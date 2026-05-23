@@ -17,6 +17,7 @@ __pycache__/
 # Test artifacts
 playwright-report/
 test-results/
+tests/screenshots/*.png
 
 # Electron builder (Phase 8)
 release/
