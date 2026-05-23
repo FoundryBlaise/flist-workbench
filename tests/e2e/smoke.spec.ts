@@ -38,9 +38,24 @@ test('app boots, sidebar loads, editor↔preview wired, F-list fetch lands', asy
 
     // Typing into the editor reflects into preview.
     await window.keyboard.press('ControlOrMeta+A')
-    await window.keyboard.type('[i]hello[/i] world')
+    await window.keyboard.type('[b]hello[/b] world')
     await expect(preview).toContainText('hello world')
-    await expect(preview.locator('em').first()).toHaveText('hello')
+    await expect(preview.locator('strong').first()).toHaveText('hello')
+
+    // Bidirectional: edit the preview span and confirm the editor updates.
+    // We poke the DOM directly + dispatch input — this is the same path
+    // the contentEditable handler follows when a user types in-place.
+    await window.evaluate(() => {
+      const span = document.querySelector(
+        '[data-testid="preview-body"] [data-bb-start]'
+      ) as HTMLElement | null
+      if (!span) throw new Error('no data-bb span in preview')
+      span.focus()
+      span.textContent = 'HELLO'
+      span.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // CodeMirror's content lives in .cm-content as visible text.
+    await expect(editor).toContainText('[b]HELLO[/b]')
 
     await window.screenshot({ path: resolve(SCREENSHOTS, 'editor-mode.png') })
 

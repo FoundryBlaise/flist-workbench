@@ -90,7 +90,7 @@ function galleryImageUrl(id: string): string {
 }
 
 type Token =
-  | { type: 'text'; value: string }
+  | { type: 'text'; value: string; start: number; end: number }
   | { type: 'open'; name: string; attr: string | null; raw: string }
   | { type: 'close'; name: string; raw: string }
   | { type: 'self'; name: string; attr: string | null; raw: string }
@@ -105,7 +105,12 @@ function tokenize(source: string): Token[] {
   for (const match of source.matchAll(TAG_RE)) {
     const start = match.index ?? 0
     if (start > lastIndex) {
-      tokens.push({ type: 'text', value: source.slice(lastIndex, start) })
+      tokens.push({
+        type: 'text',
+        value: source.slice(lastIndex, start),
+        start: lastIndex,
+        end: start
+      })
     }
     const [raw, slash, rawName, attr] = match
     const name = rawName.toLowerCase()
@@ -119,7 +124,12 @@ function tokenize(source: string): Token[] {
     lastIndex = start + raw.length
   }
   if (lastIndex < source.length) {
-    tokens.push({ type: 'text', value: source.slice(lastIndex) })
+    tokens.push({
+      type: 'text',
+      value: source.slice(lastIndex),
+      start: lastIndex,
+      end: source.length
+    })
   }
   return tokens
 }
@@ -204,13 +214,124 @@ const ALL_KNOWN_NAMES = new Set<string>([
   'br'
 ])
 
-export function bbcodeToHtml(source: string): string {
+/**
+ * Rebuild BBCode source from the live preview DOM after the user has
+ * edited it inline. The transformer must have emitted with
+ * `withSourceMap: true` so each visible text segment carries its
+ * original source range as `data-bb-start` / `data-bb-end`.
+ *
+ * Strategy: walk the DOM in document order, collect every span with a
+ * source range, then stitch:
+ *   - source[0..firstSpan.start]                  (BBCode tags before first text)
+ *   - currentText(firstSpan)
+ *   - source[firstSpan.end..secondSpan.start]    (BBCode tags between)
+ *   - currentText(secondSpan)
+ *   - …
+ *   - source[lastSpan.end..]                     (trailing BBCode tags)
+ *
+ * Spans that the user fully deleted from the DOM simply don't appear,
+ * so their source range gets elided — which matches the user's intent.
+ */
+/**
+ * Tags that consume their inner text rather than rendering it as an
+ * editable run in the preview. `[icon]Name[/icon]` becomes an <img>,
+ * `[noparse]…[/noparse]` is rendered as literal escaped text without
+ * a data-bb span. We need to tell "user deleted the span" apart from
+ * "the span was never editable" when reversing edits.
+ */
+const CONSUMING_TAGS = new Set(['icon', 'eicon', 'img', 'noparse'])
+
+function computeEditableTextStarts(source: string): Set<number> {
+  const tokens = tokenize(source)
+  const editable = new Set<number>()
+  const stack: string[] = []
+  for (const tok of tokens) {
+    if (tok.type === 'text') {
+      const insideConsuming = stack.some((name) => CONSUMING_TAGS.has(name))
+      if (!insideConsuming) editable.add(tok.start)
+    } else if (tok.type === 'open') {
+      stack.push(tok.name)
+    } else if (tok.type === 'close') {
+      const idx = stack.lastIndexOf(tok.name)
+      if (idx !== -1) stack.splice(idx)
+    }
+  }
+  return editable
+}
+
+export function bbcodeFromPreviewDom(root: HTMLElement, originalSource: string): string {
+  const editableStarts = computeEditableTextStarts(originalSource)
+  const currentBySrcStart = new Map<number, string>()
+  for (const span of root.querySelectorAll<HTMLElement>('[data-bb-start]')) {
+    const start = Number(span.getAttribute('data-bb-start'))
+    if (!Number.isFinite(start)) continue
+    currentBySrcStart.set(start, domTextWithBreaks(span))
+  }
+
+  // Walk the ORIGINAL token stream. For each text token:
+  //   - If it was editable and its span is in the DOM, use current text.
+  //   - If it was editable and the span is gone, emit nothing (user deleted).
+  //   - If it wasn't editable (inside [icon] / [noparse] / etc.), keep the
+  //     original text — it never had an editable surface to begin with.
+  // Tag tokens always pass through verbatim.
+  const tokens = tokenize(originalSource)
+  let out = ''
+  for (const tok of tokens) {
+    if (tok.type === 'text') {
+      if (editableStarts.has(tok.start)) {
+        out += currentBySrcStart.get(tok.start) ?? ''
+      } else {
+        out += tok.value
+      }
+    } else {
+      out += tok.raw
+    }
+  }
+  return out
+}
+
+function domTextWithBreaks(el: HTMLElement): string {
+  // <br> elements become \n; everything else is read from text nodes.
+  let out = ''
+  const walker = el.ownerDocument!.createTreeWalker(el, NodeFilter.SHOW_ALL)
+  let n: Node | null = walker.currentNode
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 3) {
+      out += n.nodeValue ?? ''
+    } else if ((n as Element).tagName === 'BR') {
+      out += '\n'
+    }
+  }
+  return out
+}
+
+export interface BbcodeOptions {
+  /**
+   * When true, every text segment from source is wrapped in
+   *   <span data-bb-start="N" data-bb-end="M">…</span>
+   * so a contentEditable preview can be diff-mapped back to source
+   * offsets. The tag tokens themselves (open / close / self-closing)
+   * keep their existing markup — they have no editable surface in the
+   * preview.
+   */
+  withSourceMap?: boolean
+}
+
+export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
   const root: Frame = { name: '__root__', attr: null, raw: '', children: [] }
   const stack: Frame[] = [root]
   const top = (): Frame => stack[stack.length - 1]
 
   const tokens = tokenize(source)
   let inNoparse = false
+
+  const wrapText = (value: string, start: number, end: number): string => {
+    // No literal "\n" after <br /> — that's what the <br /> already
+    // represents, and double-counting confuses the reverse mapping.
+    const inner = escapeHtml(value).replace(/\n/g, '<br />')
+    if (!opts.withSourceMap) return inner
+    return `<span data-bb-start="${start}" data-bb-end="${end}">${inner}</span>`
+  }
 
   for (const tok of tokens) {
     if (inNoparse) {
@@ -226,7 +347,7 @@ export function bbcodeToHtml(source: string): string {
     }
 
     if (tok.type === 'text') {
-      top().children.push(escapeHtml(tok.value).replace(/\n/g, '<br />\n'))
+      top().children.push(wrapText(tok.value, tok.start, tok.end))
     } else if (tok.type === 'self') {
       top().children.push(emitSelfClosing(tok.name))
     } else if (tok.type === 'open') {

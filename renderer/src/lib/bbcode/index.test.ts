@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { bbcodeToHtml } from './index'
+import { bbcodeToHtml, bbcodeFromPreviewDom } from './index'
 
 describe('bbcodeToHtml — simple inline tags', () => {
   it('renders bold, italic, underline, strikethrough', () => {
@@ -44,7 +44,7 @@ describe('bbcodeToHtml — block tags and structure', () => {
   })
 
   it('converts newlines in text to <br />', () => {
-    expect(bbcodeToHtml('line1\nline2')).toBe('line1<br />\nline2')
+    expect(bbcodeToHtml('line1\nline2')).toBe('line1<br />line2')
   })
 })
 
@@ -175,5 +175,80 @@ describe('bbcodeToHtml — real F-list profile round-trip', () => {
   it('inline gallery [img=ID] maps to the F-list image CDN', () => {
     const html = bbcodeToHtml(bbcode)
     expect(html).toContain('static.f-list.net/images/charimage/')
+  })
+})
+
+describe('bbcodeToHtml — source map for bidirectional editing', () => {
+  it('wraps each text segment in a data-bb span when requested', () => {
+    const html = bbcodeToHtml('[b]hello[/b] world', { withSourceMap: true })
+    // First text "hello" is at source offset 3..8.
+    expect(html).toContain('data-bb-start="3"')
+    expect(html).toContain('data-bb-end="8"')
+    // Trailing " world" is at 12..18.
+    expect(html).toContain('data-bb-start="12"')
+    expect(html).toContain('data-bb-end="18"')
+  })
+
+  it('does not wrap when withSourceMap is omitted', () => {
+    const html = bbcodeToHtml('[b]hello[/b] world')
+    expect(html).not.toContain('data-bb-start')
+  })
+})
+
+function renderToDom(source: string): HTMLElement {
+  const div = document.createElement('div')
+  div.innerHTML = bbcodeToHtml(source, { withSourceMap: true })
+  return div
+}
+
+describe('bbcodeFromPreviewDom — reverse mapping', () => {
+  it('round-trips an unedited render back to the original source', () => {
+    const source = '[b]hello[/b] [i]world[/i]'
+    const dom = renderToDom(source)
+    expect(bbcodeFromPreviewDom(dom, source)).toBe(source)
+  })
+
+  it('reflects an in-place text edit into the source', () => {
+    const source = '[b]hello[/b] world'
+    const dom = renderToDom(source)
+    // Edit the "hello" text node to "HELLO".
+    const span = dom.querySelector('[data-bb-start="3"]') as HTMLElement
+    span.textContent = 'HELLO'
+    expect(bbcodeFromPreviewDom(dom, source)).toBe('[b]HELLO[/b] world')
+  })
+
+  it('reflects edits to multiple text spans simultaneously', () => {
+    const source = '[b]hello[/b] world'
+    const dom = renderToDom(source)
+    ;(dom.querySelector('[data-bb-start="3"]') as HTMLElement).textContent = 'HI'
+    ;(dom.querySelector('[data-bb-start="12"]') as HTMLElement).textContent = ' there'
+    expect(bbcodeFromPreviewDom(dom, source)).toBe('[b]HI[/b] there')
+  })
+
+  it('treats a deleted span as deletion of that text', () => {
+    const source = 'before [b]middle[/b] after'
+    const dom = renderToDom(source)
+    // Remove the middle span entirely.
+    const span = dom.querySelector('[data-bb-start="10"]')
+    span?.remove()
+    expect(bbcodeFromPreviewDom(dom, source)).toBe('before [b][/b] after')
+  })
+
+  it('preserves BBCode tags around inline character icons', () => {
+    // [icon] frames render as <a>+<img> with NO data-bb-start spans for
+    // their inner text, so the icon is effectively read-only in preview.
+    const source = 'see [icon]Aurora[/icon] here'
+    const dom = renderToDom(source)
+    // Edit the trailing " here" to " there"
+    const trailing = dom.querySelector('[data-bb-start="23"]') as HTMLElement
+    expect(trailing).not.toBeNull()
+    trailing.textContent = ' there'
+    expect(bbcodeFromPreviewDom(dom, source)).toBe('see [icon]Aurora[/icon] there')
+  })
+
+  it('preserves <br /> conversions on newline-containing text', () => {
+    const source = 'line one\nline two'
+    const dom = renderToDom(source)
+    expect(bbcodeFromPreviewDom(dom, source)).toBe(source)
   })
 })

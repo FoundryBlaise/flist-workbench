@@ -1,17 +1,74 @@
-import { useMemo } from 'react'
+import { useEffect, useRef } from 'react'
 import { useStore } from '../../state'
-import { bbcodeToHtml } from '../../lib/bbcode'
+import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
 
+/**
+ * Preview pane is contentEditable. Edits inside any text span flow back
+ * into the BBCode source, so typing/correcting in the rendered preview
+ * updates the editor immediately. Structural changes (adding tags, etc.)
+ * still belong in the editor or its toolbar.
+ *
+ * Two things make this work without React fighting the DOM:
+ *
+ * 1. We manage innerHTML imperatively via a ref instead of
+ *    dangerouslySetInnerHTML. Otherwise React would overwrite the DOM
+ *    on every editorContent change and erase the user's caret.
+ *
+ * 2. When the preview owns focus we skip re-rendering it from
+ *    editorContent — the user IS the source of truth at that moment.
+ *    A blur or external content swap (e.g. Fetch profile) triggers a
+ *    fresh render so the spans get their source offsets back.
+ */
 export function PreviewPane() {
   const content = useStore((s) => s.editorContent)
-  const html = useMemo(() => bbcodeToHtml(content), [content])
+  const setContent = useStore((s) => s.setEditorContent)
+  const ref = useRef<HTMLDivElement>(null)
+  const focusedRef = useRef(false)
+  // Track which source the current DOM was rendered from. When the user
+  // types into the preview we use this as the "before" snapshot to
+  // reverse-map edits back into BBCode.
+  const renderedFromRef = useRef('')
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (focusedRef.current) return
+    el.innerHTML = bbcodeToHtml(content, { withSourceMap: true })
+    renderedFromRef.current = content
+  }, [content])
+
+  const handleInput = () => {
+    const el = ref.current
+    if (!el) return
+    const next = bbcodeFromPreviewDom(el, renderedFromRef.current)
+    setContent(next)
+  }
+
   return (
     <section className="pane preview" data-testid="preview-pane">
-      <header className="pane-head">Live Preview</header>
+      <header className="pane-head">Live Preview <span className="preview-edit-hint">· editable</span></header>
       <div
+        ref={ref}
         className="pane-body preview-body"
         data-testid="preview-body"
-        dangerouslySetInnerHTML={{ __html: html }}
+        contentEditable
+        suppressContentEditableWarning
+        spellCheck={false}
+        onInput={handleInput}
+        onFocus={() => {
+          focusedRef.current = true
+        }}
+        onBlur={() => {
+          focusedRef.current = false
+          // Re-render from current source so spans get fresh offsets
+          // after this edit session.
+          if (ref.current) {
+            ref.current.innerHTML = bbcodeToHtml(useStore.getState().editorContent, {
+              withSourceMap: true
+            })
+            renderedFromRef.current = useStore.getState().editorContent
+          }
+        }}
       />
     </section>
   )
