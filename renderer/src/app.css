@@ -295,19 +295,43 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.editor-textarea {
+.editor-cm {
   flex: 1;
-  background: var(--bg);
-  color: var(--text);
-  border: none;
-  padding: 12px;
-  font-family: 'Cascadia Code', Consolas, 'JetBrains Mono', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  resize: none;
-  outline: none;
-  white-space: pre-wrap;
+  overflow: hidden;
+  display: flex;
 }
+.editor-cm > div {
+  flex: 1;
+  overflow: hidden;
+}
+.editor-cm .cm-editor {
+  height: 100%;
+}
+.editor-cm .cm-scroller {
+  overflow: auto;
+}
+
+.editor-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.tool {
+  padding: 3px 8px;
+  background: var(--tag-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  min-width: 28px;
+  text-align: center;
+}
+.tool:hover { background: #4a4a4a; }
 
 /* Preview body — BBCode rendered into HTML */
 .preview-body { padding: 16px 20px; }
