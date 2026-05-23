@@ -1,0 +1,15 @@
+# Force LF in working tree and repo for all text files.
+# The repo is developed in a Linux container; CRLF leaks in
+# when the workspace is touched from Windows tooling.
+* text=auto eol=lf
+
+# Binary files — never normalize.
+*.png binary
+*.jpg binary
+*.ico binary
+*.gif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.gz binary
