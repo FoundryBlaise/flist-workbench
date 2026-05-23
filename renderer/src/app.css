@@ -230,6 +230,17 @@ body {
   color: #ddd;
   font-family: Georgia, serif;
   line-height: 1.6;
+  outline: none;
+}
+.pane.preview .pane-body:focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.preview-edit-hint {
+  color: var(--green);
+  font-size: 10px;
+  margin-left: 6px;
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
 }
 
 .editor-pane {
