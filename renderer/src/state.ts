@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api } from './lib/api'
+import { api, type LogMessage } from './lib/api'
 
 export type Mode = 'editor' | 'logs'
 
@@ -30,6 +30,10 @@ type State = {
 
   activePartner: string | null
 
+  messagesByPartner: Record<string, LogMessage[]>
+  messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
+  messagesError: Record<string, string | null>
+
   editorContent: string
   editorTitle: string
   editorFetchStatus: 'idle' | 'fetching' | 'ok' | 'error'
@@ -40,8 +44,13 @@ type State = {
   setMode: (mode: Mode) => void
   loadPartners: (char: string) => Promise<void>
   selectPartner: (name: string | null) => void
+  loadMessages: (char: string, partner: string) => Promise<void>
   setEditorContent: (value: string) => void
   fetchProfile: (name: string) => Promise<void>
+}
+
+function partnerKey(char: string, partner: string): string {
+  return `${char}::${partner}`
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -55,6 +64,10 @@ export const useStore = create<State>((set, get) => ({
   partners: {},
   partnersStatus: {},
   activePartner: null,
+
+  messagesByPartner: {},
+  messagesStatus: {},
+  messagesError: {},
 
   editorContent: SAMPLE_BBCODE,
   editorTitle: 'Scratch.bbcode',
@@ -103,6 +116,30 @@ export const useStore = create<State>((set, get) => ({
 
   selectPartner(name) {
     set({ activePartner: name })
+  },
+
+  async loadMessages(char, partner) {
+    const key = partnerKey(char, partner)
+    if (get().messagesStatus[key] === 'ready') return
+    set((s) => ({
+      messagesStatus: { ...s.messagesStatus, [key]: 'loading' },
+      messagesError: { ...s.messagesError, [key]: null }
+    }))
+    try {
+      const { messages } = await api.messages(char, partner)
+      set((s) => ({
+        messagesByPartner: { ...s.messagesByPartner, [key]: messages },
+        messagesStatus: { ...s.messagesStatus, [key]: 'ready' }
+      }))
+    } catch (err) {
+      set((s) => ({
+        messagesStatus: { ...s.messagesStatus, [key]: 'error' },
+        messagesError: {
+          ...s.messagesError,
+          [key]: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
   },
 
   setEditorContent(value) {

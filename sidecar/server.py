@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from flist import ProfileNotFound, fetch_profile
-from logs import LogDirError, list_characters, list_partners
+from logs import LogDirError, list_characters, list_partners, read_messages, search_messages
 
 app = FastAPI(title="F-list Workbench sidecar", version="0.0.0")
 
@@ -47,3 +47,21 @@ def logs_partners(char: str) -> dict:
     except LogDirError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"character": char, "partners": [asdict(e) for e in entries]}
+
+
+@app.get("/logs/messages")
+def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = None) -> dict:
+    try:
+        messages = list(read_messages(char, partner, offset=offset, limit=limit))
+    except LogDirError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"character": char, "partner": partner, "offset": offset, "messages": messages}
+
+
+@app.get("/logs/search")
+def logs_search(char: str, partner: str, q: str) -> dict:
+    try:
+        hits = search_messages(char, partner, q)
+    except LogDirError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"character": char, "partner": partner, "query": q, "hits": hits}
