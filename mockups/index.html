@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>F-list Workbench — UI mockups</title>
+<style>
+  body {
+    background: #1e1e1e; color: #d4d4d4;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    max-width: 900px; margin: 0 auto; padding: 40px 24px;
+    line-height: 1.6;
+  }
+  h1 { color: #569cd6; margin-bottom: 8px; }
+  h2 { margin-top: 32px; color: #c97070; font-size: 16px; }
+  .sub { color: #8a8a8a; margin-bottom: 24px; }
+  .card {
+    background: #252526; border: 1px solid #3e3e42; border-radius: 6px;
+    padding: 20px; margin: 14px 0;
+    display: grid; grid-template-columns: 60px 1fr 130px; gap: 16px; align-items: center;
+  }
+  .card.dim { opacity: 0.55; }
+  .card .badge {
+    width: 48px; height: 48px; border-radius: 6px;
+    background: #094771; color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 600; text-align: center; line-height: 1.1;
+  }
+  .card .badge.alt { background: #3a3a3a; }
+  .card .desc { font-size: 13px; }
+  .card .desc strong { color: #d4d4d4; font-size: 14px; display: block; margin-bottom: 4px; }
+  .card .desc small { color: #8a8a8a; }
+  .card a {
+    display: inline-block; padding: 8px 14px;
+    background: #569cd6; color: white; text-decoration: none;
+    border-radius: 3px; font-size: 13px; text-align: center;
+  }
+  .card a:hover { background: #4a8cc4; }
+  ul { padding-left: 20px; }
+  ul li { margin-bottom: 4px; }
+  code { background: #2d2d30; padding: 1px 6px; border-radius: 3px; color: #c0c0c0; font-size: 12px; }
+  .pick {
+    display: inline-block; background: #6a9955; color: white;
+    font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .scope-box {
+    background: #252526; border: 1px solid #3e3e42; border-left: 3px solid #6a9955;
+    padding: 16px 20px; border-radius: 4px; margin: 16px 0;
+  }
+  .scope-box .h { color: #6a9955; font-weight: 600; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <h1>F-list Workbench — UI mockups</h1>
+  <div class="sub">Layout A picked. Now iterating on the two modes inside it.</div>
+
+  <div class="scope-box">
+    <div class="h">Current scope</div>
+    The app is a <strong>BBCode editor + log browser + RAG chat</strong>. No F-list auth or API editing. The user copies BBCode from F-list, edits in F-list Workbench, copies it back. The flistcharexporter userscript stays as a separate, optional companion. RAG indexes F-Chat logs and can fetch any public F-list profile on demand.
+  </div>
+
+  <h2>Layout A — the two modes</h2>
+
+  <div class="card">
+    <div class="badge">A·E</div>
+    <div class="desc">
+      <strong>Editor mode <span class="pick">picked</span></strong>
+      Active character picker on top of the sidebar · documents list below · BBCode editor + live preview side-by-side · RAG at the bottom.
+      <small>The headline feature: a real editor for character descriptions and scene drafts.</small>
+    </div>
+    <a href="layout-a.html">Open Editor →</a>
+  </div>
+
+  <div class="card">
+    <div class="badge">A·L</div>
+    <div class="desc">
+      <strong>Logs mode</strong>
+      Same sidebar shape, but Layer 2 lists chat partners. Main area becomes a log viewer with IC/OOC filter, day separators, message search, and per-message "ask RAG about this" actions.
+      <small>Solves the "F-list's log search is chunky" problem.</small>
+    </div>
+    <a href="layout-a-logs.html">Open Logs →</a>
+  </div>
+
+  <h2>The two-layer sidebar</h2>
+  <ul>
+    <li><strong>Layer 1</strong> — active user character (Lady Amber Blaise, Vanessa Arlington, …). One choice at a time. Filters everything downstream.</li>
+    <li><strong>Layer 2</strong> — mode toggle: <em>Logs</em> shows partners that character has RP'd with; <em>Editor</em> shows BBCode documents the user has saved for that character.</li>
+  </ul>
+
+  <h2>RAG scope, simplified</h2>
+  <ul>
+    <li>Indexes F-Chat logs (existing Chat_RAG pipeline)</li>
+    <li>Can fetch any F-list public profile on demand via <code>/profile &lt;name&gt;</code> — no auth needed</li>
+    <li>Locally-saved documents in F-list Workbench can be ingested into the RAG too</li>
+  </ul>
+
+</body>
+</html>
