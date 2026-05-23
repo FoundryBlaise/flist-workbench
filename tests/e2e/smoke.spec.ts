@@ -24,16 +24,23 @@ test('app boots, sidebar loads, editor↔preview wired, F-list fetch lands', asy
     await expect(picker).not.toContainText('Loading')
 
     // Editor + preview both render. Default sample BBCode renders to HTML.
-    const editor = window.getByTestId('editor-textarea')
+    const editor = window.getByTestId('editor-cm').locator('.cm-content')
     const preview = window.getByTestId('preview-body')
     await expect(editor).toBeVisible()
     await expect(preview).toBeVisible()
     await expect(preview.locator('h2').first()).toContainText('F-list Workbench')
 
-    // Editing the textarea reflects into preview live.
-    await editor.fill('[b]hello[/b] world')
+    // Toolbar wraps selection with BBCode. Select all → click B → preview bolds.
+    await editor.click()
+    await window.keyboard.press('ControlOrMeta+A')
+    await window.getByRole('button', { name: 'Bold' }).click()
+    await expect(preview.locator('strong').first()).toBeVisible()
+
+    // Typing into the editor reflects into preview.
+    await window.keyboard.press('ControlOrMeta+A')
+    await window.keyboard.type('[i]hello[/i] world')
     await expect(preview).toContainText('hello world')
-    await expect(preview.locator('strong').first()).toHaveText('hello')
+    await expect(preview.locator('em').first()).toHaveText('hello')
 
     await window.screenshot({ path: resolve(SCREENSHOTS, 'editor-mode.png') })
 
