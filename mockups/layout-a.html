@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>F-list Workbench — Layout A (Editor mode)</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --panel-2: #2d2d30;
+    --border: #3e3e42;
+    --text: #d4d4d4;
+    --text-dim: #8a8a8a;
+    --accent: #569cd6;
+    --accent-2: #c97070;
+    --green: #6a9955;
+    --select: #094771;
+    --tag-bg: #3a3a3a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px; overflow: hidden;
+  }
+  .app { display: grid; grid-template-rows: 28px 32px 1fr 200px; height: 100vh; }
+
+  .titlebar {
+    background: #0e0e0e; color: #cccccc; display: flex; align-items: center;
+    padding: 0 12px; font-size: 12px; border-bottom: 1px solid var(--border);
+  }
+  .titlebar .title { flex: 1; text-align: center; color: #aaa; }
+  .titlebar .controls { color: #888; }
+  .menubar {
+    background: var(--panel); display: flex; align-items: center;
+    padding: 0 8px; gap: 16px; border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .menubar span { color: var(--text-dim); cursor: default; }
+
+  .main { display: grid; grid-template-columns: 250px 1fr 1fr; overflow: hidden; }
+  .col { border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .col:last-child { border-right: none; }
+
+  /* Sidebar */
+  .sidebar { background: var(--panel); display: flex; flex-direction: column; }
+  .sb-section-h {
+    padding: 8px 12px; font-size: 10px; text-transform: uppercase;
+    color: var(--text-dim); letter-spacing: 0.7px;
+  }
+
+  .char-picker {
+    margin: 4px 12px 8px; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .char-picker:hover { border-color: var(--accent); }
+  .char-picker .avatar {
+    width: 28px; height: 28px; border-radius: 4px;
+    background: linear-gradient(135deg,#7a4a4a,#3a2a2a); border: 1px solid #777;
+  }
+  .char-picker .info { flex: 1; }
+  .char-picker .name { font-weight: 600; color: var(--text); }
+  .char-picker .meta { color: var(--text-dim); font-size: 11px; }
+  .char-picker .caret { color: var(--text-dim); }
+
+  .mode-toggle {
+    margin: 0 12px 8px; display: flex;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .mode {
+    flex: 1; padding: 6px 0; text-align: center; cursor: pointer;
+    color: var(--text-dim); font-size: 12px;
+  }
+  .mode.active { background: var(--select); color: var(--text); }
+  .mode:hover:not(.active) { background: #2a2d2e; color: var(--text); }
+
+  .sb-list { flex: 1; overflow: auto; padding: 4px 0; border-top: 1px solid var(--border); }
+  .sb-item {
+    padding: 6px 12px 6px 20px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  }
+  .sb-item:hover { background: #2a2d2e; }
+  .sb-item.active { background: var(--select); }
+  .sb-item .ic { color: var(--text-dim); font-size: 12px; width: 14px; }
+  .sb-item .label { flex: 1; }
+  .sb-item .meta { color: var(--text-dim); font-size: 11px; }
+
+  .sb-foot { padding: 8px; border-top: 1px solid var(--border); display: flex; gap: 6px; }
+  .btn {
+    display: inline-block; padding: 6px 10px; background: var(--accent);
+    color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;
+    flex: 1; text-align: center;
+  }
+  .btn.alt { background: var(--tag-bg); color: var(--text); }
+  .btn.alt:hover { background: #4a4a4a; }
+
+  /* Editor */
+  .editor-head {
+    padding: 8px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .doc-name {
+    padding: 4px 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text); font-size: 12px;
+  }
+  .editor-toolbar {
+    padding: 4px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 4px;
+  }
+  .tool {
+    padding: 4px 8px; background: var(--tag-bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px; cursor: pointer; font-size: 11px;
+    min-width: 28px; text-align: center;
+  }
+  .tool:hover { background: #4a4a4a; }
+  .editor-body {
+    flex: 1; padding: 12px; font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px; line-height: 1.6; overflow: auto; white-space: pre-wrap;
+  }
+  .bb-tag { color: var(--accent); }
+  .bb-tag-close { color: var(--accent-2); }
+  .bb-attr { color: var(--green); }
+
+  /* Preview */
+  .preview-head {
+    padding: 8px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border); color: var(--text-dim);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .preview-body {
+    flex: 1; padding: 16px 20px; overflow: auto;
+    background: #2a2620; color: #ddd; font-family: Georgia, serif; line-height: 1.6;
+  }
+  .preview-body h2 { color: #d49090; font-family: Georgia, serif; font-size: 18px; margin-bottom: 4px; }
+  .preview-body em { color: #cdb88c; }
+  .preview-body p { margin-bottom: 10px; }
+  .preview-body hr { border: none; border-top: 1px solid #555; margin: 14px 0; }
+  .preview-icon {
+    display: inline-block; width: 32px; height: 32px; border-radius: 4px;
+    vertical-align: middle; margin: 0 4px; border: 1px solid #777;
+  }
+  .preview-eicon {
+    display: inline-block; padding: 2px 6px; background: #444;
+    border-radius: 3px; color: #ffd5a0; font-size: 11px; vertical-align: middle;
+  }
+
+  /* RAG */
+  .rag {
+    background: var(--panel); border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .rag-head {
+    padding: 6px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; font-size: 12px;
+  }
+  .rag-head .pill {
+    background: var(--tag-bg); padding: 2px 8px; border-radius: 10px;
+    color: var(--text-dim); font-size: 11px;
+  }
+  .rag-body { flex: 1; padding: 8px 12px; overflow: auto; font-size: 12px; }
+  .rag-msg { margin-bottom: 8px; }
+  .rag-msg .role { color: var(--accent); }
+  .rag-msg .role.user { color: var(--accent-2); }
+  .rag-cite {
+    color: var(--text-dim); font-size: 11px; margin-left: 12px;
+    border-left: 2px solid var(--border); padding-left: 8px;
+  }
+  .rag-input {
+    border-top: 1px solid var(--border); padding: 8px 12px;
+    display: flex; gap: 8px; background: var(--panel-2);
+  }
+  .rag-input input {
+    flex: 1; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 10px; font-size: 12px; font-family: inherit;
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="titlebar">
+      <span>● F-list Workbench</span>
+      <span class="title">Lady Amber Blaise — Description.bbcode</span>
+      <span class="controls">— □ ✕</span>
+    </div>
+    <div class="menubar">
+      <span>File</span><span>Edit</span><span>View</span><span>Tools</span><span>Help</span>
+    </div>
+
+    <div class="main">
+      <!-- Sidebar -->
+      <div class="col sidebar">
+        <div class="sb-section-h">Active Character</div>
+        <div class="char-picker">
+          <div class="avatar"></div>
+          <div class="info">
+            <div class="name">Lady Amber Blaise</div>
+            <div class="meta">241 logs · 5 documents</div>
+          </div>
+          <div class="caret">▾</div>
+        </div>
+
+        <div class="mode-toggle">
+          <div class="mode">Logs</div>
+          <div class="mode active">Editor</div>
+        </div>
+
+        <div class="sb-section-h">Documents</div>
+        <div class="sb-list">
+          <div class="sb-item active"><span class="ic">📄</span><span class="label">Description</span><span class="meta">2.3kb</span></div>
+          <div class="sb-item"><span class="ic">📄</span><span class="label">Tavern intro draft</span><span class="meta">680b</span></div>
+          <div class="sb-item"><span class="ic">📄</span><span class="label">Backstory v2</span><span class="meta">4.1kb</span></div>
+          <div class="sb-item"><span class="ic">📄</span><span class="label">Kink statement</span><span class="meta">920b</span></div>
+          <div class="sb-item"><span class="ic">📄</span><span class="label">Quick about</span><span class="meta">412b</span></div>
+        </div>
+        <div class="sb-foot">
+          <button class="btn">+ New doc</button>
+          <button class="btn alt" title="Paste BBCode from clipboard">📋 Paste</button>
+        </div>
+      </div>
+
+      <!-- Editor -->
+      <div class="col">
+        <div class="editor-head">
+          <span class="doc-name">Description.bbcode</span>
+          <span style="color: var(--green); font-size: 11px;">● Saved</span>
+          <div style="margin-left:auto; display:flex; gap:6px;">
+            <span class="tool" title="Copy BBCode to clipboard">📋 Copy</span>
+            <span class="tool" title="Word count">2,341 chars</span>
+          </div>
+        </div>
+        <div class="editor-toolbar">
+          <span class="tool"><b>B</b></span>
+          <span class="tool"><i>I</i></span>
+          <span class="tool"><u>U</u></span>
+          <span class="tool">S</span>
+          <span class="tool">🎨 color</span>
+          <span class="tool">icon</span>
+          <span class="tool">eicon</span>
+          <span class="tool">url</span>
+          <span class="tool">img</span>
+          <span class="tool">spoiler</span>
+          <span class="tool">collapse</span>
+          <span class="tool">hr</span>
+        </div>
+<div class="editor-body"><span class="bb-tag">[b]</span>Lady Amber Blaise<span class="bb-tag-close">[/b]</span>
+<span class="bb-tag">[i]</span>"Veuve à la fois douce et redoutable."<span class="bb-tag-close">[/i]</span>
+
+A tall woman with <span class="bb-tag">[color=<span class="bb-attr">red</span>]</span>long red hair<span class="bb-tag-close">[/color]</span>
+and eyes the color of sea-glass.
+
+<span class="bb-tag">[b]</span>Background:<span class="bb-tag-close">[/b]</span>
+Born to a minor noble house in <span class="bb-tag">[color=<span class="bb-attr">purple</span>]</span>Avalon<span class="bb-tag-close">[/color]</span>,
+married young to a man twice her age...
+
+<span class="bb-tag">[hr]</span>
+
+<span class="bb-tag">[icon]</span>Daemon Enariel<span class="bb-tag-close">[/icon]</span> <span class="bb-tag">[icon]</span>Somera<span class="bb-tag-close">[/icon]</span>
+
+<span class="bb-tag">[eicon]</span>smirk<span class="bb-tag-close">[/eicon]</span> <span class="bb-tag">[eicon]</span>wink<span class="bb-tag-close">[/eicon]</span></div>
+      </div>
+
+      <!-- Preview -->
+      <div class="col">
+        <div class="preview-head">
+          Live Preview
+          <span style="margin-left:auto; color:var(--green);">● live</span>
+        </div>
+        <div class="preview-body">
+          <h2>Lady Amber Blaise</h2>
+          <p><em>"Veuve à la fois douce et redoutable."</em></p>
+          <p>A tall woman with <span style="color:#e26060">long red hair</span> and eyes the color of sea-glass.</p>
+          <p><strong>Background:</strong> Born to a minor noble house in <span style="color:#b070d4">Avalon</span>, married young to a man twice her age...</p>
+          <hr>
+          <p>
+            <span class="preview-icon" style="background:linear-gradient(135deg,#7a4a4a,#3a2a2a)"></span>
+            <span class="preview-icon" style="background:linear-gradient(135deg,#4a6a7a,#2a3a4a)"></span>
+          </p>
+          <p>
+            <span class="preview-eicon">smirk</span>
+            <span class="preview-eicon">wink</span>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- RAG -->
+    <div class="rag">
+      <div class="rag-head">
+        <span style="color: var(--text-dim); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;">RAG Chat</span>
+        <span class="pill">Scope: Lady Amber Blaise</span>
+        <span class="pill">Sources: Logs + live profiles</span>
+        <span class="pill">Model: gemma-4-26b</span>
+        <span style="margin-left:auto; color: var(--green); font-size: 11px;">● Qdrant local · 8,516 chunks</span>
+      </div>
+      <div class="rag-body">
+        <div class="rag-msg"><span class="role user">you</span> · Where was Amber's family from?</div>
+        <div class="rag-msg">
+          <span class="role">rag</span> · Amber's family is from <strong>Avalon</strong> — established in the RP with Daemon Enariel (2025-04-21) when she mentioned her cousin's estate.
+          <div class="rag-cite">↳ log · daemon-enariel · 2025-04-21 · chunk 412</div>
+        </div>
+        <div class="rag-msg"><span class="role user">you</span> · /profile daemon enariel</div>
+        <div class="rag-msg">
+          <span class="role">rag</span> · Fetched f-list.net/c/daemon%20enariel — 38yo male, fae origin, listed kinks: yes 24 / fave 8...
+          <div class="rag-cite">↳ live · f-list public profile · cached 30s</div>
+        </div>
+      </div>
+      <div class="rag-input">
+        <input placeholder="Ask, or /profile &lt;name&gt; / /scope &lt;partner&gt;…">
+        <button class="btn" style="flex:0; padding:6px 14px;">Send</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>F-list Workbench — Layout A (Logs mode)</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --panel-2: #2d2d30;
+    --border: #3e3e42;
+    --text: #d4d4d4;
+    --text-dim: #8a8a8a;
+    --accent: #569cd6;
+    --accent-2: #c97070;
+    --green: #6a9955;
+    --yellow: #d7ba7d;
+    --select: #094771;
+    --tag-bg: #3a3a3a;
+    --ic: #6a9bd6;
+    --ooc: #888;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px; overflow: hidden;
+  }
+  .app { display: grid; grid-template-rows: 28px 32px 1fr 200px; height: 100vh; }
+
+  .titlebar {
+    background: #0e0e0e; color: #cccccc; display: flex; align-items: center;
+    padding: 0 12px; font-size: 12px; border-bottom: 1px solid var(--border);
+  }
+  .titlebar .title { flex: 1; text-align: center; color: #aaa; }
+  .titlebar .controls { color: #888; }
+  .menubar {
+    background: var(--panel); display: flex; align-items: center;
+    padding: 0 8px; gap: 16px; border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .menubar span { color: var(--text-dim); cursor: default; }
+
+  .main { display: grid; grid-template-columns: 250px 1fr; overflow: hidden; }
+  .col { border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .col:last-child { border-right: none; }
+
+  /* Sidebar */
+  .sidebar { background: var(--panel); display: flex; flex-direction: column; }
+  .sb-section-h {
+    padding: 8px 12px; font-size: 10px; text-transform: uppercase;
+    color: var(--text-dim); letter-spacing: 0.7px;
+  }
+  .char-picker {
+    margin: 4px 12px 8px; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .char-picker .avatar {
+    width: 28px; height: 28px; border-radius: 4px;
+    background: linear-gradient(135deg,#7a4a4a,#3a2a2a); border: 1px solid #777;
+  }
+  .char-picker .info { flex: 1; }
+  .char-picker .name { font-weight: 600; }
+  .char-picker .meta { color: var(--text-dim); font-size: 11px; }
+  .char-picker .caret { color: var(--text-dim); }
+
+  .mode-toggle {
+    margin: 0 12px 8px; display: flex;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .mode {
+    flex: 1; padding: 6px 0; text-align: center; cursor: pointer;
+    color: var(--text-dim); font-size: 12px;
+  }
+  .mode.active { background: var(--select); color: var(--text); }
+
+  .sb-search {
+    margin: 0 12px 8px; padding: 6px 10px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-size: 12px;
+  }
+  .sb-list { flex: 1; overflow: auto; padding: 4px 0; border-top: 1px solid var(--border); }
+  .sb-item {
+    padding: 6px 12px 6px 20px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  }
+  .sb-item:hover { background: #2a2d2e; }
+  .sb-item.active { background: var(--select); }
+  .sb-item .label { flex: 1; }
+  .sb-item .badge {
+    color: var(--text-dim); font-size: 10px; padding: 1px 6px;
+    background: var(--tag-bg); border-radius: 8px;
+  }
+  .sb-item .badge.recent { background: #4a5a3a; color: #c4d4a4; }
+
+  /* Main: log viewer */
+  .log-head {
+    padding: 10px 16px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .log-head .partner { font-weight: 600; font-size: 14px; }
+  .log-head .meta { color: var(--text-dim); font-size: 12px; }
+  .log-head .pill {
+    background: var(--tag-bg); color: var(--text); padding: 2px 8px;
+    border-radius: 10px; font-size: 11px;
+  }
+
+  .log-filters {
+    padding: 6px 16px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center;
+  }
+  .filter {
+    padding: 4px 10px; background: var(--tag-bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px; cursor: pointer; font-size: 11px;
+  }
+  .filter.on { background: var(--accent); border-color: var(--accent); color: white; }
+  .filter.off { color: var(--text-dim); }
+  .log-search {
+    flex: 1; max-width: 320px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+    color: var(--text); padding: 4px 10px; font-size: 12px;
+  }
+  .results { color: var(--text-dim); font-size: 11px; }
+
+  .log-body {
+    flex: 1; padding: 12px 20px; overflow: auto; line-height: 1.55;
+    font-size: 13px;
+  }
+  .msg { margin-bottom: 6px; padding: 4px 8px; border-radius: 3px; }
+  .msg:hover { background: #252526; }
+  .msg .ts { color: var(--text-dim); font-size: 11px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .msg .speaker { font-weight: 600; margin-right: 6px; }
+  .msg.amber .speaker { color: var(--accent-2); }
+  .msg.partner .speaker { color: var(--accent); }
+  .msg.system .speaker { color: var(--yellow); font-style: italic; }
+  .msg .text { color: var(--text); }
+  .msg.ooc .text { color: var(--ooc); font-style: italic; }
+  .msg .label {
+    display: inline-block; font-size: 9px; padding: 1px 4px;
+    border-radius: 2px; margin-left: 6px; vertical-align: middle;
+  }
+  .label-ic { background: #1f3a52; color: #8cc4ff; }
+  .label-ooc { background: #3a3a3a; color: #aaa; }
+  mark {
+    background: #5a4a1a; color: #ffd97a; padding: 0 2px; border-radius: 2px;
+  }
+  .day-sep {
+    text-align: center; margin: 14px 0 8px; color: var(--text-dim);
+    font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .day-sep::before, .day-sep::after {
+    content: ""; flex: 1; border-top: 1px solid var(--border);
+  }
+  .msg-actions {
+    float: right; color: var(--text-dim); font-size: 11px;
+    opacity: 0; transition: opacity 0.1s;
+  }
+  .msg:hover .msg-actions { opacity: 1; }
+  .msg-actions span { cursor: pointer; margin-left: 6px; }
+
+  /* RAG */
+  .rag {
+    background: var(--panel); border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .rag-head {
+    padding: 6px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; font-size: 12px;
+  }
+  .rag-head .pill {
+    background: var(--tag-bg); padding: 2px 8px; border-radius: 10px;
+    color: var(--text-dim); font-size: 11px;
+  }
+  .rag-body { flex: 1; padding: 8px 12px; overflow: auto; font-size: 12px; }
+  .rag-msg { margin-bottom: 8px; }
+  .rag-msg .role { color: var(--accent); }
+  .rag-msg .role.user { color: var(--accent-2); }
+  .rag-cite {
+    color: var(--text-dim); font-size: 11px; margin-left: 12px;
+    border-left: 2px solid var(--border); padding-left: 8px;
+  }
+  .rag-input {
+    border-top: 1px solid var(--border); padding: 8px 12px;
+    display: flex; gap: 8px; background: var(--panel-2);
+  }
+  .rag-input input {
+    flex: 1; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 10px; font-size: 12px; font-family: inherit;
+  }
+  .btn {
+    padding: 6px 14px; background: var(--accent);
+    color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="titlebar">
+      <span>● F-list Workbench</span>
+      <span class="title">Lady Amber Blaise — Logs · Daemon Enariel</span>
+      <span class="controls">— □ ✕</span>
+    </div>
+    <div class="menubar">
+      <span>File</span><span>Edit</span><span>View</span><span>Tools</span><span>Help</span>
+    </div>
+
+    <div class="main">
+      <!-- Sidebar -->
+      <div class="col sidebar">
+        <div class="sb-section-h">Active Character</div>
+        <div class="char-picker">
+          <div class="avatar"></div>
+          <div class="info">
+            <div class="name">Lady Amber Blaise</div>
+            <div class="meta">241 logs · 5 documents</div>
+          </div>
+          <div class="caret">▾</div>
+        </div>
+
+        <div class="mode-toggle">
+          <div class="mode active">Logs</div>
+          <div class="mode">Editor</div>
+        </div>
+
+        <div class="sb-section-h">Partners (4)</div>
+        <input class="sb-search" placeholder="🔍 Filter or search messages…" value="avalon">
+        <div class="sb-list">
+          <div class="sb-item active">
+            <span class="label">Daemon Enariel</span>
+            <span class="badge recent">7</span>
+          </div>
+          <div class="sb-item">
+            <span class="label">Somera</span>
+            <span class="badge">2</span>
+          </div>
+          <div class="sb-item">
+            <span class="label">Ashvalia</span>
+            <span class="badge">0</span>
+          </div>
+          <div class="sb-item">
+            <span class="label">Constanze Dumont</span>
+            <span class="badge">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log viewer -->
+      <div class="col">
+        <div class="log-head">
+          <span class="partner">Daemon Enariel</span>
+          <span class="meta">· 1,287 messages · Apr 2024 – Oct 2025</span>
+          <span class="pill" style="margin-left:auto;">IC: 412</span>
+          <span class="pill">OOC: 875</span>
+          <span class="pill">9 matches</span>
+        </div>
+        <div class="log-filters">
+          <input class="log-search" placeholder="Search this conversation…" value="avalon">
+          <span class="filter on">IC</span>
+          <span class="filter off">OOC</span>
+          <span class="filter">All days ▾</span>
+          <span class="filter">Speaker ▾</span>
+          <span class="results">9 matches · jump to next ↵</span>
+        </div>
+        <div class="log-body">
+          <div class="day-sep">Mon, 21 Apr 2025</div>
+
+          <div class="msg amber">
+            <span class="msg-actions"><span title="Ask RAG about this">🔍</span><span title="Copy">📋</span></span>
+            <span class="ts">15:36:53</span>
+            <span class="speaker">Lady Amber Blaise</span>
+            <span class="label label-ic">IC</span>
+            <span class="text">She turned the goblet slowly between her fingers, her gaze drifting toward the south-facing window. "My cousin's estate in <mark>Avalon</mark> stood empty for years after the funeral. I always meant to return, but…"</span>
+          </div>
+
+          <div class="msg partner">
+            <span class="ts">15:41:12</span>
+            <span class="speaker">Daemon Enariel</span>
+            <span class="label label-ic">IC</span>
+            <span class="text">"<mark>Avalon</mark>," he repeated, the word turning over in his mouth like an old coin. "I had not thought to hear that name from a Blaise. Your family is from there?"</span>
+          </div>
+
+          <div class="msg amber">
+            <span class="ts">15:44:08</span>
+            <span class="speaker">Lady Amber Blaise</span>
+            <span class="label label-ic">IC</span>
+            <span class="text">A faint smile. "A minor branch of a minor house. My grandmother used to say that the only thing <mark>Avalon</mark> ever produced in surplus was rain and second sons."</span>
+          </div>
+
+          <div class="msg ooc partner">
+            <span class="ts">15:46:30</span>
+            <span class="speaker">Daemon Enariel</span>
+            <span class="label label-ooc">OOC</span>
+            <span class="text">(brb dinner ~10min)</span>
+          </div>
+
+          <div class="msg partner">
+            <span class="ts">16:02:11</span>
+            <span class="speaker">Daemon Enariel</span>
+            <span class="label label-ic">IC</span>
+            <span class="text">He inclined his head with the smallest, slowest nod — the way one acknowledges something true and unfortunate at once. "I knew a man from <mark>Avalon</mark> once. He spoke of it the same way."</span>
+          </div>
+
+          <div class="day-sep">Tue, 22 Apr 2025</div>
+
+          <div class="msg system">
+            <span class="ts">09:14:00</span>
+            <span class="speaker">[ system ]</span>
+            <span class="text">Daemon Enariel went offline.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RAG -->
+    <div class="rag">
+      <div class="rag-head">
+        <span style="color: var(--text-dim); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;">RAG Chat</span>
+        <span class="pill">Scope: Amber × Daemon Enariel</span>
+        <span class="pill">Sources: Logs + live profiles</span>
+        <span class="pill">Model: gemma-4-26b</span>
+        <span style="margin-left:auto; color: var(--green); font-size: 11px;">● Qdrant local · 8,516 chunks</span>
+      </div>
+      <div class="rag-body">
+        <div class="rag-msg"><span class="role user">you</span> · Summarize what we've established about Amber's family in this RP.</div>
+        <div class="rag-msg">
+          <span class="role">rag</span> · Across the Daemon Enariel logs, Amber has established: <strong>family from Avalon</strong> (minor noble branch), grandmother used the saying about "rain and second sons", a cousin's estate stood empty after a funeral she has not yet described in detail.
+          <div class="rag-cite">↳ daemon-enariel · 2025-04-21 · chunk 412</div>
+          <div class="rag-cite">↳ daemon-enariel · 2025-04-21 · chunk 413</div>
+        </div>
+      </div>
+      <div class="rag-input">
+        <input placeholder="Ask, or /profile &lt;name&gt; / /scope all…">
+        <button class="btn">Send</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
