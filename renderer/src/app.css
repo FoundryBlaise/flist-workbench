@@ -1,0 +1,44 @@
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 24px;
+}
+
+.app h1 {
+  color: #569cd6;
+  margin: 0 0 8px;
+}
+
+.sub {
+  color: #8a8a8a;
+  margin: 0 0 24px;
+}
+
+.status {
+  background: #252526;
+  border: 1px solid #3e3e42;
+  border-radius: 6px;
+  padding: 14px 18px;
+  font-size: 14px;
+}
+
+.status-ok strong { color: #6a9955; }
+.status-error strong { color: #c97070; }
+.status-checking strong { color: #d7ba7d; }
+
+.detail {
+  color: #8a8a8a;
+  margin-left: 8px;
+}

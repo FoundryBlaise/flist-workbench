@@ -1,0 +1,22 @@
+node_modules/
+out/
+dist/
+.vite/
+*.log
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv-cache/
+
+# TypeScript composite build artifacts
+*.tsbuildinfo
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Electron builder (Phase 8)
+release/
