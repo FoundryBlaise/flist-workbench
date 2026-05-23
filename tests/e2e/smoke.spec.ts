@@ -57,10 +57,34 @@ test('app boots, sidebar loads, editor↔preview wired, F-list fetch lands', asy
 
     await window.screenshot({ path: resolve(SCREENSHOTS, 'profile-fetched.png') })
 
-    // Switch to logs mode — partner list populates.
+    // Switch to logs mode — partner list populates from real /data/fchat.
     await window.getByRole('tab', { name: 'Logs' }).click()
     await expect(window.getByTestId('log-viewer')).toBeVisible()
-    await expect(window.getByTestId('partner-list')).toBeVisible({ timeout: 5_000 })
+    const partnerList = window.getByTestId('partner-list')
+    await expect(partnerList).toBeVisible({ timeout: 5_000 })
+
+    // Click the first non-channel partner — those have parseable logs.
+    const partners = partnerList.locator('li button')
+    const partnerCount = await partners.count()
+    expect(partnerCount).toBeGreaterThan(0)
+    let opened = false
+    for (let i = 0; i < partnerCount; i++) {
+      const label = await partners.nth(i).locator('.label').textContent()
+      if (label && !label.startsWith('#')) {
+        await partners.nth(i).click()
+        opened = true
+        break
+      }
+    }
+    expect(opened).toBe(true)
+
+    // Real log lands — IC / OOC pills appear in the header.
+    const logBody = window.getByTestId('log-body')
+    await expect(logBody).toBeVisible({ timeout: 15_000 })
+    await expect(window.locator('.log-pill').filter({ hasText: /^IC \d/ })).toBeVisible()
+    // At least one message rendered.
+    await expect(logBody.locator('.log-msg').first()).toBeVisible({ timeout: 10_000 })
+
     await window.screenshot({ path: resolve(SCREENSHOTS, 'logs-mode.png') })
   } finally {
     await app.close()

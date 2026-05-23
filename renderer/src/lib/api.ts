@@ -9,6 +9,18 @@ export type Profile = {
 
 export type PartnerEntry = { name: string; bytes: number }
 
+export type LogMessage = {
+  ts: number
+  iso: string
+  type: number
+  type_name: string
+  speaker: string
+  raw: string
+  text: string
+  mentions: string[]
+  kind: 'ic' | 'ooc' | 'system'
+}
+
 function base(): string {
   return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:8765'
 }
@@ -33,6 +45,10 @@ export const api = {
   partners: (char: string) =>
     get<{ character: string; partners: PartnerEntry[] }>(
       `/logs/partners?char=${encodeURIComponent(char)}`
+    ),
+  messages: (char: string, partner: string) =>
+    get<{ character: string; partner: string; messages: LogMessage[] }>(
+      `/logs/messages?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
     ),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`)
 }

@@ -15,8 +15,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
-DEFAULT_DATA_DIR = Path("/data/fchat")
+from parser import Message, parse_log
+
+DEFAULT_DATA_DIR = Path("/sideprojects/rag/data")
 
 
 class LogDirError(Exception):
@@ -60,3 +63,51 @@ def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry
         seen[entry.name] = entry.stat().st_size
 
     return [PartnerEntry(name=name, bytes=size) for name, size in sorted(seen.items())]
+
+
+def log_path(character: str, partner: str, root: Path | None = None) -> Path:
+    base = root or data_dir()
+    path = base / character / "logs" / partner
+    if not path.exists() or not path.is_file():
+        raise LogDirError(f"log not found: {character}/{partner}")
+    return path
+
+
+def read_messages(
+    character: str,
+    partner: str,
+    *,
+    root: Path | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> Iterator[Message]:
+    """Stream parsed messages from a single partner log."""
+    path = log_path(character, partner, root)
+    skipped = 0
+    yielded = 0
+    for msg in parse_log(path):
+        if skipped < offset:
+            skipped += 1
+            continue
+        yield msg
+        yielded += 1
+        if limit is not None and yielded >= limit:
+            return
+
+
+def search_messages(
+    character: str,
+    partner: str,
+    query: str,
+    *,
+    root: Path | None = None,
+) -> list[dict]:
+    """Case-insensitive substring search across `text` (BBCode-stripped)."""
+    q = query.casefold()
+    if not q:
+        return []
+    out: list[dict] = []
+    for idx, msg in enumerate(read_messages(character, partner, root=root)):
+        if q in msg["text"].casefold():
+            out.append({"index": idx, **msg})
+    return out
