@@ -395,13 +395,25 @@ export function LogViewer() {
   }
 
   return (
-    <section className="pane log-pane" data-testid="log-viewer">
+    <section
+      className="pane log-pane"
+      data-testid="log-viewer"
+      onContextMenu={(e) => {
+        // Right-click on a message row already opens the per-message
+        // label menu (Set IC / Set OOC / Reset). Skip the
+        // conversation menu in that case — the row handler runs
+        // independently. Same for select-mode (cursor is intent on
+        // export selection, not labels).
+        const target = e.target as HTMLElement | null
+        if (target?.closest('.log-msg')) return
+        if (target?.closest('.log-label-menu')) return
+        if (selectMode) return
+        e.preventDefault()
+        openConvMenu(e.clientX, e.clientY)
+      }}
+    >
       <header
         className="pane-head log-head"
-        onContextMenu={(e) => {
-          e.preventDefault()
-          openConvMenu(e.clientX, e.clientY)
-        }}
         tabIndex={0}
         onKeyDown={(e) => {
           if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
