@@ -64,4 +64,13 @@ const bbcodeTheme = EditorView.theme(
 
 const dummyHighlight = syntaxHighlighting(HighlightStyle.define([]))
 
-export const bbcodeExtensions = [bbcodeDecorations, bbcodeTheme, dummyHighlight]
+export const bbcodeExtensions = [
+  bbcodeDecorations,
+  bbcodeTheme,
+  dummyHighlight,
+  // Profiles routinely contain very long lines (spacer rows of dashes,
+  // collapse headers padded with spaces, multi-paragraph quote bodies).
+  // Wrap them rather than scroll horizontally so the editor reads the
+  // way the preview lays out.
+  EditorView.lineWrapping
+]
