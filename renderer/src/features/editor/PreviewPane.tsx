@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
 
@@ -43,6 +43,7 @@ export function PreviewPane() {
   const setContent = useStore((s) => s.setEditorContent)
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
   // Track which source the current DOM was rendered from. When the user
   // types into the preview we use this as the "before" snapshot to
   // reverse-map edits back into BBCode.
@@ -66,9 +67,50 @@ export function PreviewPane() {
     setContent(next)
   }
 
+  // Click an inline image → open it in a lightbox. We use event
+  // delegation on the preview body so the handler keeps working after
+  // any re-render. Escape and clicking the backdrop close the lightbox.
+  const handleClick = (e: React.MouseEvent) => {
+    const t = e.target as HTMLElement
+    if (t.tagName === 'IMG' && t.classList.contains('bb-img')) {
+      e.preventDefault()
+      e.stopPropagation()
+      const img = t as HTMLImageElement
+      setLightbox({ src: img.src, alt: img.alt || 'inline image' })
+    }
+  }
+
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightbox(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [lightbox])
+
   return (
     <section className="pane preview" data-testid="preview-pane">
       <header className="pane-head">Live Preview <span className="preview-edit-hint">· editable</span></header>
+      {lightbox && (
+        <div
+          className="bb-lightbox"
+          data-testid="bb-lightbox"
+          onClick={() => setLightbox(null)}
+          role="dialog"
+          aria-label={lightbox.alt}
+        >
+          <img src={lightbox.src} alt={lightbox.alt} />
+          <button
+            type="button"
+            className="bb-lightbox-close"
+            aria-label="Close"
+            onClick={() => setLightbox(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div
         ref={ref}
         className="pane-body preview-body"
@@ -77,6 +119,7 @@ export function PreviewPane() {
         suppressContentEditableWarning
         spellCheck={false}
         onInput={handleInput}
+        onClick={handleClick}
         onFocus={() => {
           focusedRef.current = true
         }}

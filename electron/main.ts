@@ -8,6 +8,11 @@ async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
+    // Below ~900x600 the editor+preview split collapses to a few
+    // characters per pane. Enforce a floor so users don't end up with
+    // a broken layout by dragging the corner too far.
+    minWidth: 960,
+    minHeight: 600,
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),

@@ -162,8 +162,22 @@ export const useStore = create<State>((set, get) => ({
     } catch (err) {
       set({
         editorFetchStatus: 'error',
-        editorFetchError: err instanceof Error ? err.message : String(err)
+        editorFetchError: humanizeFetchError(err, name)
       })
     }
   }
 }))
+
+function humanizeFetchError(err: unknown, name: string): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  // 404 from the sidecar — F-list said "no such character".
+  if (/HTTP 404/.test(raw)) return `No character named "${name}" on F-list.`
+  // Network reach failures: fetch throws "Failed to fetch" / "TypeError"
+  // on the renderer side when the sidecar is down.
+  if (/Failed to fetch|NetworkError|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(raw)) {
+    return "Can't reach the sidecar. Is it running on port 8765?"
+  }
+  if (/HTTP 5\d\d/.test(raw)) return 'F-list is having trouble right now. Try again in a moment.'
+  if (/HTTP 4\d\d/.test(raw)) return `F-list refused that name (${raw.replace(/^HTTP \d+:\s*/, '')}).`
+  return raw
+}
