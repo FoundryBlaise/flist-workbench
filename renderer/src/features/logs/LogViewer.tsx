@@ -1,12 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useStore } from '../../state'
-import type { LogMessage } from '../../lib/api'
+import type { Label, LogMessage } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
 
-type Filter = { ic: boolean; ooc: boolean; system: boolean }
-const DEFAULT_FILTER: Filter = { ic: true, ooc: true, system: true }
+// Three semantic chips for resolved IC/OOC/Unlabeled + one for the
+// F-Chat "System" type bucket (ads/rolls/warns/events) which is
+// independent of IC/OOC and useful to silence separately.
+type Filter = { ic: boolean; ooc: boolean; unlabeled: boolean; system: boolean }
+const DEFAULT_FILTER: Filter = { ic: true, ooc: true, unlabeled: true, system: true }
+
+// A message's effective label for filtering. System-type messages
+// (ad/roll/warn/event) get bucketed as "System" regardless of label
+// — they're never roleplay content.
+function effectiveBucket(m: LogMessage): 'ic' | 'ooc' | 'unlabeled' | 'system' {
+  if (m.kind === 'system') return 'system'
+  if (m.label === 'IC') return 'ic'
+  if (m.label === 'OOC') return 'ooc'
+  // Missing label (shouldn't happen with new sidecar, but defensive) or
+  // explicit Unlabeled — both bucket as unlabeled.
+  return 'unlabeled'
+}
 
 function partnerKey(char: string | null, partner: string | null): string | null {
   return char && partner ? `${char}::${partner}` : null
@@ -119,26 +134,29 @@ export function LogViewer() {
 
   const filtered = useMemo<LogMessage[]>(() => {
     if (!messages) return []
-    const byKind = messages.filter((m) => filter[m.kind])
-    if (!search) return byKind
+    const byBucket = messages.filter((m) => filter[effectiveBucket(m)])
+    if (!search) return byBucket
     const q = search.toLowerCase()
-    return byKind.filter((m) => m.text.toLowerCase().includes(q))
+    return byBucket.filter((m) => m.text.toLowerCase().includes(q))
   }, [messages, filter, search])
 
   const stats = useMemo(() => {
-    if (!messages) return { total: 0, ic: 0, ooc: 0, system: 0, from: '', to: '' }
+    if (!messages) return { total: 0, ic: 0, ooc: 0, unlabeled: 0, system: 0, from: '', to: '' }
     // Single pass instead of three filters over 80k+ items.
     let ic = 0
     let ooc = 0
+    let unlabeled = 0
     let system = 0
     for (const m of messages) {
-      if (m.kind === 'ic') ic++
-      else if (m.kind === 'ooc') ooc++
-      else if (m.kind === 'system') system++
+      const b = effectiveBucket(m)
+      if (b === 'ic') ic++
+      else if (b === 'ooc') ooc++
+      else if (b === 'unlabeled') unlabeled++
+      else system++
     }
     const from = messages.length ? dayLabel(messages[0].ts) : ''
     const to = messages.length ? dayLabel(messages[messages.length - 1].ts) : ''
-    return { total: messages.length, ic, ooc, system, from, to }
+    return { total: messages.length, ic, ooc, unlabeled, system, from, to }
   }, [messages])
 
   type Item =
@@ -227,14 +245,16 @@ export function LogViewer() {
     )
   }
 
-  // IC/OOC/SYSTEM here reflects F-Chat's `type` field on each message,
-  // not what a roleplayer might call IC vs OOC. Channel messages get
-  // type=MSG and surface as IC even if the channel is conceptually OOC
-  // (e.g. `#german ooc` reading "IC 14k · OOC 0"). The tooltip below
-  // explains this so users don't think the parser dropped data.
-  const kindTooltip =
-    'IC/OOC/SYSTEM mirror F-Chat\'s message type field. ' +
-    'Channel messages are stored as IC even in channels named "ooc".'
+  // Chip tooltips. IC/OOC/Unlabeled come from the resolver (rule + LLM
+  // + manual). System is F-Chat's ad/roll/warn/event bucket — kept as
+  // a separate filter because it's neither IC nor OOC and the user
+  // might want to silence it independently.
+  const labelTooltip =
+    'IC / OOC / Unlabeled come from the classifier. ' +
+    'Short text (<200 chars by default) and "((…" are auto-OOC; ' +
+    'everything else is Unlabeled until you run Classify on this conversation.'
+  const systemTooltip =
+    'Ads, dice rolls, warnings and channel events. Not roleplay content.'
 
   // Map the currently-visible filtered list back into the underlying
   // `messages` array via its own array index. This is what `selRange`
@@ -315,21 +335,28 @@ export function LogViewer() {
           count={stats.ic}
           on={filter.ic}
           onClick={() => setFilter((f) => ({ ...f, ic: !f.ic }))}
-          title={kindTooltip}
+          title={labelTooltip}
         />
         <FilterButton
           label="OOC"
           count={stats.ooc}
           on={filter.ooc}
           onClick={() => setFilter((f) => ({ ...f, ooc: !f.ooc }))}
-          title={kindTooltip}
+          title={labelTooltip}
+        />
+        <FilterButton
+          label="Unlabeled"
+          count={stats.unlabeled}
+          on={filter.unlabeled}
+          onClick={() => setFilter((f) => ({ ...f, unlabeled: !f.unlabeled }))}
+          title={labelTooltip}
         />
         <FilterButton
           label="System"
           count={stats.system}
           on={filter.system}
           onClick={() => setFilter((f) => ({ ...f, system: !f.system }))}
-          title={kindTooltip}
+          title={systemTooltip}
         />
         {search && rendered.hitTotal > 0 && (
           <button
@@ -458,6 +485,10 @@ function FilterButton({
   )
 }
 
+// Confidence ≥ this gets a "trusted" visual; below it we hint visually
+// that the LLM wasn't sure. Manual labels are always 1.0 and trusted.
+const CONFIDENT_LABEL = 0.7
+
 function MessageRow({
   msg,
   search,
@@ -484,9 +515,10 @@ function MessageRow({
     () => highlight(msg.text, search, hitsBefore, activeHit).html,
     [msg.text, search, hitsBefore, activeHit]
   )
+  const bucket = effectiveBucket(msg)
   const klass = [
     'log-msg',
-    `log-msg-${msg.kind}`,
+    `log-msg-${bucket}`,
     isOwn ? 'log-msg-own' : 'log-msg-other',
     selectMode ? 'log-msg-selectable' : '',
     selected ? 'log-msg-selected' : ''
@@ -508,8 +540,52 @@ function MessageRow({
         {timeLabel(msg.ts)}
       </span>
       <span className="log-speaker">{msg.speaker}</span>
-      <span className={`log-label log-label-${msg.kind}`}>{msg.kind.toUpperCase()}</span>
+      <LabelBadge bucket={bucket} label={msg.label} source={msg.label_source} confidence={msg.label_confidence} />
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
+  )
+}
+
+function LabelBadge({
+  bucket,
+  label,
+  source,
+  confidence
+}: {
+  bucket: 'ic' | 'ooc' | 'unlabeled' | 'system'
+  label?: Label
+  source?: 'llm' | 'manual'
+  confidence?: number
+}) {
+  const text =
+    bucket === 'system'
+      ? 'SYS'
+      : bucket === 'unlabeled'
+        ? 'UNL'
+        : bucket === 'ic'
+          ? 'IC'
+          : 'OOC'
+  const lowConfidence = source === 'llm' && typeof confidence === 'number' && confidence < CONFIDENT_LABEL
+  const klass = [
+    'log-label',
+    `log-label-${bucket}`,
+    source ? `log-label-src-${source}` : '',
+    lowConfidence ? 'log-label-lowconf' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+  // Title surfaces the source & confidence on hover; useful when the
+  // user is auditing the classifier's guesses.
+  const tip = source
+    ? `${label} · ${source}${typeof confidence === 'number' ? ` · ${(confidence * 100).toFixed(0)}%` : ''}`
+    : bucket === 'system'
+      ? 'F-Chat system message'
+      : bucket === 'unlabeled'
+        ? 'Not classified — Classify on demand'
+        : `${label} · rule`
+  return (
+    <span className={klass} title={tip}>
+      {text}
+    </span>
   )
 }

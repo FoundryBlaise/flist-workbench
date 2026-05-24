@@ -24,6 +24,16 @@ CREATE TABLE IF NOT EXISTS settings (
 # trivial; the API layer is where shape validation happens.
 KEY_FCHAT_DATA_DIR = "fchat_data_dir"
 
+# Labels / classifier settings (see sidecar/labels.py for defaults +
+# resolver). Stored as strings; numeric/JSON parsing is the consumer's
+# job. The system_prompt key holds the entire classifier system prompt
+# so users can tune it without touching code.
+KEY_LABELS_THRESHOLD_CHARS = "labels.threshold_chars"
+KEY_LABELS_LLM_ENDPOINT = "labels.llm_endpoint"
+KEY_LABELS_LLM_MODEL = "labels.llm_model"
+KEY_LABELS_LLM_API_KEY = "labels.llm_api_key"
+KEY_LABELS_SYSTEM_PROMPT = "labels.system_prompt"
+
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
     # Reuse documents.connect so we share the same DB file. It already

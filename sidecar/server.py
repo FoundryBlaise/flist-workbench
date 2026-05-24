@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import documents
+import labels as labels_store
 import settings as settings_store
 from flist import ProfileNotFound, fetch_profile
 from logs import (
@@ -68,6 +69,27 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
         messages = list(read_messages(char, partner, offset=offset, limit=limit))
     except LogDirError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # Resolve each message's IC/OOC/Unlabeled label live — labels are
+    # rule-on-read, so settings changes (e.g. threshold) take effect
+    # immediately without rebuilding the DB.
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        by_hash = labels_store.labels_for_partner(labels_conn, char, partner)
+        for m in messages:
+            row = by_hash.get(labels_store.msg_hash(m))
+            m["label"] = labels_store.resolve(m, row, lab_settings)
+            if row is not None:
+                m["label_source"] = row["source"]
+                m["label_confidence"] = row["confidence"]
+            # Otherwise no source/confidence is attached — the UI can
+            # infer "rule or unlabeled" from absence of label_source.
+    finally:
+        settings_conn.close()
+        labels_conn.close()
+
     return {"character": char, "partner": partner, "offset": offset, "messages": messages}
 
 
@@ -93,6 +115,33 @@ def logs_contacts(name: str) -> dict:
     return find_contacts(name)
 
 
+# ---- labels -------------------------------------------------------------
+
+
+@app.get("/labels/stats")
+def labels_stats(char: str, partner: str) -> dict:
+    try:
+        messages = list(read_messages(char, partner))
+    except LogDirError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        counts = labels_store.stats(labels_conn, char, partner, messages, lab_settings)
+    finally:
+        settings_conn.close()
+        labels_conn.close()
+    return {
+        "character": char,
+        "partner": partner,
+        "ic": counts[labels_store.LABEL_IC],
+        "ooc": counts[labels_store.LABEL_OOC],
+        "unlabeled": counts[labels_store.LABEL_UNLABELED],
+        "total": sum(counts.values()),
+    }
+
+
 # ---- settings -----------------------------------------------------------
 
 
@@ -104,11 +153,23 @@ def _settings_db():
         conn.close()
 
 
+class LabelsSettingsUpdate(BaseModel):
+    # Empty strings restore the default for any of these — see
+    # labels.load_settings() for the fallback policy. None means "leave
+    # untouched". threshold_chars below 1 is clamped silently.
+    threshold_chars: int | None = None
+    llm_endpoint: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    system_prompt: str | None = None
+
+
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
     # the directory picker's "no folder selected" state.
     fchat_data_dir: str | None = None
+    labels: LabelsSettingsUpdate | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -119,6 +180,7 @@ def _settings_dict(conn) -> dict:
     # `effective` is what the sidecar will actually read from on the
     # next /logs request — useful for the UI to display the live path
     # regardless of where the override came from.
+    lab = labels_store.load_settings(conn)
     return {
         "fchat_data_dir": stored,
         "fchat_data_dir_effective": str(logs.data_dir()),
@@ -126,6 +188,22 @@ def _settings_dict(conn) -> dict:
         # should disable the picker in that case so the user isn't
         # surprised by their setting being ignored.
         "fchat_data_dir_env_locked": env_pinned,
+        "labels": {
+            "threshold_chars": lab.threshold_chars,
+            "llm_endpoint": lab.llm_endpoint,
+            "llm_model": lab.llm_model,
+            "llm_api_key": lab.llm_api_key,
+            "system_prompt": lab.system_prompt,
+            # Defaults exposed so the UI can show "(default)" hints and
+            # offer a one-click reset without hardcoding them.
+            "defaults": {
+                "threshold_chars": labels_store.DEFAULT_THRESHOLD_CHARS,
+                "llm_endpoint": labels_store.DEFAULT_LLM_ENDPOINT,
+                "llm_model": labels_store.DEFAULT_LLM_MODEL,
+                "llm_api_key": labels_store.DEFAULT_LLM_API_KEY,
+                "system_prompt": labels_store.DEFAULT_SYSTEM_PROMPT,
+            },
+        },
     }
 
 
@@ -152,7 +230,37 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
             settings_store.set_value(conn, settings_store.KEY_FCHAT_DATA_DIR, str(p))
         else:
             settings_store.clear(conn, settings_store.KEY_FCHAT_DATA_DIR)
+
+    if body.labels is not None:
+        _apply_labels_update(conn, body.labels)
+
     return _settings_dict(conn)
+
+
+def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
+    """Persist each labels field that was supplied.
+
+    Convention: empty string clears (falls back to default on read).
+    None means "leave untouched". threshold_chars below 1 is clamped to
+    1 — zero or negative would make every message OOC and is almost
+    certainly a typo.
+    """
+    if update.threshold_chars is not None:
+        n = max(1, int(update.threshold_chars))
+        settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(n))
+    for field, key in (
+        ("llm_endpoint", settings_store.KEY_LABELS_LLM_ENDPOINT),
+        ("llm_model", settings_store.KEY_LABELS_LLM_MODEL),
+        ("llm_api_key", settings_store.KEY_LABELS_LLM_API_KEY),
+        ("system_prompt", settings_store.KEY_LABELS_SYSTEM_PROMPT),
+    ):
+        value = getattr(update, field)
+        if value is None:
+            continue
+        if value == "":
+            settings_store.clear(conn, key)
+        else:
+            settings_store.set_value(conn, key, value)
 
 
 # ---- documents ----------------------------------------------------------

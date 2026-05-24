@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../../lib/api'
+import { api, type LabelsSettings } from '../../lib/api'
 import { useStore } from '../../state'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
+
+const ENDPOINT_PRESETS = [
+  { label: 'LM Studio', url: 'http://localhost:1234/v1' },
+  { label: 'Ollama', url: 'http://localhost:11434/v1' },
+  { label: 'OpenAI', url: 'https://api.openai.com/v1' }
+]
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const loadCharacters = useStore((s) => s.loadCharacters)
@@ -83,7 +89,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <header className="modal-head">
           <div>
             <h2 className="modal-title">Settings</h2>
-            <p className="modal-subtitle">Where this app reads your F-Chat logs from.</p>
+            <p className="modal-subtitle">F-Chat data location and label classifier.</p>
           </div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             ✕
@@ -91,8 +97,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </header>
         <div className="modal-body settings-body">
           <section className="settings-section">
+            <h3 className="settings-section-title">F-Chat data directory</h3>
             <label className="settings-label" htmlFor="fchat-data-dir-input">
-              F-Chat data directory
+              Path
             </label>
             <p className="settings-help">
               F-Chat 3.0 writes each character's logs under{' '}
@@ -156,8 +163,235 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               )}
             </div>
           </section>
+
+          {state?.labels && (
+            <LabelsSection
+              labels={state.labels}
+              onSaved={(next) => setState((prev) => (prev ? { ...prev, labels: next } : prev))}
+            />
+          )}
         </div>
       </div>
     </div>
+  )
+}
+
+function LabelsSection({
+  labels,
+  onSaved
+}: {
+  labels: LabelsSettings
+  onSaved: (next: LabelsSettings) => void
+}) {
+  // Each field has its own local input so users can edit without losing
+  // unsaved changes on a re-render. Save sends only the deltas vs. the
+  // currently-persisted values to keep the API tight.
+  const [threshold, setThreshold] = useState(String(labels.threshold_chars))
+  const [endpoint, setEndpoint] = useState(labels.llm_endpoint)
+  const [model, setModel] = useState(labels.llm_model)
+  const [apiKey, setApiKey] = useState(labels.llm_api_key)
+  const [prompt, setPrompt] = useState(labels.system_prompt)
+  const [showKey, setShowKey] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
+  const [error, setError] = useState<string | null>(null)
+
+  // Keep local form in sync when parent reloads settings (e.g. after save).
+  useEffect(() => {
+    setThreshold(String(labels.threshold_chars))
+    setEndpoint(labels.llm_endpoint)
+    setModel(labels.llm_model)
+    setApiKey(labels.llm_api_key)
+    setPrompt(labels.system_prompt)
+  }, [labels])
+
+  const save = async () => {
+    setStatus('saving')
+    setError(null)
+    const parsedThreshold = Number(threshold)
+    if (!Number.isFinite(parsedThreshold) || parsedThreshold < 1) {
+      setError('Threshold must be a positive integer.')
+      setStatus('error')
+      return
+    }
+    try {
+      const updated = await api.settingsUpdate({
+        labels: {
+          threshold_chars: Math.floor(parsedThreshold),
+          llm_endpoint: endpoint,
+          llm_model: model,
+          llm_api_key: apiKey,
+          // Empty prompt is interpreted as "reset to default" server-side.
+          system_prompt: prompt
+        }
+      })
+      onSaved(updated.labels)
+      setStatus('idle')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setStatus('error')
+    }
+  }
+
+  const resetPrompt = () => setPrompt(labels.defaults.system_prompt)
+  const resetEndpoint = () => setEndpoint(labels.defaults.llm_endpoint)
+  const resetModel = () => setModel(labels.defaults.llm_model)
+  const resetThreshold = () => setThreshold(String(labels.defaults.threshold_chars))
+
+  const isPromptDefault = prompt === labels.defaults.system_prompt
+
+  return (
+    <section className="settings-section">
+      <h3 className="settings-section-title">Labels (IC / OOC classifier)</h3>
+      <p className="settings-help">
+        Settings for the on-demand IC/OOC classifier. Short messages and{' '}
+        <code>((…</code> auto-OOC by rule; everything else stays Unlabeled until you run Classify on a
+        conversation.
+      </p>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="labels-threshold">
+          OOC threshold (chars)
+        </label>
+        <p className="settings-help">
+          Chat messages shorter than this many characters are auto-classified as OOC without
+          asking the LLM.
+        </p>
+        <div className="settings-row">
+          <input
+            id="labels-threshold"
+            type="number"
+            min={1}
+            className="settings-input settings-input-narrow"
+            value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+            data-testid="labels-threshold-input"
+          />
+          <button type="button" className="settings-clear" onClick={resetThreshold}>
+            Default ({labels.defaults.threshold_chars})
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="labels-endpoint">
+          LLM endpoint (OpenAI-compatible)
+        </label>
+        <p className="settings-help">
+          Pick a preset or type a custom URL. The classifier posts to{' '}
+          <code>&lt;endpoint&gt;/chat/completions</code>. Ollama, LM Studio and OpenAI all expose
+          this shape.
+        </p>
+        <div className="settings-row">
+          {ENDPOINT_PRESETS.map((p) => (
+            <button
+              key={p.url}
+              type="button"
+              className={`settings-preset ${endpoint === p.url ? 'on' : ''}`}
+              onClick={() => setEndpoint(p.url)}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button type="button" className="settings-clear" onClick={resetEndpoint}>
+            Default
+          </button>
+        </div>
+        <input
+          id="labels-endpoint"
+          type="text"
+          className="settings-input"
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          data-testid="labels-endpoint-input"
+        />
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="labels-model">
+          Model name
+        </label>
+        <div className="settings-row">
+          <input
+            id="labels-model"
+            type="text"
+            className="settings-input"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            data-testid="labels-model-input"
+          />
+          <button type="button" className="settings-clear" onClick={resetModel}>
+            Default
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="labels-api-key">
+          API key (leave blank for local LM Studio / Ollama)
+        </label>
+        <div className="settings-row">
+          <input
+            id="labels-api-key"
+            type={showKey ? 'text' : 'password'}
+            className="settings-input"
+            value={apiKey}
+            placeholder="sk-…"
+            autoComplete="off"
+            onChange={(e) => setApiKey(e.target.value)}
+            data-testid="labels-api-key-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setShowKey((v) => !v)}
+            title={showKey ? 'Hide key' : 'Show key'}
+          >
+            {showKey ? 'Hide' : 'Show'}
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="labels-prompt">
+          Classifier system prompt
+        </label>
+        <p className="settings-help">
+          Sent as the system message before each target message + its 3-message context window.
+          Resets to the bundled default if you save it blank.
+        </p>
+        <textarea
+          id="labels-prompt"
+          className="settings-textarea"
+          rows={14}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          data-testid="labels-prompt-input"
+        />
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={resetPrompt}
+            disabled={isPromptDefault}
+          >
+            Reset to default prompt
+          </button>
+          <span className="settings-meta">{prompt.length.toLocaleString()} chars</span>
+        </div>
+      </div>
+
+      {error && <p className="settings-error">{error}</p>}
+      <div className="settings-actions">
+        <button
+          type="button"
+          className="settings-save"
+          onClick={() => void save()}
+          disabled={status === 'saving'}
+          data-testid="labels-save"
+        >
+          {status === 'saving' ? 'Saving…' : 'Save labels settings'}
+        </button>
+      </div>
+    </section>
   )
 }
