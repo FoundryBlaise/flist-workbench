@@ -113,10 +113,15 @@ export function LogViewer() {
   const [selectMode, setSelectMode] = useState(false)
   const [selRange, setSelRange] = useState<[number, number] | null>(null)
   const [labelMenu, setLabelMenu] = useState<LabelMenuState>(null)
+  // Separate menu for conversation-level actions (Classify whole
+  // conversation, …) — right-click on the pane header. Distinct from
+  // labelMenu which is per-message.
+  const [convMenu, setConvMenu] = useState<{ x: number; y: number } | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   const markSeen = useStore((s) => s.markCharacterSeen)
   const applyLabelOverride = useStore((s) => s.applyLabelOverride)
+  const openClassify = useStore((s) => s.openClassify)
 
   useEffect(() => {
     if (activeChar && partner) {
@@ -135,7 +140,27 @@ export function LogViewer() {
     setSelRange(null)
     setSelectMode(false)
     setLabelMenu(null)
+    setConvMenu(null)
   }, [key])
+
+  // Close the conversation menu on Escape or any non-menu click.
+  useEffect(() => {
+    if (!convMenu) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConvMenu(null)
+    }
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t?.closest('.log-conv-menu')) return
+      setConvMenu(null)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onClick)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onClick)
+    }
+  }, [convMenu])
 
   // Close the label menu on Escape or any non-menu click — same
   // affordance users expect from native context menus.
@@ -359,9 +384,29 @@ export function LogViewer() {
 
   const unlabeledCount = stats.unlabeled
 
+  const openConvMenu = (x: number, y: number) => {
+    if (!activeChar) return
+    setConvMenu({ x, y })
+  }
+
   return (
     <section className="pane log-pane" data-testid="log-viewer">
-      <header className="pane-head log-head">
+      <header
+        className="pane-head log-head"
+        onContextMenu={(e) => {
+          e.preventDefault()
+          openConvMenu(e.clientX, e.clientY)
+        }}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+            e.preventDefault()
+            const r = e.currentTarget.getBoundingClientRect()
+            openConvMenu(r.left + 16, r.bottom)
+          }
+        }}
+        data-testid="log-head"
+      >
         <span className="partner">{displayPartner(partner)}</span>
         <span className="log-meta">
           {stats.total.toLocaleString()} messages · {stats.from === stats.to ? stats.from : `${stats.from} → ${stats.to}`}
@@ -375,12 +420,28 @@ export function LogViewer() {
           <span
             className="log-unlabeled-hint"
             data-testid="log-unlabeled-hint"
-            title="Open the Logs menu → Classify Current Conversation to send these to the LLM."
+            title="Right-click this header (or open the Logs menu) to Classify these messages."
           >
-            {unlabeledCount.toLocaleString()} unlabeled · Logs menu → Classify
+            {unlabeledCount.toLocaleString()} unlabeled · right-click to Classify
           </span>
         )}
       </header>
+      {convMenu && activeChar && (
+        <ConversationContextMenu
+          x={convMenu.x}
+          y={convMenu.y}
+          partnerLabel={displayPartner(partner)}
+          characterLabel={activeChar}
+          unlabeledCount={unlabeledCount}
+          onClassify={() => {
+            setConvMenu(null)
+            openClassify(
+              { character: activeChar, partner },
+              `${displayPartner(partner)} with ${activeChar}`
+            )
+          }}
+        />
+      )}
       <div className="log-filters">
         <input
           className="log-search"
@@ -660,6 +721,68 @@ function MessageRow({
         priorSource={msg.prior_source}
       />
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
+    </div>
+  )
+}
+
+function ConversationContextMenu({
+  x,
+  y,
+  partnerLabel,
+  characterLabel,
+  unlabeledCount,
+  onClassify
+}: {
+  x: number
+  y: number
+  partnerLabel: string
+  characterLabel: string
+  unlabeledCount: number
+  onClassify: () => void
+}) {
+  const W = 260
+  const H = 110
+  const left = Math.min(x, window.innerWidth - W - 8)
+  const top = Math.min(y, window.innerHeight - H - 8)
+  const ref = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    ref.current?.focus()
+  }, [])
+  const disabled = unlabeledCount === 0
+  return (
+    <div
+      className="log-label-menu log-conv-menu"
+      role="menu"
+      aria-label="Conversation actions"
+      style={{ left, top }}
+      data-testid="log-conv-menu"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="log-label-menu-head">
+        {partnerLabel}
+        <span className="log-label-menu-current">{characterLabel}</span>
+      </div>
+      <button
+        ref={ref}
+        type="button"
+        role="menuitem"
+        className="log-label-menu-item"
+        onClick={onClassify}
+        disabled={disabled}
+        title={
+          disabled
+            ? 'Nothing left to classify in this conversation.'
+            : `Send ${unlabeledCount.toLocaleString()} unlabeled messages to the LLM.`
+        }
+        data-testid="log-conv-menu-classify"
+      >
+        Classify this conversation
+        {!disabled && (
+          <span className="log-label-menu-current">
+            {unlabeledCount.toLocaleString()} unlabeled
+          </span>
+        )}
+      </button>
     </div>
   )
 }
