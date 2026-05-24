@@ -4,25 +4,27 @@ import { join } from 'node:path'
 
 let proc: ChildProcess | null = null
 
-const PORT = Number(process.env['SIDECAR_PORT'] ?? 8765)
+// Packaged builds default to 8770 so they don't collide with the dev
+// container's :8765 forward on the maintainer's machine.
+const DEFAULT_PORT = app.isPackaged ? 8770 : 8765
+const PORT = Number(process.env['SIDECAR_PORT'] ?? DEFAULT_PORT)
+process.env['SIDECAR_PORT'] = String(PORT)
 
 export async function startSidecar(): Promise<void> {
-  const sidecarDir = app.isPackaged
-    ? join(process.resourcesPath, 'sidecar')
-    : join(__dirname, '../../sidecar')
-
-  // Dev runs through `uv run` so deps resolve against the project venv.
-  // Phase 8 packaging will swap in a bundled Python interpreter.
-  const cmd = app.isPackaged ? 'python' : 'uv'
-  const args = app.isPackaged
-    ? ['-m', 'uvicorn', 'server:app', '--port', String(PORT)]
-    : ['run', 'uvicorn', 'server:app', '--port', String(PORT)]
-
-  proc = spawn(cmd, args, {
-    cwd: sidecarDir,
-    env: { ...process.env, SIDECAR_PORT: String(PORT) },
-    stdio: ['ignore', 'inherit', 'inherit']
-  })
+  if (app.isPackaged) {
+    const exe = join(process.resourcesPath, 'sidecar.exe')
+    proc = spawn(exe, [], {
+      env: { ...process.env, SIDECAR_PORT: String(PORT) },
+      stdio: ['ignore', 'inherit', 'inherit']
+    })
+  } else {
+    const sidecarDir = join(__dirname, '../../sidecar')
+    proc = spawn('uv', ['run', 'uvicorn', 'server:app', '--port', String(PORT)], {
+      cwd: sidecarDir,
+      env: { ...process.env, SIDECAR_PORT: String(PORT) },
+      stdio: ['ignore', 'inherit', 'inherit']
+    })
+  }
 
   proc.on('exit', (code) => {
     console.log(`[sidecar] exited with code ${code}`)

@@ -1,14 +1,35 @@
 # Packaging F-list Workbench for Windows
 
-Handoff for a Windows-based agent. You're producing a portable Windows
-build of this app (an `.exe` installer and/or unpacked folder). The
-codebase was built and tested in a Linux devcontainer; nothing here
-has been run on Windows yet, so this is greenfield Phase 6 packaging
-work.
-
-Treat this doc as your spec. If something here contradicts what you
-see in the repo, the repo wins — flag it back to the maintainer rather
-than working around it.
+> **Status:** Implemented 2026-05-24. The repo now contains a working
+> Windows pack pipeline. To rebuild the portable .exe:
+>
+> ```cmd
+> npm run pack:win
+> ```
+>
+> That runs three things in order:
+> 1. `electron-vite build` — bundles main / preload / renderer into `out/`
+> 2. `npm run pack:sidecar` — PyInstaller bundles `sidecar/` into
+>    `resources/sidecar.exe` (one-file, windowed/no-console)
+> 3. `electron-builder --win` — wraps the lot into a single portable
+>    .exe at `dist-electron/F-list Workbench-0.0.0-x64-portable.exe`
+>
+> Output size: ~90 MB. No installer, no Python required on the target
+> machine, double-click to run. First launch shows a SmartScreen
+> "unrecognized app" warning (unsigned binary) — click "More info" →
+> "Run anyway."
+>
+> **Prereqs on the build machine:** Node 22+, Python 3.12+, `uv` on
+> `PATH`, and a one-time `uv sync` inside `sidecar/` to create the venv
+> that `pack:sidecar` invokes PyInstaller from.
+>
+> **Default ports:** packaged builds bind sidecar on **8770** (not the
+> dev default 8765) to dodge the maintainer's dev-container forward.
+> Override with `SIDECAR_PORT` env var if needed.
+>
+> The rest of this doc is the original implementation spec, kept for
+> reference. The "Things that will probably bite you" section near the
+> bottom is still worth a read before changing the pipeline.
 
 ---
 

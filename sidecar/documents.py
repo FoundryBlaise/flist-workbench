@@ -67,7 +67,7 @@ SCRATCH_SEED = (
     "[b]Try:[/b]\n"
     "[indent][b]Bold[/b], [i]italic[/i], [u]underline[/u], [s]strike[/s].[/indent]\n"
     "[indent]Coloured text in [color=red]red[/color], [color=blue]blue[/color], [color=green]green[/color].[/indent]\n"
-    "[indent]Inline character icons: [icon]Azure Viper[/icon] [icon]Auldren Nadir[/icon][/indent]\n"
+    "[indent]Inline character icons: [icon]CharacterName[/icon] — replace with any public F-list character name.[/indent]\n"
     "[indent]Emote icons: [eicon]smirk[/eicon] [eicon]wink[/eicon][/indent]\n"
     "[indent]A link: [url=https://www.f-list.net]F-list[/url][/indent]\n\n"
     "[collapse=Click to expand][center]Hidden content.[/center][/collapse]"
