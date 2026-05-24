@@ -1470,6 +1470,141 @@ body {
   opacity: 0.82;
 }
 .log-msg-unlabeled { color: var(--text-dim); }
+
+/* Right-click → context menu for setting / resetting a message's label.
+   Positioned absolutely against the viewport, kept inside bounds by
+   the component itself. */
+.log-label-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 200px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.log-label-menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.log-label-menu-current {
+  font-size: 10px;
+  color: var(--accent);
+  letter-spacing: 0.3px;
+}
+.log-label-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.log-label-menu-item:hover:not(:disabled) {
+  background: var(--accent);
+  color: white;
+}
+.log-label-menu-item:disabled { opacity: 0.4; cursor: default; }
+.log-label-menu-reset {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  color: var(--text-dim);
+}
+
+/* Inline Classify… button in the log viewer header. Item-scoped
+   (acts on the open conversation) so it stays in-context per the
+   native-menu rule. */
+.log-classify {
+  background: var(--tag-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.log-classify:hover:not(:disabled) { border-color: var(--accent); }
+.log-classify:disabled { opacity: 0.4; cursor: default; }
+
+/* Classify action inside the character-picker dropdown. */
+.char-picker-classify {
+  margin: 6px 8px 8px;
+  background: var(--tag-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.char-picker-classify:hover { border-color: var(--accent); }
+
+/* Classify progress dialog. */
+.classify-modal { width: 560px; max-width: 95vw; }
+.classify-progress-bar {
+  height: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 6px 0 10px;
+}
+.classify-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease-out;
+}
+.classify-progress-fill.classify-state-done { background: #4a8a4a; }
+.classify-progress-fill.classify-state-cancelled { background: #b08040; }
+.classify-progress-fill.classify-state-failed { background: var(--accent-2); }
+.classify-progress-text { margin: 4px 0; font-size: 13px; }
+.classify-state {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--tag-bg);
+  color: var(--text-dim);
+}
+.classify-state.classify-state-running { background: var(--accent); color: white; }
+.classify-state.classify-state-done { background: #2d4a2d; color: #b0d8b0; }
+.classify-state.classify-state-cancelled { background: #5a4a2d; color: #d8c890; }
+.classify-state.classify-state-failed { background: #4a2d2d; color: #d8a0a0; }
+.classify-fail { color: var(--accent-2); }
+.classify-current { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
+.classify-current code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+}
+.classify-last-error { color: var(--accent-2); }
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
 .log-text { white-space: pre-wrap; word-wrap: break-word; }
 .log-hit { background: #6a5e1f; color: #ffeba8; padding: 0 2px; border-radius: 2px; }
 .log-hit-active { background: #c08a30; color: #1a1a1a; }

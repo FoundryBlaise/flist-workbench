@@ -167,8 +167,38 @@ export function CharacterPicker() {
               <li className="char-picker-empty-result">No match for "{query}"</li>
             )}
           </ul>
+          {active && (
+            <ClassifyAllPartnersButton
+              character={active}
+              onAfter={() => setOpen(false)}
+            />
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+function ClassifyAllPartnersButton({
+  character,
+  onAfter
+}: {
+  character: string
+  onAfter: () => void
+}) {
+  const openClassify = useStore((s) => s.openClassify)
+  return (
+    <button
+      type="button"
+      className="char-picker-classify"
+      onClick={() => {
+        openClassify({ character }, `All partners for ${displayName(character)}`)
+        onAfter()
+      }}
+      title="Send every unlabeled message across this character's DMs to the LLM for IC/OOC classification."
+      data-testid="char-picker-classify"
+    >
+      Classify all partners for {displayName(character)}…
+    </button>
   )
 }

@@ -6,6 +6,9 @@ export type MenuAction =
   | 'find-contacts'
   | 'search-all-partners'
   | 'settings'
+  | 'classify-current'
+  | 'classify-character'
+  | 'classify-all'
 
 declare global {
   interface Window {

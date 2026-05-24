@@ -9,6 +9,9 @@ export type MenuAction =
   | 'find-contacts'
   | 'search-all-partners'
   | 'settings'
+  | 'classify-current'
+  | 'classify-character'
+  | 'classify-all'
 
 function send(win: BrowserWindow | null, action: MenuAction): void {
   if (win && !win.isDestroyed()) {
@@ -91,6 +94,22 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           id: 'search-all-partners',
           label: 'Search All Partners…',
           click: () => send(getWindow(), 'search-all-partners')
+        },
+        { type: 'separator' },
+        {
+          id: 'classify-current',
+          label: 'Classify Current Conversation…',
+          click: () => send(getWindow(), 'classify-current')
+        },
+        {
+          id: 'classify-character',
+          label: 'Classify Active Character (all partners)…',
+          click: () => send(getWindow(), 'classify-character')
+        },
+        {
+          id: 'classify-all',
+          label: 'Classify All Characters…',
+          click: () => send(getWindow(), 'classify-all')
         }
       ]
     },

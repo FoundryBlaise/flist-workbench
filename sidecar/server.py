@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 import documents
 import labels as labels_store
+import labels_jobs
 import settings as settings_store
 from flist import ProfileNotFound, fetch_profile
 from logs import (
@@ -79,7 +80,11 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
         lab_settings = labels_store.load_settings(settings_conn)
         by_hash = labels_store.labels_for_partner(labels_conn, char, partner)
         for m in messages:
-            row = by_hash.get(labels_store.msg_hash(m))
+            h = labels_store.msg_hash(m)
+            # Send the hash so the renderer can call /labels/override
+            # without re-implementing sha1(ts|speaker|raw) client-side.
+            m["hash"] = h
+            row = by_hash.get(h)
             m["label"] = labels_store.resolve(m, row, lab_settings)
             if row is not None:
                 m["label_source"] = row["source"]
@@ -140,6 +145,98 @@ def labels_stats(char: str, partner: str) -> dict:
         "unlabeled": counts[labels_store.LABEL_UNLABELED],
         "total": sum(counts.values()),
     }
+
+
+class ClassifyJobRequest(BaseModel):
+    # All optional. {} = classify every character × every partner.
+    # {character: X} = all partners for character X. {character: X,
+    # partner: Y} = a single conversation.
+    character: str | None = None
+    partner: str | None = None
+
+
+@app.post("/labels/classify", status_code=202)
+def labels_classify_start(body: ClassifyJobRequest) -> dict:
+    if body.partner and not body.character:
+        raise HTTPException(status_code=400, detail="partner requires character")
+    scope: dict = {}
+    if body.character:
+        scope["character"] = body.character
+    if body.partner:
+        scope["partner"] = body.partner
+    job = labels_jobs.start(scope)
+    return job.to_dict()
+
+
+@app.get("/labels/jobs")
+def labels_jobs_list() -> dict:
+    return {"jobs": [j.to_dict() for j in labels_jobs.registry().list()]}
+
+
+@app.get("/labels/jobs/{job_id}")
+def labels_job_get(job_id: str) -> dict:
+    job = labels_jobs.registry().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    return job.to_dict()
+
+
+@app.delete("/labels/jobs/{job_id}")
+def labels_job_cancel(job_id: str) -> dict:
+    ok = labels_jobs.registry().cancel(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    return {"id": job_id, "cancel_requested": True}
+
+
+class LabelOverride(BaseModel):
+    character: str
+    partner: str
+    hash: str
+    ts: int
+    speaker: str
+    # label=None / missing deletes the row (revert to rule / Unlabeled).
+    label: str | None = None
+
+
+@app.post("/labels/override")
+def labels_override(body: LabelOverride) -> dict:
+    conn = labels_store.connect()
+    try:
+        if body.label is None:
+            removed = labels_store.delete_label(conn, body.hash)
+            return {"hash": body.hash, "deleted": removed, "label": None}
+        if body.label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
+            raise HTTPException(
+                status_code=400,
+                detail=f"label must be IC or OOC, got {body.label!r}",
+            )
+        labels_store.upsert_label(
+            conn,
+            hash=body.hash,
+            character=body.character,
+            partner=body.partner,
+            ts=body.ts,
+            speaker=body.speaker,
+            label=body.label,
+            source="manual",
+            confidence=1.0,
+            reason="manual override",
+        )
+        row = conn.execute(
+            "SELECT label, source, confidence, prior_label, prior_source FROM labels WHERE hash = ?",
+            (body.hash,),
+        ).fetchone()
+        return {
+            "hash": body.hash,
+            "label": row["label"],
+            "source": row["source"],
+            "confidence": row["confidence"],
+            "prior_label": row["prior_label"],
+            "prior_source": row["prior_source"],
+        }
+    finally:
+        conn.close()
 
 
 # ---- settings -----------------------------------------------------------

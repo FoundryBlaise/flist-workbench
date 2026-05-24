@@ -298,3 +298,50 @@ def test_settings_put_empty_string_resets_to_default(api_client: TestClient) -> 
 def test_settings_put_clamps_threshold_below_one(api_client: TestClient) -> None:
     res = api_client.put("/settings", json={"labels": {"threshold_chars": -5}}).json()
     assert res["labels"]["threshold_chars"] == 1
+
+
+# ---- /labels/override ---------------------------------------------------
+
+
+def _override_body(label: str | None = "IC", hash: str = "deadbeefdeadbeef") -> dict:
+    return {
+        "character": "Char",
+        "partner": "Partner",
+        "hash": hash,
+        "ts": 1700000000,
+        "speaker": "Partner",
+        "label": label,
+    }
+
+
+def test_override_creates_manual_label(api_client: TestClient) -> None:
+    res = api_client.post("/labels/override", json=_override_body("IC")).json()
+    assert res["label"] == "IC"
+    assert res["source"] == "manual"
+    assert res["confidence"] == 1.0
+    assert res["prior_label"] is None
+
+
+def test_override_snapshots_prior_label(api_client: TestClient) -> None:
+    api_client.post("/labels/override", json=_override_body("IC"))
+    res = api_client.post("/labels/override", json=_override_body("OOC")).json()
+    assert res["label"] == "OOC"
+    # The previous manual IC becomes the prior snapshot.
+    assert res["prior_label"] == "IC"
+    assert res["prior_source"] == "manual"
+
+
+def test_override_delete_with_null_label(api_client: TestClient) -> None:
+    api_client.post("/labels/override", json=_override_body("IC"))
+    res = api_client.post("/labels/override", json=_override_body(None)).json()
+    assert res["label"] is None
+    assert res["deleted"] is True
+    # Deleting again is a no-op (idempotent).
+    res = api_client.post("/labels/override", json=_override_body(None)).json()
+    assert res["deleted"] is False
+
+
+def test_override_rejects_invalid_label(api_client: TestClient) -> None:
+    res = api_client.post("/labels/override", json=_override_body("MAYBE"))
+    assert res.status_code == 400
+    assert "IC or OOC" in res.json()["detail"]
