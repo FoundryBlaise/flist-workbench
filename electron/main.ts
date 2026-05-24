@@ -1,8 +1,29 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { startSidecar, stopSidecar } from './sidecar'
 
 const isDev = !app.isPackaged
+
+// Renderer asks for a folder via this channel — we open the OS-native
+// directory picker in the main process and return the absolute path
+// (or null when the user cancels). Settings modal uses this to pick
+// the F-Chat data directory.
+ipcMain.handle('workbench:select-directory', async (event, opts: { title?: string; defaultPath?: string } = {}) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+  const result = win
+    ? await dialog.showOpenDialog(win, {
+        title: opts.title ?? 'Select folder',
+        defaultPath: opts.defaultPath,
+        properties: ['openDirectory']
+      })
+    : await dialog.showOpenDialog({
+        title: opts.title ?? 'Select folder',
+        defaultPath: opts.defaultPath,
+        properties: ['openDirectory']
+      })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
 
 async function createWindow(): Promise<void> {
   const win = new BrowserWindow({

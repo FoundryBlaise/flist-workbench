@@ -114,6 +114,22 @@ export const api = {
       name: string
       dm: { character: string; partner: string; bytes: number; mtime: number }[]
     }>(`/logs/contacts?name=${encodeURIComponent(name)}`),
+
+  settingsGet: () =>
+    get<{
+      fchat_data_dir: string | null
+      fchat_data_dir_effective: string
+      fchat_data_dir_env_locked: boolean
+    }>('/settings'),
+  settingsUpdate: (body: { fchat_data_dir?: string | null }) =>
+    request<{
+      fchat_data_dir: string | null
+      fchat_data_dir_effective: string
+      fchat_data_dir_env_locked: boolean
+    }>('/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    }),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // Documents

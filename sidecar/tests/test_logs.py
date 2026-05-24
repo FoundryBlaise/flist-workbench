@@ -93,3 +93,25 @@ def test_find_contacts_skips_the_named_character(fake_data: Path) -> None:
 def test_find_contacts_no_match(fake_data: Path) -> None:
     res = find_contacts("Nobody In Particular", root=fake_data)
     assert res["dm"] == []
+
+
+def test_default_data_dir_picks_os_native_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys as _sys
+
+    import logs as _logs
+
+    monkeypatch.setattr(_sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
+    win = _logs.default_data_dir()
+    assert str(win).replace("\\", "/").endswith("/AppData/Roaming/fchat/data")
+
+    monkeypatch.setattr(_sys, "platform", "darwin")
+    mac = _logs.default_data_dir()
+    assert str(mac).endswith("Library/Application Support/fchat/data")
+
+    monkeypatch.setattr(_sys, "platform", "linux")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/home/x/.config")
+    linux = _logs.default_data_dir()
+    assert str(linux) == "/home/x/.config/fchat/data"
