@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
@@ -262,35 +262,72 @@ def classify_messages(
                 failed += 1
                 emit_progress({"last_error": err})
     else:
+        # Chunked submission so cancel takes effect within ~one model
+        # latency. The previous code submitted every task up front,
+        # and ThreadPoolExecutor.__exit__ then waited for all of them
+        # — so cancel-lag scaled with `remaining_tasks * latency /
+        # concurrency` (measured ~9.5 s on a 5-task probe). With this
+        # loop, only `concurrency` futures are in-flight at any time;
+        # on cancel we stop submitting new ones and wait at most for
+        # the current batch to drain.
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
-            futures = {ex.submit(process, t): t for t in tasks}
-            for fut in as_completed(futures):
+            task_iter = iter(tasks)
+            in_flight: dict = {}
+
+            def submit_next() -> bool:
+                try:
+                    t = next(task_iter)
+                except StopIteration:
+                    return False
+                in_flight[ex.submit(process, t)] = t
+                return True
+
+            # Prime the pump up to `concurrency`.
+            for _ in range(concurrency):
                 if cancel.is_set():
                     cancelled = True
-                    # Don't abandon in-flight: drain the rest as they
-                    # finish, but stop scheduling new work (this loop is
-                    # also collecting completions). Future executors
-                    # would let us shutdown(wait=False) but we want the
-                    # already-spent compute persisted.
-                label, err = fut.result()
-                if label:
-                    labels_store.upsert_label(
-                        labels_conn,
-                        hash=label["hash"],
-                        character=character,
-                        partner=partner,
-                        ts=label["ts"],
-                        speaker=label["speaker"],
-                        label=label["label"],
-                        source="llm",
-                        confidence=label["confidence"],
-                        reason=label["reason"],
-                    )
-                    classified += 1
-                    emit_progress({"last_label": label["label"]})
-                else:
-                    failed += 1
-                    emit_progress({"last_error": err})
+                    break
+                if not submit_next():
+                    break
+
+            while in_flight:
+                # Re-check cancel on a short tick so the user doesn't
+                # wait the full model latency just to see "cancelled".
+                done, _pending = wait(
+                    in_flight.keys(), timeout=0.5, return_when=FIRST_COMPLETED
+                )
+                if not done:
+                    if cancel.is_set():
+                        cancelled = True
+                    continue
+                for fut in done:
+                    label, err = fut.result()
+                    del in_flight[fut]
+                    if label:
+                        labels_store.upsert_label(
+                            labels_conn,
+                            hash=label["hash"],
+                            character=character,
+                            partner=partner,
+                            ts=label["ts"],
+                            speaker=label["speaker"],
+                            label=label["label"],
+                            source="llm",
+                            confidence=label["confidence"],
+                            reason=label["reason"],
+                        )
+                        classified += 1
+                        emit_progress({"last_label": label["label"]})
+                    else:
+                        failed += 1
+                        emit_progress({"last_error": err})
+                    # Backfill only if we're still running. After
+                    # cancel we let the remaining in-flight finish but
+                    # don't queue more.
+                    if cancel.is_set():
+                        cancelled = True
+                    else:
+                        submit_next()
 
     return {
         "character": character,
