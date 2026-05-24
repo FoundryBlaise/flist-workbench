@@ -46,6 +46,20 @@ test('capture F-list rendering for ' + CHAR, async () => {
   })
   await writeFile(resolve(OUT, 'lady-amber-blaise.bbcode'), rawBBCode, 'utf-8')
 
+  // F-list embeds the per-character inline manifest on the page so
+  // [img=ID] tags can be resolved to hashed CDN URLs without an extra
+  // round-trip. Lift it from the page so our offline harness has the
+  // same data F-Chat would.
+  const inlines = await page.evaluate(() => {
+    const w = window as unknown as { FList?: { Inlines?: { inlines?: unknown } } }
+    return w.FList?.Inlines?.inlines ?? {}
+  })
+  await writeFile(
+    resolve(OUT, 'lady-amber-blaise.inlines.json'),
+    JSON.stringify(inlines, null, 2),
+    'utf-8'
+  )
+
   await block.screenshot({ path: resolve(OUT, 'flist-raw.png') })
 
   const renderedHtml = await block.evaluate((el) => el.innerHTML)

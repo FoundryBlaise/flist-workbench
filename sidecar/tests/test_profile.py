@@ -37,6 +37,19 @@ def test_parse_real_profile() -> None:
     assert "\n" in profile.bbcode
 
 
+def test_inlines_manifest_extracted() -> None:
+    profile = parse_profile(load("profile_azure_viper.html"), requested_name="Azure Viper")
+    # The profile must expose FList.Inlines.inlines as a dict keyed by
+    # the numeric id used in [img=ID] tags. Each entry must carry the
+    # hash + extension fields the client uses to build the CDN url.
+    assert profile.inlines, "expected inlines manifest to be extracted"
+    sample_id, sample = next(iter(profile.inlines.items()))
+    assert sample_id.isdigit()
+    assert "hash" in sample and len(sample["hash"]) == 40
+    assert "extension" in sample
+    assert "nsfw" in sample
+
+
 def test_missing_character_raises() -> None:
     html = (
         "<html><head><title>F-list - System message</title></head>"

@@ -119,13 +119,22 @@ describe('bbcodeToHtml — F-list custom inline tags', () => {
     expect(out).toContain('https://static.f-list.net/images/eicon/smirk.gif')
   })
 
-  it('renders [img=ID] gallery images and rejects non-numeric ids', () => {
-    const ok = bbcodeToHtml('[img=3338463]inline[/img]')
-    expect(ok).toContain('https://static.f-list.net/images/charimage/3338463.png')
+  it('renders [img=ID] using the inlines manifest and rejects non-numeric ids', () => {
+    const inlines = {
+      '3338463': { hash: '709932ec193db81ed3b77ddea5be3dea226a0399', extension: 'png', nsfw: false }
+    }
+    const ok = bbcodeToHtml('[img=3338463]inline[/img]', { inlines })
+    expect(ok).toContain('https://static.f-list.net/images/charinline/70/99/709932ec193db81ed3b77ddea5be3dea226a0399.png')
+
+    // Without a manifest entry, render a clearly-marked placeholder
+    // (no guessed URL) — the user sees the inline is missing.
+    const missing = bbcodeToHtml('[img=99999]inline[/img]')
+    expect(missing).toContain('bb-img-missing')
+    expect(missing).not.toContain('charinline/')
 
     const bad = bbcodeToHtml('[img=evil]inline[/img]')
     expect(bad).toContain('[img=evil]')
-    expect(bad).not.toContain('charimage/evil')
+    expect(bad).not.toContain('charinline/')
   })
 })
 
@@ -192,9 +201,12 @@ describe('bbcodeToHtml — real F-list profile round-trip', () => {
     expect(html).not.toMatch(/\[\/?indent]/)
   })
 
-  it('inline gallery [img=ID] maps to the F-list image CDN', () => {
+  it('inline [img=ID] without a manifest renders as a missing-placeholder', () => {
+    // Without a per-character inlines manifest we cannot reach the CDN
+    // (URL is content-addressed by hash). Renderer must mark inlines
+    // missing rather than fabricate a wrong URL.
     const html = bbcodeToHtml(bbcode)
-    expect(html).toContain('static.f-list.net/images/charimage/')
+    expect(html).toContain('bb-img-missing')
   })
 })
 

@@ -7,26 +7,16 @@
 // access to it without auth, so we stub a placeholder image of the
 // matching ID so the layout still flows.
 import { StandardBBCodeParser } from './standard'
-import { InlineDisplayMode } from './stubs'
 
-export function renderFListBBCode(source: string, root: HTMLElement): void {
+type InlineMap = { [k: string]: { hash: string; extension: string; nsfw: boolean; name?: string } }
+
+export function renderFListBBCode(
+  source: string,
+  root: HTMLElement,
+  inlines?: InlineMap
+): void {
   const parser = new StandardBBCodeParser()
-  // Synthesize an inlines table on demand so [img=N] always resolves.
-  parser.inlines = new Proxy({}, {
-    get(_t, key: string) {
-      if (!/^\d+$/.test(key)) return undefined
-      return {
-        // Pad to keep substr(0,2)/substr(2,2) happy; use a deterministic
-        // placeholder hash so the image src stays stable.
-        hash: ('00000000' + key).slice(-32).padStart(32, '0'),
-        extension: 'png',
-        nsfw: false,
-        name: 'placeholder'
-      }
-    }
-  }) as unknown as { [k: string]: { hash: string; extension: string; nsfw: boolean; name: string } }
-  // Force inline-display "all" so we don't get the click-to-load shim.
-  ;(globalThis as unknown as { __settings?: unknown }).__settings = { inlineDisplayMode: InlineDisplayMode.DISPLAY_ALL }
+  parser.inlines = (inlines ?? {}) as unknown as typeof parser.inlines
 
   const rendered = parser.parseEverything(source)
   root.innerHTML = ''

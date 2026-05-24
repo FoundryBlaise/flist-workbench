@@ -13,6 +13,11 @@ test('ours vs F-Chat 3.0 parser, rendered side-by-side', async () => {
   const bbcode = await readFile(resolve(OUT, 'lady-amber-blaise.bbcode'), 'utf-8')
   const ourCss = await readFile(APP_CSS, 'utf-8')
   const fchatCss = await readFile(FCHAT_CSS, 'utf-8')
+  // Real inlines manifest captured alongside the BBCode source. Both
+  // parsers need it to resolve [img=ID] tags to the hashed CDN url.
+  const inlines = JSON.parse(
+    await readFile(resolve(OUT, 'lady-amber-blaise.inlines.json'), 'utf-8')
+  )
 
   const { build } = await import('esbuild')
   const [ourBundle, fchatBundle] = await Promise.all([
@@ -66,8 +71,9 @@ test('ours vs F-Chat 3.0 parser, rendered side-by-side', async () => {
 </div>
 <script>
   const src = ${JSON.stringify(bbcode)};
-  document.getElementById('ours').innerHTML = OURS.bbcodeToHtml(src);
-  FCHAT.renderFListBBCode(src, document.getElementById('fchat'));
+  const inlines = ${JSON.stringify(inlines)};
+  document.getElementById('ours').innerHTML = OURS.bbcodeToHtml(src, { inlines });
+  FCHAT.renderFListBBCode(src, document.getElementById('fchat'), inlines);
 </script>
 </body></html>`
   const path = resolve(OUT, 'parsers-side-by-side.html')
