@@ -51,13 +51,20 @@ describe('bbcodeToHtml — block tags and structure', () => {
     expect(bbcodeToHtml('a[hr]b')).toBe('a<hr class="bb-hr" />b')
   })
 
-  it('renders collapse with label', () => {
+  it('renders collapse as a card with header and clipped body', () => {
     const out = bbcodeToHtml('[collapse=Show me]hidden[/collapse]')
-    expect(out).toBe('<details class="bb-collapse"><summary>Show me</summary>hidden</details>')
+    expect(out).toContain('class="bb-collapse"')
+    expect(out).toContain('class="bb-collapse-header"')
+    expect(out).toContain('Show me')
+    expect(out).toContain('class="bb-collapse-body"')
+    expect(out).toContain('hidden')
   })
 
-  it('converts newlines in text to <br />', () => {
-    expect(bbcodeToHtml('line1\nline2')).toBe('line1<br />line2')
+  it('keeps newlines as literal text (pre-wrap handles them)', () => {
+    // Preview pane sets white-space: pre-wrap, so source newlines render
+    // as line breaks without an HTML <br> getting in the way of source
+    // mapping during bidirectional editing.
+    expect(bbcodeToHtml('line1\nline2')).toBe('line1\nline2')
   })
 })
 

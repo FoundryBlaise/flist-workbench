@@ -169,8 +169,12 @@ function emit(frame: Frame): string {
     case 'spoiler':
       return `<span class="bb-spoiler" tabindex="0">${body}</span>`
     case 'collapse': {
-      const label = frame.attr ?? 'Show'
-      return `<details class="bb-collapse"><summary>${escapeHtml(label)}</summary>${body}</details>`
+      const label = (frame.attr ?? '').trim() || 'Show'
+      // F-Chat 3.0 renders this as a bordered card with a header strip
+      // and a clipped body so contents stay inside the box. We mirror
+      // that structure with a <details> element, but the card/header
+      // CSS shapes the visual frame so the content can't pip out.
+      return `<details class="bb-collapse"><summary class="bb-collapse-header"><span class="bb-collapse-chevron"></span>${escapeHtml(label)}</summary><div class="bb-collapse-body">${body}</div></details>`
     }
     case 'icon': {
       const name = stripTags(body).trim()
@@ -338,9 +342,10 @@ export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
   let inNoparse = false
 
   const wrapText = (value: string, start: number, end: number): string => {
-    // No literal "\n" after <br /> — that's what the <br /> already
-    // represents, and double-counting confuses the reverse mapping.
-    const inner = escapeHtml(value).replace(/\n/g, '<br />')
+    // We rely on `white-space: pre-wrap` in the preview CSS so source
+    // newlines render as line breaks without an HTML <br> getting in
+    // the way of bidirectional source mapping. F-list does the same.
+    const inner = escapeHtml(value)
     if (!opts.withSourceMap) return inner
     return `<span data-bb-start="${start}" data-bb-end="${end}">${inner}</span>`
   }
