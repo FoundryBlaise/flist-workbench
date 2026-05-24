@@ -84,12 +84,16 @@ export type LabelsSettings = {
   llm_model: string
   llm_api_key: string
   system_prompt: string
+  context_before: number
+  context_after: number
   defaults: {
     threshold_chars: number
     llm_endpoint: string
     llm_model: string
     llm_api_key: string
     system_prompt: string
+    context_before: number
+    context_after: number
   }
 }
 

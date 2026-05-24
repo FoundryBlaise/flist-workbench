@@ -403,6 +403,8 @@ class LabelsSettingsUpdate(BaseModel):
     llm_model: str | None = None
     llm_api_key: str | None = None
     system_prompt: str | None = None
+    context_before: int | None = None
+    context_after: int | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -435,6 +437,8 @@ def _settings_dict(conn) -> dict:
             "llm_model": lab.llm_model,
             "llm_api_key": lab.llm_api_key,
             "system_prompt": lab.system_prompt,
+            "context_before": lab.context_before,
+            "context_after": lab.context_after,
             # Defaults exposed so the UI can show "(default)" hints and
             # offer a one-click reset without hardcoding them.
             "defaults": {
@@ -443,6 +447,8 @@ def _settings_dict(conn) -> dict:
                 "llm_model": labels_store.DEFAULT_LLM_MODEL,
                 "llm_api_key": labels_store.DEFAULT_LLM_API_KEY,
                 "system_prompt": labels_store.DEFAULT_SYSTEM_PROMPT,
+                "context_before": labels_store.DEFAULT_CONTEXT_BEFORE,
+                "context_after": labels_store.DEFAULT_CONTEXT_AFTER,
             },
         },
     }
@@ -489,6 +495,14 @@ def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
     if update.threshold_chars is not None:
         n = max(1, int(update.threshold_chars))
         settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(n))
+    if update.context_before is not None:
+        # Clamp same as load_settings: 0..10. Higher is risky on small
+        # context windows; lower than 0 is meaningless.
+        n = max(0, min(10, int(update.context_before)))
+        settings_store.set_value(conn, settings_store.KEY_LABELS_CONTEXT_BEFORE, str(n))
+    if update.context_after is not None:
+        n = max(0, min(10, int(update.context_after)))
+        settings_store.set_value(conn, settings_store.KEY_LABELS_CONTEXT_AFTER, str(n))
     for field, key in (
         ("llm_endpoint", settings_store.KEY_LABELS_LLM_ENDPOINT),
         ("llm_model", settings_store.KEY_LABELS_LLM_MODEL),

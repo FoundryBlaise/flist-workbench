@@ -191,6 +191,8 @@ function LabelsSection({
   const [model, setModel] = useState(labels.llm_model)
   const [apiKey, setApiKey] = useState(labels.llm_api_key)
   const [prompt, setPrompt] = useState(labels.system_prompt)
+  const [contextBefore, setContextBefore] = useState(String(labels.context_before))
+  const [contextAfter, setContextAfter] = useState(String(labels.context_after))
   const [showKey, setShowKey] = useState(false)
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -212,6 +214,8 @@ function LabelsSection({
     setModel(labels.llm_model)
     setApiKey(labels.llm_api_key)
     setPrompt(labels.system_prompt)
+    setContextBefore(String(labels.context_before))
+    setContextAfter(String(labels.context_after))
   }, [labels])
 
   const save = async () => {
@@ -223,6 +227,10 @@ function LabelsSection({
       setStatus('error')
       return
     }
+    // Same clamp as the sidecar so the UI doesn't accept impossible
+    // values silently; 0..10 mirrors labels.load_settings.
+    const parsedBefore = Math.max(0, Math.min(10, Math.floor(Number(contextBefore) || 0)))
+    const parsedAfter = Math.max(0, Math.min(10, Math.floor(Number(contextAfter) || 0)))
     try {
       const updated = await api.settingsUpdate({
         labels: {
@@ -231,7 +239,9 @@ function LabelsSection({
           llm_model: model,
           llm_api_key: apiKey,
           // Empty prompt is interpreted as "reset to default" server-side.
-          system_prompt: prompt
+          system_prompt: prompt,
+          context_before: parsedBefore,
+          context_after: parsedAfter
         }
       })
       onSaved(updated.labels)
@@ -300,6 +310,62 @@ function LabelsSection({
           />
           <button type="button" className="settings-clear" onClick={resetThreshold}>
             Default ({labels.defaults.threshold_chars})
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label">Context window (surrounding messages)</label>
+        <p className="settings-help">
+          How many messages before and after the target are attached as <code>KONTEXT</code> to each
+          classify call. Higher helps disambiguation but eats the model's context budget — drop to{' '}
+          <code>1 / 1</code> or <code>0 / 0</code> on small-VRAM cards (≤ 8 GB) if you hit context-limit
+          errors. Range 0–10 each.
+        </p>
+        <div className="settings-row">
+          <label
+            htmlFor="labels-ctx-before"
+            className="settings-meta"
+            style={{ alignSelf: 'center' }}
+          >
+            Before
+          </label>
+          <input
+            id="labels-ctx-before"
+            type="number"
+            min={0}
+            max={10}
+            className="settings-input settings-input-narrow"
+            value={contextBefore}
+            onChange={(e) => setContextBefore(e.target.value)}
+            data-testid="labels-context-before-input"
+          />
+          <label
+            htmlFor="labels-ctx-after"
+            className="settings-meta"
+            style={{ alignSelf: 'center' }}
+          >
+            After
+          </label>
+          <input
+            id="labels-ctx-after"
+            type="number"
+            min={0}
+            max={10}
+            className="settings-input settings-input-narrow"
+            value={contextAfter}
+            onChange={(e) => setContextAfter(e.target.value)}
+            data-testid="labels-context-after-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => {
+              setContextBefore(String(labels.defaults.context_before))
+              setContextAfter(String(labels.defaults.context_after))
+            }}
+          >
+            Default ({labels.defaults.context_before} / {labels.defaults.context_after})
           </button>
         </div>
       </div>
