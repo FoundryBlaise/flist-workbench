@@ -65,7 +65,7 @@ def test_search_all_partners_returns_per_partner_shape(fake_data: Path) -> None:
 
 def test_find_contacts_empty_name(fake_data: Path) -> None:
     res = find_contacts("", root=fake_data)
-    assert res == {"name": "", "dm": [], "channels": []}
+    assert res == {"name": "", "dm": []}
 
 
 def test_find_contacts_matches_dm_partner_case_insensitive(fake_data: Path) -> None:
@@ -93,4 +93,3 @@ def test_find_contacts_skips_the_named_character(fake_data: Path) -> None:
 def test_find_contacts_no_match(fake_data: Path) -> None:
     res = find_contacts("Nobody In Particular", root=fake_data)
     assert res["dm"] == []
-    assert res["channels"] == []
