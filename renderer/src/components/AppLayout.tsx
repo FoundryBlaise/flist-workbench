@@ -9,11 +9,13 @@ import { SettingsModal } from '../features/settings/SettingsModal'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
+import type { MenuAction } from '../App'
 
 type HealthStatus = 'checking' | 'ok' | 'error'
 
 export function AppLayout() {
   const mode = useStore((s) => s.mode)
+  const setMode = useStore((s) => s.setMode)
   const activeChar = useStore((s) => s.activeCharacter)
   const activePartner = useStore((s) => s.activePartner)
   const editorTitle = useStore((s) => s.editorTitle)
@@ -34,6 +36,33 @@ export function AppLayout() {
       cancelled = true
     }
   }, [])
+
+  // Native menu (electron/menu.ts) dispatches actions over IPC. Route
+  // them to the existing local/store handlers so the menu items are
+  // wired without duplicating any logic.
+  useEffect(() => {
+    const subscribe = window.workbench?.onMenuAction
+    if (!subscribe) return
+    return subscribe((action: MenuAction) => {
+      switch (action) {
+        case 'mode-editor':
+          setMode('editor')
+          break
+        case 'mode-logs':
+          setMode('logs')
+          break
+        case 'find-contacts':
+          setContactsOpen(true)
+          break
+        case 'search-all-partners':
+          setCrossSearchOpen(true)
+          break
+        case 'settings':
+          setSettingsOpen(true)
+          break
+      }
+    })
+  }, [setMode, setCrossSearchOpen])
 
   // The header centre piece identifies what the user is currently
   // looking at. In editor mode that's the document; in log mode it's
@@ -59,24 +88,6 @@ export function AppLayout() {
       <header className="titlebar">
         <span className="app-name">● F-list Workbench</span>
         <span className="title-doc" data-testid="titlebar-doc">{titleDoc}</span>
-        <button
-          type="button"
-          className="titlebar-action"
-          onClick={() => setContactsOpen(true)}
-          title="Find which of your characters has had contact with someone"
-          data-testid="find-contacts-open"
-        >
-          Find contacts…
-        </button>
-        <button
-          type="button"
-          className="titlebar-action"
-          onClick={() => setSettingsOpen(true)}
-          title="Settings"
-          data-testid="settings-open"
-        >
-          Settings…
-        </button>
         <span
           className={`sidecar-pill sidecar-${health}`}
           data-testid="sidecar-status"

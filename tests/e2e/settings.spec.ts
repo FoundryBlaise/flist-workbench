@@ -27,7 +27,11 @@ test('Settings modal saves a new FCHAT_DATA_DIR and refreshes characters', async
     window.on('dialog', (d) => void d.accept())
     await expect(window.getByTestId('sidecar-status')).toContainText('ok')
 
-    await window.getByTestId('settings-open').click()
+    // Settings now lives in the native menu (Tools → Settings…). Drive
+    // it via IPC from the main process — same path the menu item takes.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'settings')
+    })
     const input = window.getByTestId('settings-fchat-dir-input')
     await expect(input).toBeVisible()
     await expect(input).toBeFocused({ timeout: 2_000 })
