@@ -195,14 +195,28 @@ def labels_test_connection(body: TestConnectionRequest) -> dict:
     api_key = body.llm_api_key if body.llm_api_key is not None else saved.llm_api_key
     prompt = body.system_prompt or saved.system_prompt
 
+    # Realistic test message: an IC-shaped paragraph long enough that
+    # the resolver wouldn't have rule-skipped it, so the model has
+    # something coherent to classify. Older two-word probes ("hello
+    # there") confused the classifier into returning empty content.
     canned_user = (
         ">>> ZIELNACHRICHT <<<\n"
-        "[01-01 12:00 | 12 chars] Tester: hello there\n"
+        "[01-15 22:13 | 312 chars] Lyra: She turned slowly, her gaze settling on him with a "
+        "measured calm that belied the storm of thoughts behind her eyes. The candlelight caught "
+        "the silver threads woven through her cloak as she spoke, voice low and deliberate. \"You "
+        "knew this moment would come, didn't you? You've been waiting for it.\"\n"
         ">>> ENDE ZIELNACHRICHT <<<"
     )
+    # Cold-start inference on a 20B+ model can take 30–60 s on first
+    # call. 90 s gives the model room without making "endpoint is
+    # actually unreachable" feel like an eternity. Trade-off chosen
+    # deliberately — faster models will return in 1–3 s.
+    test_timeout = 90.0
     started = _time.monotonic()
     try:
-        content = labels_llm.call_llm(endpoint, model, api_key, prompt, canned_user, timeout=15)
+        content = labels_llm.call_llm(
+            endpoint, model, api_key, prompt, canned_user, timeout=test_timeout
+        )
     except HTTPError as exc:
         return {
             "ok": False,
@@ -218,7 +232,10 @@ def labels_test_connection(body: TestConnectionRequest) -> dict:
     except TimeoutError as exc:
         return {
             "ok": False,
-            "error": f"timed out: {exc}",
+            "error": (
+                f"timed out after {int(test_timeout)} s — the model may be cold-loading. "
+                f"Try again, or pick a smaller model. ({exc})"
+            ),
             "elapsed_ms": int((_time.monotonic() - started) * 1000),
         }
     except Exception as exc:  # noqa: BLE001 — surface to UI
@@ -228,6 +245,17 @@ def labels_test_connection(body: TestConnectionRequest) -> dict:
             "elapsed_ms": int((_time.monotonic() - started) * 1000),
         }
     elapsed_ms = int((_time.monotonic() - started) * 1000)
+    if not content.strip():
+        return {
+            "ok": False,
+            "elapsed_ms": elapsed_ms,
+            "raw": "",
+            "parsed": None,
+            "error": (
+                "model returned empty content. The system prompt may be incompatible "
+                "with this model, or the model needs more time to warm up — retry once."
+            ),
+        }
     parsed = labels_llm.parse_label(content)
     return {
         "ok": parsed is not None,
