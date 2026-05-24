@@ -316,6 +316,33 @@ class LabelOverride(BaseModel):
     label: str | None = None
 
 
+class LabelsClearRequest(BaseModel):
+    character: str
+    partner: str
+
+
+@app.post("/labels/clear")
+def labels_clear(body: LabelsClearRequest) -> dict:
+    """Delete every label (LLM + manual) for one conversation.
+
+    Used by the renderer's "Reset all labels" context-menu action.
+    After this returns, the resolver falls back to rule-on-read for
+    every message in that conversation.
+    """
+    conn = labels_store.connect()
+    try:
+        deleted = labels_store.delete_labels_for_partner(
+            conn, body.character, body.partner
+        )
+    finally:
+        conn.close()
+    return {
+        "character": body.character,
+        "partner": body.partner,
+        "deleted": deleted,
+    }
+
+
 @app.post("/labels/override")
 def labels_override(body: LabelOverride) -> dict:
     conn = labels_store.connect()

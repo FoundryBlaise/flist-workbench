@@ -275,6 +275,24 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     return cur.rowcount > 0
 
 
+def delete_labels_for_partner(
+    conn: sqlite3.Connection, character: str, partner: str
+) -> int:
+    """Drop every explicit label for one (character, partner) pair.
+
+    Returns the count of deleted rows. After this call, every message
+    in the conversation falls back to the rule-on-read resolver — so
+    rule:short / rule:parens / rule:empty hits stay OOC, everything
+    else reverts to Unlabeled.
+    """
+    cur = conn.execute(
+        "DELETE FROM labels WHERE character = ? AND partner = ?",
+        (character, partner),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def stats(
     conn: sqlite3.Connection,
     character: str,

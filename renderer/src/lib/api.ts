@@ -210,6 +210,14 @@ export const api = {
     get<LabelsStats>(
       `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
     ),
+  labelsClear: (body: { character: string; partner: string }) =>
+    request<{ character: string; partner: string; deleted: number }>(
+      '/labels/clear',
+      {
+        method: 'POST',
+        body: JSON.stringify(body)
+      }
+    ),
   labelsOverride: (body: {
     character: string
     partner: string

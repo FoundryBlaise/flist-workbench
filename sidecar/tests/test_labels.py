@@ -174,6 +174,28 @@ def test_delete_label_reverts_to_resolver(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_delete_labels_for_partner_scopes_correctly(tmp_path: Path) -> None:
+    """Bulk delete clears just the targeted conversation, not others."""
+    conn = _db(tmp_path)
+    try:
+        # Three labels: two for (C, P), one for (C, Q). The Q row must
+        # survive a delete on P.
+        for h, p in (("h1", "P"), ("h2", "P"), ("h3", "Q")):
+            labels_store.upsert_label(
+                conn, hash=h, character="C", partner=p,
+                ts=1, speaker="S", label="IC", source="llm", confidence=0.9,
+            )
+        deleted = labels_store.delete_labels_for_partner(conn, "C", "P")
+        assert deleted == 2
+        assert labels_store.labels_for_partner(conn, "C", "P") == {}
+        # Q untouched
+        assert "h3" in labels_store.labels_for_partner(conn, "C", "Q")
+        # Idempotent: second call returns 0
+        assert labels_store.delete_labels_for_partner(conn, "C", "P") == 0
+    finally:
+        conn.close()
+
+
 def test_stats_counts_three_buckets(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     try:
