@@ -28,10 +28,23 @@ describe('bbcodeToHtml — simple inline tags', () => {
 
 describe('bbcodeToHtml — block tags and structure', () => {
   it('renders headings, quotes, center, indent', () => {
-    expect(bbcodeToHtml('[heading]H[/heading]')).toBe('<h2>H</h2>')
-    expect(bbcodeToHtml('[quote]Q[/quote]')).toBe('<blockquote>Q</blockquote>')
+    expect(bbcodeToHtml('[heading]H[/heading]')).toBe('<div class="bb-heading">H</div>')
+    expect(bbcodeToHtml('[quote]Q[/quote]')).toBe('<div class="bb-quote"><b>Quote:</b><br />Q</div>')
     expect(bbcodeToHtml('[center]C[/center]')).toBe('<div class="bb-center">C</div>')
     expect(bbcodeToHtml('[indent]I[/indent]')).toBe('<div class="bb-indent">I</div>')
+  })
+
+  it('renders left, right, and justify alignment blocks', () => {
+    expect(bbcodeToHtml('[left]L[/left]')).toBe('<div class="bb-left">L</div>')
+    expect(bbcodeToHtml('[right]R[/right]')).toBe('<div class="bb-right">R</div>')
+    expect(bbcodeToHtml('[justify]J[/justify]')).toBe('<div class="bb-justify">J</div>')
+  })
+
+  it('renders [user] as a link to the F-list profile', () => {
+    const out = bbcodeToHtml('[user]Azure Viper[/user]')
+    expect(out).toContain('href="https://www.f-list.net/c/Azure%20Viper"')
+    expect(out).toContain('class="bb-user"')
+    expect(out).toContain('Azure Viper')
   })
 
   it('renders hr standalone', () => {

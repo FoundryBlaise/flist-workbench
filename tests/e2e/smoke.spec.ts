@@ -28,7 +28,7 @@ test('app boots, sidebar loads, editor↔preview wired, F-list fetch lands', asy
     const preview = window.getByTestId('preview-body')
     await expect(editor).toBeVisible()
     await expect(preview).toBeVisible()
-    await expect(preview.locator('h2').first()).toContainText('F-list Workbench')
+    await expect(preview.locator('.bb-heading').first()).toContainText('F-list Workbench')
 
     // Toolbar wraps selection with BBCode. Select all → click B → preview bolds.
     await editor.click()
