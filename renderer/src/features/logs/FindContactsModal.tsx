@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useStore } from '../../state'
 import { displayCharacter } from '../../lib/partnerName'
@@ -29,6 +29,17 @@ export function FindContactsModal({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [result, setResult] = useState<ContactsResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Explicit focus rather than `autoFocus` JSX attribute — when the
+  // modal opens from a title-bar click while CodeMirror has focus,
+  // the autoFocus race can lose to CodeMirror's own focus retention
+  // and keystrokes silently go nowhere. rAF gives the modal a tick to
+  // mount before we steal focus back.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -94,7 +105,7 @@ export function FindContactsModal({ onClose }: { onClose: () => void }) {
           }}
         >
           <input
-            autoFocus
+            ref={inputRef}
             type="text"
             className="find-contacts-input"
             placeholder="Character name… (e.g. Aiko Kato)"
