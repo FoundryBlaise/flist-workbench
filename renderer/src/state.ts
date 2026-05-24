@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, type LogMessage } from './lib/api'
+import { api, type LogMessage, type InlineImage } from './lib/api'
 
 export type Mode = 'editor' | 'logs'
 
@@ -36,6 +36,7 @@ type State = {
 
   editorContent: string
   editorTitle: string
+  editorInlines: Record<string, InlineImage>
   editorFetchStatus: 'idle' | 'fetching' | 'ok' | 'error'
   editorFetchError: string | null
 
@@ -71,6 +72,7 @@ export const useStore = create<State>((set, get) => ({
 
   editorContent: SAMPLE_BBCODE,
   editorTitle: 'Scratch.bbcode',
+  editorInlines: {},
   editorFetchStatus: 'idle',
   editorFetchError: null,
 
@@ -153,6 +155,7 @@ export const useStore = create<State>((set, get) => ({
       set({
         editorContent: profile.bbcode,
         editorTitle: `${profile.name}.bbcode`,
+        editorInlines: profile.inlines ?? {},
         editorFetchStatus: 'ok',
         editorFetchError: null
       })

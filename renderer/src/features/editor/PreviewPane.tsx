@@ -21,6 +21,7 @@ import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
  */
 export function PreviewPane() {
   const content = useStore((s) => s.editorContent)
+  const inlines = useStore((s) => s.editorInlines)
   const setContent = useStore((s) => s.setEditorContent)
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
@@ -33,9 +34,9 @@ export function PreviewPane() {
     const el = ref.current
     if (!el) return
     if (focusedRef.current) return
-    el.innerHTML = bbcodeToHtml(content, { withSourceMap: true })
+    el.innerHTML = bbcodeToHtml(content, { withSourceMap: true, inlines })
     renderedFromRef.current = content
-  }, [content])
+  }, [content, inlines])
 
   const handleInput = () => {
     const el = ref.current
@@ -63,10 +64,12 @@ export function PreviewPane() {
           // Re-render from current source so spans get fresh offsets
           // after this edit session.
           if (ref.current) {
-            ref.current.innerHTML = bbcodeToHtml(useStore.getState().editorContent, {
-              withSourceMap: true
+            const s = useStore.getState()
+            ref.current.innerHTML = bbcodeToHtml(s.editorContent, {
+              withSourceMap: true,
+              inlines: s.editorInlines
             })
-            renderedFromRef.current = useStore.getState().editorContent
+            renderedFromRef.current = s.editorContent
           }
         }}
       />

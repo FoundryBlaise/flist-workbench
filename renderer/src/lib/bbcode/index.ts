@@ -51,7 +51,14 @@ const SIMPLE_INLINE_NAMES = new Set(Object.keys(SIMPLE_INLINE))
 
 const CDN_AVATAR = 'https://static.f-list.net/images/avatar/'
 const CDN_EICON = 'https://static.f-list.net/images/eicon/'
-const CDN_GALLERY = 'https://static.f-list.net/images/charimage/'
+const CDN_INLINE = 'https://static.f-list.net/images/charinline/'
+
+export interface InlineImage {
+  hash: string
+  extension: string
+  nsfw: boolean
+}
+export type InlinesManifest = Record<string, InlineImage>
 
 function escapeHtml(s: string): string {
   return s
@@ -87,8 +94,12 @@ function eiconUrl(name: string): string {
   return CDN_EICON + encodeURIComponent(name.toLowerCase()).replace(/%20/g, ' ') + '.gif'
 }
 
-function galleryImageUrl(id: string): string {
-  return CDN_GALLERY + encodeURIComponent(id) + '.png'
+function inlineImageUrl(inline: InlineImage): string {
+  // F-list's content-addressed CDN scheme: shard by the first two hex
+  // bytes of the hash, then file by full hash + extension.
+  const p1 = inline.hash.slice(0, 2)
+  const p2 = inline.hash.slice(2, 4)
+  return `${CDN_INLINE}${p1}/${p2}/${encodeURIComponent(inline.hash)}.${encodeURIComponent(inline.extension)}`
 }
 
 type Token =
@@ -143,7 +154,7 @@ interface Frame {
   children: string[]
 }
 
-function emit(frame: Frame): string {
+function emit(frame: Frame, opts: BbcodeOptions = {}): string {
   const body = frame.children.join('')
   switch (frame.name) {
     case 'noparse':
@@ -171,10 +182,12 @@ function emit(frame: Frame): string {
     case 'collapse': {
       const label = (frame.attr ?? '').trim() || 'Show'
       // F-Chat 3.0 renders this as a bordered card with a header strip
-      // and a clipped body so contents stay inside the box. We mirror
-      // that structure with a <details> element, but the card/header
-      // CSS shapes the visual frame so the content can't pip out.
-      return `<details class="bb-collapse"><summary class="bb-collapse-header"><span class="bb-collapse-chevron"></span>${escapeHtml(label)}</summary><div class="bb-collapse-body">${body}</div></details>`
+      // and a clipped body. We mirror that with <details>, but the
+      // preview pane is contentEditable so the native summary-click
+      // toggle is swallowed. contenteditable="false" on the summary
+      // restores native click behaviour without breaking editing in
+      // the surrounding text.
+      return `<details class="bb-collapse"><summary class="bb-collapse-header" contenteditable="false"><span class="bb-collapse-chevron"></span>${escapeHtml(label)}</summary><div class="bb-collapse-body">${body}</div></details>`
     }
     case 'icon': {
       const name = stripTags(body).trim()
@@ -187,11 +200,18 @@ function emit(frame: Frame): string {
       return `<img class="bb-eicon" src="${escapeAttr(eiconUrl(name))}" alt="${escapeHtml(name)}" title="${escapeHtml(name)}" />`
     }
     case 'img': {
-      // [img=12345]optional alt[/img] — F-list inline gallery image
+      // [img=12345]optional alt[/img] — F-list inline gallery image,
+      // resolved via the per-character inlines manifest.
       const id = (frame.attr ?? '').trim()
       if (!/^\d+$/.test(id)) return escapeHtml(frame.raw) + body + `[/img]`
-      const alt = stripTags(body).trim() || `gallery image ${id}`
-      return `<img class="bb-img" src="${escapeAttr(galleryImageUrl(id))}" alt="${escapeHtml(alt)}" />`
+      const inline = opts.inlines?.[id]
+      if (!inline) {
+        // No manifest entry — render a placeholder rather than guessing.
+        const alt = stripTags(body).trim() || `inline ${id}`
+        return `<span class="bb-img bb-img-missing" title="No manifest entry for inline ${escapeHtml(id)}">[Inline ${escapeHtml(alt)}]</span>`
+      }
+      const alt = stripTags(body).trim() || `inline ${id}`
+      return `<img class="bb-img" src="${escapeAttr(inlineImageUrl(inline))}" alt="${escapeHtml(alt)}" />`
     }
     default: {
       const wrap = SIMPLE_INLINE[frame.name]
@@ -331,6 +351,13 @@ export interface BbcodeOptions {
    * preview.
    */
   withSourceMap?: boolean
+  /**
+   * Per-character inline-image manifest. F-list stores inline images on
+   * a content-addressed CDN: each `[img=ID]` tag's numeric id resolves
+   * to a hash+extension that we need to build the URL. Profiles fetched
+   * via /profile/<name> bring this manifest with them.
+   */
+  inlines?: InlinesManifest
 }
 
 export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
@@ -354,7 +381,7 @@ export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
     if (inNoparse) {
       if (tok.type === 'close' && tok.name === 'noparse') {
         const frame = stack.pop()!
-        top().children.push(emit(frame))
+        top().children.push(emit(frame, opts))
         inNoparse = false
       } else {
         // Inside [noparse]: everything renders as escaped text.
@@ -392,16 +419,16 @@ export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
       }
       while (stack.length - 1 > depth) {
         const frame = stack.pop()!
-        top().children.push(emit(frame))
+        top().children.push(emit(frame, opts))
       }
       const frame = stack.pop()!
-      top().children.push(emit(frame))
+      top().children.push(emit(frame, opts))
     }
   }
 
   while (stack.length > 1) {
     const frame = stack.pop()!
-    top().children.push(emit(frame))
+    top().children.push(emit(frame, opts))
   }
 
   return root.children.join('')

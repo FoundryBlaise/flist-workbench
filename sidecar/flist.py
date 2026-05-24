@@ -14,6 +14,7 @@ stay on the HTML scrape path.
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass, asdict, field
 from typing import Any
@@ -39,6 +40,10 @@ class Profile:
     avatar_url: str | None
     stats: dict[str, str] = field(default_factory=dict)
     bbcode: str = ""
+    # Manifest for inline images referenced by [img=ID] tags. F-list
+    # embeds this on the profile page so the client can map a numeric
+    # id to its content-addressed CDN URL.
+    inlines: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -77,6 +82,7 @@ _FORMATTED_BLOCK_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_INLINES_RE = re.compile(r"FList\.Inlines\.inlines\s*=\s*(\{.*?\})\s*;", re.DOTALL)
 
 
 def parse_profile(profile_html: str, *, requested_name: str | None = None) -> Profile:
@@ -110,4 +116,18 @@ def parse_profile(profile_html: str, *, requested_name: str | None = None) -> Pr
         normalised = without_br.replace("\r\n", "\n").replace("\r", "\n")
         bbcode = html.unescape(normalised).strip()
 
-    return Profile(name=title, avatar_url=avatar_url, stats=stats, bbcode=bbcode)
+    inlines: dict[str, dict[str, Any]] = {}
+    inlines_match = _INLINES_RE.search(profile_html)
+    if inlines_match:
+        try:
+            inlines = json.loads(inlines_match.group(1))
+        except json.JSONDecodeError:
+            inlines = {}
+
+    return Profile(
+        name=title,
+        avatar_url=avatar_url,
+        stats=stats,
+        bbcode=bbcode,
+        inlines=inlines,
+    )

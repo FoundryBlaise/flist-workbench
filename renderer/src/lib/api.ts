@@ -1,10 +1,13 @@
 type ApiOptions = { signal?: AbortSignal }
 
+export type InlineImage = { hash: string; extension: string; nsfw: boolean }
+
 export type Profile = {
   name: string
   avatar_url: string | null
   stats: Record<string, string>
   bbcode: string
+  inlines: Record<string, InlineImage>
 }
 
 export type PartnerEntry = { name: string; bytes: number }
