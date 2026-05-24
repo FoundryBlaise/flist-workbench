@@ -121,7 +121,14 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?|\n?```$")
 
 
 def parse_label(content: str) -> dict | None:
-    """Extract {label, confidence, reason} from the LLM JSON reply."""
+    """Extract {label, confidence, reason} from the LLM JSON reply.
+
+    The `confidence` field is no longer required of the model — in
+    practice it never returned anything below 0.95, so the number was
+    information-free. We default to 1.0 when missing and accept any
+    valid value if the model still emits one (for backwards-compat
+    with custom prompts that include it).
+    """
     s = content.strip()
     if s.startswith("```"):
         s = _FENCE_RE.sub("", s)
@@ -136,11 +143,14 @@ def parse_label(content: str) -> dict | None:
     label = str(data.get("label", "")).upper()
     if label not in ("IC", "OOC"):
         return None
-    try:
-        conf = float(data.get("confidence", 0.5))
-    except (TypeError, ValueError):
-        conf = 0.5
-    conf = max(0.0, min(1.0, conf))
+    raw_conf = data.get("confidence")
+    if raw_conf is None:
+        conf = 1.0
+    else:
+        try:
+            conf = max(0.0, min(1.0, float(raw_conf)))
+        except (TypeError, ValueError):
+            conf = 1.0
     reason = str(data.get("reason", ""))[:120]
     return {"label": label, "confidence": conf, "reason": reason}
 

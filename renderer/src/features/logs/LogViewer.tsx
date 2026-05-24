@@ -681,10 +681,6 @@ function FilterButton({
   )
 }
 
-// Confidence ≥ this gets a "trusted" visual; below it we hint visually
-// that the LLM wasn't sure. Manual labels are always 1.0 and trusted.
-const CONFIDENT_LABEL = 0.7
-
 function MessageRow({
   msg,
   search,
@@ -758,7 +754,6 @@ function MessageRow({
         bucket={bucket}
         label={msg.label}
         source={msg.label_source}
-        confidence={msg.label_confidence}
         reason={msg.label_reason}
         priorLabel={msg.prior_label}
         priorSource={msg.prior_source}
@@ -1015,7 +1010,6 @@ function LabelBadge({
   bucket,
   label,
   source,
-  confidence,
   reason,
   priorLabel,
   priorSource
@@ -1023,7 +1017,6 @@ function LabelBadge({
   bucket: 'ic' | 'ooc' | 'unlabeled' | 'system'
   label?: Label
   source?: 'llm' | 'manual'
-  confidence?: number
   reason?: string
   // Sidecar only ever sets prior_label when the user manually
   // overrode an IC or OOC label, so the wire shape is just IC|OOC.
@@ -1042,23 +1035,20 @@ function LabelBadge({
         : bucket === 'ic'
           ? 'IC'
           : 'OOC'
-  const lowConfidence = source === 'llm' && typeof confidence === 'number' && confidence < CONFIDENT_LABEL
   const klass = [
     'log-label',
     `log-label-${bucket}`,
-    source ? `log-label-src-${source}` : '',
-    lowConfidence ? 'log-label-lowconf' : ''
+    source ? `log-label-src-${source}` : ''
   ]
     .filter(Boolean)
     .join(' ')
-  // Build the tooltip in lines: source/confidence line, then the
-  // model's own reason (if any), then the prior-label trail (if any).
-  // The reason matters most when confidence saturates near 1.0 — the
-  // number alone isn't informative and the user needs to see why.
+  // Tooltip: source line, model's reason (if any), prior-label trail
+  // for manual overrides. Confidence used to be in here but the
+  // model never returned anything below 0.95 so the number was
+  // information-free; dropped it.
   const lines: string[] = []
   if (source) {
-    const conf = typeof confidence === 'number' ? ` · ${(confidence * 100).toFixed(0)}%` : ''
-    lines.push(`${label} · ${source}${conf}`)
+    lines.push(`${label} · ${source}`)
   } else if (bucket === 'system') {
     lines.push('F-Chat system message')
   } else if (bucket === 'unlabeled') {
