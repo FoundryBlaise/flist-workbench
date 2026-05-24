@@ -45,7 +45,11 @@ def fmt_msg(m: dict, truncate: bool = False) -> str:
     if truncate and len(text) > CONTEXT_TRUNCATE_CHARS:
         text = text[:CONTEXT_TRUNCATE_CHARS].rstrip() + " [… truncated]"
     n = len(text)
-    return f"[{t} | {n} chars] {m['speaker']}: {text}"
+    # F-Chat type byte 1 == /me action. Surface it as an explicit
+    # marker so the classifier doesn't have to infer "this is a /me"
+    # from the parser-prepended speaker name alone.
+    action_marker = " | action" if m.get("type") == 1 else ""
+    return f"[{t} | {n} chars{action_marker}] {m['speaker']}: {text}"
 
 
 def build_user_prompt(messages: list[dict], target_idx: int) -> str:

@@ -222,22 +222,27 @@ export function LogViewer() {
   }, [messages, filter, search])
 
   const stats = useMemo(() => {
-    if (!messages) return { total: 0, ic: 0, ooc: 0, unlabeled: 0, system: 0, from: '', to: '' }
+    if (!messages)
+      return { total: 0, ic: 0, ooc: 0, unlabeled: 0, system: 0, labeled: 0, from: '', to: '' }
     // Single pass instead of three filters over 80k+ items.
     let ic = 0
     let ooc = 0
     let unlabeled = 0
     let system = 0
+    // Messages with an explicit LLM/manual label — i.e. rows in
+    // labels.db that the "Reset all labels" action would clear.
+    let labeled = 0
     for (const m of messages) {
       const b = effectiveBucket(m)
       if (b === 'ic') ic++
       else if (b === 'ooc') ooc++
       else if (b === 'unlabeled') unlabeled++
       else system++
+      if (m.label_source) labeled++
     }
     const from = messages.length ? dayLabel(messages[0].ts) : ''
     const to = messages.length ? dayLabel(messages[messages.length - 1].ts) : ''
-    return { total: messages.length, ic, ooc, unlabeled, system, from, to }
+    return { total: messages.length, ic, ooc, unlabeled, system, labeled, from, to }
   }, [messages])
 
   type Item =
@@ -433,12 +438,37 @@ export function LogViewer() {
           partnerLabel={displayPartner(partner)}
           characterLabel={activeChar}
           unlabeledCount={unlabeledCount}
+          labeledCount={stats.labeled}
           onClassify={() => {
             setConvMenu(null)
             openClassify(
               { character: activeChar, partner },
               `${displayPartner(partner)} with ${activeChar}`
             )
+          }}
+          onResetAll={async () => {
+            setConvMenu(null)
+            const partnerName = displayPartner(partner)
+            const confirmed = window.confirm(
+              `Reset all labels for ${partnerName} with ${activeChar}?\n\n` +
+                `This deletes ${stats.labeled.toLocaleString()} LLM/manual labels. ` +
+                `Rule-based labels (short messages, "((", etc.) recompute automatically. ` +
+                `This cannot be undone.`
+            )
+            if (!confirmed) return
+            try {
+              await api.labelsClear({ character: activeChar, partner })
+              // Reload messages so the badges reflect rule-only state.
+              useStore.getState().invalidateMessages(activeChar, partner)
+              void useStore
+                .getState()
+                .loadMessages(activeChar, partner, { force: true })
+            } catch (err) {
+              console.error('[labels] clear failed', err)
+              window.alert(
+                `Couldn't reset labels: ${err instanceof Error ? err.message : String(err)}`
+              )
+            }
           }}
         />
       )}
@@ -732,24 +762,53 @@ function ConversationContextMenu({
   partnerLabel,
   characterLabel,
   unlabeledCount,
-  onClassify
+  labeledCount,
+  onClassify,
+  onResetAll
 }: {
   x: number
   y: number
   partnerLabel: string
   characterLabel: string
   unlabeledCount: number
+  labeledCount: number
   onClassify: () => void
+  onResetAll: () => void
 }) {
-  const W = 260
-  const H = 110
+  const W = 280
+  const H = 160
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
-  const ref = useRef<HTMLButtonElement | null>(null)
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
   useEffect(() => {
-    ref.current?.focus()
+    const first = itemRefs.current.find((b) => b && !b.disabled)
+    first?.focus()
   }, [])
-  const disabled = unlabeledCount === 0
+  const moveFocus = (from: number, dir: 1 | -1) => {
+    const items = itemRefs.current
+    const len = items.length
+    if (len === 0) return
+    let idx = from
+    for (let step = 0; step < len; step++) {
+      idx = (idx + dir + len) % len
+      const btn = items[idx]
+      if (btn && !btn.disabled) {
+        btn.focus()
+        return
+      }
+    }
+  }
+  const onItemKeyDown = (idx: number) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      moveFocus(idx, 1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      moveFocus(idx, -1)
+    }
+  }
+  const classifyDisabled = unlabeledCount === 0
+  const resetDisabled = labeledCount === 0
   return (
     <div
       className="log-label-menu log-conv-menu"
@@ -764,23 +823,50 @@ function ConversationContextMenu({
         <span className="log-label-menu-current">{characterLabel}</span>
       </div>
       <button
-        ref={ref}
+        ref={(el) => {
+          itemRefs.current[0] = el
+        }}
         type="button"
         role="menuitem"
         className="log-label-menu-item"
         onClick={onClassify}
-        disabled={disabled}
+        onKeyDown={onItemKeyDown(0)}
+        disabled={classifyDisabled}
         title={
-          disabled
+          classifyDisabled
             ? 'Nothing left to classify in this conversation.'
             : `Send ${unlabeledCount.toLocaleString()} unlabeled messages to the LLM.`
         }
         data-testid="log-conv-menu-classify"
       >
         Classify this conversation
-        {!disabled && (
+        {!classifyDisabled && (
           <span className="log-label-menu-current">
             {unlabeledCount.toLocaleString()} unlabeled
+          </span>
+        )}
+      </button>
+      <button
+        ref={(el) => {
+          itemRefs.current[1] = el
+        }}
+        type="button"
+        role="menuitem"
+        className="log-label-menu-item log-label-menu-reset"
+        onClick={onResetAll}
+        onKeyDown={onItemKeyDown(1)}
+        disabled={resetDisabled}
+        title={
+          resetDisabled
+            ? 'No LLM or manual labels to clear.'
+            : `Delete ${labeledCount.toLocaleString()} LLM + manual labels and fall back to rules.`
+        }
+        data-testid="log-conv-menu-reset-all"
+      >
+        Reset all labels (LLM + manual)
+        {!resetDisabled && (
+          <span className="log-label-menu-current">
+            {labeledCount.toLocaleString()} labeled
           </span>
         )}
       </button>
