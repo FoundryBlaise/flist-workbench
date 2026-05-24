@@ -38,12 +38,19 @@ test('lady amber blaise: collapse expands and inline images render', async () =>
     expect(src).toContain('/images/charinline/')
     expect(src).not.toContain('/images/charimage/')
 
-    // Open the first collapse and confirm its body becomes visible.
+    // Open the first collapse and confirm its body becomes visible —
+    // and STAYS visible after focus moves elsewhere. The previous bug
+    // was: click → opens → focus event triggers re-render → loses
+    // details.open → user has to click twice.
     const firstCollapse = preview.locator('details.bb-collapse').first()
     await expect(firstCollapse).toBeVisible()
     const body = firstCollapse.locator('.bb-collapse-body')
     await expect(body).toBeHidden()  // closed by default
     await firstCollapse.locator('summary.bb-collapse-header').click()
+    await expect(body).toBeVisible()
+    // Click somewhere outside the preview pane to trigger blur, then
+    // verify the collapse stayed open instead of getting reset.
+    await window.locator('.editor-toolbar').first().click()
     await expect(body).toBeVisible()
 
     // Body must be inside the details bounding box.

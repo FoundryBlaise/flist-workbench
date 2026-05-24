@@ -19,6 +19,24 @@ import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
  *    A blur or external content swap (e.g. Fetch profile) triggers a
  *    fresh render so the spans get their source offsets back.
  */
+// Capture which <details class="bb-collapse"> are currently open before
+// we throw away the DOM, and re-apply that state to the next render's
+// details elements in document order. Without this, a re-render closes
+// every collapse the user had opened — which feels like the click did
+// nothing on the second beat.
+function captureOpenCollapses(root: HTMLElement): boolean[] {
+  return Array.from(root.querySelectorAll<HTMLDetailsElement>('details.bb-collapse')).map(
+    (d) => d.open
+  )
+}
+
+function applyOpenCollapses(root: HTMLElement, openStates: boolean[]): void {
+  const details = root.querySelectorAll<HTMLDetailsElement>('details.bb-collapse')
+  for (let i = 0; i < details.length && i < openStates.length; i++) {
+    details[i].open = openStates[i]
+  }
+}
+
 export function PreviewPane() {
   const content = useStore((s) => s.editorContent)
   const inlines = useStore((s) => s.editorInlines)
@@ -34,7 +52,10 @@ export function PreviewPane() {
     const el = ref.current
     if (!el) return
     if (focusedRef.current) return
+    if (renderedFromRef.current === content) return
+    const opens = captureOpenCollapses(el)
     el.innerHTML = bbcodeToHtml(content, { withSourceMap: true, inlines })
+    applyOpenCollapses(el, opens)
     renderedFromRef.current = content
   }, [content, inlines])
 
@@ -61,16 +82,21 @@ export function PreviewPane() {
         }}
         onBlur={() => {
           focusedRef.current = false
-          // Re-render from current source so spans get fresh offsets
-          // after this edit session.
-          if (ref.current) {
-            const s = useStore.getState()
-            ref.current.innerHTML = bbcodeToHtml(s.editorContent, {
-              withSourceMap: true,
-              inlines: s.editorInlines
-            })
-            renderedFromRef.current = s.editorContent
-          }
+          // Re-render only if source actually changed during this edit
+          // session — otherwise we'd needlessly reset open collapses,
+          // scroll position, and anything else outside React's
+          // knowledge. Source-map offsets only need refreshing when
+          // source moved.
+          if (!ref.current) return
+          const s = useStore.getState()
+          if (renderedFromRef.current === s.editorContent) return
+          const opens = captureOpenCollapses(ref.current)
+          ref.current.innerHTML = bbcodeToHtml(s.editorContent, {
+            withSourceMap: true,
+            inlines: s.editorInlines
+          })
+          applyOpenCollapses(ref.current, opens)
+          renderedFromRef.current = s.editorContent
         }}
       />
     </section>
