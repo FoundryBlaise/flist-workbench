@@ -48,6 +48,9 @@ type State = {
 
   activePartner: string | null
 
+  /** When set, a Classify-labels progress dialog is open over the app. */
+  classifyTarget: { scope: { character?: string | null; partner?: string | null }; label: string } | null
+
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
@@ -81,6 +84,21 @@ type State = {
   loadPartners: (char: string) => Promise<void>
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string) => Promise<void>
+  openClassify: (
+    scope: { character?: string | null; partner?: string | null },
+    label: string
+  ) => void
+  closeClassify: () => void
+  applyLabelOverride: (
+    char: string,
+    partner: string,
+    hash: string,
+    patch: {
+      label?: 'IC' | 'OOC'
+      label_source?: 'llm' | 'manual'
+      label_confidence?: number
+    } | null
+  ) => void
   setEditorContent: (value: string) => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
@@ -147,6 +165,8 @@ export const useStore = create<State>((set, get) => ({
   partners: {},
   partnersStatus: {},
   activePartner: null,
+
+  classifyTarget: null,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -249,6 +269,46 @@ export const useStore = create<State>((set, get) => ({
         }
       }))
     }
+  },
+
+  openClassify(scope, label) {
+    set({ classifyTarget: { scope, label } })
+  },
+
+  closeClassify() {
+    set({ classifyTarget: null })
+  },
+
+  // Patches a single message's label fields in place. `patch === null`
+  // clears label fields back to rule/Unlabeled resolution — but since
+  // the resolver runs server-side, we approximate locally by removing
+  // label_source/_confidence and falling back to the rule the renderer
+  // can compute (or 'Unlabeled' if unknown). The next loadMessages
+  // refresh will re-resolve from the sidecar authoritatively.
+  applyLabelOverride(char, partner, hash, patch) {
+    const key = partnerKey(char, partner)
+    set((s) => {
+      const list = s.messagesByPartner[key]
+      if (!list) return s
+      const next = list.map((m) => {
+        if (m.hash !== hash) return m
+        if (patch === null) {
+          const { label_source, label_confidence, ...rest } = m
+          void label_source
+          void label_confidence
+          // Drop the explicit label so the UI treats it as needing
+          // rule recomputation; the resolver re-runs on next fetch.
+          return { ...rest, label: undefined }
+        }
+        return {
+          ...m,
+          label: patch.label ?? m.label,
+          label_source: patch.label_source ?? m.label_source,
+          label_confidence: patch.label_confidence ?? m.label_confidence
+        }
+      })
+      return { messagesByPartner: { ...s.messagesByPartner, [key]: next } }
+    })
   },
 
   setEditorContent(value) {

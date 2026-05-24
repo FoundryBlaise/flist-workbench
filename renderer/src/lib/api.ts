@@ -56,6 +56,9 @@ export type LogMessage = {
   // kind is F-Chat's message type bucket (chat/action vs ad/roll/warn/event).
   // Used to keep "System" filtering working independently of semantic IC/OOC.
   kind: 'ic' | 'ooc' | 'system'
+  // Sidecar-computed sha1(ts|speaker|raw)[:16] used as the labels-DB
+  // primary key. The renderer passes this back when overriding.
+  hash: string
   // label is the semantic IC/OOC classification from the resolver. Always
   // present for chat/action messages; absent label_source means rule-or-unlabeled
   // (no explicit DB row).
@@ -86,6 +89,28 @@ export type LabelsStats = {
   ooc: number
   unlabeled: number
   total: number
+}
+
+export type ClassifyJobScope = {
+  character?: string | null
+  partner?: string | null
+}
+
+export type ClassifyJob = {
+  id: string
+  scope: { character?: string; partner?: string }
+  state: 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+  classified: number
+  failed: number
+  total: number
+  skipped_existing: number
+  skipped_rule: number
+  last_label?: string | null
+  last_error?: string | null
+  current_partner?: string | null
+  error?: string | null
+  created_at: number
+  finished_at?: number | null
 }
 
 function base(): string {
@@ -173,6 +198,38 @@ export const api = {
   labelsStats: (char: string, partner: string) =>
     get<LabelsStats>(
       `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
+    ),
+  labelsOverride: (body: {
+    character: string
+    partner: string
+    hash: string
+    ts: number
+    speaker: string
+    label: Label | null
+  }) =>
+    request<{
+      hash: string
+      label: Label | null
+      source?: LabelSource
+      confidence?: number
+      prior_label?: Label | null
+      prior_source?: LabelSource | null
+      deleted?: boolean
+    }>('/labels/override', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  labelsClassifyStart: (scope: ClassifyJobScope) =>
+    request<ClassifyJob>('/labels/classify', {
+      method: 'POST',
+      body: JSON.stringify(scope)
+    }),
+  labelsJobGet: (id: string, opts?: ApiOptions) =>
+    get<ClassifyJob>(`/labels/jobs/${encodeURIComponent(id)}`, opts),
+  labelsJobCancel: (id: string) =>
+    request<{ id: string; cancel_requested: boolean }>(
+      `/labels/jobs/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
     ),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useStore } from '../../state'
-import type { Label, LogMessage } from '../../lib/api'
+import { api, type Label, type LogMessage } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
+
+type LabelMenuState = { x: number; y: number; msg: LogMessage } | null
 
 // Three semantic chips for resolved IC/OOC/Unlabeled + one for the
 // F-Chat "System" type bucket (ads/rolls/warns/events) which is
@@ -110,9 +112,12 @@ export function LogViewer() {
   // shift-clicked). The range is inclusive of both endpoints.
   const [selectMode, setSelectMode] = useState(false)
   const [selRange, setSelRange] = useState<[number, number] | null>(null)
+  const [labelMenu, setLabelMenu] = useState<LabelMenuState>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   const markSeen = useStore((s) => s.markCharacterSeen)
+  const applyLabelOverride = useStore((s) => s.applyLabelOverride)
+  const openClassify = useStore((s) => s.openClassify)
 
   useEffect(() => {
     if (activeChar && partner) {
@@ -130,7 +135,59 @@ export function LogViewer() {
     setActiveHit(0)
     setSelRange(null)
     setSelectMode(false)
+    setLabelMenu(null)
   }, [key])
+
+  // Close the label menu on Escape or any non-menu click — same
+  // affordance users expect from native context menus.
+  useEffect(() => {
+    if (!labelMenu) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLabelMenu(null)
+    }
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest('.log-label-menu')) return
+      setLabelMenu(null)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onClick)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onClick)
+    }
+  }, [labelMenu])
+
+  const submitOverride = async (msg: LogMessage, label: Label | null) => {
+    if (!activeChar || !partner) return
+    setLabelMenu(null)
+    // Optimistic — patch the local state, then call the API. If the
+    // request fails we reload the conversation to get authoritative
+    // state back from the sidecar.
+    if (label === null) {
+      applyLabelOverride(activeChar, partner, msg.hash, null)
+    } else {
+      applyLabelOverride(activeChar, partner, msg.hash, {
+        label,
+        label_source: 'manual',
+        label_confidence: 1.0
+      })
+    }
+    try {
+      await api.labelsOverride({
+        character: activeChar,
+        partner,
+        hash: msg.hash,
+        ts: msg.ts,
+        speaker: msg.speaker,
+        label
+      })
+    } catch (err) {
+      console.error('[labels] override failed', err)
+      // Soft-reset by refetching — cheap for a paged conversation.
+      void useStore.getState().loadMessages(activeChar, partner)
+    }
+  }
 
   const filtered = useMemo<LogMessage[]>(() => {
     if (!messages) return []
@@ -301,6 +358,8 @@ export function LogViewer() {
   const isInSelection = (idx: number): boolean =>
     selBounds !== null && idx >= selBounds[0] && idx <= selBounds[1]
 
+  const unlabeledCount = stats.unlabeled
+
   return (
     <section className="pane log-pane" data-testid="log-viewer">
       <header className="pane-head log-head">
@@ -313,6 +372,26 @@ export function LogViewer() {
             {Math.min(activeHit + 1, rendered.hitTotal)} / {rendered.hitTotal}
           </span>
         )}
+        <button
+          type="button"
+          className="log-classify"
+          disabled={!activeChar || unlabeledCount === 0}
+          onClick={() => {
+            if (!activeChar) return
+            openClassify(
+              { character: activeChar, partner },
+              `${displayPartner(partner)} with ${activeChar}`
+            )
+          }}
+          title={
+            unlabeledCount === 0
+              ? 'Nothing left to classify in this conversation.'
+              : `Send ${unlabeledCount.toLocaleString()} unlabeled messages to the LLM for IC/OOC classification.`
+          }
+          data-testid="log-classify"
+        >
+          Classify ({unlabeledCount.toLocaleString()})
+        </button>
       </header>
       <div className="log-filters">
         <input
@@ -419,6 +498,14 @@ export function LogViewer() {
           )}
         </div>
       )}
+      {labelMenu && (
+        <LabelContextMenu
+          x={labelMenu.x}
+          y={labelMenu.y}
+          msg={labelMenu.msg}
+          onChoose={(label) => void submitOverride(labelMenu.msg, label)}
+        />
+      )}
       <div className="pane-body log-body" data-testid="log-body">
         {filtered.length === 0 ? (
           <div className="pane-body-placeholder">
@@ -448,6 +535,11 @@ export function LogViewer() {
                   selected={sourceIdx !== -1 && isInSelection(sourceIdx)}
                   onSelectClick={(shift) => {
                     if (sourceIdx !== -1) handleRowClick(sourceIdx, shift)
+                  }}
+                  onContextMenu={(e) => {
+                    if (selectMode) return
+                    e.preventDefault()
+                    setLabelMenu({ x: e.clientX, y: e.clientY, msg: item.msg })
                   }}
                 />
               )
@@ -497,7 +589,8 @@ function MessageRow({
   isOwn,
   selectMode,
   selected,
-  onSelectClick
+  onSelectClick,
+  onContextMenu
 }: {
   msg: LogMessage
   search: string
@@ -507,6 +600,7 @@ function MessageRow({
   selectMode: boolean
   selected: boolean
   onSelectClick: (shift: boolean) => void
+  onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => void
 }) {
   // Lazy: only escape/highlight at render time for rows actually
   // visible to the user. This is what keeps an 80k-message channel
@@ -535,6 +629,7 @@ function MessageRow({
             }
           : undefined
       }
+      onContextMenu={onContextMenu}
     >
       <span className="log-ts" title={msg.iso}>
         {timeLabel(msg.ts)}
@@ -542,6 +637,74 @@ function MessageRow({
       <span className="log-speaker">{msg.speaker}</span>
       <LabelBadge bucket={bucket} label={msg.label} source={msg.label_source} confidence={msg.label_confidence} />
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
+    </div>
+  )
+}
+
+function LabelContextMenu({
+  x,
+  y,
+  msg,
+  onChoose
+}: {
+  x: number
+  y: number
+  msg: LogMessage
+  onChoose: (label: Label | null) => void
+}) {
+  // Nudge the menu so it stays inside the viewport on right-clicks
+  // near the bottom/right edges. 180×120 is the menu's nominal size.
+  const W = 200
+  const H = 140
+  const left = Math.min(x, window.innerWidth - W - 8)
+  const top = Math.min(y, window.innerHeight - H - 8)
+  const currentLabel = msg.label
+  const currentSource = msg.label_source
+  return (
+    <div
+      className="log-label-menu"
+      style={{ left, top }}
+      data-testid="log-label-menu"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="log-label-menu-head">
+        Label this message
+        {currentSource && (
+          <span className="log-label-menu-current">
+            {currentLabel} · {currentSource}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        className="log-label-menu-item"
+        onClick={() => onChoose('IC')}
+        data-testid="log-label-menu-ic"
+      >
+        Set <strong>IC</strong>
+      </button>
+      <button
+        type="button"
+        className="log-label-menu-item"
+        onClick={() => onChoose('OOC')}
+        data-testid="log-label-menu-ooc"
+      >
+        Set <strong>OOC</strong>
+      </button>
+      <button
+        type="button"
+        className="log-label-menu-item log-label-menu-reset"
+        onClick={() => onChoose(null)}
+        disabled={currentSource === undefined}
+        title={
+          currentSource === undefined
+            ? 'No manual or LLM label to reset'
+            : 'Remove the manual/LLM label and fall back to the rules / Unlabeled'
+        }
+        data-testid="log-label-menu-reset"
+      >
+        Reset to rule / Unlabeled
+      </button>
     </div>
   )
 }
