@@ -1,6 +1,7 @@
-import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view'
+import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, keymap } from '@codemirror/view'
 import { RangeSetBuilder } from '@codemirror/state'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
+import { TOOLBAR_ACTIONS, applyAction } from '../../features/editor/Toolbar'
 
 const TAG_RE = /\[(\/?)([a-zA-Z][a-zA-Z0-9]*)(?:=([^\]]*))?\]/g
 
@@ -64,6 +65,20 @@ const bbcodeTheme = EditorView.theme(
 
 const dummyHighlight = syntaxHighlighting(HighlightStyle.define([]))
 
+// Bind every TOOLBAR_ACTION that declares a shortcut into the editor
+// keymap. Ctrl/Cmd+B/I/U/etc. wrap the current selection the same way
+// clicking the toolbar button does.
+const bbcodeShortcuts = keymap.of(
+  TOOLBAR_ACTIONS.filter((a) => a.shortcut).map((a) => ({
+    key: a.shortcut!,
+    preventDefault: true,
+    run: (view) => {
+      applyAction(view, a)
+      return true
+    }
+  }))
+)
+
 export const bbcodeExtensions = [
   bbcodeDecorations,
   bbcodeTheme,
@@ -72,5 +87,6 @@ export const bbcodeExtensions = [
   // collapse headers padded with spaces, multi-paragraph quote bodies).
   // Wrap them rather than scroll horizontally so the editor reads the
   // way the preview lays out.
-  EditorView.lineWrapping
+  EditorView.lineWrapping,
+  bbcodeShortcuts
 ]

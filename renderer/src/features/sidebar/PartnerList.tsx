@@ -7,6 +7,15 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}mb`
 }
 
+// F-Chat writes partner directory names lower-cased. Display them
+// title-cased so they match the message-row author names; preserve the
+// '#' prefix on channels and the original casing of any segment that
+// already includes a non-letter (channel ADH hashes, etc).
+function displayPartner(name: string): string {
+  if (!/[a-z]/.test(name)) return name
+  return name.replace(/\b([a-z])([a-z]*)/g, (_m, h: string, t: string) => h.toUpperCase() + t)
+}
+
 export function PartnerList() {
   const activeChar = useStore((s) => s.activeCharacter)
   const partners = useStore((s) => (activeChar ? s.partners[activeChar] : null))
@@ -35,11 +44,12 @@ export function PartnerList() {
               type="button"
               className={`sb-item ${p.name === activePartner ? 'active' : ''}`}
               onClick={() => selectPartner(p.name)}
+              title={p.name}
             >
               <span className="ic" aria-hidden>
                 {isChannel ? '#' : '•'}
               </span>
-              <span className="label">{p.name}</span>
+              <span className="label">{displayPartner(p.name)}</span>
               <span className="meta">{formatBytes(p.bytes)}</span>
             </button>
           </li>
