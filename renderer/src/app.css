@@ -1629,6 +1629,21 @@ body {
   color: white;
 }
 .log-label-menu-item:disabled { opacity: 0.4; cursor: default; }
+/* Conversation-level context menu — same chrome as the per-message
+   menu, but items can carry a right-aligned count badge. */
+.log-conv-menu .log-label-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.log-conv-menu .log-label-menu-item .log-label-menu-current {
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+}
+.log-conv-menu .log-label-menu-item:hover:not(:disabled) .log-label-menu-current {
+  color: rgba(255, 255, 255, 0.85);
+}
 .log-label-menu-reset {
   margin-top: 4px;
   border-top: 1px solid var(--border);
