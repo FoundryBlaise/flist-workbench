@@ -19,5 +19,29 @@ playwright-report/
 test-results/
 tests/screenshots/*.png
 
-# Electron builder (Phase 8)
+# Electron-builder output (Phase 6 Windows packaging — see docs/PACKAGING_WINDOWS.md)
 release/
+dist-electron/
+# Bundled sidecar binary produced by `npm run pack:sidecar`. ~30 MB,
+# regenerated from source on every pack — never check it in.
+resources/sidecar.exe
+resources/sidecar
+# PyInstaller intermediate output (the dist/ entry above also covers
+# sidecar/dist/ from running PyInstaller directly).
+sidecar/build/
+sidecar/dist/
+# PyInstaller spec files ARE committed if hand-edited (they capture
+# the hidden-imports list and entry point). Auto-generated stubs from
+# a fresh `pyinstaller server.py` run get clobbered on the next build
+# anyway, so this is mostly a "don't commit by accident" note.
+
+# OS / editor cruft
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Lockfiles — package-lock.json IS tracked (npm convention). uv.lock
+# for the sidecar IS tracked. Anything pip generates ad-hoc isn't.
+pip-wheel-metadata/
