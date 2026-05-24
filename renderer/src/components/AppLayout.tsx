@@ -41,6 +41,15 @@ export function AppLayout() {
     }
   }, [])
 
+  // Push activeChar/activePartner state to the native menu so items
+  // requiring a selection grey out instead of silently no-op'ing.
+  useEffect(() => {
+    window.workbench?.setMenuState?.({
+      classifyCurrent: !!(activeChar && activePartner),
+      classifyCharacter: !!activeChar
+    })
+  }, [activeChar, activePartner])
+
   // Native menu (electron/menu.ts) dispatches actions over IPC. Route
   // them to the existing local/store handlers so the menu items are
   // wired without duplicating any logic.

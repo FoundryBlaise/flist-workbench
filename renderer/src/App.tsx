@@ -19,6 +19,7 @@ declare global {
         defaultPath?: string
       }) => Promise<string | null>
       onMenuAction?: (listener: (action: MenuAction) => void) => () => void
+      setMenuState?: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => void
     }
   }
 }

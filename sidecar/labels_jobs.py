@@ -220,7 +220,22 @@ def _run_job(job: Job) -> None:
                 job.state = "cancelled"
                 break
         if job.state == "running":
-            job.state = "done"
+            # A run that managed to talk to the LLM zero times but
+            # accumulated failures is a connection/config problem
+            # masquerading as success — promote to "failed" so the UI
+            # treats it as such. Use the last per-message error as the
+            # explanation since the worker itself didn't throw.
+            if finished_classified == 0 and finished_failed > 0:
+                job.state = "failed"
+                if job.error is None:
+                    last = job.progress.last_error
+                    job.error = (
+                        f"All {finished_failed} message(s) failed: {last}"
+                        if last
+                        else f"All {finished_failed} message(s) failed."
+                    )
+            else:
+                job.state = "done"
     except Exception as exc:  # noqa: BLE001 — top-level worker guard
         job.error = repr(exc)
         job.state = "failed"

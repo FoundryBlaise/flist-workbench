@@ -985,7 +985,7 @@ body {
 }
 .log-filter {
   background: var(--bg);
-  color: var(--text-dim);
+  color: var(--text);
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 3px 10px;
@@ -994,8 +994,26 @@ body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  position: relative;
 }
-.log-filter.on { background: var(--select); color: var(--text); border-color: var(--select); }
+.log-filter.on {
+  background: var(--select);
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+/* Off chips are visually inert — dimmed text, no background contrast,
+   and a faint diagonal strikethrough overlay so "muted" is obvious
+   even at a glance and doesn't get confused with a "0 count" chip. */
+.log-filter.off {
+  color: var(--text-dim);
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.65;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.25);
+  text-decoration-thickness: 1px;
+}
 .log-filter:hover { border-color: var(--accent); }
 .log-filter-count {
   font-variant-numeric: tabular-nums;
@@ -1003,6 +1021,7 @@ body {
   letter-spacing: 0;
   opacity: 0.8;
   margin-left: 2px;
+  text-decoration: none;
 }
 .log-jump {
   background: var(--accent);
@@ -1145,6 +1164,14 @@ body {
 }
 .modal-close:hover { color: var(--text); }
 .modal-body { padding: 14px 20px; }
+/* The settings modal body can outgrow the 80vh max-height. Let it
+   scroll inside the modal so the per-section Save buttons stay
+   reachable without resizing the dialog. */
+.settings-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
 
 .find-contacts-modal { width: 720px; }
 .find-contacts-form {
@@ -1462,6 +1489,15 @@ body {
 /* Manual override gets a left bar so the user can see at a glance
    which labels they fixed themselves vs which came from the LLM. */
 .log-label-src-manual { box-shadow: inset 2px 0 0 #c2884c; }
+/* The row-edge accent (paired with the badge inset) is what actually
+   reads at scrolling speed — a 2px stripe on a 10px badge is too
+   small to spot. The accent colour matches the badge marker. */
+.log-msg-manual {
+  box-shadow: inset 3px 0 0 #c2884c;
+}
+.log-msg-manual.log-msg-selected {
+  box-shadow: inset 3px 0 0 #c2884c, inset 6px 0 0 var(--accent);
+}
 /* Low-confidence LLM labels read as a dotted underline — the visual
    nudge says "the classifier wasn't sure, audit this." */
 .log-label-lowconf {
@@ -1574,6 +1610,36 @@ body {
 .classify-progress-fill.classify-state-done { background: #4a8a4a; }
 .classify-progress-fill.classify-state-cancelled { background: #b08040; }
 .classify-progress-fill.classify-state-failed { background: var(--accent-2); }
+/* Indeterminate mode — while the worker is still walking the
+   filesystem totalling targets, slide a translucent stripe across the
+   bar so the dialog clearly shows "something is happening". */
+.classify-progress-bar-indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+.classify-progress-bar-indeterminate .classify-progress-fill {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(86, 156, 214, 0.55) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: classify-indeterminate-slide 1.2s linear infinite;
+  width: 100% !important;
+}
+@keyframes classify-indeterminate-slide {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.classify-summary {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text);
+}
 .classify-progress-text { margin: 4px 0; font-size: 13px; }
 .classify-state {
   text-transform: uppercase;

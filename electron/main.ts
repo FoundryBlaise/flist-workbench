@@ -28,6 +28,23 @@ ipcMain.handle('workbench:select-directory', async (event, opts: { title?: strin
   return result.filePaths[0]
 })
 
+// Renderer reports which classify scopes are reachable so the native
+// menu can grey out items that would otherwise no-op silently. The
+// renderer keeps the canonical state (it knows the active character
+// and partner); main just mirrors it onto the menu items.
+type MenuFlags = {
+  classifyCurrent: boolean
+  classifyCharacter: boolean
+}
+ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
+  const menu = Menu.getApplicationMenu()
+  if (!menu) return
+  const cur = menu.getMenuItemById('classify-current')
+  const ch = menu.getMenuItemById('classify-character')
+  if (cur) cur.enabled = !!flags.classifyCurrent
+  if (ch) ch.enabled = !!flags.classifyCharacter
+})
+
 async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1400,

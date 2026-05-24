@@ -541,6 +541,11 @@ export function LogViewer() {
                     e.preventDefault()
                     setLabelMenu({ x: e.clientX, y: e.clientY, msg: item.msg })
                   }}
+                  onLabelKeyboardOpen={(anchor) => {
+                    if (selectMode) return
+                    const r = anchor.getBoundingClientRect()
+                    setLabelMenu({ x: r.left + 16, y: r.bottom, msg: item.msg })
+                  }}
                 />
               )
             }}
@@ -590,7 +595,8 @@ function MessageRow({
   selectMode,
   selected,
   onSelectClick,
-  onContextMenu
+  onContextMenu,
+  onLabelKeyboardOpen
 }: {
   msg: LogMessage
   search: string
@@ -601,6 +607,7 @@ function MessageRow({
   selected: boolean
   onSelectClick: (shift: boolean) => void
   onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => void
+  onLabelKeyboardOpen: (anchor: HTMLElement) => void
 }) {
   // Lazy: only escape/highlight at render time for rows actually
   // visible to the user. This is what keeps an 80k-message channel
@@ -614,6 +621,10 @@ function MessageRow({
     'log-msg',
     `log-msg-${bucket}`,
     isOwn ? 'log-msg-own' : 'log-msg-other',
+    // Row-edge accent for manual overrides — the badge inset was too
+    // subtle to spot when scrolling. Keep the badge styling too for
+    // when the user looks at a label up close.
+    msg.label_source === 'manual' ? 'log-msg-manual' : '',
     selectMode ? 'log-msg-selectable' : '',
     selected ? 'log-msg-selected' : ''
   ]
@@ -622,6 +633,7 @@ function MessageRow({
   return (
     <div
       className={klass}
+      tabIndex={selectMode ? -1 : 0}
       onClick={
         selectMode
           ? (e) => {
@@ -630,6 +642,14 @@ function MessageRow({
           : undefined
       }
       onContextMenu={onContextMenu}
+      onKeyDown={(e) => {
+        // Keyboard equivalent of right-click: Shift+F10 or the
+        // ContextMenu key open the label menu anchored at the row.
+        if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+          e.preventDefault()
+          onLabelKeyboardOpen(e.currentTarget)
+        }
+      }}
     >
       <span className="log-ts" title={msg.iso}>
         {timeLabel(msg.ts)}
@@ -660,11 +680,53 @@ function LabelContextMenu({
   const top = Math.min(y, window.innerHeight - H - 8)
   const currentLabel = msg.label
   const currentSource = msg.label_source
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  useEffect(() => {
+    // Open on the first enabled item so keyboard users land on a
+    // sensible default and arrow keys do something immediately.
+    const first = itemRefs.current.find((b) => b && !b.disabled)
+    first?.focus()
+  }, [])
+
+  const moveFocus = (from: number, dir: 1 | -1) => {
+    const items = itemRefs.current
+    const len = items.length
+    if (len === 0) return
+    let idx = from
+    for (let step = 0; step < len; step++) {
+      idx = (idx + dir + len) % len
+      const btn = items[idx]
+      if (btn && !btn.disabled) {
+        btn.focus()
+        return
+      }
+    }
+  }
+
+  const onItemKeyDown = (idx: number) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      moveFocus(idx, 1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      moveFocus(idx, -1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      moveFocus(-1, 1)
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      moveFocus(itemRefs.current.length, -1)
+    }
+  }
+
   return (
     <div
       className="log-label-menu"
       style={{ left, top }}
       data-testid="log-label-menu"
+      role="menu"
+      aria-label="Label this message"
       onContextMenu={(e) => e.preventDefault()}
     >
       <div className="log-label-menu-head">
@@ -676,25 +738,40 @@ function LabelContextMenu({
         )}
       </div>
       <button
+        ref={(el) => {
+          itemRefs.current[0] = el
+        }}
         type="button"
+        role="menuitem"
         className="log-label-menu-item"
         onClick={() => onChoose('IC')}
+        onKeyDown={onItemKeyDown(0)}
         data-testid="log-label-menu-ic"
       >
         Set <strong>IC</strong>
       </button>
       <button
+        ref={(el) => {
+          itemRefs.current[1] = el
+        }}
         type="button"
+        role="menuitem"
         className="log-label-menu-item"
         onClick={() => onChoose('OOC')}
+        onKeyDown={onItemKeyDown(1)}
         data-testid="log-label-menu-ooc"
       >
         Set <strong>OOC</strong>
       </button>
       <button
+        ref={(el) => {
+          itemRefs.current[2] = el
+        }}
         type="button"
+        role="menuitem"
         className="log-label-menu-item log-label-menu-reset"
         onClick={() => onChoose(null)}
+        onKeyDown={onItemKeyDown(2)}
         disabled={currentSource === undefined}
         title={
           currentSource === undefined
