@@ -1,3 +1,4 @@
+import os
 from dataclasses import asdict
 from typing import Any
 
@@ -6,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import documents
+import settings as settings_store
 from flist import ProfileNotFound, fetch_profile
 from logs import (
     LogDirError,
@@ -89,6 +91,68 @@ def logs_search_all(char: str, q: str, limit_per_partner: int = 50) -> dict:
 @app.get("/logs/contacts")
 def logs_contacts(name: str) -> dict:
     return find_contacts(name)
+
+
+# ---- settings -----------------------------------------------------------
+
+
+def _settings_db():
+    conn = settings_store.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+class SettingsUpdate(BaseModel):
+    # Allow null to clear the override; absent fields are left
+    # untouched. Empty string is treated as "unset" for symmetry with
+    # the directory picker's "no folder selected" state.
+    fchat_data_dir: str | None = None
+
+
+def _settings_dict(conn) -> dict:
+    import logs
+
+    env_pinned = bool(os.environ.get("FCHAT_DATA_DIR"))
+    stored = settings_store.get(conn, settings_store.KEY_FCHAT_DATA_DIR)
+    # `effective` is what the sidecar will actually read from on the
+    # next /logs request — useful for the UI to display the live path
+    # regardless of where the override came from.
+    return {
+        "fchat_data_dir": stored,
+        "fchat_data_dir_effective": str(logs.data_dir()),
+        # Surface whether the env var is forcing the value — the UI
+        # should disable the picker in that case so the user isn't
+        # surprised by their setting being ignored.
+        "fchat_data_dir_env_locked": env_pinned,
+    }
+
+
+@app.get("/settings")
+def settings_get(conn=Depends(_settings_db)) -> dict:
+    return _settings_dict(conn)
+
+
+@app.put("/settings")
+def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
+    if body.fchat_data_dir is not None:
+        value = body.fchat_data_dir.strip()
+        if value:
+            # Reject obviously bogus paths up front so the UI gets a
+            # clean 400 rather than a "characters: []" reply later.
+            from pathlib import Path
+
+            p = Path(value).expanduser()
+            if not p.exists() or not p.is_dir():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"directory does not exist: {value}",
+                )
+            settings_store.set_value(conn, settings_store.KEY_FCHAT_DATA_DIR, str(p))
+        else:
+            settings_store.clear(conn, settings_store.KEY_FCHAT_DATA_DIR)
+    return _settings_dict(conn)
 
 
 # ---- documents ----------------------------------------------------------

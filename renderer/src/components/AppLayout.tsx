@@ -5,6 +5,7 @@ import { PreviewPane } from '../features/editor/PreviewPane'
 import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
+import { SettingsModal } from '../features/settings/SettingsModal'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
@@ -21,6 +22,7 @@ export function AppLayout() {
   const setCrossSearchOpen = useStore((s) => s.setCrossSearchOpen)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -66,6 +68,15 @@ export function AppLayout() {
         >
           Find contacts…
         </button>
+        <button
+          type="button"
+          className="titlebar-action"
+          onClick={() => setSettingsOpen(true)}
+          title="Settings"
+          data-testid="settings-open"
+        >
+          Settings…
+        </button>
         <span
           className={`sidecar-pill sidecar-${health}`}
           data-testid="sidecar-status"
@@ -75,6 +86,7 @@ export function AppLayout() {
         </span>
       </header>
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       <main className={`main main-${mode}`}>
         <Sidebar />
         {mode === 'editor' ? (

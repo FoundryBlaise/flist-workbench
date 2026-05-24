@@ -13,13 +13,40 @@ porting `parser.py` from Chat_RAG and is a later milestone.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 from parser import Message, parse_log
 
-DEFAULT_DATA_DIR = Path("/sideprojects/rag/data")
+
+def default_data_dir() -> Path:
+    """OS-native location where F-Chat 3.0 writes its logs by default.
+
+    F-Chat's own storage layout (matches what Frolic and the F-Chat
+    Electron client write):
+      - Windows: %APPDATA%/fchat/data
+      - macOS:   ~/Library/Application Support/fchat/data
+      - Linux:   ~/.config/fchat/data  (XDG)
+
+    The devcontainer ships with a corpus at /sideprojects/rag/data
+    and sets FCHAT_DATA_DIR to point at it, so users developing
+    against this repo never hit this fallback.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "fchat" / "data"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "fchat" / "data"
+    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(xdg) / "fchat" / "data"
+
+
+# Kept as a module-level constant so existing tests / callers that
+# imported it still resolve. The function above is the live source of
+# truth — it picks up env changes per call.
+DEFAULT_DATA_DIR = default_data_dir()
 
 
 class LogDirError(Exception):
@@ -33,8 +60,29 @@ class PartnerEntry:
 
 
 def data_dir() -> Path:
+    # Env var wins so tests and the devcontainer can pin a known
+    # directory regardless of UI state. Otherwise check the settings
+    # store the user has the option to point at a custom path.
     raw = os.environ.get("FCHAT_DATA_DIR")
-    return Path(raw) if raw else DEFAULT_DATA_DIR
+    if raw:
+        return Path(raw)
+    try:
+        # Local import to avoid a circular reference at module load
+        # time — settings imports documents which has no deps on logs.
+        import settings as _settings  # noqa: PLC0415
+
+        conn = _settings.connect()
+        try:
+            override = _settings.get(conn, _settings.KEY_FCHAT_DATA_DIR)
+        finally:
+            conn.close()
+        if override:
+            return Path(override)
+    except Exception:
+        # Settings DB unreachable / first launch / readonly filesystem
+        # — fall through to the OS-native default.
+        pass
+    return default_data_dir()
 
 
 @dataclass(slots=True, frozen=True)
