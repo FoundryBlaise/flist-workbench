@@ -226,10 +226,15 @@ body {
 .pane-body { flex: 1; overflow: auto; padding: 12px; }
 .pane-body-placeholder { color: var(--text-dim); font-size: 12px; }
 .pane.preview .pane-body {
-  background: #2a2620;
+  background: #2e2828;
   color: #ddd;
-  font-family: Georgia, serif;
-  line-height: 1.6;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  /* F-list preserves the source whitespace verbatim — the spacers and
+     long dash lines users put in profiles count on that. */
+  white-space: pre-wrap;
+  word-wrap: break-word;
   outline: none;
 }
 .pane.preview .pane-body:focus {
@@ -351,10 +356,10 @@ body {
 .preview-body { padding: 16px 20px; }
 .preview-body p { margin: 0 0 10px; }
 .preview-body .bb-heading {
-  color: var(--accent);
-  font-weight: bold;
-  font-size: 1.4em;
-  margin: 10px 0;
+  font-weight: 500;
+  font-size: 1.5em;
+  line-height: 1.2;
+  margin: 0.5em 0;
 }
 .preview-body hr.bb-hr {
   border: none;
@@ -374,7 +379,7 @@ body {
 .preview-body .bb-left { text-align: left; }
 .preview-body .bb-right { text-align: right; }
 .preview-body .bb-justify { text-align: justify; }
-.preview-body .bb-indent { padding-left: 40px; }
+.preview-body .bb-indent { padding-left: 5%; }
 /* Colour palette mirrors F-list's dark theme (text-shadow lifts them
    off the editor's dark background the way F-Chat does). */
 .preview-body [class*="bb-color-"] { text-shadow: 0 1px 2px #000; }
@@ -429,14 +434,27 @@ body {
   color: #ddd;
 }
 .preview-body .bb-collapse {
-  border: 1px solid #555;
-  border-radius: 4px;
-  padding: 4px 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
   margin: 6px 0;
+  background: rgba(0,0,0,0.2);
+  /* Clip body so its contents can never visually escape the card. */
+  overflow: hidden;
 }
-.preview-body .bb-collapse summary {
+.preview-body .bb-collapse-header {
   cursor: pointer;
-  color: var(--accent);
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.05);
+  font-weight: bold;
+  color: var(--text);
+  list-style: none;
+}
+.preview-body .bb-collapse-header::-webkit-details-marker { display: none; }
+.preview-body .bb-collapse-chevron::before { content: '▾'; margin-right: 8px; }
+.preview-body .bb-collapse[open] .bb-collapse-chevron::before { content: '▴'; }
+.preview-body .bb-collapse-body {
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255,255,255,0.05);
 }
 
 /* Log viewer */

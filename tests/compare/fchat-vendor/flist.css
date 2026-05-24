@@ -1,0 +1,98 @@
+/* Hand-port of f-list/chat3client/scss/_bbcode.scss + the dark-theme
+   colour palette from the wiki BBCode reference. Used by the comparison
+   harness so the vendored parser renders close to how F-Chat shows a
+   profile in its dark theme. Not used in the app itself. */
+:root {
+  --flist-bg: #2e2828;
+  --flist-text: #ddd;
+  --flist-muted: #999;
+  --flist-link: #729fcf;
+}
+
+.bbcode {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--flist-text);
+  background: var(--flist-bg);
+  padding: 16px 20px;
+  max-width: 100%;
+}
+.bbcode a { color: var(--flist-link); text-decoration: underline; }
+.bbcode a:hover { text-decoration: none; }
+.bbcode h2 {
+  font-size: 1.5em;
+  font-weight: 500;
+  margin: 0.5em 0;
+  line-height: 1.2;
+}
+.bbcode blockquote {
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 10px;
+  margin: 10px 2px;
+  font-style: italic;
+  box-shadow: 0 0 1px #111;
+}
+.bbcode .quoteHeader {
+  font-style: normal;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+span.bigText { font-size: 1.25rem; }
+span.smallText { font-size: 0.875rem; }
+span.leftText { display: block; text-align: left; }
+span.centerText { display: block; text-align: center; }
+span.rightText { display: block; text-align: right; }
+span.justifyText { display: block; text-align: justify; }
+div.indentText { padding-left: 5%; }
+
+/* Dark-theme colour values, per wiki: List_of_BBCode_tags */
+.redText    { color: #f44; text-shadow: 0 1px 2px #000; }
+.blueText   { color: #1e90ff; }
+.greenText  { color: #4f4; text-shadow: 0 1px 2px #000; }
+.yellowText { color: yellow; text-shadow: 0 1px 2px #000; }
+.cyanText   { color: #00ffff; text-shadow: 0 1px 2px #000; }
+.purpleText { color: #d0f; text-shadow: 0 1px 2px #000; }
+.brownText  { color: #967117; text-shadow: 0 1px 2px #000; }
+.pinkText   { color: #ffcbdb; text-shadow: 0 1px 2px #000; }
+.grayText   { color: #d3d3d3; text-shadow: 0 1px 2px #000; }
+.orangeText { color: orange; text-shadow: 0 1px 2px #000; }
+.whiteText  { color: #fff; }
+.blackText  { color: #888; text-shadow: 0 1px 2px #000; }
+
+.character-avatar { display: inline; height: 100px; width: 100px; }
+.character-avatar.icon { height: 50px; width: 50px; }
+
+.bbcode-collapse {
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  margin: 6px 0;
+  background: rgba(0,0,0,0.2);
+  overflow: hidden;
+}
+.bbcode-collapse-header {
+  font-weight: bold;
+  cursor: pointer;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.05);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.bbcode-collapse-body {
+  overflow-y: hidden;
+  transition: height 0.2s;
+}
+.bbcode-collapse-body .card-body { padding: 8px 10px; }
+
+.link-domain { color: var(--flist-muted); }
+.user-link { font-weight: 500; }
+
+.inline-image { max-width: 100%; height: auto; display: block; margin: 6px auto; }
+
+.fa { font-style: normal; margin-right: 4px; }
+.fa-link::before { content: '🔗'; }
+.fa-chevron-down::before { content: '▾'; }
+.fa-chevron-up::before { content: '▴'; }
