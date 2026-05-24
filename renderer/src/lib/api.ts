@@ -66,6 +66,11 @@ export type LogMessage = {
   label?: Label
   label_source?: LabelSource
   label_confidence?: number
+  // Free-text reason the model gave for the verdict (LLM source) or
+  // "manual override" / similar (manual source). Surfaced in the
+  // badge tooltip — useful when confidence saturates near 1.0 and the
+  // number alone tells the user nothing about WHY.
+  label_reason?: string
   // Snapshot of what the label was before the most recent change.
   // Present only on manual overrides; lets the UI surface "LLM had
   // said IC; you changed it to OOC" without a separate lookup.

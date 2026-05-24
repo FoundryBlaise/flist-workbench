@@ -89,6 +89,12 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
             if row is not None:
                 m["label_source"] = row["source"]
                 m["label_confidence"] = row["confidence"]
+                # Surface the model's own reason string in the badge
+                # tooltip so the user can audit why a label was chosen
+                # — useful when confidence saturates at 0.99+ and the
+                # number alone isn't informative.
+                if row["reason"]:
+                    m["label_reason"] = row["reason"]
                 # Carry the prior snapshot so the UI can show "LLM had
                 # said IC; you changed it to OOC" on manual overrides.
                 if row["prior_label"] is not None:
