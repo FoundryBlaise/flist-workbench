@@ -36,7 +36,10 @@ export function EditorPane() {
             onChange={(e) => setFetchName(e.target.value)}
             data-testid="profile-fetch-input"
           />
-          <button type="submit" disabled={fetchStatus === 'fetching'}>
+          <button
+            type="submit"
+            disabled={fetchStatus === 'fetching' || !fetchName.trim()}
+          >
             {fetchStatus === 'fetching' ? 'Fetching…' : 'Fetch profile'}
           </button>
         </form>
