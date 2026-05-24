@@ -83,7 +83,8 @@ type State = {
   setCrossSearchOpen: (open: boolean) => void
   loadPartners: (char: string) => Promise<void>
   selectPartner: (name: string | null) => void
-  loadMessages: (char: string, partner: string) => Promise<void>
+  loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
+  invalidateMessages: (char: string, partner: string) => void
   openClassify: (
     scope: { character?: string | null; partner?: string | null },
     label: string
@@ -247,9 +248,9 @@ export const useStore = create<State>((set, get) => ({
     set({ activePartner: name, crossSearchOpen: false })
   },
 
-  async loadMessages(char, partner) {
+  async loadMessages(char, partner, opts) {
     const key = partnerKey(char, partner)
-    if (get().messagesStatus[key] === 'ready') return
+    if (get().messagesStatus[key] === 'ready' && !opts?.force) return
     set((s) => ({
       messagesStatus: { ...s.messagesStatus, [key]: 'loading' },
       messagesError: { ...s.messagesError, [key]: null }
@@ -269,6 +270,20 @@ export const useStore = create<State>((set, get) => ({
         }
       }))
     }
+  },
+
+  // Drop the cached entry so the next loadMessages refetches. Used
+  // after a multi-scope classify so the currently open conversation
+  // doesn't show stale labels.
+  invalidateMessages(char, partner) {
+    const key = partnerKey(char, partner)
+    set((s) => {
+      const { [key]: _, ...byPartner } = s.messagesByPartner
+      const { [key]: __, ...status } = s.messagesStatus
+      void _
+      void __
+      return { messagesByPartner: byPartner, messagesStatus: status }
+    })
   },
 
   openClassify(scope, label) {

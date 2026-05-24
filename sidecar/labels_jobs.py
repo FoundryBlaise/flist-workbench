@@ -131,13 +131,19 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
       {character: <name>}                          → all partners for that char
       {} or {character: None}                      → all characters × all partners
     """
+    # Channels (#-prefixed) used to be silently skipped here. They're
+    # visible in the partner list and the chip strip shows non-zero
+    # unlabeled counts for them — silently excluding them from classify
+    # was the most confusing surface in the entire labels flow per PO
+    # review. Include them; the rule resolver will still mark short and
+    # `((` messages OOC by rule, and the LLM gets the rest.
     character = scope.get("character")
     partner = scope.get("partner")
     if character and partner:
         return [(character, partner)]
     if character:
         partners = logs_store.list_partners(character)
-        return [(character, p.name) for p in partners if not p.name.startswith("#")]
+        return [(character, p.name) for p in partners]
     targets: list[tuple[str, str]] = []
     chars = logs_store.list_characters()
     for c in chars:
@@ -146,8 +152,6 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
         except logs_store.LogDirError:
             continue
         for p in partners:
-            if p.name.startswith("#"):
-                continue
             targets.append((c.name, p.name))
     return targets
 

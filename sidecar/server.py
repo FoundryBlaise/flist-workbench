@@ -89,6 +89,11 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
             if row is not None:
                 m["label_source"] = row["source"]
                 m["label_confidence"] = row["confidence"]
+                # Carry the prior snapshot so the UI can show "LLM had
+                # said IC; you changed it to OOC" on manual overrides.
+                if row["prior_label"] is not None:
+                    m["prior_label"] = row["prior_label"]
+                    m["prior_source"] = row["prior_source"]
             # Otherwise no source/confidence is attached — the UI can
             # infer "rule or unlabeled" from absence of label_source.
     finally:
@@ -153,6 +158,84 @@ class ClassifyJobRequest(BaseModel):
     # partner: Y} = a single conversation.
     character: str | None = None
     partner: str | None = None
+
+
+class TestConnectionRequest(BaseModel):
+    # All optional — when omitted we pull from saved settings. The
+    # renderer typically posts the current edit-state so the user can
+    # test before saving.
+    llm_endpoint: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    system_prompt: str | None = None
+
+
+@app.post("/labels/test-connection")
+def labels_test_connection(body: TestConnectionRequest) -> dict:
+    """One canned classification roundtrip so the user can validate
+    endpoint / model / prompt without launching a real job.
+
+    Returns latency + raw model output + parsed JSON (if any). All
+    failure modes return 200 with `ok=false` and a structured `error`
+    so the UI can show actionable feedback without HTTP-error parsing.
+    """
+    import time as _time
+    from urllib.error import HTTPError, URLError
+
+    import labels_llm
+
+    settings_conn = settings_store.connect()
+    try:
+        saved = labels_store.load_settings(settings_conn)
+    finally:
+        settings_conn.close()
+
+    endpoint = body.llm_endpoint or saved.llm_endpoint
+    model = body.llm_model or saved.llm_model
+    api_key = body.llm_api_key if body.llm_api_key is not None else saved.llm_api_key
+    prompt = body.system_prompt or saved.system_prompt
+
+    canned_user = (
+        ">>> ZIELNACHRICHT <<<\n"
+        "[01-01 12:00 | 12 chars] Tester: hello there\n"
+        ">>> ENDE ZIELNACHRICHT <<<"
+    )
+    started = _time.monotonic()
+    try:
+        content = labels_llm.call_llm(endpoint, model, api_key, prompt, canned_user, timeout=15)
+    except HTTPError as exc:
+        return {
+            "ok": False,
+            "error": f"HTTP {exc.code}: {exc.reason}",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except URLError as exc:
+        return {
+            "ok": False,
+            "error": f"connection failed: {exc.reason}",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except TimeoutError as exc:
+        return {
+            "ok": False,
+            "error": f"timed out: {exc}",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001 — surface to UI
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    elapsed_ms = int((_time.monotonic() - started) * 1000)
+    parsed = labels_llm.parse_label(content)
+    return {
+        "ok": parsed is not None,
+        "elapsed_ms": elapsed_ms,
+        "raw": content[:400],
+        "parsed": parsed,
+        "error": None if parsed is not None else "model output did not contain a valid {label, confidence} JSON object",
+    }
 
 
 @app.post("/labels/classify", status_code=202)

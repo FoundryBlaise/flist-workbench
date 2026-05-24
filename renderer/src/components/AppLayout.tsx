@@ -132,6 +132,7 @@ export function AppLayout() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {classifyTarget && (
         <ClassifyDialog
+          key={`${classifyTarget.scope.character ?? '*'}::${classifyTarget.scope.partner ?? '*'}`}
           scope={classifyTarget.scope}
           scopeLabel={classifyTarget.label}
           onClose={closeClassify}
