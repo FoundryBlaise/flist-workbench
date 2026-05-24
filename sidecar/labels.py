@@ -41,6 +41,11 @@ DEFAULT_THRESHOLD_CHARS = 200
 DEFAULT_LLM_ENDPOINT = "http://localhost:1234/v1"
 DEFAULT_LLM_MODEL = "gemma-4-26b-a4b-it-uncensored-heretic"
 DEFAULT_LLM_API_KEY = ""
+# Default surrounding-context window size for classify calls. 3 + 3
+# is the value RAG_DESIGN.md picked; users can tune down (small VRAM)
+# or up via Settings → Labels.
+DEFAULT_CONTEXT_BEFORE = 3
+DEFAULT_CONTEXT_AFTER = 3
 
 # Default classifier prompt. Lifted from Chat_RAG/classify.py (German
 # RP). Users can edit this in Settings → Labels; a blank stored value
@@ -192,6 +197,8 @@ class LabelsSettings:
     llm_model: str
     llm_api_key: str
     system_prompt: str
+    context_before: int
+    context_after: int
 
 
 def _coerce_int(raw: str | None, default: int) -> int:
@@ -220,12 +227,18 @@ def load_settings(conn: sqlite3.Connection | None = None) -> LabelsSettings:
         model = settings_store.get(conn, settings_store.KEY_LABELS_LLM_MODEL) or DEFAULT_LLM_MODEL
         api_key = settings_store.get(conn, settings_store.KEY_LABELS_LLM_API_KEY) or DEFAULT_LLM_API_KEY
         prompt = settings_store.get(conn, settings_store.KEY_LABELS_SYSTEM_PROMPT) or DEFAULT_SYSTEM_PROMPT
+        ctx_before_raw = settings_store.get(conn, settings_store.KEY_LABELS_CONTEXT_BEFORE)
+        ctx_after_raw = settings_store.get(conn, settings_store.KEY_LABELS_CONTEXT_AFTER)
         return LabelsSettings(
             threshold_chars=_coerce_int(threshold_raw, DEFAULT_THRESHOLD_CHARS),
             llm_endpoint=endpoint,
             llm_model=model,
             llm_api_key=api_key,
             system_prompt=prompt,
+            # Clamp to a sane range — context that's too wide blows the
+            # model's window; negative or zero is fine (no surroundings).
+            context_before=max(0, min(10, _coerce_int(ctx_before_raw, DEFAULT_CONTEXT_BEFORE))),
+            context_after=max(0, min(10, _coerce_int(ctx_after_raw, DEFAULT_CONTEXT_AFTER))),
         )
     finally:
         if own_conn:

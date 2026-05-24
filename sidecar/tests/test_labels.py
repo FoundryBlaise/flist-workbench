@@ -32,6 +32,8 @@ def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
         llm_model=labels_store.DEFAULT_LLM_MODEL,
         llm_api_key="",
         system_prompt=labels_store.DEFAULT_SYSTEM_PROMPT,
+        context_before=labels_store.DEFAULT_CONTEXT_BEFORE,
+        context_after=labels_store.DEFAULT_CONTEXT_AFTER,
     )
 
 

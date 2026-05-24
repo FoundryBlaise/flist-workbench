@@ -33,6 +33,12 @@ KEY_LABELS_LLM_ENDPOINT = "labels.llm_endpoint"
 KEY_LABELS_LLM_MODEL = "labels.llm_model"
 KEY_LABELS_LLM_API_KEY = "labels.llm_api_key"
 KEY_LABELS_SYSTEM_PROMPT = "labels.system_prompt"
+# How many surrounding messages to attach as KONTEXT VORHER / NACHHER
+# to each classify call. Higher = better disambiguation, lower = fits
+# tighter on smaller-VRAM cards (8GB local models hit context limits
+# easily). Defaults to 3 each per RAG_DESIGN.md.
+KEY_LABELS_CONTEXT_BEFORE = "labels.context_before"
+KEY_LABELS_CONTEXT_AFTER = "labels.context_after"
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:

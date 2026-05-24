@@ -33,8 +33,8 @@ from urllib.request import Request, urlopen
 import labels as labels_store
 from labels import LabelsSettings, msg_hash
 
-CONTEXT_BEFORE = 3
-CONTEXT_AFTER = 3
+CONTEXT_BEFORE = 3  # historical default; runtime reads from settings
+CONTEXT_AFTER = 3   # historical default; runtime reads from settings
 CONTEXT_TRUNCATE_CHARS = 500
 REQUEST_TIMEOUT = 180
 
@@ -52,9 +52,15 @@ def fmt_msg(m: dict, truncate: bool = False) -> str:
     return f"[{t} | {n} chars{action_marker}] {m['speaker']}: {text}"
 
 
-def build_user_prompt(messages: list[dict], target_idx: int) -> str:
-    lo = max(0, target_idx - CONTEXT_BEFORE)
-    hi = min(len(messages), target_idx + CONTEXT_AFTER + 1)
+def build_user_prompt(
+    messages: list[dict],
+    target_idx: int,
+    *,
+    context_before: int = CONTEXT_BEFORE,
+    context_after: int = CONTEXT_AFTER,
+) -> str:
+    lo = max(0, target_idx - context_before)
+    hi = min(len(messages), target_idx + context_after + 1)
     parts: list[str] = []
     if target_idx > lo:
         parts.append("KONTEXT VORHER (nicht klassifizieren):")
@@ -193,7 +199,17 @@ def classify_messages(
         if labels_store.resolve(m, None, settings) != labels_store.LABEL_UNLABELED:
             skipped_rule += 1
             continue
-        tasks.append((idx, m, h, build_user_prompt(msgs, idx)))
+        tasks.append((
+            idx,
+            m,
+            h,
+            build_user_prompt(
+                msgs,
+                idx,
+                context_before=settings.context_before,
+                context_after=settings.context_after,
+            ),
+        ))
 
     total = len(tasks)
     classified = 0
