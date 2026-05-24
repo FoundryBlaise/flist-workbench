@@ -107,36 +107,36 @@ BEISPIELE ZUR MUSTERERKENNUNG:
 
 NACHRICHT: "Galadriel legte sanft ihre seidige Hand auf das kühle Metall des
 Türgriffs und zog die Tür langsam auf."
-ANTWORT: {"label":"IC","confidence":0.95,"reason":"Szenenerzählung in dritter Person, passiert jetzt"}
+ANTWORT: {"label":"IC","reason":"Szenenerzählung in dritter Person, passiert jetzt"}
 
 NACHRICHT: "[03-12 21:08 | 92 chars] Seraphina: Seraphina kommt durch die Tür,
 trägt einen langen Mantel und schaut sich suchend um."
-ANTWORT: {"label":"IC","confidence":0.97,"reason":"Sprecher Seraphina beschreibt sich selbst in dritter Person"}
+ANTWORT: {"label":"IC","reason":"Sprecher Seraphina beschreibt sich selbst in dritter Person"}
 
 NACHRICHT: "\\"Das ist eine wirklich schlechte Idee\\", murmelte sie und schüttelte
 den Kopf, ohne ihn anzusehen."
-ANTWORT: {"label":"IC","confidence":0.95,"reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
+ANTWORT: {"label":"IC","reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
 
 NACHRICHT: "Éowyn von Rohan verzieht spöttisch den Mund. \\"Dann schlaft ihr
 eben in der Scheune, dieses Zimmer nehme ich.\\"
 Sie rührt sich nicht, als man sie beiseiteschieben will. \\"Ihr seht mir
 ganz nach einer Straßenelfe aus. Packt eure Sachen und verschwindet.\\""
-ANTWORT: {"label":"IC","confidence":0.96,"reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
+ANTWORT: {"label":"IC","reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
 
 NACHRICHT: "Zum Beispiel, ja. Wir könnten auch sagen, dass sie sich
 in einer Schmugglerkneipe nach Informanten umhört."
-ANTWORT: {"label":"OOC","confidence":0.90,"reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
+ANTWORT: {"label":"OOC","reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
 
 NACHRICHT: "Kenn ich von meinem alten Job. Bei uns in der Familie war das,
 ehrlich gesagt, auch nie anders"
-ANTWORT: {"label":"OOC","confidence":0.95,"reason":"Spieler-Anekdote aus echtem Leben (Job, Familie), erste Person"}
+ANTWORT: {"label":"OOC","reason":"Spieler-Anekdote aus echtem Leben (Job, Familie), erste Person"}
 
 NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt."
-ANTWORT: {"label":"OOC","confidence":0.85,"reason":"Konjunktiv 'würde' beschreibt Möglichkeit, nicht Geschehen"}
+ANTWORT: {"label":"OOC","reason":"Konjunktiv 'würde' beschreibt Möglichkeit, nicht Geschehen"}
 
 NACHRICHT: "(Ich werde jetzt würfeln für den Magieffekt. Willst du den Wurf sehen
 oder soll ich das eher heimlich machen?)"
-ANTWORT: {"label":"OOC","confidence":0.97,"reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
+ANTWORT: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
 
 FORMAT (STRIKTE PFLICHT):
 Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt.
@@ -144,7 +144,7 @@ KEINE Code-Fences (kein ```json). KEINE Markdown-Blöcke. KEINE Arrays (kein [ ]
 KEINE Vor-Überlegung, kein Chain-of-Thought, KEIN Text vor oder nach dem JSON.
 Das "reason"-Feld MAX 60 Zeichen. Verwende KEINE wörtlichen Zitate aus dem Text
 und KEINE Anführungszeichen im Reason — beschreibe das Muster, nicht den Inhalt.
-{"label":"IC"|"OOC","confidence":0.0-1.0,"reason":"kurze Begründung max 60 Zeichen"}"""
+{"label":"IC"|"OOC","reason":"kurze Begründung max 60 Zeichen"}"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS labels (

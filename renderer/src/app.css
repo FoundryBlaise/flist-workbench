@@ -1573,13 +1573,6 @@ body {
 .log-msg-menu-target.log-msg-manual {
   background: #2a1f12;
 }
-/* Low-confidence LLM labels read as a dotted underline — the visual
-   nudge says "the classifier wasn't sure, audit this." */
-.log-label-lowconf {
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-  opacity: 0.82;
-}
 .log-msg-unlabeled { color: var(--text-dim); }
 
 /* Right-click → context menu for setting / resetting a message's label.
