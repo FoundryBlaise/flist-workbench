@@ -344,43 +344,56 @@ body {
 }
 .tool:hover { background: #4a4a4a; }
 
-/* Preview body — BBCode rendered into HTML */
+/* Preview body — F-list dark-theme BBCode rendering.
+   Colour values, sizing, and spacing taken from the F-list wiki's
+   "List of BBCode tags" reference so the preview reads the way an
+   F-Chat reader sees a profile. */
 .preview-body { padding: 16px 20px; }
 .preview-body p { margin: 0 0 10px; }
-.preview-body h2 {
-  color: #d49090;
-  font-family: Georgia, serif;
-  font-size: 18px;
-  margin: 0 0 6px;
+.preview-body .bb-heading {
+  color: var(--accent);
+  font-weight: bold;
+  font-size: 1.4em;
+  margin: 10px 0;
 }
-.preview-body em { color: #cdb88c; }
 .preview-body hr.bb-hr {
   border: none;
   border-top: 1px solid #555;
   margin: 14px 0;
 }
-.preview-body blockquote {
-  border-left: 3px solid #555;
-  padding: 4px 12px;
-  margin: 10px 0;
-  color: #bbb;
+.preview-body .bb-quote {
+  padding: 10px;
+  margin: 4px 2px;
+  font-style: italic;
+  border: 1px solid #555;
+  border-radius: 3px;
+  box-shadow: 0 0 1px #111;
 }
+.preview-body .bb-quote > b { font-style: normal; }
 .preview-body .bb-center { text-align: center; }
-.preview-body .bb-indent { margin-left: 20px; }
-.preview-body .bb-color-red { color: #e26060; }
-.preview-body .bb-color-orange { color: #e08a3a; }
-.preview-body .bb-color-yellow { color: #e0d050; }
-.preview-body .bb-color-green { color: #7ab85e; }
-.preview-body .bb-color-cyan { color: #5fc6c0; }
-.preview-body .bb-color-blue { color: #6090e0; }
-.preview-body .bb-color-purple { color: #b070d4; }
-.preview-body .bb-color-pink { color: #e08aa6; }
-.preview-body .bb-color-black { color: #444; }
-.preview-body .bb-color-brown { color: #8a6240; }
-.preview-body .bb-color-white { color: #fff; }
-.preview-body .bb-color-gray { color: #aaa; }
-.preview-body .bb-big { font-size: 1.3em; }
-.preview-body .bb-small { font-size: 0.85em; }
+.preview-body .bb-left { text-align: left; }
+.preview-body .bb-right { text-align: right; }
+.preview-body .bb-justify { text-align: justify; }
+.preview-body .bb-indent { padding-left: 40px; }
+/* Colour palette mirrors F-list's dark theme (text-shadow lifts them
+   off the editor's dark background the way F-Chat does). */
+.preview-body [class*="bb-color-"] { text-shadow: 0 1px 2px #000; }
+.preview-body .bb-color-red { color: #f44; }
+.preview-body .bb-color-orange { color: orange; }
+.preview-body .bb-color-yellow { color: yellow; }
+.preview-body .bb-color-green { color: #4f4; }
+.preview-body .bb-color-cyan { color: #00ffff; }
+.preview-body .bb-color-blue { color: #1e90ff; text-shadow: none; }
+.preview-body .bb-color-purple { color: #d0f; }
+.preview-body .bb-color-pink { color: #ffcbdb; }
+.preview-body .bb-color-black { color: #888; }
+.preview-body .bb-color-brown { color: #967117; }
+.preview-body .bb-color-white { color: #fff; text-shadow: none; }
+.preview-body .bb-color-gray { color: #d3d3d3; }
+.preview-body .bb-big { font-size: 1.4em; }
+.preview-body .bb-small { font-size: 0.8em; }
+.preview-body .bb-sub { vertical-align: baseline; font-size: 0.8em; }
+.preview-body .bb-sup { vertical-align: top; font-size: 0.8em; }
 .preview-body .bb-icon img {
   width: 50px;
   height: 50px;
@@ -399,7 +412,8 @@ body {
   border-radius: 4px;
   margin: 6px 0;
 }
-.preview-body .bb-url {
+.preview-body .bb-url,
+.preview-body .bb-user {
   color: var(--accent);
   text-decoration: underline;
 }

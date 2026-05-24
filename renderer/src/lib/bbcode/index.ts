@@ -34,13 +34,15 @@ const SIMPLE_INLINE: Record<string, string> = {
   i: 'em',
   u: 'u',
   s: 's',
-  sub: 'sub',
-  sup: 'sup',
+  sub: 'span class="bb-sub"',
+  sup: 'span class="bb-sup"',
   big: 'span class="bb-big"',
   small: 'span class="bb-small"',
-  heading: 'h2',
-  quote: 'blockquote',
+  heading: 'div class="bb-heading"',
   center: 'div class="bb-center"',
+  left: 'div class="bb-left"',
+  right: 'div class="bb-right"',
+  justify: 'div class="bb-justify"',
   indent: 'div class="bb-indent"',
   noparse: '__noparse__'
 }
@@ -156,6 +158,14 @@ function emit(frame: Frame): string {
       if (!isSafeUrl(target)) return escapeHtml(frame.raw) + body + `[/url]`
       return `<a class="bb-url" href="${escapeAttr(target)}" target="_blank" rel="noreferrer noopener">${body}</a>`
     }
+    case 'quote':
+      // F-list renders [quote] as a bordered block with a "Quote:" label.
+      return `<div class="bb-quote"><b>Quote:</b><br />${body}</div>`
+    case 'user': {
+      const name = stripTags(body).trim()
+      if (!name) return ''
+      return `<a class="bb-user" href="https://www.f-list.net/c/${escapeAttr(encodeURIComponent(name))}" target="_blank" rel="noreferrer noopener">${escapeHtml(name)}</a>`
+    }
     case 'spoiler':
       return `<span class="bb-spoiler" tabindex="0">${body}</span>`
     case 'collapse': {
@@ -205,6 +215,8 @@ const ALL_KNOWN_NAMES = new Set<string>([
   ...SIMPLE_INLINE_NAMES,
   'color',
   'url',
+  'quote',
+  'user',
   'spoiler',
   'collapse',
   'icon',
