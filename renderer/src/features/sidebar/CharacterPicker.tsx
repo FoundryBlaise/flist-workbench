@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../state'
 
 export function CharacterPicker() {
@@ -8,6 +8,27 @@ export function CharacterPicker() {
   const active = useStore((s) => s.activeCharacter)
   const select = useStore((s) => s.selectCharacter)
   const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  // Close on Escape, and on any pointer down outside the wrapper. The
+  // dropdown otherwise stays open and intercepts clicks on the rest of
+  // the UI — a real footgun.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    const onPointer = (e: PointerEvent) => {
+      const w = wrapRef.current
+      if (w && e.target instanceof Node && !w.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onPointer)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPointer)
+    }
+  }, [open])
 
   if (status === 'loading' || status === 'idle') {
     return (
@@ -32,7 +53,7 @@ export function CharacterPicker() {
   }
 
   return (
-    <div className="char-picker-wrap" data-testid="char-picker">
+    <div className="char-picker-wrap" data-testid="char-picker" ref={wrapRef}>
       <button
         type="button"
         className="char-picker"

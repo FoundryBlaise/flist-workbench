@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useStore } from '../../state'
 import type { LogMessage } from '../../lib/api'
 
@@ -9,13 +10,33 @@ function partnerKey(char: string | null, partner: string | null): string | null 
   return char && partner ? `${char}::${partner}` : null
 }
 
+// toLocaleDateString is shockingly expensive (~100 µs/call on V8) so
+// for 80k-message logs we cache by local-day bucket. The bucket key is
+// the YYYY-MM-DD string derived from the local-time epoch, which is
+// stable and cheap to compute without going through the locale layer.
+const DAY_LABEL_CACHE = new Map<string, string>()
+
+function dayBucket(ts: number): string {
+  const d = new Date(ts * 1000)
+  // Local year-month-day, padded.
+  const y = d.getFullYear()
+  const m = d.getMonth() + 1
+  const day = d.getDate()
+  return `${y}-${m < 10 ? '0' : ''}${m}-${day < 10 ? '0' : ''}${day}`
+}
+
 function dayLabel(ts: number): string {
-  return new Date(ts * 1000).toLocaleDateString(undefined, {
+  const key = dayBucket(ts)
+  const cached = DAY_LABEL_CACHE.get(key)
+  if (cached !== undefined) return cached
+  const label = new Date(ts * 1000).toLocaleDateString(undefined, {
     weekday: 'short',
     day: '2-digit',
     month: 'short',
     year: 'numeric'
   })
+  DAY_LABEL_CACHE.set(key, label)
+  return label
 }
 
 function timeLabel(ts: number): string {
@@ -27,22 +48,22 @@ function timeLabel(ts: number): string {
   })
 }
 
-function highlight(text: string, q: string): { html: string; count: number } {
+function highlight(
+  text: string,
+  q: string,
+  hitsBefore: number,
+  activeHit: number
+): { html: string; count: number } {
   if (!q) return { html: escapeHtml(text), count: 0 }
   const escapedQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const re = new RegExp(escapedQuery, 'gi')
   let count = 0
-  const html = escapeHtml(text).replace(
-    new RegExp(escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
-    (m) => {
-      count += 1
-      return `<mark class="log-hit">${escapeHtml(m)}</mark>`
-    }
-  )
-  // Use re.lastIndex to silence the unused-var lint cleanly. (And no, that's
-  // not how lint silencing should work — but we need the regex object for
-  // splitting; the second escape above does the actual replace.)
-  re.lastIndex = 0
+  const html = escapeHtml(text).replace(re, (m) => {
+    const globalIdx = hitsBefore + count
+    count += 1
+    const cls = globalIdx === activeHit ? 'log-hit log-hit-active' : 'log-hit'
+    return `<mark class="${cls}">${escapeHtml(m)}</mark>`
+  })
   return { html, count }
 }
 
@@ -67,7 +88,7 @@ export function LogViewer() {
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
   const [search, setSearch] = useState('')
   const [activeHit, setActiveHit] = useState(0)
-  const bodyRef = useRef<HTMLDivElement>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   useEffect(() => {
     if (activeChar && partner) void loadMessages(activeChar, partner)
@@ -81,38 +102,63 @@ export function LogViewer() {
 
   const filtered = useMemo<LogMessage[]>(() => {
     if (!messages) return []
-    return messages.filter((m) => filter[m.kind])
-  }, [messages, filter])
+    const byKind = messages.filter((m) => filter[m.kind])
+    if (!search) return byKind
+    const q = search.toLowerCase()
+    return byKind.filter((m) => m.text.toLowerCase().includes(q))
+  }, [messages, filter, search])
 
   const stats = useMemo(() => {
     if (!messages) return { total: 0, ic: 0, ooc: 0, system: 0, from: '', to: '' }
-    const ic = messages.filter((m) => m.kind === 'ic').length
-    const ooc = messages.filter((m) => m.kind === 'ooc').length
-    const system = messages.filter((m) => m.kind === 'system').length
+    // Single pass instead of three filters over 80k+ items.
+    let ic = 0
+    let ooc = 0
+    let system = 0
+    for (const m of messages) {
+      if (m.kind === 'ic') ic++
+      else if (m.kind === 'ooc') ooc++
+      else if (m.kind === 'system') system++
+    }
     const from = messages.length ? dayLabel(messages[0].ts) : ''
     const to = messages.length ? dayLabel(messages[messages.length - 1].ts) : ''
     return { total: messages.length, ic, ooc, system, from, to }
   }, [messages])
 
+  type Item =
+    | { kind: 'day'; key: string; label: string }
+    | { kind: 'msg'; key: string; msg: LogMessage; hitsBefore: number; hits: number }
+
+  // Build the day-sep + message list. We deliberately do NOT call
+  // escapeHtml / highlight here — those are done lazily inside the
+  // MessageRow render so big channels (82k+ messages) don't spend a
+  // second of string work on rows the user never sees. Hit counts are
+  // cheap to compute and still need to be precomputed for the jump
+  // counter ("3 / 14") and for scroll-to-next.
   const rendered = useMemo(() => {
     let lastDay = ''
     let hitTotal = 0
-    const items: Array<
-      | { kind: 'day'; key: string; label: string }
-      | { kind: 'msg'; key: string; msg: LogMessage; html: string; hitsBefore: number; hits: number }
-    > = []
+    const items: Item[] = []
+    const escRe = search
+      ? new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+      : null
     for (const m of filtered) {
-      const day = dayLabel(m.ts)
-      if (day !== lastDay) {
-        items.push({ kind: 'day', key: `day-${day}-${m.ts}`, label: day })
-        lastDay = day
+      // Compare on the cheap bucket key, only format the label when we
+      // actually emit a separator. Saves an order of magnitude over
+      // running toLocaleDateString on every row.
+      const bucket = dayBucket(m.ts)
+      if (bucket !== lastDay) {
+        items.push({ kind: 'day', key: `day-${bucket}-${m.ts}`, label: dayLabel(m.ts) })
+        lastDay = bucket
       }
-      const { html, count } = highlight(m.text, search)
+      let count = 0
+      if (escRe) {
+        escRe.lastIndex = 0
+        while (escRe.exec(m.text) !== null) count += 1
+      }
       items.push({
         kind: 'msg',
         key: `m-${m.ts}-${m.speaker}-${items.length}`,
         msg: m,
-        html,
         hitsBefore: hitTotal,
         hits: count
       })
@@ -121,15 +167,21 @@ export function LogViewer() {
     return { items, hitTotal }
   }, [filtered, search])
 
+  // With virtualisation we can't grab mark.log-hit-active from the DOM
+  // (it may not be mounted yet). Look up the index of the message that
+  // owns the active hit and ask Virtuoso to scroll it into view.
   useEffect(() => {
-    if (!search) return
-    const body = bodyRef.current
-    if (!body) return
-    const marks = body.querySelectorAll('mark.log-hit')
-    marks.forEach((mark, i) => mark.classList.toggle('log-hit-active', i === activeHit))
-    const active = marks[activeHit]
-    if (active && 'scrollIntoView' in active) {
-      ;(active as HTMLElement).scrollIntoView({ block: 'center', behavior: 'auto' })
+    if (!search || rendered.hitTotal === 0) return
+    let idx = -1
+    for (let i = 0; i < rendered.items.length; i++) {
+      const it = rendered.items[i]
+      if (it.kind === 'msg' && activeHit >= it.hitsBefore && activeHit < it.hitsBefore + it.hits) {
+        idx = i
+        break
+      }
+    }
+    if (idx >= 0) {
+      virtuosoRef.current?.scrollToIndex({ index: idx, align: 'center', behavior: 'auto' })
     }
   }, [search, activeHit, rendered])
 
@@ -212,24 +264,33 @@ export function LogViewer() {
           </button>
         )}
       </div>
-      <div className="pane-body log-body" ref={bodyRef} data-testid="log-body">
+      <div className="pane-body log-body" data-testid="log-body">
         {filtered.length === 0 ? (
-          <div className="pane-body-placeholder">No messages match the current filter.</div>
+          <div className="pane-body-placeholder">
+            {search
+              ? `No messages match "${search}".`
+              : 'No messages match the current filter.'}
+          </div>
         ) : (
-          rendered.items.map((item) =>
-            item.kind === 'day' ? (
-              <div key={item.key} className="day-sep">
-                {item.label}
-              </div>
-            ) : (
-              <MessageRow
-                key={item.key}
-                msg={item.msg}
-                html={item.html}
-                isOwn={item.msg.speaker === activeChar}
-              />
-            )
-          )
+          <Virtuoso
+            ref={virtuosoRef}
+            data={rendered.items}
+            increaseViewportBy={{ top: 600, bottom: 600 }}
+            computeItemKey={(_, item) => item.key}
+            itemContent={(_, item) =>
+              item.kind === 'day' ? (
+                <div className="day-sep">{item.label}</div>
+              ) : (
+                <MessageRow
+                  msg={item.msg}
+                  search={search}
+                  hitsBefore={item.hitsBefore}
+                  activeHit={activeHit}
+                  isOwn={item.msg.speaker === activeChar}
+                />
+              )
+            }
+          />
         )}
       </div>
     </section>
@@ -249,7 +310,26 @@ function FilterButton({ label, on, onClick }: { label: string; on: boolean; onCl
   )
 }
 
-function MessageRow({ msg, html, isOwn }: { msg: LogMessage; html: string; isOwn: boolean }) {
+function MessageRow({
+  msg,
+  search,
+  hitsBefore,
+  activeHit,
+  isOwn
+}: {
+  msg: LogMessage
+  search: string
+  hitsBefore: number
+  activeHit: number
+  isOwn: boolean
+}) {
+  // Lazy: only escape/highlight at render time for rows actually
+  // visible to the user. This is what keeps an 80k-message channel
+  // feeling instant.
+  const html = useMemo(
+    () => highlight(msg.text, search, hitsBefore, activeHit).html,
+    [msg.text, search, hitsBefore, activeHit]
+  )
   const klass = [
     'log-msg',
     `log-msg-${msg.kind}`,

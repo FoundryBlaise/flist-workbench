@@ -474,17 +474,25 @@ body {
 }
 .log-head .partner { font-weight: 600; }
 .log-head .log-meta { color: var(--text-dim); font-size: 11px; flex: 1; }
+/* Header counters: read as labels, NOT buttons. Distinct from the
+   filter buttons sitting just below in the toolbar (which DO look
+   clickable: bordered, ALL-CAPS, with hover/active states). */
 .log-pill {
-  background: var(--tag-bg);
+  background: transparent;
   color: var(--text-dim);
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 0;
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  cursor: default;
 }
 .log-pill-hit {
   background: #2d4a2d;
   color: #b8d8a8;
+  padding: 2px 8px;
+  border-radius: 10px;
 }
 .log-filters {
   display: flex;
@@ -531,9 +539,18 @@ body {
 
 .log-body {
   flex: 1;
-  overflow-y: auto;
-  padding: 8px 0;
+  /* Virtuoso owns its own scroller — let it fill this pane. The empty
+     state is a static placeholder so we still allow overflow as a
+     fallback. */
+  overflow: hidden;
+  padding: 0;
   background: var(--bg);
+  position: relative;
+  min-height: 0;
+}
+.log-body > div[data-testid="virtuoso-scroller"],
+.log-body > [data-virtuoso-scroller] {
+  height: 100% !important;
 }
 .day-sep {
   text-align: center;
