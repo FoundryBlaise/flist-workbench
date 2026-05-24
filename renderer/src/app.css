@@ -1221,8 +1221,49 @@ body {
 .find-contacts-open:hover { border-color: var(--accent); }
 
 /* Settings modal */
-.settings-modal { width: 600px; }
+.settings-modal { width: 720px; max-width: 95vw; }
 .settings-section { padding: 0; }
+.settings-section + .settings-section {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.settings-section-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+.settings-field + .settings-field { margin-top: 16px; }
+.settings-input-narrow { flex: 0 0 120px; }
+.settings-preset {
+  background: var(--tag-bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.settings-preset:hover { border-color: var(--accent); color: var(--text); }
+.settings-preset.on { background: var(--accent); color: white; border-color: var(--accent); }
+.settings-textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 160px;
+  box-sizing: border-box;
+}
+.settings-textarea:focus { outline: none; border-color: var(--accent); }
 .settings-label {
   display: block;
   font-weight: 600;
@@ -1416,7 +1457,19 @@ body {
 }
 .log-label-ic { background: #2d4a6a; color: #a8c8e8; }
 .log-label-ooc { background: #5a4a2d; color: #d8c890; }
+.log-label-unlabeled { background: #2f2f2f; color: #777; }
 .log-label-system { background: #3a3a3a; color: #888; }
+/* Manual override gets a left bar so the user can see at a glance
+   which labels they fixed themselves vs which came from the LLM. */
+.log-label-src-manual { box-shadow: inset 2px 0 0 #c2884c; }
+/* Low-confidence LLM labels read as a dotted underline — the visual
+   nudge says "the classifier wasn't sure, audit this." */
+.log-label-lowconf {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  opacity: 0.82;
+}
+.log-msg-unlabeled { color: var(--text-dim); }
 .log-text { white-space: pre-wrap; word-wrap: break-word; }
 .log-hit { background: #6a5e1f; color: #ffeba8; padding: 0 2px; border-radius: 2px; }
 .log-hit-active { background: #c08a30; color: #1a1a1a; }

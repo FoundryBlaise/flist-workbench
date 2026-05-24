@@ -41,6 +41,9 @@ export type RevisionSummary = {
   created_at: number
 }
 
+export type Label = 'IC' | 'OOC' | 'Unlabeled'
+export type LabelSource = 'llm' | 'manual'
+
 export type LogMessage = {
   ts: number
   iso: string
@@ -50,7 +53,39 @@ export type LogMessage = {
   raw: string
   text: string
   mentions: string[]
+  // kind is F-Chat's message type bucket (chat/action vs ad/roll/warn/event).
+  // Used to keep "System" filtering working independently of semantic IC/OOC.
   kind: 'ic' | 'ooc' | 'system'
+  // label is the semantic IC/OOC classification from the resolver. Always
+  // present for chat/action messages; absent label_source means rule-or-unlabeled
+  // (no explicit DB row).
+  label?: Label
+  label_source?: LabelSource
+  label_confidence?: number
+}
+
+export type LabelsSettings = {
+  threshold_chars: number
+  llm_endpoint: string
+  llm_model: string
+  llm_api_key: string
+  system_prompt: string
+  defaults: {
+    threshold_chars: number
+    llm_endpoint: string
+    llm_model: string
+    llm_api_key: string
+    system_prompt: string
+  }
+}
+
+export type LabelsStats = {
+  character: string
+  partner: string
+  ic: number
+  ooc: number
+  unlabeled: number
+  total: number
 }
 
 function base(): string {
@@ -120,16 +155,25 @@ export const api = {
       fchat_data_dir: string | null
       fchat_data_dir_effective: string
       fchat_data_dir_env_locked: boolean
+      labels: LabelsSettings
     }>('/settings'),
-  settingsUpdate: (body: { fchat_data_dir?: string | null }) =>
+  settingsUpdate: (body: {
+    fchat_data_dir?: string | null
+    labels?: Partial<Omit<LabelsSettings, 'defaults'>>
+  }) =>
     request<{
       fchat_data_dir: string | null
       fchat_data_dir_effective: string
       fchat_data_dir_env_locked: boolean
+      labels: LabelsSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)
     }),
+  labelsStats: (char: string, partner: string) =>
+    get<LabelsStats>(
+      `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
+    ),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // Documents
