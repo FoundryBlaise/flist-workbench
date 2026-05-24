@@ -36,21 +36,19 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar" data-testid="sidebar">
+      {/* Active Character lives in both modes: in logs it gates the
+          partner list, in editor it seeds the Fetch input so the user
+          doesn't have to retype the alt they already picked. */}
+      <div className="sb-section-h">Active Character</div>
+      <CharacterPicker />
+      <ModeToggle />
       {mode === 'editor' ? (
-        // In editor mode the document library is the primary control;
-        // the active-character picker only feeds log filtering so it
-        // collapses out of the way (still toggleable via the mode
-        // switch below).
         <>
           <div className="sb-section-h">Documents</div>
           <DocumentList />
-          <ModeToggle />
         </>
       ) : (
         <>
-          <div className="sb-section-h">Active Character</div>
-          <CharacterPicker />
-          <ModeToggle />
           <SearchAllButton />
           <div className="sb-section-h">Partners</div>
           <PartnerList />

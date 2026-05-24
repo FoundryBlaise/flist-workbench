@@ -4,6 +4,7 @@ import { EditorPane } from '../features/editor/EditorPane'
 import { PreviewPane } from '../features/editor/PreviewPane'
 import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
+import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
@@ -19,6 +20,7 @@ export function AppLayout() {
   const crossSearchOpen = useStore((s) => s.crossSearchOpen)
   const setCrossSearchOpen = useStore((s) => s.setCrossSearchOpen)
   const [health, setHealth] = useState<HealthStatus>('checking')
+  const [contactsOpen, setContactsOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -55,6 +57,15 @@ export function AppLayout() {
       <header className="titlebar">
         <span className="app-name">● F-list Workbench</span>
         <span className="title-doc" data-testid="titlebar-doc">{titleDoc}</span>
+        <button
+          type="button"
+          className="titlebar-action"
+          onClick={() => setContactsOpen(true)}
+          title="Find which of your characters has had contact with someone"
+          data-testid="find-contacts-open"
+        >
+          Find contacts…
+        </button>
         <span
           className={`sidecar-pill sidecar-${health}`}
           data-testid="sidecar-status"
@@ -63,6 +74,7 @@ export function AppLayout() {
           sidecar: {health}
         </span>
       </header>
+      {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       <main className={`main main-${mode}`}>
         <Sidebar />
         {mode === 'editor' ? (

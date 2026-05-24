@@ -9,6 +9,7 @@ import documents
 from flist import ProfileNotFound, fetch_profile
 from logs import (
     LogDirError,
+    find_contacts,
     list_characters,
     list_partners,
     read_messages,
@@ -83,6 +84,11 @@ def logs_search_all(char: str, q: str, limit_per_partner: int = 50) -> dict:
         return search_all_partners(char, q, limit_per_partner=limit_per_partner)
     except LogDirError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/logs/contacts")
+def logs_contacts(name: str) -> dict:
+    return find_contacts(name)
 
 
 # ---- documents ----------------------------------------------------------

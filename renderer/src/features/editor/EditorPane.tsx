@@ -3,6 +3,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
 import { useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
+import { displayCharacter } from '../../lib/partnerName'
 import { Toolbar } from './Toolbar'
 import { RevisionsPanel } from './RevisionsPanel'
 
@@ -25,14 +26,39 @@ export function EditorPane() {
   const activeDocId = useStore((s) => s.activeDocId)
   const saveActiveDocument = useStore((s) => s.saveActiveDocument)
   const saveActiveDraft = useStore((s) => s.saveActiveDraft)
-  const [fetchName, setFetchName] = useState('Azure Viper')
+  const activeCharacter = useStore((s) => s.activeCharacter)
+  const [fetchName, setFetchName] = useState(() =>
+    activeCharacter ? displayCharacter(activeCharacter) : ''
+  )
   const [progressDots, setProgressDots] = useState(0)
   const [showRevisions, setShowRevisions] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Track which char name (if any) the input was last auto-seeded
+  // from. If the user has typed something else we leave the input
+  // alone; if they're still showing the previous auto-seed (or it's
+  // empty) we update on character switch.
+  const seededFromRef = useRef<string | null>(activeCharacter)
 
   const cmRef = useRef<ReactCodeMirrorRef>(null)
   const viewRef = useRef<EditorView | null>(null)
   const prevStatusRef = useRef(fetchStatus)
+
+  // Switching the active character seeds the Fetch input with that
+  // character's name so it's a one-click "fetch this alt's profile"
+  // instead of typing the name again. Only overwrites the input when
+  // the user hasn't typed something custom into it.
+  useEffect(() => {
+    if (!activeCharacter) return
+    const proposed = displayCharacter(activeCharacter)
+    const wasAutoSeeded =
+      fetchName === '' ||
+      (seededFromRef.current !== null && fetchName === displayCharacter(seededFromRef.current))
+    if (wasAutoSeeded) {
+      setFetchName(proposed)
+      seededFromRef.current = activeCharacter
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCharacter])
 
   // Slow F-list profile fetches (5-10 s on a cold CDN) only changed the
   // button label, which reads as "frozen UI" to anyone not watching the
