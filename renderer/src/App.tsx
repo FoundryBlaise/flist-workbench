@@ -1,5 +1,12 @@
 import { AppLayout } from './components/AppLayout'
 
+export type MenuAction =
+  | 'mode-editor'
+  | 'mode-logs'
+  | 'find-contacts'
+  | 'search-all-partners'
+  | 'settings'
+
 declare global {
   interface Window {
     workbench?: {
@@ -8,6 +15,7 @@ declare global {
         title?: string
         defaultPath?: string
       }) => Promise<string | null>
+      onMenuAction?: (listener: (action: MenuAction) => void) => () => void
     }
   }
 }

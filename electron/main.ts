@@ -1,8 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { join } from 'node:path'
 import { startSidecar, stopSidecar } from './sidecar'
+import { buildMenu } from './menu'
 
 const isDev = !app.isPackaged
+
+let mainWindow: BrowserWindow | null = null
 
 // Renderer asks for a folder via this channel — we open the OS-native
 // directory picker in the main process and return the absolute path
@@ -26,7 +29,7 @@ ipcMain.handle('workbench:select-directory', async (event, opts: { title?: strin
 })
 
 async function createWindow(): Promise<void> {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     // Below ~1100 px the editor and preview both compress past readable
@@ -45,11 +48,15 @@ async function createWindow(): Promise<void> {
     }
   })
 
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (isDev && devUrl) {
-    await win.loadURL(devUrl)
+    await mainWindow.loadURL(devUrl)
   } else {
-    await win.loadFile(join(__dirname, '../renderer/index.html'))
+    await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
@@ -59,6 +66,9 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[main] sidecar failed to start:', err)
   }
+  // Menu has to be set after app is ready (uses app.name etc) but
+  // before window creation so the new window picks it up.
+  Menu.setApplicationMenu(buildMenu(() => mainWindow))
   await createWindow()
 
   app.on('activate', () => {

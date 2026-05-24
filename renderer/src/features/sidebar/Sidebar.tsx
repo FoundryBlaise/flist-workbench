@@ -5,24 +5,6 @@ import { ModeToggle } from './ModeToggle'
 import { PartnerList } from './PartnerList'
 import { DocumentList, useEnsureDocumentsLoaded } from './DocumentList'
 
-function SearchAllButton() {
-  const open = useStore((s) => s.crossSearchOpen)
-  const set = useStore((s) => s.setCrossSearchOpen)
-  const activeChar = useStore((s) => s.activeCharacter)
-  return (
-    <button
-      type="button"
-      className={`sb-search-all ${open ? 'on' : ''}`}
-      onClick={() => set(!open)}
-      disabled={!activeChar}
-      title="Search across every partner log for the active character"
-      data-testid="search-all-toggle"
-    >
-      Search all partners…
-    </button>
-  )
-}
-
 export function Sidebar() {
   const status = useStore((s) => s.charactersStatus)
   const loadCharacters = useStore((s) => s.loadCharacters)
@@ -49,7 +31,6 @@ export function Sidebar() {
         </>
       ) : (
         <>
-          <SearchAllButton />
           <div className="sb-section-h">Partners</div>
           <PartnerList />
         </>

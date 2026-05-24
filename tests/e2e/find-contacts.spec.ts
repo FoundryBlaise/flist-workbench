@@ -28,7 +28,11 @@ test('Find Contacts modal accepts typing and returns DM results', async () => {
     await window.getByTestId('editor-cm').locator('.cm-content').click()
     await window.keyboard.type('hi')
 
-    await window.getByTestId('find-contacts-open').click()
+    // Find Contacts now lives in the native menu (Logs → Find Contacts…).
+    // Drive it via IPC — same path the menu item takes.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'find-contacts')
+    })
 
     const input = window.getByTestId('find-contacts-input')
     await expect(input).toBeVisible()

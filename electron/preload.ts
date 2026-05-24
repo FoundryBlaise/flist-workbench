@@ -12,8 +12,19 @@ function resolvePort(): number {
 
 const sidecarPort = resolvePort()
 
+// Menu items in main send `menu:action` with a string id; renderer subscribes
+// here. Returns an unsubscriber so React effects can clean up on unmount.
+type MenuActionListener = (action: string) => void
+
 contextBridge.exposeInMainWorld('workbench', {
   sidecarUrl: `http://127.0.0.1:${sidecarPort}`,
   selectDirectory: (opts?: { title?: string; defaultPath?: string }) =>
-    ipcRenderer.invoke('workbench:select-directory', opts ?? {}) as Promise<string | null>
+    ipcRenderer.invoke('workbench:select-directory', opts ?? {}) as Promise<string | null>,
+  onMenuAction: (listener: MenuActionListener) => {
+    const wrapped = (_event: unknown, action: string): void => listener(action)
+    ipcRenderer.on('menu:action', wrapped)
+    return () => {
+      ipcRenderer.removeListener('menu:action', wrapped)
+    }
+  }
 })
