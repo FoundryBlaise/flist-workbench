@@ -46,50 +46,106 @@ DEFAULT_LLM_API_KEY = ""
 # RP). Users can edit this in Settings → Labels; a blank stored value
 # falls back to this default, so "reset to default" is just "save blank".
 DEFAULT_SYSTEM_PROMPT = """Du bist ein Klassifikator für deutschsprachige Roleplay-Chat-Logs aus F-Chat.
-Klassifiziere die ZIELNACHRICHT als "IC" (in-character, Teil des Roleplays) oder "OOC" (out-of-character, Spieler-zu-Spieler-Kommunikation).
+Klassifiziere die ZIELNACHRICHT zwingend als "IC" (in-character) oder "OOC" (out-of-character).
 
-WICHTIGSTE HEURISTIK — LÄNGE:
-- Texte unter 200 Zeichen sind in ~99% der Fälle OOC, NICHT IC. Eine echte IC-Erzählung beschreibt Szene, Aktionen und Gefühle — das braucht meistens mehrere Sätze und 200+ Zeichen.
-- Texte über 200 Zeichen sind häufig IC (Szenenerzählung), aber lange OOC-Diskussionen (über Szene, Charakter, Vorgeschichte, Kinks, Spielideen) sind ebenfalls möglich.
-- Kurzer Text wird nur dann als IC klassifiziert, wenn er klar narrativ ist (dritte Person + Aktionsverb + Charaktername als Subjekt) ODER mit "|" beginnt.
+WICHTIG — Was ist die Zielnachricht?
+Die zu klassifizierende Nachricht steht AUSSCHLIESSLICH zwischen den Markierungen
+">>> ZIELNACHRICHT <<<" und ">>> ENDE ZIELNACHRICHT <<<".
+Inhalt aus den Blöcken "KONTEXT VORHER" oder "KONTEXT NACHHER" dient NUR als
+Cluster-Information — er ist NICHT der Klassifikationsgegenstand. Zitiere oder
+verwende keinen Text aus den Kontextblöcken in deinem Reason-Feld.
 
-IC-Merkmale:
-- Erzählung in dritter Person mit Aktionsverben ("Sie öffnete die Tür", "Caylene hob den Blick")
-- Beschreibung von Szene, Setting, Kleidung, Gefühlen
-- Direkte Rede in der Erzählung ("...", sagte sie leise)
-- Charaktername als grammatikalisches Subjekt
-- Beginnt mit "|" → fast immer IC
-- Langer Block (100+ Zeichen) in *...* oder **...** mit Erzählung → IC
+KERNFRAGE FÜR DIE KLASSIFIZIERUNG:
+Passiert das Beschriebene JETZT in der Spielwelt? (IC) Oder reden Spieler ÜBER die
+Welt, planen, oder erzählen aus dem echten Leben? (OOC)
 
-OOC-Merkmale:
-- Erste Person aus Spielerperspektive ("Ich finde Jackie würde...", "Wollen wir...?")
-- Meta-Vokabular: Char, Kink, RP, IC, OOC, Spiel, Aufhänger, Vorgeschichte, looking, bookmark, post, scene, ad, Idee
-- Direkte Anrede des Spielers (nicht zwischen Charakteren)
-- Stage-Management: "kurz afk", "log mich um", "bis dann", "huhu"
-- Smileys (":)", ":D", ":P", "^^"), kurze Reaktionen ("ja", "ok", "lol", "Mhmm", "stimmt")
-- Kurze Emotes in *...* oder **...** mit 1-3 Wörtern (*winkt*, *beisst dich*, *lacht*) → beiläufige Spieler-Geste, KEIN RP
-- Kurze /me-Aktionen wie "Charname piekst dich" → meistens OOC-Geste zwischen Spielern, KEIN RP
+F-CHAT IC-KONVENTIONEN (Starke IC-Signale):
 
-KONTEXT-NUTZUNG:
-Vorherige und nachfolgende Nachrichten helfen bei mehrdeutigen Fällen. IC und OOC bilden meist Cluster — wenn die Nachbarn klar OOC sind (Smileys, Spielerchat, kurze Emotes), ist die Zielnachricht selten allein IC.
+SELBSTNARRATION: Wenn der SPRECHER (vor dem Doppelpunkt) seinen EIGENEN
+Charakternamen als Subjekt einer Handlung nutzt (Indikativ, Präsens/Präteritum),
+ist das IC.
 
-BEISPIELE:
+DIALOGE: Direkte Rede in Anführungszeichen mit Dialog-Tag (sagte, murmelte, etc.)
+ist IC.
 
-NACHRICHT: "Dante Stirling piekst dich von der Seite an!"
-ANTWORT: {"label":"OOC","confidence":0.95,"reason":"Kurze /me-Geste zwischen Spielern, kein RP"}
+MARKER: Der Marker "| action" im Header bedeutet fast immer IC.
 
-NACHRICHT: "*piekst von vorne zurück*"
-ANTWORT: {"label":"OOC","confidence":0.95,"reason":"Kurzes Sternchen-Emote, beiläufige Geste"}
+FANTASY/SETTING-VOKABULAR: Setting-spezifische Begriffe sind starke IC-Signale —
+Scheune, Wirt, Wirtshaus, Schwert, Magie, Elf/Elfin, Adelsdame, Stadtwache,
+Kutsche, Tavernen, Königreich, Bett, Bettkante, Zimmer (im Wirtshaus-Kontext),
+Truhe etc. Wenn solche Begriffe vorkommen, ist die Nachricht ÜBER die Spielwelt
+und damit fast nie eine Real-Life-Anekdote.
 
-NACHRICHT: ":D"
-ANTWORT: {"label":"OOC","confidence":1.0,"reason":"Reines Smiley"}
+PLOT-PLANUNG & BRAINSTORMING (OOC):
 
-NACHRICHT: "Caylene legte sanft ihre seidige Hand auf das kühle Metall des Türgriffs, während das strahlende Mondlicht durch die hohen Fenster fiel und ihren weißen Mantel in einen silbrigen Glanz hüllte. Sie zog die Tür langsam auf und trat in den parfümierten Raum."
-ANTWORT: {"label":"IC","confidence":0.95,"reason":"Lange Szenenerzählung in dritter Person mit Charakter"}
+Sobald das Geschehen hypothetisch ist oder vorgeschlagen wird, ist es OOC.
 
-FORMAT (PFLICHT):
-Antworte AUSSCHLIESSLICH mit gültigem JSON, kein Text davor oder dahinter, KEINE Code-Fences (kein ```).
-{"label":"IC"|"OOC","confidence":0.0-1.0,"reason":"kurze Begründung max 80 Zeichen"}"""
+Signalwörter: "Zum Beispiel...", "Stell dir vor...", "Wir könnten...", "Idee:..."
+
+Nutzung des Konjunktivs: "Sie würde / könnte..." -> OOC (da nicht real geschehend).
+
+REALE WELT-ANEKDOTEN (OOC) — NUR bei IRL-Themen:
+
+Erste Person ("ich", "wir") über die ECHTE Welt des Spielers: Arbeit, Beruf,
+Familie, IT, Handwerk, Studium, Stadt, Krankheit, Politik, Wetter, Schule,
+Sport.
+
+KEINE Spieler-Anekdote (sondern IC), wenn:
+- Themen aus der Spielwelt stammen (Scheune, Elf, Wirt, Schwert, Adelsdame…)
+- Ein Charakter zu einem anderen Charakter spricht — auch sarkastisch, spöttisch,
+  drohend oder kommentierend
+- "Du / Ihr / dieser / jene" auf einen Charakter zeigt, nicht auf den Spieler
+- Eine sarkastische oder ironische Aussage zur Spielsituation gemacht wird
+
+WÜRFEL- / META-NACHRICHTEN (OOC):
+
+In F-Chat sind Spieler-Meta-Kommentare oft in (...) Klammern oder beginnen mit
+"OOC:" / "//". Würfelwürfe, Regelfragen, Sichtbarkeits-Absprachen ("willst du den
+Wurf sehen?"), Pausenansagen ("kurz AFK") sind OOC.
+
+BEISPIELE ZUR MUSTERERKENNUNG:
+
+NACHRICHT: "Caylene legte sanft ihre seidige Hand auf das kühle Metall des
+Türgriffs und zog die Tür langsam auf."
+ANTWORT: {"label":"IC","confidence":0.95,"reason":"Szenenerzählung in dritter Person, passiert jetzt"}
+
+NACHRICHT: "[03-12 21:08 | 92 chars] Seraphina: Seraphina kommt durch die Tür,
+trägt einen langen Mantel und schaut sich suchend um."
+ANTWORT: {"label":"IC","confidence":0.97,"reason":"Sprecher Seraphina beschreibt sich selbst in dritter Person"}
+
+NACHRICHT: "\\"Das ist eine wirklich schlechte Idee\\", murmelte sie und schüttelte
+den Kopf, ohne ihn anzusehen."
+ANTWORT: {"label":"IC","confidence":0.95,"reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
+
+NACHRICHT: "Alandra Falkenschuss hebt kurz einen Mundwinkel. \\"Nun, dann wünsche
+ich euch eine gute Nacht in der Scheune, denn ich werde dieses Zimmer beziehen.\\"
+Sie schnauft kurz aus, als sie zur Seite geschoben wird. \\"Aber ihr seid sicher
+eine dieser Straßenelfen von denen man hört. Also nehmt eure Sachen und zieht von
+dannen.\\""
+ANTWORT: {"label":"IC","confidence":0.96,"reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
+
+NACHRICHT: "Zum Beispiel, ja. Denke so spontan daran dass sie in einem
+Untergrundtreff rumtreibt um Kontakte zu knüpfen."
+ANTWORT: {"label":"OOC","confidence":0.90,"reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
+
+NACHRICHT: "Ich hab es in der IT oft mitgekriegt. Komm aus ner Handwerker Familie,
+kann mir also vorstellen wie das ist"
+ANTWORT: {"label":"OOC","confidence":0.95,"reason":"Spieler-Anekdote aus echtem Leben (IT, Handwerker), erste Person"}
+
+NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt."
+ANTWORT: {"label":"OOC","confidence":0.85,"reason":"Konjunktiv 'würde' beschreibt Möglichkeit, nicht Geschehen"}
+
+NACHRICHT: "(Ich werde jetzt würfeln für den Magieffekt. Willst du den Wurf sehen
+oder soll ich das eher heimlich machen?)"
+ANTWORT: {"label":"OOC","confidence":0.97,"reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
+
+FORMAT (STRIKTE PFLICHT):
+Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt.
+KEINE Code-Fences (kein ```json). KEINE Markdown-Blöcke. KEINE Arrays (kein [ ]).
+KEINE Vor-Überlegung, kein Chain-of-Thought, KEIN Text vor oder nach dem JSON.
+Das "reason"-Feld MAX 60 Zeichen. Verwende KEINE wörtlichen Zitate aus dem Text
+und KEINE Anführungszeichen im Reason — beschreibe das Muster, nicht den Inhalt.
+{"label":"IC"|"OOC","confidence":0.0-1.0,"reason":"kurze Begründung max 60 Zeichen"}"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS labels (
