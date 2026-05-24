@@ -46,6 +46,17 @@ body {
 }
 .titlebar .app-name { color: var(--accent); }
 .titlebar .title-doc { flex: 1; text-align: center; color: var(--text-dim); }
+.titlebar-action {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.titlebar-action:hover { color: var(--text); border-color: var(--accent); }
 .sidecar-pill {
   font-size: 11px;
   padding: 2px 8px;
@@ -1091,6 +1102,123 @@ body {
 }
 .cross-search-q { color: var(--text); font-weight: 600; }
 .cross-search-truncated-note { color: var(--text-dim); font-style: italic; }
+
+/* Modal shell — used by Find Contacts */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 520px;
+  max-width: 900px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.modal-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.modal-subtitle { margin: 4px 0 0; font-size: 12px; color: var(--text-dim); }
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 14px 20px; }
+
+.find-contacts-modal { width: 720px; }
+.find-contacts-form {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+.find-contacts-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+.find-contacts-input:focus { border-color: var(--accent); outline: none; }
+.find-contacts-submit {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 3px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.find-contacts-submit:disabled { opacity: 0.4; cursor: default; }
+.find-contacts-results {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.find-contacts-placeholder {
+  margin: 8px 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.find-contacts-placeholder.error { color: var(--accent-2); }
+.find-contacts-summary { color: var(--text); font-size: 13px; margin: 0 0 12px; }
+.find-contacts-section { margin: 14px 0; }
+.find-contacts-section h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+.find-contacts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.find-contacts-table th,
+.find-contacts-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.find-contacts-table th { color: var(--text-dim); font-size: 11px; font-weight: 500; text-transform: uppercase; }
+.find-contacts-table td.meta { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.find-contacts-open {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.find-contacts-open:hover { border-color: var(--accent); }
 .cross-search-groups {
   list-style: none;
   padding: 0;

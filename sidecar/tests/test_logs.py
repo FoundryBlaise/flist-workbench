@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from logs import LogDirError, list_characters, list_partners, search_all_partners
+from logs import LogDirError, find_contacts, list_characters, list_partners, search_all_partners
 
 
 @pytest.fixture
@@ -61,3 +61,36 @@ def test_search_all_partners_returns_per_partner_shape(fake_data: Path) -> None:
     assert result["character"] == "Aurora Fenwick"
     assert result["query"] == "anything"
     assert "partners" in result
+
+
+def test_find_contacts_empty_name(fake_data: Path) -> None:
+    res = find_contacts("", root=fake_data)
+    assert res == {"name": "", "dm": [], "channels": []}
+
+
+def test_find_contacts_matches_dm_partner_case_insensitive(fake_data: Path) -> None:
+    # Aurora Fenwick has a "Daelan Envale" DM partner; query should
+    # match regardless of case and exclude the named character itself
+    # from results.
+    res = find_contacts("DAELAN ENVALE", root=fake_data)
+    assert res["name"] == "DAELAN ENVALE"
+    chars = [d["character"] for d in res["dm"]]
+    assert "Aurora Fenwick" in chars
+    # Each DM entry carries partner + bytes for the renderer.
+    aurora = next(d for d in res["dm"] if d["character"] == "Aurora Fenwick")
+    assert aurora["partner"] == "Daelan Envale"
+    assert aurora["bytes"] == 1024
+
+
+def test_find_contacts_skips_the_named_character(fake_data: Path) -> None:
+    # Querying "Vanessa Arlington" must not list Vanessa-as-character
+    # in the DM results (you don't have "contact" with yourself).
+    res = find_contacts("Vanessa Arlington", root=fake_data)
+    chars = [d["character"] for d in res["dm"]]
+    assert "Vanessa Arlington" not in chars
+
+
+def test_find_contacts_no_match(fake_data: Path) -> None:
+    res = find_contacts("Nobody In Particular", root=fake_data)
+    assert res["dm"] == []
+    assert res["channels"] == []

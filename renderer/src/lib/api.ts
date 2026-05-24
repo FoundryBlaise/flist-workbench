@@ -109,6 +109,17 @@ export const api = {
         truncated: boolean
       }[]
     }>(`/logs/search_all?char=${encodeURIComponent(char)}&q=${encodeURIComponent(q)}`),
+  findContacts: (name: string) =>
+    get<{
+      name: string
+      dm: { character: string; partner: string; bytes: number; mtime: number }[]
+      channels: {
+        character: string
+        channel: string
+        messages_from_name: number
+        bytes: number
+      }[]
+    }>(`/logs/contacts?name=${encodeURIComponent(name)}`),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // Documents
