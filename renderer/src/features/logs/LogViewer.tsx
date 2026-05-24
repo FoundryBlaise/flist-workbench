@@ -117,7 +117,6 @@ export function LogViewer() {
 
   const markSeen = useStore((s) => s.markCharacterSeen)
   const applyLabelOverride = useStore((s) => s.applyLabelOverride)
-  const openClassify = useStore((s) => s.openClassify)
 
   useEffect(() => {
     if (activeChar && partner) {
@@ -158,7 +157,7 @@ export function LogViewer() {
     }
   }, [labelMenu])
 
-  const submitOverride = async (msg: LogMessage, label: Label | null) => {
+  const submitOverride = async (msg: LogMessage, label: 'IC' | 'OOC' | null) => {
     if (!activeChar || !partner) return
     setLabelMenu(null)
     // Optimistic — patch the local state, then call the API. If the
@@ -372,26 +371,15 @@ export function LogViewer() {
             {Math.min(activeHit + 1, rendered.hitTotal)} / {rendered.hitTotal}
           </span>
         )}
-        <button
-          type="button"
-          className="log-classify"
-          disabled={!activeChar || unlabeledCount === 0}
-          onClick={() => {
-            if (!activeChar) return
-            openClassify(
-              { character: activeChar, partner },
-              `${displayPartner(partner)} with ${activeChar}`
-            )
-          }}
-          title={
-            unlabeledCount === 0
-              ? 'Nothing left to classify in this conversation.'
-              : `Send ${unlabeledCount.toLocaleString()} unlabeled messages to the LLM for IC/OOC classification.`
-          }
-          data-testid="log-classify"
-        >
-          Classify ({unlabeledCount.toLocaleString()})
-        </button>
+        {unlabeledCount > 0 && (
+          <span
+            className="log-unlabeled-hint"
+            data-testid="log-unlabeled-hint"
+            title="Open the Logs menu → Classify Current Conversation to send these to the LLM."
+          >
+            {unlabeledCount.toLocaleString()} unlabeled · Logs menu → Classify
+          </span>
+        )}
       </header>
       <div className="log-filters">
         <input
@@ -533,16 +521,24 @@ export function LogViewer() {
                   isOwn={item.msg.speaker === activeChar}
                   selectMode={selectMode}
                   selected={sourceIdx !== -1 && isInSelection(sourceIdx)}
+                  isMenuTarget={labelMenu?.msg.hash === item.msg.hash}
                   onSelectClick={(shift) => {
                     if (sourceIdx !== -1) handleRowClick(sourceIdx, shift)
                   }}
                   onContextMenu={(e) => {
                     if (selectMode) return
+                    // No override for System-typed rows — the bucket
+                    // is hard-pinned in effectiveBucket() so a manual
+                    // IC/OOC label would persist to DB but never
+                    // change the visible badge. Silent no-op was the
+                    // worst possible UX; offer no menu at all instead.
+                    if (item.msg.kind === 'system') return
                     e.preventDefault()
                     setLabelMenu({ x: e.clientX, y: e.clientY, msg: item.msg })
                   }}
                   onLabelKeyboardOpen={(anchor) => {
                     if (selectMode) return
+                    if (item.msg.kind === 'system') return
                     const r = anchor.getBoundingClientRect()
                     setLabelMenu({ x: r.left + 16, y: r.bottom, msg: item.msg })
                   }}
@@ -594,6 +590,7 @@ function MessageRow({
   isOwn,
   selectMode,
   selected,
+  isMenuTarget,
   onSelectClick,
   onContextMenu,
   onLabelKeyboardOpen
@@ -605,6 +602,7 @@ function MessageRow({
   isOwn: boolean
   selectMode: boolean
   selected: boolean
+  isMenuTarget: boolean
   onSelectClick: (shift: boolean) => void
   onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => void
   onLabelKeyboardOpen: (anchor: HTMLElement) => void
@@ -621,12 +619,10 @@ function MessageRow({
     'log-msg',
     `log-msg-${bucket}`,
     isOwn ? 'log-msg-own' : 'log-msg-other',
-    // Row-edge accent for manual overrides — the badge inset was too
-    // subtle to spot when scrolling. Keep the badge styling too for
-    // when the user looks at a label up close.
     msg.label_source === 'manual' ? 'log-msg-manual' : '',
     selectMode ? 'log-msg-selectable' : '',
-    selected ? 'log-msg-selected' : ''
+    selected ? 'log-msg-selected' : '',
+    isMenuTarget ? 'log-msg-menu-target' : ''
   ]
     .filter(Boolean)
     .join(' ')
@@ -655,7 +651,14 @@ function MessageRow({
         {timeLabel(msg.ts)}
       </span>
       <span className="log-speaker">{msg.speaker}</span>
-      <LabelBadge bucket={bucket} label={msg.label} source={msg.label_source} confidence={msg.label_confidence} />
+      <LabelBadge
+        bucket={bucket}
+        label={msg.label}
+        source={msg.label_source}
+        confidence={msg.label_confidence}
+        priorLabel={msg.prior_label}
+        priorSource={msg.prior_source}
+      />
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   )
@@ -670,7 +673,7 @@ function LabelContextMenu({
   x: number
   y: number
   msg: LogMessage
-  onChoose: (label: Label | null) => void
+  onChoose: (label: 'IC' | 'OOC' | null) => void
 }) {
   // Nudge the menu so it stays inside the viewport on right-clicks
   // near the bottom/right edges. 180×120 is the menu's nominal size.
@@ -790,18 +793,28 @@ function LabelBadge({
   bucket,
   label,
   source,
-  confidence
+  confidence,
+  priorLabel,
+  priorSource
 }: {
   bucket: 'ic' | 'ooc' | 'unlabeled' | 'system'
   label?: Label
   source?: 'llm' | 'manual'
   confidence?: number
+  // Sidecar only ever sets prior_label when the user manually
+  // overrode an IC or OOC label, so the wire shape is just IC|OOC.
+  priorLabel?: 'IC' | 'OOC'
+  priorSource?: 'llm' | 'manual'
 }) {
+  // IC / OOC keep their full word — short, semantically loaded, and
+  // the chip strip uses the same spelling. Unlabeled and System show
+  // a single em-dash because the chip strip already names them and a
+  // tiny "UNL"/"SYS" badge was both jargon-y and a contrast hazard.
   const text =
     bucket === 'system'
-      ? 'SYS'
+      ? '—'
       : bucket === 'unlabeled'
-        ? 'UNL'
+        ? '—'
         : bucket === 'ic'
           ? 'IC'
           : 'OOC'
@@ -814,18 +827,32 @@ function LabelBadge({
   ]
     .filter(Boolean)
     .join(' ')
-  // Title surfaces the source & confidence on hover; useful when the
-  // user is auditing the classifier's guesses.
-  const tip = source
+  // Title surfaces source, confidence, and prior snapshot on hover —
+  // a manual override carries "you changed this from IC (llm) to
+  // OOC" so the user can audit their own choices.
+  const baseTip = source
     ? `${label} · ${source}${typeof confidence === 'number' ? ` · ${(confidence * 100).toFixed(0)}%` : ''}`
     : bucket === 'system'
       ? 'F-Chat system message'
       : bucket === 'unlabeled'
         ? 'Not classified — Classify on demand'
         : `${label} · rule`
+  const priorTip =
+    source === 'manual' && priorLabel
+      ? `  ·  was ${priorLabel} (${priorSource ?? 'auto'})`
+      : ''
   return (
-    <span className={klass} title={tip}>
+    <span
+      className={klass}
+      title={`${baseTip}${priorTip}`}
+      aria-label={source === 'manual' ? `${label}, manually labeled` : undefined}
+    >
       {text}
+      {source === 'manual' && (
+        <span className="log-label-manual-glyph" aria-hidden>
+          ✎
+        </span>
+      )}
     </span>
   )
 }

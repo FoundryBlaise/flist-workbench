@@ -12,12 +12,21 @@ export type ClassifyDialogProps = {
   onClose: () => void
 }
 
+// Parent renders this with a key derived from the scope so re-opening
+// with a different scope remounts the component. That sidesteps the
+// useEffect-deps trap where the start request only fires once per
+// mount even if the scope prop changed.
 export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogProps) {
   const [job, setJob] = useState<ClassifyJob | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [pulseCancel, setPulseCancel] = useState(false)
   const pollTimer = useRef<number | null>(null)
   const jobIdRef = useRef<string | null>(null)
-  const refreshMessages = useStore((s) => s.loadMessages)
+  const pulseTimer = useRef<number | null>(null)
+  const activeChar = useStore((s) => s.activeCharacter)
+  const activePartner = useStore((s) => s.activePartner)
+  const reloadMessages = useStore((s) => s.loadMessages)
+  const invalidateMessages = useStore((s) => s.invalidateMessages)
 
   useEffect(() => {
     let cancelled = false
@@ -38,9 +47,30 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
       if (pollTimer.current !== null) {
         window.clearInterval(pollTimer.current)
       }
+      if (pulseTimer.current !== null) {
+        window.clearTimeout(pulseTimer.current)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Refresh the open conversation if the just-finished job's scope
+  // touched it. For per-conversation jobs that's the obvious case. For
+  // "all partners for character X" and "all characters" jobs we may
+  // have updated the labels of whatever the user has open — invalidate
+  // the cache and force a reload.
+  const refreshOpenConversationIfTouched = () => {
+    if (!activeChar || !activePartner) return
+    const scopedChar = scope.character ?? null
+    const scopedPartner = scope.partner ?? null
+    const touchesOpen =
+      (scopedChar === null && scopedPartner === null) ||
+      (scopedChar === activeChar && scopedPartner === null) ||
+      (scopedChar === activeChar && scopedPartner === activePartner)
+    if (!touchesOpen) return
+    invalidateMessages(activeChar, activePartner)
+    void reloadMessages(activeChar, activePartner, { force: true })
+  }
 
   const startPolling = (id: string) => {
     if (pollTimer.current !== null) {
@@ -56,10 +86,7 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
               window.clearInterval(pollTimer.current)
               pollTimer.current = null
             }
-            // Refresh the open conversation so newly-set labels appear.
-            if (scope.character && scope.partner) {
-              void refreshMessages(scope.character, scope.partner)
-            }
+            refreshOpenConversationIfTouched()
           }
         })
         .catch((err: unknown) => {
@@ -104,9 +131,18 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
   }, [canClose, onClose])
 
   const onBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!canClose) return
     // Only the backdrop itself, not anything inside the modal.
-    if (e.target === e.currentTarget) onClose()
+    if (e.target !== e.currentTarget) return
+    if (canClose) {
+      onClose()
+      return
+    }
+    // While the job is running, backdrop is a no-op for the dismiss
+    // intent — but the user clearly tried to close. Flash the Cancel
+    // button so they see the recovery path.
+    setPulseCancel(true)
+    if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current)
+    pulseTimer.current = window.setTimeout(() => setPulseCancel(false), 700)
   }
 
   return (
@@ -151,17 +187,13 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
                 {isEnumerating ? (
                   <>
                     <strong>Scanning conversations…</strong>{' '}
-                    <span className={`classify-state classify-state-${job.state}`}>
-                      {job.state}
-                    </span>
+                    <StatePill state={job.state} />
                   </>
                 ) : (
                   <>
                     <strong>{job.classified.toLocaleString()}</strong> /{' '}
                     {job.total.toLocaleString()} ({pct}%) ·{' '}
-                    <span className={`classify-state classify-state-${job.state}`}>
-                      {job.state}
-                    </span>
+                    <StatePill state={job.state} />
                     {job.failed > 0 && (
                       <span className="classify-fail"> · {job.failed} failed</span>
                     )}
@@ -206,7 +238,7 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
           {job && !isDone && (
             <button
               type="button"
-              className="settings-clear"
+              className={`settings-clear${pulseCancel ? ' classify-cancel-pulse' : ''}`}
               onClick={() => void cancel()}
               data-testid="classify-cancel"
             >
@@ -232,4 +264,27 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
 
 function isTerminal(state: ClassifyJob['state']): boolean {
   return state === 'done' || state === 'cancelled' || state === 'failed'
+}
+
+// Small glyph + label per state so the pill doesn't carry meaning by
+// colour alone. Glyphs are unicode so no asset pipeline needed.
+function StatePill({ state }: { state: ClassifyJob['state'] }) {
+  const glyph =
+    state === 'running'
+      ? '◌'
+      : state === 'done'
+        ? '✓'
+        : state === 'failed'
+          ? '✕'
+          : state === 'cancelled'
+            ? '⏹'
+            : '·'
+  return (
+    <span className={`classify-state classify-state-${state}`}>
+      <span className="classify-state-glyph" aria-hidden>
+        {glyph}
+      </span>
+      {state}
+    </span>
+  )
 }

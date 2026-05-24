@@ -194,6 +194,16 @@ function LabelsSection({
   const [showKey, setShowKey] = useState(false)
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
   const [error, setError] = useState<string | null>(null)
+  // Test-connection state stays separate from save status so the
+  // user can re-test without re-saving.
+  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle')
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    elapsed_ms: number
+    error?: string | null
+    raw?: string
+    parsed?: { label: string; confidence: number; reason: string } | null
+  } | null>(null)
 
   // Keep local form in sync when parent reloads settings (e.g. after save).
   useEffect(() => {
@@ -236,6 +246,28 @@ function LabelsSection({
   const resetEndpoint = () => setEndpoint(labels.defaults.llm_endpoint)
   const resetModel = () => setModel(labels.defaults.llm_model)
   const resetThreshold = () => setThreshold(String(labels.defaults.threshold_chars))
+
+  const runTest = async () => {
+    setTestStatus('running')
+    setTestResult(null)
+    try {
+      const result = await api.labelsTestConnection({
+        llm_endpoint: endpoint,
+        llm_model: model,
+        llm_api_key: apiKey,
+        system_prompt: prompt
+      })
+      setTestResult(result)
+      setTestStatus(result.ok ? 'ok' : 'fail')
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        elapsed_ms: 0,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      setTestStatus('fail')
+    }
+  }
 
   const isPromptDefault = prompt === labels.defaults.system_prompt
 
@@ -357,7 +389,6 @@ function LabelsSection({
         </label>
         <p className="settings-help">
           Sent as the system message before each target message + its 3-message context window.
-          Resets to the bundled default if you save it blank.
         </p>
         <textarea
           id="labels-prompt"
@@ -380,8 +411,44 @@ function LabelsSection({
         </div>
       </div>
 
+      <div className="settings-field">
+        <label className="settings-label">Test connection</label>
+        <p className="settings-help">
+          One canned classification roundtrip against the endpoint + model + prompt above. Useful before kicking off a long classify job.
+        </p>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-pick"
+            onClick={() => void runTest()}
+            disabled={testStatus === 'running'}
+            data-testid="labels-test-connection"
+          >
+            {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+          </button>
+          {testResult && (
+            <span
+              className={`settings-meta labels-test-result labels-test-${testStatus}`}
+              data-testid="labels-test-result"
+            >
+              {testStatus === 'ok' ? '✓ ' : testStatus === 'fail' ? '✕ ' : ''}
+              {testResult.ok
+                ? `OK · ${testResult.elapsed_ms} ms · ${testResult.parsed?.label} (${(
+                    (testResult.parsed?.confidence ?? 0) * 100
+                  ).toFixed(0)}%)`
+                : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`}
+            </span>
+          )}
+        </div>
+        {testResult && testResult.raw && !testResult.ok && (
+          <p className="settings-meta classify-last-error">
+            Raw response: <code>{testResult.raw}</code>
+          </p>
+        )}
+      </div>
+
       {error && <p className="settings-error">{error}</p>}
-      <div className="settings-actions">
+      <div className="settings-actions settings-footer-actions">
         <button
           type="button"
           className="settings-save"

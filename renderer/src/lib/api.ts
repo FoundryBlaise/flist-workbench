@@ -43,6 +43,7 @@ export type RevisionSummary = {
 
 export type Label = 'IC' | 'OOC' | 'Unlabeled'
 export type LabelSource = 'llm' | 'manual'
+export type PriorSource = 'llm' | 'manual' | null
 
 export type LogMessage = {
   ts: number
@@ -65,6 +66,11 @@ export type LogMessage = {
   label?: Label
   label_source?: LabelSource
   label_confidence?: number
+  // Snapshot of what the label was before the most recent change.
+  // Present only on manual overrides; lets the UI surface "LLM had
+  // said IC; you changed it to OOC" without a separate lookup.
+  prior_label?: 'IC' | 'OOC'
+  prior_source?: 'llm' | 'manual'
 }
 
 export type LabelsSettings = {
@@ -223,6 +229,22 @@ export const api = {
     request<ClassifyJob>('/labels/classify', {
       method: 'POST',
       body: JSON.stringify(scope)
+    }),
+  labelsTestConnection: (body: {
+    llm_endpoint?: string
+    llm_model?: string
+    llm_api_key?: string
+    system_prompt?: string
+  }) =>
+    request<{
+      ok: boolean
+      elapsed_ms: number
+      error?: string | null
+      raw?: string
+      parsed?: { label: 'IC' | 'OOC'; confidence: number; reason: string } | null
+    }>('/labels/test-connection', {
+      method: 'POST',
+      body: JSON.stringify(body)
     }),
   labelsJobGet: (id: string, opts?: ApiOptions) =>
     get<ClassifyJob>(`/labels/jobs/${encodeURIComponent(id)}`, opts),

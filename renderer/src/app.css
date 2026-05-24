@@ -7,11 +7,36 @@
   --border: #3e3e42;
   --text: #d4d4d4;
   --text-dim: #8a8a8a;
+  --text-dim-2: #b0b0b0; /* brighter than --text-dim for status lines */
   --accent: #569cd6;
   --accent-2: #c97070;
   --green: #6a9955;
   --select: #094771;
   --tag-bg: #3a3a3a;
+
+  /* State + label palette — split out from --accent so "in-progress"
+     doesn't share a colour with "primary action" / "focused" / "IC voice". */
+  --state-running: #1f4d7a;
+  --state-done: #4a8a4a;
+  --state-cancelled: #b08040;
+  --state-failed: var(--accent-2);
+  --state-manual: #c2884c;
+
+  /* Label badge palette. AA-tuned: UNL/SYS bumped from #777/#888 to
+     #9e9e9e/#a0a0a0 against their backgrounds. */
+  --label-ic-bg: #2d4a6a;   --label-ic-fg: #a8c8e8;
+  --label-ooc-bg: #5a4a2d;  --label-ooc-fg: #d8c890;
+  --label-unl-bg: #2f2f2f;  --label-unl-fg: #9e9e9e;
+  --label-sys-bg: #3a3a3a;  --label-sys-fg: #a0a0a0;
+}
+
+/* Global focus indicator. Previously the only visible focus was the
+   browser's 1px default ring, which the filter-chip inset shadow ate
+   entirely. A 2px high-contrast yellow ring with offset reads on the
+   dark theme and survives most component-level styling. */
+:focus-visible {
+  outline: 2px solid #ffd84d;
+  outline-offset: 2px;
 }
 
 * {
@@ -1035,16 +1060,22 @@ body {
 }
 .log-export-toggle {
   margin-left: auto;
-  background: var(--tag-bg);
-  color: var(--text);
+  background: transparent;
+  color: var(--text-dim-2);
+  /* Different shape from filter chips: pill, no caps, no
+     letter-spacing — reads as a mode toggle, not a filter. */
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 3px 10px;
+  border-radius: 14px;
+  padding: 3px 12px;
   cursor: pointer;
   font: inherit;
   font-size: 11px;
 }
-.log-export-toggle.on { background: var(--select); border-color: var(--select); }
+.log-export-toggle.on {
+  background: var(--select);
+  color: var(--text);
+  border-color: var(--accent);
+}
 .log-export-toggle:hover { border-color: var(--accent); }
 .log-export-bar {
   display: flex;
@@ -1482,21 +1513,36 @@ body {
   text-align: center;
   letter-spacing: 0.4px;
 }
-.log-label-ic { background: #2d4a6a; color: #a8c8e8; }
-.log-label-ooc { background: #5a4a2d; color: #d8c890; }
-.log-label-unlabeled { background: #2f2f2f; color: #777; }
-.log-label-system { background: #3a3a3a; color: #888; }
-/* Manual override gets a left bar so the user can see at a glance
-   which labels they fixed themselves vs which came from the LLM. */
-.log-label-src-manual { box-shadow: inset 2px 0 0 #c2884c; }
-/* The row-edge accent (paired with the badge inset) is what actually
-   reads at scrolling speed — a 2px stripe on a 10px badge is too
-   small to spot. The accent colour matches the badge marker. */
+.log-label-ic { background: var(--label-ic-bg); color: var(--label-ic-fg); }
+.log-label-ooc { background: var(--label-ooc-bg); color: var(--label-ooc-fg); }
+.log-label-unlabeled { background: var(--label-unl-bg); color: var(--label-unl-fg); }
+.log-label-system { background: var(--label-sys-bg); color: var(--label-sys-fg); }
+/* Manual overrides carry a visible ✎ glyph inside the badge — see
+   LabelBadge in LogViewer.tsx. The glyph is the load-bearing cue;
+   the row-edge bar below is supportive. */
+.log-label-manual-glyph {
+  margin-left: 4px;
+  color: var(--state-manual);
+  font-size: 11px;
+  line-height: 1;
+  vertical-align: middle;
+}
+/* Row-edge accent for manual overrides — supports the in-badge glyph
+   so the row reads as "fixed by you" while scrolling. */
 .log-msg-manual {
-  box-shadow: inset 3px 0 0 #c2884c;
+  box-shadow: inset 3px 0 0 var(--state-manual);
 }
 .log-msg-manual.log-msg-selected {
-  box-shadow: inset 3px 0 0 #c2884c, inset 6px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--state-manual), inset 6px 0 0 var(--accent);
+}
+/* The row whose context menu is currently open gets a tinted bar so
+   keyboard + mouse users can see which row their next IC/OOC choice
+   will affect. */
+.log-msg-menu-target {
+  background: #1a2740;
+}
+.log-msg-menu-target.log-msg-manual {
+  background: #2a1f12;
 }
 /* Low-confidence LLM labels read as a dotted underline — the visual
    nudge says "the classifier wasn't sure, audit this." */
@@ -1561,36 +1607,17 @@ body {
   color: var(--text-dim);
 }
 
-/* Inline Classify… button in the log viewer header. Item-scoped
-   (acts on the open conversation) so it stays in-context per the
-   native-menu rule. */
-.log-classify {
-  background: var(--tag-bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 3px;
-  padding: 4px 10px;
-  font: inherit;
+/* Inline hint in the log viewer header pointing at the native menu.
+   Reads as a status pill, not a button — no border, no hover state. */
+.log-unlabeled-hint {
+  color: var(--text-dim-2);
   font-size: 11px;
-  cursor: pointer;
+  padding: 2px 8px;
+  background: rgba(194, 136, 76, 0.12);
+  border-radius: 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.log-classify:hover:not(:disabled) { border-color: var(--accent); }
-.log-classify:disabled { opacity: 0.4; cursor: default; }
-
-/* Classify action inside the character-picker dropdown. */
-.char-picker-classify {
-  margin: 6px 8px 8px;
-  background: var(--tag-bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 3px;
-  padding: 6px 10px;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  text-align: left;
-}
-.char-picker-classify:hover { border-color: var(--accent); }
 
 /* Classify progress dialog. */
 .classify-modal { width: 560px; max-width: 95vw; }
@@ -1607,30 +1634,31 @@ body {
   background: var(--accent);
   transition: width 200ms ease-out;
 }
-.classify-progress-fill.classify-state-done { background: #4a8a4a; }
-.classify-progress-fill.classify-state-cancelled { background: #b08040; }
-.classify-progress-fill.classify-state-failed { background: var(--accent-2); }
-/* Indeterminate mode — while the worker is still walking the
-   filesystem totalling targets, slide a translucent stripe across the
-   bar so the dialog clearly shows "something is happening". */
+.classify-progress-fill.classify-state-done { background: var(--state-done); }
+.classify-progress-fill.classify-state-cancelled { background: var(--state-cancelled); }
+.classify-progress-fill.classify-state-failed { background: var(--state-failed); }
+/* Indeterminate mode — slimmer than the determinate bar (6px vs
+   12px) and the gradient is replaced with a diagonal stripe pattern
+   so indeterminacy reads as a different *shape*, not just colour. */
 .classify-progress-bar-indeterminate {
   position: relative;
   overflow: hidden;
+  height: 6px;
 }
 .classify-progress-bar-indeterminate .classify-progress-fill {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(86, 156, 214, 0.55) 50%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(86, 156, 214, 0.55) 0 6px,
+      transparent 6px 12px
+    );
+  background-size: 24px 24px;
   animation: classify-indeterminate-slide 1.2s linear infinite;
   width: 100% !important;
 }
 @keyframes classify-indeterminate-slide {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
+  from { background-position: 0 0; }
+  to { background-position: 48px 0; }
 }
 .classify-summary {
   margin: 10px 0 0;
@@ -1640,6 +1668,28 @@ body {
   font-size: 12px;
   color: var(--text);
 }
+/* Backdrop-click while running — flash the Cancel button so the user
+   sees the right way to dismiss the dialog. */
+.classify-cancel-pulse {
+  animation: classify-cancel-pulse 0.7s ease-out;
+}
+@keyframes classify-cancel-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(201, 112, 112, 0.6); }
+  60% { box-shadow: 0 0 0 8px rgba(201, 112, 112, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(201, 112, 112, 0); }
+}
+/* Settings modal: per-section Save row should read like a footer
+   (top border, padded) so it matches ClassifyDialog's rhythm
+   instead of looking like an inline form control. */
+.settings-footer-actions {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+/* Test-connection result colours — OK is green, fail is red. The
+   text itself stays on the standard meta background. */
+.labels-test-result.labels-test-ok { color: #8fcf72; }
+.labels-test-result.labels-test-fail { color: var(--accent-2); }
 .classify-progress-text { margin: 4px 0; font-size: 13px; }
 .classify-state {
   text-transform: uppercase;
@@ -1650,12 +1700,32 @@ body {
   background: var(--tag-bg);
   color: var(--text-dim);
 }
-.classify-state.classify-state-running { background: var(--accent); color: white; }
+.classify-state.classify-state-running {
+  /* Was white-on-#569cd6 which fails AA at 2.95:1; this deeper blue
+     pushes contrast over 7:1 with the white text. */
+  background: var(--state-running);
+  color: white;
+}
 .classify-state.classify-state-done { background: #2d4a2d; color: #b0d8b0; }
 .classify-state.classify-state-cancelled { background: #5a4a2d; color: #d8c890; }
 .classify-state.classify-state-failed { background: #4a2d2d; color: #d8a0a0; }
+.classify-state-glyph {
+  margin-right: 4px;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-block;
+}
+.classify-state-running .classify-state-glyph {
+  animation: classify-state-spin 1.2s linear infinite;
+}
+@keyframes classify-state-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 .classify-fail { color: var(--accent-2); }
-.classify-current { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
+/* "Working on:" line should read clearly while a job runs — the
+   previous --text-dim grey was 4.44:1, under AA at 12px. */
+.classify-current { margin: 4px 0; font-size: 12px; color: var(--text-dim-2); }
 .classify-current code {
   background: var(--bg);
   padding: 1px 5px;

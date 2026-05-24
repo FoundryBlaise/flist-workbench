@@ -104,7 +104,7 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
         },
         {
           id: 'classify-character',
-          label: 'Classify Active Character (all partners)…',
+          label: 'Classify Active Character…',
           enabled: false,
           click: () => send(getWindow(), 'classify-character')
         },

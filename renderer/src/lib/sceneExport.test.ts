@@ -12,7 +12,8 @@ function msg(ts: number, speaker: string, text: string, kind: LogMessage['kind']
     raw: text,
     text,
     mentions: [],
-    kind
+    kind,
+    hash: ''
   }
 }
 
