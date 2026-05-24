@@ -79,7 +79,13 @@ def call_llm(
     system_prompt: str,
     user_prompt: str,
     *,
-    max_tokens: int = 800,
+    # 2048 not 800: some local models emit invisible chain-of-thought
+    # tokens before the JSON payload (e.g. gemma-3-12b "var-thinking"
+    # variants). With max_tokens=800 the reason field would get cut
+    # off mid-string and json.loads would fail with "bad json …
+    # truncated". 2048 is comfortable for thinking + a 100-char
+    # reason and still cheap.
+    max_tokens: int = 2048,
     timeout: float = REQUEST_TIMEOUT,
 ) -> str:
     payload = {
