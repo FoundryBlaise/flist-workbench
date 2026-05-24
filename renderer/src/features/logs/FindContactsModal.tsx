@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { useStore } from '../../state'
-import { displayCharacter, displayPartner } from '../../lib/partnerName'
+import { displayCharacter } from '../../lib/partnerName'
 
 type ContactsResult = Awaited<ReturnType<typeof api.findContacts>>
 
@@ -79,7 +79,7 @@ export function FindContactsModal({ onClose }: { onClose: () => void }) {
           <div>
             <h2 className="modal-title">Find contacts</h2>
             <p className="modal-subtitle">
-              Search across all your characters for who's had contact with someone.
+              Find which of your characters has a 1:1 DM log with someone.
             </p>
           </div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
@@ -109,15 +109,12 @@ export function FindContactsModal({ onClose }: { onClose: () => void }) {
         <div className="modal-body find-contacts-results" data-testid="find-contacts-results">
           {status === 'idle' && (
             <p className="find-contacts-placeholder">
-              Type a character name and hit Find. We'll scan every one of your characters'
-              partner directories for DM logs with that name, and every channel log for
-              messages they spoke in.
+              Type a character name and hit Find. We'll look across every one of your
+              characters' DM logs for that name.
             </p>
           )}
           {status === 'loading' && (
-            <p className="find-contacts-placeholder">
-              Scanning every character's logs… channels can take a moment.
-            </p>
+            <p className="find-contacts-placeholder">Searching…</p>
           )}
           {status === 'error' && (
             <p className="find-contacts-placeholder error">Couldn't search: {error}</p>
@@ -140,90 +137,47 @@ function ContactsTable({
   submitted: string
   openContact: (character: string, partner: string) => void
 }) {
-  const total = result.dm.length + result.channels.length
-  if (total === 0) {
+  if (result.dm.length === 0) {
     return (
       <p className="find-contacts-placeholder">
-        No contact with <b>{submitted}</b> found across your characters.
+        None of your characters has a DM log with <b>{submitted}</b>.
       </p>
     )
   }
   return (
     <>
       <p className="find-contacts-summary">
-        <b>{displayCharacter(result.name)}</b> has logs with{' '}
-        <b>{result.dm.length}</b> direct message{result.dm.length === 1 ? '' : 's'} and{' '}
-        <b>{result.channels.length}</b> shared channel{result.channels.length === 1 ? '' : 's'}{' '}
-        across your characters.
+        <b>{result.dm.length}</b> of your character{result.dm.length === 1 ? ' has' : 's have'} a
+        DM log with <b>{displayCharacter(result.name)}</b>.
       </p>
-      {result.dm.length > 0 && (
-        <section className="find-contacts-section">
-          <h3>Direct messages</h3>
-          <table className="find-contacts-table">
-            <thead>
-              <tr>
-                <th>Your character</th>
-                <th>Last activity</th>
-                <th>Size</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {result.dm.map((d) => (
-                <tr key={`${d.character}|${d.partner}`}>
-                  <td>{displayCharacter(d.character)}</td>
-                  <td className="meta">{formatDate(d.mtime)}</td>
-                  <td className="meta">{formatBytes(d.bytes)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="find-contacts-open"
-                      onClick={() => openContact(d.character, d.partner)}
-                    >
-                      Open
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
-      {result.channels.length > 0 && (
-        <section className="find-contacts-section">
-          <h3>Shared channels</h3>
-          <table className="find-contacts-table">
-            <thead>
-              <tr>
-                <th>Your character</th>
-                <th>Channel</th>
-                <th>Messages from {displayCharacter(result.name)}</th>
-                <th>Size</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {result.channels.map((c) => (
-                <tr key={`${c.character}|${c.channel}`}>
-                  <td>{displayCharacter(c.character)}</td>
-                  <td>{displayPartner(c.channel)}</td>
-                  <td className="meta">{c.messages_from_name.toLocaleString()}</td>
-                  <td className="meta">{formatBytes(c.bytes)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="find-contacts-open"
-                      onClick={() => openContact(c.character, c.channel)}
-                    >
-                      Open
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+      <table className="find-contacts-table">
+        <thead>
+          <tr>
+            <th>Your character</th>
+            <th>Last activity</th>
+            <th>Size</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {result.dm.map((d) => (
+            <tr key={`${d.character}|${d.partner}`}>
+              <td>{displayCharacter(d.character)}</td>
+              <td className="meta">{formatDate(d.mtime)}</td>
+              <td className="meta">{formatBytes(d.bytes)}</td>
+              <td>
+                <button
+                  type="button"
+                  className="find-contacts-open"
+                  onClick={() => openContact(d.character, d.partner)}
+                >
+                  Open
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </>
   )
 }

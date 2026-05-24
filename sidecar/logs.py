@@ -132,40 +132,34 @@ def search_messages(
 
 
 def find_contacts(name: str, *, root: Path | None = None) -> dict:
-    """Across every character on this machine, find who's had contact
-    with `name` (case-insensitive).
+    """Across every character on this machine, find which of YOUR
+    characters has a 1-on-1 DM log with `name` (case-insensitive).
 
-    Two flavours of "contact":
-      * DM — a 1-on-1 partner directory whose filename matches `name`.
-        This is a cheap directory listing per character.
-      * Channel — a channel log (`#...`) in which `name` shows up as
-        a message speaker. Requires scanning the channel log; we cap
-        per-channel scanning so a 5 MB channel doesn't lock the
-        request. Skips channels named after the queried `name`
-        (those are DMs, not shared channels).
+    A "DM" is a non-channel partner directory whose filename matches
+    the queried name. Channels are deliberately ignored — they'd
+    require scanning every message of every channel log, and the user
+    interface is built around the 1:1 case.
 
     Returns:
         {
           "name": <queried name>,
-          "dm": [{character, partner, bytes, mtime}],
-          "channels": [{character, channel, messages_from_name, bytes}]
+          "dm": [{character, partner, bytes, mtime}]
         }
 
-    Both arrays are sorted by character then descending byte size of
-    the matching log.
+    Sorted by your character (alphabetical) then descending byte size
+    of the DM log.
     """
     target = name.strip()
     if not target:
-        return {"name": name, "dm": [], "channels": []}
+        return {"name": name, "dm": []}
     needle = target.casefold()
 
     dms: list[dict] = []
-    channels: list[dict] = []
 
     try:
         chars = list_characters(root=root)
     except LogDirError:
-        return {"name": name, "dm": [], "channels": []}
+        return {"name": name, "dm": []}
 
     for char in chars:
         # Skip the queried character — "who knows X" trivially
@@ -178,43 +172,24 @@ def find_contacts(name: str, *, root: Path | None = None) -> dict:
             continue
         for p in partners:
             if p.name.startswith("#"):
-                # Channel contact: scan the channel log for messages
-                # whose speaker matches the queried name.
-                count = 0
-                try:
-                    for msg in read_messages(char.name, p.name, root=root):
-                        if msg["speaker"].casefold() == needle:
-                            count += 1
-                except Exception:
-                    continue
-                if count > 0:
-                    channels.append(
-                        {
-                            "character": char.name,
-                            "channel": p.name,
-                            "messages_from_name": count,
-                            "bytes": p.bytes,
-                        }
-                    )
-            else:
-                # DM contact: just match the partner filename.
-                if p.name.casefold() == needle:
-                    try:
-                        mtime = (log_path(char.name, p.name, root=root)).stat().st_mtime
-                    except OSError:
-                        mtime = 0.0
-                    dms.append(
-                        {
-                            "character": char.name,
-                            "partner": p.name,
-                            "bytes": p.bytes,
-                            "mtime": mtime,
-                        }
-                    )
+                continue
+            if p.name.casefold() != needle:
+                continue
+            try:
+                mtime = log_path(char.name, p.name, root=root).stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            dms.append(
+                {
+                    "character": char.name,
+                    "partner": p.name,
+                    "bytes": p.bytes,
+                    "mtime": mtime,
+                }
+            )
 
     dms.sort(key=lambda r: (r["character"].casefold(), -r["bytes"]))
-    channels.sort(key=lambda r: (r["character"].casefold(), -r["bytes"]))
-    return {"name": target, "dm": dms, "channels": channels}
+    return {"name": target, "dm": dms}
 
 
 def search_all_partners(
