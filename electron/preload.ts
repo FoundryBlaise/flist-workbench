@@ -26,5 +26,8 @@ contextBridge.exposeInMainWorld('workbench', {
     return () => {
       ipcRenderer.removeListener('menu:action', wrapped)
     }
+  },
+  setMenuState: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => {
+    ipcRenderer.send('menu:set-state', flags)
   }
 })

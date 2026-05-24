@@ -99,11 +99,13 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
         {
           id: 'classify-current',
           label: 'Classify Current Conversation…',
+          enabled: false,
           click: () => send(getWindow(), 'classify-current')
         },
         {
           id: 'classify-character',
           label: 'Classify Active Character (all partners)…',
+          enabled: false,
           click: () => send(getWindow(), 'classify-character')
         },
         {

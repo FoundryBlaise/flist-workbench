@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api, type ClassifyJob, type ClassifyJobScope } from '../../lib/api'
 import { useStore } from '../../state'
 
@@ -80,9 +80,42 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
 
   const pct = job && job.total > 0 ? Math.round((job.classified / job.total) * 100) : 0
   const isDone = job ? isTerminal(job.state) : false
+  // The dialog is dismissable when the job reached a terminal state or
+  // when the start request itself failed (no job ever existed).
+  const canClose = isDone || (!!error && !job)
+  // The very first poll(s) of an "all characters" run report
+  // `total=0` while enumeration is still walking the filesystem. Drop
+  // the progress bar / counter and show an indeterminate state so the
+  // dialog doesn't look frozen at 0 / 0.
+  const isEnumerating = job?.state === 'running' && job.total === 0
+
+  // ESC + backdrop close. Both are no-ops while the job is still
+  // running so the user has to make an explicit Cancel decision (no
+  // accidentally clicking outside and losing the job handle).
+  useEffect(() => {
+    if (!canClose) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [canClose, onClose])
+
+  const onBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!canClose) return
+    // Only the backdrop itself, not anything inside the modal.
+    if (e.target === e.currentTarget) onClose()
+  }
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onClick={onBackdropClick}
+    >
       <div className="modal classify-modal" data-testid="classify-dialog">
         <header className="modal-head">
           <div>
@@ -94,8 +127,8 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
             className="modal-close"
             onClick={onClose}
             aria-label="Close"
-            disabled={!isDone && !error}
-            title={!isDone && !error ? 'Cancel the job first' : 'Close'}
+            disabled={!canClose}
+            title={!canClose ? 'Cancel the job first' : 'Close'}
           >
             ✕
           </button>
@@ -105,19 +138,37 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
           {!job && !error && <p className="settings-help">Starting job…</p>}
           {job && (
             <>
-              <div className="classify-progress-bar" aria-label="progress">
+              <div
+                className={`classify-progress-bar${isEnumerating ? ' classify-progress-bar-indeterminate' : ''}`}
+                aria-label="progress"
+              >
                 <div
                   className={`classify-progress-fill classify-state-${job.state}`}
-                  style={{ width: `${pct}%` }}
+                  style={{ width: isEnumerating ? '100%' : `${pct}%` }}
                 />
               </div>
               <p className="classify-progress-text">
-                <strong>{job.classified.toLocaleString()}</strong> /{' '}
-                {job.total.toLocaleString()} ({pct}%) ·{' '}
-                <span className={`classify-state classify-state-${job.state}`}>{job.state}</span>
-                {job.failed > 0 && <span className="classify-fail"> · {job.failed} failed</span>}
+                {isEnumerating ? (
+                  <>
+                    <strong>Scanning conversations…</strong>{' '}
+                    <span className={`classify-state classify-state-${job.state}`}>
+                      {job.state}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <strong>{job.classified.toLocaleString()}</strong> /{' '}
+                    {job.total.toLocaleString()} ({pct}%) ·{' '}
+                    <span className={`classify-state classify-state-${job.state}`}>
+                      {job.state}
+                    </span>
+                    {job.failed > 0 && (
+                      <span className="classify-fail"> · {job.failed} failed</span>
+                    )}
+                  </>
+                )}
               </p>
-              {job.current_partner && (
+              {job.current_partner && job.state === 'running' && !isEnumerating && (
                 <p className="classify-current">
                   Working on: <code>{job.current_partner}</code>
                 </p>
@@ -140,6 +191,14 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
               {job.state === 'failed' && job.error && (
                 <p className="settings-error">Job failed: {job.error}</p>
               )}
+              {isDone && (
+                <p className="classify-summary" data-testid="classify-summary">
+                  <strong>Classified {job.classified.toLocaleString()}</strong> ·{' '}
+                  {job.failed.toLocaleString()} failed ·{' '}
+                  {(job.skipped_existing + job.skipped_rule).toLocaleString()} skipped
+                  {job.state === 'cancelled' && ' (cancelled)'}
+                </p>
+              )}
             </>
           )}
         </div>
@@ -160,6 +219,7 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
               className="settings-save"
               onClick={onClose}
               data-testid="classify-close"
+              autoFocus
             >
               Close
             </button>

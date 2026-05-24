@@ -370,3 +370,69 @@ def test_job_cancel_flips_state(
 def test_registry_unknown_id_returns_none(isolated_registry: labels_jobs.JobRegistry) -> None:
     assert isolated_registry.get("does-not-exist") is None
     assert isolated_registry.cancel("does-not-exist") is False
+
+
+def test_job_promotes_to_failed_when_all_llm_calls_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_registry: labels_jobs.JobRegistry
+) -> None:
+    """An "all-failed" run is a config error, not a successful pass.
+
+    Previously the worker only flipped state to failed on a top-level
+    exception, so 31-of-31 per-message failures were reported as
+    "done". The UI treats that as success and offers no Retry path.
+    """
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
+    long_text = "A" * 250
+    msgs = [_msg(i, long_text, speaker=f"P{i}") for i in range(1, 4)]
+    monkeypatch.setattr(labels_jobs.logs_store, "read_messages", lambda *_a, **_k: iter(msgs))
+    monkeypatch.setattr(
+        labels_jobs,
+        "_resolve_targets",
+        lambda scope: [(scope["character"], scope["partner"])],
+    )
+
+    from urllib.error import URLError
+
+    def boom(req, timeout=None):  # noqa: ARG001
+        raise URLError("Connection refused")
+
+    monkeypatch.setattr(labels_llm, "urlopen", boom)
+
+    job = labels_jobs.start({"character": "TestChar", "partner": "Bob"})
+    _wait_until(lambda: job.state in ("done", "cancelled", "failed"))
+    assert job.state == "failed"
+    assert job.progress.classified == 0
+    assert job.progress.failed == 3
+    assert job.error is not None
+    assert "3" in job.error
+
+
+def test_job_stays_done_when_some_classified_some_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolated_registry: labels_jobs.JobRegistry
+) -> None:
+    """Partial success (one of two works) is still "done" — we only
+    promote to failed when nothing landed at all.
+    """
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
+    long_text = "A" * 250
+    msgs = [_msg(1, long_text, speaker="P1"), _msg(2, long_text, speaker="P2")]
+    monkeypatch.setattr(labels_jobs.logs_store, "read_messages", lambda *_a, **_k: iter(msgs))
+    monkeypatch.setattr(
+        labels_jobs,
+        "_resolve_targets",
+        lambda scope: [(scope["character"], scope["partner"])],
+    )
+
+    from urllib.error import URLError
+
+    fake, _ = _mk_urlopen([
+        '{"label":"IC","confidence":0.9}',
+        URLError("Connection refused"),
+    ])
+    monkeypatch.setattr(labels_llm, "urlopen", fake)
+
+    job = labels_jobs.start({"character": "TestChar", "partner": "Bob"})
+    _wait_until(lambda: job.state in ("done", "cancelled", "failed"))
+    assert job.state == "done"
+    assert job.progress.classified == 1
+    assert job.progress.failed == 1
