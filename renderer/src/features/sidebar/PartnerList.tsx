@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { displayPartner } from '../../lib/partnerName'
-import type { PartnerEntry } from '../../lib/api'
+import { api, type PartnerEntry } from '../../lib/api'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n}B`
@@ -11,6 +11,8 @@ function formatBytes(n: number): string {
 
 const SEARCH_THRESHOLD = 20
 
+type PartnerMenuState = { x: number; y: number; partner: string } | null
+
 export function PartnerList() {
   const activeChar = useStore((s) => s.activeCharacter)
   const partners = useStore((s) => (activeChar ? s.partners[activeChar] : null))
@@ -18,7 +20,77 @@ export function PartnerList() {
   const loadPartners = useStore((s) => s.loadPartners)
   const activePartner = useStore((s) => s.activePartner)
   const selectPartner = useStore((s) => s.selectPartner)
+  const openClassify = useStore((s) => s.openClassify)
+  const invalidateMessages = useStore((s) => s.invalidateMessages)
+  const loadMessages = useStore((s) => s.loadMessages)
   const [query, setQuery] = useState('')
+  const [partnerMenu, setPartnerMenu] = useState<PartnerMenuState>(null)
+
+  // Esc / outside click closes the partner-row context menu.
+  useEffect(() => {
+    if (!partnerMenu) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPartnerMenu(null)
+    }
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t?.closest('.sb-partner-menu')) return
+      setPartnerMenu(null)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onClick)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onClick)
+    }
+  }, [partnerMenu])
+
+  const onRowContextMenu = (
+    partnerName: string,
+    e: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    if (!activeChar) return
+    e.preventDefault()
+    setPartnerMenu({ x: e.clientX, y: e.clientY, partner: partnerName })
+  }
+
+  const onClassifyPartner = (partnerName: string) => {
+    if (!activeChar) return
+    setPartnerMenu(null)
+    openClassify(
+      { character: activeChar, partner: partnerName },
+      `${displayPartner(partnerName)} with ${activeChar}`
+    )
+  }
+
+  const onResetPartner = async (partnerName: string) => {
+    if (!activeChar) return
+    setPartnerMenu(null)
+    const confirmed = window.confirm(
+      `Remove all IC/OOC labels for ${displayPartner(partnerName)} with ${activeChar}?\n\n` +
+        `Every LLM and manual label in that conversation reverts to Unlabeled. ` +
+        `Rule-based hints (short messages, "((", etc.) keep firing as OOC. ` +
+        `This cannot be undone.`
+    )
+    if (!confirmed) return
+    try {
+      await api.labelsClear({ character: activeChar, partner: partnerName })
+      // If the conversation is currently open, refresh so the UI
+      // reflects rule-only state immediately. Otherwise the next
+      // open will fetch fresh anyway.
+      if (activePartner === partnerName) {
+        invalidateMessages(activeChar, partnerName)
+        void loadMessages(activeChar, partnerName, { force: true })
+      } else {
+        invalidateMessages(activeChar, partnerName)
+      }
+    } catch (err) {
+      console.error('[labels] partner clear failed', err)
+      window.alert(
+        `Couldn't reset labels: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
 
   useEffect(() => {
     if (activeChar && status === undefined) void loadPartners(activeChar)
@@ -72,6 +144,7 @@ export function PartnerList() {
           query={query}
           activePartner={activePartner}
           onSelect={selectPartner}
+          onContextMenu={onRowContextMenu}
           testid="partner-list-channels"
         />
       )}
@@ -83,9 +156,80 @@ export function PartnerList() {
           query={query}
           activePartner={activePartner}
           onSelect={selectPartner}
+          onContextMenu={onRowContextMenu}
           testid="partner-list-people"
         />
       )}
+      {partnerMenu && activeChar && (
+        <PartnerContextMenu
+          x={partnerMenu.x}
+          y={partnerMenu.y}
+          partner={partnerMenu.partner}
+          character={activeChar}
+          onClassify={() => onClassifyPartner(partnerMenu.partner)}
+          onResetAll={() => void onResetPartner(partnerMenu.partner)}
+        />
+      )}
+    </div>
+  )
+}
+
+function PartnerContextMenu({
+  x,
+  y,
+  partner,
+  character,
+  onClassify,
+  onResetAll
+}: {
+  x: number
+  y: number
+  partner: string
+  character: string
+  onClassify: () => void
+  onResetAll: () => void
+}) {
+  const W = 260
+  const H = 130
+  const left = Math.min(x, window.innerWidth - W - 8)
+  const top = Math.min(y, window.innerHeight - H - 8)
+  const firstRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    firstRef.current?.focus()
+  }, [])
+  return (
+    <div
+      className="log-label-menu log-conv-menu sb-partner-menu"
+      role="menu"
+      aria-label={`Actions for ${partner}`}
+      style={{ left, top }}
+      data-testid="partner-context-menu"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="log-label-menu-head">
+        {displayPartner(partner)}
+        <span className="log-label-menu-current">{character}</span>
+      </div>
+      <button
+        ref={firstRef}
+        type="button"
+        role="menuitem"
+        className="log-label-menu-item"
+        onClick={onClassify}
+        data-testid="partner-context-menu-classify"
+      >
+        Classify this conversation
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="log-label-menu-item log-label-menu-reset"
+        onClick={onResetAll}
+        data-testid="partner-context-menu-reset"
+      >
+        Remove all IC/OOC labels
+        <span className="log-label-menu-current">revert to Unlabeled</span>
+      </button>
     </div>
   )
 }
@@ -103,6 +247,7 @@ function PartnerSection({
   query,
   activePartner,
   onSelect,
+  onContextMenu,
   testid
 }: {
   heading: string
@@ -111,6 +256,7 @@ function PartnerSection({
   query: string
   activePartner: string | null
   onSelect: (name: string) => void
+  onContextMenu: (name: string, e: React.MouseEvent<HTMLButtonElement>) => void
   testid: string
 }) {
   return (
@@ -132,6 +278,7 @@ function PartnerSection({
                   type="button"
                   className={`sb-item ${p.name === activePartner ? 'active' : ''}`}
                   onClick={() => onSelect(p.name)}
+                  onContextMenu={(e) => onContextMenu(p.name, e)}
                   title={p.name}
                 >
                   <span className="ic" aria-hidden>

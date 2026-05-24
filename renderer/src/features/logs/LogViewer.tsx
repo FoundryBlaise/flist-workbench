@@ -462,9 +462,9 @@ export function LogViewer() {
             setConvMenu(null)
             const partnerName = displayPartner(partner)
             const confirmed = window.confirm(
-              `Reset all labels for ${partnerName} with ${activeChar}?\n\n` +
-                `This deletes ${stats.labeled.toLocaleString()} LLM/manual labels. ` +
-                `Rule-based labels (short messages, "((", etc.) recompute automatically. ` +
+              `Remove all IC/OOC labels for ${partnerName} with ${activeChar}?\n\n` +
+                `${stats.labeled.toLocaleString()} message(s) will revert to Unlabeled. ` +
+                `Rule-based hints (short messages, "((", etc.) keep firing as OOC. ` +
                 `This cannot be undone.`
             )
             if (!confirmed) return
@@ -875,12 +875,12 @@ function ConversationContextMenu({
         }
         data-testid="log-conv-menu-reset-all"
       >
-        Reset all labels (LLM + manual)
-        {!resetDisabled && (
-          <span className="log-label-menu-current">
-            {labeledCount.toLocaleString()} labeled
-          </span>
-        )}
+        Remove all IC/OOC labels
+        <span className="log-label-menu-current">
+          {resetDisabled
+            ? 'nothing to remove'
+            : `${labeledCount.toLocaleString()} → Unlabeled`}
+        </span>
       </button>
     </div>
   )

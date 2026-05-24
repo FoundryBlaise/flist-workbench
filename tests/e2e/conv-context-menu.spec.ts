@@ -72,6 +72,24 @@ test('conversation pane right-click shows Classify menu', async () => {
     await expect(window.getByTestId('log-label-menu')).toBeVisible()
     await expect(convMenu).not.toBeVisible()
     await window.keyboard.press('Escape')
+
+    // Right-click on a partner row in the sidebar should open the
+    // partner-row context menu with Classify + Reset all options,
+    // scoped to that partner — regardless of which one is currently
+    // open in the pane.
+    const otherPartner = partners.nth(1)
+    if ((await partners.count()) >= 2) {
+      await otherPartner.click({ button: 'right' })
+      const partnerMenu = window.getByTestId('partner-context-menu')
+      await expect(partnerMenu).toBeVisible()
+      await expect(window.getByTestId('partner-context-menu-classify')).toBeVisible()
+      await expect(window.getByTestId('partner-context-menu-reset')).toBeVisible()
+      await window.screenshot({
+        path: resolve(SCREENSHOTS, 'partner-context-menu-open.png')
+      })
+      await window.keyboard.press('Escape')
+      await expect(partnerMenu).not.toBeVisible()
+    }
   } finally {
     await app.close()
   }
