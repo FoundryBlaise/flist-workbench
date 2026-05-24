@@ -8,10 +8,10 @@ async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
-    // Below ~900x600 the editor+preview split collapses to a few
-    // characters per pane. Enforce a floor so users don't end up with
-    // a broken layout by dragging the corner too far.
-    minWidth: 960,
+    // Below ~1100 px the editor and preview both compress past readable
+    // width (at 800 px the preview was one letter per line). Enforce a
+    // floor that keeps the dual-pane layout usable.
+    minWidth: 1100,
     minHeight: 600,
     backgroundColor: '#1e1e1e',
     webPreferences: {

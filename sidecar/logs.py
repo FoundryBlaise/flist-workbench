@@ -37,13 +37,31 @@ def data_dir() -> Path:
     return Path(raw) if raw else DEFAULT_DATA_DIR
 
 
-def list_characters(root: Path | None = None) -> list[str]:
+@dataclass(slots=True, frozen=True)
+class CharacterEntry:
+    name: str
+    # Latest mtime (epoch seconds) seen across this character's logs
+    # directory. The renderer compares it against a per-user "last
+    # opened" timestamp to flag characters with new activity. 0 when
+    # the logs subdir doesn't exist (no logs yet for that character).
+    mtime: float
+
+
+def list_characters(root: Path | None = None) -> list[CharacterEntry]:
     base = root or data_dir()
     if not base.exists():
         raise LogDirError(f"F-Chat data directory not found: {base}")
-    return sorted(
-        entry.name for entry in base.iterdir() if entry.is_dir() and not entry.name.startswith(".")
-    )
+    out: list[CharacterEntry] = []
+    for entry in sorted(base.iterdir(), key=lambda e: e.name):
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        logs = entry / "logs"
+        try:
+            mtime = logs.stat().st_mtime if logs.exists() else 0.0
+        except OSError:
+            mtime = 0.0
+        out.append(CharacterEntry(name=entry.name, mtime=mtime))
+    return out
 
 
 def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry]:
@@ -111,3 +129,50 @@ def search_messages(
         if q in msg["text"].casefold():
             out.append({"index": idx, **msg})
     return out
+
+
+def search_all_partners(
+    character: str,
+    query: str,
+    *,
+    root: Path | None = None,
+    limit_per_partner: int = 50,
+) -> dict:
+    """Substring search across every partner log for one character.
+
+    Returns a `{partner: [hits...]}` mapping plus a per-partner hit
+    count. Each partner is capped at `limit_per_partner` so a single
+    runaway result set (e.g. searching "the" against an 80k-message
+    channel) can't dominate the response — the renderer can still see
+    the count and offer to drill into that partner specifically.
+
+    Performance note: this is a linear scan over every log file. Good
+    enough for the 100s-of-MB corpora we see today; a real index
+    (SQLite FTS5) is the F3 follow-up when we have evidence we need it.
+    """
+    q = query.casefold()
+    if not q:
+        return {"character": character, "query": query, "hits": []}
+    partners = list_partners(character, root=root)
+    results: list[dict] = []
+    for entry in partners:
+        partner_hits: list[dict] = []
+        truncated = False
+        for idx, msg in enumerate(read_messages(character, entry.name, root=root)):
+            if q in msg["text"].casefold():
+                if len(partner_hits) >= limit_per_partner:
+                    truncated = True
+                    continue
+                partner_hits.append({"index": idx, **msg})
+        if partner_hits or truncated:
+            results.append(
+                {
+                    "partner": entry.name,
+                    "bytes": entry.bytes,
+                    "hits": partner_hits,
+                    # Truncation flag tells the UI "open this partner
+                    # to see the rest", not "we missed messages".
+                    "truncated": truncated,
+                }
+            )
+    return {"character": character, "query": query, "partners": results}
