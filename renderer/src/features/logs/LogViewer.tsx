@@ -717,6 +717,7 @@ function MessageRow({
         label={msg.label}
         source={msg.label_source}
         confidence={msg.label_confidence}
+        reason={msg.label_reason}
         priorLabel={msg.prior_label}
         priorSource={msg.prior_source}
       />
@@ -917,6 +918,7 @@ function LabelBadge({
   label,
   source,
   confidence,
+  reason,
   priorLabel,
   priorSource
 }: {
@@ -924,6 +926,7 @@ function LabelBadge({
   label?: Label
   source?: 'llm' | 'manual'
   confidence?: number
+  reason?: string
   // Sidecar only ever sets prior_label when the user manually
   // overrode an IC or OOC label, so the wire shape is just IC|OOC.
   priorLabel?: 'IC' | 'OOC'
@@ -950,24 +953,29 @@ function LabelBadge({
   ]
     .filter(Boolean)
     .join(' ')
-  // Title surfaces source, confidence, and prior snapshot on hover —
-  // a manual override carries "you changed this from IC (llm) to
-  // OOC" so the user can audit their own choices.
-  const baseTip = source
-    ? `${label} · ${source}${typeof confidence === 'number' ? ` · ${(confidence * 100).toFixed(0)}%` : ''}`
-    : bucket === 'system'
-      ? 'F-Chat system message'
-      : bucket === 'unlabeled'
-        ? 'Not classified — Classify on demand'
-        : `${label} · rule`
-  const priorTip =
-    source === 'manual' && priorLabel
-      ? `  ·  was ${priorLabel} (${priorSource ?? 'auto'})`
-      : ''
+  // Build the tooltip in lines: source/confidence line, then the
+  // model's own reason (if any), then the prior-label trail (if any).
+  // The reason matters most when confidence saturates near 1.0 — the
+  // number alone isn't informative and the user needs to see why.
+  const lines: string[] = []
+  if (source) {
+    const conf = typeof confidence === 'number' ? ` · ${(confidence * 100).toFixed(0)}%` : ''
+    lines.push(`${label} · ${source}${conf}`)
+  } else if (bucket === 'system') {
+    lines.push('F-Chat system message')
+  } else if (bucket === 'unlabeled') {
+    lines.push('Not classified — Classify on demand')
+  } else {
+    lines.push(`${label} · rule`)
+  }
+  if (reason) lines.push(reason)
+  if (source === 'manual' && priorLabel) {
+    lines.push(`was ${priorLabel} (${priorSource ?? 'auto'})`)
+  }
   return (
     <span
       className={klass}
-      title={`${baseTip}${priorTip}`}
+      title={lines.join('\n')}
       aria-label={source === 'manual' ? `${label}, manually labeled` : undefined}
     >
       {text}
