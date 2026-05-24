@@ -1,0 +1,20 @@
+appId: net.aiart-foundry.flist-workbench
+productName: F-list Workbench
+copyright: Copyright (c) 2026 Foundry Blaise
+directories:
+  output: dist-electron
+  buildResources: build-resources
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/node_modules/**/{test,__tests__,tests}/**"
+extraResources:
+  - from: resources/sidecar.exe
+    to: sidecar.exe
+asar: true
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}-portable.${ext}

@@ -305,3 +305,14 @@ def drafts_save(doc_id: int, body: RevisionWrite, conn=Depends(_db)) -> None:
 @app.delete("/documents/{doc_id}/draft", status_code=204)
 def drafts_discard(doc_id: int, conn=Depends(_db)) -> None:
     documents.discard_draft(conn, doc_id)
+
+
+# Entry point for the PyInstaller-frozen build. In dev we run via
+# `uv run uvicorn server:app` which imports `app` directly, so this
+# block is unreached. The packaged Electron app spawns sidecar.exe
+# (this script frozen) and reads SIDECAR_PORT from the environment.
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("SIDECAR_PORT", "8770"))
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")

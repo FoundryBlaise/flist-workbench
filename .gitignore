@@ -30,10 +30,10 @@ resources/sidecar
 # sidecar/dist/ from running PyInstaller directly).
 sidecar/build/
 sidecar/dist/
-# PyInstaller spec files ARE committed if hand-edited (they capture
-# the hidden-imports list and entry point). Auto-generated stubs from
-# a fresh `pyinstaller server.py` run get clobbered on the next build
-# anyway, so this is mostly a "don't commit by accident" note.
+# Auto-generated spec file from `npm run pack:sidecar`. Has absolute
+# paths baked in, so it's per-machine — the npm script regenerates it
+# from CLI args on every build.
+sidecar/sidecar.spec
 
 # OS / editor cruft
 Thumbs.db

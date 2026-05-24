@@ -128,7 +128,7 @@ const SAMPLE_BBCODE = `[heading]F-list Workbench[/heading]
 [b]Try:[/b]
 [indent][b]Bold[/b], [i]italic[/i], [u]underline[/u], [s]strike[/s].[/indent]
 [indent]Coloured text in [color=red]red[/color], [color=blue]blue[/color], [color=green]green[/color].[/indent]
-[indent]Inline character icons: [icon]Azure Viper[/icon] [icon]Auldren Nadir[/icon][/indent]
+[indent]Inline character icons: [icon]CharacterName[/icon] — replace with any public F-list character name.[/indent]
 [indent]Emote icons: [eicon]smirk[/eicon] [eicon]wink[/eicon][/indent]
 [indent]A link: [url=https://www.f-list.net]F-list[/url][/indent]
 
