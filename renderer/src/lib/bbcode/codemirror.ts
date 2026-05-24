@@ -1,7 +1,8 @@
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, keymap } from '@codemirror/view'
-import { RangeSetBuilder } from '@codemirror/state'
+import { Prec, RangeSetBuilder } from '@codemirror/state'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { TOOLBAR_ACTIONS, applyAction } from '../../features/editor/Toolbar'
+import { bbcodeAutocomplete } from './autocomplete'
 
 const TAG_RE = /\[(\/?)([a-zA-Z][a-zA-Z0-9]*)(?:=([^\]]*))?\]/g
 
@@ -67,16 +68,21 @@ const dummyHighlight = syntaxHighlighting(HighlightStyle.define([]))
 
 // Bind every TOOLBAR_ACTION that declares a shortcut into the editor
 // keymap. Ctrl/Cmd+B/I/U/etc. wrap the current selection the same way
-// clicking the toolbar button does.
-const bbcodeShortcuts = keymap.of(
-  TOOLBAR_ACTIONS.filter((a) => a.shortcut).map((a) => ({
-    key: a.shortcut!,
-    preventDefault: true,
-    run: (view) => {
-      applyAction(view, a)
-      return true
-    }
-  }))
+// clicking the toolbar button does. Wrap in Prec.highest because the
+// CodeMirror default keymap binds Mod-u to undoSelection and would
+// otherwise win the race for that chord.
+const bbcodeShortcuts = Prec.highest(
+  keymap.of(
+    TOOLBAR_ACTIONS.filter((a) => a.shortcut).map((a) => ({
+      key: a.shortcut!,
+      preventDefault: true,
+      stopPropagation: true,
+      run: (view) => {
+        applyAction(view, a)
+        return true
+      }
+    }))
+  )
 )
 
 export const bbcodeExtensions = [
@@ -88,5 +94,6 @@ export const bbcodeExtensions = [
   // Wrap them rather than scroll horizontally so the editor reads the
   // way the preview lays out.
   EditorView.lineWrapping,
+  bbcodeAutocomplete,
   bbcodeShortcuts
 ]

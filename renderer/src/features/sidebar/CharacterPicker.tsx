@@ -1,23 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
-
-// F-Chat stores character directory names lower-cased; show them
-// title-cased in the UI so they match the names users see everywhere
-// else (the message rows, the doc title in the editor header).
-function displayName(s: string): string {
-  return s.replace(/\b([a-z])([a-z]*)/g, (_m, h: string, t: string) => h.toUpperCase() + t)
-}
+import { displayCharacter as displayName } from '../../lib/partnerName'
 
 export function CharacterPicker() {
   const status = useStore((s) => s.charactersStatus)
   const error = useStore((s) => s.charactersError)
   const characters = useStore((s) => s.characters)
+  const lastSeen = useStore((s) => s.charLastSeen)
   const active = useStore((s) => s.activeCharacter)
   const select = useStore((s) => s.selectCharacter)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+
+  // A character is "recently active" if its log directory has been
+  // written since the user last opened it. Unknown last-seen (first
+  // launch with already-mtimed dirs) is treated as never-opened: dots
+  // light up so the user notices their existing characters.
+  const hasNewActivity = (name: string, mtime: number) => {
+    if (mtime <= 0) return false
+    const seen = lastSeen[name]
+    if (seen === undefined) return true
+    return mtime > seen
+  }
 
   // Close on Escape, and on any pointer down outside the wrapper. The
   // dropdown otherwise stays open and intercepts clicks on the rest of
@@ -52,8 +58,14 @@ export function CharacterPicker() {
   const visible = useMemo(() => {
     if (!query.trim()) return characters
     const q = query.toLowerCase()
-    return characters.filter((c) => c.toLowerCase().includes(q))
+    return characters.filter((c) => c.name.toLowerCase().includes(q))
   }, [characters, query])
+
+  const recentCount = useMemo(
+    () => characters.filter((c) => hasNewActivity(c.name, c.mtime)).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [characters, lastSeen]
+  )
 
   if (status === 'loading' || status === 'idle') {
     return (
@@ -91,6 +103,18 @@ export function CharacterPicker() {
           <span className="name">{active ? displayName(active) : 'Select character'}</span>
           <span className="meta">
             {characters.length} character{characters.length === 1 ? '' : 's'}
+            {recentCount > 0 && (
+              <>
+                {' '}
+                ·{' '}
+                <span
+                  className="char-picker-new"
+                  title={`${recentCount} character${recentCount === 1 ? '' : 's'} with new log activity since you last opened them.`}
+                >
+                  {recentCount} new
+                </span>
+              </>
+            )}
           </span>
         </span>
         <span className="caret" aria-hidden>
@@ -109,28 +133,36 @@ export function CharacterPicker() {
             onKeyDown={(e) => {
               if (e.key === 'Escape') setOpen(false)
               if (e.key === 'Enter' && visible.length > 0) {
-                select(visible[0])
+                select(visible[0].name)
                 setOpen(false)
               }
             }}
             aria-label="Filter characters"
           />
           <ul>
-            {visible.map((name) => (
-              <li key={name}>
-                <button
-                  type="button"
-                  className={name === active ? 'active' : ''}
-                  onClick={() => {
-                    select(name)
-                    setOpen(false)
-                  }}
-                  title={name}
-                >
-                  {displayName(name)}
-                </button>
-              </li>
-            ))}
+            {visible.map((c) => {
+              const isNew = hasNewActivity(c.name, c.mtime)
+              return (
+                <li key={c.name}>
+                  <button
+                    type="button"
+                    className={c.name === active ? 'active' : ''}
+                    onClick={() => {
+                      select(c.name)
+                      setOpen(false)
+                    }}
+                    title={c.name}
+                  >
+                    <span
+                      className={`char-dot ${isNew ? 'char-dot-new' : ''}`}
+                      aria-hidden
+                      title={isNew ? 'New log activity since you last opened this character.' : undefined}
+                    />
+                    {displayName(c.name)}
+                  </button>
+                </li>
+              )
+            })}
             {visible.length === 0 && (
               <li className="char-picker-empty-result">No match for "{query}"</li>
             )}

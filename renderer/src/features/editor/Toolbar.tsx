@@ -1,5 +1,5 @@
 import { EditorView } from '@codemirror/view'
-import type { RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 
 export type ToolbarAction = {
   label: string
@@ -10,6 +10,15 @@ export type ToolbarAction = {
   insert?: string
 }
 
+type ToolbarGroup = {
+  key: string
+  actions: ToolbarAction[]
+  /** When true, surfaced behind a "more…" popover instead of the main row. */
+  overflow?: boolean
+}
+
+// Flat action list, exported so the CodeMirror keymap can pick out the
+// ones with shortcuts. Order inside each group is the order rendered.
 export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'B', title: 'Bold', shortcut: 'Mod-b', wrap: { open: '[b]', close: '[/b]' } },
   { label: 'I', title: 'Italic', shortcut: 'Mod-i', wrap: { open: '[i]', close: '[/i]' } },
@@ -28,6 +37,17 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'hr', title: 'Horizontal rule', insert: '[hr]' },
   { label: 'center', title: 'Centre', wrap: { open: '[center]', close: '[/center]' } },
   { label: 'indent', title: 'Indent', wrap: { open: '[indent]', close: '[/indent]' } }
+]
+
+// Visual grouping for the toolbar. Order within each group is its
+// natural reading order; the overflow group is hidden behind a "more"
+// popover to keep the main bar uncluttered.
+const TOOLBAR_GROUPS: ToolbarGroup[] = [
+  { key: 'format', actions: TOOLBAR_ACTIONS.slice(0, 4) },
+  { key: 'colour', actions: TOOLBAR_ACTIONS.slice(4, 5) },
+  { key: 'refs', actions: TOOLBAR_ACTIONS.slice(5, 8) },
+  { key: 'blocks', actions: TOOLBAR_ACTIONS.slice(8, 10) },
+  { key: 'structural', actions: TOOLBAR_ACTIONS.slice(10, 13), overflow: true }
 ]
 
 // Convert "Mod-b" to a human label that mirrors how F-Chat shows
@@ -61,27 +81,98 @@ export function applyAction(view: EditorView, action: ToolbarAction) {
   view.focus()
 }
 
+function ToolButton({
+  action,
+  viewRef
+}: {
+  action: ToolbarAction
+  viewRef: RefObject<EditorView | null>
+}) {
+  const title = action.shortcut ? `${action.title} (${shortcutLabel(action.shortcut)})` : action.title
+  return (
+    <button
+      type="button"
+      className="tool"
+      title={title}
+      aria-label={title}
+      onClick={() => {
+        const view = viewRef.current
+        if (view) applyAction(view, action)
+      }}
+    >
+      {action.label}
+    </button>
+  )
+}
+
 export function Toolbar({ viewRef }: { viewRef: RefObject<EditorView | null> }) {
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreWrapRef = useRef<HTMLDivElement>(null)
+  const overflowGroup = TOOLBAR_GROUPS.find((g) => g.overflow)
+  const visibleGroups = TOOLBAR_GROUPS.filter((g) => !g.overflow)
+
+  useEffect(() => {
+    if (!moreOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMoreOpen(false)
+    }
+    const onPointer = (e: PointerEvent) => {
+      const w = moreWrapRef.current
+      if (w && e.target instanceof Node && !w.contains(e.target)) setMoreOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onPointer)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPointer)
+    }
+  }, [moreOpen])
+
   return (
     <div className="editor-toolbar" role="toolbar" aria-label="BBCode formatting">
-      {TOOLBAR_ACTIONS.map((a) => {
-        const title = a.shortcut ? `${a.title} (${shortcutLabel(a.shortcut)})` : a.title
-        return (
+      {visibleGroups.map((group, idx) => (
+        <span key={group.key} className="tool-group" data-group={group.key}>
+          {group.actions.map((a) => (
+            <ToolButton key={a.label} action={a} viewRef={viewRef} />
+          ))}
+          {idx < visibleGroups.length - 1 && <span className="tool-divider" aria-hidden />}
+        </span>
+      ))}
+      {overflowGroup && (
+        <span className="tool-group tool-more-wrap" ref={moreWrapRef}>
+          <span className="tool-divider" aria-hidden />
           <button
-            key={a.label}
             type="button"
-            className="tool"
-            title={title}
-            aria-label={title}
-            onClick={() => {
-              const view = viewRef.current
-              if (view) applyAction(view, a)
-            }}
+            className="tool tool-more"
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            title="More tags"
           >
-            {a.label}
+            more…
           </button>
-        )
-      })}
+          {moreOpen && (
+            <div className="tool-more-menu" role="menu" data-testid="toolbar-more-menu">
+              {overflowGroup.actions.map((a) => (
+                <button
+                  key={a.label}
+                  type="button"
+                  role="menuitem"
+                  className="tool-more-item"
+                  onClick={() => {
+                    const view = viewRef.current
+                    if (view) applyAction(view, a)
+                    setMoreOpen(false)
+                  }}
+                  title={a.title}
+                >
+                  <span className="tool-more-tag">[{a.label}]</span>
+                  <span className="tool-more-desc">{a.title}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      )}
     </div>
   )
 }

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
 
+const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
+
 /**
  * Preview pane is contentEditable. Edits inside any text span flow back
  * into the BBCode source, so typing/correcting in the rendered preview
@@ -44,6 +46,18 @@ export function PreviewPane() {
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
+  const [showEditHint, setShowEditHint] = useState(() => {
+    if (typeof localStorage === 'undefined') return true
+    return localStorage.getItem(EDIT_HINT_KEY) !== '1'
+  })
+  const dismissEditHint = () => {
+    setShowEditHint(false)
+    try {
+      localStorage.setItem(EDIT_HINT_KEY, '1')
+    } catch {
+      // private mode / disabled storage — fine, hint just won't persist
+    }
+  }
   // Track which source the current DOM was rendered from. When the user
   // types into the preview we use this as the "before" snapshot to
   // reverse-map edits back into BBCode.
@@ -92,6 +106,22 @@ export function PreviewPane() {
   return (
     <section className="pane preview" data-testid="preview-pane">
       <header className="pane-head">Live Preview <span className="preview-edit-hint">· editable</span></header>
+      {showEditHint && (
+        <div className="preview-edit-banner" data-testid="preview-edit-banner">
+          <span>
+            <b>Click anywhere here to edit text in place.</b>{' '}
+            Structural changes (tags, layout) still go in the source on the left.
+          </span>
+          <button
+            type="button"
+            className="preview-edit-banner-close"
+            onClick={dismissEditHint}
+            aria-label="Dismiss hint"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {lightbox && (
         <div
           className="bb-lightbox"

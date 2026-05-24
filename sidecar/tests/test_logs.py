@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from logs import LogDirError, list_characters, list_partners
+from logs import LogDirError, list_characters, list_partners, search_all_partners
 
 
 @pytest.fixture
@@ -27,7 +27,10 @@ def fake_data(tmp_path: Path) -> Path:
 
 
 def test_list_characters(fake_data: Path) -> None:
-    assert list_characters(root=fake_data) == ["Aurora Frost", "Vanessa Arlington"]
+    chars = list_characters(root=fake_data)
+    assert [c.name for c in chars] == ["Aurora Frost", "Vanessa Arlington"]
+    # Both characters have a populated logs/ directory so mtime > 0.
+    assert all(c.mtime > 0 for c in chars)
 
 
 def test_list_partners_filters_idx_and_scratch(fake_data: Path) -> None:
@@ -43,3 +46,18 @@ def test_list_partners_filters_idx_and_scratch(fake_data: Path) -> None:
 def test_unknown_character(fake_data: Path) -> None:
     with pytest.raises(LogDirError):
         list_partners("Nobody Here", root=fake_data)
+
+
+def test_search_all_partners_empty_query(fake_data: Path) -> None:
+    result = search_all_partners("Aurora Frost", "", root=fake_data)
+    assert result == {"character": "Aurora Frost", "query": "", "hits": []}
+
+
+def test_search_all_partners_returns_per_partner_shape(fake_data: Path) -> None:
+    # The fixture writes zeroed binary logs that parse to zero
+    # messages, so there are no hits — but the structure must be
+    # well-formed (the cross-partner UI binds against this shape).
+    result = search_all_partners("Aurora Frost", "anything", root=fake_data)
+    assert result["character"] == "Aurora Frost"
+    assert result["query"] == "anything"
+    assert "partners" in result

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useStore } from '../../state'
 import type { LogMessage } from '../../lib/api'
+import { displayPartner } from '../../lib/partnerName'
+import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
 
 type Filter = { ic: boolean; ooc: boolean; system: boolean }
 const DEFAULT_FILTER: Filter = { ic: true, ooc: true, system: true }
@@ -88,16 +90,31 @@ export function LogViewer() {
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
   const [search, setSearch] = useState('')
   const [activeHit, setActiveHit] = useState(0)
+  // Scene-export selection: when on, clicking a row marks one end of
+  // the range. The next click marks the other end (or extends if
+  // shift-clicked). The range is inclusive of both endpoints.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selRange, setSelRange] = useState<[number, number] | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
 
-  useEffect(() => {
-    if (activeChar && partner) void loadMessages(activeChar, partner)
-  }, [activeChar, partner, loadMessages])
+  const markSeen = useStore((s) => s.markCharacterSeen)
 
-  // Reset filter / search when the partner switches.
+  useEffect(() => {
+    if (activeChar && partner) {
+      void loadMessages(activeChar, partner)
+      // Opening a conversation = the user has "seen" this character's
+      // current log state. Used to drive the recently-active dot in
+      // the character picker — see CharacterPicker.tsx.
+      markSeen(activeChar)
+    }
+  }, [activeChar, partner, loadMessages, markSeen])
+
+  // Reset filter / search / selection when the partner switches.
   useEffect(() => {
     setSearch('')
     setActiveHit(0)
+    setSelRange(null)
+    setSelectMode(false)
   }, [key])
 
   const filtered = useMemo<LogMessage[]>(() => {
@@ -196,7 +213,7 @@ export function LogViewer() {
   if (status === 'loading' || !messages) {
     return (
       <section className="pane" data-testid="log-viewer">
-        <header className="pane-head">{partner}</header>
+        <header className="pane-head">{displayPartner(partner)}</header>
         <div className="pane-body pane-body-placeholder">Loading log…</div>
       </section>
     )
@@ -204,22 +221,73 @@ export function LogViewer() {
   if (status === 'error') {
     return (
       <section className="pane" data-testid="log-viewer">
-        <header className="pane-head">{partner}</header>
+        <header className="pane-head">{displayPartner(partner)}</header>
         <div className="pane-body pane-body-placeholder">Couldn't load: {error}</div>
       </section>
     )
   }
 
+  // IC/OOC/SYSTEM here reflects F-Chat's `type` field on each message,
+  // not what a roleplayer might call IC vs OOC. Channel messages get
+  // type=MSG and surface as IC even if the channel is conceptually OOC
+  // (e.g. `#german ooc` reading "IC 14k · OOC 0"). The tooltip below
+  // explains this so users don't think the parser dropped data.
+  const kindTooltip =
+    'IC/OOC/SYSTEM mirror F-Chat\'s message type field. ' +
+    'Channel messages are stored as IC even in channels named "ooc".'
+
+  // Map the currently-visible filtered list back into the underlying
+  // `messages` array via its own array index. This is what `selRange`
+  // points at, so toggling filters mid-selection doesn't accidentally
+  // move the bounds.
+  const handleRowClick = (idx: number, shiftKey: boolean) => {
+    if (!selectMode) return
+    setSelRange((prev) => {
+      if (!prev || !shiftKey) return [idx, idx]
+      // Shift-click extends the range from whichever bound is closer
+      // — feels like a normal multi-select.
+      const [a, b] = prev
+      const distA = Math.abs(idx - a)
+      const distB = Math.abs(idx - b)
+      return distA <= distB ? [idx, b] : [a, idx]
+    })
+  }
+
+  const exportRange = (format: ExportFormat) => {
+    if (!messages || !partner || !activeChar) return
+    const slice =
+      selRange === null
+        ? filtered
+        : messages.slice(
+            Math.min(selRange[0], selRange[1]),
+            Math.max(selRange[0], selRange[1]) + 1
+          )
+    if (slice.length === 0) return
+    const text = exportMessages(slice, displayPartner(partner), activeChar, format)
+    // Clipboard is the integration surface per project policy — paste
+    // it wherever the user wants the scene to land.
+    void navigator.clipboard.writeText(text).then(() => {
+      // Surface a quiet status; the alert would be intrusive for a
+      // multi-select export so just log to console.
+      console.info(`[log-export] copied ${slice.length} message(s) as ${format}`)
+    })
+  }
+
+  const selBounds =
+    selRange === null
+      ? null
+      : ([Math.min(selRange[0], selRange[1]), Math.max(selRange[0], selRange[1])] as [number, number])
+  const selectionCount = selBounds ? selBounds[1] - selBounds[0] + 1 : 0
+  const isInSelection = (idx: number): boolean =>
+    selBounds !== null && idx >= selBounds[0] && idx <= selBounds[1]
+
   return (
     <section className="pane log-pane" data-testid="log-viewer">
       <header className="pane-head log-head">
-        <span className="partner">{partner}</span>
+        <span className="partner">{displayPartner(partner)}</span>
         <span className="log-meta">
           {stats.total.toLocaleString()} messages · {stats.from === stats.to ? stats.from : `${stats.from} → ${stats.to}`}
         </span>
-        <span className="log-pill">IC {stats.ic.toLocaleString()}</span>
-        <span className="log-pill">OOC {stats.ooc.toLocaleString()}</span>
-        {stats.system > 0 && <span className="log-pill">sys {stats.system.toLocaleString()}</span>}
         {search && rendered.hitTotal > 0 && (
           <span className="log-pill log-pill-hit">
             {Math.min(activeHit + 1, rendered.hitTotal)} / {rendered.hitTotal}
@@ -242,16 +310,26 @@ export function LogViewer() {
           }}
           data-testid="log-search"
         />
-        <FilterButton label="IC" on={filter.ic} onClick={() => setFilter((f) => ({ ...f, ic: !f.ic }))} />
+        <FilterButton
+          label="IC"
+          count={stats.ic}
+          on={filter.ic}
+          onClick={() => setFilter((f) => ({ ...f, ic: !f.ic }))}
+          title={kindTooltip}
+        />
         <FilterButton
           label="OOC"
+          count={stats.ooc}
           on={filter.ooc}
           onClick={() => setFilter((f) => ({ ...f, ooc: !f.ooc }))}
+          title={kindTooltip}
         />
         <FilterButton
           label="System"
+          count={stats.system}
           on={filter.system}
           onClick={() => setFilter((f) => ({ ...f, system: !f.system }))}
+          title={kindTooltip}
         />
         {search && rendered.hitTotal > 0 && (
           <button
@@ -263,7 +341,57 @@ export function LogViewer() {
             jump ↓
           </button>
         )}
+        <button
+          type="button"
+          className={`log-export-toggle ${selectMode ? 'on' : 'off'}`}
+          onClick={() => {
+            setSelectMode((v) => {
+              if (v) setSelRange(null)
+              return !v
+            })
+          }}
+          title="Toggle scene selection — click a row to start, shift-click to extend, then Export."
+          data-testid="log-export-toggle"
+          aria-pressed={selectMode}
+        >
+          {selectMode ? 'Cancel select' : 'Select for export'}
+        </button>
       </div>
+      {selectMode && (
+        <div className="log-export-bar" data-testid="log-export-bar">
+          <span className="log-export-status">
+            {selBounds
+              ? `${selectionCount.toLocaleString()} message${selectionCount === 1 ? '' : 's'} selected`
+              : 'Click a row to begin · shift-click to extend'}
+          </span>
+          <button
+            type="button"
+            onClick={() => exportRange('markdown')}
+            disabled={selBounds === null}
+            title="Copy the selection as Markdown to the clipboard"
+          >
+            Copy Markdown
+          </button>
+          <button
+            type="button"
+            onClick={() => exportRange('text')}
+            disabled={selBounds === null}
+            title="Copy the selection as plain text to the clipboard"
+          >
+            Copy Text
+          </button>
+          {selBounds !== null && (
+            <button
+              type="button"
+              className="log-export-clear"
+              onClick={() => setSelRange(null)}
+              title="Clear selection"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
       <div className="pane-body log-body" data-testid="log-body">
         {filtered.length === 0 ? (
           <div className="pane-body-placeholder">
@@ -277,19 +405,26 @@ export function LogViewer() {
             data={rendered.items}
             increaseViewportBy={{ top: 600, bottom: 600 }}
             computeItemKey={(_, item) => item.key}
-            itemContent={(_, item) =>
-              item.kind === 'day' ? (
-                <div className="day-sep">{item.label}</div>
-              ) : (
+            itemContent={(_, item) => {
+              if (item.kind === 'day') return <div className="day-sep">{item.label}</div>
+              // Resolve the underlying messages-array index for this
+              // row so selection survives filter/search toggles.
+              const sourceIdx = messages ? messages.indexOf(item.msg) : -1
+              return (
                 <MessageRow
                   msg={item.msg}
                   search={search}
                   hitsBefore={item.hitsBefore}
                   activeHit={activeHit}
                   isOwn={item.msg.speaker === activeChar}
+                  selectMode={selectMode}
+                  selected={sourceIdx !== -1 && isInSelection(sourceIdx)}
+                  onSelectClick={(shift) => {
+                    if (sourceIdx !== -1) handleRowClick(sourceIdx, shift)
+                  }}
                 />
               )
-            }
+            }}
           />
         )}
       </div>
@@ -297,15 +432,28 @@ export function LogViewer() {
   )
 }
 
-function FilterButton({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+function FilterButton({
+  label,
+  count,
+  on,
+  onClick,
+  title
+}: {
+  label: string
+  count: number
+  on: boolean
+  onClick: () => void
+  title?: string
+}) {
   return (
     <button
       type="button"
       className={`log-filter ${on ? 'on' : 'off'}`}
       onClick={onClick}
       aria-pressed={on}
+      title={title}
     >
-      {label}
+      {label} <span className="log-filter-count">({count.toLocaleString()})</span>
     </button>
   )
 }
@@ -315,13 +463,19 @@ function MessageRow({
   search,
   hitsBefore,
   activeHit,
-  isOwn
+  isOwn,
+  selectMode,
+  selected,
+  onSelectClick
 }: {
   msg: LogMessage
   search: string
   hitsBefore: number
   activeHit: number
   isOwn: boolean
+  selectMode: boolean
+  selected: boolean
+  onSelectClick: (shift: boolean) => void
 }) {
   // Lazy: only escape/highlight at render time for rows actually
   // visible to the user. This is what keeps an 80k-message channel
@@ -333,10 +487,23 @@ function MessageRow({
   const klass = [
     'log-msg',
     `log-msg-${msg.kind}`,
-    isOwn ? 'log-msg-own' : 'log-msg-other'
-  ].join(' ')
+    isOwn ? 'log-msg-own' : 'log-msg-other',
+    selectMode ? 'log-msg-selectable' : '',
+    selected ? 'log-msg-selected' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
   return (
-    <div className={klass}>
+    <div
+      className={klass}
+      onClick={
+        selectMode
+          ? (e) => {
+              onSelectClick(e.shiftKey)
+            }
+          : undefined
+      }
+    >
       <span className="log-ts" title={msg.iso}>
         {timeLabel(msg.ts)}
       </span>
