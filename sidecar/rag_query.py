@@ -137,7 +137,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "- If the answer is not in the context, say so directly "
     '("I can\'t find that in the logs.").\n'
     "- Quote with the date when relevant "
-    '(e.g. "On 2025-03-15, Olivia said: ...").\n'
+    '(e.g. "On 2025-03-15, Tauriel said: ...").\n'
     "- Stay concrete and close to the source — do not invent details."
 )
 

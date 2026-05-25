@@ -204,8 +204,7 @@ export function LogViewer() {
     } else {
       applyLabelOverride(activeChar, partner, msg.hash, {
         label,
-        label_source: 'manual',
-        label_confidence: 1.0
+        label_source: 'manual'
       })
     }
     try {

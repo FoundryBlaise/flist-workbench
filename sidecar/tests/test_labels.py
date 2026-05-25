@@ -113,12 +113,11 @@ def test_upsert_then_get_returns_label(tmp_path: Path) -> None:
         labels_store.upsert_label(
             conn, hash="abc", character="Char", partner="Bob",
             ts=1, speaker="Bob", label="IC", source="llm",
-            confidence=0.85, reason="long narrative",
+            reason="long narrative",
         )
         rows = labels_store.labels_for_partner(conn, "Char", "Bob")
         assert "abc" in rows
         assert rows["abc"]["label"] == "IC"
-        assert rows["abc"]["confidence"] == 0.85
         assert rows["abc"]["source"] == "llm"
         assert rows["abc"]["prior_label"] is None
     finally:
@@ -185,7 +184,7 @@ def test_delete_labels_for_partner_scopes_correctly(tmp_path: Path) -> None:
         for h, p in (("h1", "P"), ("h2", "P"), ("h3", "Q")):
             labels_store.upsert_label(
                 conn, hash=h, character="C", partner=p,
-                ts=1, speaker="S", label="IC", source="llm", confidence=0.9,
+                ts=1, speaker="S", label="IC", source="llm",
             )
         deleted = labels_store.delete_labels_for_partner(conn, "C", "P")
         assert deleted == 2
@@ -209,7 +208,7 @@ def test_stats_counts_three_buckets(tmp_path: Path) -> None:
         labels_store.upsert_label(
             conn, hash=labels_store.msg_hash(m_db_ic),
             character="C", partner="P", ts=30, speaker="A",
-            label="IC", source="llm", confidence=0.9,
+            label="IC", source="llm",
         )
         counts = labels_store.stats(conn, "C", "P", [m_long, m_short, m_db_ic], _settings())
         assert counts == {"IC": 1, "OOC": 1, "Unlabeled": 1}
@@ -342,7 +341,7 @@ def test_override_creates_manual_label(api_client: TestClient) -> None:
     res = api_client.post("/labels/override", json=_override_body("IC")).json()
     assert res["label"] == "IC"
     assert res["source"] == "manual"
-    assert res["confidence"] == 1.0
+    assert "confidence" not in res
     assert res["prior_label"] is None
 
 

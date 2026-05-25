@@ -96,11 +96,8 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
             m["label"] = labels_store.resolve(m, row, lab_settings)
             if row is not None:
                 m["label_source"] = row["source"]
-                m["label_confidence"] = row["confidence"]
                 # Surface the model's own reason string in the badge
-                # tooltip so the user can audit why a label was chosen
-                # — useful when confidence saturates at 0.99+ and the
-                # number alone isn't informative.
+                # tooltip so the user can audit why a label was chosen.
                 if row["reason"]:
                     m["label_reason"] = row["reason"]
                 # Carry the prior snapshot so the UI can show "LLM had
@@ -108,8 +105,8 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
                 if row["prior_label"] is not None:
                     m["prior_label"] = row["prior_label"]
                     m["prior_source"] = row["prior_source"]
-            # Otherwise no source/confidence is attached — the UI can
-            # infer "rule or unlabeled" from absence of label_source.
+            # Otherwise no source is attached — the UI infers "rule
+            # or unlabeled" from absence of label_source.
     finally:
         settings_conn.close()
         labels_conn.close()
@@ -213,9 +210,13 @@ def labels_test_connection(body: TestConnectionRequest) -> dict:
     # the resolver wouldn't have rule-skipped it, so the model has
     # something coherent to classify. Older two-word probes ("hello
     # there") confused the classifier into returning empty content.
+    # IC-shaped paragraph long enough that the resolver wouldn't have
+    # rule-skipped it, so the model has something coherent to classify.
+    # Speaker uses a canonical fantasy name (Witcher) to avoid any
+    # overlap with real F-list characters in the user's corpus.
     canned_user = (
         ">>> ZIELNACHRICHT <<<\n"
-        "[01-15 22:13 | 312 chars] Lyra: She turned slowly, her gaze settling on him with a "
+        "[01-15 22:13 | 312 chars] Triss: She turned slowly, her gaze settling on him with a "
         "measured calm that belied the storm of thoughts behind her eyes. The candlelight caught "
         "the silver threads woven through her cloak as she spoke, voice low and deliberate. \"You "
         "knew this moment would come, didn't you? You've been waiting for it.\"\n"
@@ -276,7 +277,7 @@ def labels_test_connection(body: TestConnectionRequest) -> dict:
         "elapsed_ms": elapsed_ms,
         "raw": content[:400],
         "parsed": parsed,
-        "error": None if parsed is not None else "model output did not contain a valid {label, confidence} JSON object",
+        "error": None if parsed is not None else "model output did not contain a valid {label, reason} JSON object",
     }
 
 
@@ -689,18 +690,16 @@ def labels_override(body: LabelOverride) -> dict:
             speaker=body.speaker,
             label=body.label,
             source="manual",
-            confidence=1.0,
             reason="manual override",
         )
         row = conn.execute(
-            "SELECT label, source, confidence, prior_label, prior_source FROM labels WHERE hash = ?",
+            "SELECT label, source, prior_label, prior_source FROM labels WHERE hash = ?",
             (body.hash,),
         ).fetchone()
         return {
             "hash": body.hash,
             "label": row["label"],
             "source": row["source"],
-            "confidence": row["confidence"],
             "prior_label": row["prior_label"],
             "prior_source": row["prior_source"],
         }

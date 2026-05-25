@@ -127,13 +127,13 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?|\n?```$")
 
 
 def parse_label(content: str) -> dict | None:
-    """Extract {label, confidence, reason} from the LLM JSON reply.
+    """Extract {label, reason} from the LLM JSON reply.
 
-    The `confidence` field is no longer required of the model — in
-    practice it never returned anything below 0.95, so the number was
-    information-free. We default to 1.0 when missing and accept any
-    valid value if the model still emits one (for backwards-compat
-    with custom prompts that include it).
+    The bundled v4 prompt asks for `{"label": …, "reason": …}` only.
+    Custom prompts that still include a `confidence` field are
+    accepted (and silently ignored) for forward-compatibility — we
+    don't fail to parse just because the user's prompt is out of
+    date.
     """
     s = content.strip()
     if s.startswith("```"):
@@ -149,16 +149,8 @@ def parse_label(content: str) -> dict | None:
     label = str(data.get("label", "")).upper()
     if label not in ("IC", "OOC"):
         return None
-    raw_conf = data.get("confidence")
-    if raw_conf is None:
-        conf = 1.0
-    else:
-        try:
-            conf = max(0.0, min(1.0, float(raw_conf)))
-        except (TypeError, ValueError):
-            conf = 1.0
     reason = str(data.get("reason", ""))[:120]
-    return {"label": label, "confidence": conf, "reason": reason}
+    return {"label": label, "reason": reason}
 
 
 ProgressCb = Callable[[dict], None]
@@ -264,7 +256,6 @@ def classify_messages(
             "ts": m["ts"],
             "speaker": m["speaker"],
             "label": parsed["label"],
-            "confidence": parsed["confidence"],
             "reason": parsed["reason"],
         }, None
 
@@ -285,7 +276,6 @@ def classify_messages(
                     speaker=label["speaker"],
                     label=label["label"],
                     source="llm",
-                    confidence=label["confidence"],
                     reason=label["reason"],
                 )
                 classified += 1
@@ -345,7 +335,6 @@ def classify_messages(
                             speaker=label["speaker"],
                             label=label["label"],
                             source="llm",
-                            confidence=label["confidence"],
                             reason=label["reason"],
                         )
                         classified += 1

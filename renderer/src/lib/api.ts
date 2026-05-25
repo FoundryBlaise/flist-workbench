@@ -65,11 +65,9 @@ export type LogMessage = {
   // (no explicit DB row).
   label?: Label
   label_source?: LabelSource
-  label_confidence?: number
   // Free-text reason the model gave for the verdict (LLM source) or
   // "manual override" / similar (manual source). Surfaced in the
-  // badge tooltip — useful when confidence saturates near 1.0 and the
-  // number alone tells the user nothing about WHY.
+  // badge tooltip so users can audit why a label was chosen.
   label_reason?: string
   // Snapshot of what the label was before the most recent change.
   // Present only on manual overrides; lets the UI surface "LLM had
@@ -364,7 +362,6 @@ export const api = {
       hash: string
       label: Label | null
       source?: LabelSource
-      confidence?: number
       prior_label?: Label | null
       prior_source?: LabelSource | null
       deleted?: boolean
@@ -388,7 +385,7 @@ export const api = {
       elapsed_ms: number
       error?: string | null
       raw?: string
-      parsed?: { label: 'IC' | 'OOC'; confidence: number; reason: string } | null
+      parsed?: { label: 'IC' | 'OOC'; reason: string } | null
     }>('/labels/test-connection', {
       method: 'POST',
       body: JSON.stringify(body)

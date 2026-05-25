@@ -88,13 +88,17 @@ def _mk_urlopen(responses: Iterable[str | Exception]):
 
 
 def test_parse_label_strips_fences_and_extracts_json() -> None:
-    out = labels_llm.parse_label('```json\n{"label":"IC","confidence":0.9,"reason":"narrative"}\n```')
-    assert out == {"label": "IC", "confidence": 0.9, "reason": "narrative"}
+    out = labels_llm.parse_label('```json\n{"label":"IC","reason":"narrative"}\n```')
+    assert out == {"label": "IC", "reason": "narrative"}
 
 
-def test_parse_label_clamps_confidence() -> None:
-    assert labels_llm.parse_label('{"label":"OOC","confidence":1.7}')["confidence"] == 1.0
-    assert labels_llm.parse_label('{"label":"OOC","confidence":-0.2}')["confidence"] == 0.0
+def test_parse_label_silently_ignores_legacy_confidence_field() -> None:
+    # Custom user prompts may still emit a `confidence` field. We accept
+    # it (don't fail to parse) but drop it — the field stopped carrying
+    # signal once the v4 prompt removed it.
+    out = labels_llm.parse_label('{"label":"OOC","confidence":1.7,"reason":"x"}')
+    assert out == {"label": "OOC", "reason": "x"}
+    assert "confidence" not in out
 
 
 def test_parse_label_rejects_garbage() -> None:
@@ -181,7 +185,8 @@ def test_classify_calls_llm_for_long_unlabeled(tmp_path: Path, monkeypatch: pyte
     only = next(iter(rows.values()))
     assert only["label"] == "IC"
     assert only["source"] == "llm"
-    assert only["confidence"] == 0.85
+    # confidence column is always written 1.0 now; not user-facing.
+    assert only["confidence"] == 1.0
     assert only["reason"] == "narrative"
 
 
