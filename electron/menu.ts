@@ -188,12 +188,6 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
       label: '&Tools',
       submenu: [
         {
-          id: 'ai-setup-tools',
-          label: 'AI Setup…',
-          click: () => send(getWindow(), 'ai-setup')
-        },
-        { type: 'separator' },
-        {
           id: 'chat-toggle',
           label: 'Ask the logs…',
           accelerator: 'CmdOrCtrl+J',

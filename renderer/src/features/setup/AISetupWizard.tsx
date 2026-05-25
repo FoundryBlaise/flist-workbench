@@ -89,6 +89,10 @@ export function AISetupWizard({ onClose }: { onClose: () => void }) {
   const [applyNomicPrefixes, setApplyNomicPrefixes] = useState(true)
   const [chatModelOverride, setChatModelOverride] = useState(false)
   const [embedModelOverride, setEmbedModelOverride] = useState(false)
+  // Lifted from OllamaPage so the footer's Continue button can gate on
+  // detection success. We let the user click Continue themselves rather
+  // than auto-advancing — testers found the timed jump disorienting.
+  const [ollamaOk, setOllamaOk] = useState(false)
 
   const chatModel = useMemo(() => {
     if (chatModelOverride && customChatModel.trim()) return customChatModel.trim()
@@ -164,9 +168,7 @@ export function AISetupWizard({ onClose }: { onClose: () => void }) {
         </header>
         <Stepper current={page} />
         <div className="wizard-body">
-          {page === 'ollama' && (
-            <OllamaPage onAdvance={goNext} />
-          )}
+          {page === 'ollama' && <OllamaPage onStatusChange={setOllamaOk} />}
           {page === 'gpu' && (
             <GpuPage
               choice={choice}
@@ -257,6 +259,7 @@ export function AISetupWizard({ onClose }: { onClose: () => void }) {
               embedModel={embedModel}
               envApplied={envApplied}
               envSkipped={envSkipped}
+              ollamaOk={ollamaOk}
               onNext={goNext}
             />
           )}
@@ -309,24 +312,27 @@ function Stepper({ current }: { current: Page }) {
 
 // ---- Page 1: Ollama detection ------------------------------------------
 
-function OllamaPage({ onAdvance }: { onAdvance: () => void }) {
+function OllamaPage({
+  onStatusChange
+}: {
+  onStatusChange: (ok: boolean) => void
+}) {
   const [status, setStatus] = useState<'detecting' | 'ok' | 'fail'>('detecting')
   const [info, setInfo] = useState<OllamaStatus | null>(null)
-  const autoAdvanceTimer = useRef<number | null>(null)
-  // One-shot ref so the auto-advance can't re-arm if the parent re-
-  // renders (which would freshly capture onAdvance and re-run the
-  // effect). Also blocks a stale fire if the user clicks Continue
-  // before the timer elapses.
-  const advancedRef = useRef(false)
-  const onAdvanceRef = useRef(onAdvance)
-  onAdvanceRef.current = onAdvance
+  // Mirror status into the parent so the footer's Continue button can
+  // gate on it. Wrapped in a ref so the probe closure stays stable.
+  const onStatusChangeRef = useRef(onStatusChange)
+  onStatusChangeRef.current = onStatusChange
 
   const probe = async () => {
     setStatus('detecting')
+    onStatusChangeRef.current(false)
     try {
       const res = await api.systemOllamaStatus()
       setInfo(res)
-      setStatus(res.running ? 'ok' : 'fail')
+      const ok = res.running
+      setStatus(ok ? 'ok' : 'fail')
+      onStatusChangeRef.current(ok)
     } catch (err) {
       setInfo({
         running: false,
@@ -336,36 +342,14 @@ function OllamaPage({ onAdvance }: { onAdvance: () => void }) {
         error: err instanceof Error ? err.message : String(err)
       })
       setStatus('fail')
+      onStatusChangeRef.current(false)
     }
   }
 
   useEffect(() => {
     void probe()
-    return () => {
-      if (autoAdvanceTimer.current !== null) {
-        window.clearTimeout(autoAdvanceTimer.current)
-      }
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Soft auto-advance on success so the user doesn't have to click
-  // "Next" through a no-action page when everything is fine. Reads
-  // onAdvance from a ref to avoid re-arming when the parent re-renders.
-  useEffect(() => {
-    if (status !== 'ok' || advancedRef.current) return
-    autoAdvanceTimer.current = window.setTimeout(() => {
-      if (advancedRef.current) return
-      advancedRef.current = true
-      onAdvanceRef.current()
-    }, 1500)
-    return () => {
-      if (autoAdvanceTimer.current !== null) {
-        window.clearTimeout(autoAdvanceTimer.current)
-        autoAdvanceTimer.current = null
-      }
-    }
-  }, [status])
 
   return (
     <>
@@ -400,7 +384,7 @@ function OllamaPage({ onAdvance }: { onAdvance: () => void }) {
               className="settings-meta"
               data-testid="ai-setup-ollama-version"
             >
-              Advancing in a moment…
+              Press Continue when ready.
             </span>
           </>
         )}
@@ -1318,6 +1302,7 @@ function WizardNextButton({
   embedModel,
   envApplied,
   envSkipped,
+  ollamaOk,
   onNext
 }: {
   page: Page
@@ -1326,18 +1311,18 @@ function WizardNextButton({
   embedModel: string
   envApplied: boolean
   envSkipped: boolean
+  ollamaOk: boolean
   onNext: () => void
 }) {
   // Next is enabled by default; per-page rules below.
   let enabled = true
   let label = 'Next →'
   if (page === 'ollama') {
-    // Ollama page handles its own auto-advance; Next is only shown as
-    // a fallback affordance after success. Disable until the next-
-    // button reflects something the user can act on. We leave it
-    // enabled (cheap "press it now" affordance) since the page itself
-    // disables progression while detecting via its own buttons.
-    enabled = true
+    // Stay disabled until the detection probe says Ollama is reachable.
+    // The user has to press Continue themselves — testers found the
+    // previous 1.5 s auto-advance disorienting (the screen jumped before
+    // they'd registered what was detected).
+    enabled = ollamaOk
     label = 'Continue →'
   }
   if (page === 'gpu') {
