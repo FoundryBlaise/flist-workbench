@@ -68,12 +68,17 @@ F-CHAT IC-KONVENTIONEN (Starke IC-Signale):
 
 SELBSTNARRATION: Wenn der SPRECHER (vor dem Doppelpunkt) seinen EIGENEN
 Charakternamen als Subjekt einer Handlung nutzt (Indikativ, Präsens/Präteritum),
-ist das IC.
+ist das IC — auch bei alltäglichen Aktivitäten wie Schlafen, Essen, Lesen,
+Gehen, Putzen. Die Banalität der Handlung sagt NICHTS über IC vs OOC; die
+Perspektive (dritte Person über den Charakter) ist der entscheidende Marker.
 
 DIALOGE: Direkte Rede in Anführungszeichen mit Dialog-Tag (sagte, murmelte, etc.)
 ist IC.
 
-MARKER: Der Marker "| action" im Header bedeutet fast immer IC.
+MARKER: Der Marker "| action" im Header bedeutet IC, mit zwei Ausnahmen:
+(a) Inhalt ist explizit in (…) oder ((…)) Spieler-Klammern, oder
+(b) der Text beginnt mit "OOC:" / "//".
+Sonst: "| action" + dritte-Person-Selbstnarration = IC, auch ohne Fantasy-Vokabular.
 
 FANTASY/SETTING-VOKABULAR: Setting-spezifische Begriffe sind starke IC-Signale —
 Scheune, Wirt, Wirtshaus, Schwert, Magie, Elf/Elfin, Adelsdame, Stadtwache,
@@ -101,6 +106,10 @@ KEINE Spieler-Anekdote (sondern IC), wenn:
   drohend oder kommentierend
 - "Du / Ihr / dieser / jene" auf einen Charakter zeigt, nicht auf den Spieler
 - Eine sarkastische oder ironische Aussage zur Spielsituation gemacht wird
+- Die Erzählung in DRITTER Person über den Sprecher-Charakter geschieht
+  (Indikativ), unabhängig davon wie alltäglich die Handlung ist.
+  Beispiel-Heuristik: "Galadriel las ein Buch und ging in die Küche" → IC.
+  "Ich hab gestern ein Buch gelesen und bin in die Küche gegangen" → OOC.
 
 WÜRFEL- / META-NACHRICHTEN (OOC):
 
@@ -128,6 +137,14 @@ Sie schnauft kurz aus, als sie zur Seite geschoben wird. \\"Aber ihr seid sicher
 eine dieser Straßenelfen von denen man hört. Also nehmt eure Sachen und zieht von
 dannen.\\""
 ANTWORT: {"label":"IC","reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
+
+NACHRICHT: "[04-15 22:30 | 1240 chars | action] Galadriel: Galadriel hat sich aufs
+Bett gelegt, einen Kopfhörer im Ohr, und blättert in ihrem Buch, während ihre
+Gedanken auf Reisen gehen. Kurzzeitig versucht sie zu schlafen, gibt es dann aber
+auf und widmet sich wieder dem Buch. Sie merkt dass ihr Magen knurrt und verlässt
+ihr Zimmer, um die Küche anzusteuern. \\"Sag, gibt es irgendwelche Schränke an die
+ich nicht ran darf?\\", fragt sie."
+ANTWORT: {"label":"IC","reason":"Dritte-Person-Selbstnarration mit | action-Marker; mundane Aktivitäten zählen trotzdem als IC"}
 
 NACHRICHT: "Zum Beispiel, ja. Denke so spontan daran dass sie in einem
 Untergrundtreff rumtreibt um Kontakte zu knüpfen."
