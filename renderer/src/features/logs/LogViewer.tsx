@@ -517,6 +517,15 @@ export function LogViewer() {
               `${displayPartner(partner)} with ${activeChar}`
             )
           }}
+          onChatWithThis={() => {
+            setConvMenu(null)
+            // Panel auto-syncs scope to the active partner when in
+            // 'partner' mode (the default when a partner is selected),
+            // so just opening it is enough. Focus is a nicety so the
+            // user can type immediately.
+            useStore.getState().toggleChatPanel(true)
+            useStore.getState().requestChatFocus()
+          }}
           onResetAll={async () => {
             setConvMenu(null)
             const partnerName = displayPartner(partner)
@@ -843,6 +852,7 @@ function ConversationContextMenu({
   labeledCount,
   onClassify,
   onIngest,
+  onChatWithThis,
   onResetAll
 }: {
   x: number
@@ -853,12 +863,14 @@ function ConversationContextMenu({
   labeledCount: number
   onClassify: () => void
   onIngest: () => void
+  onChatWithThis: () => void
   onResetAll: () => void
 }) {
   const W = 280
-  // 3 menu items now (Classify, Ingest, Reset); bumped from 160 so the
-  // viewport-edge clamp still keeps the whole menu on-screen.
-  const H = 220
+  // 4 menu items (Classify, Ingest, Chat with this, Reset); H sized so
+  // the viewport-edge clamp keeps the whole menu on-screen when right-
+  // clicking near the bottom of a tall pane.
+  const H = 280
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -948,9 +960,23 @@ function ConversationContextMenu({
         }}
         type="button"
         role="menuitem"
+        className="log-label-menu-item"
+        onClick={onChatWithThis}
+        onKeyDown={onItemKeyDown(2)}
+        title="Open the chat panel scoped to this conversation."
+        data-testid="log-conv-menu-chat"
+      >
+        Chat with this log
+      </button>
+      <button
+        ref={(el) => {
+          itemRefs.current[3] = el
+        }}
+        type="button"
+        role="menuitem"
         className="log-label-menu-item log-label-menu-reset"
         onClick={onResetAll}
-        onKeyDown={onItemKeyDown(2)}
+        onKeyDown={onItemKeyDown(3)}
         disabled={resetDisabled}
         title={
           resetDisabled
