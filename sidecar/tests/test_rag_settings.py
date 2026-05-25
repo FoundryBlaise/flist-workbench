@@ -150,3 +150,182 @@ def test_rag_test_embedding_handles_unexpected_exception(
     assert res["ok"] is False
     assert "RuntimeError" in res["error"]
     assert "boom" in res["error"]
+
+
+# ---- /rag/test-chat -----------------------------------------------------
+
+
+def test_rag_test_chat_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import labels_llm
+
+    captured: dict[str, Any] = {}
+
+    def fake_call(endpoint, model, api_key, system_prompt, user_prompt, **kw):
+        captured["endpoint"] = endpoint
+        captured["model"] = model
+        captured["user_prompt"] = user_prompt
+        return "ready"
+
+    monkeypatch.setattr(labels_llm, "call_llm", fake_call)
+    res = client.post(
+        "/rag/test-chat",
+        json={
+            "chat_endpoint": "http://chat.test/v1",
+            "chat_model": "gemma",
+            "chat_api_key": "",
+        },
+    ).json()
+    assert res["ok"] is True
+    assert res["raw"] == "ready"
+    assert res["error"] is None
+    assert "elapsed_ms" in res
+    assert captured["endpoint"] == "http://chat.test/v1"
+    assert captured["model"] == "gemma"
+    # The canned probe should ask for a short instruction-following reply.
+    assert "ready" in captured["user_prompt"].lower()
+
+
+def test_rag_test_chat_uses_saved_when_body_omits(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import labels_llm
+
+    client.put(
+        "/settings",
+        json={"rag": {"chat_endpoint": "http://saved-chat.test/v1", "chat_model": "saved-chat"}},
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_call(endpoint, model, *_a, **_kw):
+        captured["endpoint"] = endpoint
+        captured["model"] = model
+        return "ok"
+
+    monkeypatch.setattr(labels_llm, "call_llm", fake_call)
+    res = client.post("/rag/test-chat", json={}).json()
+    assert res["ok"] is True
+    assert captured["endpoint"] == "http://saved-chat.test/v1"
+    assert captured["model"] == "saved-chat"
+
+
+def test_rag_test_chat_handles_http_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import labels_llm
+    from urllib.error import HTTPError
+
+    def boom(*_a, **_kw):
+        raise HTTPError("http://x", 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(labels_llm, "call_llm", boom)
+    res = client.post("/rag/test-chat", json={}).json()
+    assert res["ok"] is False
+    assert "HTTP 404" in res["error"]
+
+
+def test_rag_test_chat_handles_empty_content(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import labels_llm
+
+    monkeypatch.setattr(labels_llm, "call_llm", lambda *a, **k: "   \n  ")
+    res = client.post("/rag/test-chat", json={}).json()
+    assert res["ok"] is False
+    assert "empty content" in res["error"]
+
+
+# ---- /settings/discover-models -----------------------------------------
+
+
+def test_discover_models_openai_shape(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LM Studio / OpenAI return {data: [{id: "..."}, ...]}."""
+    import io
+    import json as _json
+    import server as server_mod
+
+    def fake_urlopen(req, timeout):
+        body = _json.dumps(
+            {"data": [{"id": "qwen2.5-7b"}, {"id": "gemma-3-12b"}, {"id": "qwen2.5-7b"}]}
+        ).encode()
+        resp = io.BytesIO(body)
+        resp.status = 200
+        # context manager protocol so `with urlopen(...) as resp:` works.
+        resp.__enter__ = lambda self: self  # type: ignore[attr-defined]
+        resp.__exit__ = lambda self, *a: None  # type: ignore[attr-defined]
+        return resp
+
+    monkeypatch.setattr(server_mod, "urlopen", fake_urlopen, raising=False)
+    # The endpoint imports urlopen lazily; patch at the urllib.request
+    # module so the lazy import picks up the fake.
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    res = client.post(
+        "/settings/discover-models",
+        json={"endpoint": "http://lm.test/v1"},
+    ).json()
+    assert res["source"] == "openai"
+    assert res["models"] == ["gemma-3-12b", "qwen2.5-7b"]  # deduped + sorted
+    assert res["error"] is None
+
+
+def test_discover_models_ollama_shape(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama returns {models: [{name: "..."}, ...]} at /api/tags."""
+    import io
+    import json as _json
+    import urllib.request
+    from urllib.error import HTTPError
+
+    def fake_urlopen(req, timeout):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if url.endswith("/models"):
+            # Simulate LM Studio not being there — Ollama doesn't serve /models.
+            raise HTTPError(url, 404, "Not Found", {}, None)
+        body = _json.dumps(
+            {"models": [{"name": "llama3:latest"}, {"name": "nomic-embed-text"}]}
+        ).encode()
+        resp = io.BytesIO(body)
+        resp.status = 200
+        resp.__enter__ = lambda self: self  # type: ignore[attr-defined]
+        resp.__exit__ = lambda self, *a: None  # type: ignore[attr-defined]
+        return resp
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    res = client.post(
+        "/settings/discover-models",
+        json={"endpoint": "http://ollama.test"},
+    ).json()
+    assert res["source"] == "ollama"
+    assert "llama3:latest" in res["models"]
+    assert "nomic-embed-text" in res["models"]
+
+
+def test_discover_models_handles_unreachable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import urllib.request
+    from urllib.error import URLError
+
+    def fake_urlopen(req, timeout):
+        raise URLError("Connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    res = client.post(
+        "/settings/discover-models",
+        json={"endpoint": "http://nope.test"},
+    ).json()
+    assert res["models"] == []
+    assert res["source"] == "unknown"
+    assert "connection failed" in res["error"]
+
+
+def test_discover_models_rejects_empty_endpoint(client: TestClient) -> None:
+    res = client.post("/settings/discover-models", json={"endpoint": "   "}).json()
+    assert res["models"] == []
+    assert "empty" in res["error"]

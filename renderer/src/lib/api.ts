@@ -450,6 +450,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
+  ragTestChat: (body: {
+    chat_endpoint?: string
+    chat_model?: string
+    chat_api_key?: string
+    chat_system_prompt?: string
+  }) =>
+    request<{
+      ok: boolean
+      elapsed_ms: number
+      raw?: string
+      error: string | null
+    }>('/rag/test-chat', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  // Probe an OpenAI-compatible or Ollama endpoint for the list of
+  // loaded/installed models. Returns sorted+deduped IDs. Failure is
+  // signalled by an empty `models` + populated `error`.
+  discoverModels: (endpoint: string) =>
+    request<{
+      models: string[]
+      source: 'openai' | 'ollama' | 'unknown'
+      error: string | null
+      elapsed_ms?: number
+    }>('/settings/discover-models', {
+      method: 'POST',
+      body: JSON.stringify({ endpoint })
+    }),
   ragIngestStart: (
     scope: IngestJobScope,
     opts: { include_ooc?: boolean; force_rewipe?: boolean } = {}

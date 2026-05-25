@@ -403,6 +403,116 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
     }
 
 
+class RagTestChatRequest(BaseModel):
+    """Override-or-saved fields for one canned chat probe.
+
+    Same overlay-on-saved pattern as RagTestEmbeddingRequest and
+    TestConnectionRequest: the renderer typically sends the current
+    edit-state from the form so the user can validate before saving.
+    """
+    chat_endpoint: str | None = None
+    chat_model: str | None = None
+    chat_api_key: str | None = None
+    chat_system_prompt: str | None = None
+
+
+@app.post("/rag/test-chat")
+def rag_test_chat(body: RagTestChatRequest) -> dict:
+    """One non-streaming chat completion to validate endpoint + model.
+
+    Mirrors /labels/test-connection: 200-always shape with ok/elapsed_ms
+    /raw/error so the UI can render either result with one path. We
+    deliberately bypass rag_chat.stream_chat (streaming + tools, wrong
+    cost surface for a probe) and reuse labels_llm.call_llm with a tiny
+    "say hi" exchange.
+    """
+    import time as _time
+    from urllib.error import HTTPError, URLError
+
+    import labels_llm
+
+    saved = rag_settings.load_settings()
+    endpoint = body.chat_endpoint or saved.chat_endpoint
+    model = body.chat_model or saved.chat_model
+    api_key = body.chat_api_key if body.chat_api_key is not None else saved.chat_api_key
+    system_prompt = (
+        body.chat_system_prompt
+        if body.chat_system_prompt is not None
+        else saved.chat_system_prompt
+    )
+
+    # Canned probe: a single instruction-following exchange. We
+    # explicitly ask for a short reply so cold-start latency dominates
+    # over generation time — the test should reflect "is the endpoint
+    # alive" not "is the model fast at writing prose".
+    canned_user = (
+        "Reply with the single word 'ready' (lowercase, no quotes, "
+        "no punctuation) so the test harness can confirm the model is "
+        "answering instructions."
+    )
+    test_timeout = 90.0
+    started = _time.monotonic()
+    try:
+        content = labels_llm.call_llm(
+            endpoint,
+            model,
+            api_key,
+            system_prompt,
+            canned_user,
+            max_tokens=64,
+            timeout=test_timeout,
+        )
+    except HTTPError as exc:
+        return {
+            "ok": False,
+            "error": f"HTTP {exc.code}: {exc.reason}",
+            "raw": "",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except URLError as exc:
+        return {
+            "ok": False,
+            "error": f"connection failed: {exc.reason}",
+            "raw": "",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except TimeoutError as exc:
+        return {
+            "ok": False,
+            "error": (
+                f"timed out after {int(test_timeout)} s — the model may be "
+                f"cold-loading. Try again, or pick a smaller model. ({exc})"
+            ),
+            "raw": "",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001 — surface to UI
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "raw": "",
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    elapsed_ms = int((_time.monotonic() - started) * 1000)
+    if not content.strip():
+        return {
+            "ok": False,
+            "elapsed_ms": elapsed_ms,
+            "raw": "",
+            "error": (
+                "model returned empty content. The system prompt may be "
+                "incompatible with this model, or the model needs more "
+                "time to warm up — retry once."
+            ),
+        }
+    return {
+        "ok": True,
+        "elapsed_ms": elapsed_ms,
+        "raw": content[:400],
+        "error": None,
+    }
+
+
 class RagIngestRequest(BaseModel):
     # Same scope shape as ClassifyJobRequest. {} = every char × every
     # partner; {character: X} = all partners for X; {character: X,
@@ -993,6 +1103,114 @@ def _resolve_default_chat_prompt() -> str:
     from rag_query import DEFAULT_SYSTEM_PROMPT
 
     return DEFAULT_SYSTEM_PROMPT
+
+
+class DiscoverModelsRequest(BaseModel):
+    """Endpoint URL for one inference server to enumerate.
+
+    The renderer sends the current text-field value (not the saved
+    settings) so the user can discover before they hit Save. We don't
+    require any of the other settings — just the URL the user typed.
+    """
+    endpoint: str
+
+
+@app.post("/settings/discover-models")
+def settings_discover_models(body: DiscoverModelsRequest) -> dict:
+    """Enumerate models on an OpenAI-compatible or Ollama endpoint.
+
+    Tries `<endpoint>/models` first (OpenAI shape — LM Studio, OpenAI
+    itself, llamafile). Falls back to `<endpoint>/api/tags` (Ollama).
+    Returns `{models: list[str], source: 'openai'|'ollama'|'unknown',
+    error: str | None}`. 200-always — failure surfaces as ok=false-ish
+    via empty `models` + populated `error`.
+
+    Proxied through the sidecar (instead of the renderer fetching
+    directly) because: (a) some configs of LM Studio omit CORS headers,
+    so a browser-side fetch silently fails; (b) the sidecar already
+    has the URL parsing + timeout patterns we want.
+    """
+    import time as _time
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    endpoint = body.endpoint.strip()
+    if not endpoint:
+        return {"models": [], "source": "unknown", "error": "endpoint is empty"}
+
+    # Short timeout — discovery runs on a user button click and the
+    # right answer for "endpoint is wrong" is fast feedback, not a
+    # 60 s wait. Cold-loaded models don't need to be ready to be
+    # listed; the /models endpoint is metadata-only.
+    timeout = 5.0
+    base = endpoint.rstrip("/")
+
+    def _try(url: str) -> tuple[int, str]:
+        req = Request(url, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+
+    started = _time.monotonic()
+    # Order: /models then /api/tags. LM Studio and OpenAI answer
+    # /models; Ollama answers /api/tags. Trying both in sequence is
+    # cheap (5 s each worst-case) and avoids asking the user "is this
+    # Ollama or OpenAI?".
+    last_error: str | None = None
+    for candidate, source in (
+        (f"{base}/models", "openai"),
+        (f"{base}/api/tags", "ollama"),
+    ):
+        try:
+            _status, body_text = _try(candidate)
+        except HTTPError as exc:
+            # 404 from LM Studio means "no /models route" — keep trying
+            # the Ollama URL. 401/403 means auth issue — surface and stop.
+            if exc.code in (401, 403):
+                last_error = f"HTTP {exc.code} from {candidate}: {exc.reason}"
+                break
+            last_error = f"HTTP {exc.code} from {candidate}"
+            continue
+        except URLError as exc:
+            last_error = f"connection failed: {exc.reason}"
+            continue
+        except TimeoutError:
+            last_error = f"timed out after {int(timeout)} s"
+            continue
+        except Exception as exc:  # noqa: BLE001 — surface to UI
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+        try:
+            payload = json.loads(body_text)
+        except json.JSONDecodeError:
+            last_error = f"non-JSON response from {candidate}"
+            continue
+        models: list[str] = []
+        if source == "openai":
+            # OpenAI shape: {data: [{id: "...", ...}, ...]}
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+                        models.append(entry["id"])
+        else:
+            # Ollama shape: {models: [{name: "...", ...}, ...]}
+            data = payload.get("models") if isinstance(payload, dict) else None
+            if isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                        models.append(entry["name"])
+        return {
+            "models": sorted(set(models)),
+            "source": source,
+            "error": None,
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    return {
+        "models": [],
+        "source": "unknown",
+        "error": last_error or "no models endpoint responded",
+        "elapsed_ms": int((_time.monotonic() - started) * 1000),
+    }
 
 
 @app.get("/settings")
