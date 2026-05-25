@@ -26,6 +26,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
+import aliases as aliases_store
 import chunker
 import labels as labels_store
 import logs as logs_store
@@ -150,11 +151,23 @@ def registry() -> JobRegistry:
 def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
     """Same shape as labels_jobs._resolve_targets — kept in lockstep so
     the renderer can think about RAG ingest scopes the same way it
-    thinks about classify scopes."""
+    thinks about classify scopes.
+
+    Note on aliases: list_partners already folds alias groups so we
+    naturally return one (char, primary_name) per group. For an
+    explicit single-conversation scope we normalize the supplied
+    partner to its primary so the chunker keys chunks canonically;
+    read_messages on the primary will pick up every member's log file.
+    """
     character = scope.get("character")
     partner = scope.get("partner")
     if character and partner:
-        return [(character, partner)]
+        conn = aliases_store.connect()
+        try:
+            primary = aliases_store.primary_for(conn, character, partner)
+        finally:
+            conn.close()
+        return [(character, primary)]
     if character:
         partners = logs_store.list_partners(character)
         return [(character, p.name) for p in partners]
@@ -339,7 +352,15 @@ def _ingest_one_partner(
         job.progress.last_error = f"{character} / {partner}: {exc}"
         return
 
-    by_hash = labels_store.labels_for_partner(labels_conn, character, partner)
+    # Look up the full alias group so labels written under any of the
+    # member names apply to this conversation. (_resolve_targets has
+    # already normalised `partner` to the primary name for single-
+    # conversation scopes, but for character / all-characters scopes
+    # we still get the primary names from list_partners.)
+    alias_group = aliases_store.all_names_for(labels_conn, character, partner)
+    by_hash = labels_store.labels_for_partner(
+        labels_conn, character, partner, partner_aliases=alias_group
+    )
     chunks = chunker.chunk_messages(
         messages,
         character=character,

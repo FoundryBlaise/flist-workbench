@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
+import aliases as aliases_store
 from parser import Message, parse_log
 
 
@@ -57,6 +58,11 @@ class LogDirError(Exception):
 class PartnerEntry:
     name: str
     bytes: int
+    # Alternate names this partner has been linked to via the alias
+    # system (F-Chat creates a new log file when a partner renames
+    # mid-RP; users can right-click to merge them). Tuple stays empty
+    # for unaliased partners so existing callers see no shape change.
+    aliases: tuple[str, ...] = field(default_factory=tuple)
 
 
 def data_dir() -> Path:
@@ -128,7 +134,65 @@ def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry
             continue
         seen[entry.name] = entry.stat().st_size
 
-    return [PartnerEntry(name=name, bytes=size) for name, size in sorted(seen.items())]
+    # Fold alias groups together. Each on-disk file's bytes flow to its
+    # primary's entry; the primary surfaces every member of the group
+    # in `aliases` (including names without on-disk files yet, so the
+    # link is visible even before the partner sends anything under the
+    # new name).
+    try:
+        conn = aliases_store.connect()
+    except Exception:
+        # Settings/labels DB unreachable on first launch / readonly FS —
+        # fall back to the flat list. Linking just becomes a no-op.
+        conn = None
+
+    try:
+        groups: dict[str, dict] = {}  # primary -> {bytes, aliases set, present set}
+        if conn is None:
+            primary_lookup = {n: n for n in seen}
+            group_members: dict[str, set[str]] = {n: {n} for n in seen}
+        else:
+            primary_lookup = {
+                n: aliases_store.primary_for(conn, character, n) for n in seen
+            }
+            # Pre-fetch the full group membership in one query for every
+            # primary that shows up in primary_lookup. Avoids N round trips.
+            unique_primaries = set(primary_lookup.values())
+            group_members = {
+                p: set(aliases_store.all_names_for(conn, character, p))
+                for p in unique_primaries
+            }
+
+        for disk_name, size in seen.items():
+            primary = primary_lookup[disk_name]
+            entry = groups.setdefault(
+                primary,
+                {"bytes": 0, "members": set(group_members.get(primary, {primary}))},
+            )
+            entry["bytes"] += size
+            entry["members"].add(disk_name)
+
+        # If a primary is listed in the alias DB but has no on-disk file
+        # for ANY of its members, it's a stale link — drop it from the
+        # output so the sidebar doesn't show ghost rows. (We never
+        # render group_members on its own; only when at least one of
+        # them showed up in `seen`.)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    out: list[PartnerEntry] = []
+    for primary, info in groups.items():
+        # `aliases` field excludes the primary itself — the entry's
+        # `name` already carries that. Sort for stable rendering.
+        alts = sorted(n for n in info["members"] if n != primary)
+        out.append(
+            PartnerEntry(
+                name=primary, bytes=info["bytes"], aliases=tuple(alts)
+            )
+        )
+    out.sort(key=lambda e: e.name)
+    return out
 
 
 def log_path(character: str, partner: str, root: Path | None = None) -> Path:
@@ -147,11 +211,34 @@ def read_messages(
     limit: int | None = None,
     offset: int = 0,
 ) -> Iterator[Message]:
-    """Stream parsed messages from a single partner log."""
-    path = log_path(character, partner, root)
+    """Stream parsed messages for a partner, merging any alias files.
+
+    When `partner` is part of an alias group, every member's on-disk
+    log is parsed and the combined message stream is yielded in ts
+    order. For unaliased partners this is exactly the original
+    single-file behaviour. limit/offset apply to the merged stream.
+    """
+    paths = _alias_paths(character, partner, root)
+    if not paths:
+        raise LogDirError(f"log not found: {character}/{partner}")
+    if len(paths) == 1:
+        # Fast path — no merge sort, no list buffering, identical to
+        # the pre-aliases behaviour.
+        stream: Iterator[Message] = parse_log(paths[0])
+    else:
+        # Each file is already ts-ordered on disk, but the global merge
+        # needs all messages buffered to interleave them. F-Chat logs
+        # are typically O(10k) messages per partner so this is cheap
+        # enough; if it ever isn't we can switch to a heapq merge.
+        merged: list[Message] = []
+        for p in paths:
+            merged.extend(parse_log(p))
+        merged.sort(key=lambda m: m["ts"])
+        stream = iter(merged)
+
     skipped = 0
     yielded = 0
-    for msg in parse_log(path):
+    for msg in stream:
         if skipped < offset:
             skipped += 1
             continue
@@ -159,6 +246,33 @@ def read_messages(
         yielded += 1
         if limit is not None and yielded >= limit:
             return
+
+
+def _alias_paths(character: str, partner: str, root: Path | None) -> list[Path]:
+    """Return every existing on-disk log path for `partner` and any of
+    its aliases. Used by read_messages + alias-aware label queries."""
+    base = root or data_dir()
+    logs_dir = base / character / "logs"
+
+    try:
+        conn = aliases_store.connect()
+    except Exception:
+        conn = None
+    try:
+        if conn is None:
+            names: list[str] = [partner]
+        else:
+            names = aliases_store.all_names_for(conn, character, partner)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    paths: list[Path] = []
+    for n in names:
+        p = logs_dir / n
+        if p.exists() and p.is_file():
+            paths.append(p)
+    return paths
 
 
 def search_messages(

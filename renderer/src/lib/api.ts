@@ -12,7 +12,16 @@ export type Profile = {
   inlines: Record<string, InlineImage>
 }
 
-export type PartnerEntry = { name: string; bytes: number }
+export type PartnerEntry = {
+  name: string
+  bytes: number
+  // Alternate names linked to this partner via the alias system.
+  // Empty array for unaliased entries. The entry's `name` is the
+  // primary; `aliases` are the other members of the group.
+  aliases: string[]
+}
+
+export type AliasGroups = Record<string, string[]>
 
 export type Document = {
   id: number
@@ -309,6 +318,25 @@ export const api = {
         truncated: boolean
       }[]
     }>(`/logs/search_all?char=${encodeURIComponent(char)}&q=${encodeURIComponent(q)}`),
+  aliasesList: (char: string) =>
+    get<{ character: string; groups: AliasGroups }>(
+      `/aliases?char=${encodeURIComponent(char)}`
+    ),
+  aliasesAdd: (body: { character: string; name: string; primary_name: string }) =>
+    request<{ character: string; primary_name: string; group: string[] }>(
+      '/aliases',
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  aliasesRemove: (char: string, name: string) =>
+    request<{ character: string; name: string; removed: boolean }>(
+      `/aliases?char=${encodeURIComponent(char)}&name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' }
+    ),
+  aliasesUnlinkGroup: (char: string, primary: string) =>
+    request<{ character: string; primary: string; deleted: number }>(
+      `/aliases/group?char=${encodeURIComponent(char)}&primary=${encodeURIComponent(primary)}`,
+      { method: 'DELETE' }
+    ),
   findContacts: (name: string) =>
     get<{
       name: string
