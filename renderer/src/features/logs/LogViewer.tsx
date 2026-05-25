@@ -619,15 +619,16 @@ export function LogViewer() {
           onClick={() => setFilter((f) => ({ ...f, unlabeled: !f.unlabeled }))}
           title={labelTooltip}
         />
-        {stats.failed > 0 && (
-          <FilterButton
-            label="Failed"
-            count={stats.failed}
-            on={filter.failed}
-            onClick={() => setFilter((f) => ({ ...f, failed: !f.failed }))}
-            title={failedTooltip}
-          />
-        )}
+        {/* Always render the Failed chip so users know where to look
+            before they have any. Greyed out at 0; loud when populated.
+            Discoverability beats screen-space savings here. */}
+        <FilterButton
+          label="Failed"
+          count={stats.failed}
+          on={filter.failed}
+          onClick={() => setFilter((f) => ({ ...f, failed: !f.failed }))}
+          title={failedTooltip}
+        />
         <FilterButton
           label="System"
           count={stats.system}
@@ -781,10 +782,14 @@ function FilterButton({
   onClick: () => void
   title?: string
 }) {
+  // Chip dims when the bucket is empty — keeps the affordance visible
+  // for discovery (especially for "Failed", which we render even at 0)
+  // without making the eye fight a count of zero for attention.
+  const empty = count === 0
   return (
     <button
       type="button"
-      className={`log-filter ${on ? 'on' : 'off'}`}
+      className={`log-filter ${on ? 'on' : 'off'}${empty ? ' log-filter-empty' : ''}`}
       onClick={onClick}
       aria-pressed={on}
       title={title}
