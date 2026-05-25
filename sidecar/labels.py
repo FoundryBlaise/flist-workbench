@@ -169,6 +169,21 @@ CREATE TABLE IF NOT EXISTS labels (
 );
 CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner);
 CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
+
+-- Partner aliases share this DB so every labels.connect() is
+-- automatically alias-aware. aliases.py owns the read/write logic;
+-- duplicating the CREATE here just guarantees the table exists for
+-- callers (rag_jobs, server.py) that pass the labels connection
+-- straight into aliases_store helpers.
+CREATE TABLE IF NOT EXISTS partner_aliases (
+    character     TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    primary_name  TEXT NOT NULL,
+    created_at    REAL NOT NULL,
+    PRIMARY KEY (character, name)
+);
+CREATE INDEX IF NOT EXISTS idx_aliases_primary
+    ON partner_aliases(character, primary_name);
 """
 
 
@@ -273,18 +288,38 @@ def labels_for_partner(
     conn: sqlite3.Connection,
     character: str,
     partner: str,
+    *,
+    partner_aliases: list[str] | None = None,
 ) -> dict[str, sqlite3.Row]:
     """All stored labels for one conversation, keyed by message hash.
+
+    `partner_aliases` lets the caller fold in labels written under any
+    alternate names a partner has been linked to via the aliases
+    module. When omitted, only rows with `partner = ?` are returned —
+    same behaviour as before aliases existed.
 
     Loaded in one query so per-message resolution is a dict lookup —
     a long conversation might have tens of thousands of messages but
     only a few thousand explicit labels.
     """
+    names = _partner_query_set(partner, partner_aliases)
+    placeholders = ",".join("?" * len(names))
     rows = conn.execute(
-        "SELECT * FROM labels WHERE character = ? AND partner = ?",
-        (character, partner),
+        f"SELECT * FROM labels WHERE character = ? AND partner IN ({placeholders})",
+        (character, *names),
     ).fetchall()
     return {row["hash"]: row for row in rows}
+
+
+def _partner_query_set(partner: str, alias_names: list[str] | None) -> list[str]:
+    """Dedupe the (partner, aliases) tuple → ordered list of names.
+
+    Order doesn't matter for the SQL IN clause but a stable list keeps
+    test assertions / cache keys predictable.
+    """
+    if not alias_names:
+        return [partner]
+    return sorted({partner, *alias_names})
 
 
 def upsert_label(
@@ -350,18 +385,26 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
 
 
 def delete_labels_for_partner(
-    conn: sqlite3.Connection, character: str, partner: str
+    conn: sqlite3.Connection,
+    character: str,
+    partner: str,
+    *,
+    partner_aliases: list[str] | None = None,
 ) -> int:
     """Drop every explicit label for one (character, partner) pair.
 
-    Returns the count of deleted rows. After this call, every message
-    in the conversation falls back to the rule-on-read resolver — so
-    rule:short / rule:parens / rule:empty hits stay OOC, everything
-    else reverts to Unlabeled.
+    `partner_aliases` extends the delete to labels written under any
+    linked alternate name (typical after the user has merged a
+    partner rename). Returns the count of deleted rows. After this
+    call, every message in the conversation falls back to the rule-
+    on-read resolver — so rule:short / rule:parens / rule:empty hits
+    stay OOC, everything else reverts to Unlabeled.
     """
+    names = _partner_query_set(partner, partner_aliases)
+    placeholders = ",".join("?" * len(names))
     cur = conn.execute(
-        "DELETE FROM labels WHERE character = ? AND partner = ?",
-        (character, partner),
+        f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
+        (character, *names),
     )
     conn.commit()
     return cur.rowcount
@@ -373,15 +416,20 @@ def stats(
     partner: str,
     messages: Iterable[dict],
     settings: LabelsSettings,
+    *,
+    partner_aliases: list[str] | None = None,
 ) -> dict[str, int]:
     """Count IC / OOC / Unlabeled across the supplied messages.
 
     Caller passes the already-parsed messages (we don't re-walk the
-    binary log) plus this conversation's stored labels. Cheap because
-    the labels lookup is a single query and resolution is a dict hit
-    per message.
+    binary log) plus this conversation's stored labels. Pass
+    `partner_aliases` to fold in label rows written under any linked
+    alternate names. Cheap because the labels lookup is a single
+    query and resolution is a dict hit per message.
     """
-    by_hash = labels_for_partner(conn, character, partner)
+    by_hash = labels_for_partner(
+        conn, character, partner, partner_aliases=partner_aliases
+    )
     counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
         lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)

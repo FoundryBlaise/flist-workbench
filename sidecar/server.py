@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import aliases as aliases_store
 import documents
 import labels as labels_store
 import labels_jobs
@@ -86,7 +87,13 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
     labels_conn = labels_store.connect()
     try:
         lab_settings = labels_store.load_settings(settings_conn)
-        by_hash = labels_store.labels_for_partner(labels_conn, char, partner)
+        # Folding label rows from any linked alternate names — labels
+        # written under "Daemon Enariel" pre-rename still apply when
+        # the user opens the merged "Ashvalia" conversation.
+        alias_group = aliases_store.all_names_for(labels_conn, char, partner)
+        by_hash = labels_store.labels_for_partner(
+            labels_conn, char, partner, partner_aliases=alias_group
+        )
         for m in messages:
             h = labels_store.msg_hash(m)
             # Send the hash so the renderer can call /labels/override
@@ -149,7 +156,15 @@ def labels_stats(char: str, partner: str) -> dict:
     labels_conn = labels_store.connect()
     try:
         lab_settings = labels_store.load_settings(settings_conn)
-        counts = labels_store.stats(labels_conn, char, partner, messages, lab_settings)
+        alias_group = aliases_store.all_names_for(labels_conn, char, partner)
+        counts = labels_store.stats(
+            labels_conn,
+            char,
+            partner,
+            messages,
+            lab_settings,
+            partner_aliases=alias_group,
+        )
     finally:
         settings_conn.close()
         labels_conn.close()
@@ -509,6 +524,25 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
     """
     rag_set = rag_settings.load_settings()
     scope = body.scope.model_dump(exclude_none=True) if body.scope else None
+    # Expand a single-partner scope into the full alias group so
+    # queries scoped to "Ashvalia" also pull chunks indexed under the
+    # pre-rename name "Daemon Enariel". Skips the expansion when scope
+    # is character-only / cross-RP — those don't filter by partner.
+    if scope and scope.get("character") and scope.get("partner") and not scope.get("partners"):
+        alias_conn = aliases_store.connect()
+        try:
+            group = aliases_store.all_names_for(
+                alias_conn, scope["character"], scope["partner"]
+            )
+        finally:
+            alias_conn.close()
+        if len(group) > 1:
+            # Move from single-partner filter to multi-partner filter;
+            # rag_store._scope_to_filter handles both shapes.
+            scope = {
+                "character": scope["character"],
+                "partners": group,
+            }
     top_k = body.top_k if body.top_k is not None else rag_set.top_k
     neighbors = body.neighbors if body.neighbors is not None else rag_set.neighbors
     # Clamp the same way the settings loader does — overrides shouldn't
@@ -657,8 +691,14 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     """
     conn = labels_store.connect()
     try:
-        deleted = labels_store.delete_labels_for_partner(
+        alias_group = aliases_store.all_names_for(
             conn, body.character, body.partner
+        )
+        deleted = labels_store.delete_labels_for_partner(
+            conn,
+            body.character,
+            body.partner,
+            partner_aliases=alias_group,
         )
     finally:
         conn.close()
@@ -681,11 +721,16 @@ def labels_override(body: LabelOverride) -> dict:
                 status_code=400,
                 detail=f"label must be IC or OOC, got {body.label!r}",
             )
+        # Write labels under the alias group's canonical primary so
+        # the partner column stays consistent post-rename. Lookup is
+        # alias-aware (labels_for_partner expands the group) so old
+        # rows under the alias name still resolve.
+        primary = aliases_store.primary_for(conn, body.character, body.partner)
         labels_store.upsert_label(
             conn,
             hash=body.hash,
             character=body.character,
-            partner=body.partner,
+            partner=primary,
             ts=body.ts,
             speaker=body.speaker,
             label=body.label,
@@ -705,6 +750,71 @@ def labels_override(body: LabelOverride) -> dict:
         }
     finally:
         conn.close()
+
+
+# ---- aliases ------------------------------------------------------------
+
+
+class AliasAdd(BaseModel):
+    character: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    primary_name: str = Field(min_length=1, max_length=200)
+
+
+@app.get("/aliases")
+def aliases_list(char: str) -> dict:
+    """Return {primary_name: [member names…]} for one character.
+
+    Empty dict when the character has no linked partners. Renderer
+    uses this to decide whether to render alias hints on each partner
+    row.
+    """
+    conn = aliases_store.connect()
+    try:
+        groups = aliases_store.list_groups(conn, char)
+    finally:
+        conn.close()
+    return {"character": char, "groups": groups}
+
+
+@app.post("/aliases", status_code=201)
+def aliases_add(body: AliasAdd) -> dict:
+    """Link `name` to `primary_name` for `character`. Idempotent;
+    handles chain consolidation (linking A→B then A→C ends with both
+    A and B pointing at C, never building a multi-hop chain)."""
+    conn = aliases_store.connect()
+    try:
+        aliases_store.add_alias(conn, body.character, body.name, body.primary_name)
+        group = aliases_store.all_names_for(conn, body.character, body.primary_name)
+    finally:
+        conn.close()
+    return {
+        "character": body.character,
+        "primary_name": body.primary_name,
+        "group": group,
+    }
+
+
+@app.delete("/aliases")
+def aliases_remove(char: str, name: str) -> dict:
+    """Drop one name from its alias group."""
+    conn = aliases_store.connect()
+    try:
+        removed = aliases_store.remove_alias(conn, char, name)
+    finally:
+        conn.close()
+    return {"character": char, "name": name, "removed": removed}
+
+
+@app.delete("/aliases/group")
+def aliases_unlink_group(char: str, primary: str) -> dict:
+    """Drop every member of an alias group at once."""
+    conn = aliases_store.connect()
+    try:
+        deleted = aliases_store.unlink_group(conn, char, primary)
+    finally:
+        conn.close()
+    return {"character": char, "primary": primary, "deleted": deleted}
 
 
 # ---- settings -----------------------------------------------------------

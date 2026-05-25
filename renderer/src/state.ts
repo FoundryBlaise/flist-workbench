@@ -5,6 +5,7 @@ import {
   type Document,
   type InlineImage,
   type LogMessage,
+  type PartnerEntry,
   type RevisionSummary
 } from './lib/api'
 
@@ -43,7 +44,7 @@ type State = {
   /** When true, the logs main pane shows the cross-conversation search view. */
   crossSearchOpen: boolean
 
-  partners: Record<string, { name: string; bytes: number }[]>
+  partners: Record<string, PartnerEntry[]>
   partnersStatus: Record<string, 'loading' | 'ready' | 'error'>
 
   activePartner: string | null
