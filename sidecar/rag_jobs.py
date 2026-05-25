@@ -356,7 +356,9 @@ def _ingest_one_partner(
     # member names apply to this conversation. (_resolve_targets has
     # already normalised `partner` to the primary name for single-
     # conversation scopes, but for character / all-characters scopes
-    # we still get the primary names from list_partners.)
+    # we still get the primary names from list_partners.) Also passed
+    # to the chunker as speaker_aliases so messages from the pre-
+    # rename name read as the canonical name in the LLM context.
     alias_group = aliases_store.all_names_for(labels_conn, character, partner)
     by_hash = labels_store.labels_for_partner(
         labels_conn, character, partner, partner_aliases=alias_group
@@ -368,6 +370,7 @@ def _ingest_one_partner(
         labels_by_hash=by_hash,
         label_settings=label_settings,
         include_ooc=job.include_ooc,
+        speaker_aliases=alias_group,
         max_chars=rag_set.chunk_max_chars,
         soft_split=rag_set.chunk_soft_split_chars,
         overlap=rag_set.chunk_overlap_msgs,
