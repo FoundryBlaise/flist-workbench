@@ -373,6 +373,45 @@ def test_settings_soft_split_respects_current_max(client: TestClient) -> None:
     assert res["rag"]["chunk_soft_split_chars"] <= 1400  # max - 100
 
 
+def test_rag_wipe_clears_collection_and_manifest(
+    client: TestClient, tmp_path: Path
+) -> None:
+    # Seed a collection + manifest, then hit /rag/wipe.
+    with rag_store.RagStore(path=tmp_path / "qdrant") as store:
+        store.ensure_collection(vector_size=4)
+        store.upsert_chunks(
+            [
+                {
+                    "chunk_id": "C__P__2026-01-01__IC#0",
+                    "char_owner": "C",
+                    "partner": "P",
+                    "date": "2026-01-01",
+                    "label": "IC",
+                    "subchunk": 0,
+                    "ts_start": 0,
+                    "ts_end": 1,
+                    "speakers": ["C"],
+                    "msg_count": 1,
+                    "char_count": 5,
+                    "text": "hello",
+                    "prev_chunk_id": None,
+                    "next_chunk_id": None,
+                }
+            ],
+            [[1.0, 0.0, 0.0, 0.0]],
+        )
+    rag_store.write_manifest(embed_model="m", embed_dimension=4)
+
+    res = client.post("/rag/wipe").json()
+    assert res == {"wiped": True}
+
+    # Status should report a fresh slate.
+    status = client.get("/rag/status").json()
+    assert status["embed_model"] is None
+    assert status["embed_dimension"] is None
+    assert status["chunk_count"] == 0
+
+
 def test_settings_exposes_chunk_defaults(client: TestClient) -> None:
     res = client.get("/settings").json()
     import rag as rag_settings

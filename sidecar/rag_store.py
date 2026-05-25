@@ -24,6 +24,7 @@ Stored payload mirrors the original embed.py:
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import time
 import uuid
@@ -239,17 +240,46 @@ class RagStore:
             )
 
     def recreate_collection(self, vector_size: int) -> None:
-        """Drop + recreate the collection (destroys all stored vectors).
+        """Wipe the entire vector store directory and reopen the client
+        with a fresh empty collection at the requested dimension.
 
-        Used by the ingest job when a model swap is detected and the
-        user confirmed the wipe.
+        Why we nuke the directory rather than `delete_collection +
+        create_collection`: qdrant-client's embedded mode has cases
+        where stale segment files survive `delete_collection`, and the
+        next upsert blows up with "broadcast (N,) into (M,)" against
+        the old dimension. The only wipe we trust for a dim change is
+        removing the storage folder and reopening.
         """
-        if self._client.collection_exists(COLLECTION):
-            self._client.delete_collection(COLLECTION)
+        # Close the client first so file locks on Windows release
+        # before the rmtree. On Linux the unlink-while-open trick works
+        # but the lock-file dance burns us on Windows.
+        try:
+            self._client.close()
+        except Exception:  # noqa: BLE001
+            pass
+        if self._path.exists():
+            shutil.rmtree(self._path, ignore_errors=False)
+        self._path.mkdir(parents=True, exist_ok=True)
+        self._client = QdrantClient(path=str(self._path))
         self._client.create_collection(
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
+
+    def wipe(self) -> None:
+        """Drop the collection entirely (no recreation). Used by the
+        Settings → "Wipe index" button when the user wants a fresh
+        slate without immediately re-ingesting. Caller is expected to
+        also clear the manifest so the next ingest starts cold.
+        """
+        try:
+            self._client.close()
+        except Exception:  # noqa: BLE001
+            pass
+        if self._path.exists():
+            shutil.rmtree(self._path, ignore_errors=False)
+        self._path.mkdir(parents=True, exist_ok=True)
+        self._client = QdrantClient(path=str(self._path))
 
     def collection_exists(self) -> bool:
         return self._client.collection_exists(COLLECTION)

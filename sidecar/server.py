@@ -422,6 +422,21 @@ def rag_job_cancel(job_id: str) -> dict:
     return {"id": job_id, "cancel_requested": True}
 
 
+@app.post("/rag/wipe")
+def rag_wipe() -> dict:
+    """Drop the local Qdrant collection and clear the manifest.
+
+    Pure delete — no re-ingest, no probe. Use this when you want to
+    forget everything and rebuild on your own schedule (e.g. after
+    changing chunking settings without immediately re-embedding 80k
+    messages). The next /rag/ingest starts cold.
+    """
+    with rag_store.RagStore() as store:
+        store.wipe()
+    rag_store.clear_manifest()
+    return {"wiped": True}
+
+
 @app.get("/rag/status")
 def rag_status() -> dict:
     """Snapshot of the local vector store + manifest.

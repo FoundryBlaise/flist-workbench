@@ -430,6 +430,8 @@ export const api = {
       { method: 'DELETE' }
     ),
   ragStatus: () => get<RagStatus>('/rag/status'),
+  ragWipe: () =>
+    request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
   ragQuery: async (
     body: {
       question: string

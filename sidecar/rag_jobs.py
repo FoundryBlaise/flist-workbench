@@ -220,23 +220,66 @@ def _run_job(job: IngestJob) -> None:
                 manifest.embed_model is not None
                 and manifest.embed_model != rag_set.embed_model
             )
-            if mismatch and not job.force_rewipe:
+
+            # Also catch the manifest-empty-but-collection-exists case:
+            # ensure_collection raises DimensionMismatchError, but the
+            # bare `Exception` handler used to swallow it as a generic
+            # failure (no model_swap flag, no actionable UI path). Trap
+            # it here as the same model_swap signal so the UI can
+            # surface the Wipe + re-ingest button.
+            try:
+                if mismatch and job.force_rewipe:
+                    # Dim/model change confirmed → nuke the world. Per-
+                    # conversation wipe wouldn't help because every old
+                    # chunk's vector is the wrong dim.
+                    store.recreate_collection(vector_size=dimension)
+                    rag_store.clear_manifest()
+                elif mismatch:
+                    job.model_swap = True
+                    job.error = (
+                        f"embedding model changed from "
+                        f"{manifest.embed_model} (dim "
+                        f"{manifest.embed_dimension}) to "
+                        f"{rag_set.embed_model} (dim {dimension}). "
+                        "Existing vectors are incompatible — confirm "
+                        "wipe to re-ingest."
+                    )
+                    job.state = "failed"
+                    job.finished_at = time.time()
+                    return
+                elif job.force_rewipe:
+                    # No dim mismatch, user explicitly asked for a
+                    # rewipe — scope-aware so re-ingesting one
+                    # conversation doesn't nuke the whole index. Safe
+                    # because chunks only reference others within the
+                    # same (character, partner) via prev/next pointers.
+                    if job.scope.get("character") and job.scope.get("partner"):
+                        store.delete_scope(job.scope)
+                        store.ensure_collection(vector_size=dimension)
+                    else:
+                        # Broad scope (character-only or all): nuke +
+                        # rebuild, matching the user's mental model of
+                        # "Re-ingest all".
+                        store.recreate_collection(vector_size=dimension)
+                        rag_store.clear_manifest()
+                else:
+                    store.ensure_collection(vector_size=dimension)
+            except rag_store.DimensionMismatchError as exc:
+                # Fresh install with an orphaned 768-dim Qdrant
+                # collection while the manifest is empty — the
+                # mismatch check above didn't fire because both
+                # manifest fields were None. Surface as model_swap so
+                # the dialog offers the same Wipe + re-ingest button.
                 job.model_swap = True
                 job.error = (
-                    f"embedding model changed from "
-                    f"{manifest.embed_model} (dim {manifest.embed_dimension}) "
-                    f"to {rag_set.embed_model} (dim {dimension}). "
-                    "Existing vectors are incompatible — confirm wipe to re-ingest."
+                    f"existing vector index has dimension {exc.actual} "
+                    f"but the embedding model now returns {exc.expected}. "
+                    "The index needs to be wiped and rebuilt — confirm "
+                    "wipe below or use Settings → RAG → Re-ingest all."
                 )
                 job.state = "failed"
                 job.finished_at = time.time()
                 return
-
-            if mismatch and job.force_rewipe:
-                store.recreate_collection(vector_size=dimension)
-                rag_store.clear_manifest()
-            else:
-                store.ensure_collection(vector_size=dimension)
 
             # Persist manifest now so a crash mid-ingest still records
             # the model/dim — partial collections aren't useful but at
