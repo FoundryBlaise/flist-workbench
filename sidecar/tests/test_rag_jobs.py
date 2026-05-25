@@ -261,6 +261,156 @@ def test_job_detects_dim_mismatch_and_aborts(
     assert "embedding model changed" in (job.error or "")
 
 
+def test_job_detects_orphan_collection_as_model_swap(
+    workbench_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_registry: rag_jobs.JobRegistry,
+) -> None:
+    """Manifest is empty but a 768-dim Qdrant collection survives from
+    a previous build at a different dim. ensure_collection raises
+    DimensionMismatchError, and the job must surface that as
+    model_swap=True (not as a generic Exception) so the UI gives the
+    user the Wipe + re-ingest path instead of the cryptic broadcast
+    ValueError they used to see.
+    """
+    # Seed an orphan 4-dim collection at the canonical path.
+    store = rag_store.RagStore()
+    try:
+        store.ensure_collection(vector_size=4)
+    finally:
+        store.close()
+    # Don't write a manifest — that's the regression: manifest empty
+    # while the collection on disk says 4 dims.
+
+    msgs = [_msg(1735689600, "x" * 300)]
+    _stub_one_partner(monkeypatch, "Char", "Partner", msgs)
+    # Probe returns a different dim (8) → ensure_collection mismatch.
+    _stub_embedding(monkeypatch, dimension=8)
+    labels_conn = labels_store.connect()
+    try:
+        labels_store.upsert_label(
+            labels_conn,
+            hash=labels_store.msg_hash(msgs[0]),
+            character="Char",
+            partner="Partner",
+            ts=msgs[0]["ts"],
+            speaker="Bob",
+            label="IC",
+            source="manual",
+        )
+    finally:
+        labels_conn.close()
+
+    job = rag_jobs.start({"character": "Char", "partner": "Partner"})
+    _wait_until(lambda: job.state in ("done", "failed", "cancelled"), timeout=5.0)
+    assert job.state == "failed"
+    assert job.model_swap is True
+    assert "vector index has dimension 4" in (job.error or "")
+
+
+def test_job_scoped_force_rewipe_deletes_only_that_scope(
+    workbench_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_registry: rag_jobs.JobRegistry,
+) -> None:
+    """A per-conversation force_rewipe must only delete that
+    conversation's chunks, not nuke the whole collection. Verifies the
+    scope-aware wipe added to _run_job.
+    """
+    # Pre-seed chunks for two partners. Both at 4 dims.
+    store = rag_store.RagStore()
+    try:
+        store.ensure_collection(vector_size=4)
+        store.upsert_chunks(
+            [
+                {
+                    "chunk_id": "Char__A__2026-01-01__IC#0",
+                    "char_owner": "Char",
+                    "partner": "A",
+                    "date": "2026-01-01",
+                    "label": "IC",
+                    "subchunk": 0,
+                    "ts_start": 0,
+                    "ts_end": 1,
+                    "speakers": ["Char"],
+                    "msg_count": 1,
+                    "char_count": 1,
+                    "text": "old A chunk",
+                    "prev_chunk_id": None,
+                    "next_chunk_id": None,
+                },
+                {
+                    "chunk_id": "Char__B__2026-01-01__IC#0",
+                    "char_owner": "Char",
+                    "partner": "B",
+                    "date": "2026-01-01",
+                    "label": "IC",
+                    "subchunk": 0,
+                    "ts_start": 0,
+                    "ts_end": 1,
+                    "speakers": ["Char"],
+                    "msg_count": 1,
+                    "char_count": 1,
+                    "text": "old B chunk",
+                    "prev_chunk_id": None,
+                    "next_chunk_id": None,
+                },
+            ],
+            [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+        )
+    finally:
+        store.close()
+    # Manifest must match the loaded RagSettings model name too, not
+    # just the dim — otherwise the loader's default model name vs our
+    # stored "m" trips the mismatch branch and the world gets nuked
+    # instead of just scope A.
+    import rag as rag_settings_mod
+
+    rag_store.write_manifest(
+        embed_model=rag_settings_mod.DEFAULT_EMBED_MODEL,
+        embed_dimension=4,
+    )
+
+    msgs = [_msg(1735689600, "y" * 300)]
+    _stub_one_partner(monkeypatch, "Char", "A", msgs)
+    _stub_embedding(monkeypatch, dimension=4)
+    # The settings loader uses the saved labels endpoint by default.
+    # Embedding probe + embed are both stubbed so this doesn't matter.
+    labels_conn = labels_store.connect()
+    try:
+        labels_store.upsert_label(
+            labels_conn,
+            hash=labels_store.msg_hash(msgs[0]),
+            character="Char",
+            partner="A",
+            ts=msgs[0]["ts"],
+            speaker="Bob",
+            label="IC",
+            source="manual",
+        )
+    finally:
+        labels_conn.close()
+
+    job = rag_jobs.start(
+        {"character": "Char", "partner": "A"}, force_rewipe=True
+    )
+    _wait_until(lambda: job.state in ("done", "failed", "cancelled"), timeout=5.0)
+    assert job.state == "done", job.error
+
+    # Partner A's old chunk should be gone; the re-ingest produces a
+    # new chunk under the same partner. Partner B's chunk must survive.
+    store = rag_store.RagStore()
+    try:
+        all_ids = store.existing_chunk_ids()
+    finally:
+        store.close()
+    assert "Char__B__2026-01-01__IC#0" in all_ids
+    # Old A chunk had a different content/date so its chunk_id differs
+    # from any chunk the chunker would produce now — confirm the pre-
+    # seeded one was removed.
+    assert "Char__A__2026-01-01__IC#0" not in all_ids
+
+
 def test_job_with_force_rewipe_recreates_collection(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,

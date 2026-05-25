@@ -233,3 +233,42 @@ def test_cid_to_uuid_is_deterministic() -> None:
     b = rag_store.cid_to_uuid("foo__bar__2026-01-01__IC#0")
     assert a == b
     assert rag_store.cid_to_uuid("foo__bar__2026-01-01__IC#1") != a
+
+
+def test_recreate_collection_survives_dimension_change(
+    tmp_path, monkeypatch
+) -> None:
+    """Reproduces the 'broadcast (N,) into (M,)' regression. A store
+    opened at dim N must, after recreate_collection(M), accept M-dim
+    upserts cleanly. The nuke-and-reopen recreate guards this.
+    """
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
+    path = tmp_path / "qdrant"
+    store = rag_store.RagStore(path=path)
+    try:
+        store.ensure_collection(vector_size=4)
+        store.upsert_chunks([_mkchunk("a")], [[1.0, 0.0, 0.0, 0.0]])
+        # Same store, swap to a different dim.
+        store.recreate_collection(vector_size=8)
+        # Old data gone, new dim accepted, no broadcast error.
+        assert store.count() == 0
+        store.upsert_chunks([_mkchunk("b")], [[0.0] * 8])
+        assert store.count() == 1
+    finally:
+        store.close()
+
+
+def test_wipe_leaves_empty_directory_and_no_collection(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
+    store = rag_store.RagStore(path=tmp_path / "qdrant")
+    try:
+        store.ensure_collection(vector_size=4)
+        store.upsert_chunks([_mkchunk("a")], [[1.0, 0.0, 0.0, 0.0]])
+        assert store.count() == 1
+
+        store.wipe()
+        assert store.collection_exists() is False
+    finally:
+        store.close()

@@ -631,6 +631,36 @@ function RagSection({
   }, [rag])
 
   const openIngest = useStore((s) => s.openIngest)
+  const [wipeStatus, setWipeStatus] = useState<'idle' | 'wiping' | 'wiped' | 'error'>(
+    'idle'
+  )
+  const [wipeError, setWipeError] = useState<string | null>(null)
+  const triggerWipe = async () => {
+    if (wipeStatus === 'wiping') return
+    const confirmed = window.confirm(
+      'Wipe the local vector index?\n\n' +
+        'This deletes every embedded chunk and clears the manifest. ' +
+        'It does NOT touch your labels or your F-Chat logs. The next ' +
+        'time you run Ingest the index will rebuild from scratch.'
+    )
+    if (!confirmed) return
+    setWipeStatus('wiping')
+    setWipeError(null)
+    try {
+      await api.ragWipe()
+      setWipeStatus('wiped')
+      // Refresh the indexed-coverage line above so it reads zero.
+      try {
+        const s = await api.ragStatus()
+        setIndexStatus(s)
+      } catch {
+        // Best-effort; the wipe itself succeeded.
+      }
+    } catch (err) {
+      setWipeStatus('error')
+      setWipeError(err instanceof Error ? err.message : String(err))
+    }
+  }
   const triggerReingestAll = () => {
     const confirmed = window.confirm(
       'Re-ingest all logs?\n\n' +
@@ -1260,13 +1290,29 @@ function RagSection({
       <hr className="settings-divider" />
       <h4 className="settings-subheading">Index maintenance</h4>
       <p className="settings-help">
-        Wipe the local Qdrant collection and re-embed every conversation
-        from scratch with the current chunking + embedding settings.
-        Use this after switching embedding model or adjusting chunk
-        size; otherwise old chunks of an incompatible shape can linger
+        <strong>Wipe index</strong> drops the local Qdrant collection
+        and clears the manifest — pure delete, no re-ingest. Useful if
+        you want to free disk now and re-embed later, or if you want
+        a known-clean slate before changing chunking / embedding
+        settings.
+      </p>
+      <p className="settings-help">
+        <strong>Re-ingest all</strong> wipes <em>and</em> rebuilds
+        every conversation in one step using the current settings. Use
+        this after switching embedding model or adjusting chunk size;
+        otherwise old chunks of an incompatible shape can linger
         alongside new ones.
       </p>
       <div className="settings-actions">
+        <button
+          type="button"
+          className="settings-clear"
+          onClick={() => void triggerWipe()}
+          disabled={wipeStatus === 'wiping'}
+          data-testid="rag-wipe"
+        >
+          {wipeStatus === 'wiping' ? 'Wiping…' : 'Wipe index'}
+        </button>
         <button
           type="button"
           className="settings-clear"
@@ -1275,6 +1321,14 @@ function RagSection({
         >
           Re-ingest all (wipe + rebuild)…
         </button>
+        {wipeStatus === 'wiped' && (
+          <span className="settings-meta">Index wiped.</span>
+        )}
+        {wipeStatus === 'error' && wipeError && (
+          <span className="settings-meta classify-last-error">
+            Wipe failed: {wipeError}
+          </span>
+        )}
       </div>
 
       {error && <p className="settings-error">{error}</p>}
