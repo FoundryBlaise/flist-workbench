@@ -25,6 +25,15 @@ export function IngestDialog({
   forceRewipe = false,
   onClose
 }: IngestDialogProps) {
+  // 'configuring' shows the overwrite checkbox + Start; 'running' is
+  // the live job. Settings → Re-ingest All passes forceRewipe=true and
+  // we skip straight to 'running' so the user doesn't have to click
+  // Start twice for the same intent (they already confirmed in
+  // Settings).
+  const [phase, setPhase] = useState<'configuring' | 'running'>(
+    forceRewipe ? 'running' : 'configuring'
+  )
+  const [overwrite, setOverwrite] = useState<boolean>(forceRewipe)
   const [job, setJob] = useState<IngestJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pulseCancel, setPulseCancel] = useState(false)
@@ -37,7 +46,9 @@ export function IngestDialog({
   const pulseTimer = useRef<number | null>(null)
 
   useEffect(() => {
-    startJob({ force_rewipe: forceRewipe })
+    if (forceRewipe) {
+      startJob({ force_rewipe: true })
+    }
     return () => {
       if (pollTimer.current !== null) window.clearInterval(pollTimer.current)
       if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current)
@@ -46,6 +57,7 @@ export function IngestDialog({
   }, [])
 
   const startJob = ({ force_rewipe }: { force_rewipe: boolean }) => {
+    setPhase('running')
     setError(null)
     setJob(null)
     api
@@ -96,7 +108,7 @@ export function IngestDialog({
   }
 
   const isDone = job ? isTerminal(job.state) : false
-  const canClose = isDone || (!!error && !job)
+  const canClose = phase === 'configuring' || isDone || (!!error && !job)
   const showModelSwapPrompt =
     !!job && job.state === 'failed' && job.model_swap && !wipeOffered
   // Total stays at 0 during the partner-enumeration phase of an
@@ -154,7 +166,40 @@ export function IngestDialog({
         </header>
         <div className="modal-body">
           {error && <p className="settings-error">{error}</p>}
-          {!job && !error && <p className="settings-help">Starting ingest…</p>}
+          {phase === 'configuring' && !error && (
+            <>
+              <p className="settings-help">
+                Walks every IC chunk in scope through the embedding
+                model and upserts to the local vector index. Re-runs
+                are cheap by default — chunks already in the index get
+                skipped via deterministic IDs.
+              </p>
+              <label
+                className="settings-checkbox-row"
+                data-testid="ingest-overwrite-row"
+              >
+                <input
+                  type="checkbox"
+                  checked={overwrite}
+                  onChange={(e) => setOverwrite(e.target.checked)}
+                  data-testid="ingest-overwrite-input"
+                />
+                <span>
+                  <strong>Wipe &amp; re-embed already-indexed chunks</strong>
+                  <span className="settings-meta">
+                    Drops every chunk in this scope first, then
+                    re-embeds from scratch. Use after changing chunk
+                    settings, the classifier prompt, or linking an
+                    alias — the deterministic-ID skip won't notice
+                    those changes on its own.
+                  </span>
+                </span>
+              </label>
+            </>
+          )}
+          {phase === 'running' && !job && !error && (
+            <p className="settings-help">Starting ingest…</p>
+          )}
           {job && (
             <>
               <div
@@ -225,7 +270,28 @@ export function IngestDialog({
           )}
         </div>
         <div className="modal-actions">
-          {job && !isDone && (
+          {phase === 'configuring' && !error && (
+            <>
+              <button
+                type="button"
+                className="settings-clear"
+                onClick={onClose}
+                data-testid="ingest-preflight-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="settings-save"
+                onClick={() => startJob({ force_rewipe: overwrite })}
+                data-testid="ingest-preflight-start"
+                autoFocus
+              >
+                {overwrite ? 'Wipe & re-ingest' : 'Start ingest'}
+              </button>
+            </>
+          )}
+          {phase === 'running' && job && !isDone && (
             <button
               type="button"
               className={`settings-clear${pulseCancel ? ' classify-cancel-pulse' : ''}`}
@@ -246,7 +312,7 @@ export function IngestDialog({
               Wipe + re-ingest
             </button>
           )}
-          {(isDone || error) && !showModelSwapPrompt && (
+          {(isDone || (error && phase === 'running')) && !showModelSwapPrompt && (
             <button
               type="button"
               className="settings-save"

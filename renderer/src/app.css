@@ -2013,3 +2013,32 @@ body {
 .alias-candidate:hover { background: var(--hover-soft); }
 .alias-candidate:disabled { opacity: 0.5; cursor: wait; }
 .alias-candidate-name { font-weight: 600; }
+
+/* Pre-flight checkbox row used by ClassifyDialog + IngestDialog. The
+   secondary settings-meta hint stacks under the label so the
+   description doesn't crowd the click target. */
+.settings-checkbox-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--hover-soft);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.settings-checkbox-row:hover { background: var(--row-hover); }
+.settings-checkbox-row input[type="checkbox"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.settings-checkbox-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-checkbox-row .settings-meta {
+  display: block;
+  font-size: var(--font-meta);
+  line-height: 1.4;
+}

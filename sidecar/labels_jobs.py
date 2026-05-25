@@ -42,6 +42,11 @@ class JobProgress:
 class Job:
     id: str
     scope: dict
+    # When true, classify_messages is called with skip_existing=False,
+    # so messages that already have an LLM/manual label get re-classified
+    # in place. Used by "Re-classify (overwrite)" after a prompt or
+    # model change.
+    overwrite: bool = False
     state: JobState = "pending"
     progress: JobProgress = field(default_factory=JobProgress)
     error: str | None = None
@@ -54,6 +59,7 @@ class Job:
         return {
             "id": self.id,
             "scope": self.scope,
+            "overwrite": self.overwrite,
             "state": self.state,
             "classified": self.progress.classified,
             "failed": self.progress.failed,
@@ -81,9 +87,9 @@ class JobRegistry:
         self._lock = threading.Lock()
         self.retention_seconds = retention_seconds
 
-    def create(self, scope: dict) -> Job:
+    def create(self, scope: dict, *, overwrite: bool = False) -> Job:
         job_id = uuid.uuid4().hex[:12]
-        job = Job(id=job_id, scope=scope)
+        job = Job(id=job_id, scope=scope, overwrite=overwrite)
         with self._lock:
             self._sweep_locked()
             self._jobs[job_id] = job
@@ -211,6 +217,7 @@ def _run_job(job: Job) -> None:
                 labels_conn,
                 cancel=job._cancel,
                 on_progress=make_progress_cb(),
+                skip_existing=not job.overwrite,
             )
             finished_classified += summary["classified"]
             finished_failed += summary["failed"]
@@ -249,8 +256,8 @@ def _run_job(job: Job) -> None:
         job.finished_at = time.time()
 
 
-def start(scope: dict) -> Job:
-    job = registry().create(scope)
+def start(scope: dict, *, overwrite: bool = False) -> Job:
+    job = registry().create(scope, overwrite=overwrite)
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     job._thread = thread
     thread.start()
