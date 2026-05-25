@@ -596,5 +596,100 @@ export const api = {
       body: JSON.stringify({ bbcode, inlines })
     }),
   draftDiscard: (id: number) =>
-    request<void>(`/documents/${id}/draft`, { method: 'DELETE' })
+    request<void>(`/documents/${id}/draft`, { method: 'DELETE' }),
+
+  // ---- AI Setup wizard surface ------------------------------------------
+  systemOllamaStatus: () =>
+    get<{
+      running: boolean
+      installed: boolean
+      version: string | null
+      models: string[] | null
+      error: string | null
+    }>('/system/ollama-status'),
+  systemOllamaPull: async (
+    name: string,
+    handlers: {
+      onProgress?: (p: OllamaPullProgress) => void
+      onDone?: (model: string) => void
+      onError?: (info: { message: string }) => void
+    },
+    opts?: ApiOptions
+  ): Promise<void> => {
+    // Same fetch-streaming pattern as ragQuery — POST with JSON body
+    // rules out EventSource. AbortController.signal stops the upstream
+    // pull; partial Ollama blob files stay on disk and resume on retry.
+    const res = await fetch(`${base()}/system/ollama-pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ name }),
+      signal: opts?.signal
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          dispatchPullBlock(block, handlers)
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) {
+        dispatchPullBlock(buffer, handlers)
+      }
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // best-effort
+      }
+    }
+  }
+}
+
+export type OllamaPullProgress = {
+  status: string
+  digest: string | null
+  completed: number | null
+  total: number | null
+}
+
+function dispatchPullBlock(
+  block: string,
+  handlers: {
+    onProgress?: (p: OllamaPullProgress) => void
+    onDone?: (model: string) => void
+    onError?: (info: { message: string }) => void
+  }
+): void {
+  let event: string | null = null
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
+  }
+  if (!event) return
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(dataLines.join('\n'))
+  } catch {
+    return
+  }
+  if (event === 'progress' && handlers.onProgress) {
+    handlers.onProgress(parsed as OllamaPullProgress)
+  } else if (event === 'done' && handlers.onDone) {
+    handlers.onDone((parsed as { model: string }).model)
+  } else if (event === 'error' && handlers.onError) {
+    handlers.onError(parsed as { message: string })
+  }
 }

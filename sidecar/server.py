@@ -13,6 +13,7 @@ import documents
 import labels as labels_store
 import labels_jobs
 import labels_llm
+import system as system_probe
 import rag as rag_settings
 import rag_chat
 import rag_embed
@@ -1376,6 +1377,70 @@ def _doc_dict(doc: documents.Document) -> dict:
         "latest_created_at": doc.latest_created_at,
         "has_draft": doc.has_draft,
     }
+
+
+# ---- system / setup ----------------------------------------------------
+
+
+@app.get("/system/ollama-status")
+def system_ollama_status() -> dict:
+    """Synchronous probe used by the AI Setup wizard's first page.
+
+    Returns {running, installed, version, models, error}. Fast (≤5 s)
+    by design — the renderer treats this as instant feedback.
+    """
+    return system_probe.ollama_status().to_dict()
+
+
+class OllamaPullRequest(BaseModel):
+    name: str
+
+
+@app.post("/system/ollama-pull")
+def system_ollama_pull(body: OllamaPullRequest) -> StreamingResponse:
+    """SSE stream of Ollama pull progress.
+
+    Body: {name: "<model id>"}. The model id is whatever Ollama
+    accepts on /api/pull — including `hf.co/<repo>/<model>:<tag>` paths.
+    Emits one `progress` event per upstream NDJSON line, then `done`
+    when Ollama reports `status:"success"`, or `error` on any failure.
+
+    Cancel: if the renderer closes the SSE connection mid-stream, the
+    underlying urlopen handle is GC'd which closes the HTTP socket;
+    Ollama stops pulling and the partial blob stays on disk for resume.
+    """
+
+    name = body.name
+
+    def gen():
+        try:
+            for evt in system_probe.ollama_pull_stream(name):
+                # Pass through the raw fields the renderer renders against.
+                yield _sse_event("progress", {
+                    "status": evt.get("status", ""),
+                    "digest": evt.get("digest"),
+                    "completed": evt.get("completed"),
+                    "total": evt.get("total"),
+                })
+                if evt.get("status") == "success":
+                    yield _sse_event("done", {"model": name})
+                    return
+            # Stream ended without `success` — Ollama dropped us, but
+            # didn't error. Surface that so the UI doesn't hang on the
+            # last `progress` event.
+            yield _sse_event(
+                "error",
+                {"message": "pull stream ended without success status"},
+            )
+        except Exception as exc:  # noqa: BLE001 — boundary
+            # HTTPError / URLError / TimeoutError land here too. Wrap
+            # them in the same SSE shape so the renderer has one path.
+            yield _sse_event(
+                "error",
+                {"message": f"{type(exc).__name__}: {exc}"},
+            )
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 def _rev_dict(rev: documents.Revision) -> dict:

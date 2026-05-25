@@ -29,5 +29,22 @@ contextBridge.exposeInMainWorld('workbench', {
   },
   setMenuState: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => {
     ipcRenderer.send('menu:set-state', flags)
+  },
+  // Used by the AI Setup wizard to open ollama.com/download in the user's
+  // default browser. Main does the actual shell.openExternal call so the
+  // renderer never holds a Node module reference.
+  openExternal: (url: string) => {
+    ipcRenderer.send('workbench:open-external', url)
+  },
+  // Convenience for the env-var page: spawns a PowerShell window with
+  // the supplied commands ready to run. Windows-only; main checks the
+  // platform and no-ops elsewhere.
+  spawnPowerShell: (command: string) => {
+    ipcRenderer.send('workbench:spawn-powershell', command)
+  },
+  // The Done page's "Open Settings" CTA — fires the same menu action
+  // path settings already use, so the modal opens consistently.
+  openSettings: () => {
+    ipcRenderer.send('workbench:open-settings')
   }
 })
