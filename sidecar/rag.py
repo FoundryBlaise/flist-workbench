@@ -20,6 +20,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+import chunker
 import labels as labels_store
 import rag_rerank
 import settings as settings_store
@@ -47,6 +48,10 @@ DEFAULT_RERANK_CANDIDATES = rag_rerank.DEFAULT_RERANK_CANDIDATES
 DEFAULT_TOP_K = rag_rerank.DEFAULT_TOP_K
 DEFAULT_NEIGHBORS = rag_rerank.DEFAULT_NEIGHBORS
 
+DEFAULT_CHUNK_MAX_CHARS = chunker.DEFAULT_MAX_CHUNK_CHARS
+DEFAULT_CHUNK_SOFT_SPLIT_CHARS = chunker.DEFAULT_SOFT_SPLIT_CHARS
+DEFAULT_CHUNK_OVERLAP_MSGS = chunker.DEFAULT_OVERLAP_MSGS
+
 
 @dataclass(slots=True, frozen=True)
 class RagSettings:
@@ -63,6 +68,9 @@ class RagSettings:
     rerank_candidates: int
     top_k: int
     neighbors: int
+    chunk_max_chars: int
+    chunk_soft_split_chars: int
+    chunk_overlap_msgs: int
 
 
 def _coerce_int(raw: str | None, default: int, *, lo: int, hi: int) -> int:
@@ -147,6 +155,26 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             lo=0,
             hi=5,
         )
+        chunk_max = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS),
+            DEFAULT_CHUNK_MAX_CHARS,
+            lo=500,
+            hi=20000,
+        )
+        chunk_soft = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_CHUNK_SOFT_SPLIT_CHARS),
+            DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
+            lo=400,
+            # soft_split must stay below max — clamp at max-100 so the
+            # split logic always has room to land before the hard cap.
+            hi=max(500, chunk_max - 100),
+        )
+        chunk_overlap = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_CHUNK_OVERLAP_MSGS),
+            DEFAULT_CHUNK_OVERLAP_MSGS,
+            lo=0,
+            hi=5,
+        )
         return RagSettings(
             embed_endpoint=endpoint,
             embed_model=model,
@@ -161,6 +189,9 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             rerank_candidates=rerank_candidates,
             top_k=top_k,
             neighbors=neighbors,
+            chunk_max_chars=chunk_max,
+            chunk_soft_split_chars=chunk_soft,
+            chunk_overlap_msgs=chunk_overlap,
         )
     finally:
         if own_conn:

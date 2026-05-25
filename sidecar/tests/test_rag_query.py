@@ -39,6 +39,9 @@ def rag_set() -> rag_settings.RagSettings:
         rerank_candidates=30,
         top_k=5,
         neighbors=1,
+        chunk_max_chars=5000,
+        chunk_soft_split_chars=4000,
+        chunk_overlap_msgs=1,
     )
 
 

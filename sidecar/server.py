@@ -333,6 +333,9 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
         rerank_candidates=saved.rerank_candidates,
         top_k=saved.top_k,
         neighbors=saved.neighbors,
+        chunk_max_chars=saved.chunk_max_chars,
+        chunk_soft_split_chars=saved.chunk_soft_split_chars,
+        chunk_overlap_msgs=saved.chunk_overlap_msgs,
     )
 
     # 60 s probe budget: cold-loading a 768-dim model in LM Studio
@@ -736,6 +739,9 @@ class RagSettingsUpdate(BaseModel):
     rerank_candidates: int | None = None
     top_k: int | None = None
     neighbors: int | None = None
+    chunk_max_chars: int | None = None
+    chunk_soft_split_chars: int | None = None
+    chunk_overlap_msgs: int | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -798,6 +804,9 @@ def _settings_dict(conn) -> dict:
             "rerank_candidates": rag.rerank_candidates,
             "top_k": rag.top_k,
             "neighbors": rag.neighbors,
+            "chunk_max_chars": rag.chunk_max_chars,
+            "chunk_soft_split_chars": rag.chunk_soft_split_chars,
+            "chunk_overlap_msgs": rag.chunk_overlap_msgs,
             "defaults": {
                 "embed_endpoint": rag_settings.DEFAULT_EMBED_ENDPOINT,
                 "embed_model": rag_settings.DEFAULT_EMBED_MODEL,
@@ -814,6 +823,9 @@ def _settings_dict(conn) -> dict:
                 "rerank_candidates": rag_settings.DEFAULT_RERANK_CANDIDATES,
                 "top_k": rag_settings.DEFAULT_TOP_K,
                 "neighbors": rag_settings.DEFAULT_NEIGHBORS,
+                "chunk_max_chars": rag_settings.DEFAULT_CHUNK_MAX_CHARS,
+                "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
+                "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
             },
         },
     }
@@ -930,6 +942,23 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
     if update.neighbors is not None:
         n = max(0, min(5, int(update.neighbors)))
         settings_store.set_value(conn, settings_store.KEY_RAG_NEIGHBORS, str(n))
+    if update.chunk_max_chars is not None:
+        n = max(500, min(20000, int(update.chunk_max_chars)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS, str(n))
+    if update.chunk_soft_split_chars is not None:
+        # Clamp against the saved (or just-saved) max to keep
+        # soft_split < max — same invariant the loader enforces.
+        # Re-read so an in-same-request max change is honoured.
+        max_raw = settings_store.get(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS)
+        try:
+            cur_max = int(max_raw) if max_raw else rag_settings.DEFAULT_CHUNK_MAX_CHARS
+        except (TypeError, ValueError):
+            cur_max = rag_settings.DEFAULT_CHUNK_MAX_CHARS
+        n = max(400, min(max(500, cur_max - 100), int(update.chunk_soft_split_chars)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_SOFT_SPLIT_CHARS, str(n))
+    if update.chunk_overlap_msgs is not None:
+        n = max(0, min(5, int(update.chunk_overlap_msgs)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_OVERLAP_MSGS, str(n))
 
 
 # ---- documents ----------------------------------------------------------

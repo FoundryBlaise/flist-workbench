@@ -304,6 +304,9 @@ def _ingest_one_partner(
         labels_by_hash=by_hash,
         label_settings=label_settings,
         include_ooc=job.include_ooc,
+        max_chars=rag_set.chunk_max_chars,
+        soft_split=rag_set.chunk_soft_split_chars,
+        overlap=rag_set.chunk_overlap_msgs,
     )
     job.progress.chunked += len(chunks)
     job.progress.total_chunks += len(chunks)

@@ -543,6 +543,28 @@ function LabelsSection({
 const NOMIC_QUERY_PREFIX = 'search_query: '
 const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
+// Reranker dropdown options. List matches what fastembed's
+// TextCrossEncoder.list_supported_models() returns plus the
+// "disabled" sentinel the sidecar honours. Sizes are rough on-disk
+// download sizes so users can pick something their machine fits.
+const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  {
+    value: 'jinaai/jina-reranker-v2-base-multilingual',
+    label: 'Jina v2 multilingual (1.1 GB) — default'
+  },
+  { value: 'BAAI/bge-reranker-base', label: 'BGE reranker base (1.0 GB)' },
+  {
+    value: 'Xenova/ms-marco-MiniLM-L-12-v2',
+    label: 'MiniLM L-12 (English, 0.12 GB)'
+  },
+  {
+    value: 'Xenova/ms-marco-MiniLM-L-6-v2',
+    label: 'MiniLM L-6 (English, 0.08 GB)'
+  },
+  { value: 'jinaai/jina-reranker-v1-tiny-en', label: 'Jina v1 tiny (English, 0.13 GB)' },
+  { value: 'disabled', label: 'Disabled — skip reranking' }
+]
+
 function RagSection({
   rag,
   onSaved
@@ -568,13 +590,59 @@ function RagSection({
   } | null>(null)
   const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
 
+  // Chat-side form state.
+  const [chatEndpoint, setChatEndpoint] = useState(rag.chat_endpoint)
+  const [chatModel, setChatModel] = useState(rag.chat_model)
+  const [chatApiKey, setChatApiKey] = useState(rag.chat_api_key)
+  const [chatPrompt, setChatPrompt] = useState(rag.chat_system_prompt)
+  const [showChatKey, setShowChatKey] = useState(false)
+
+  // Retrieval tunables — strings so the inputs stay editable while the
+  // user is typing (an empty string parses as NaN and the inputs would
+  // otherwise refuse to clear).
+  const [topK, setTopK] = useState(String(rag.top_k))
+  const [rerankCandidates, setRerankCandidates] = useState(String(rag.rerank_candidates))
+  const [neighbors, setNeighbors] = useState(String(rag.neighbors))
+  const [rerankModel, setRerankModel] = useState(rag.rerank_model)
+
+  // Chunking tunables — same string-state pattern as the retrieval
+  // section so the user can clear them mid-edit.
+  const [chunkMax, setChunkMax] = useState(String(rag.chunk_max_chars))
+  const [chunkSoft, setChunkSoft] = useState(String(rag.chunk_soft_split_chars))
+  const [chunkOverlap, setChunkOverlap] = useState(String(rag.chunk_overlap_msgs))
+
   useEffect(() => {
     setEndpoint(rag.embed_endpoint)
     setModel(rag.embed_model)
     setApiKey(rag.embed_api_key)
     setQueryPrefix(rag.embed_query_prefix)
     setDocPrefix(rag.embed_document_prefix)
+    setChatEndpoint(rag.chat_endpoint)
+    setChatModel(rag.chat_model)
+    setChatApiKey(rag.chat_api_key)
+    setChatPrompt(rag.chat_system_prompt)
+    setTopK(String(rag.top_k))
+    setRerankCandidates(String(rag.rerank_candidates))
+    setNeighbors(String(rag.neighbors))
+    setRerankModel(rag.rerank_model)
+    setChunkMax(String(rag.chunk_max_chars))
+    setChunkSoft(String(rag.chunk_soft_split_chars))
+    setChunkOverlap(String(rag.chunk_overlap_msgs))
   }, [rag])
+
+  const openIngest = useStore((s) => s.openIngest)
+  const triggerReingestAll = () => {
+    const confirmed = window.confirm(
+      'Re-ingest all logs?\n\n' +
+        'This wipes the existing vector index and rebuilds it for every ' +
+        'character × partner using the current chunking + embedding ' +
+        'settings. Existing chunks of incompatible shape (different ' +
+        'embedding dimension or chunk size) will be removed first. The ' +
+        'operation runs in the background and you can cancel mid-way.'
+    )
+    if (!confirmed) return
+    openIngest({}, 'All characters, all partners (re-ingest)', { forceRewipe: true })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -606,6 +674,25 @@ function RagSection({
   const save = async () => {
     setStatus('saving')
     setError(null)
+    // Coerce + clamp numeric strings here so a typo doesn't get to the
+    // sidecar as NaN. Bounds mirror the loader's clamp; out-of-range
+    // values are clamped silently rather than rejected.
+    const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
+      const n = Math.floor(Number(s))
+      if (!Number.isFinite(n)) return fallback
+      return Math.max(lo, Math.min(hi, n))
+    }
+    const nextTopK = clampInt(topK, 1, 50, rag.top_k)
+    const nextRC = clampInt(rerankCandidates, 1, 200, rag.rerank_candidates)
+    const nextNeighbors = clampInt(neighbors, 0, 5, rag.neighbors)
+    const nextChunkMax = clampInt(chunkMax, 500, 20000, rag.chunk_max_chars)
+    const nextChunkSoft = clampInt(
+      chunkSoft,
+      400,
+      Math.max(500, nextChunkMax - 100),
+      rag.chunk_soft_split_chars
+    )
+    const nextChunkOverlap = clampInt(chunkOverlap, 0, 5, rag.chunk_overlap_msgs)
     try {
       const updated = await api.settingsUpdate({
         rag: {
@@ -613,7 +700,18 @@ function RagSection({
           embed_model: model,
           embed_api_key: apiKey,
           embed_query_prefix: queryPrefix,
-          embed_document_prefix: docPrefix
+          embed_document_prefix: docPrefix,
+          chat_endpoint: chatEndpoint,
+          chat_model: chatModel,
+          chat_api_key: chatApiKey,
+          chat_system_prompt: chatPrompt,
+          rerank_model: rerankModel,
+          rerank_candidates: nextRC,
+          top_k: nextTopK,
+          neighbors: nextNeighbors,
+          chunk_max_chars: nextChunkMax,
+          chunk_soft_split_chars: nextChunkSoft,
+          chunk_overlap_msgs: nextChunkOverlap
         }
       })
       onSaved(updated.rag)
@@ -862,6 +960,321 @@ function RagSection({
             </span>
           )}
         </div>
+      </div>
+
+      <hr className="settings-divider" />
+      <h4 className="settings-subheading">Chat</h4>
+      <p className="settings-help">
+        LLM that answers questions over the retrieved chunks. Defaults
+        to the labels endpoint — point this at a larger / different
+        model if you prefer a separate chat brain.
+      </p>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-chat-endpoint">
+          Chat endpoint
+        </label>
+        <div className="settings-row">
+          {ENDPOINT_PRESETS.map((p) => (
+            <button
+              key={`chat-${p.url}`}
+              type="button"
+              className={`settings-preset ${chatEndpoint === p.url ? 'on' : ''}`}
+              onClick={() => setChatEndpoint(p.url)}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setChatEndpoint(rag.defaults.chat_endpoint)}
+          >
+            Default
+          </button>
+        </div>
+        <input
+          id="rag-chat-endpoint"
+          type="text"
+          className="settings-input"
+          value={chatEndpoint}
+          onChange={(e) => setChatEndpoint(e.target.value)}
+          data-testid="rag-chat-endpoint-input"
+        />
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-chat-model">
+          Chat model
+        </label>
+        <div className="settings-row">
+          <input
+            id="rag-chat-model"
+            type="text"
+            className="settings-input"
+            value={chatModel}
+            onChange={(e) => setChatModel(e.target.value)}
+            data-testid="rag-chat-model-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setChatModel(rag.defaults.chat_model)}
+          >
+            Default
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-chat-api-key">
+          API key (blank for local LM Studio / Ollama)
+        </label>
+        <div className="settings-row">
+          <input
+            id="rag-chat-api-key"
+            type={showChatKey ? 'text' : 'password'}
+            className="settings-input"
+            value={chatApiKey}
+            placeholder="sk-…"
+            autoComplete="off"
+            onChange={(e) => setChatApiKey(e.target.value)}
+            data-testid="rag-chat-api-key-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setShowChatKey((v) => !v)}
+            title={showChatKey ? 'Hide key' : 'Show key'}
+          >
+            {showChatKey ? 'Hide' : 'Show'}
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-chat-prompt">
+          Chat system prompt
+        </label>
+        <p className="settings-help">
+          Prepended as the system message before each retrieval call.
+          Empty resets to the bundled English default that asks the
+          model to ground answers in the cited chunks.
+        </p>
+        <textarea
+          id="rag-chat-prompt"
+          className="settings-textarea"
+          rows={10}
+          value={chatPrompt}
+          onChange={(e) => setChatPrompt(e.target.value)}
+          data-testid="rag-chat-prompt-input"
+        />
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setChatPrompt(rag.defaults.chat_system_prompt)}
+            disabled={chatPrompt === rag.defaults.chat_system_prompt}
+          >
+            Reset to default prompt
+          </button>
+          <span className="settings-meta">{chatPrompt.length.toLocaleString()} chars</span>
+        </div>
+      </div>
+
+      <hr className="settings-divider" />
+      <h4 className="settings-subheading">Retrieval</h4>
+      <p className="settings-help">
+        How many chunks fetch / rerank / send to the LLM per question.
+        These tunables don't require a re-ingest — changes take effect
+        on the next chat message.
+      </p>
+
+      <div className="settings-field">
+        <label className="settings-label">Top-K, rerank candidates, neighbors</label>
+        <p className="settings-help">
+          <code>top-K</code> goes to the LLM; <code>rerank candidates</code> is
+          how many we pull from Qdrant before reranking down to top-K;{' '}
+          <code>neighbors</code> expands each hit by ±N adjacent chunks for
+          extra context (0 disables expansion).
+        </p>
+        <div className="settings-row">
+          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '5.5rem' }}>
+            Top-K
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            className="settings-input settings-input-narrow"
+            value={topK}
+            onChange={(e) => setTopK(e.target.value)}
+            data-testid="rag-top-k-input"
+          />
+        </div>
+        <div className="settings-row">
+          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '5.5rem' }}>
+            Candidates
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={200}
+            className="settings-input settings-input-narrow"
+            value={rerankCandidates}
+            onChange={(e) => setRerankCandidates(e.target.value)}
+            data-testid="rag-rerank-candidates-input"
+          />
+        </div>
+        <div className="settings-row">
+          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '5.5rem' }}>
+            Neighbors
+          </label>
+          <input
+            type="number"
+            min={0}
+            max={5}
+            className="settings-input settings-input-narrow"
+            value={neighbors}
+            onChange={(e) => setNeighbors(e.target.value)}
+            data-testid="rag-neighbors-input"
+          />
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-rerank-model">
+          Reranker model
+        </label>
+        <p className="settings-help">
+          Cross-encoder that re-scores Qdrant candidates against the
+          query. Downloads on first use to{' '}
+          <code>~/Documents/flist-workbench/models/</code>. Bigger
+          multilingual models cost more disk + memory but recover
+          recall on non-English corpora.
+        </p>
+        <div className="settings-row">
+          <select
+            id="rag-rerank-model"
+            className="settings-input"
+            value={rerankModel}
+            onChange={(e) => setRerankModel(e.target.value)}
+            data-testid="rag-rerank-model-input"
+          >
+            {RERANK_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setRerankModel(rag.defaults.rerank_model)}
+          >
+            Default
+          </button>
+        </div>
+      </div>
+
+      <hr className="settings-divider" />
+      <h4 className="settings-subheading">Chunking</h4>
+      <p className="settings-help">
+        How parsed messages get grouped into retrieval chunks. Smaller
+        chunks improve "find the exact moment" queries at the cost of
+        more vectors to embed; more overlap reduces meaning getting cut
+        mid-exchange. <strong>Changing any of these requires a
+        re-ingest</strong> for existing data to use the new shape — use
+        the button below.
+      </p>
+
+      <div className="settings-field">
+        <label className="settings-label">Max / soft-split / overlap</label>
+        <div className="settings-row">
+          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '6.5rem' }}>
+            Max chars
+          </label>
+          <input
+            type="number"
+            min={500}
+            max={20000}
+            step={100}
+            className="settings-input settings-input-narrow"
+            value={chunkMax}
+            onChange={(e) => setChunkMax(e.target.value)}
+            data-testid="rag-chunk-max-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setChunkMax(String(rag.defaults.chunk_max_chars))}
+          >
+            Default ({rag.defaults.chunk_max_chars})
+          </button>
+        </div>
+        <div className="settings-row">
+          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '6.5rem' }}>
+            Soft split
+          </label>
+          <input
+            type="number"
+            min={400}
+            max={20000}
+            step={100}
+            className="settings-input settings-input-narrow"
+            value={chunkSoft}
+            onChange={(e) => setChunkSoft(e.target.value)}
+            data-testid="rag-chunk-soft-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setChunkSoft(String(rag.defaults.chunk_soft_split_chars))}
+          >
+            Default ({rag.defaults.chunk_soft_split_chars})
+          </button>
+        </div>
+        <div className="settings-row">
+          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '6.5rem' }}>
+            Overlap msgs
+          </label>
+          <input
+            type="number"
+            min={0}
+            max={5}
+            className="settings-input settings-input-narrow"
+            value={chunkOverlap}
+            onChange={(e) => setChunkOverlap(e.target.value)}
+            data-testid="rag-chunk-overlap-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setChunkOverlap(String(rag.defaults.chunk_overlap_msgs))}
+          >
+            Default ({rag.defaults.chunk_overlap_msgs})
+          </button>
+        </div>
+      </div>
+
+      <hr className="settings-divider" />
+      <h4 className="settings-subheading">Index maintenance</h4>
+      <p className="settings-help">
+        Wipe the local Qdrant collection and re-embed every conversation
+        from scratch with the current chunking + embedding settings.
+        Use this after switching embedding model or adjusting chunk
+        size; otherwise old chunks of an incompatible shape can linger
+        alongside new ones.
+      </p>
+      <div className="settings-actions">
+        <button
+          type="button"
+          className="settings-clear"
+          onClick={triggerReingestAll}
+          data-testid="rag-reingest-all"
+        >
+          Re-ingest all (wipe + rebuild)…
+        </button>
       </div>
 
       {error && <p className="settings-error">{error}</p>}
