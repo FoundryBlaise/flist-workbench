@@ -8,6 +8,7 @@ import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
+import { ChatPanel } from '../features/rag/ChatPanel'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
@@ -30,6 +31,8 @@ export function AppLayout() {
   const ingestTarget = useStore((s) => s.ingestTarget)
   const openIngest = useStore((s) => s.openIngest)
   const closeIngest = useStore((s) => s.closeIngest)
+  const chatPanelOpen = useStore((s) => s.chatPanelOpen)
+  const toggleChatPanel = useStore((s) => s.toggleChatPanel)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -115,6 +118,13 @@ export function AppLayout() {
         case 'ingest-all':
           openIngest({}, 'All characters, all partners')
           break
+        case 'chat-toggle':
+          // Opening the chat panel also flips to logs mode — chat is
+          // contextual to the log viewer, so launching it from the
+          // editor surface should put the user where the panel lives.
+          if (mode !== 'logs') setMode('logs')
+          toggleChatPanel()
+          break
       }
     })
   }, [
@@ -123,7 +133,9 @@ export function AppLayout() {
     activeChar,
     activePartner,
     openClassify,
-    openIngest
+    openIngest,
+    toggleChatPanel,
+    mode
   ])
 
   // The header centre piece identifies what the user is currently
@@ -176,7 +188,11 @@ export function AppLayout() {
           onClose={closeIngest}
         />
       )}
-      <main className={`main main-${mode}`}>
+      <main
+        className={`main main-${mode}${
+          mode === 'logs' && chatPanelOpen ? ' main-logs-with-chat' : ''
+        }`}
+      >
         <Sidebar />
         {mode === 'editor' ? (
           <>
@@ -186,7 +202,10 @@ export function AppLayout() {
         ) : crossSearchOpen ? (
           <CrossSearch onClose={() => setCrossSearchOpen(false)} />
         ) : (
-          <LogViewer />
+          <>
+            <LogViewer />
+            {chatPanelOpen && <ChatPanel />}
+          </>
         )}
       </main>
     </div>

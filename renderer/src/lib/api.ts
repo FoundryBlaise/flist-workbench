@@ -103,13 +103,61 @@ export type RagSettings = {
   embed_api_key: string
   embed_query_prefix: string
   embed_document_prefix: string
+  chat_endpoint: string
+  chat_model: string
+  chat_api_key: string
+  chat_system_prompt: string
+  rerank_model: string
+  rerank_candidates: number
+  top_k: number
+  neighbors: number
   defaults: {
     embed_endpoint: string
     embed_model: string
     embed_api_key: string
     embed_query_prefix: string
     embed_document_prefix: string
+    chat_endpoint: string
+    chat_model: string
+    chat_api_key: string
+    chat_system_prompt: string
+    rerank_model: string
+    rerank_candidates: number
+    top_k: number
+    neighbors: number
   }
+}
+
+export type RagCitation = {
+  chunk_id: string | null
+  char_owner: string | null
+  partner: string | null
+  date: string | null
+  label: string | null
+  ts_start: number | null
+  ts_end: number | null
+  speakers: string[]
+  score: number
+  rerank_score?: number | null
+  expanded: boolean
+}
+
+export type RagQueryScope = {
+  character?: string | null
+  partner?: string | null
+  partners?: string[] | null
+}
+
+export type RagQueryHandlers = {
+  onRetrieved?: (info: {
+    hit_count: number
+    rerank_applied: boolean
+    rerank_model: string | null
+    embed_model: string
+  }) => void
+  onToken?: (content: string) => void
+  onDone?: (citations: RagCitation[]) => void
+  onError?: (info: { stage: string; message: string }) => void
 }
 
 export type LabelsStats = {
@@ -176,6 +224,33 @@ export type RagStatus = {
 
 function base(): string {
   return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:8765'
+}
+
+function dispatchSseBlock(block: string, handlers: RagQueryHandlers): void {
+  let event: string | null = null
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
+  }
+  if (!event) return
+  const data = dataLines.join('\n')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(data)
+  } catch {
+    // Sidecar always emits JSON; a malformed payload is a bug, drop it.
+    return
+  }
+  if (event === 'retrieved' && handlers.onRetrieved) {
+    handlers.onRetrieved(parsed as Parameters<NonNullable<RagQueryHandlers['onRetrieved']>>[0])
+  } else if (event === 'token' && handlers.onToken) {
+    handlers.onToken((parsed as { content: string }).content)
+  } else if (event === 'done' && handlers.onDone) {
+    handlers.onDone((parsed as { citations: RagCitation[] }).citations)
+  } else if (event === 'error' && handlers.onError) {
+    handlers.onError(parsed as { stage: string; message: string })
+  }
 }
 
 async function request<T>(
@@ -349,6 +424,57 @@ export const api = {
       { method: 'DELETE' }
     ),
   ragStatus: () => get<RagStatus>('/rag/status'),
+  ragQuery: async (
+    body: {
+      question: string
+      scope?: RagQueryScope | null
+      top_k?: number
+      neighbors?: number
+    },
+    handlers: RagQueryHandlers,
+    opts?: ApiOptions
+  ): Promise<void> => {
+    // SSE consumer using fetch streaming. ReadableStream is available
+    // in Electron's chromium renderer; no EventSource because we want
+    // POST with a JSON body which EventSource doesn't support.
+    const res = await fetch(`${base()}/rag/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+      signal: opts?.signal
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        // SSE events are separated by a blank line.
+        let sep
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          dispatchSseBlock(block, handlers)
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) {
+        // Tail event without trailing blank line — still dispatch.
+        dispatchSseBlock(buffer, handlers)
+      }
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // best-effort
+      }
+    }
+  },
   labelsJobGet: (id: string, opts?: ApiOptions) =>
     get<ClassifyJob>(`/labels/jobs/${encodeURIComponent(id)}`, opts),
   labelsJobCancel: (id: string) =>

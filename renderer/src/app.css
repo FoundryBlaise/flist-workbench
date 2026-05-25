@@ -127,6 +127,7 @@ body {
 }
 .main-editor { grid-template-columns: 260px 1fr 1fr; }
 .main-logs { grid-template-columns: 260px 1fr; }
+.main-logs-with-chat { grid-template-columns: 260px 1fr 380px; }
 
 /* Sidebar */
 .sidebar {
@@ -1781,3 +1782,176 @@ body {
 .log-text { white-space: pre-wrap; word-wrap: break-word; }
 .log-hit { background: #6a5e1f; color: #ffeba8; padding: 0 2px; border-radius: 2px; }
 .log-hit-active { background: #c08a30; color: #1a1a1a; }
+
+/* Chat panel — RAG chat surface beside the Log Viewer. Lives in the
+   main-logs-with-chat grid column. */
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-meta);
+}
+.chat-title {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.chat-scope-chip {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--row-hover);
+  color: var(--text);
+  font-size: var(--font-meta);
+}
+.chat-flex { flex: 1; }
+.chat-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+.chat-close:hover { color: var(--text); }
+.chat-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-empty {
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  line-height: 1.5;
+}
+.chat-empty code { font-family: var(--font-mono); }
+.chat-turn {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--hover-soft);
+  font-size: var(--font-body);
+  line-height: 1.45;
+}
+.chat-turn-user { background: var(--row-hover); }
+.chat-turn-system {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--font-meta);
+  white-space: pre-wrap;
+}
+.chat-turn-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--font-meta);
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.chat-role {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.chat-scope-meta { font-style: italic; }
+.chat-streaming {
+  color: var(--accent);
+  font-size: var(--font-meta);
+}
+.chat-turn-body { white-space: pre-wrap; word-wrap: break-word; }
+.chat-turn-error {
+  margin-top: 6px;
+  color: var(--accent-2);
+  font-size: var(--font-meta);
+}
+.chat-citations {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.chat-citation {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: var(--font-meta);
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+.chat-citation:hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+.chat-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.chat-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+  font-size: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.chat-textarea:focus { outline: 1px solid var(--accent); }
+.chat-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-input-hint { flex: 1; display: flex; gap: 4px; }
+.chat-meta-pill {
+  background: var(--row-hover);
+  color: var(--text-dim);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: var(--font-meta);
+  font-family: var(--font-mono);
+}
+.chat-send, .chat-stop {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--font-meta);
+}
+.chat-send:disabled {
+  background: var(--row-hover);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+.chat-stop { background: var(--accent-2); }
+
+/* Log-jump highlight — the LogViewer applies this class to a message
+   when the user clicks a citation, then fades it out after a few seconds. */
+.log-msg-jump-target {
+  background: var(--hover-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+  transition: background 1.2s ease-out, box-shadow 1.2s ease-out;
+}
+.log-msg-jump-target.fading {
+  background: transparent;
+  box-shadow: inset 3px 0 0 transparent;
+}

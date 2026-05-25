@@ -20,12 +20,22 @@ def _settings(
     qp: str = "",
     dp: str = "",
 ) -> RagSettings:
+    # Chat-side and rerank fields have to be present even though
+    # rag_embed never reads them — the dataclass is frozen.
     return RagSettings(
         embed_endpoint=endpoint,
         embed_model=model,
         embed_api_key=api_key,
         embed_query_prefix=qp,
         embed_document_prefix=dp,
+        chat_endpoint="http://chat.test/v1",
+        chat_model="chat-model",
+        chat_api_key="",
+        chat_system_prompt="system",
+        rerank_model="disabled",
+        rerank_candidates=30,
+        top_k=5,
+        neighbors=1,
     )
 
 

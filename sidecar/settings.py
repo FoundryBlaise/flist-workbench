@@ -49,6 +49,22 @@ KEY_RAG_EMBED_API_KEY = "rag.embed_api_key"
 KEY_RAG_EMBED_QUERY_PREFIX = "rag.embed_query_prefix"
 KEY_RAG_EMBED_DOCUMENT_PREFIX = "rag.embed_document_prefix"
 
+# RAG chat / query-time settings. chat_endpoint defaults to the labels
+# endpoint (LM Studio often hosts both chat and embedding side-by-side
+# at the same port); chat_model defaults to the labels model. The
+# system prompt is user-editable; empty string falls back to the
+# DEFAULT_SYSTEM_PROMPT in rag_query.
+KEY_RAG_CHAT_ENDPOINT = "rag.chat_endpoint"
+KEY_RAG_CHAT_MODEL = "rag.chat_model"
+KEY_RAG_CHAT_API_KEY = "rag.chat_api_key"
+KEY_RAG_CHAT_SYSTEM_PROMPT = "rag.chat_system_prompt"
+# Retrieval / rerank tunables. Stored as strings; numeric coercion in
+# the loader, with clamping for safety.
+KEY_RAG_RERANK_MODEL = "rag.rerank_model"
+KEY_RAG_RERANK_CANDIDATES = "rag.rerank_candidates"
+KEY_RAG_TOP_K = "rag.top_k"
+KEY_RAG_NEIGHBORS = "rag.neighbors"
+
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
     # Reuse documents.connect so we share the same DB file. It already

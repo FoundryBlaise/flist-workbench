@@ -59,6 +59,14 @@ type State = {
       }
     | null
 
+  /** Visibility of the RAG chat panel beside the Log Viewer. */
+  chatPanelOpen: boolean
+  /** Pending "scroll the log viewer to this timestamp range" intent
+   *  raised by a clicked citation. LogViewer consumes & clears it. */
+  logJump:
+    | { character: string; partner: string; ts_start: number; ts_end: number; nonce: number }
+    | null
+
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
@@ -103,6 +111,14 @@ type State = {
     label: string
   ) => void
   closeIngest: () => void
+  toggleChatPanel: (force?: boolean) => void
+  requestLogJump: (
+    character: string,
+    partner: string,
+    ts_start: number,
+    ts_end: number
+  ) => void
+  clearLogJump: () => void
   applyLabelOverride: (
     char: string,
     partner: string,
@@ -182,6 +198,8 @@ export const useStore = create<State>((set, get) => ({
 
   classifyTarget: null,
   ingestTarget: null,
+  chatPanelOpen: false,
+  logJump: null,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -314,6 +332,24 @@ export const useStore = create<State>((set, get) => ({
 
   closeIngest() {
     set({ ingestTarget: null })
+  },
+
+  toggleChatPanel(force) {
+    set((s) => ({
+      chatPanelOpen: typeof force === 'boolean' ? force : !s.chatPanelOpen
+    }))
+  },
+
+  requestLogJump(character, partner, ts_start, ts_end) {
+    // nonce guarantees a fresh value even if the user clicks the same
+    // citation twice — useEffect dependencies see a new reference.
+    set({
+      logJump: { character, partner, ts_start, ts_end, nonce: Date.now() }
+    })
+  },
+
+  clearLogJump() {
+    set({ logJump: null })
   },
 
   // Patches a single message's label fields in place. `patch === null`

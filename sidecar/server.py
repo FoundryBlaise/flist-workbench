@@ -1,17 +1,21 @@
+import json
 import os
 from dataclasses import asdict
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import documents
 import labels as labels_store
 import labels_jobs
 import rag as rag_settings
+import rag_chat
 import rag_embed
 import rag_jobs
+import rag_query
 import rag_store
 import settings as settings_store
 from flist import ProfileNotFound, fetch_profile
@@ -302,6 +306,9 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
     import time as _time
 
     saved = rag_settings.load_settings()
+    # Only the embedding-side fields are overridable from this endpoint
+    # — chat / rerank / retrieval tunables ride on saved settings to
+    # keep the test surface tight.
     merged = rag_settings.RagSettings(
         embed_endpoint=body.embed_endpoint or saved.embed_endpoint,
         embed_model=body.embed_model or saved.embed_model,
@@ -318,6 +325,14 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
             if body.embed_document_prefix is not None
             else saved.embed_document_prefix
         ),
+        chat_endpoint=saved.chat_endpoint,
+        chat_model=saved.chat_model,
+        chat_api_key=saved.chat_api_key,
+        chat_system_prompt=saved.chat_system_prompt,
+        rerank_model=saved.rerank_model,
+        rerank_candidates=saved.rerank_candidates,
+        top_k=saved.top_k,
+        neighbors=saved.neighbors,
     )
 
     # 60 s probe budget: cold-loading a 768-dim model in LM Studio
@@ -430,6 +445,135 @@ def rag_status() -> dict:
         "last_ingest_at": manifest.last_ingest_at,
         "chunk_count": chunk_count,
     }
+
+
+class RagQueryScope(BaseModel):
+    character: str | None = None
+    partner: str | None = None
+    partners: list[str] | None = None
+
+
+class RagQueryRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    scope: RagQueryScope | None = None
+    # Per-request overrides — the chat panel exposes these via slash
+    # commands (/top, /neighbors). Server clamps the same way the
+    # settings loader does so a runaway /top 9999 doesn't try to
+    # retrieve thousands of chunks.
+    top_k: int | None = None
+    neighbors: int | None = None
+
+
+def _sse_event(event: str, data: dict | str) -> bytes:
+    """Format one SSE message. Reuses the OpenAI streaming convention:
+    each event has an `event:` name + a JSON `data:` payload, separated
+    by a blank line.
+    """
+    if isinstance(data, str):
+        payload = data
+    else:
+        payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+
+
+@app.post("/rag/query")
+def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
+    """SSE stream: 'token' events with per-delta content, then a 'done'
+    event carrying the citation list. Errors emit an 'error' event and
+    close the stream so the renderer can render a single failure pill
+    rather than parsing HTTP non-2xx.
+
+    Pipeline runs synchronously up to the LLM call (cheap), then yields
+    deltas as the LLM streams. Citations are computed up-front from the
+    retrieval hits — they don't depend on the LLM's response, so the
+    final `done` event has them ready the instant the stream completes.
+    """
+    rag_set = rag_settings.load_settings()
+    scope = body.scope.model_dump(exclude_none=True) if body.scope else None
+    top_k = body.top_k if body.top_k is not None else rag_set.top_k
+    neighbors = body.neighbors if body.neighbors is not None else rag_set.neighbors
+    # Clamp the same way the settings loader does — overrides shouldn't
+    # be able to do what saved settings can't.
+    top_k = max(1, min(50, int(top_k)))
+    neighbors = max(0, min(5, int(neighbors)))
+
+    def producer():
+        # Phase 1: retrieval. Failures here are visible to the user
+        # immediately as an `error` SSE event — no partial LLM stream.
+        try:
+            with rag_store.RagStore() as store:
+                if not store.collection_exists():
+                    yield _sse_event(
+                        "error",
+                        {
+                            "stage": "retrieval",
+                            "message": (
+                                "no RAG index yet — run Logs → Ingest before asking."
+                            ),
+                        },
+                    )
+                    return
+                try:
+                    result = rag_query.run_query(
+                        body.question,
+                        scope=scope,
+                        store=store,
+                        rag_set=rag_set,
+                        rerank_model=rag_set.rerank_model,
+                        rerank_candidates=rag_set.rerank_candidates,
+                        top_k=top_k,
+                        neighbors=neighbors,
+                        system_prompt=rag_set.chat_system_prompt,
+                    )
+                except rag_embed.EmbedError as exc:
+                    yield _sse_event(
+                        "error", {"stage": "embed", "message": str(exc)}
+                    )
+                    return
+                citations = rag_query.citation_payload(result.hits)
+
+            # Phase 1.5: tell the renderer what we retrieved before any
+            # LLM tokens arrive — useful so the citation chip strip can
+            # render while the answer streams.
+            yield _sse_event(
+                "retrieved",
+                {
+                    "hit_count": len(citations),
+                    "rerank_applied": result.rerank_applied,
+                    "rerank_model": result.rerank_model,
+                    "embed_model": result.embed_model,
+                },
+            )
+
+            # Phase 2: stream the LLM answer.
+            try:
+                for delta in rag_chat.stream_chat(
+                    rag_set.chat_endpoint,
+                    rag_set.chat_model,
+                    rag_set.chat_api_key,
+                    result.messages,
+                ):
+                    yield _sse_event("token", {"content": delta})
+            except rag_chat.ChatError as exc:
+                yield _sse_event(
+                    "error", {"stage": "chat", "message": str(exc)}
+                )
+                return
+
+            yield _sse_event("done", {"citations": citations})
+        except Exception as exc:  # noqa: BLE001 — last-resort: don't bring down the stream silently
+            yield _sse_event(
+                "error", {"stage": "unknown", "message": repr(exc)}
+            )
+
+    return StreamingResponse(
+        producer(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---- labels jobs (continued) ------------------------------------------
@@ -581,6 +725,17 @@ class RagSettingsUpdate(BaseModel):
     embed_api_key: str | None = None
     embed_query_prefix: str | None = None
     embed_document_prefix: str | None = None
+    # Chat / query-time fields. None = untouched; "" = reset to default.
+    # Numeric fields are int|None — empty string isn't meaningful for an
+    # int. The renderer just sends None when the user wants the default.
+    chat_endpoint: str | None = None
+    chat_model: str | None = None
+    chat_api_key: str | None = None
+    chat_system_prompt: str | None = None
+    rerank_model: str | None = None
+    rerank_candidates: int | None = None
+    top_k: int | None = None
+    neighbors: int | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -635,15 +790,41 @@ def _settings_dict(conn) -> dict:
             "embed_api_key": rag.embed_api_key,
             "embed_query_prefix": rag.embed_query_prefix,
             "embed_document_prefix": rag.embed_document_prefix,
+            "chat_endpoint": rag.chat_endpoint,
+            "chat_model": rag.chat_model,
+            "chat_api_key": rag.chat_api_key,
+            "chat_system_prompt": rag.chat_system_prompt,
+            "rerank_model": rag.rerank_model,
+            "rerank_candidates": rag.rerank_candidates,
+            "top_k": rag.top_k,
+            "neighbors": rag.neighbors,
             "defaults": {
                 "embed_endpoint": rag_settings.DEFAULT_EMBED_ENDPOINT,
                 "embed_model": rag_settings.DEFAULT_EMBED_MODEL,
                 "embed_api_key": rag_settings.DEFAULT_EMBED_API_KEY,
                 "embed_query_prefix": rag_settings.DEFAULT_EMBED_QUERY_PREFIX,
                 "embed_document_prefix": rag_settings.DEFAULT_EMBED_DOCUMENT_PREFIX,
+                "chat_endpoint": rag_settings.DEFAULT_CHAT_ENDPOINT,
+                "chat_model": rag_settings.DEFAULT_CHAT_MODEL,
+                "chat_api_key": rag_settings.DEFAULT_CHAT_API_KEY,
+                # Expose the resolved English default so the UI can
+                # show "Reset to default" without hardcoding it.
+                "chat_system_prompt": _resolve_default_chat_prompt(),
+                "rerank_model": rag_settings.DEFAULT_RERANK_MODEL,
+                "rerank_candidates": rag_settings.DEFAULT_RERANK_CANDIDATES,
+                "top_k": rag_settings.DEFAULT_TOP_K,
+                "neighbors": rag_settings.DEFAULT_NEIGHBORS,
             },
         },
     }
+
+
+def _resolve_default_chat_prompt() -> str:
+    # Lazy import — rag_query imports rag, rag imports rag_query in
+    # its loader, so doing this at module top would cycle.
+    from rag_query import DEFAULT_SYSTEM_PROMPT
+
+    return DEFAULT_SYSTEM_PROMPT
 
 
 @app.get("/settings")
@@ -725,6 +906,11 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
         ("embed_api_key", settings_store.KEY_RAG_EMBED_API_KEY),
         ("embed_query_prefix", settings_store.KEY_RAG_EMBED_QUERY_PREFIX),
         ("embed_document_prefix", settings_store.KEY_RAG_EMBED_DOCUMENT_PREFIX),
+        ("chat_endpoint", settings_store.KEY_RAG_CHAT_ENDPOINT),
+        ("chat_model", settings_store.KEY_RAG_CHAT_MODEL),
+        ("chat_api_key", settings_store.KEY_RAG_CHAT_API_KEY),
+        ("chat_system_prompt", settings_store.KEY_RAG_CHAT_SYSTEM_PROMPT),
+        ("rerank_model", settings_store.KEY_RAG_RERANK_MODEL),
     ):
         value = getattr(update, field)
         if value is None:
@@ -733,6 +919,17 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
             settings_store.clear(conn, key)
         else:
             settings_store.set_value(conn, key, value)
+
+    # Numeric fields: int|None. Clamp + store as string.
+    if update.rerank_candidates is not None:
+        n = max(1, min(200, int(update.rerank_candidates)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_RERANK_CANDIDATES, str(n))
+    if update.top_k is not None:
+        n = max(1, min(50, int(update.top_k)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_TOP_K, str(n))
+    if update.neighbors is not None:
+        n = max(0, min(5, int(update.neighbors)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_NEIGHBORS, str(n))
 
 
 # ---- documents ----------------------------------------------------------
