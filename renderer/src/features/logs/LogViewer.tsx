@@ -7,19 +7,36 @@ import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
 
 type LabelMenuState = { x: number; y: number; msg: LogMessage } | null
 
-// Three semantic chips for resolved IC/OOC/Unlabeled + one for the
-// F-Chat "System" type bucket (ads/rolls/warns/events) which is
-// independent of IC/OOC and useful to silence separately.
-type Filter = { ic: boolean; ooc: boolean; unlabeled: boolean; system: boolean }
-const DEFAULT_FILTER: Filter = { ic: true, ooc: true, unlabeled: true, system: true }
+// Semantic chips for resolved IC / OOC / Unlabeled / Failed + one for
+// the F-Chat "System" type bucket (ads/rolls/warns/events) which is
+// independent of IC/OOC and useful to silence separately. "Failed" is
+// a sidecar-tracked state for messages whose classify call errored;
+// the user fixes them via the per-message Mark IC / Mark OOC menu.
+type Filter = {
+  ic: boolean
+  ooc: boolean
+  unlabeled: boolean
+  failed: boolean
+  system: boolean
+}
+const DEFAULT_FILTER: Filter = {
+  ic: true,
+  ooc: true,
+  unlabeled: true,
+  failed: true,
+  system: true,
+}
+
+type Bucket = 'ic' | 'ooc' | 'unlabeled' | 'failed' | 'system'
 
 // A message's effective label for filtering. System-type messages
 // (ad/roll/warn/event) get bucketed as "System" regardless of label
 // — they're never roleplay content.
-function effectiveBucket(m: LogMessage): 'ic' | 'ooc' | 'unlabeled' | 'system' {
+function effectiveBucket(m: LogMessage): Bucket {
   if (m.kind === 'system') return 'system'
   if (m.label === 'IC') return 'ic'
   if (m.label === 'OOC') return 'ooc'
+  if (m.label === 'Failed') return 'failed'
   // Missing label (shouldn't happen with new sidecar, but defensive) or
   // explicit Unlabeled — both bucket as unlabeled.
   return 'unlabeled'
@@ -233,26 +250,34 @@ export function LogViewer() {
 
   const stats = useMemo(() => {
     if (!messages)
-      return { total: 0, ic: 0, ooc: 0, unlabeled: 0, system: 0, labeled: 0, from: '', to: '' }
-    // Single pass instead of three filters over 80k+ items.
+      return {
+        total: 0, ic: 0, ooc: 0, unlabeled: 0, failed: 0, system: 0,
+        labeled: 0, from: '', to: '',
+      }
     let ic = 0
     let ooc = 0
     let unlabeled = 0
+    let failed = 0
     let system = 0
     // Messages with an explicit LLM/manual label — i.e. rows in
     // labels.db that the "Reset all labels" action would clear.
+    // Failed rows live in a parallel table and don't count here.
     let labeled = 0
     for (const m of messages) {
       const b = effectiveBucket(m)
       if (b === 'ic') ic++
       else if (b === 'ooc') ooc++
       else if (b === 'unlabeled') unlabeled++
+      else if (b === 'failed') failed++
       else system++
-      if (m.label_source) labeled++
+      if (m.label_source === 'llm' || m.label_source === 'manual') labeled++
     }
     const from = messages.length ? dayLabel(messages[0].ts) : ''
     const to = messages.length ? dayLabel(messages[messages.length - 1].ts) : ''
-    return { total: messages.length, ic, ooc, unlabeled, system, labeled, from, to }
+    return {
+      total: messages.length, ic, ooc, unlabeled, failed, system,
+      labeled, from, to,
+    }
   }, [messages])
 
   type Item =
@@ -383,13 +408,19 @@ export function LogViewer() {
   }
 
   // Chip tooltips. IC/OOC/Unlabeled come from the resolver (rule + LLM
-  // + manual). System is F-Chat's ad/roll/warn/event bucket — kept as
-  // a separate filter because it's neither IC nor OOC and the user
-  // might want to silence it independently.
+  // + manual). Failed messages had a classify call that errored — fix
+  // them via right-click → Mark IC/OOC, or re-run Classify. System is
+  // F-Chat's ad/roll/warn/event bucket — kept as a separate filter
+  // because it's neither IC nor OOC and the user might want to silence
+  // it independently.
   const labelTooltip =
     'IC / OOC / Unlabeled come from the classifier. ' +
     'Short text (<200 chars by default) and "((…" are auto-OOC; ' +
     'everything else is Unlabeled until you run Classify on this conversation.'
+  const failedTooltip =
+    'Messages whose classify call errored (bad JSON, HTTP error, timeout). ' +
+    'Right-click → Mark IC / Mark OOC to fix manually, or re-run Classify ' +
+    'to retry. Full debug context is in classify-failures.log (Tools menu).'
   const systemTooltip =
     'Ads, dice rolls, warnings and channel events. Not roleplay content.'
 
@@ -588,6 +619,15 @@ export function LogViewer() {
           onClick={() => setFilter((f) => ({ ...f, unlabeled: !f.unlabeled }))}
           title={labelTooltip}
         />
+        {stats.failed > 0 && (
+          <FilterButton
+            label="Failed"
+            count={stats.failed}
+            on={filter.failed}
+            onClick={() => setFilter((f) => ({ ...f, failed: !f.failed }))}
+            title={failedTooltip}
+          />
+        )}
         <FilterButton
           label="System"
           count={stats.system}
@@ -836,6 +876,7 @@ function MessageRow({
         reason={msg.label_reason}
         priorLabel={msg.prior_label}
         priorSource={msg.prior_source}
+        error={msg.label_error}
       />
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
@@ -1126,21 +1167,26 @@ function LabelBadge({
   source,
   reason,
   priorLabel,
-  priorSource
+  priorSource,
+  error
 }: {
-  bucket: 'ic' | 'ooc' | 'unlabeled' | 'system'
+  bucket: Bucket
   label?: Label
-  source?: 'llm' | 'manual'
+  source?: 'llm' | 'manual' | 'failed'
   reason?: string
   // Sidecar only ever sets prior_label when the user manually
   // overrode an IC or OOC label, so the wire shape is just IC|OOC.
   priorLabel?: 'IC' | 'OOC'
   priorSource?: 'llm' | 'manual'
+  // Classifier error string when bucket === 'failed'. Truncated
+  // server-side to 500 chars; the full prompt + raw is in the JSONL
+  // log accessed via Tools → Open classify failure log.
+  error?: string
 }) {
-  // IC / OOC keep their full word — short, semantically loaded, and
-  // the chip strip uses the same spelling. Unlabeled and System show
-  // a single em-dash because the chip strip already names them and a
-  // tiny "UNL"/"SYS" badge was both jargon-y and a contrast hazard.
+  // IC / OOC / Failed get a visible word; Unlabeled and System show
+  // an em-dash because the chip strip already names them and a tiny
+  // "UNL"/"SYS" badge was both jargon-y and a contrast hazard. Failed
+  // is loud-by-design — the user needs to *see* it to fix it.
   const text =
     bucket === 'system'
       ? '—'
@@ -1148,7 +1194,9 @@ function LabelBadge({
         ? '—'
         : bucket === 'ic'
           ? 'IC'
-          : 'OOC'
+          : bucket === 'failed'
+            ? '!'
+            : 'OOC'
   const klass = [
     'log-label',
     `log-label-${bucket}`,
@@ -1157,11 +1205,12 @@ function LabelBadge({
     .filter(Boolean)
     .join(' ')
   // Tooltip: source line, model's reason (if any), prior-label trail
-  // for manual overrides. Confidence used to be in here but the
-  // model never returned anything below 0.95 so the number was
-  // information-free; dropped it.
+  // for manual overrides, or the failure error string for Failed.
   const lines: string[] = []
-  if (source) {
+  if (bucket === 'failed') {
+    lines.push('Classify failed — right-click to fix manually')
+    if (error) lines.push(error)
+  } else if (source === 'llm' || source === 'manual') {
     lines.push(`${label} · ${source}`)
   } else if (bucket === 'system') {
     lines.push('F-Chat system message')
@@ -1170,7 +1219,7 @@ function LabelBadge({
   } else {
     lines.push(`${label} · rule`)
   }
-  if (reason) lines.push(reason)
+  if (reason && bucket !== 'failed') lines.push(reason)
   if (source === 'manual' && priorLabel) {
     lines.push(`was ${priorLabel} (${priorSource ?? 'auto'})`)
   }
@@ -1178,7 +1227,11 @@ function LabelBadge({
     <span
       className={klass}
       title={lines.join('\n')}
-      aria-label={source === 'manual' ? `${label}, manually labeled` : undefined}
+      aria-label={
+        bucket === 'failed'
+          ? 'Classification failed'
+          : source === 'manual' ? `${label}, manually labeled` : undefined
+      }
     >
       {text}
       {source === 'manual' && (

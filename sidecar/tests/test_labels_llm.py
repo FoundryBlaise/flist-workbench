@@ -279,15 +279,33 @@ def test_classify_records_failure_on_bad_json(tmp_path: Path, monkeypatch: pytes
     msgs = [_msg(1, long)]
     fake, _ = _mk_urlopen(["not actually json"])
     monkeypatch.setattr(labels_llm, "urlopen", fake)
+    # Pin both the labels DB AND the failure log into tmp_path so the
+    # test doesn't leak into the dev user-data dir.
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     conn = labels_store.connect(root=tmp_path)
     try:
         summary = labels_llm.classify_messages(
             "C", "P", msgs, _settings(), conn, concurrency=1
         )
+        assert summary["classified"] == 0
+        assert summary["failed"] == 1
+        # DB row written so the resolver can surface "Failed".
+        failures = labels_store.failures_for_partner(conn, "C", "P")
+        assert len(failures) == 1
+        row = next(iter(failures.values()))
+        assert "bad json" in row["error"]
+        # JSONL log written, one line, includes prompt + raw message.
+        log = labels_llm.failure_log_path(tmp_path).read_text(encoding="utf-8")
+        lines = [ln for ln in log.splitlines() if ln.strip()]
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["character"] == "C"
+        assert entry["partner"] == "P"
+        assert entry["speaker"] == "Bob"
+        assert ">>> ZIELNACHRICHT <<<" in entry["prompt"]
+        assert entry["raw"] == long
     finally:
         conn.close()
-    assert summary["classified"] == 0
-    assert summary["failed"] == 1
 
 
 def test_classify_honours_cancel_between_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

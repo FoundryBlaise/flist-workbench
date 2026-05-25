@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, Menu, MenuItemConstructorOptions, shell } from 'electron'
+import { sidecarUrl } from './sidecar'
 
 // All Workbench-specific menu items send a single channel with a known
 // id. The renderer dispatches to its existing handlers. Adding a new
@@ -16,6 +17,51 @@ export type MenuAction =
   | 'ingest-character'
   | 'ingest-all'
   | 'chat-toggle'
+
+// Lives in the main process because it touches shell.openPath; we
+// resolve the path from the sidecar so user_data_dir() stays the one
+// source of truth across both processes.
+async function openClassifyFailureLog(win: BrowserWindow | null): Promise<void> {
+  try {
+    const res = await fetch(`${sidecarUrl}/labels/failure-log`)
+    if (!res.ok) throw new Error(`sidecar returned HTTP ${res.status}`)
+    const body = (await res.json()) as { path: string; exists: boolean; byte_size: number }
+    if (!body.exists || body.byte_size === 0) {
+      // No failures yet — show the dir in the file manager so the user
+      // can still find the location, with a friendly note.
+      const opts = {
+        type: 'info' as const,
+        title: 'No classify failures yet',
+        message: 'No failed classifications have been recorded.',
+        detail:
+          `When the classifier can't parse the LLM's reply, the message + ` +
+          `prompt + error go here:\n\n${body.path}\n\n` +
+          `The file is created on the first failure.`,
+        buttons: ['OK']
+      }
+      if (win) await dialog.showMessageBox(win, opts)
+      else await dialog.showMessageBox(opts)
+      return
+    }
+    // Best-effort: shell.openPath returns a non-empty string on error.
+    const err = await shell.openPath(body.path)
+    if (err) {
+      // Fallback to revealing in the OS file manager.
+      shell.showItemInFolder(body.path)
+    }
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    const opts = {
+      type: 'error' as const,
+      title: "Couldn't open failure log",
+      message: 'The sidecar is not reachable or returned an error.',
+      detail,
+      buttons: ['OK']
+    }
+    if (win) await dialog.showMessageBox(win, opts)
+    else await dialog.showMessageBox(opts)
+  }
+}
 
 function send(win: BrowserWindow | null, action: MenuAction): void {
   if (win && !win.isDestroyed()) {
@@ -145,6 +191,14 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           label: 'Ask the logs…',
           accelerator: 'CmdOrCtrl+J',
           click: () => send(getWindow(), 'chat-toggle')
+        },
+        { type: 'separator' },
+        {
+          id: 'open-classify-log',
+          label: 'Open Classify Failure Log…',
+          click: () => {
+            void openClassifyFailureLog(getWindow())
+          }
         },
         { type: 'separator' },
         {

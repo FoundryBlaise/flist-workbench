@@ -142,13 +142,13 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
   const onBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
     // Only the backdrop itself, not anything inside the modal.
     if (e.target !== e.currentTarget) return
-    if (canClose) {
-      onClose()
-      return
-    }
-    // While the job is running, backdrop is a no-op for the dismiss
-    // intent — but the user clearly tried to close. Flash the Cancel
-    // button so they see the recovery path.
+    // Backdrop click is inert app-wide — closing dialogs requires the
+    // explicit ✕ / Close / Escape path. After a job finishes the user
+    // typically wants to *read* the failure summary; vanishing the
+    // dialog on a stray click cost too much information.
+    if (canClose) return
+    // While the job is running, flash Cancel so a stray click points
+    // at the right recovery action.
     setPulseCancel(true)
     if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current)
     pulseTimer.current = window.setTimeout(() => setPulseCancel(false), 700)

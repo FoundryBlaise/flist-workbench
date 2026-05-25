@@ -30,22 +30,34 @@ from typing import Iterable
 import documents
 import settings as settings_store
 
-# Three-state result the resolver returns. The DB only ever stores IC
-# or OOC; "Unlabeled" is what the resolver returns when no explicit
-# label exists and no rule matched.
+# Four-state result the resolver returns. The labels table only ever
+# stores IC or OOC; "Unlabeled" is what the resolver returns when no
+# explicit label exists and no rule matched; "Failed" surfaces a row
+# in the parallel label_failures table — the LLM was asked but didn't
+# produce a usable answer (HTTP/JSON/parse error). The user can fix it
+# manually from the message context menu; manual overrides clear the
+# failure row.
 LABEL_IC = "IC"
 LABEL_OOC = "OOC"
 LABEL_UNLABELED = "Unlabeled"
+LABEL_FAILED = "Failed"
 
 DEFAULT_THRESHOLD_CHARS = 200
 DEFAULT_LLM_ENDPOINT = "http://localhost:1234/v1"
 DEFAULT_LLM_MODEL = "gemma-4-26b-a4b-it-uncensored-heretic"
 DEFAULT_LLM_API_KEY = ""
-# Default surrounding-context window size for classify calls. 3 + 3
-# is the value RAG_DESIGN.md picked; users can tune down (small VRAM)
-# or up via Settings → Labels.
-DEFAULT_CONTEXT_BEFORE = 3
-DEFAULT_CONTEXT_AFTER = 3
+# Default surrounding-context window size for classify calls. RAG_DESIGN
+# originally picked 3 + 3; in practice that bleeds — the model latches
+# onto the surrounding cluster (e.g. mid-RP banter) and mislabels the
+# target. 1 + 1 holds the IC/OOC boundary much better.
+#
+# WARNING: if you tune this UP and start seeing messages at the *start*
+# or *end* of IC/OOC blocks classified wrongly (the target is IC but
+# all visible context is OOC, or vice versa), the bleed is back —
+# reduce, don't increase. Set to 0 for no surroundings at all when
+# debugging the prompt in isolation.
+DEFAULT_CONTEXT_BEFORE = 1
+DEFAULT_CONTEXT_AFTER = 1
 
 # Default classifier prompt. Lifted from Chat_RAG/classify.py (German
 # RP). Users can edit this in Settings → Labels; a blank stored value
@@ -201,6 +213,22 @@ CREATE TABLE IF NOT EXISTS partner_aliases (
 );
 CREATE INDEX IF NOT EXISTS idx_aliases_primary
     ON partner_aliases(character, primary_name);
+
+-- Parallel to `labels`, but tracks messages whose classify attempt
+-- failed (HTTP/JSON/parse error). The resolver returns "Failed" when
+-- a hash exists here AND no labels row + no rule hit. Cleared on
+-- successful re-classify and on any manual override.
+CREATE TABLE IF NOT EXISTS label_failures (
+    hash         TEXT PRIMARY KEY,
+    character    TEXT NOT NULL,
+    partner      TEXT NOT NULL,
+    ts           INTEGER NOT NULL,
+    speaker      TEXT NOT NULL,
+    error        TEXT NOT NULL,
+    updated_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_label_failures_partner
+    ON label_failures(character, partner);
 """
 
 
@@ -280,12 +308,24 @@ def load_settings(conn: sqlite3.Connection | None = None) -> LabelsSettings:
 _PARENS_PREFIX = re.compile(r"^\s*\(\(")
 
 
-def resolve(msg: dict, db_label: sqlite3.Row | dict | None, settings: LabelsSettings) -> str:
+def resolve(
+    msg: dict,
+    db_label: sqlite3.Row | dict | None,
+    settings: LabelsSettings,
+    *,
+    failed: bool = False,
+) -> str:
     """Return the effective label for a message.
 
     `db_label` is the explicit-labels row keyed by `msg_hash(msg)`, or
-    None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
-    matching what `parser.parse_log` yields.
+    None. `failed` is True when a label_failures row exists for the
+    same hash (a prior classify call couldn't produce a usable answer).
+    `msg` must have `text` (BBCode-stripped) and `raw` keys — matching
+    what `parser.parse_log` yields.
+
+    Precedence: explicit DB label wins; otherwise rules (empty / short /
+    `((` prefix) decide; otherwise a recorded failure surfaces as
+    "Failed"; otherwise "Unlabeled".
     """
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
@@ -298,6 +338,8 @@ def resolve(msg: dict, db_label: sqlite3.Row | dict | None, settings: LabelsSett
     raw = msg.get("raw") or ""
     if _PARENS_PREFIX.match(raw):
         return LABEL_OOC
+    if failed:
+        return LABEL_FAILED
     return LABEL_UNLABELED
 
 
@@ -391,7 +433,72 @@ def upsert_label(
             1.0, reason, source, prior_label, prior_source, time.time(),
         ),
     )
+    # Any explicit label clears a prior failure — the user fixed it
+    # (manual override) or a re-classify finally got an answer.
+    conn.execute("DELETE FROM label_failures WHERE hash = ?", (hash,))
     conn.commit()
+
+
+def record_failure(
+    conn: sqlite3.Connection,
+    *,
+    hash: str,
+    character: str,
+    partner: str,
+    ts: int,
+    speaker: str,
+    error: str,
+) -> None:
+    """Mark a message as classify-failed.
+
+    No-op if an explicit label already exists for this hash — a
+    successful prior classify shouldn't be downgraded to "Failed" just
+    because a re-classify attempt errored. The error string is
+    truncated; the JSONL log file is the full debug surface.
+    """
+    has_label = conn.execute(
+        "SELECT 1 FROM labels WHERE hash = ?", (hash,)
+    ).fetchone()
+    if has_label is not None:
+        return
+    conn.execute(
+        """
+        INSERT INTO label_failures (
+            hash, character, partner, ts, speaker, error, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(hash) DO UPDATE SET
+            error = excluded.error,
+            updated_at = excluded.updated_at
+        """,
+        (hash, character, partner, ts, speaker, error[:500], time.time()),
+    )
+    conn.commit()
+
+
+def clear_failure(conn: sqlite3.Connection, hash: str) -> bool:
+    cur = conn.execute("DELETE FROM label_failures WHERE hash = ?", (hash,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def failures_for_partner(
+    conn: sqlite3.Connection,
+    character: str,
+    partner: str,
+    *,
+    partner_aliases: list[str] | None = None,
+) -> dict[str, sqlite3.Row]:
+    """All failure rows for one conversation, keyed by message hash.
+
+    Same alias-aware lookup shape as `labels_for_partner`.
+    """
+    names = _partner_query_set(partner, partner_aliases)
+    placeholders = ",".join("?" * len(names))
+    rows = conn.execute(
+        f"SELECT * FROM label_failures WHERE character = ? AND partner IN ({placeholders})",
+        (character, *names),
+    ).fetchall()
+    return {row["hash"]: row for row in rows}
 
 
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
@@ -410,17 +517,19 @@ def delete_labels_for_partner(
 ) -> int:
     """Drop every explicit label for one (character, partner) pair.
 
-    `partner_aliases` extends the delete to labels written under any
-    linked alternate name (typical after the user has merged a
-    partner rename). Returns the count of deleted rows. After this
-    call, every message in the conversation falls back to the rule-
-    on-read resolver — so rule:short / rule:parens / rule:empty hits
-    stay OOC, everything else reverts to Unlabeled.
+    Also drops any recorded failure rows — "Reset all labels" should
+    reset every classifier-side state, not just the success rows.
+    Returns the count of deleted label rows (failure rows aren't
+    counted; they're an implementation detail of the chip strip).
     """
     names = _partner_query_set(partner, partner_aliases)
     placeholders = ",".join("?" * len(names))
     cur = conn.execute(
         f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
+        (character, *names),
+    )
+    conn.execute(
+        f"DELETE FROM label_failures WHERE character = ? AND partner IN ({placeholders})",
         (character, *names),
     )
     conn.commit()
@@ -447,8 +556,14 @@ def stats(
     by_hash = labels_for_partner(
         conn, character, partner, partner_aliases=partner_aliases
     )
-    counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
+    failed_hashes = failures_for_partner(
+        conn, character, partner, partner_aliases=partner_aliases
+    )
+    counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0, LABEL_FAILED: 0}
     for msg in messages:
-        lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
+        h = msg_hash(msg)
+        lab = resolve(
+            msg, by_hash.get(h), settings, failed=h in failed_hashes,
+        )
         counts[lab] = counts.get(lab, 0) + 1
     return counts

@@ -50,8 +50,12 @@ export type RevisionSummary = {
   created_at: number
 }
 
-export type Label = 'IC' | 'OOC' | 'Unlabeled'
-export type LabelSource = 'llm' | 'manual'
+export type Label = 'IC' | 'OOC' | 'Unlabeled' | 'Failed'
+// 'failed' is a synthetic source the sidecar attaches when a
+// label_failures row exists but no labels row does — there's nothing
+// in the labels table proper, just a record that the classifier tried
+// and couldn't produce a usable answer.
+export type LabelSource = 'llm' | 'manual' | 'failed'
 export type PriorSource = 'llm' | 'manual' | null
 
 export type LogMessage = {
@@ -83,6 +87,12 @@ export type LogMessage = {
   // said IC; you changed it to OOC" without a separate lookup.
   prior_label?: 'IC' | 'OOC'
   prior_source?: 'llm' | 'manual'
+  // Present when label === 'Failed'. Holds the classifier's error
+  // message (truncated) so the badge tooltip can explain why the
+  // message couldn't be classified — e.g. "bad json: '<garbage>'" or
+  // "api error: HTTP 500". The full prompt + context lives in
+  // <user_data>/classify-failures.log, surfaced via Tools → Open log.
+  label_error?: string
 }
 
 export type LabelsSettings = {
@@ -179,6 +189,7 @@ export type LabelsStats = {
   ic: number
   ooc: number
   unlabeled: number
+  failed: number
   total: number
 }
 
