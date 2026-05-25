@@ -310,6 +310,105 @@ def test_empty_input_returns_empty() -> None:
     )
 
 
+# --- speaker aliases ----------------------------------------------------
+
+
+def test_speaker_aliases_rewrite_in_text_and_speakers_field() -> None:
+    """When the partner is a merged rename group, messages whose
+    speaker matches an aliased name are surfaced under the primary
+    name so the LLM treats both as the same character."""
+    long = "x" * 300
+    old_name_msg = _mkmsg(ts(2026, 1, 1, 10), "Daemon Enariel", long)
+    new_name_msg = _mkmsg(ts(2026, 1, 1, 11), "Ashvalia", long)
+    by_hash = {
+        labels_store.msg_hash(old_name_msg): _stored("IC"),
+        labels_store.msg_hash(new_name_msg): _stored("IC"),
+    }
+    chunks = chunker.chunk_messages(
+        [old_name_msg, new_name_msg],
+        character="MyChar",
+        partner="Ashvalia",
+        labels_by_hash=by_hash,
+        label_settings=_settings(),
+        speaker_aliases=["Ashvalia", "Daemon Enariel"],
+    )
+    assert len(chunks) == 1
+    # Both speaker mentions in the chunk text collapsed to the primary.
+    assert "Ashvalia:" in chunks[0]["text"]
+    assert "Daemon Enariel:" not in chunks[0]["text"]
+    # Same for the speakers payload — deduped down to one entry.
+    assert chunks[0]["speakers"] == ["Ashvalia"]
+
+
+def test_speaker_aliases_leave_non_aliased_speakers_alone() -> None:
+    """Only names in the alias group get rewritten — the user's own
+    character (and anyone else in the room) keeps their literal name."""
+    long = "x" * 300
+    old_msg = _mkmsg(ts(2026, 1, 1, 10), "Daemon Enariel", long)
+    own_msg = _mkmsg(ts(2026, 1, 1, 11), "MyChar", long)
+    chunks = chunker.chunk_messages(
+        [old_msg, own_msg],
+        character="MyChar",
+        partner="Ashvalia",
+        labels_by_hash={
+            labels_store.msg_hash(old_msg): _stored("IC"),
+            labels_store.msg_hash(own_msg): _stored("IC"),
+        },
+        label_settings=_settings(),
+        speaker_aliases=["Ashvalia", "Daemon Enariel"],
+    )
+    assert "MyChar:" in chunks[0]["text"]
+    # And both renamed-partner-side names collapse to the primary.
+    assert "Daemon Enariel:" not in chunks[0]["text"]
+    assert chunks[0]["speakers"] == ["Ashvalia", "MyChar"]
+
+
+def test_speaker_aliases_default_off_preserves_literal_speaker() -> None:
+    """Backwards-compat — calls without speaker_aliases get the original
+    speaker rendering. Important because most chunker callers don't
+    have an alias group to thread through."""
+    long = "x" * 300
+    m = _mkmsg(ts(2026, 1, 1, 10), "Daemon Enariel", long)
+    chunks = chunker.chunk_messages(
+        [m],
+        character="MyChar",
+        partner="Ashvalia",
+        labels_by_hash={labels_store.msg_hash(m): _stored("IC")},
+        label_settings=_settings(),
+    )
+    assert "Daemon Enariel:" in chunks[0]["text"]
+    assert chunks[0]["speakers"] == ["Daemon Enariel"]
+
+
+def test_speaker_aliases_oversize_split_uses_normalised_lengths() -> None:
+    """The split-by-char-budget logic measures line length AFTER
+    speaker normalisation, so a long aliased name doesn't accidentally
+    push the chunk past its limit."""
+    big = "y" * 600
+    # All messages from the aliased speaker → every line gets shortened
+    # if the alias is shorter than the primary. Split should still
+    # produce sub-chunks correctly under the budget.
+    msgs = [_mkmsg(ts(2026, 1, 1, 10 + i), "VeryLongOldName", big) for i in range(5)]
+    by_hash = {labels_store.msg_hash(m): _stored("IC") for m in msgs}
+    chunks = chunker.chunk_messages(
+        msgs,
+        character="MyChar",
+        partner="X",
+        labels_by_hash=by_hash,
+        label_settings=_settings(),
+        max_chars=1500,
+        soft_split=1200,
+        overlap=1,
+        speaker_aliases=["X", "VeryLongOldName"],
+    )
+    assert len(chunks) >= 2
+    # No chunk text exceeds the hard cap.
+    assert all(len(c["text"]) <= 1500 for c in chunks)
+    # All chunks render the speaker as the primary.
+    assert all("VeryLongOldName:" not in c["text"] for c in chunks)
+    assert all("X:" in c["text"] for c in chunks)
+
+
 def test_manual_label_takes_precedence() -> None:
     # Manual OOC override should suppress chunking even if include_ooc=False,
     # which is the same precedence the log browser shows.

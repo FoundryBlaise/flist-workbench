@@ -62,14 +62,20 @@ def _safe_id(s: str) -> str:
     return re.sub(r"[^\w\-]+", "_", s).strip("_") or "_"
 
 
-def _fmt_line(m: dict) -> str:
+def _fmt_line(m: dict, *, speaker_override: str | None = None) -> str:
     iso = datetime.fromtimestamp(m["ts"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
     text = (m.get("text") or "").strip()
-    return f"[{iso}] {m['speaker']}: {text}"
+    speaker = speaker_override if speaker_override is not None else m["speaker"]
+    return f"[{iso}] {speaker}: {text}"
 
 
-def _total_chars(msgs: list[dict]) -> int:
-    return sum(len(_fmt_line(m)) + 1 for m in msgs)
+def _total_chars(msgs: list[dict], speaker_map: dict[str, str] | None = None) -> int:
+    if speaker_map is None:
+        return sum(len(_fmt_line(m)) + 1 for m in msgs)
+    return sum(
+        len(_fmt_line(m, speaker_override=speaker_map.get(m["speaker"]))) + 1
+        for m in msgs
+    )
 
 
 def _utc_date(ts: int) -> str:
@@ -82,22 +88,28 @@ def _split_oversize(
     max_chars: int,
     soft_split: int,
     overlap: int,
+    speaker_map: dict[str, str] | None = None,
 ) -> list[list[dict]]:
     """If a group fits, return it whole; else split into ~soft_split-char
     sub-groups with `overlap` messages repeated between consecutive parts.
     """
-    if _total_chars(msgs) <= max_chars:
+    if _total_chars(msgs, speaker_map) <= max_chars:
         return [msgs]
+
+    def line_len(m: dict) -> int:
+        speaker = (speaker_map or {}).get(m["speaker"])
+        return len(_fmt_line(m, speaker_override=speaker)) + 1
+
     parts: list[list[dict]] = []
     current: list[dict] = []
     cur_chars = 0
     for m in msgs:
-        line_chars = len(_fmt_line(m)) + 1
+        line_chars = line_len(m)
         if cur_chars + line_chars > soft_split and current:
             parts.append(current)
             tail = current[-overlap:] if overlap > 0 else []
             current = list(tail) + [m]
-            cur_chars = _total_chars(current)
+            cur_chars = _total_chars(current, speaker_map)
         else:
             current.append(m)
             cur_chars += line_chars
@@ -117,14 +129,32 @@ def chunk_messages(
     max_chars: int = DEFAULT_MAX_CHUNK_CHARS,
     soft_split: int = DEFAULT_SOFT_SPLIT_CHARS,
     overlap: int = DEFAULT_OVERLAP_MSGS,
+    speaker_aliases: list[str] | None = None,
 ) -> list[Chunk]:
     """Group an in-memory conversation into retrieval chunks.
 
     `labels_by_hash` is what `labels.labels_for_partner` returns (just
     the DB rows). The resolver fills in rule-driven IC/OOC outcomes
     on the fly — we never trust a Unlabeled message into the corpus.
+
+    `speaker_aliases` — pass the partner's alias group when this
+    conversation is a merged rename. Any message whose `speaker`
+    matches an aliased name gets rewritten to `partner` (the primary)
+    in both the chunk text and the `speakers` payload so the LLM
+    treats "Daemon Enariel" and "Ashvalia" as the same character.
+    Labels are untouched: they're hash-keyed and each row records the
+    literal speaker as written on disk.
     """
     labels_by_hash = labels_by_hash or {}
+    # Build the speaker rewrite map once: every aliased name (excluding
+    # the primary, which already equals partner) maps to the partner.
+    # None when there's no group → fast-path the unrelated cases.
+    speaker_map: dict[str, str] | None = None
+    if speaker_aliases:
+        aliased = {n for n in speaker_aliases if n and n != partner}
+        if aliased:
+            speaker_map = {n: partner for n in aliased}
+
     groups: dict[tuple[str, str], list[dict]] = {}
     for m in messages:
         # F-Chat 'system' (warn/event/etc) is never useful for RP
@@ -140,6 +170,9 @@ def chunk_messages(
             continue
         groups.setdefault((_utc_date(m["ts"]), label), []).append(m)
 
+    def render_speaker(speaker: str) -> str:
+        return (speaker_map or {}).get(speaker, speaker)
+
     chunks: list[Chunk] = []
     for (date, label), msgs in sorted(groups.items()):
         msgs.sort(key=lambda x: x["ts"])
@@ -148,10 +181,14 @@ def chunk_messages(
             max_chars=max_chars,
             soft_split=soft_split,
             overlap=overlap,
+            speaker_map=speaker_map,
         )
         for sub_idx, sub_msgs in enumerate(sub_groups):
-            speakers = sorted({m["speaker"] for m in sub_msgs})
-            text = "\n".join(_fmt_line(m) for m in sub_msgs)
+            speakers = sorted({render_speaker(m["speaker"]) for m in sub_msgs})
+            text = "\n".join(
+                _fmt_line(m, speaker_override=render_speaker(m["speaker"]))
+                for m in sub_msgs
+            )
             chunks.append(
                 Chunk(
                     chunk_id=(
