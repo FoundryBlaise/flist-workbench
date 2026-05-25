@@ -21,6 +21,7 @@ import sqlite3
 from dataclasses import dataclass
 
 import labels as labels_store
+import rag_rerank
 import settings as settings_store
 
 DEFAULT_EMBED_ENDPOINT = labels_store.DEFAULT_LLM_ENDPOINT
@@ -28,6 +29,23 @@ DEFAULT_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 DEFAULT_EMBED_API_KEY = ""
 DEFAULT_EMBED_QUERY_PREFIX = ""
 DEFAULT_EMBED_DOCUMENT_PREFIX = ""
+
+# Chat side defaults shadow the labels LLM settings — the typical user
+# runs one inference server hosting one chat model + one embedding
+# model. Splitting the keys lets a power user point chat at a bigger
+# remote model while keeping classification local.
+DEFAULT_CHAT_ENDPOINT = labels_store.DEFAULT_LLM_ENDPOINT
+DEFAULT_CHAT_MODEL = labels_store.DEFAULT_LLM_MODEL
+DEFAULT_CHAT_API_KEY = ""
+# Default English; users can override per-language in Settings. We
+# import the prompt body lazily in load_settings to avoid a hard
+# import cycle (rag_query imports rag).
+DEFAULT_CHAT_SYSTEM_PROMPT = ""  # empty → load_settings substitutes rag_query.DEFAULT_SYSTEM_PROMPT
+
+DEFAULT_RERANK_MODEL = rag_rerank.DEFAULT_RERANK_MODEL
+DEFAULT_RERANK_CANDIDATES = rag_rerank.DEFAULT_RERANK_CANDIDATES
+DEFAULT_TOP_K = rag_rerank.DEFAULT_TOP_K
+DEFAULT_NEIGHBORS = rag_rerank.DEFAULT_NEIGHBORS
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,6 +55,24 @@ class RagSettings:
     embed_api_key: str
     embed_query_prefix: str
     embed_document_prefix: str
+    chat_endpoint: str
+    chat_model: str
+    chat_api_key: str
+    chat_system_prompt: str
+    rerank_model: str
+    rerank_candidates: int
+    top_k: int
+    neighbors: int
+
+
+def _coerce_int(raw: str | None, default: int, *, lo: int, hi: int) -> int:
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
 
 
 def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
@@ -67,12 +103,64 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
         d_prefix = settings_store.get(conn, settings_store.KEY_RAG_EMBED_DOCUMENT_PREFIX)
         if d_prefix is None:
             d_prefix = DEFAULT_EMBED_DOCUMENT_PREFIX
+
+        chat_endpoint = (
+            settings_store.get(conn, settings_store.KEY_RAG_CHAT_ENDPOINT)
+            or DEFAULT_CHAT_ENDPOINT
+        )
+        chat_model = (
+            settings_store.get(conn, settings_store.KEY_RAG_CHAT_MODEL)
+            or DEFAULT_CHAT_MODEL
+        )
+        chat_api_key = (
+            settings_store.get(conn, settings_store.KEY_RAG_CHAT_API_KEY)
+            or DEFAULT_CHAT_API_KEY
+        )
+        # The default system prompt body lives in rag_query (one place,
+        # alongside the build_context format it expects). Importing
+        # here would be a cycle; do it lazily inside the function.
+        chat_prompt = settings_store.get(conn, settings_store.KEY_RAG_CHAT_SYSTEM_PROMPT)
+        if not chat_prompt:
+            from rag_query import DEFAULT_SYSTEM_PROMPT  # noqa: PLC0415 — lazy to break cycle
+
+            chat_prompt = DEFAULT_SYSTEM_PROMPT
+
+        rerank_model = (
+            settings_store.get(conn, settings_store.KEY_RAG_RERANK_MODEL)
+            or DEFAULT_RERANK_MODEL
+        )
+        rerank_candidates = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_RERANK_CANDIDATES),
+            DEFAULT_RERANK_CANDIDATES,
+            lo=1,
+            hi=200,
+        )
+        top_k = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_TOP_K),
+            DEFAULT_TOP_K,
+            lo=1,
+            hi=50,
+        )
+        neighbors = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_NEIGHBORS),
+            DEFAULT_NEIGHBORS,
+            lo=0,
+            hi=5,
+        )
         return RagSettings(
             embed_endpoint=endpoint,
             embed_model=model,
             embed_api_key=api_key,
             embed_query_prefix=q_prefix,
             embed_document_prefix=d_prefix,
+            chat_endpoint=chat_endpoint,
+            chat_model=chat_model,
+            chat_api_key=chat_api_key,
+            chat_system_prompt=chat_prompt,
+            rerank_model=rerank_model,
+            rerank_candidates=rerank_candidates,
+            top_k=top_k,
+            neighbors=neighbors,
         )
     finally:
         if own_conn:

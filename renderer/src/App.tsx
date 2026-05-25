@@ -12,6 +12,7 @@ export type MenuAction =
   | 'ingest-current'
   | 'ingest-character'
   | 'ingest-all'
+  | 'chat-toggle'
 
 declare global {
   interface Window {

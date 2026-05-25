@@ -15,6 +15,7 @@ export type MenuAction =
   | 'ingest-current'
   | 'ingest-character'
   | 'ingest-all'
+  | 'chat-toggle'
 
 function send(win: BrowserWindow | null, action: MenuAction): void {
   if (win && !win.isDestroyed()) {
@@ -139,6 +140,13 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
     {
       label: '&Tools',
       submenu: [
+        {
+          id: 'chat-toggle',
+          label: 'Ask the logs…',
+          accelerator: 'CmdOrCtrl+J',
+          click: () => send(getWindow(), 'chat-toggle')
+        },
+        { type: 'separator' },
         {
           id: 'settings',
           label: 'Settings…',

@@ -143,6 +143,16 @@ export function LogViewer() {
     setConvMenu(null)
   }, [key])
 
+  // RAG citation jump state — populated by the effect further below
+  // (after `filtered` and `rendered` are computed). Declaring the
+  // state here keeps it accessible from the Virtuoso row callback.
+  const [jumpRange, setJumpRange] = useState<{ start: number; end: number } | null>(null)
+  const [jumpFading, setJumpFading] = useState(false)
+  const logJump = useStore((s) => s.logJump)
+  const clearLogJump = useStore((s) => s.clearLogJump)
+  const selectCharacter = useStore((s) => s.selectCharacter)
+  const selectPartner = useStore((s) => s.selectPartner)
+
   // Close the conversation menu on Escape or any non-menu click.
   useEffect(() => {
     if (!convMenu) return
@@ -287,6 +297,47 @@ export function LogViewer() {
     }
     return { items, hitTotal }
   }, [filtered, search])
+
+  // RAG citation click — scroll to and briefly highlight the cited
+  // message range. The jump intent may arrive while a different
+  // partner is loaded; in that case we flip the sidebar selection and
+  // wait for the messages to land before scrolling.
+  useEffect(() => {
+    if (!logJump) return
+    // Wrong conversation open → swap sidebar selection. The next render
+    // (after messages load) re-fires this effect with the matching pair.
+    if (logJump.character !== activeChar || logJump.partner !== partner) {
+      if (logJump.character !== activeChar) selectCharacter(logJump.character)
+      selectPartner(logJump.partner)
+      return
+    }
+    if (!filtered.length) return
+    // Walk rendered.items (not filtered) so the scroll index lines up
+    // with what Virtuoso sees — items include day-separator pseudo-rows.
+    const targetItem = rendered.items.findIndex(
+      (it) => it.kind === 'msg' && it.msg.ts >= logJump.ts_start
+    )
+    if (targetItem >= 0) {
+      virtuosoRef.current?.scrollToIndex({
+        index: targetItem,
+        align: 'center',
+        behavior: 'smooth'
+      })
+    }
+    setJumpRange({ start: logJump.ts_start, end: logJump.ts_end })
+    setJumpFading(false)
+    clearLogJump()
+    const fade = window.setTimeout(() => setJumpFading(true), 2500)
+    const clear = window.setTimeout(() => {
+      setJumpRange(null)
+      setJumpFading(false)
+    }, 4500)
+    return () => {
+      window.clearTimeout(fade)
+      window.clearTimeout(clear)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logJump, activeChar, partner, filtered.length])
 
   // With virtualisation we can't grab mark.log-hit-active from the DOM
   // (it may not be mounted yet). Look up the index of the message that
@@ -625,6 +676,12 @@ export function LogViewer() {
                   selectMode={selectMode}
                   selected={sourceIdx !== -1 && isInSelection(sourceIdx)}
                   isMenuTarget={labelMenu?.msg.hash === item.msg.hash}
+                  isJumpTarget={
+                    jumpRange !== null &&
+                    item.msg.ts >= jumpRange.start &&
+                    item.msg.ts <= jumpRange.end
+                  }
+                  jumpFading={jumpFading}
                   onSelectClick={(shift) => {
                     if (sourceIdx !== -1) handleRowClick(sourceIdx, shift)
                   }}
@@ -690,6 +747,8 @@ function MessageRow({
   selectMode,
   selected,
   isMenuTarget,
+  isJumpTarget,
+  jumpFading,
   onSelectClick,
   onContextMenu,
   onLabelKeyboardOpen
@@ -702,6 +761,8 @@ function MessageRow({
   selectMode: boolean
   selected: boolean
   isMenuTarget: boolean
+  isJumpTarget: boolean
+  jumpFading: boolean
   onSelectClick: (shift: boolean) => void
   onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => void
   onLabelKeyboardOpen: (anchor: HTMLElement) => void
@@ -721,7 +782,9 @@ function MessageRow({
     msg.label_source === 'manual' ? 'log-msg-manual' : '',
     selectMode ? 'log-msg-selectable' : '',
     selected ? 'log-msg-selected' : '',
-    isMenuTarget ? 'log-msg-menu-target' : ''
+    isMenuTarget ? 'log-msg-menu-target' : '',
+    isJumpTarget ? 'log-msg-jump-target' : '',
+    isJumpTarget && jumpFading ? 'fading' : ''
   ]
     .filter(Boolean)
     .join(' ')
