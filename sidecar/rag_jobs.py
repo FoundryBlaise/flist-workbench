@@ -32,6 +32,7 @@ import labels as labels_store
 import logs as logs_store
 import rag as rag_settings
 import rag_embed
+import rag_lexical
 import rag_store
 
 JobState = Literal["pending", "running", "done", "cancelled", "failed"]
@@ -202,6 +203,9 @@ def _run_job(job: IngestJob) -> None:
         return
 
     labels_conn = labels_store.connect()
+    # Hoisted so the `finally` block can call try_unload even if the
+    # settings load below raises before rag_set gets bound inside try.
+    rag_set: rag_settings.RagSettings | None = None
     try:
         label_settings = labels_store.load_settings()
         rag_set = rag_settings.load_settings()
@@ -221,7 +225,7 @@ def _run_job(job: IngestJob) -> None:
         job.embed_dimension = dimension
 
         manifest = rag_store.read_manifest()
-        with rag_store.RagStore() as store:
+        with rag_store.RagStore() as store, rag_lexical.LexicalStore() as lex:
             # Detect a model swap — manifest disagrees with the probe's
             # dimension or the previously-recorded model name. The UI
             # asks the user; if they say yes the renderer retries with
@@ -247,6 +251,7 @@ def _run_job(job: IngestJob) -> None:
                     # chunk's vector is the wrong dim.
                     store.recreate_collection(vector_size=dimension)
                     rag_store.clear_manifest()
+                    lex.wipe()
                 elif mismatch:
                     job.model_swap = True
                     job.error = (
@@ -268,6 +273,7 @@ def _run_job(job: IngestJob) -> None:
                     # same (character, partner) via prev/next pointers.
                     if job.scope.get("character") and job.scope.get("partner"):
                         store.delete_scope(job.scope)
+                        lex.delete_scope(job.scope)
                         store.ensure_collection(vector_size=dimension)
                     else:
                         # Broad scope (character-only or all): nuke +
@@ -275,6 +281,7 @@ def _run_job(job: IngestJob) -> None:
                         # "Re-ingest all".
                         store.recreate_collection(vector_size=dimension)
                         rag_store.clear_manifest()
+                        lex.wipe()
                 else:
                     store.ensure_collection(vector_size=dimension)
             except rag_store.DimensionMismatchError as exc:
@@ -312,6 +319,7 @@ def _run_job(job: IngestJob) -> None:
                     partner,
                     job=job,
                     store=store,
+                    lex=lex,
                     labels_conn=labels_conn,
                     label_settings=label_settings,
                     rag_set=rag_set,
@@ -326,6 +334,16 @@ def _run_job(job: IngestJob) -> None:
         job.state = "failed"
     finally:
         labels_conn.close()
+        # Best-effort: tell Ollama to evict the embedding model now that
+        # the ingest run is over. LM Studio ignores the keep_alive
+        # field harmlessly. Worth doing on every terminal state
+        # (done / cancelled / failed) so a partial run still frees VRAM
+        # for whatever the user wants to do next.
+        if rag_set is not None:
+            try:
+                rag_embed.try_unload(rag_set)
+            except Exception:  # noqa: BLE001 — unload is advisory
+                pass
         job.finished_at = time.time()
 
 
@@ -335,6 +353,7 @@ def _ingest_one_partner(
     *,
     job: IngestJob,
     store: rag_store.RagStore,
+    lex: rag_lexical.LexicalStore,
     labels_conn,
     label_settings: labels_store.LabelsSettings,
     rag_set: rag_settings.RagSettings,
@@ -407,6 +426,16 @@ def _ingest_one_partner(
             continue
         job.progress.embedded += len(vectors)
         store.upsert_chunks(batch, vectors)
+        # Mirror into the FTS5 lexical index. Cheap (no network) — keep
+        # it inline so dense + lexical stay byte-equivalent in chunk_id
+        # coverage. A failure here should not abort the dense upsert
+        # the user already paid for, so swallow + log into last_error.
+        try:
+            lex.upsert_chunks(batch)
+        except Exception as exc:  # noqa: BLE001 — lexical mirror is best-effort
+            job.progress.last_error = (
+                f"{character} / {partner}: lexical mirror failed: {exc}"
+            )
         job.progress.upserted += len(batch)
 
 

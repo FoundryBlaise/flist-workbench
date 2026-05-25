@@ -38,6 +38,12 @@ DEFAULT_RERANK_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
 DEFAULT_RERANK_CANDIDATES = 30
 DEFAULT_TOP_K = 5
 DEFAULT_NEIGHBORS = 1
+# Default 0.0 = preserve old behaviour for users who upgrade. The setting
+# is most useful for "needle in haystack" questions where the reranker
+# clearly singles out 1-2 chunks: dropping noisy candidates below
+# top_score × ratio reduces the distractor surface the chat LLM has to
+# anchor on (which is how the "Baal echo" hallucination class arises).
+DEFAULT_RERANK_MIN_RATIO = 0.0
 RERANK_DISABLED = "disabled"
 
 
@@ -109,6 +115,7 @@ def rerank_hits(
     *,
     model_name: str | None,
     top_k: int = DEFAULT_TOP_K,
+    min_ratio: float = DEFAULT_RERANK_MIN_RATIO,
     cache_dir: Path | None = None,
 ) -> list[dict]:
     """Re-score hits with the cross-encoder, return the top_k re-ranked.
@@ -119,10 +126,22 @@ def rerank_hits(
     `rerank_skipped=True` for the caller to surface and fall back to
     vector order. The query path treats any rerank failure as non-fatal:
     bad rerank shouldn't kill the answer.
+
+    `min_ratio` (0.0-1.0) optionally drops chunks scoring below
+    top_score × ratio after the sort, before the top_k slice — collapses
+    the 15-chunk worst case (top_k=5 × neighbors=±1) when the reranker
+    clearly singles out only 1-2 relevant chunks. 0.0 disables.
     """
     if not hits:
         return []
-    if is_disabled(model_name) or len(hits) <= top_k:
+    if is_disabled(model_name):
+        return hits[:top_k]
+    # Cheap path: when nothing would be re-ordered AND no threshold
+    # filter is requested, skip the encoder entirely. Keeps the
+    # common-case latency unchanged. With min_ratio > 0 we still need
+    # scores even on small pools so the threshold has something to
+    # filter against.
+    if len(hits) <= top_k and min_ratio <= 0.0:
         return hits[:top_k]
     try:
         encoder = get_encoder(model_name, cache_dir=cache_dir)
@@ -135,4 +154,12 @@ def rerank_hits(
     for h, s in zip(hits, scores):
         h["rerank_score"] = float(s)
     hits.sort(key=lambda h: -float(h.get("rerank_score", 0.0)))
+    if min_ratio > 0.0:
+        top = float(hits[0].get("rerank_score", 0.0))
+        # Skip the filter for non-positive top scores: some cross-encoders
+        # emit raw logits in (-inf, +inf) where "× ratio" inverts meaning.
+        # Sigmoid-shaped scores (jina v2, BGE) are always > 0 in practice.
+        if top > 0.0:
+            threshold = top * min_ratio
+            hits = [h for h in hits if float(h.get("rerank_score", 0.0)) >= threshold]
     return hits[:top_k]

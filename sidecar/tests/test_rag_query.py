@@ -39,6 +39,12 @@ def rag_set() -> rag_settings.RagSettings:
         rerank_candidates=30,
         top_k=5,
         neighbors=1,
+        rerank_min_ratio=0.0,
+        hybrid_enabled=False,
+        hybrid_bm25_candidates=30,
+        multiquery_enabled=False,
+        multiquery_variants=3,
+        chat_num_ctx=0,
         chunk_max_chars=5000,
         chunk_soft_split_chars=4000,
         chunk_overlap_msgs=1,
@@ -331,3 +337,153 @@ def test_citation_payload_strips_text_and_keeps_navigation_fields() -> None:
     assert cites[0]["rerank_score"] == pytest.approx(1.23)
     assert cites[0]["speakers"] == ["C", "P"]
     assert "text" not in cites[0]  # trimmed
+
+
+# ---- hybrid retrieval (BM25 fused with dense via RRF) ------------------
+
+
+class _FakeLexicalStore:
+    """Stand-in for rag_lexical.LexicalStore — returns canned BM25 hits
+    keyed by chunk_id. Avoids touching SQLite from rag_query tests."""
+
+    def __init__(self, hits_by_query: dict[str, list[str]]) -> None:
+        self._hits = hits_by_query
+        self.search_calls: list[tuple[str, dict | None]] = []
+
+    def search(self, query: str, *, scope=None, limit: int = 30):
+        self.search_calls.append((query, scope))
+        from rag_lexical import LexicalHit
+        return [
+            LexicalHit(chunk_id=cid, bm25_score=10.0 - i)
+            for i, cid in enumerate(self._hits.get(query, [])[:limit])
+        ]
+
+
+def test_run_query_hybrid_pulls_lexical_only_chunk_into_pool(
+    store: rag_store.RagStore,
+    rag_set: rag_settings.RagSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Dense surfaces "a" only; lexical surfaces "lex_only" — which
+    # exists in Qdrant but the dense vector misses. Hybrid+RRF should
+    # include both so the chat context sees the lexical chunk too.
+    _stub_embedding(monkeypatch, vector=[1.0, 0.0, 0.0])
+    _seed_chunks(
+        store,
+        [
+            (_mkchunk("a", text="aligned"), [1.0, 0.0, 0.0]),
+            (_mkchunk("lex_only", text="exact-name chunk"), [0.0, 0.0, 1.0]),
+            (_mkchunk("c", text="orthogonal"), [0.0, 1.0, 0.0]),
+        ],
+    )
+    lex = _FakeLexicalStore({"who is amber?": ["lex_only"]})
+    result = rag_query.run_query(
+        "who is amber?",
+        scope=None,
+        store=store,
+        rag_set=rag_set,
+        rerank_model="disabled",
+        top_k=3,
+        neighbors=0,
+        lex=lex,
+        hybrid_bm25_candidates=10,
+    )
+    cids = {(h.get("payload") or {}).get("chunk_id") for h in result.hits}
+    assert "lex_only" in cids
+    assert "a" in cids
+    assert result.hybrid_applied is True
+    assert result.hybrid_lexical_hits == 1
+    # Lexical search should have been called with the original question.
+    assert lex.search_calls == [("who is amber?", None)]
+
+
+def test_run_query_without_lex_skips_lexical_search(
+    store: rag_store.RagStore,
+    rag_set: rag_settings.RagSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_embedding(monkeypatch, vector=[1.0, 0.0, 0.0])
+    _seed_chunks(store, [(_mkchunk("a"), [1.0, 0.0, 0.0])])
+    result = rag_query.run_query(
+        "q",
+        scope=None,
+        store=store,
+        rag_set=rag_set,
+        rerank_model="disabled",
+        top_k=5,
+        neighbors=0,
+    )
+    assert result.hybrid_applied is False
+    assert result.hybrid_lexical_hits == 0
+
+
+# ---- multi-query expansion ---------------------------------------------
+
+
+def test_run_query_multiquery_unions_variants_by_chunk_id(
+    store: rag_store.RagStore,
+    rag_set: rag_settings.RagSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Each variant gets a different dense vector — set up the embedder
+    # to map each query string to the vector that lands it on a
+    # specific chunk. Then the union must cover both chunks.
+    by_query = {
+        "ophelia?": [1.0, 0.0, 0.0],     # hits "ophelia_chunk"
+        "ophelia who?": [0.0, 1.0, 0.0], # hits "variant_chunk"
+    }
+
+    def fake_embed(texts, kind, settings, **_):  # noqa: ARG001
+        return [by_query.get(t, [0.0, 0.0, 1.0]) for t in texts]
+
+    monkeypatch.setattr(rag_embed, "embed_texts", fake_embed)
+    _seed_chunks(
+        store,
+        [
+            (_mkchunk("ophelia_chunk", text="Ophelia at the ball"), [1.0, 0.0, 0.0]),
+            (_mkchunk("variant_chunk", text="Whoever Ophelia is"), [0.0, 1.0, 0.0]),
+        ],
+    )
+    result = rag_query.run_query(
+        "ophelia?",
+        scope=None,
+        store=store,
+        rag_set=rag_set,
+        rerank_model="disabled",
+        top_k=5,
+        neighbors=0,
+        query_variants=["ophelia who?"],
+    )
+    cids = {(h.get("payload") or {}).get("chunk_id") for h in result.hits}
+    assert cids == {"ophelia_chunk", "variant_chunk"}
+    assert result.query_variants == ["ophelia who?"]
+
+
+def test_run_query_multiquery_dedupes_against_original(
+    store: rag_store.RagStore,
+    rag_set: rag_settings.RagSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A variant identical to the original (after normalisation) must
+    # not add a second retrieval round.
+    embed_calls: list[str] = []
+
+    def fake_embed(texts, kind, settings, **_):  # noqa: ARG001
+        embed_calls.extend(texts)
+        return [[1.0, 0.0, 0.0]] * len(texts)
+
+    monkeypatch.setattr(rag_embed, "embed_texts", fake_embed)
+    _seed_chunks(store, [(_mkchunk("a"), [1.0, 0.0, 0.0])])
+    rag_query.run_query(
+        "Wer ist Amber?",
+        scope=None,
+        store=store,
+        rag_set=rag_set,
+        rerank_model="disabled",
+        top_k=3,
+        neighbors=0,
+        query_variants=["Wer ist Amber?", "Beschreibe Amber"],
+    )
+    # Exact-dup variant collapsed; only the original + the second
+    # variant got embedded.
+    assert embed_calls == ["Wer ist Amber?", "Beschreibe Amber"]

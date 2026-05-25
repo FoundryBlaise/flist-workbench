@@ -17,7 +17,9 @@ import system as system_probe
 import rag as rag_settings
 import rag_chat
 import rag_embed
+import rag_expand
 import rag_jobs
+import rag_lexical
 import rag_query
 import rag_store
 import settings as settings_store
@@ -367,6 +369,12 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
         rerank_candidates=saved.rerank_candidates,
         top_k=saved.top_k,
         neighbors=saved.neighbors,
+        rerank_min_ratio=saved.rerank_min_ratio,
+        hybrid_enabled=saved.hybrid_enabled,
+        hybrid_bm25_candidates=saved.hybrid_bm25_candidates,
+        multiquery_enabled=saved.multiquery_enabled,
+        multiquery_variants=saved.multiquery_variants,
+        chat_num_ctx=saved.chat_num_ctx,
         chunk_max_chars=saved.chunk_max_chars,
         chunk_soft_split_chars=saved.chunk_soft_split_chars,
         chunk_overlap_msgs=saved.chunk_overlap_msgs,
@@ -578,6 +586,8 @@ def rag_wipe() -> dict:
     with rag_store.RagStore() as store:
         store.wipe()
     rag_store.clear_manifest()
+    with rag_lexical.LexicalStore() as lex:
+        lex.wipe()
     return {"wiped": True}
 
 
@@ -682,6 +692,26 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
         # Phase 1: retrieval. Failures here are visible to the user
         # immediately as an `error` SSE event — no partial LLM stream.
         try:
+            # Multi-query expansion runs OUTSIDE the RagStore context so
+            # the chat LLM call doesn't hold the embedded-Qdrant file
+            # lock open longer than necessary. Failure here is logged +
+            # ignored — the original question still drives retrieval.
+            query_variants: list[str] = []
+            if rag_set.multiquery_enabled:
+                try:
+                    query_variants = rag_expand.expand_query(
+                        body.question,
+                        n=rag_set.multiquery_variants,
+                        rag_set=rag_set,
+                    )
+                except Exception:  # noqa: BLE001 — expansion never breaks chat
+                    query_variants = []
+                if query_variants:
+                    yield _sse_event(
+                        "expanded",
+                        {"variants": query_variants},
+                    )
+
             with rag_store.RagStore() as store:
                 if not store.collection_exists():
                     yield _sse_event(
@@ -694,6 +724,23 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
                         },
                     )
                     return
+
+                # Open the lexical store only when hybrid is enabled.
+                # Skipping the connect() avoids a labels.db handle on
+                # the most common "dense-only" path.
+                lex: rag_lexical.LexicalStore | None = None
+                if rag_set.hybrid_enabled:
+                    lex = rag_lexical.LexicalStore()
+                    # Backfill safety net: a user who enabled hybrid
+                    # after an existing ingest has an empty FTS5 table
+                    # while Qdrant has thousands of chunks. Rebuilding
+                    # from payloads is a few seconds and avoids the "I
+                    # turned it on and got no hits" surprise.
+                    try:
+                        if lex.count() == 0 and store.count() > 0:
+                            rag_lexical.backfill_from_qdrant(store, lex)
+                    except Exception:  # noqa: BLE001 — backfill is best-effort
+                        pass
                 try:
                     result = rag_query.run_query(
                         body.question,
@@ -704,6 +751,10 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
                         rerank_candidates=rag_set.rerank_candidates,
                         top_k=top_k,
                         neighbors=neighbors,
+                        rerank_min_ratio=rag_set.rerank_min_ratio,
+                        lex=lex,
+                        hybrid_bm25_candidates=rag_set.hybrid_bm25_candidates,
+                        query_variants=query_variants,
                         system_prompt=rag_set.chat_system_prompt,
                     )
                 except rag_embed.EmbedError as exc:
@@ -711,6 +762,9 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
                         "error", {"stage": "embed", "message": str(exc)}
                     )
                     return
+                finally:
+                    if lex is not None:
+                        lex.close()
                 citations = rag_query.citation_payload(result.hits)
 
             # Phase 1.5: tell the renderer what we retrieved before any
@@ -723,6 +777,8 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
                     "rerank_applied": result.rerank_applied,
                     "rerank_model": result.rerank_model,
                     "embed_model": result.embed_model,
+                    "hybrid_applied": result.hybrid_applied,
+                    "hybrid_lexical_hits": result.hybrid_lexical_hits,
                 },
             )
 
@@ -733,6 +789,7 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
                     rag_set.chat_model,
                     rag_set.chat_api_key,
                     result.messages,
+                    num_ctx=rag_set.chat_num_ctx or None,
                 ):
                     yield _sse_event("token", {"content": delta})
             except rag_chat.ChatError as exc:
@@ -1006,6 +1063,14 @@ class RagSettingsUpdate(BaseModel):
     rerank_candidates: int | None = None
     top_k: int | None = None
     neighbors: int | None = None
+    # Quality / fusion tunables. bool fields use None = untouched
+    # (omitted from request); float for the rerank threshold ratio.
+    rerank_min_ratio: float | None = None
+    hybrid_enabled: bool | None = None
+    hybrid_bm25_candidates: int | None = None
+    multiquery_enabled: bool | None = None
+    multiquery_variants: int | None = None
+    chat_num_ctx: int | None = None
     chunk_max_chars: int | None = None
     chunk_soft_split_chars: int | None = None
     chunk_overlap_msgs: int | None = None
@@ -1071,6 +1136,12 @@ def _settings_dict(conn) -> dict:
             "rerank_candidates": rag.rerank_candidates,
             "top_k": rag.top_k,
             "neighbors": rag.neighbors,
+            "rerank_min_ratio": rag.rerank_min_ratio,
+            "hybrid_enabled": rag.hybrid_enabled,
+            "hybrid_bm25_candidates": rag.hybrid_bm25_candidates,
+            "multiquery_enabled": rag.multiquery_enabled,
+            "multiquery_variants": rag.multiquery_variants,
+            "chat_num_ctx": rag.chat_num_ctx,
             "chunk_max_chars": rag.chunk_max_chars,
             "chunk_soft_split_chars": rag.chunk_soft_split_chars,
             "chunk_overlap_msgs": rag.chunk_overlap_msgs,
@@ -1090,6 +1161,12 @@ def _settings_dict(conn) -> dict:
                 "rerank_candidates": rag_settings.DEFAULT_RERANK_CANDIDATES,
                 "top_k": rag_settings.DEFAULT_TOP_K,
                 "neighbors": rag_settings.DEFAULT_NEIGHBORS,
+                "rerank_min_ratio": rag_settings.DEFAULT_RERANK_MIN_RATIO,
+                "hybrid_enabled": rag_settings.DEFAULT_HYBRID_ENABLED,
+                "hybrid_bm25_candidates": rag_settings.DEFAULT_HYBRID_BM25_CANDIDATES,
+                "multiquery_enabled": rag_settings.DEFAULT_MULTIQUERY_ENABLED,
+                "multiquery_variants": rag_settings.DEFAULT_MULTIQUERY_VARIANTS,
+                "chat_num_ctx": rag_settings.DEFAULT_CHAT_NUM_CTX,
                 "chunk_max_chars": rag_settings.DEFAULT_CHUNK_MAX_CHARS,
                 "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
@@ -1317,6 +1394,35 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
     if update.neighbors is not None:
         n = max(0, min(5, int(update.neighbors)))
         settings_store.set_value(conn, settings_store.KEY_RAG_NEIGHBORS, str(n))
+    if update.rerank_min_ratio is not None:
+        # Stored as the literal float string ("0.5"); _coerce_float on
+        # read handles the parse + clamp.
+        ratio = max(0.0, min(1.0, float(update.rerank_min_ratio)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_RERANK_MIN_RATIO, str(ratio))
+    if update.hybrid_enabled is not None:
+        # Bools stored as "1" / "0" so the settings table stays TEXT.
+        settings_store.set_value(
+            conn,
+            settings_store.KEY_RAG_HYBRID_ENABLED,
+            "1" if update.hybrid_enabled else "0",
+        )
+    if update.hybrid_bm25_candidates is not None:
+        n = max(1, min(200, int(update.hybrid_bm25_candidates)))
+        settings_store.set_value(
+            conn, settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES, str(n)
+        )
+    if update.multiquery_enabled is not None:
+        settings_store.set_value(
+            conn,
+            settings_store.KEY_RAG_MULTIQUERY_ENABLED,
+            "1" if update.multiquery_enabled else "0",
+        )
+    if update.multiquery_variants is not None:
+        n = max(2, min(5, int(update.multiquery_variants)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_MULTIQUERY_VARIANTS, str(n))
+    if update.chat_num_ctx is not None:
+        n = max(0, min(131072, int(update.chat_num_ctx)))
+        settings_store.set_value(conn, settings_store.KEY_RAG_CHAT_NUM_CTX, str(n))
     if update.chunk_max_chars is not None:
         n = max(500, min(20000, int(update.chunk_max_chars)))
         settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS, str(n))

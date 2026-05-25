@@ -36,6 +36,12 @@ def _settings(
         rerank_candidates=30,
         top_k=5,
         neighbors=1,
+        rerank_min_ratio=0.0,
+        hybrid_enabled=False,
+        hybrid_bm25_candidates=30,
+        multiquery_enabled=False,
+        multiquery_variants=3,
+        chat_num_ctx=0,
         chunk_max_chars=5000,
         chunk_soft_split_chars=4000,
         chunk_overlap_msgs=1,
@@ -206,3 +212,42 @@ def test_probe_returns_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
     dim, vec = rag_embed.probe(_settings())
     assert dim == 384
     assert len(vec) == 384
+
+
+# ---- try_unload (best-effort keep_alive=0) ----------------------------
+
+
+class _OkResponse:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
+def test_try_unload_sends_keep_alive_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["url"] = req.full_url
+        return _OkResponse()
+
+    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
+    assert rag_embed.try_unload(_settings()) is True
+    assert captured["body"]["keep_alive"] == 0
+    assert captured["body"]["model"] == "test-model"
+    assert captured["url"].endswith("/embeddings")
+
+
+def test_try_unload_swallows_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.error import URLError
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001, ARG001
+        raise URLError("connection refused")
+
+    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
+    # Should never raise — best-effort by contract.
+    assert rag_embed.try_unload(_settings()) is False

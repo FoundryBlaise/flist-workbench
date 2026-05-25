@@ -149,3 +149,45 @@ def probe(settings: RagSettings, *, timeout: float = 30.0) -> tuple[int, list[fl
         raise EmbedError("probe returned no vectors")
     vec = vecs[0]
     return len(vec), vec
+
+
+def try_unload(settings: RagSettings, *, timeout: float = 10.0) -> bool:
+    """Best-effort request to unload the embedding model from VRAM.
+
+    Why this exists: an ingest job pegs the user's GPU for the duration
+    of the run, then by default Ollama keeps the model resident for 5
+    minutes after the last request — wasted VRAM if the user wanted to
+    chat or game right after. Sending `keep_alive: 0` flips that to
+    "unload immediately".
+
+    Ollama supports `keep_alive` on its OpenAI-compatible endpoint as a
+    non-standard extension. LM Studio ignores unknown fields (its
+    models are loaded explicitly via the UI; nothing to evict). So
+    this is safe to call against either — the worst case on LM Studio
+    is one extra round-trip that does nothing.
+
+    Returns True on a 2xx response, False on any failure. Caller must
+    treat this as advisory only — never raises.
+    """
+    headers = {"Content-Type": "application/json"}
+    if settings.embed_api_key:
+        headers["Authorization"] = f"Bearer {settings.embed_api_key}"
+    body = {
+        "model": settings.embed_model,
+        # Empty input + keep_alive=0: Ollama treats this as "release the
+        # model from memory right now". LM Studio rejects the empty
+        # input shape; we swallow the resulting 400 since the model
+        # isn't on a timer there anyway.
+        "input": [""],
+        "keep_alive": 0,
+    }
+    req = Request(
+        f"{settings.embed_endpoint.rstrip('/')}/embeddings",
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+    )
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 300
+    except Exception:  # noqa: BLE001 — unload is best-effort
+        return False

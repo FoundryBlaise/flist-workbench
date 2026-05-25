@@ -55,6 +55,20 @@ DEFAULT_RERANK_MODEL = rag_rerank.DEFAULT_RERANK_MODEL
 DEFAULT_RERANK_CANDIDATES = rag_rerank.DEFAULT_RERANK_CANDIDATES
 DEFAULT_TOP_K = rag_rerank.DEFAULT_TOP_K
 DEFAULT_NEIGHBORS = rag_rerank.DEFAULT_NEIGHBORS
+DEFAULT_RERANK_MIN_RATIO = rag_rerank.DEFAULT_RERANK_MIN_RATIO
+
+# Quality / fusion knobs. Off by default; users enable per-need after
+# validating against their own corpus.
+DEFAULT_HYBRID_ENABLED = False
+DEFAULT_HYBRID_BM25_CANDIDATES = 30
+DEFAULT_MULTIQUERY_ENABLED = False
+DEFAULT_MULTIQUERY_VARIANTS = 3
+# Default 8192: Ollama's own per-request default is only 2048, which
+# silently truncates retrieved context on most chat queries — RAG hits
+# easily exceed 2k tokens once neighbour expansion is on. 8192 fits
+# comfortably in any modern local model and prevents that footgun. Set
+# to 0 to suppress the field entirely (LM Studio ignores it either way).
+DEFAULT_CHAT_NUM_CTX = 8192
 
 DEFAULT_CHUNK_MAX_CHARS = chunker.DEFAULT_MAX_CHUNK_CHARS
 DEFAULT_CHUNK_SOFT_SPLIT_CHARS = chunker.DEFAULT_SOFT_SPLIT_CHARS
@@ -76,6 +90,12 @@ class RagSettings:
     rerank_candidates: int
     top_k: int
     neighbors: int
+    rerank_min_ratio: float
+    hybrid_enabled: bool
+    hybrid_bm25_candidates: int
+    multiquery_enabled: bool
+    multiquery_variants: int
+    chat_num_ctx: int
     chunk_max_chars: int
     chunk_soft_split_chars: int
     chunk_overlap_msgs: int
@@ -89,6 +109,23 @@ def _coerce_int(raw: str | None, default: int, *, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, v))
+
+
+def _coerce_float(raw: str | None, default: float, *, lo: float, hi: float) -> float:
+    if raw is None or raw == "":
+        return default
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
+def _coerce_bool(raw: str | None, default: bool) -> bool:
+    # Stored as "1" / "0" strings (settings table is TEXT-only).
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
@@ -163,6 +200,41 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             lo=0,
             hi=5,
         )
+        rerank_min_ratio = _coerce_float(
+            settings_store.get(conn, settings_store.KEY_RAG_RERANK_MIN_RATIO),
+            DEFAULT_RERANK_MIN_RATIO,
+            lo=0.0,
+            hi=1.0,
+        )
+        hybrid_enabled = _coerce_bool(
+            settings_store.get(conn, settings_store.KEY_RAG_HYBRID_ENABLED),
+            DEFAULT_HYBRID_ENABLED,
+        )
+        hybrid_bm25_candidates = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES),
+            DEFAULT_HYBRID_BM25_CANDIDATES,
+            lo=1,
+            hi=200,
+        )
+        multiquery_enabled = _coerce_bool(
+            settings_store.get(conn, settings_store.KEY_RAG_MULTIQUERY_ENABLED),
+            DEFAULT_MULTIQUERY_ENABLED,
+        )
+        multiquery_variants = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_MULTIQUERY_VARIANTS),
+            DEFAULT_MULTIQUERY_VARIANTS,
+            lo=2,
+            hi=5,
+        )
+        chat_num_ctx = _coerce_int(
+            settings_store.get(conn, settings_store.KEY_RAG_CHAT_NUM_CTX),
+            DEFAULT_CHAT_NUM_CTX,
+            lo=0,
+            # 131072 is a reasonable upper bound — covers Llama 3.1 128k
+            # and any local model the user could plausibly load. Anything
+            # larger is almost certainly a typo.
+            hi=131072,
+        )
         chunk_max = _coerce_int(
             settings_store.get(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS),
             DEFAULT_CHUNK_MAX_CHARS,
@@ -197,6 +269,12 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             rerank_candidates=rerank_candidates,
             top_k=top_k,
             neighbors=neighbors,
+            rerank_min_ratio=rerank_min_ratio,
+            hybrid_enabled=hybrid_enabled,
+            hybrid_bm25_candidates=hybrid_bm25_candidates,
+            multiquery_enabled=multiquery_enabled,
+            multiquery_variants=multiquery_variants,
+            chat_num_ctx=chat_num_ctx,
             chunk_max_chars=chunk_max,
             chunk_soft_split_chars=chunk_soft,
             chunk_overlap_msgs=chunk_overlap,
