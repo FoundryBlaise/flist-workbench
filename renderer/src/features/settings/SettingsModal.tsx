@@ -1,552 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
-import { api, type LabelsSettings, type RagSettings, type RagStatus } from '../../lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  api,
+  type LabelsSettings,
+  type RagSettings,
+  type RagStatus
+} from '../../lib/api'
 import { useStore } from '../../state'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
 
+// Endpoint presets used everywhere a URL field is offered. The first
+// entry is what most users want — LM Studio running on the Windows
+// host, reachable from the dev container via host.docker.internal
+// (see CLAUDE.md). Falls back to localhost-shaped URLs for users who
+// run LM Studio / Ollama on the same machine the app runs on.
 const ENDPOINT_PRESETS = [
+  { label: 'LM Studio (host)', url: 'http://host.docker.internal:1234/v1' },
   { label: 'LM Studio', url: 'http://localhost:1234/v1' },
   { label: 'Ollama', url: 'http://localhost:11434/v1' },
   { label: 'OpenAI', url: 'https://api.openai.com/v1' }
 ]
 
-export function SettingsModal({ onClose }: { onClose: () => void }) {
-  const loadCharacters = useStore((s) => s.loadCharacters)
-  const [state, setState] = useState<SettingsState | null>(null)
-  const [dirInput, setDirInput] = useState('')
-  const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'error'>('loading')
-  const [error, setError] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .settingsGet()
-      .then((s) => {
-        if (cancelled) return
-        setState(s)
-        setDirInput(s.fchat_data_dir ?? '')
-        setStatus('idle')
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
-        setStatus('error')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  useEffect(() => {
-    const id = requestAnimationFrame(() => inputRef.current?.focus())
-    return () => cancelAnimationFrame(id)
-  }, [])
-
-  const pick = async () => {
-    const picker = window.workbench?.selectDirectory
-    if (!picker) {
-      setError("Folder picker isn't available in this build.")
-      return
-    }
-    const chosen = await picker({
-      title: 'Pick your F-Chat data directory',
-      defaultPath: dirInput || state?.fchat_data_dir_effective
-    })
-    if (chosen) setDirInput(chosen)
-  }
-
-  const save = async (nextValue: string | null) => {
-    setStatus('saving')
-    setError(null)
-    try {
-      const updated = await api.settingsUpdate({ fchat_data_dir: nextValue })
-      setState(updated)
-      setDirInput(updated.fchat_data_dir ?? '')
-      setStatus('idle')
-      // Reload characters so the sidebar reflects the new directory
-      // immediately rather than waiting for a refresh.
-      await loadCharacters()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
-    }
-  }
-
-  const envLocked = state?.fchat_data_dir_env_locked ?? false
-
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="modal settings-modal">
-        <header className="modal-head">
-          <div>
-            <h2 className="modal-title">Settings</h2>
-            <p className="modal-subtitle">F-Chat data location and label classifier.</p>
-          </div>
-          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </header>
-        <div className="modal-body settings-body">
-          <section className="settings-section">
-            <h3 className="settings-section-title">F-Chat data directory</h3>
-            <label className="settings-label" htmlFor="fchat-data-dir-input">
-              Path
-            </label>
-            <p className="settings-help">
-              F-Chat 3.0 writes each character's logs under{' '}
-              <code>&lt;data&gt;/&lt;character&gt;/logs</code>. Point this at the parent of those
-              character folders.
-            </p>
-            <div className="settings-row">
-              <input
-                id="fchat-data-dir-input"
-                ref={inputRef}
-                type="text"
-                className="settings-input"
-                placeholder="/path/to/F-Chat/data"
-                value={dirInput}
-                onChange={(e) => setDirInput(e.target.value)}
-                disabled={envLocked || status === 'saving'}
-                data-testid="settings-fchat-dir-input"
-              />
-              <button
-                type="button"
-                className="settings-pick"
-                onClick={() => void pick()}
-                disabled={envLocked || status === 'saving' || !window.workbench?.selectDirectory}
-                data-testid="settings-fchat-dir-pick"
-              >
-                Browse…
-              </button>
-            </div>
-            {state && (
-              <p className="settings-meta">
-                Currently reading from: <code>{state.fchat_data_dir_effective}</code>
-              </p>
-            )}
-            {envLocked && (
-              <p className="settings-note">
-                <b>FCHAT_DATA_DIR</b> is set in the environment and overrides this setting. Unset
-                it to control the path from here.
-              </p>
-            )}
-            {error && <p className="settings-error">{error}</p>}
-            <div className="settings-actions">
-              <button
-                type="button"
-                className="settings-save"
-                onClick={() => void save(dirInput.trim() || null)}
-                disabled={envLocked || status === 'saving'}
-                data-testid="settings-save"
-              >
-                {status === 'saving' ? 'Saving…' : 'Save'}
-              </button>
-              {state?.fchat_data_dir && !envLocked && (
-                <button
-                  type="button"
-                  className="settings-clear"
-                  onClick={() => void save(null)}
-                  disabled={status === 'saving'}
-                  title="Clear the override and fall back to the default directory"
-                >
-                  Reset
-                </button>
-              )}
-            </div>
-          </section>
-
-          {state?.labels && (
-            <LabelsSection
-              labels={state.labels}
-              onSaved={(next) => setState((prev) => (prev ? { ...prev, labels: next } : prev))}
-            />
-          )}
-
-          {state?.rag && (
-            <RagSection
-              rag={state.rag}
-              onSaved={(next) => setState((prev) => (prev ? { ...prev, rag: next } : prev))}
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function LabelsSection({
-  labels,
-  onSaved
-}: {
-  labels: LabelsSettings
-  onSaved: (next: LabelsSettings) => void
-}) {
-  // Each field has its own local input so users can edit without losing
-  // unsaved changes on a re-render. Save sends only the deltas vs. the
-  // currently-persisted values to keep the API tight.
-  const [threshold, setThreshold] = useState(String(labels.threshold_chars))
-  const [endpoint, setEndpoint] = useState(labels.llm_endpoint)
-  const [model, setModel] = useState(labels.llm_model)
-  const [apiKey, setApiKey] = useState(labels.llm_api_key)
-  const [prompt, setPrompt] = useState(labels.system_prompt)
-  const [contextBefore, setContextBefore] = useState(String(labels.context_before))
-  const [contextAfter, setContextAfter] = useState(String(labels.context_after))
-  const [showKey, setShowKey] = useState(false)
-  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
-  const [error, setError] = useState<string | null>(null)
-  // Test-connection state stays separate from save status so the
-  // user can re-test without re-saving.
-  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle')
-  const [testResult, setTestResult] = useState<{
-    ok: boolean
-    elapsed_ms: number
-    error?: string | null
-    raw?: string
-    parsed?: { label: string; reason: string } | null
-  } | null>(null)
-
-  // Keep local form in sync when parent reloads settings (e.g. after save).
-  useEffect(() => {
-    setThreshold(String(labels.threshold_chars))
-    setEndpoint(labels.llm_endpoint)
-    setModel(labels.llm_model)
-    setApiKey(labels.llm_api_key)
-    setPrompt(labels.system_prompt)
-    setContextBefore(String(labels.context_before))
-    setContextAfter(String(labels.context_after))
-  }, [labels])
-
-  const save = async () => {
-    setStatus('saving')
-    setError(null)
-    const parsedThreshold = Number(threshold)
-    if (!Number.isFinite(parsedThreshold) || parsedThreshold < 1) {
-      setError('Threshold must be a positive integer.')
-      setStatus('error')
-      return
-    }
-    // Same clamp as the sidecar so the UI doesn't accept impossible
-    // values silently; 0..10 mirrors labels.load_settings.
-    const parsedBefore = Math.max(0, Math.min(10, Math.floor(Number(contextBefore) || 0)))
-    const parsedAfter = Math.max(0, Math.min(10, Math.floor(Number(contextAfter) || 0)))
-    try {
-      const updated = await api.settingsUpdate({
-        labels: {
-          threshold_chars: Math.floor(parsedThreshold),
-          llm_endpoint: endpoint,
-          llm_model: model,
-          llm_api_key: apiKey,
-          // Empty prompt is interpreted as "reset to default" server-side.
-          system_prompt: prompt,
-          context_before: parsedBefore,
-          context_after: parsedAfter
-        }
-      })
-      onSaved(updated.labels)
-      setStatus('idle')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
-    }
-  }
-
-  const resetPrompt = () => setPrompt(labels.defaults.system_prompt)
-  const resetEndpoint = () => setEndpoint(labels.defaults.llm_endpoint)
-  const resetModel = () => setModel(labels.defaults.llm_model)
-  const resetThreshold = () => setThreshold(String(labels.defaults.threshold_chars))
-
-  const runTest = async () => {
-    setTestStatus('running')
-    setTestResult(null)
-    try {
-      const result = await api.labelsTestConnection({
-        llm_endpoint: endpoint,
-        llm_model: model,
-        llm_api_key: apiKey,
-        system_prompt: prompt
-      })
-      setTestResult(result)
-      setTestStatus(result.ok ? 'ok' : 'fail')
-    } catch (err) {
-      setTestResult({
-        ok: false,
-        elapsed_ms: 0,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      setTestStatus('fail')
-    }
-  }
-
-  const isPromptDefault = prompt === labels.defaults.system_prompt
-
-  return (
-    <section className="settings-section">
-      <h3 className="settings-section-title">Labels (IC / OOC classifier)</h3>
-      <p className="settings-help">
-        Settings for the on-demand IC/OOC classifier. Short messages and{' '}
-        <code>((…</code> auto-OOC by rule; everything else stays Unlabeled until you run Classify on a
-        conversation.
-      </p>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="labels-threshold">
-          OOC threshold (chars)
-        </label>
-        <p className="settings-help">
-          Chat messages shorter than this many characters are auto-classified as OOC without
-          asking the LLM.
-        </p>
-        <div className="settings-row">
-          <input
-            id="labels-threshold"
-            type="number"
-            min={1}
-            className="settings-input settings-input-narrow"
-            value={threshold}
-            onChange={(e) => setThreshold(e.target.value)}
-            data-testid="labels-threshold-input"
-          />
-          <button type="button" className="settings-clear" onClick={resetThreshold}>
-            Default ({labels.defaults.threshold_chars})
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label">Context window (surrounding messages)</label>
-        <p className="settings-help">
-          How many messages before and after the target are attached as <code>KONTEXT</code> to each
-          classify call. Defaults to <code>1 / 1</code> — wider windows cause the model to latch
-          onto the surrounding cluster and bleed across IC/OOC boundaries (the target is IC but all
-          context is OOC, or vice versa). If you're seeing such boundary messages mislabeled, drop
-          to <code>0 / 0</code>, not up. Wider also eats the model's context budget on small-VRAM
-          cards. Range 0–10 each.
-        </p>
-        <div className="settings-row">
-          <label
-            htmlFor="labels-ctx-before"
-            className="settings-meta"
-            style={{ alignSelf: 'center' }}
-          >
-            Before
-          </label>
-          <input
-            id="labels-ctx-before"
-            type="number"
-            min={0}
-            max={10}
-            className="settings-input settings-input-narrow"
-            value={contextBefore}
-            onChange={(e) => setContextBefore(e.target.value)}
-            data-testid="labels-context-before-input"
-          />
-          <label
-            htmlFor="labels-ctx-after"
-            className="settings-meta"
-            style={{ alignSelf: 'center' }}
-          >
-            After
-          </label>
-          <input
-            id="labels-ctx-after"
-            type="number"
-            min={0}
-            max={10}
-            className="settings-input settings-input-narrow"
-            value={contextAfter}
-            onChange={(e) => setContextAfter(e.target.value)}
-            data-testid="labels-context-after-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => {
-              setContextBefore(String(labels.defaults.context_before))
-              setContextAfter(String(labels.defaults.context_after))
-            }}
-          >
-            Default ({labels.defaults.context_before} / {labels.defaults.context_after})
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="labels-endpoint">
-          LLM endpoint (OpenAI-compatible)
-        </label>
-        <p className="settings-help">
-          Pick a preset or type a custom URL. The classifier posts to{' '}
-          <code>&lt;endpoint&gt;/chat/completions</code>. Ollama, LM Studio and OpenAI all expose
-          this shape.
-        </p>
-        <div className="settings-row">
-          {ENDPOINT_PRESETS.map((p) => (
-            <button
-              key={p.url}
-              type="button"
-              className={`settings-preset ${endpoint === p.url ? 'on' : ''}`}
-              onClick={() => setEndpoint(p.url)}
-            >
-              {p.label}
-            </button>
-          ))}
-          <button type="button" className="settings-clear" onClick={resetEndpoint}>
-            Default
-          </button>
-        </div>
-        <input
-          id="labels-endpoint"
-          type="text"
-          className="settings-input"
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          data-testid="labels-endpoint-input"
-        />
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="labels-model">
-          Model name
-        </label>
-        <div className="settings-row">
-          <input
-            id="labels-model"
-            type="text"
-            className="settings-input"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            data-testid="labels-model-input"
-          />
-          <button type="button" className="settings-clear" onClick={resetModel}>
-            Default
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="labels-api-key">
-          API key (leave blank for local LM Studio / Ollama)
-        </label>
-        <div className="settings-row">
-          <input
-            id="labels-api-key"
-            type={showKey ? 'text' : 'password'}
-            className="settings-input"
-            value={apiKey}
-            placeholder="sk-…"
-            autoComplete="off"
-            onChange={(e) => setApiKey(e.target.value)}
-            data-testid="labels-api-key-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setShowKey((v) => !v)}
-            title={showKey ? 'Hide key' : 'Show key'}
-          >
-            {showKey ? 'Hide' : 'Show'}
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="labels-prompt">
-          Classifier system prompt
-        </label>
-        <p className="settings-help">
-          Sent as the system message before each target message + its 3-message context window.
-        </p>
-        <textarea
-          id="labels-prompt"
-          className="settings-textarea"
-          rows={14}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          data-testid="labels-prompt-input"
-        />
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={resetPrompt}
-            disabled={isPromptDefault}
-          >
-            Reset to default prompt
-          </button>
-          <span className="settings-meta">{prompt.length.toLocaleString()} chars</span>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label">Test connection</label>
-        <p className="settings-help">
-          One canned classification roundtrip against the endpoint + model + prompt above. Useful before kicking off a long classify job.
-        </p>
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-pick"
-            onClick={() => void runTest()}
-            disabled={testStatus === 'running'}
-            data-testid="labels-test-connection"
-          >
-            {testStatus === 'running' ? 'Testing…' : 'Test connection'}
-          </button>
-          {testResult && (
-            <span
-              className={`settings-meta labels-test-result labels-test-${testStatus}`}
-              data-testid="labels-test-result"
-            >
-              {testStatus === 'ok' ? '✓ ' : testStatus === 'fail' ? '✕ ' : ''}
-              {testResult.ok
-                ? `OK · ${testResult.elapsed_ms} ms · ${testResult.parsed?.label}`
-                : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`}
-            </span>
-          )}
-        </div>
-        {testResult && testResult.raw && !testResult.ok && (
-          <p className="settings-meta classify-last-error">
-            Raw response: <code>{testResult.raw}</code>
-          </p>
-        )}
-      </div>
-
-      {error && <p className="settings-error">{error}</p>}
-      <div className="settings-actions settings-footer-actions">
-        <button
-          type="button"
-          className="settings-save"
-          onClick={() => void save()}
-          disabled={status === 'saving'}
-          data-testid="labels-save"
-        >
-          {status === 'saving' ? 'Saving…' : 'Save labels settings'}
-        </button>
-      </div>
-    </section>
-  )
-}
-
-// nomic-* models require these task-specific prefixes; everything else
-// (BGE, e5, voyage, gemini, sentence-transformers/*-mpnet, etc) ignores
-// them. The toggle below sets both prefixes in one click so users don't
-// have to remember the magic strings.
-const NOMIC_QUERY_PREFIX = 'search_query: '
-const NOMIC_DOCUMENT_PREFIX = 'search_document: '
-
-// Reranker dropdown options. List matches what fastembed's
-// TextCrossEncoder.list_supported_models() returns plus the
-// "disabled" sentinel the sidecar honours. Sizes are rough on-disk
-// download sizes so users can pick something their machine fits.
+// Reranker dropdown options — fastembed's TextCrossEncoder list plus
+// a "disabled" sentinel the sidecar honours.
 const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   {
     value: 'jinaai/jina-reranker-v2-base-multilingual',
@@ -565,114 +41,680 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'disabled', label: 'Disabled — skip reranking' }
 ]
 
-function RagSection({
-  rag,
-  onSaved
-}: {
-  rag: RagSettings
-  onSaved: (next: RagSettings) => void
-}) {
-  const [endpoint, setEndpoint] = useState(rag.embed_endpoint)
-  const [model, setModel] = useState(rag.embed_model)
-  const [apiKey, setApiKey] = useState(rag.embed_api_key)
-  const [queryPrefix, setQueryPrefix] = useState(rag.embed_query_prefix)
-  const [docPrefix, setDocPrefix] = useState(rag.embed_document_prefix)
-  const [showKey, setShowKey] = useState(false)
-  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
-  const [error, setError] = useState<string | null>(null)
-  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle')
-  const [testResult, setTestResult] = useState<{
-    ok: boolean
-    elapsed_ms: number
-    dimension: number | null
-    model: string
-    error: string | null
-  } | null>(null)
-  const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
+// Nomic-family embed models need these task prefixes; one-click apply
+// keeps the magic strings out of user-facing copy.
+const NOMIC_QUERY_PREFIX = 'search_query: '
+const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
-  // Chat-side form state.
-  const [chatEndpoint, setChatEndpoint] = useState(rag.chat_endpoint)
-  const [chatModel, setChatModel] = useState(rag.chat_model)
-  const [chatApiKey, setChatApiKey] = useState(rag.chat_api_key)
-  const [chatPrompt, setChatPrompt] = useState(rag.chat_system_prompt)
-  const [showChatKey, setShowChatKey] = useState(false)
+type SectionId = 'general' | 'labels' | 'chat' | 'embedding'
 
-  // Retrieval tunables — strings so the inputs stay editable while the
-  // user is typing (an empty string parses as NaN and the inputs would
-  // otherwise refuse to clear).
-  const [topK, setTopK] = useState(String(rag.top_k))
-  const [rerankCandidates, setRerankCandidates] = useState(String(rag.rerank_candidates))
-  const [neighbors, setNeighbors] = useState(String(rag.neighbors))
-  const [rerankModel, setRerankModel] = useState(rag.rerank_model)
+const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
+  { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
+  { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
+  { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
+  { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' }
+]
 
-  // Chunking tunables — same string-state pattern as the retrieval
-  // section so the user can clear them mid-edit.
-  const [chunkMax, setChunkMax] = useState(String(rag.chunk_max_chars))
-  const [chunkSoft, setChunkSoft] = useState(String(rag.chunk_soft_split_chars))
-  const [chunkOverlap, setChunkOverlap] = useState(String(rag.chunk_overlap_msgs))
+// Local working copy of every editable field, kept alongside the
+// loaded snapshot so we can compute per-section dirty state in O(fields).
+type Draft = {
+  fchat_data_dir: string
+  labels: {
+    threshold_chars: string
+    llm_endpoint: string
+    llm_model: string
+    llm_api_key: string
+    system_prompt: string
+    context_before: string
+    context_after: string
+  }
+  rag: {
+    embed_endpoint: string
+    embed_model: string
+    embed_api_key: string
+    embed_query_prefix: string
+    embed_document_prefix: string
+    chat_endpoint: string
+    chat_model: string
+    chat_api_key: string
+    chat_system_prompt: string
+    top_k: string
+    rerank_candidates: string
+    neighbors: string
+    rerank_model: string
+    chunk_max_chars: string
+    chunk_soft_split_chars: string
+    chunk_overlap_msgs: string
+  }
+}
 
-  useEffect(() => {
-    setEndpoint(rag.embed_endpoint)
-    setModel(rag.embed_model)
-    setApiKey(rag.embed_api_key)
-    setQueryPrefix(rag.embed_query_prefix)
-    setDocPrefix(rag.embed_document_prefix)
-    setChatEndpoint(rag.chat_endpoint)
-    setChatModel(rag.chat_model)
-    setChatApiKey(rag.chat_api_key)
-    setChatPrompt(rag.chat_system_prompt)
-    setTopK(String(rag.top_k))
-    setRerankCandidates(String(rag.rerank_candidates))
-    setNeighbors(String(rag.neighbors))
-    setRerankModel(rag.rerank_model)
-    setChunkMax(String(rag.chunk_max_chars))
-    setChunkSoft(String(rag.chunk_soft_split_chars))
-    setChunkOverlap(String(rag.chunk_overlap_msgs))
-  }, [rag])
-
-  const openIngest = useStore((s) => s.openIngest)
-  const [wipeStatus, setWipeStatus] = useState<'idle' | 'wiping' | 'wiped' | 'error'>(
-    'idle'
-  )
-  const [wipeError, setWipeError] = useState<string | null>(null)
-  const triggerWipe = async () => {
-    if (wipeStatus === 'wiping') return
-    const confirmed = window.confirm(
-      'Wipe the local vector index?\n\n' +
-        'This deletes every embedded chunk and clears the manifest. ' +
-        'It does NOT touch your labels or your F-Chat logs. The next ' +
-        'time you run Ingest the index will rebuild from scratch.'
-    )
-    if (!confirmed) return
-    setWipeStatus('wiping')
-    setWipeError(null)
-    try {
-      await api.ragWipe()
-      setWipeStatus('wiped')
-      // Refresh the indexed-coverage line above so it reads zero.
-      try {
-        const s = await api.ragStatus()
-        setIndexStatus(s)
-      } catch {
-        // Best-effort; the wipe itself succeeded.
-      }
-    } catch (err) {
-      setWipeStatus('error')
-      setWipeError(err instanceof Error ? err.message : String(err))
+function buildDraft(state: SettingsState): Draft {
+  return {
+    fchat_data_dir: state.fchat_data_dir ?? '',
+    labels: {
+      threshold_chars: String(state.labels.threshold_chars),
+      llm_endpoint: state.labels.llm_endpoint,
+      llm_model: state.labels.llm_model,
+      llm_api_key: state.labels.llm_api_key,
+      system_prompt: state.labels.system_prompt,
+      context_before: String(state.labels.context_before),
+      context_after: String(state.labels.context_after)
+    },
+    rag: {
+      embed_endpoint: state.rag.embed_endpoint,
+      embed_model: state.rag.embed_model,
+      embed_api_key: state.rag.embed_api_key,
+      embed_query_prefix: state.rag.embed_query_prefix,
+      embed_document_prefix: state.rag.embed_document_prefix,
+      chat_endpoint: state.rag.chat_endpoint,
+      chat_model: state.rag.chat_model,
+      chat_api_key: state.rag.chat_api_key,
+      chat_system_prompt: state.rag.chat_system_prompt,
+      top_k: String(state.rag.top_k),
+      rerank_candidates: String(state.rag.rerank_candidates),
+      neighbors: String(state.rag.neighbors),
+      rerank_model: state.rag.rerank_model,
+      chunk_max_chars: String(state.rag.chunk_max_chars),
+      chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
+      chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
     }
   }
-  const triggerReingestAll = () => {
-    const confirmed = window.confirm(
-      'Re-ingest all logs?\n\n' +
-        'This wipes the existing vector index and rebuilds it for every ' +
-        'character × partner using the current chunking + embedding ' +
-        'settings. Existing chunks of incompatible shape (different ' +
-        'embedding dimension or chunk size) will be removed first. The ' +
-        'operation runs in the background and you can cancel mid-way.'
-    )
-    if (!confirmed) return
-    openIngest({}, 'All characters, all partners (re-ingest)', { forceRewipe: true })
+}
+
+// Diff each section vs. its baseline to drive the rail dirty dots.
+// Strings everywhere → cheap === comparison; we don't need deep-equal
+// helpers for nested objects.
+function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean> {
+  const generalDirty = draft.fchat_data_dir.trim() !== baseline.fchat_data_dir.trim()
+  const labelsDirty =
+    draft.labels.threshold_chars !== baseline.labels.threshold_chars ||
+    draft.labels.llm_endpoint !== baseline.labels.llm_endpoint ||
+    draft.labels.llm_model !== baseline.labels.llm_model ||
+    draft.labels.llm_api_key !== baseline.labels.llm_api_key ||
+    draft.labels.system_prompt !== baseline.labels.system_prompt ||
+    draft.labels.context_before !== baseline.labels.context_before ||
+    draft.labels.context_after !== baseline.labels.context_after
+  const chatDirty =
+    draft.rag.chat_endpoint !== baseline.rag.chat_endpoint ||
+    draft.rag.chat_model !== baseline.rag.chat_model ||
+    draft.rag.chat_api_key !== baseline.rag.chat_api_key ||
+    draft.rag.chat_system_prompt !== baseline.rag.chat_system_prompt ||
+    draft.rag.top_k !== baseline.rag.top_k ||
+    draft.rag.rerank_candidates !== baseline.rag.rerank_candidates ||
+    draft.rag.neighbors !== baseline.rag.neighbors ||
+    draft.rag.rerank_model !== baseline.rag.rerank_model
+  const embeddingDirty =
+    draft.rag.embed_endpoint !== baseline.rag.embed_endpoint ||
+    draft.rag.embed_model !== baseline.rag.embed_model ||
+    draft.rag.embed_api_key !== baseline.rag.embed_api_key ||
+    draft.rag.embed_query_prefix !== baseline.rag.embed_query_prefix ||
+    draft.rag.embed_document_prefix !== baseline.rag.embed_document_prefix ||
+    draft.rag.chunk_max_chars !== baseline.rag.chunk_max_chars ||
+    draft.rag.chunk_soft_split_chars !== baseline.rag.chunk_soft_split_chars ||
+    draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
+  return {
+    general: generalDirty,
+    labels: labelsDirty,
+    chat: chatDirty,
+    embedding: embeddingDirty
   }
+}
+
+function anyDirty(d: Record<SectionId, boolean>): boolean {
+  return d.general || d.labels || d.chat || d.embedding
+}
+
+const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
+  const n = Math.floor(Number(s))
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(lo, Math.min(hi, n))
+}
+
+export function SettingsModal({ onClose }: { onClose: () => void }) {
+  const loadCharacters = useStore((s) => s.loadCharacters)
+  const [state, setState] = useState<SettingsState | null>(null)
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [activeSection, setActiveSection] = useState<SectionId>('general')
+  const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'error'>(
+    'loading'
+  )
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const firstFieldRef = useRef<HTMLInputElement | null>(null)
+  const focusedOnceRef = useRef(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .settingsGet()
+      .then((s) => {
+        if (cancelled) return
+        setState(s)
+        setDraft(buildDraft(s))
+        setStatus('idle')
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setSaveError(err instanceof Error ? err.message : String(err))
+        setStatus('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const baseline = useMemo(() => (state ? buildDraft(state) : null), [state])
+  const dirtyByDraft = useMemo(
+    () => (draft && baseline ? dirtySections(draft, baseline) : null),
+    [draft, baseline]
+  )
+
+  const tryClose = () => {
+    if (dirtyByDraft && anyDirty(dirtyByDraft)) {
+      const ok = window.confirm(
+        'You have unsaved changes. Close without saving?'
+      )
+      if (!ok) return
+    }
+    onClose()
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') tryClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirtyByDraft])
+
+  // Wait until settings have loaded (and the General pane has therefore
+  // rendered its inputs) before trying to focus — running this on
+  // mount alone misses, the input isn't in the DOM yet. One-shot via a
+  // ref so save-and-stay-on-the-modal doesn't yank focus back to the
+  // dir input every time settings round-trip.
+  useEffect(() => {
+    if (focusedOnceRef.current || status !== 'idle' || !draft) return
+    focusedOnceRef.current = true
+    const id = requestAnimationFrame(() => firstFieldRef.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [status, draft])
+
+  const updateLabels = (patch: Partial<Draft['labels']>) =>
+    setDraft((d) => (d ? { ...d, labels: { ...d.labels, ...patch } } : d))
+  const updateRag = (patch: Partial<Draft['rag']>) =>
+    setDraft((d) => (d ? { ...d, rag: { ...d.rag, ...patch } } : d))
+  const updateGeneral = (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) =>
+    setDraft((d) => (d ? { ...d, ...patch } : d))
+
+  const saveAll = async () => {
+    if (!state || !draft || !dirtyByDraft) return
+    setStatus('saving')
+    setSaveError(null)
+    // Validate Labels threshold up-front — non-finite or zero would
+    // be silently coerced by the sidecar to its default, which is
+    // user-hostile. Other numerics are clamped here so out-of-range
+    // typos resolve to sensible values.
+    const parsedThreshold = Number(draft.labels.threshold_chars)
+    if (!Number.isFinite(parsedThreshold) || parsedThreshold < 1) {
+      setSaveError('Threshold must be a positive integer.')
+      setStatus('error')
+      setActiveSection('labels')
+      return
+    }
+    try {
+      const payload: Parameters<typeof api.settingsUpdate>[0] = {}
+      if (dirtyByDraft.general) {
+        payload.fchat_data_dir = draft.fchat_data_dir.trim() || null
+      }
+      if (dirtyByDraft.labels) {
+        payload.labels = {
+          threshold_chars: Math.floor(parsedThreshold),
+          llm_endpoint: draft.labels.llm_endpoint,
+          llm_model: draft.labels.llm_model,
+          llm_api_key: draft.labels.llm_api_key,
+          system_prompt: draft.labels.system_prompt,
+          context_before: clampInt(
+            draft.labels.context_before,
+            0,
+            10,
+            state.labels.context_before
+          ),
+          context_after: clampInt(
+            draft.labels.context_after,
+            0,
+            10,
+            state.labels.context_after
+          )
+        }
+      }
+      if (dirtyByDraft.chat || dirtyByDraft.embedding) {
+        const nextChunkMax = clampInt(
+          draft.rag.chunk_max_chars,
+          500,
+          20000,
+          state.rag.chunk_max_chars
+        )
+        payload.rag = {
+          embed_endpoint: draft.rag.embed_endpoint,
+          embed_model: draft.rag.embed_model,
+          embed_api_key: draft.rag.embed_api_key,
+          embed_query_prefix: draft.rag.embed_query_prefix,
+          embed_document_prefix: draft.rag.embed_document_prefix,
+          chat_endpoint: draft.rag.chat_endpoint,
+          chat_model: draft.rag.chat_model,
+          chat_api_key: draft.rag.chat_api_key,
+          chat_system_prompt: draft.rag.chat_system_prompt,
+          rerank_model: draft.rag.rerank_model,
+          rerank_candidates: clampInt(
+            draft.rag.rerank_candidates,
+            1,
+            200,
+            state.rag.rerank_candidates
+          ),
+          top_k: clampInt(draft.rag.top_k, 1, 50, state.rag.top_k),
+          neighbors: clampInt(draft.rag.neighbors, 0, 5, state.rag.neighbors),
+          chunk_max_chars: nextChunkMax,
+          chunk_soft_split_chars: clampInt(
+            draft.rag.chunk_soft_split_chars,
+            400,
+            Math.max(500, nextChunkMax - 100),
+            state.rag.chunk_soft_split_chars
+          ),
+          chunk_overlap_msgs: clampInt(
+            draft.rag.chunk_overlap_msgs,
+            0,
+            5,
+            state.rag.chunk_overlap_msgs
+          )
+        }
+      }
+      const updated = await api.settingsUpdate(payload)
+      setState(updated)
+      setDraft(buildDraft(updated))
+      setStatus('idle')
+      if (dirtyByDraft.general) {
+        // Refresh the sidebar so the new directory's characters appear.
+        await loadCharacters()
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+      setStatus('error')
+    }
+  }
+
+  const discardAll = () => {
+    if (!state) return
+    setDraft(buildDraft(state))
+    setSaveError(null)
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal settings-modal settings-modal-rail">
+        <header className="modal-head">
+          <div>
+            <h2 className="modal-title">Settings</h2>
+            <p className="modal-subtitle">F-Chat data, label classifier, RAG.</p>
+          </div>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={tryClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+        <div className="settings-shell">
+          <nav className="settings-rail" aria-label="Settings sections">
+            {SECTION_ORDER.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`settings-rail-item${
+                  activeSection === s.id ? ' on' : ''
+                }`}
+                onClick={() => setActiveSection(s.id)}
+                data-testid={`settings-rail-${s.id}`}
+              >
+                <span className="settings-rail-label">{s.label}</span>
+                <span className="settings-rail-sub">{s.subtitle}</span>
+                {dirtyByDraft && dirtyByDraft[s.id] && (
+                  <span
+                    className="settings-rail-dirty"
+                    aria-label="Unsaved changes"
+                    title="Unsaved changes in this section"
+                  />
+                )}
+              </button>
+            ))}
+          </nav>
+          <div className="settings-pane">
+            {status === 'loading' && (
+              <p className="settings-help">Loading settings…</p>
+            )}
+            {state && draft && (
+              <>
+                {activeSection === 'general' && (
+                  <GeneralPane
+                    state={state}
+                    draft={draft}
+                    onChange={updateGeneral}
+                    firstFieldRef={firstFieldRef}
+                  />
+                )}
+                {activeSection === 'labels' && (
+                  <LabelsPane
+                    labels={state.labels}
+                    draft={draft.labels}
+                    onChange={updateLabels}
+                  />
+                )}
+                {activeSection === 'chat' && (
+                  <ChatPane
+                    rag={state.rag}
+                    draft={draft.rag}
+                    onChange={updateRag}
+                  />
+                )}
+                {activeSection === 'embedding' && (
+                  <EmbeddingPane
+                    rag={state.rag}
+                    draft={draft.rag}
+                    onChange={updateRag}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </div>
+        <footer className="settings-footer">
+          {saveError && <span className="settings-error">{saveError}</span>}
+          <span className="settings-footer-spacer" />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={discardAll}
+            disabled={
+              status === 'saving' || !dirtyByDraft || !anyDirty(dirtyByDraft)
+            }
+            data-testid="settings-discard"
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            className="settings-save"
+            onClick={() => void saveAll()}
+            disabled={
+              status === 'saving' || !dirtyByDraft || !anyDirty(dirtyByDraft)
+            }
+            data-testid="settings-save"
+          >
+            {status === 'saving' ? 'Saving…' : 'Save'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  )
+}
+
+// ---------- Reusable building blocks ------------------------------------
+
+function EndpointField({
+  id,
+  value,
+  defaultUrl,
+  onChange,
+  help,
+  testId
+}: {
+  id: string
+  value: string
+  defaultUrl: string
+  onChange: (v: string) => void
+  help?: React.ReactNode
+  testId: string
+}) {
+  return (
+    <div className="settings-field">
+      <label className="settings-label" htmlFor={id}>
+        Endpoint
+      </label>
+      {help && <p className="settings-help">{help}</p>}
+      <div className="settings-row settings-row-wrap">
+        {ENDPOINT_PRESETS.map((p) => (
+          <button
+            key={p.url}
+            type="button"
+            className={`settings-preset ${value === p.url ? 'on' : ''}`}
+            onClick={() => onChange(p.url)}
+          >
+            {p.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="settings-clear"
+          onClick={() => onChange(defaultUrl)}
+        >
+          Default
+        </button>
+      </div>
+      <input
+        id={id}
+        type="text"
+        className="settings-input"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        data-testid={testId}
+      />
+    </div>
+  )
+}
+
+function ApiKeyField({
+  id,
+  value,
+  onChange,
+  label,
+  testId
+}: {
+  id: string
+  value: string
+  onChange: (v: string) => void
+  label?: string
+  testId: string
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="settings-field">
+      <label className="settings-label" htmlFor={id}>
+        {label ?? 'API key (blank for local LM Studio / Ollama)'}
+      </label>
+      <div className="settings-row">
+        <input
+          id={id}
+          type={show ? 'text' : 'password'}
+          className="settings-input"
+          value={value}
+          placeholder="sk-…"
+          autoComplete="off"
+          onChange={(e) => onChange(e.target.value)}
+          data-testid={testId}
+        />
+        <button
+          type="button"
+          className="settings-clear"
+          onClick={() => setShow((v) => !v)}
+          title={show ? 'Hide key' : 'Show key'}
+        >
+          {show ? 'Hide' : 'Show'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ModelField({
+  id,
+  value,
+  defaultValue,
+  endpoint,
+  onChange,
+  help,
+  testId
+}: {
+  id: string
+  value: string
+  defaultValue: string
+  endpoint: string
+  onChange: (v: string) => void
+  help?: React.ReactNode
+  testId: string
+}) {
+  // Discover is lazy — we never auto-fetch on mount. Users often open
+  // Settings *because* the endpoint is broken; a hanging fetch on
+  // open is the worst UX. The dropdown only appears after an explicit
+  // click; an error inlines below the button so the form stays usable.
+  const [discoverStatus, setDiscoverStatus] = useState<
+    'idle' | 'loading' | 'ok' | 'err'
+  >('idle')
+  const [discovered, setDiscovered] = useState<string[]>([])
+  const [discoverError, setDiscoverError] = useState<string | null>(null)
+  const [showList, setShowList] = useState(false)
+
+  const discover = async () => {
+    if (!endpoint.trim()) {
+      setDiscoverError('Set the endpoint first.')
+      setDiscoverStatus('err')
+      return
+    }
+    setDiscoverStatus('loading')
+    setDiscoverError(null)
+    try {
+      const res = await api.discoverModels(endpoint.trim())
+      if (res.models.length === 0) {
+        setDiscovered([])
+        setDiscoverError(res.error ?? 'no models returned')
+        setDiscoverStatus('err')
+        setShowList(false)
+        return
+      }
+      setDiscovered(res.models)
+      setDiscoverStatus('ok')
+      setShowList(true)
+    } catch (err) {
+      setDiscoverError(err instanceof Error ? err.message : String(err))
+      setDiscoverStatus('err')
+      setShowList(false)
+    }
+  }
+
+  return (
+    <div className="settings-field">
+      <label className="settings-label" htmlFor={id}>
+        Model
+      </label>
+      {help && <p className="settings-help">{help}</p>}
+      <div className="settings-row">
+        <input
+          id={id}
+          type="text"
+          className="settings-input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          data-testid={testId}
+        />
+        <button
+          type="button"
+          className="settings-pick"
+          onClick={() => void discover()}
+          disabled={discoverStatus === 'loading'}
+          title="Query the endpoint above for loaded models (LM Studio / OpenAI / Ollama)"
+          data-testid={`${testId}-discover`}
+        >
+          {discoverStatus === 'loading' ? '…' : '↻ Discover'}
+        </button>
+        <button
+          type="button"
+          className="settings-clear"
+          onClick={() => onChange(defaultValue)}
+        >
+          Default
+        </button>
+      </div>
+      {showList && discovered.length > 0 && (
+        <div className="settings-discovered" data-testid={`${testId}-list`}>
+          <p className="settings-meta">
+            {discovered.length} loaded — click to fill the field
+          </p>
+          <ul className="settings-discovered-list">
+            {discovered.map((m) => (
+              <li key={m}>
+                <button
+                  type="button"
+                  className={`settings-discovered-item${
+                    m === value ? ' on' : ''
+                  }`}
+                  onClick={() => {
+                    onChange(m)
+                    setShowList(false)
+                  }}
+                >
+                  {m}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {discoverStatus === 'err' && discoverError && (
+        <p className="settings-meta classify-last-error">
+          Discover failed: {discoverError}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// Pill rendering shared between the Labels and Chat test rows so the
+// "OK / latency / extra" surface looks identical across panes.
+function TestStatusPill({
+  status,
+  text,
+  testId
+}: {
+  status: 'idle' | 'running' | 'ok' | 'fail'
+  text: string
+  testId: string
+}) {
+  return (
+    <span
+      className={`settings-meta labels-test-result labels-test-${status}`}
+      data-testid={testId}
+    >
+      {status === 'ok' ? '✓ ' : status === 'fail' ? '✕ ' : ''}
+      {text}
+    </span>
+  )
+}
+
+// ---------- Section panes ------------------------------------------------
+
+function GeneralPane({
+  state,
+  draft,
+  onChange,
+  firstFieldRef
+}: {
+  state: SettingsState
+  draft: Draft
+  onChange: (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) => void
+  firstFieldRef: React.RefObject<HTMLInputElement>
+}) {
+  const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
+  const envLocked = state.fchat_data_dir_env_locked
 
   useEffect(() => {
     let cancelled = false
@@ -682,86 +724,596 @@ function RagSection({
         if (!cancelled) setIndexStatus(s)
       })
       .catch(() => {
-        // Status is best-effort context — failure shouldn't block the form.
+        // Best-effort; status failure shouldn't block the form.
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  const usesNomicPrefixes =
-    queryPrefix === NOMIC_QUERY_PREFIX && docPrefix === NOMIC_DOCUMENT_PREFIX
-
-  const applyNomicPrefixes = () => {
-    setQueryPrefix(NOMIC_QUERY_PREFIX)
-    setDocPrefix(NOMIC_DOCUMENT_PREFIX)
-  }
-  const clearPrefixes = () => {
-    setQueryPrefix('')
-    setDocPrefix('')
+  const pick = async () => {
+    const picker = window.workbench?.selectDirectory
+    if (!picker) return
+    const chosen = await picker({
+      title: 'Pick your F-Chat data directory',
+      defaultPath: draft.fchat_data_dir || state.fchat_data_dir_effective
+    })
+    if (chosen) onChange({ fchat_data_dir: chosen })
   }
 
-  const save = async () => {
-    setStatus('saving')
-    setError(null)
-    // Coerce + clamp numeric strings here so a typo doesn't get to the
-    // sidecar as NaN. Bounds mirror the loader's clamp; out-of-range
-    // values are clamped silently rather than rejected.
-    const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
-      const n = Math.floor(Number(s))
-      if (!Number.isFinite(n)) return fallback
-      return Math.max(lo, Math.min(hi, n))
-    }
-    const nextTopK = clampInt(topK, 1, 50, rag.top_k)
-    const nextRC = clampInt(rerankCandidates, 1, 200, rag.rerank_candidates)
-    const nextNeighbors = clampInt(neighbors, 0, 5, rag.neighbors)
-    const nextChunkMax = clampInt(chunkMax, 500, 20000, rag.chunk_max_chars)
-    const nextChunkSoft = clampInt(
-      chunkSoft,
-      400,
-      Math.max(500, nextChunkMax - 100),
-      rag.chunk_soft_split_chars
-    )
-    const nextChunkOverlap = clampInt(chunkOverlap, 0, 5, rag.chunk_overlap_msgs)
+  return (
+    <>
+      <PaneHeader
+        title="General"
+        subtitle="F-Chat data directory and one-glance index status."
+      />
+      <div className="settings-section">
+        <div className="settings-field">
+          <label className="settings-label" htmlFor="fchat-data-dir-input">
+            F-Chat data directory
+          </label>
+          <p className="settings-help">
+            F-Chat 3.0 writes each character's logs under{' '}
+            <code>&lt;data&gt;/&lt;character&gt;/logs</code>. Point this at the
+            parent of those character folders.
+          </p>
+          <div className="settings-row">
+            <input
+              id="fchat-data-dir-input"
+              ref={firstFieldRef}
+              type="text"
+              className="settings-input"
+              placeholder="/path/to/F-Chat/data"
+              value={draft.fchat_data_dir}
+              onChange={(e) => onChange({ fchat_data_dir: e.target.value })}
+              disabled={envLocked}
+              data-testid="settings-fchat-dir-input"
+            />
+            <button
+              type="button"
+              className="settings-pick"
+              onClick={() => void pick()}
+              disabled={envLocked || !window.workbench?.selectDirectory}
+              data-testid="settings-fchat-dir-pick"
+            >
+              Browse…
+            </button>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() => onChange({ fchat_data_dir: '' })}
+              disabled={envLocked || !draft.fchat_data_dir}
+              title="Clear the override and fall back to the default directory"
+            >
+              Reset
+            </button>
+          </div>
+          <p className="settings-meta">
+            Currently reading from: <code>{state.fchat_data_dir_effective}</code>
+          </p>
+          {envLocked && (
+            <p className="settings-note">
+              <b>FCHAT_DATA_DIR</b> is set in the environment and overrides this
+              setting. Unset it to control the path from here.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">RAG index status</h3>
+        {indexStatus === null ? (
+          <p className="settings-meta">Loading status…</p>
+        ) : indexStatus.chunk_count > 0 ? (
+          <p className="settings-meta" data-testid="rag-index-status">
+            <strong>{indexStatus.chunk_count.toLocaleString()}</strong> chunks
+            indexed · model <code>{indexStatus.embed_model}</code> (dim{' '}
+            {indexStatus.embed_dimension})
+          </p>
+        ) : (
+          <p className="settings-meta" data-testid="rag-index-status">
+            No chunks indexed yet. Use{' '}
+            <strong>Logs → Ingest All Characters (RAG)…</strong> to build the
+            vector index.
+          </p>
+        )}
+      </div>
+    </>
+  )
+}
+
+function LabelsPane({
+  labels,
+  draft,
+  onChange
+}: {
+  labels: LabelsSettings
+  draft: Draft['labels']
+  onChange: (patch: Partial<Draft['labels']>) => void
+}) {
+  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>(
+    'idle'
+  )
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    elapsed_ms: number
+    error?: string | null
+    raw?: string
+    parsed?: { label: string; reason: string } | null
+  } | null>(null)
+
+  const runTest = async () => {
+    setTestStatus('running')
+    setTestResult(null)
     try {
-      const updated = await api.settingsUpdate({
-        rag: {
-          embed_endpoint: endpoint,
-          embed_model: model,
-          embed_api_key: apiKey,
-          embed_query_prefix: queryPrefix,
-          embed_document_prefix: docPrefix,
-          chat_endpoint: chatEndpoint,
-          chat_model: chatModel,
-          chat_api_key: chatApiKey,
-          chat_system_prompt: chatPrompt,
-          rerank_model: rerankModel,
-          rerank_candidates: nextRC,
-          top_k: nextTopK,
-          neighbors: nextNeighbors,
-          chunk_max_chars: nextChunkMax,
-          chunk_soft_split_chars: nextChunkSoft,
-          chunk_overlap_msgs: nextChunkOverlap
-        }
+      const result = await api.labelsTestConnection({
+        llm_endpoint: draft.llm_endpoint,
+        llm_model: draft.llm_model,
+        llm_api_key: draft.llm_api_key,
+        system_prompt: draft.system_prompt
       })
-      onSaved(updated.rag)
-      setStatus('idle')
+      setTestResult(result)
+      setTestStatus(result.ok ? 'ok' : 'fail')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
+      setTestResult({
+        ok: false,
+        elapsed_ms: 0,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      setTestStatus('fail')
     }
   }
+
+  const isPromptDefault = draft.system_prompt === labels.defaults.system_prompt
+  const testText = testResult
+    ? testResult.ok
+      ? `OK · ${testResult.elapsed_ms} ms · ${testResult.parsed?.label}`
+      : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`
+    : 'not run yet'
+
+  return (
+    <>
+      <PaneHeader
+        title="Labels — IC / OOC classifier"
+        subtitle="Settings for the on-demand classifier. Short messages and `((…` auto-OOC by rule; everything else stays Unlabeled until you run Classify on a conversation."
+      />
+
+      <div className="settings-section">
+        <div className="settings-field">
+          <label className="settings-label" htmlFor="labels-threshold">
+            OOC threshold (chars)
+          </label>
+          <p className="settings-help">
+            Chat messages shorter than this many characters are auto-classified
+            as OOC without asking the LLM.
+          </p>
+          <div className="settings-row">
+            <input
+              id="labels-threshold"
+              type="number"
+              min={1}
+              className="settings-input settings-input-narrow"
+              value={draft.threshold_chars}
+              onChange={(e) => onChange({ threshold_chars: e.target.value })}
+              data-testid="labels-threshold-input"
+            />
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() =>
+                onChange({ threshold_chars: String(labels.defaults.threshold_chars) })
+              }
+            >
+              Default ({labels.defaults.threshold_chars})
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-field">
+          <label className="settings-label">Context window (surrounding messages)</label>
+          <p className="settings-help">
+            How many messages before and after the target are attached as{' '}
+            <code>KONTEXT</code> to each classify call. Defaults to{' '}
+            <code>1 / 1</code> — wider windows cause the model to latch onto the
+            surrounding cluster and bleed across IC/OOC boundaries. If you see
+            boundary messages mislabeled, drop to <code>0 / 0</code>, not up.
+            Range 0–10 each.
+          </p>
+          <div className="settings-row">
+            <label htmlFor="labels-ctx-before" className="settings-row-label">
+              Before
+            </label>
+            <input
+              id="labels-ctx-before"
+              type="number"
+              min={0}
+              max={10}
+              className="settings-input settings-input-narrow"
+              value={draft.context_before}
+              onChange={(e) => onChange({ context_before: e.target.value })}
+              data-testid="labels-context-before-input"
+            />
+            <label htmlFor="labels-ctx-after" className="settings-row-label">
+              After
+            </label>
+            <input
+              id="labels-ctx-after"
+              type="number"
+              min={0}
+              max={10}
+              className="settings-input settings-input-narrow"
+              value={draft.context_after}
+              onChange={(e) => onChange({ context_after: e.target.value })}
+              data-testid="labels-context-after-input"
+            />
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() =>
+                onChange({
+                  context_before: String(labels.defaults.context_before),
+                  context_after: String(labels.defaults.context_after)
+                })
+              }
+            >
+              Default ({labels.defaults.context_before} / {labels.defaults.context_after})
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">Inference</h3>
+        <EndpointField
+          id="labels-endpoint"
+          value={draft.llm_endpoint}
+          defaultUrl={labels.defaults.llm_endpoint}
+          onChange={(v) => onChange({ llm_endpoint: v })}
+          help={
+            <>
+              OpenAI-compatible URL. The classifier posts to{' '}
+              <code>&lt;endpoint&gt;/chat/completions</code>.
+            </>
+          }
+          testId="labels-endpoint-input"
+        />
+        <ModelField
+          id="labels-model"
+          value={draft.llm_model}
+          defaultValue={labels.defaults.llm_model}
+          endpoint={draft.llm_endpoint}
+          onChange={(v) => onChange({ llm_model: v })}
+          help={
+            <>The model identifier the server expects. <strong>Discover</strong> queries the endpoint for loaded models.</>
+          }
+          testId="labels-model-input"
+        />
+        <ApiKeyField
+          id="labels-api-key"
+          value={draft.llm_api_key}
+          onChange={(v) => onChange({ llm_api_key: v })}
+          testId="labels-api-key-input"
+        />
+
+        <div className="settings-field">
+          <label className="settings-label">Test connection</label>
+          <p className="settings-help">
+            One canned classification roundtrip against the endpoint + model +
+            prompt above. Useful before kicking off a long classify job.
+          </p>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="settings-pick"
+              onClick={() => void runTest()}
+              disabled={testStatus === 'running'}
+              data-testid="labels-test-connection"
+            >
+              {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+            </button>
+            {testResult && (
+              <TestStatusPill
+                status={testStatus}
+                text={testText}
+                testId="labels-test-result"
+              />
+            )}
+          </div>
+          {testResult && testResult.raw && !testResult.ok && (
+            <p className="settings-meta classify-last-error">
+              Raw response: <code>{testResult.raw}</code>
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">System prompt</h3>
+        <p className="settings-help">
+          Sent as the system message before each target message + its context
+          window.
+        </p>
+        <textarea
+          id="labels-prompt"
+          className="settings-textarea"
+          rows={14}
+          value={draft.system_prompt}
+          onChange={(e) => onChange({ system_prompt: e.target.value })}
+          data-testid="labels-prompt-input"
+        />
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => onChange({ system_prompt: labels.defaults.system_prompt })}
+            disabled={isPromptDefault}
+          >
+            Reset to default prompt
+          </button>
+          <span className="settings-meta">
+            {draft.system_prompt.length.toLocaleString()} chars
+          </span>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function ChatPane({
+  rag,
+  draft,
+  onChange
+}: {
+  rag: RagSettings
+  draft: Draft['rag']
+  onChange: (patch: Partial<Draft['rag']>) => void
+}) {
+  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>(
+    'idle'
+  )
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    elapsed_ms: number
+    error: string | null
+    raw?: string
+  } | null>(null)
+
+  const runTest = async () => {
+    setTestStatus('running')
+    setTestResult(null)
+    try {
+      const result = await api.ragTestChat({
+        chat_endpoint: draft.chat_endpoint,
+        chat_model: draft.chat_model,
+        chat_api_key: draft.chat_api_key,
+        chat_system_prompt: draft.chat_system_prompt
+      })
+      setTestResult(result)
+      setTestStatus(result.ok ? 'ok' : 'fail')
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        elapsed_ms: 0,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      setTestStatus('fail')
+    }
+  }
+
+  const testText = testResult
+    ? testResult.ok
+      ? `OK · ${testResult.elapsed_ms} ms`
+      : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`
+    : 'not run yet'
+  const isChatPromptDefault =
+    draft.chat_system_prompt === rag.defaults.chat_system_prompt
+
+  return (
+    <>
+      <PaneHeader
+        title="RAG · Chat"
+        subtitle="LLM that answers questions over the retrieved chunks. Changes here take effect on the next message — no re-ingest needed."
+      />
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">Inference</h3>
+        <EndpointField
+          id="rag-chat-endpoint"
+          value={draft.chat_endpoint}
+          defaultUrl={rag.defaults.chat_endpoint}
+          onChange={(v) => onChange({ chat_endpoint: v })}
+          help="Same OpenAI-compatible shape as the Labels endpoint. Often the same server, different loaded model."
+          testId="rag-chat-endpoint-input"
+        />
+        <ModelField
+          id="rag-chat-model"
+          value={draft.chat_model}
+          defaultValue={rag.defaults.chat_model}
+          endpoint={draft.chat_endpoint}
+          onChange={(v) => onChange({ chat_model: v })}
+          help={<>For chat questions over your logs. <strong>Discover</strong> lists loaded models from the endpoint above.</>}
+          testId="rag-chat-model-input"
+        />
+        <ApiKeyField
+          id="rag-chat-api-key"
+          value={draft.chat_api_key}
+          onChange={(v) => onChange({ chat_api_key: v })}
+          testId="rag-chat-api-key-input"
+        />
+
+        <div className="settings-field">
+          <label className="settings-label">Test connection</label>
+          <p className="settings-help">
+            One non-streaming chat completion to validate the endpoint + model.
+            Doesn't touch your index or chat history.
+          </p>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="settings-pick"
+              onClick={() => void runTest()}
+              disabled={testStatus === 'running'}
+              data-testid="rag-chat-test-connection"
+            >
+              {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+            </button>
+            {testResult && (
+              <TestStatusPill
+                status={testStatus}
+                text={testText}
+                testId="rag-chat-test-result"
+              />
+            )}
+          </div>
+          {testResult && testResult.raw && !testResult.ok && (
+            <p className="settings-meta classify-last-error">
+              Raw response: <code>{testResult.raw}</code>
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">System prompt</h3>
+        <p className="settings-help">
+          Prepended as the system message before each retrieval call. Empty
+          resets to the bundled English default that asks the model to ground
+          answers in the cited chunks.
+        </p>
+        <textarea
+          id="rag-chat-prompt"
+          className="settings-textarea"
+          rows={10}
+          value={draft.chat_system_prompt}
+          onChange={(e) => onChange({ chat_system_prompt: e.target.value })}
+          data-testid="rag-chat-prompt-input"
+        />
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() =>
+              onChange({ chat_system_prompt: rag.defaults.chat_system_prompt })
+            }
+            disabled={isChatPromptDefault}
+          >
+            Reset to default prompt
+          </button>
+          <span className="settings-meta">
+            {draft.chat_system_prompt.length.toLocaleString()} chars
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">Retrieval</h3>
+        <p className="settings-help">
+          How many chunks fetch / rerank / send to the LLM per question. No
+          re-ingest required.
+        </p>
+        <NumericRow
+          label="Top-K"
+          help="Number of chunks sent to the chat model."
+          value={draft.top_k}
+          onChange={(v) => onChange({ top_k: v })}
+          min={1}
+          max={50}
+          testId="rag-top-k-input"
+        />
+        <NumericRow
+          label="Candidates"
+          help="How many we pull from Qdrant before reranking down to top-K."
+          value={draft.rerank_candidates}
+          onChange={(v) => onChange({ rerank_candidates: v })}
+          min={1}
+          max={200}
+          testId="rag-rerank-candidates-input"
+        />
+        <NumericRow
+          label="Neighbors"
+          help="±N adjacent chunks attached to each hit for context (0 = no expansion)."
+          value={draft.neighbors}
+          onChange={(v) => onChange({ neighbors: v })}
+          min={0}
+          max={5}
+          testId="rag-neighbors-input"
+        />
+
+        <div className="settings-field">
+          <label className="settings-label" htmlFor="rag-rerank-model">
+            Reranker model
+          </label>
+          <p className="settings-help">
+            Cross-encoder that re-scores Qdrant candidates against the query.
+            Downloads on first use to{' '}
+            <code>~/Documents/flist-workbench/models/</code>. Bigger multilingual
+            models cost more disk + memory but recover recall on non-English
+            corpora.
+          </p>
+          <div className="settings-row">
+            <select
+              id="rag-rerank-model"
+              className="settings-input"
+              value={draft.rerank_model}
+              onChange={(e) => onChange({ rerank_model: e.target.value })}
+              data-testid="rag-rerank-model-input"
+            >
+              {RERANK_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() => onChange({ rerank_model: rag.defaults.rerank_model })}
+            >
+              Default
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function EmbeddingPane({
+  rag,
+  draft,
+  onChange
+}: {
+  rag: RagSettings
+  draft: Draft['rag']
+  onChange: (patch: Partial<Draft['rag']>) => void
+}) {
+  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>(
+    'idle'
+  )
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    elapsed_ms: number
+    dimension: number | null
+    model: string
+    error: string | null
+  } | null>(null)
+
+  const openIngest = useStore((s) => s.openIngest)
+  const [wipeStatus, setWipeStatus] = useState<
+    'idle' | 'wiping' | 'wiped' | 'error'
+  >('idle')
+  const [wipeError, setWipeError] = useState<string | null>(null)
 
   const runTest = async () => {
     setTestStatus('running')
     setTestResult(null)
     try {
       const result = await api.ragTestEmbedding({
-        embed_endpoint: endpoint,
-        embed_model: model,
-        embed_api_key: apiKey,
-        embed_query_prefix: queryPrefix,
-        embed_document_prefix: docPrefix
+        embed_endpoint: draft.embed_endpoint,
+        embed_model: draft.embed_model,
+        embed_api_key: draft.embed_api_key,
+        embed_query_prefix: draft.embed_query_prefix,
+        embed_document_prefix: draft.embed_document_prefix
       })
       setTestResult(result)
       setTestStatus(result.ok ? 'ok' : 'fail')
@@ -770,579 +1322,320 @@ function RagSection({
         ok: false,
         elapsed_ms: 0,
         dimension: null,
-        model,
+        model: draft.embed_model,
         error: err instanceof Error ? err.message : String(err)
       })
       setTestStatus('fail')
     }
   }
 
+  const triggerWipe = async () => {
+    if (wipeStatus === 'wiping') return
+    const confirmed = window.confirm(
+      'Wipe the local vector index?\n\n' +
+        'This deletes every embedded chunk and clears the manifest. It does ' +
+        'NOT touch your labels or your F-Chat logs. The next time you run ' +
+        'Ingest the index will rebuild from scratch.'
+    )
+    if (!confirmed) return
+    setWipeStatus('wiping')
+    setWipeError(null)
+    try {
+      await api.ragWipe()
+      setWipeStatus('wiped')
+    } catch (err) {
+      setWipeStatus('error')
+      setWipeError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const triggerReingestAll = () => {
+    const confirmed = window.confirm(
+      'Re-ingest all logs?\n\n' +
+        'This wipes the existing vector index and rebuilds it for every ' +
+        'character × partner using the current chunking + embedding settings. ' +
+        'The operation runs in the background and you can cancel mid-way.'
+    )
+    if (!confirmed) return
+    openIngest({}, 'All characters, all partners (re-ingest)', {
+      forceRewipe: true
+    })
+  }
+
+  const usesNomicPrefixes =
+    draft.embed_query_prefix === NOMIC_QUERY_PREFIX &&
+    draft.embed_document_prefix === NOMIC_DOCUMENT_PREFIX
+
+  const testText = testResult
+    ? testResult.ok
+      ? `OK · ${testResult.elapsed_ms} ms · dim ${testResult.dimension} · ${testResult.model}`
+      : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`
+    : 'not run yet'
+
   return (
-    <section className="settings-section">
-      <h3 className="settings-section-title">RAG (chat over your logs)</h3>
-      <p className="settings-help">
-        Settings for the local embedding model used to index conversations for
-        retrieval. Load an embedding model in LM Studio (or your inference
-        server of choice) alongside the chat model, then point this here.{' '}
-        <code>&lt;endpoint&gt;/embeddings</code> is hit per request — same
-        OpenAI-compatible shape as the labels classifier.
-      </p>
+    <>
+      <PaneHeader
+        title="RAG · Embedding"
+        subtitle="Index shape — embedding model + chunking. Changes here invalidate existing chunks; you'll need to re-ingest."
+      />
 
-      {indexStatus !== null && (
-        <p className="settings-meta" data-testid="rag-index-status">
-          {indexStatus.chunk_count > 0 ? (
-            <>
-              Index: <strong>{indexStatus.chunk_count.toLocaleString()}</strong>{' '}
-              chunks · model <code>{indexStatus.embed_model}</code> (dim{' '}
-              {indexStatus.embed_dimension})
-            </>
-          ) : (
-            <>
-              No chunks indexed yet. Use{' '}
-              <strong>Logs → Ingest All Characters (RAG)…</strong> to build the
-              vector index.
-            </>
-          )}
-        </p>
-      )}
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-endpoint">
-          Embedding endpoint
-        </label>
-        <p className="settings-help">
-          Usually the same URL as the labels classifier — LM Studio can host a
-          chat model and an embedding model at the same port.
-        </p>
-        <div className="settings-row">
-          {ENDPOINT_PRESETS.map((p) => (
-            <button
-              key={p.url}
-              type="button"
-              className={`settings-preset ${endpoint === p.url ? 'on' : ''}`}
-              onClick={() => setEndpoint(p.url)}
-            >
-              {p.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setEndpoint(rag.defaults.embed_endpoint)}
-          >
-            Default
-          </button>
-        </div>
-        <input
+      <div className="settings-section">
+        <h3 className="settings-section-title">Inference</h3>
+        <EndpointField
           id="rag-endpoint"
-          type="text"
-          className="settings-input"
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          data-testid="rag-endpoint-input"
+          value={draft.embed_endpoint}
+          defaultUrl={rag.defaults.embed_endpoint}
+          onChange={(v) => onChange({ embed_endpoint: v })}
+          help="Usually the same server as the labels classifier — LM Studio can host a chat model and an embedding model side by side."
+          testId="rag-endpoint-input"
+        />
+        <ModelField
+          id="rag-model"
+          value={draft.embed_model}
+          defaultValue={rag.defaults.embed_model}
+          endpoint={draft.embed_endpoint}
+          onChange={(v) => onChange({ embed_model: v })}
+          help={
+            <>
+              For LM Studio that's the name shown in the model loader — e.g.{' '}
+              <code>nomic-ai/nomic-embed-text-v1.5</code> or{' '}
+              <code>BAAI/bge-m3</code>. <strong>Discover</strong> lists what's
+              loaded.
+            </>
+          }
+          testId="rag-model-input"
+        />
+        <ApiKeyField
+          id="rag-api-key"
+          value={draft.embed_api_key}
+          onChange={(v) => onChange({ embed_api_key: v })}
+          testId="rag-api-key-input"
+        />
+
+        <div className="settings-field">
+          <label className="settings-label">Task-specific prefixes</label>
+          <p className="settings-help">
+            Only the <code>nomic-embed-text-*</code> family requires these — they
+            drop recall ~30% without them. BGE, e5, Voyage, Gemini and most
+            others ignore prefixes; leave blank.
+          </p>
+          <div className="settings-row">
+            <button
+              type="button"
+              className={`settings-preset ${usesNomicPrefixes ? 'on' : ''}`}
+              onClick={() =>
+                onChange({
+                  embed_query_prefix: NOMIC_QUERY_PREFIX,
+                  embed_document_prefix: NOMIC_DOCUMENT_PREFIX
+                })
+              }
+              data-testid="rag-prefix-nomic"
+            >
+              Use nomic prefixes
+            </button>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() =>
+                onChange({ embed_query_prefix: '', embed_document_prefix: '' })
+              }
+              data-testid="rag-prefix-clear"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="settings-row">
+            <label htmlFor="rag-query-prefix" className="settings-row-label settings-row-label-wide">
+              Query
+            </label>
+            <input
+              id="rag-query-prefix"
+              type="text"
+              className="settings-input"
+              value={draft.embed_query_prefix}
+              placeholder="(none)"
+              onChange={(e) => onChange({ embed_query_prefix: e.target.value })}
+              data-testid="rag-query-prefix-input"
+            />
+          </div>
+          <div className="settings-row">
+            <label htmlFor="rag-doc-prefix" className="settings-row-label settings-row-label-wide">
+              Document
+            </label>
+            <input
+              id="rag-doc-prefix"
+              type="text"
+              className="settings-input"
+              value={draft.embed_document_prefix}
+              placeholder="(none)"
+              onChange={(e) => onChange({ embed_document_prefix: e.target.value })}
+              data-testid="rag-doc-prefix-input"
+            />
+          </div>
+        </div>
+
+        <div className="settings-field">
+          <label className="settings-label">Test connection</label>
+          <p className="settings-help">
+            One canned embedding roundtrip. Validates the endpoint, that the
+            model is loaded, and reports the vector dimension.
+          </p>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="settings-pick"
+              onClick={() => void runTest()}
+              disabled={testStatus === 'running'}
+              data-testid="rag-test-embedding"
+            >
+              {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+            </button>
+            {testResult && (
+              <TestStatusPill
+                status={testStatus}
+                text={testText}
+                testId="rag-test-result"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">Chunking</h3>
+        <p className="settings-help">
+          How parsed messages get grouped into retrieval chunks. Smaller chunks
+          improve "find the exact moment" queries at the cost of more vectors to
+          embed; more overlap reduces meaning getting cut mid-exchange.{' '}
+          <strong>Changing any of these requires a re-ingest</strong> for
+          existing data to use the new shape.
+        </p>
+        <NumericRow
+          label="Max chars"
+          value={draft.chunk_max_chars}
+          onChange={(v) => onChange({ chunk_max_chars: v })}
+          min={500}
+          max={20000}
+          step={100}
+          testId="rag-chunk-max-input"
+          defaultValue={String(rag.defaults.chunk_max_chars)}
+        />
+        <NumericRow
+          label="Soft split"
+          value={draft.chunk_soft_split_chars}
+          onChange={(v) => onChange({ chunk_soft_split_chars: v })}
+          min={400}
+          max={20000}
+          step={100}
+          testId="rag-chunk-soft-input"
+          defaultValue={String(rag.defaults.chunk_soft_split_chars)}
+        />
+        <NumericRow
+          label="Overlap msgs"
+          value={draft.chunk_overlap_msgs}
+          onChange={(v) => onChange({ chunk_overlap_msgs: v })}
+          min={0}
+          max={5}
+          testId="rag-chunk-overlap-input"
+          defaultValue={String(rag.defaults.chunk_overlap_msgs)}
         />
       </div>
 
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-model">
-          Embedding model
-        </label>
+      <div className="settings-section">
+        <h3 className="settings-section-title">Index maintenance</h3>
         <p className="settings-help">
-          The model identifier the server expects. For LM Studio that's the
-          name shown in the model loader — e.g.{' '}
-          <code>nomic-ai/nomic-embed-text-v1.5</code>,{' '}
-          <code>BAAI/bge-m3</code>, or whatever you have loaded.
-        </p>
-        <div className="settings-row">
-          <input
-            id="rag-model"
-            type="text"
-            className="settings-input"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            data-testid="rag-model-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setModel(rag.defaults.embed_model)}
-          >
-            Default
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-api-key">
-          API key (blank for local LM Studio / Ollama)
-        </label>
-        <div className="settings-row">
-          <input
-            id="rag-api-key"
-            type={showKey ? 'text' : 'password'}
-            className="settings-input"
-            value={apiKey}
-            placeholder="sk-…"
-            autoComplete="off"
-            onChange={(e) => setApiKey(e.target.value)}
-            data-testid="rag-api-key-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setShowKey((v) => !v)}
-            title={showKey ? 'Hide key' : 'Show key'}
-          >
-            {showKey ? 'Hide' : 'Show'}
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label">Task-specific prefixes</label>
-        <p className="settings-help">
-          Only the <code>nomic-embed-text-*</code> family requires these — they
-          drop recall ~30% without them. BGE, e5, Voyage, Gemini and most other
-          models ignore prefixes; leave them blank.
-        </p>
-        <div className="settings-row">
-          <button
-            type="button"
-            className={`settings-preset ${usesNomicPrefixes ? 'on' : ''}`}
-            onClick={applyNomicPrefixes}
-            data-testid="rag-prefix-nomic"
-          >
-            Use nomic prefixes
-          </button>
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={clearPrefixes}
-            data-testid="rag-prefix-clear"
-          >
-            Clear
-          </button>
-        </div>
-        <div className="settings-row">
-          <label
-            htmlFor="rag-query-prefix"
-            className="settings-meta"
-            style={{ alignSelf: 'center', minWidth: '4.5rem' }}
-          >
-            Query
-          </label>
-          <input
-            id="rag-query-prefix"
-            type="text"
-            className="settings-input"
-            value={queryPrefix}
-            placeholder="(none)"
-            onChange={(e) => setQueryPrefix(e.target.value)}
-            data-testid="rag-query-prefix-input"
-          />
-        </div>
-        <div className="settings-row">
-          <label
-            htmlFor="rag-doc-prefix"
-            className="settings-meta"
-            style={{ alignSelf: 'center', minWidth: '4.5rem' }}
-          >
-            Document
-          </label>
-          <input
-            id="rag-doc-prefix"
-            type="text"
-            className="settings-input"
-            value={docPrefix}
-            placeholder="(none)"
-            onChange={(e) => setDocPrefix(e.target.value)}
-            data-testid="rag-doc-prefix-input"
-          />
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label">Test connection</label>
-        <p className="settings-help">
-          One canned embedding roundtrip. Validates the endpoint, that the
-          model is loaded, and reports the vector dimension so you can confirm
-          you picked the model you intended.
+          <strong>Wipe index</strong> drops the local Qdrant collection — pure
+          delete. Useful before changing chunking / embedding settings.{' '}
+          <strong>Re-ingest all</strong> wipes <em>and</em> rebuilds every
+          conversation in one step using current settings.
         </p>
         <div className="settings-actions">
           <button
             type="button"
-            className="settings-pick"
-            onClick={() => void runTest()}
-            disabled={testStatus === 'running'}
-            data-testid="rag-test-embedding"
+            className="settings-clear"
+            onClick={() => void triggerWipe()}
+            disabled={wipeStatus === 'wiping'}
+            data-testid="rag-wipe"
           >
-            {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+            {wipeStatus === 'wiping' ? 'Wiping…' : 'Wipe index'}
           </button>
-          {testResult && (
-            <span
-              className={`settings-meta labels-test-result labels-test-${testStatus}`}
-              data-testid="rag-test-result"
-            >
-              {testStatus === 'ok' ? '✓ ' : testStatus === 'fail' ? '✕ ' : ''}
-              {testResult.ok
-                ? `OK · ${testResult.elapsed_ms} ms · dim ${testResult.dimension} · ${testResult.model}`
-                : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`}
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={triggerReingestAll}
+            data-testid="rag-reingest-all"
+          >
+            Re-ingest all (wipe + rebuild)…
+          </button>
+          {wipeStatus === 'wiped' && (
+            <span className="settings-meta">Index wiped.</span>
+          )}
+          {wipeStatus === 'error' && wipeError && (
+            <span className="settings-meta classify-last-error">
+              Wipe failed: {wipeError}
             </span>
           )}
         </div>
       </div>
+    </>
+  )
+}
 
-      <hr className="settings-divider" />
-      <h4 className="settings-subheading">Chat</h4>
-      <p className="settings-help">
-        LLM that answers questions over the retrieved chunks. Defaults
-        to the labels endpoint — point this at a larger / different
-        model if you prefer a separate chat brain.
-      </p>
+function PaneHeader({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <header className="settings-pane-head">
+      <h3 className="settings-pane-title">{title}</h3>
+      <p className="settings-pane-subtitle">{subtitle}</p>
+    </header>
+  )
+}
 
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-chat-endpoint">
-          Chat endpoint
-        </label>
-        <div className="settings-row">
-          {ENDPOINT_PRESETS.map((p) => (
-            <button
-              key={`chat-${p.url}`}
-              type="button"
-              className={`settings-preset ${chatEndpoint === p.url ? 'on' : ''}`}
-              onClick={() => setChatEndpoint(p.url)}
-            >
-              {p.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setChatEndpoint(rag.defaults.chat_endpoint)}
-          >
-            Default
-          </button>
-        </div>
+function NumericRow({
+  label,
+  help,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  testId,
+  defaultValue
+}: {
+  label: string
+  help?: string
+  value: string
+  onChange: (v: string) => void
+  min: number
+  max: number
+  step?: number
+  testId: string
+  defaultValue?: string
+}) {
+  return (
+    <div className="settings-field settings-field-tight">
+      <div className="settings-row">
+        <label className="settings-row-label settings-row-label-wide">{label}</label>
         <input
-          id="rag-chat-endpoint"
-          type="text"
-          className="settings-input"
-          value={chatEndpoint}
-          onChange={(e) => setChatEndpoint(e.target.value)}
-          data-testid="rag-chat-endpoint-input"
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          className="settings-input settings-input-narrow"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          data-testid={testId}
         />
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-chat-model">
-          Chat model
-        </label>
-        <div className="settings-row">
-          <input
-            id="rag-chat-model"
-            type="text"
-            className="settings-input"
-            value={chatModel}
-            onChange={(e) => setChatModel(e.target.value)}
-            data-testid="rag-chat-model-input"
-          />
+        {defaultValue !== undefined && (
           <button
             type="button"
             className="settings-clear"
-            onClick={() => setChatModel(rag.defaults.chat_model)}
+            onClick={() => onChange(defaultValue)}
           >
-            Default
+            Default ({defaultValue})
           </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-chat-api-key">
-          API key (blank for local LM Studio / Ollama)
-        </label>
-        <div className="settings-row">
-          <input
-            id="rag-chat-api-key"
-            type={showChatKey ? 'text' : 'password'}
-            className="settings-input"
-            value={chatApiKey}
-            placeholder="sk-…"
-            autoComplete="off"
-            onChange={(e) => setChatApiKey(e.target.value)}
-            data-testid="rag-chat-api-key-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setShowChatKey((v) => !v)}
-            title={showChatKey ? 'Hide key' : 'Show key'}
-          >
-            {showChatKey ? 'Hide' : 'Show'}
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-chat-prompt">
-          Chat system prompt
-        </label>
-        <p className="settings-help">
-          Prepended as the system message before each retrieval call.
-          Empty resets to the bundled English default that asks the
-          model to ground answers in the cited chunks.
-        </p>
-        <textarea
-          id="rag-chat-prompt"
-          className="settings-textarea"
-          rows={10}
-          value={chatPrompt}
-          onChange={(e) => setChatPrompt(e.target.value)}
-          data-testid="rag-chat-prompt-input"
-        />
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setChatPrompt(rag.defaults.chat_system_prompt)}
-            disabled={chatPrompt === rag.defaults.chat_system_prompt}
-          >
-            Reset to default prompt
-          </button>
-          <span className="settings-meta">{chatPrompt.length.toLocaleString()} chars</span>
-        </div>
-      </div>
-
-      <hr className="settings-divider" />
-      <h4 className="settings-subheading">Retrieval</h4>
-      <p className="settings-help">
-        How many chunks fetch / rerank / send to the LLM per question.
-        These tunables don't require a re-ingest — changes take effect
-        on the next chat message.
-      </p>
-
-      <div className="settings-field">
-        <label className="settings-label">Top-K, rerank candidates, neighbors</label>
-        <p className="settings-help">
-          <code>top-K</code> goes to the LLM; <code>rerank candidates</code> is
-          how many we pull from Qdrant before reranking down to top-K;{' '}
-          <code>neighbors</code> expands each hit by ±N adjacent chunks for
-          extra context (0 disables expansion).
-        </p>
-        <div className="settings-row">
-          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '5.5rem' }}>
-            Top-K
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={50}
-            className="settings-input settings-input-narrow"
-            value={topK}
-            onChange={(e) => setTopK(e.target.value)}
-            data-testid="rag-top-k-input"
-          />
-        </div>
-        <div className="settings-row">
-          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '5.5rem' }}>
-            Candidates
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            className="settings-input settings-input-narrow"
-            value={rerankCandidates}
-            onChange={(e) => setRerankCandidates(e.target.value)}
-            data-testid="rag-rerank-candidates-input"
-          />
-        </div>
-        <div className="settings-row">
-          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '5.5rem' }}>
-            Neighbors
-          </label>
-          <input
-            type="number"
-            min={0}
-            max={5}
-            className="settings-input settings-input-narrow"
-            value={neighbors}
-            onChange={(e) => setNeighbors(e.target.value)}
-            data-testid="rag-neighbors-input"
-          />
-        </div>
-      </div>
-
-      <div className="settings-field">
-        <label className="settings-label" htmlFor="rag-rerank-model">
-          Reranker model
-        </label>
-        <p className="settings-help">
-          Cross-encoder that re-scores Qdrant candidates against the
-          query. Downloads on first use to{' '}
-          <code>~/Documents/flist-workbench/models/</code>. Bigger
-          multilingual models cost more disk + memory but recover
-          recall on non-English corpora.
-        </p>
-        <div className="settings-row">
-          <select
-            id="rag-rerank-model"
-            className="settings-input"
-            value={rerankModel}
-            onChange={(e) => setRerankModel(e.target.value)}
-            data-testid="rag-rerank-model-input"
-          >
-            {RERANK_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setRerankModel(rag.defaults.rerank_model)}
-          >
-            Default
-          </button>
-        </div>
-      </div>
-
-      <hr className="settings-divider" />
-      <h4 className="settings-subheading">Chunking</h4>
-      <p className="settings-help">
-        How parsed messages get grouped into retrieval chunks. Smaller
-        chunks improve "find the exact moment" queries at the cost of
-        more vectors to embed; more overlap reduces meaning getting cut
-        mid-exchange. <strong>Changing any of these requires a
-        re-ingest</strong> for existing data to use the new shape — use
-        the button below.
-      </p>
-
-      <div className="settings-field">
-        <label className="settings-label">Max / soft-split / overlap</label>
-        <div className="settings-row">
-          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '6.5rem' }}>
-            Max chars
-          </label>
-          <input
-            type="number"
-            min={500}
-            max={20000}
-            step={100}
-            className="settings-input settings-input-narrow"
-            value={chunkMax}
-            onChange={(e) => setChunkMax(e.target.value)}
-            data-testid="rag-chunk-max-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setChunkMax(String(rag.defaults.chunk_max_chars))}
-          >
-            Default ({rag.defaults.chunk_max_chars})
-          </button>
-        </div>
-        <div className="settings-row">
-          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '6.5rem' }}>
-            Soft split
-          </label>
-          <input
-            type="number"
-            min={400}
-            max={20000}
-            step={100}
-            className="settings-input settings-input-narrow"
-            value={chunkSoft}
-            onChange={(e) => setChunkSoft(e.target.value)}
-            data-testid="rag-chunk-soft-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setChunkSoft(String(rag.defaults.chunk_soft_split_chars))}
-          >
-            Default ({rag.defaults.chunk_soft_split_chars})
-          </button>
-        </div>
-        <div className="settings-row">
-          <label className="settings-meta" style={{ alignSelf: 'center', minWidth: '6.5rem' }}>
-            Overlap msgs
-          </label>
-          <input
-            type="number"
-            min={0}
-            max={5}
-            className="settings-input settings-input-narrow"
-            value={chunkOverlap}
-            onChange={(e) => setChunkOverlap(e.target.value)}
-            data-testid="rag-chunk-overlap-input"
-          />
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => setChunkOverlap(String(rag.defaults.chunk_overlap_msgs))}
-          >
-            Default ({rag.defaults.chunk_overlap_msgs})
-          </button>
-        </div>
-      </div>
-
-      <hr className="settings-divider" />
-      <h4 className="settings-subheading">Index maintenance</h4>
-      <p className="settings-help">
-        <strong>Wipe index</strong> drops the local Qdrant collection
-        and clears the manifest — pure delete, no re-ingest. Useful if
-        you want to free disk now and re-embed later, or if you want
-        a known-clean slate before changing chunking / embedding
-        settings.
-      </p>
-      <p className="settings-help">
-        <strong>Re-ingest all</strong> wipes <em>and</em> rebuilds
-        every conversation in one step using the current settings. Use
-        this after switching embedding model or adjusting chunk size;
-        otherwise old chunks of an incompatible shape can linger
-        alongside new ones.
-      </p>
-      <div className="settings-actions">
-        <button
-          type="button"
-          className="settings-clear"
-          onClick={() => void triggerWipe()}
-          disabled={wipeStatus === 'wiping'}
-          data-testid="rag-wipe"
-        >
-          {wipeStatus === 'wiping' ? 'Wiping…' : 'Wipe index'}
-        </button>
-        <button
-          type="button"
-          className="settings-clear"
-          onClick={triggerReingestAll}
-          data-testid="rag-reingest-all"
-        >
-          Re-ingest all (wipe + rebuild)…
-        </button>
-        {wipeStatus === 'wiped' && (
-          <span className="settings-meta">Index wiped.</span>
-        )}
-        {wipeStatus === 'error' && wipeError && (
-          <span className="settings-meta classify-last-error">
-            Wipe failed: {wipeError}
-          </span>
         )}
       </div>
-
-      {error && <p className="settings-error">{error}</p>}
-      <div className="settings-actions settings-footer-actions">
-        <button
-          type="button"
-          className="settings-save"
-          onClick={() => void save()}
-          disabled={status === 'saving'}
-          data-testid="rag-save"
-        >
-          {status === 'saving' ? 'Saving…' : 'Save RAG settings'}
-        </button>
-      </div>
-    </section>
+      {help && <p className="settings-help settings-help-tight">{help}</p>}
+    </div>
   )
 }
