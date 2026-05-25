@@ -11,7 +11,10 @@ export type AliasLinkDialogProps = {
   // locally without a refetch.
   allPartners: PartnerEntry[]
   onClose: () => void
-  onLinked: () => void
+  // Receives the names that ended up in the alias group after the
+  // link succeeded. Caller uses this to invalidate cached log streams
+  // and refresh the partner list.
+  onLinked: (groupNames: string[]) => void
 }
 
 export function AliasLinkDialog({
@@ -59,12 +62,12 @@ export function AliasLinkDialog({
       // Convention: keep the right-clicked row as the canonical
       // "primary" — the rest fold into it. User intuition is "I'm
       // calling this group X, also under these other names".
-      await api.aliasesAdd({
+      const result = await api.aliasesAdd({
         character,
         name: other.name,
         primary_name: partner.name
       })
-      onLinked()
+      onLinked(result.group)
       onClose()
     } catch (err) {
       setStatus('error')
