@@ -21,6 +21,9 @@ export function PartnerList() {
   const activePartner = useStore((s) => s.activePartner)
   const selectPartner = useStore((s) => s.selectPartner)
   const openClassify = useStore((s) => s.openClassify)
+  const openIngest = useStore((s) => s.openIngest)
+  const toggleChatPanel = useStore((s) => s.toggleChatPanel)
+  const requestChatFocus = useStore((s) => s.requestChatFocus)
   const invalidateMessages = useStore((s) => s.invalidateMessages)
   const loadMessages = useStore((s) => s.loadMessages)
   const [query, setQuery] = useState('')
@@ -61,6 +64,29 @@ export function PartnerList() {
       { character: activeChar, partner: partnerName },
       `${displayPartner(partnerName)} with ${activeChar}`
     )
+  }
+
+  const onIngestPartner = (partnerName: string) => {
+    if (!activeChar) return
+    setPartnerMenu(null)
+    openIngest(
+      { character: activeChar, partner: partnerName },
+      `${displayPartner(partnerName)} with ${activeChar}`
+    )
+  }
+
+  const onChatPartner = (partnerName: string) => {
+    if (!activeChar) return
+    setPartnerMenu(null)
+    // Make sure the chat panel's scope sees this partner — selecting
+    // it first so the panel's partner-mode default lands on the right
+    // conversation. (Right-clicking a partner row doesn't otherwise
+    // change selection.)
+    if (activePartner !== partnerName) {
+      selectPartner(partnerName)
+    }
+    toggleChatPanel(true)
+    requestChatFocus()
   }
 
   const onResetPartner = async (partnerName: string) => {
@@ -167,6 +193,8 @@ export function PartnerList() {
           partner={partnerMenu.partner}
           character={activeChar}
           onClassify={() => onClassifyPartner(partnerMenu.partner)}
+          onIngest={() => onIngestPartner(partnerMenu.partner)}
+          onChatWithThis={() => onChatPartner(partnerMenu.partner)}
           onResetAll={() => void onResetPartner(partnerMenu.partner)}
         />
       )}
@@ -180,6 +208,8 @@ function PartnerContextMenu({
   partner,
   character,
   onClassify,
+  onIngest,
+  onChatWithThis,
   onResetAll
 }: {
   x: number
@@ -187,10 +217,14 @@ function PartnerContextMenu({
   partner: string
   character: string
   onClassify: () => void
+  onIngest: () => void
+  onChatWithThis: () => void
   onResetAll: () => void
 }) {
   const W = 260
-  const H = 130
+  // 4 items now: Classify / Ingest / Chat with this / Reset. Sized so
+  // viewport-edge clamping keeps the whole menu on-screen.
+  const H = 240
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const firstRef = useRef<HTMLButtonElement | null>(null)
@@ -219,6 +253,26 @@ function PartnerContextMenu({
         data-testid="partner-context-menu-classify"
       >
         Classify this conversation
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="log-label-menu-item"
+        onClick={onIngest}
+        title="Embed this conversation's IC chunks into the local RAG index."
+        data-testid="partner-context-menu-ingest"
+      >
+        Ingest this chat (RAG)
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="log-label-menu-item"
+        onClick={onChatWithThis}
+        title="Open the chat panel scoped to this conversation."
+        data-testid="partner-context-menu-chat"
+      >
+        Chat with this log
       </button>
       <button
         type="button"
