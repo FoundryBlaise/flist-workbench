@@ -7,6 +7,12 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "httpx>=0.28",
+  # qdrant-client in embedded mode persists vectors to a folder on
+  # disk — no docker, no port 6333. Pin major because the local-mode
+  # API still tightens occasionally. fastembed/onnxruntime are NOT
+  # pulled in: embedding lives in LM Studio (see rag_embed.py), so
+  # we install the bare client without optional extras.
+  "qdrant-client>=1.12,<2",
 ]
 
 [dependency-groups]

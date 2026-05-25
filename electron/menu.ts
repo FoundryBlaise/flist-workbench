@@ -12,6 +12,9 @@ export type MenuAction =
   | 'classify-current'
   | 'classify-character'
   | 'classify-all'
+  | 'ingest-current'
+  | 'ingest-character'
+  | 'ingest-all'
 
 function send(win: BrowserWindow | null, action: MenuAction): void {
   if (win && !win.isDestroyed()) {
@@ -112,6 +115,24 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           id: 'classify-all',
           label: 'Classify All Characters…',
           click: () => send(getWindow(), 'classify-all')
+        },
+        { type: 'separator' },
+        {
+          id: 'ingest-current',
+          label: 'Ingest Current Conversation (RAG)…',
+          enabled: false,
+          click: () => send(getWindow(), 'ingest-current')
+        },
+        {
+          id: 'ingest-character',
+          label: 'Ingest Active Character (RAG)…',
+          enabled: false,
+          click: () => send(getWindow(), 'ingest-character')
+        },
+        {
+          id: 'ingest-all',
+          label: 'Ingest All Characters (RAG)…',
+          click: () => send(getWindow(), 'ingest-all')
         }
       ]
     },

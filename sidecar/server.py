@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field
 import documents
 import labels as labels_store
 import labels_jobs
+import rag as rag_settings
+import rag_embed
+import rag_jobs
+import rag_store
 import settings as settings_store
 from flist import ProfileNotFound, fetch_profile
 from logs import (
@@ -272,6 +276,165 @@ def labels_test_connection(body: TestConnectionRequest) -> dict:
     }
 
 
+# ---- rag (settings-side; ingest endpoints land in 4.6) ----------------
+
+
+class RagTestEmbeddingRequest(BaseModel):
+    # All optional — when omitted we pull from saved settings. The
+    # renderer typically posts the current edit-state so the user can
+    # test before saving, mirroring /labels/test-connection.
+    embed_endpoint: str | None = None
+    embed_model: str | None = None
+    embed_api_key: str | None = None
+    embed_query_prefix: str | None = None
+    embed_document_prefix: str | None = None
+
+
+@app.post("/rag/test-embedding")
+def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
+    """One canned embedding roundtrip — validates endpoint + model +
+    that the model is actually loaded in LM Studio / equivalent.
+
+    Returns latency + dimension on success; ok=false + structured
+    error string on failure. Same 200-always shape as
+    /labels/test-connection so the UI can render either with one path.
+    """
+    import time as _time
+
+    saved = rag_settings.load_settings()
+    merged = rag_settings.RagSettings(
+        embed_endpoint=body.embed_endpoint or saved.embed_endpoint,
+        embed_model=body.embed_model or saved.embed_model,
+        embed_api_key=(
+            body.embed_api_key if body.embed_api_key is not None else saved.embed_api_key
+        ),
+        embed_query_prefix=(
+            body.embed_query_prefix
+            if body.embed_query_prefix is not None
+            else saved.embed_query_prefix
+        ),
+        embed_document_prefix=(
+            body.embed_document_prefix
+            if body.embed_document_prefix is not None
+            else saved.embed_document_prefix
+        ),
+    )
+
+    # 60 s probe budget: cold-loading a 768-dim model in LM Studio
+    # takes 15–30 s; loaded-already returns in <1 s. 60 s leaves a
+    # cushion without making "endpoint unreachable" feel forever.
+    test_timeout = 60.0
+    started = _time.monotonic()
+    try:
+        dimension, _vec = rag_embed.probe(merged, timeout=test_timeout)
+    except rag_embed.EmbedError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "dimension": None,
+            "model": merged.embed_model,
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001 — surface to UI
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "dimension": None,
+            "model": merged.embed_model,
+            "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        }
+    return {
+        "ok": True,
+        "error": None,
+        "dimension": dimension,
+        "model": merged.embed_model,
+        "elapsed_ms": int((_time.monotonic() - started) * 1000),
+    }
+
+
+class RagIngestRequest(BaseModel):
+    # Same scope shape as ClassifyJobRequest. {} = every char × every
+    # partner; {character: X} = all partners for X; {character: X,
+    # partner: Y} = one conversation.
+    character: str | None = None
+    partner: str | None = None
+    # Default off — OOC chunks pollute retrieval for "what happened in
+    # this RP" questions. Power users can flip this in a future
+    # Settings → RAG advanced toggle.
+    include_ooc: bool = False
+    # The renderer sends true after the user confirms wiping the
+    # collection because the embedding model changed. Without
+    # confirmation we refuse to silently corrupt the index.
+    force_rewipe: bool = False
+
+
+@app.post("/rag/ingest", status_code=202)
+def rag_ingest_start(body: RagIngestRequest) -> dict:
+    if body.partner and not body.character:
+        raise HTTPException(status_code=400, detail="partner requires character")
+    scope: dict = {}
+    if body.character:
+        scope["character"] = body.character
+    if body.partner:
+        scope["partner"] = body.partner
+    job = rag_jobs.start(
+        scope, include_ooc=body.include_ooc, force_rewipe=body.force_rewipe
+    )
+    return job.to_dict()
+
+
+@app.get("/rag/jobs")
+def rag_jobs_list() -> dict:
+    return {"jobs": [j.to_dict() for j in rag_jobs.registry().list()]}
+
+
+@app.get("/rag/jobs/{job_id}")
+def rag_job_get(job_id: str) -> dict:
+    job = rag_jobs.registry().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    return job.to_dict()
+
+
+@app.delete("/rag/jobs/{job_id}")
+def rag_job_cancel(job_id: str) -> dict:
+    ok = rag_jobs.registry().cancel(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    return {"id": job_id, "cancel_requested": True}
+
+
+@app.get("/rag/status")
+def rag_status() -> dict:
+    """Snapshot of the local vector store + manifest.
+
+    Used by the renderer's Settings → RAG panel to show "indexed: N
+    chunks for model X (dim 768)" and by the Ingest dialog as a sanity
+    check before a re-ingest. Cheap — one Qdrant count + one SQLite
+    read.
+    """
+    manifest = rag_store.read_manifest()
+    chunk_count = 0
+    if manifest.embed_dimension is not None:
+        # Only open the store when a manifest exists — otherwise the
+        # bare /rag/status from a fresh install would create an empty
+        # collection on disk for no reason.
+        try:
+            with rag_store.RagStore() as store:
+                chunk_count = store.count() if store.collection_exists() else 0
+        except Exception:  # noqa: BLE001 — status must always answer
+            chunk_count = 0
+    return {
+        "embed_model": manifest.embed_model,
+        "embed_dimension": manifest.embed_dimension,
+        "last_ingest_at": manifest.last_ingest_at,
+        "chunk_count": chunk_count,
+    }
+
+
+# ---- labels jobs (continued) ------------------------------------------
+
+
 @app.post("/labels/classify", status_code=202)
 def labels_classify_start(body: ClassifyJobRequest) -> dict:
     if body.partner and not body.character:
@@ -407,12 +570,26 @@ class LabelsSettingsUpdate(BaseModel):
     context_after: int | None = None
 
 
+class RagSettingsUpdate(BaseModel):
+    # Same convention as LabelsSettingsUpdate: empty string clears
+    # (falls back to default on read), None leaves untouched. Prefixes
+    # are special — an empty string for them is a real value (not a
+    # default), but we still accept it as "clear" since the default
+    # also happens to be empty.
+    embed_endpoint: str | None = None
+    embed_model: str | None = None
+    embed_api_key: str | None = None
+    embed_query_prefix: str | None = None
+    embed_document_prefix: str | None = None
+
+
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
     # the directory picker's "no folder selected" state.
     fchat_data_dir: str | None = None
     labels: LabelsSettingsUpdate | None = None
+    rag: RagSettingsUpdate | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -424,6 +601,7 @@ def _settings_dict(conn) -> dict:
     # next /logs request — useful for the UI to display the live path
     # regardless of where the override came from.
     lab = labels_store.load_settings(conn)
+    rag = rag_settings.load_settings(conn)
     return {
         "fchat_data_dir": stored,
         "fchat_data_dir_effective": str(logs.data_dir()),
@@ -449,6 +627,20 @@ def _settings_dict(conn) -> dict:
                 "system_prompt": labels_store.DEFAULT_SYSTEM_PROMPT,
                 "context_before": labels_store.DEFAULT_CONTEXT_BEFORE,
                 "context_after": labels_store.DEFAULT_CONTEXT_AFTER,
+            },
+        },
+        "rag": {
+            "embed_endpoint": rag.embed_endpoint,
+            "embed_model": rag.embed_model,
+            "embed_api_key": rag.embed_api_key,
+            "embed_query_prefix": rag.embed_query_prefix,
+            "embed_document_prefix": rag.embed_document_prefix,
+            "defaults": {
+                "embed_endpoint": rag_settings.DEFAULT_EMBED_ENDPOINT,
+                "embed_model": rag_settings.DEFAULT_EMBED_MODEL,
+                "embed_api_key": rag_settings.DEFAULT_EMBED_API_KEY,
+                "embed_query_prefix": rag_settings.DEFAULT_EMBED_QUERY_PREFIX,
+                "embed_document_prefix": rag_settings.DEFAULT_EMBED_DOCUMENT_PREFIX,
             },
         },
     }
@@ -481,6 +673,9 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
     if body.labels is not None:
         _apply_labels_update(conn, body.labels)
 
+    if body.rag is not None:
+        _apply_rag_update(conn, body.rag)
+
     return _settings_dict(conn)
 
 
@@ -508,6 +703,28 @@ def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
         ("llm_model", settings_store.KEY_LABELS_LLM_MODEL),
         ("llm_api_key", settings_store.KEY_LABELS_LLM_API_KEY),
         ("system_prompt", settings_store.KEY_LABELS_SYSTEM_PROMPT),
+    ):
+        value = getattr(update, field)
+        if value is None:
+            continue
+        if value == "":
+            settings_store.clear(conn, key)
+        else:
+            settings_store.set_value(conn, key, value)
+
+
+def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
+    """Persist each RAG field that was supplied.
+
+    Same convention as _apply_labels_update: None leaves the field
+    untouched, empty string clears (falls back to default on read).
+    """
+    for field, key in (
+        ("embed_endpoint", settings_store.KEY_RAG_EMBED_ENDPOINT),
+        ("embed_model", settings_store.KEY_RAG_EMBED_MODEL),
+        ("embed_api_key", settings_store.KEY_RAG_EMBED_API_KEY),
+        ("embed_query_prefix", settings_store.KEY_RAG_EMBED_QUERY_PREFIX),
+        ("embed_document_prefix", settings_store.KEY_RAG_EMBED_DOCUMENT_PREFIX),
     ):
         value = getattr(update, field)
         if value is None:

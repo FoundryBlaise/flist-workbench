@@ -97,6 +97,21 @@ export type LabelsSettings = {
   }
 }
 
+export type RagSettings = {
+  embed_endpoint: string
+  embed_model: string
+  embed_api_key: string
+  embed_query_prefix: string
+  embed_document_prefix: string
+  defaults: {
+    embed_endpoint: string
+    embed_model: string
+    embed_api_key: string
+    embed_query_prefix: string
+    embed_document_prefix: string
+  }
+}
+
 export type LabelsStats = {
   character: string
   partner: string
@@ -126,6 +141,37 @@ export type ClassifyJob = {
   error?: string | null
   created_at: number
   finished_at?: number | null
+}
+
+export type IngestJobScope = ClassifyJobScope
+
+export type IngestJob = {
+  id: string
+  scope: { character?: string; partner?: string }
+  include_ooc: boolean
+  force_rewipe: boolean
+  state: 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+  chunked: number
+  embedded: number
+  upserted: number
+  skipped_existing: number
+  failed: number
+  total_chunks: number
+  current_partner?: string | null
+  last_error?: string | null
+  error?: string | null
+  model_swap: boolean
+  embed_model?: string | null
+  embed_dimension?: number | null
+  created_at: number
+  finished_at?: number | null
+}
+
+export type RagStatus = {
+  embed_model: string | null
+  embed_dimension: number | null
+  last_ingest_at: number | null
+  chunk_count: number
 }
 
 function base(): string {
@@ -196,16 +242,19 @@ export const api = {
       fchat_data_dir_effective: string
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
+      rag: RagSettings
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
+    rag?: Partial<Omit<RagSettings, 'defaults'>>
   }) =>
     request<{
       fchat_data_dir: string | null
       fchat_data_dir_effective: string
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
+      rag: RagSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)
@@ -263,6 +312,43 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
+  ragTestEmbedding: (body: {
+    embed_endpoint?: string
+    embed_model?: string
+    embed_api_key?: string
+    embed_query_prefix?: string
+    embed_document_prefix?: string
+  }) =>
+    request<{
+      ok: boolean
+      elapsed_ms: number
+      dimension: number | null
+      model: string
+      error: string | null
+    }>('/rag/test-embedding', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  ragIngestStart: (
+    scope: IngestJobScope,
+    opts: { include_ooc?: boolean; force_rewipe?: boolean } = {}
+  ) =>
+    request<IngestJob>('/rag/ingest', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...scope,
+        include_ooc: opts.include_ooc ?? false,
+        force_rewipe: opts.force_rewipe ?? false
+      })
+    }),
+  ragJobGet: (id: string, opts?: ApiOptions) =>
+    get<IngestJob>(`/rag/jobs/${encodeURIComponent(id)}`, opts),
+  ragJobCancel: (id: string) =>
+    request<{ id: string; cancel_requested: boolean }>(
+      `/rag/jobs/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+  ragStatus: () => get<RagStatus>('/rag/status'),
   labelsJobGet: (id: string, opts?: ApiOptions) =>
     get<ClassifyJob>(`/labels/jobs/${encodeURIComponent(id)}`, opts),
   labelsJobCancel: (id: string) =>

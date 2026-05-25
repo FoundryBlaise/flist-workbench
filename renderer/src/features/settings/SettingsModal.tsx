@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type LabelsSettings } from '../../lib/api'
+import { api, type LabelsSettings, type RagSettings, type RagStatus } from '../../lib/api'
 import { useStore } from '../../state'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
@@ -168,6 +168,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <LabelsSection
               labels={state.labels}
               onSaved={(next) => setState((prev) => (prev ? { ...prev, labels: next } : prev))}
+            />
+          )}
+
+          {state?.rag && (
+            <RagSection
+              rag={state.rag}
+              onSaved={(next) => setState((prev) => (prev ? { ...prev, rag: next } : prev))}
             />
           )}
         </div>
@@ -523,6 +530,350 @@ function LabelsSection({
           data-testid="labels-save"
         >
           {status === 'saving' ? 'Saving…' : 'Save labels settings'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+// nomic-* models require these task-specific prefixes; everything else
+// (BGE, e5, voyage, gemini, sentence-transformers/*-mpnet, etc) ignores
+// them. The toggle below sets both prefixes in one click so users don't
+// have to remember the magic strings.
+const NOMIC_QUERY_PREFIX = 'search_query: '
+const NOMIC_DOCUMENT_PREFIX = 'search_document: '
+
+function RagSection({
+  rag,
+  onSaved
+}: {
+  rag: RagSettings
+  onSaved: (next: RagSettings) => void
+}) {
+  const [endpoint, setEndpoint] = useState(rag.embed_endpoint)
+  const [model, setModel] = useState(rag.embed_model)
+  const [apiKey, setApiKey] = useState(rag.embed_api_key)
+  const [queryPrefix, setQueryPrefix] = useState(rag.embed_query_prefix)
+  const [docPrefix, setDocPrefix] = useState(rag.embed_document_prefix)
+  const [showKey, setShowKey] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle')
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    elapsed_ms: number
+    dimension: number | null
+    model: string
+    error: string | null
+  } | null>(null)
+  const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
+
+  useEffect(() => {
+    setEndpoint(rag.embed_endpoint)
+    setModel(rag.embed_model)
+    setApiKey(rag.embed_api_key)
+    setQueryPrefix(rag.embed_query_prefix)
+    setDocPrefix(rag.embed_document_prefix)
+  }, [rag])
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .ragStatus()
+      .then((s) => {
+        if (!cancelled) setIndexStatus(s)
+      })
+      .catch(() => {
+        // Status is best-effort context — failure shouldn't block the form.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const usesNomicPrefixes =
+    queryPrefix === NOMIC_QUERY_PREFIX && docPrefix === NOMIC_DOCUMENT_PREFIX
+
+  const applyNomicPrefixes = () => {
+    setQueryPrefix(NOMIC_QUERY_PREFIX)
+    setDocPrefix(NOMIC_DOCUMENT_PREFIX)
+  }
+  const clearPrefixes = () => {
+    setQueryPrefix('')
+    setDocPrefix('')
+  }
+
+  const save = async () => {
+    setStatus('saving')
+    setError(null)
+    try {
+      const updated = await api.settingsUpdate({
+        rag: {
+          embed_endpoint: endpoint,
+          embed_model: model,
+          embed_api_key: apiKey,
+          embed_query_prefix: queryPrefix,
+          embed_document_prefix: docPrefix
+        }
+      })
+      onSaved(updated.rag)
+      setStatus('idle')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setStatus('error')
+    }
+  }
+
+  const runTest = async () => {
+    setTestStatus('running')
+    setTestResult(null)
+    try {
+      const result = await api.ragTestEmbedding({
+        embed_endpoint: endpoint,
+        embed_model: model,
+        embed_api_key: apiKey,
+        embed_query_prefix: queryPrefix,
+        embed_document_prefix: docPrefix
+      })
+      setTestResult(result)
+      setTestStatus(result.ok ? 'ok' : 'fail')
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        elapsed_ms: 0,
+        dimension: null,
+        model,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      setTestStatus('fail')
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h3 className="settings-section-title">RAG (chat over your logs)</h3>
+      <p className="settings-help">
+        Settings for the local embedding model used to index conversations for
+        retrieval. Load an embedding model in LM Studio (or your inference
+        server of choice) alongside the chat model, then point this here.{' '}
+        <code>&lt;endpoint&gt;/embeddings</code> is hit per request — same
+        OpenAI-compatible shape as the labels classifier.
+      </p>
+
+      {indexStatus !== null && (
+        <p className="settings-meta" data-testid="rag-index-status">
+          {indexStatus.chunk_count > 0 ? (
+            <>
+              Index: <strong>{indexStatus.chunk_count.toLocaleString()}</strong>{' '}
+              chunks · model <code>{indexStatus.embed_model}</code> (dim{' '}
+              {indexStatus.embed_dimension})
+            </>
+          ) : (
+            <>
+              No chunks indexed yet. Use{' '}
+              <strong>Logs → Ingest All Characters (RAG)…</strong> to build the
+              vector index.
+            </>
+          )}
+        </p>
+      )}
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-endpoint">
+          Embedding endpoint
+        </label>
+        <p className="settings-help">
+          Usually the same URL as the labels classifier — LM Studio can host a
+          chat model and an embedding model at the same port.
+        </p>
+        <div className="settings-row">
+          {ENDPOINT_PRESETS.map((p) => (
+            <button
+              key={p.url}
+              type="button"
+              className={`settings-preset ${endpoint === p.url ? 'on' : ''}`}
+              onClick={() => setEndpoint(p.url)}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setEndpoint(rag.defaults.embed_endpoint)}
+          >
+            Default
+          </button>
+        </div>
+        <input
+          id="rag-endpoint"
+          type="text"
+          className="settings-input"
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          data-testid="rag-endpoint-input"
+        />
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-model">
+          Embedding model
+        </label>
+        <p className="settings-help">
+          The model identifier the server expects. For LM Studio that's the
+          name shown in the model loader — e.g.{' '}
+          <code>nomic-ai/nomic-embed-text-v1.5</code>,{' '}
+          <code>BAAI/bge-m3</code>, or whatever you have loaded.
+        </p>
+        <div className="settings-row">
+          <input
+            id="rag-model"
+            type="text"
+            className="settings-input"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            data-testid="rag-model-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setModel(rag.defaults.embed_model)}
+          >
+            Default
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label" htmlFor="rag-api-key">
+          API key (blank for local LM Studio / Ollama)
+        </label>
+        <div className="settings-row">
+          <input
+            id="rag-api-key"
+            type={showKey ? 'text' : 'password'}
+            className="settings-input"
+            value={apiKey}
+            placeholder="sk-…"
+            autoComplete="off"
+            onChange={(e) => setApiKey(e.target.value)}
+            data-testid="rag-api-key-input"
+          />
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => setShowKey((v) => !v)}
+            title={showKey ? 'Hide key' : 'Show key'}
+          >
+            {showKey ? 'Hide' : 'Show'}
+          </button>
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label">Task-specific prefixes</label>
+        <p className="settings-help">
+          Only the <code>nomic-embed-text-*</code> family requires these — they
+          drop recall ~30% without them. BGE, e5, Voyage, Gemini and most other
+          models ignore prefixes; leave them blank.
+        </p>
+        <div className="settings-row">
+          <button
+            type="button"
+            className={`settings-preset ${usesNomicPrefixes ? 'on' : ''}`}
+            onClick={applyNomicPrefixes}
+            data-testid="rag-prefix-nomic"
+          >
+            Use nomic prefixes
+          </button>
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={clearPrefixes}
+            data-testid="rag-prefix-clear"
+          >
+            Clear
+          </button>
+        </div>
+        <div className="settings-row">
+          <label
+            htmlFor="rag-query-prefix"
+            className="settings-meta"
+            style={{ alignSelf: 'center', minWidth: '4.5rem' }}
+          >
+            Query
+          </label>
+          <input
+            id="rag-query-prefix"
+            type="text"
+            className="settings-input"
+            value={queryPrefix}
+            placeholder="(none)"
+            onChange={(e) => setQueryPrefix(e.target.value)}
+            data-testid="rag-query-prefix-input"
+          />
+        </div>
+        <div className="settings-row">
+          <label
+            htmlFor="rag-doc-prefix"
+            className="settings-meta"
+            style={{ alignSelf: 'center', minWidth: '4.5rem' }}
+          >
+            Document
+          </label>
+          <input
+            id="rag-doc-prefix"
+            type="text"
+            className="settings-input"
+            value={docPrefix}
+            placeholder="(none)"
+            onChange={(e) => setDocPrefix(e.target.value)}
+            data-testid="rag-doc-prefix-input"
+          />
+        </div>
+      </div>
+
+      <div className="settings-field">
+        <label className="settings-label">Test connection</label>
+        <p className="settings-help">
+          One canned embedding roundtrip. Validates the endpoint, that the
+          model is loaded, and reports the vector dimension so you can confirm
+          you picked the model you intended.
+        </p>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-pick"
+            onClick={() => void runTest()}
+            disabled={testStatus === 'running'}
+            data-testid="rag-test-embedding"
+          >
+            {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+          </button>
+          {testResult && (
+            <span
+              className={`settings-meta labels-test-result labels-test-${testStatus}`}
+              data-testid="rag-test-result"
+            >
+              {testStatus === 'ok' ? '✓ ' : testStatus === 'fail' ? '✕ ' : ''}
+              {testResult.ok
+                ? `OK · ${testResult.elapsed_ms} ms · dim ${testResult.dimension} · ${testResult.model}`
+                : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {error && <p className="settings-error">{error}</p>}
+      <div className="settings-actions settings-footer-actions">
+        <button
+          type="button"
+          className="settings-save"
+          onClick={() => void save()}
+          disabled={status === 'saving'}
+          data-testid="rag-save"
+        >
+          {status === 'saving' ? 'Saving…' : 'Save RAG settings'}
         </button>
       </div>
     </section>
