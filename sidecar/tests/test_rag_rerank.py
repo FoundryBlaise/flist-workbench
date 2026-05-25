@@ -117,6 +117,48 @@ def test_rerank_empty_input_returns_empty() -> None:
     assert rag_rerank.rerank_hits([], "q", model_name="some-model", top_k=5) == []
 
 
+# ---- min_ratio threshold filter ---------------------------------------
+
+
+def test_min_ratio_zero_preserves_all_top_k() -> None:
+    # Backwards-compat: ratio=0 means "behave like the pre-filter code".
+    hits = [
+        _hit("strong", "alpha beta gamma"),  # score 3
+        _hit("mid", "alpha beta"),            # score 2 (with -0.01 penalty: ~1.99)
+        _hit("weak", "alpha"),                # score 1 (~0.98)
+        _hit("none", "zzz"),                  # score 0 (~-0.03)
+    ]
+    out = rag_rerank.rerank_hits(
+        hits, "alpha beta gamma", model_name="m", top_k=4, min_ratio=0.0
+    )
+    assert [h["payload"]["chunk_id"] for h in out] == ["strong", "mid", "weak", "none"]
+
+
+def test_min_ratio_drops_below_threshold() -> None:
+    # top=3, ratio=0.5 → keep score >= 1.5. mid (~1.99) stays, weak
+    # (~0.98) drops, none (~-0.03) drops.
+    hits = [
+        _hit("strong", "alpha beta gamma"),
+        _hit("mid", "alpha beta"),
+        _hit("weak", "alpha"),
+        _hit("none", "zzz"),
+    ]
+    out = rag_rerank.rerank_hits(
+        hits, "alpha beta gamma", model_name="m", top_k=4, min_ratio=0.5
+    )
+    assert [h["payload"]["chunk_id"] for h in out] == ["strong", "mid"]
+
+
+def test_min_ratio_skipped_when_top_score_non_positive() -> None:
+    # All docs have zero query-word overlap → top_score ~ 0; filter
+    # would invert meaning, so we skip it and rely on top_k slicing.
+    hits = [_hit("a", "zzz"), _hit("b", "zzz"), _hit("c", "zzz")]
+    out = rag_rerank.rerank_hits(
+        hits, "alpha", model_name="m", top_k=2, min_ratio=0.5
+    )
+    assert len(out) == 2
+
+
 def test_rerank_swallows_encoder_errors_and_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

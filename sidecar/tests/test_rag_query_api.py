@@ -425,11 +425,10 @@ def test_settings_exposes_chunk_defaults(client: TestClient) -> None:
 def test_settings_default_chat_prompt_is_english(client: TestClient) -> None:
     res = client.get("/settings").json()
     # The default lives in rag_query — we can't import directly here
-    # without circular ugliness, so check a phrase that's stable.
-    assert "saved\nroleplay logs" in res["rag"]["defaults"]["chat_system_prompt"] or (
-        "based on the provided context"
-        in res["rag"]["defaults"]["chat_system_prompt"].lower()
-    )
+    # without circular ugliness, so check phrases that are stable.
+    body = res["rag"]["defaults"]["chat_system_prompt"].lower()
+    assert "roleplay logs" in body
+    assert "exclusively from the provided sources" in body
 
 
 def test_settings_chat_prompt_falls_back_to_default_when_empty(
@@ -439,10 +438,7 @@ def test_settings_chat_prompt_falls_back_to_default_when_empty(
     client.put("/settings", json={"rag": {"chat_system_prompt": "custom"}})
     res = client.put("/settings", json={"rag": {"chat_system_prompt": ""}}).json()
     assert res["rag"]["chat_system_prompt"] != "custom"
-    assert (
-        "based on the provided context"
-        in res["rag"]["chat_system_prompt"].lower()
-    )
+    assert "exclusively from the provided sources" in res["rag"]["chat_system_prompt"].lower()
 
 
 # ---- labels.connect side-effect: rag_meta lives in same DB --------------

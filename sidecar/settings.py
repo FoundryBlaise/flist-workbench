@@ -64,6 +64,17 @@ KEY_RAG_RERANK_MODEL = "rag.rerank_model"
 KEY_RAG_RERANK_CANDIDATES = "rag.rerank_candidates"
 KEY_RAG_TOP_K = "rag.top_k"
 KEY_RAG_NEIGHBORS = "rag.neighbors"
+# Quality tunables surfaced under "Retrieval" / "Quality" in the chat
+# settings pane. All default to off / 0 so upgrading is a no-op for
+# existing users — they opt in once they validate behaviour.
+KEY_RAG_RERANK_MIN_RATIO = "rag.rerank_min_ratio"
+KEY_RAG_HYBRID_ENABLED = "rag.hybrid_enabled"
+KEY_RAG_HYBRID_BM25_CANDIDATES = "rag.hybrid_bm25_candidates"
+KEY_RAG_MULTIQUERY_ENABLED = "rag.multiquery_enabled"
+KEY_RAG_MULTIQUERY_VARIANTS = "rag.multiquery_variants"
+# Ollama-specific: forwarded as options.num_ctx in the chat payload.
+# LM Studio sets context at model load time and ignores this field.
+KEY_RAG_CHAT_NUM_CTX = "rag.chat_num_ctx"
 
 # Chunking tunables. Changing any of these requires a re-ingest with
 # wipe for existing data — chunk_ids encode the subchunk index, so

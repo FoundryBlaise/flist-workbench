@@ -42,6 +42,7 @@ def stream_chat(
     *,
     temperature: float = DEFAULT_TEMPERATURE,
     timeout: float = DEFAULT_TIMEOUT,
+    num_ctx: int | None = None,
 ) -> Iterator[str]:
     """Stream content deltas from /v1/chat/completions.
 
@@ -50,13 +51,21 @@ def stream_chat(
     transport failure is wrapped in ChatError before yielding to the
     caller — the caller decides whether to surface it in-band on the
     SSE side or break the connection.
+
+    `num_ctx` (when truthy) is forwarded as `options.num_ctx`. Ollama
+    honours this on its OpenAI-compatible endpoint — overriding the
+    default context window the model was loaded with. LM Studio loads
+    its context at model selection time and ignores unknown payload
+    fields, so this is a no-op there.
     """
-    payload = {
+    payload: dict = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "stream": True,
     }
+    if num_ctx:
+        payload["options"] = {"num_ctx": int(num_ctx)}
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"

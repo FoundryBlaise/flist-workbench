@@ -128,6 +128,12 @@ export type RagSettings = {
   rerank_candidates: number
   top_k: number
   neighbors: number
+  rerank_min_ratio: number
+  hybrid_enabled: boolean
+  hybrid_bm25_candidates: number
+  multiquery_enabled: boolean
+  multiquery_variants: number
+  chat_num_ctx: number
   chunk_max_chars: number
   chunk_soft_split_chars: number
   chunk_overlap_msgs: number
@@ -145,6 +151,12 @@ export type RagSettings = {
     rerank_candidates: number
     top_k: number
     neighbors: number
+    rerank_min_ratio: number
+    hybrid_enabled: boolean
+    hybrid_bm25_candidates: number
+    multiquery_enabled: boolean
+    multiquery_variants: number
+    chat_num_ctx: number
     chunk_max_chars: number
     chunk_soft_split_chars: number
     chunk_overlap_msgs: number
@@ -177,7 +189,13 @@ export type RagQueryHandlers = {
     rerank_applied: boolean
     rerank_model: string | null
     embed_model: string
+    hybrid_applied?: boolean
+    hybrid_lexical_hits?: number
   }) => void
+  // Emitted between the optional multi-query expansion step and the
+  // first dense retrieval round. `variants` lists the extra queries
+  // the LLM generated — the original question is NOT included.
+  onExpanded?: (info: { variants: string[] }) => void
   onToken?: (content: string) => void
   onDone?: (citations: RagCitation[]) => void
   onError?: (info: { stage: string; message: string }) => void
@@ -269,6 +287,8 @@ function dispatchSseBlock(block: string, handlers: RagQueryHandlers): void {
   }
   if (event === 'retrieved' && handlers.onRetrieved) {
     handlers.onRetrieved(parsed as Parameters<NonNullable<RagQueryHandlers['onRetrieved']>>[0])
+  } else if (event === 'expanded' && handlers.onExpanded) {
+    handlers.onExpanded(parsed as { variants: string[] })
   } else if (event === 'token' && handlers.onToken) {
     handlers.onToken((parsed as { content: string }).content)
   } else if (event === 'done' && handlers.onDone) {

@@ -163,3 +163,47 @@ def test_stream_chat_sends_bearer_when_api_key(
     assert captured["headers"].get("authorization") == "Bearer sk-secret"
     assert captured["body"]["stream"] is True
     assert captured["body"]["model"] == "model-x"
+
+
+def test_stream_chat_includes_num_ctx_option_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def capture(req, timeout):  # noqa: ARG001
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeStreamResp(_sse(_delta("ok"), "data: [DONE]"))
+
+    monkeypatch.setattr(rag_chat, "urlopen", capture)
+    list(
+        rag_chat.stream_chat(
+            "http://test/v1",
+            "m",
+            "",
+            [{"role": "user", "content": "x"}],
+            num_ctx=16384,
+        )
+    )
+    assert captured["body"]["options"] == {"num_ctx": 16384}
+
+
+def test_stream_chat_omits_options_when_num_ctx_is_zero_or_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def capture(req, timeout):  # noqa: ARG001
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeStreamResp(_sse(_delta("ok"), "data: [DONE]"))
+
+    monkeypatch.setattr(rag_chat, "urlopen", capture)
+    list(
+        rag_chat.stream_chat(
+            "http://test/v1",
+            "m",
+            "",
+            [{"role": "user", "content": "x"}],
+            num_ctx=0,
+        )
+    )
+    assert "options" not in captured["body"]

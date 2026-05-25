@@ -82,6 +82,15 @@ type Draft = {
     rerank_candidates: string
     neighbors: string
     rerank_model: string
+    // Quality / fusion knobs. Booleans live alongside the rest of the
+    // draft as strings ('1' / '0') for symmetry with the rest of the
+    // form — saveAll re-parses to bool when posting to the sidecar.
+    rerank_min_ratio: string
+    hybrid_enabled: boolean
+    hybrid_bm25_candidates: string
+    multiquery_enabled: boolean
+    multiquery_variants: string
+    chat_num_ctx: string
     chunk_max_chars: string
     chunk_soft_split_chars: string
     chunk_overlap_msgs: string
@@ -114,6 +123,12 @@ function buildDraft(state: SettingsState): Draft {
       rerank_candidates: String(state.rag.rerank_candidates),
       neighbors: String(state.rag.neighbors),
       rerank_model: state.rag.rerank_model,
+      rerank_min_ratio: String(state.rag.rerank_min_ratio),
+      hybrid_enabled: state.rag.hybrid_enabled,
+      hybrid_bm25_candidates: String(state.rag.hybrid_bm25_candidates),
+      multiquery_enabled: state.rag.multiquery_enabled,
+      multiquery_variants: String(state.rag.multiquery_variants),
+      chat_num_ctx: String(state.rag.chat_num_ctx),
       chunk_max_chars: String(state.rag.chunk_max_chars),
       chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
       chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
@@ -142,7 +157,13 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.rag.top_k !== baseline.rag.top_k ||
     draft.rag.rerank_candidates !== baseline.rag.rerank_candidates ||
     draft.rag.neighbors !== baseline.rag.neighbors ||
-    draft.rag.rerank_model !== baseline.rag.rerank_model
+    draft.rag.rerank_model !== baseline.rag.rerank_model ||
+    draft.rag.rerank_min_ratio !== baseline.rag.rerank_min_ratio ||
+    draft.rag.hybrid_enabled !== baseline.rag.hybrid_enabled ||
+    draft.rag.hybrid_bm25_candidates !== baseline.rag.hybrid_bm25_candidates ||
+    draft.rag.multiquery_enabled !== baseline.rag.multiquery_enabled ||
+    draft.rag.multiquery_variants !== baseline.rag.multiquery_variants ||
+    draft.rag.chat_num_ctx !== baseline.rag.chat_num_ctx
   const embeddingDirty =
     draft.rag.embed_endpoint !== baseline.rag.embed_endpoint ||
     draft.rag.embed_model !== baseline.rag.embed_model ||
@@ -166,6 +187,12 @@ function anyDirty(d: Record<SectionId, boolean>): boolean {
 
 const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
   const n = Math.floor(Number(s))
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(lo, Math.min(hi, n))
+}
+
+const clampFloat = (s: string, lo: number, hi: number, fallback: number): number => {
+  const n = Number(s)
   if (!Number.isFinite(n)) return fallback
   return Math.max(lo, Math.min(hi, n))
 }
@@ -313,6 +340,32 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           ),
           top_k: clampInt(draft.rag.top_k, 1, 50, state.rag.top_k),
           neighbors: clampInt(draft.rag.neighbors, 0, 5, state.rag.neighbors),
+          rerank_min_ratio: clampFloat(
+            draft.rag.rerank_min_ratio,
+            0,
+            1,
+            state.rag.rerank_min_ratio
+          ),
+          hybrid_enabled: draft.rag.hybrid_enabled,
+          hybrid_bm25_candidates: clampInt(
+            draft.rag.hybrid_bm25_candidates,
+            1,
+            200,
+            state.rag.hybrid_bm25_candidates
+          ),
+          multiquery_enabled: draft.rag.multiquery_enabled,
+          multiquery_variants: clampInt(
+            draft.rag.multiquery_variants,
+            2,
+            5,
+            state.rag.multiquery_variants
+          ),
+          chat_num_ctx: clampInt(
+            draft.rag.chat_num_ctx,
+            0,
+            131072,
+            state.rag.chat_num_ctx
+          ),
           chunk_max_chars: nextChunkMax,
           chunk_soft_split_chars: clampInt(
             draft.rag.chunk_soft_split_chars,
@@ -1272,6 +1325,197 @@ function ChatPane({
               Default
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">Quality</h3>
+        <p className="settings-help">
+          Optional retrieval extensions. All off by default — turn each on
+          once you've validated it improves answers against your own logs.
+        </p>
+
+        <div className="settings-field settings-field-tight">
+          <div className="settings-row">
+            <label
+              className="settings-row-label settings-row-label-wide"
+              htmlFor="rag-min-ratio"
+            >
+              Min rerank ratio
+            </label>
+            <input
+              id="rag-min-ratio"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              className="settings-input settings-input-narrow"
+              value={draft.rerank_min_ratio}
+              onChange={(e) => onChange({ rerank_min_ratio: e.target.value })}
+              data-testid="rag-min-ratio-input"
+            />
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() =>
+                onChange({
+                  rerank_min_ratio: String(rag.defaults.rerank_min_ratio)
+                })
+              }
+            >
+              Default ({rag.defaults.rerank_min_ratio})
+            </button>
+          </div>
+          <p className="settings-help settings-help-tight">
+            Drops chunks scoring below <code>top × ratio</code> after
+            reranking. Cuts noise on factual lookups where only 1–2 chunks
+            are actually relevant. <code>0</code> disables.
+          </p>
+        </div>
+
+        <div className="settings-field">
+          <label className="settings-checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.hybrid_enabled}
+              onChange={(e) => onChange({ hybrid_enabled: e.target.checked })}
+              data-testid="rag-hybrid-enabled-input"
+            />
+            <span>Hybrid retrieval (BM25 + embeddings)</span>
+          </label>
+          <p className="settings-help">
+            Adds SQLite FTS5 keyword search alongside dense embeddings,
+            fused with Reciprocal Rank Fusion. Recovers recall on
+            proper-noun questions ("who is Amber?", "which cocktail?").
+            First use after enabling rebuilds the lexical index from
+            existing chunks (a few seconds).
+          </p>
+          {draft.hybrid_enabled && (
+            <div className="settings-row">
+              <label
+                className="settings-row-label settings-row-label-wide"
+                htmlFor="rag-hybrid-bm25"
+              >
+                BM25 candidates
+              </label>
+              <input
+                id="rag-hybrid-bm25"
+                type="number"
+                min={1}
+                max={200}
+                className="settings-input settings-input-narrow"
+                value={draft.hybrid_bm25_candidates}
+                onChange={(e) =>
+                  onChange({ hybrid_bm25_candidates: e.target.value })
+                }
+                data-testid="rag-hybrid-bm25-input"
+              />
+              <button
+                type="button"
+                className="settings-clear"
+                onClick={() =>
+                  onChange({
+                    hybrid_bm25_candidates: String(
+                      rag.defaults.hybrid_bm25_candidates
+                    )
+                  })
+                }
+              >
+                Default ({rag.defaults.hybrid_bm25_candidates})
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="settings-field">
+          <label className="settings-checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.multiquery_enabled}
+              onChange={(e) =>
+                onChange({ multiquery_enabled: e.target.checked })
+              }
+              data-testid="rag-multiquery-enabled-input"
+            />
+            <span>Multi-query expansion</span>
+          </label>
+          <p className="settings-help">
+            Asks the chat model to paraphrase your question (and quietly
+            autocorrect proper-noun typos) before retrieval. Each variant
+            triggers its own embedding round; results are unioned. Adds
+            1–3 s of latency per question.
+          </p>
+          {draft.multiquery_enabled && (
+            <div className="settings-row">
+              <label
+                className="settings-row-label settings-row-label-wide"
+                htmlFor="rag-multiquery-variants"
+              >
+                Variants
+              </label>
+              <input
+                id="rag-multiquery-variants"
+                type="number"
+                min={2}
+                max={5}
+                className="settings-input settings-input-narrow"
+                value={draft.multiquery_variants}
+                onChange={(e) =>
+                  onChange({ multiquery_variants: e.target.value })
+                }
+                data-testid="rag-multiquery-variants-input"
+              />
+              <button
+                type="button"
+                className="settings-clear"
+                onClick={() =>
+                  onChange({
+                    multiquery_variants: String(rag.defaults.multiquery_variants)
+                  })
+                }
+              >
+                Default ({rag.defaults.multiquery_variants})
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="settings-field settings-field-tight">
+          <div className="settings-row">
+            <label
+              className="settings-row-label settings-row-label-wide"
+              htmlFor="rag-num-ctx"
+            >
+              Context window
+            </label>
+            <input
+              id="rag-num-ctx"
+              type="number"
+              min={0}
+              max={131072}
+              step={1024}
+              className="settings-input settings-input-narrow"
+              value={draft.chat_num_ctx}
+              onChange={(e) => onChange({ chat_num_ctx: e.target.value })}
+              data-testid="rag-num-ctx-input"
+            />
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() =>
+                onChange({ chat_num_ctx: String(rag.defaults.chat_num_ctx) })
+              }
+            >
+              Default ({rag.defaults.chat_num_ctx})
+            </button>
+          </div>
+          <p className="settings-help settings-help-tight">
+            Sent as <code>options.num_ctx</code> in the chat payload.
+            <strong>Ollama:</strong> default 8192 — Ollama's own per-request
+            default is only 2048, which truncates retrieved chunks on most
+            RAG queries. <strong>LM Studio:</strong> ignored (context is
+            set at model load). <code>0</code> suppresses the field.
+          </p>
         </div>
       </div>
     </>
