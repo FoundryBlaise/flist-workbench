@@ -211,7 +211,82 @@ def test_stats_counts_three_buckets(tmp_path: Path) -> None:
             label="IC", source="llm",
         )
         counts = labels_store.stats(conn, "C", "P", [m_long, m_short, m_db_ic], _settings())
-        assert counts == {"IC": 1, "OOC": 1, "Unlabeled": 1}
+        assert counts == {"IC": 1, "OOC": 1, "Unlabeled": 1, "Failed": 0}
+    finally:
+        conn.close()
+
+
+# ---- failure tracking ---------------------------------------------------
+
+
+def test_record_failure_surfaces_in_resolver_and_stats(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+    try:
+        long_text = "A" * 250
+        m = _msg(ts=10, speaker="A", raw=long_text, text=long_text)
+        h = labels_store.msg_hash(m)
+        labels_store.record_failure(
+            conn, hash=h, character="C", partner="P",
+            ts=10, speaker="A", error="bad json: 'foo'",
+        )
+        failures = labels_store.failures_for_partner(conn, "C", "P")
+        assert h in failures
+        assert failures[h]["error"] == "bad json: 'foo'"
+        assert labels_store.resolve(m, None, _settings(), failed=True) == "Failed"
+        counts = labels_store.stats(conn, "C", "P", [m], _settings())
+        assert counts == {"IC": 0, "OOC": 0, "Unlabeled": 0, "Failed": 1}
+    finally:
+        conn.close()
+
+
+def test_upsert_label_clears_failure_row(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+    try:
+        labels_store.record_failure(
+            conn, hash="abc", character="C", partner="P",
+            ts=1, speaker="A", error="api error",
+        )
+        assert "abc" in labels_store.failures_for_partner(conn, "C", "P")
+        labels_store.upsert_label(
+            conn, hash="abc", character="C", partner="P",
+            ts=1, speaker="A", label="IC", source="manual",
+        )
+        assert "abc" not in labels_store.failures_for_partner(conn, "C", "P")
+    finally:
+        conn.close()
+
+
+def test_record_failure_skips_already_labeled(tmp_path: Path) -> None:
+    """A successful prior label shouldn't be downgraded to Failed."""
+    conn = _db(tmp_path)
+    try:
+        labels_store.upsert_label(
+            conn, hash="abc", character="C", partner="P",
+            ts=1, speaker="A", label="IC", source="llm",
+        )
+        labels_store.record_failure(
+            conn, hash="abc", character="C", partner="P",
+            ts=1, speaker="A", error="transient",
+        )
+        assert "abc" not in labels_store.failures_for_partner(conn, "C", "P")
+    finally:
+        conn.close()
+
+
+def test_delete_labels_for_partner_also_clears_failures(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+    try:
+        labels_store.upsert_label(
+            conn, hash="ok", character="C", partner="P",
+            ts=1, speaker="A", label="IC", source="llm",
+        )
+        labels_store.record_failure(
+            conn, hash="bad", character="C", partner="P",
+            ts=2, speaker="A", error="boom",
+        )
+        labels_store.delete_labels_for_partner(conn, "C", "P")
+        assert labels_store.labels_for_partner(conn, "C", "P") == {}
+        assert labels_store.failures_for_partner(conn, "C", "P") == {}
     finally:
         conn.close()
 

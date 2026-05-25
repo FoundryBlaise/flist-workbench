@@ -28,6 +28,9 @@
   --label-ooc-bg: #5a4a2d;  --label-ooc-fg: #d8c890;
   --label-unl-bg: #2f2f2f;  --label-unl-fg: #9e9e9e;
   --label-sys-bg: #3a3a3a;  --label-sys-fg: #a0a0a0;
+  /* Failed badge intentionally loud — the user has to spot these to
+     fix them. Pairs with the row-edge bar in .log-msg-failed below. */
+  --label-fail-bg: #6a2d2d; --label-fail-fg: #f3b8b8;
 
   /* Surface tints used for hover states throughout. Previously
      hardcoded as #2a2d2e in 4 places (sidebar items, dropdown items,
@@ -1569,6 +1572,19 @@ body {
 .log-label-ooc { background: var(--label-ooc-bg); color: var(--label-ooc-fg); }
 .log-label-unlabeled { background: var(--label-unl-bg); color: var(--label-unl-fg); }
 .log-label-system { background: var(--label-sys-bg); color: var(--label-sys-fg); }
+.log-label-failed {
+  background: var(--label-fail-bg);
+  color: var(--label-fail-fg);
+  font-weight: 700;
+}
+/* Loud row-edge accent so a Failed message is visible while scrolling
+   without needing the filter chip. Matches the .log-msg-manual idiom. */
+.log-msg-failed {
+  box-shadow: inset 3px 0 0 var(--label-fail-fg);
+}
+.log-msg-failed.log-msg-selected {
+  box-shadow: inset 3px 0 0 var(--label-fail-fg), inset 6px 0 0 var(--accent);
+}
 /* Manual overrides carry a visible ✎ glyph inside the badge — see
    LabelBadge in LogViewer.tsx. The glyph is the load-bearing cue;
    the row-edge bar below is supportive. */

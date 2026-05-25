@@ -84,8 +84,8 @@ export function FindContactsModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="modal find-contacts-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal find-contacts-modal">
         <header className="modal-head">
           <div>
             <h2 className="modal-title">Find contacts</h2>

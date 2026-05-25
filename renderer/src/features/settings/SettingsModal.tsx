@@ -84,8 +84,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const envLocked = state?.fchat_data_dir_env_locked ?? false
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal settings-modal">
         <header className="modal-head">
           <div>
             <h2 className="modal-title">Settings</h2>
@@ -325,9 +325,11 @@ function LabelsSection({
         <label className="settings-label">Context window (surrounding messages)</label>
         <p className="settings-help">
           How many messages before and after the target are attached as <code>KONTEXT</code> to each
-          classify call. Higher helps disambiguation but eats the model's context budget — drop to{' '}
-          <code>1 / 1</code> or <code>0 / 0</code> on small-VRAM cards (≤ 8 GB) if you hit context-limit
-          errors. Range 0–10 each.
+          classify call. Defaults to <code>1 / 1</code> — wider windows cause the model to latch
+          onto the surrounding cluster and bleed across IC/OOC boundaries (the target is IC but all
+          context is OOC, or vice versa). If you're seeing such boundary messages mislabeled, drop
+          to <code>0 / 0</code>, not up. Wider also eats the model's context budget on small-VRAM
+          cards. Range 0–10 each.
         </p>
         <div className="settings-row">
           <label

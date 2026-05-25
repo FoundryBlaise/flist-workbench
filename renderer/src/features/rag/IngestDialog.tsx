@@ -129,12 +129,13 @@ export function IngestDialog({
     return () => document.removeEventListener('keydown', onKey)
   }, [canClose, onClose])
 
+  // Backdrop click is inert across every modal in the app — closing
+  // dialogs requires the explicit ✕ / Close / Escape path. During a
+  // running job we still flash the Cancel button so a stray backdrop
+  // click points the user at the right recovery action.
   const onBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return
-    if (canClose) {
-      onClose()
-      return
-    }
+    if (canClose) return
     setPulseCancel(true)
     if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current)
     pulseTimer.current = window.setTimeout(() => setPulseCancel(false), 700)

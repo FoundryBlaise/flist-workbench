@@ -24,17 +24,54 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import documents
 import labels as labels_store
 from labels import LabelsSettings, msg_hash
 
-CONTEXT_BEFORE = 3  # historical default; runtime reads from settings
-CONTEXT_AFTER = 3   # historical default; runtime reads from settings
+# Append-only JSONL log of classify failures, one object per line.
+# Lives in user_data_dir so it survives sidecar restarts. Format is
+# intentionally raw enough to grep and to feed back into another model
+# for analysis. Truncated content is the same we send to the LLM; full
+# context is logged so the user can spot prompt/temperature issues.
+FAILURE_LOG_FILENAME = "classify-failures.log"
+
+
+def failure_log_path(root: Path | None = None) -> Path:
+    base = root or documents.user_data_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    return base / FAILURE_LOG_FILENAME
+
+
+_log_lock = threading.Lock()
+
+
+def _append_failure_log(record: dict, root: Path | None = None) -> None:
+    """Append one JSON record. Best-effort: never raise into the worker.
+
+    Lock serialises concurrent writes from the classifier's thread
+    pool so lines don't interleave on POSIX-line-buffered file handles.
+    """
+    try:
+        path = failure_log_path(root)
+        line = json.dumps(record, ensure_ascii=False)
+        with _log_lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except OSError:
+        # Disk full, perms, etc — the DB row is the canonical signal;
+        # losing the log file is sad but not job-fatal.
+        pass
+
+CONTEXT_BEFORE = 1  # runtime reads from settings; this is the fallback
+CONTEXT_AFTER = 1   # runtime reads from settings; this is the fallback
 CONTEXT_TRUNCATE_CHARS = 500
 REQUEST_TIMEOUT = 180
 
@@ -259,6 +296,34 @@ def classify_messages(
             "reason": parsed["reason"],
         }, None
 
+    def record_failure(task: tuple[int, dict, str, str], err: str) -> None:
+        """Persist failure to DB + JSONL. Always safe to call."""
+        _idx, m, h, prompt = task
+        labels_store.record_failure(
+            labels_conn,
+            hash=h,
+            character=character,
+            partner=partner,
+            ts=m["ts"],
+            speaker=m["speaker"],
+            error=err,
+        )
+        _append_failure_log({
+            "ts_logged": time.time(),
+            "character": character,
+            "partner": partner,
+            "msg_hash": h,
+            "msg_ts": m["ts"],
+            "speaker": m["speaker"],
+            "raw": m.get("raw", ""),
+            "text": m.get("text", ""),
+            "type": m.get("type"),
+            "prompt": prompt,
+            "model": settings.llm_model,
+            "endpoint": settings.llm_endpoint,
+            "error": err,
+        })
+
     cancelled = False
     if concurrency <= 1:
         for task in tasks:
@@ -281,6 +346,7 @@ def classify_messages(
                 classified += 1
                 emit_progress({"last_label": label["label"]})
             else:
+                record_failure(task, err or "unknown error")
                 failed += 1
                 emit_progress({"last_error": err})
     else:
@@ -324,7 +390,7 @@ def classify_messages(
                     continue
                 for fut in done:
                     label, err = fut.result()
-                    del in_flight[fut]
+                    task_for_fut = in_flight.pop(fut)
                     if label:
                         labels_store.upsert_label(
                             labels_conn,
@@ -340,6 +406,7 @@ def classify_messages(
                         classified += 1
                         emit_progress({"last_label": label["label"]})
                     else:
+                        record_failure(task_for_fut, err or "unknown error")
                         failed += 1
                         emit_progress({"last_error": err})
                     # Backfill only if we're still running. After

@@ -12,6 +12,7 @@ import aliases as aliases_store
 import documents
 import labels as labels_store
 import labels_jobs
+import labels_llm
 import rag as rag_settings
 import rag_chat
 import rag_embed
@@ -94,13 +95,19 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
         by_hash = labels_store.labels_for_partner(
             labels_conn, char, partner, partner_aliases=alias_group
         )
+        failures = labels_store.failures_for_partner(
+            labels_conn, char, partner, partner_aliases=alias_group
+        )
         for m in messages:
             h = labels_store.msg_hash(m)
             # Send the hash so the renderer can call /labels/override
             # without re-implementing sha1(ts|speaker|raw) client-side.
             m["hash"] = h
             row = by_hash.get(h)
-            m["label"] = labels_store.resolve(m, row, lab_settings)
+            fail = failures.get(h)
+            m["label"] = labels_store.resolve(
+                m, row, lab_settings, failed=fail is not None,
+            )
             if row is not None:
                 m["label_source"] = row["source"]
                 # Surface the model's own reason string in the badge
@@ -112,6 +119,11 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
                 if row["prior_label"] is not None:
                     m["prior_label"] = row["prior_label"]
                     m["prior_source"] = row["prior_source"]
+            elif fail is not None:
+                # Surface the classifier's error so the badge tooltip
+                # explains *why* this message is Failed.
+                m["label_source"] = "failed"
+                m["label_error"] = fail["error"]
             # Otherwise no source is attached — the UI infers "rule
             # or unlabeled" from absence of label_source.
     finally:
@@ -174,6 +186,7 @@ def labels_stats(char: str, partner: str) -> dict:
         "ic": counts[labels_store.LABEL_IC],
         "ooc": counts[labels_store.LABEL_OOC],
         "unlabeled": counts[labels_store.LABEL_UNLABELED],
+        "failed": counts[labels_store.LABEL_FAILED],
         "total": sum(counts.values()),
     }
 
@@ -683,6 +696,21 @@ class LabelOverride(BaseModel):
 class LabelsClearRequest(BaseModel):
     character: str
     partner: str
+
+
+@app.get("/labels/failure-log")
+def labels_failure_log() -> dict:
+    """Where the classify failure JSONL lives + whether it has anything yet.
+
+    The renderer hands the path to Electron's shell.openPath so the
+    user can inspect / forward the file to a model for debugging. We
+    don't stream contents over HTTP — these can grow long, and the OS
+    text viewer is the right tool.
+    """
+    path = labels_llm.failure_log_path()
+    exists = path.exists()
+    size = path.stat().st_size if exists else 0
+    return {"path": str(path), "exists": exists, "byte_size": size}
 
 
 @app.post("/labels/clear")

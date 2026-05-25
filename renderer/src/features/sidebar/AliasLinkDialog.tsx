@@ -33,7 +33,9 @@ export function AliasLinkDialog({
     inputRef.current?.focus()
   }, [])
 
-  // ESC dismisses; backdrop click dismisses.
+  // ESC dismisses. Backdrop click is intentionally inert across all
+  // modals in the app — accidentally clicking outside used to drop
+  // mid-task state (Settings, mid-job dialogs); explicit close only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -80,9 +82,6 @@ export function AliasLinkDialog({
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
     >
       <div className="modal classify-modal" data-testid="alias-link-dialog">
         <header className="modal-head">

@@ -10,6 +10,10 @@ const DEFAULT_PORT = app.isPackaged ? 8770 : 8765
 const PORT = Number(process.env['SIDECAR_PORT'] ?? DEFAULT_PORT)
 process.env['SIDECAR_PORT'] = String(PORT)
 
+// Exposed so the main-process menu handlers can call the sidecar
+// directly (e.g. resolving the failure-log path before shell.openPath).
+export const sidecarUrl = `http://127.0.0.1:${PORT}`
+
 export async function startSidecar(): Promise<void> {
   if (app.isPackaged) {
     const exe = join(process.resourcesPath, 'sidecar.exe')
