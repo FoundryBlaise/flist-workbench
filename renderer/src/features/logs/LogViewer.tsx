@@ -122,6 +122,7 @@ export function LogViewer() {
   const markSeen = useStore((s) => s.markCharacterSeen)
   const applyLabelOverride = useStore((s) => s.applyLabelOverride)
   const openClassify = useStore((s) => s.openClassify)
+  const openIngest = useStore((s) => s.openIngest)
 
   useEffect(() => {
     if (activeChar && partner) {
@@ -509,6 +510,13 @@ export function LogViewer() {
               `${displayPartner(partner)} with ${activeChar}`
             )
           }}
+          onIngest={() => {
+            setConvMenu(null)
+            openIngest(
+              { character: activeChar, partner },
+              `${displayPartner(partner)} with ${activeChar}`
+            )
+          }}
           onResetAll={async () => {
             setConvMenu(null)
             const partnerName = displayPartner(partner)
@@ -834,6 +842,7 @@ function ConversationContextMenu({
   unlabeledCount,
   labeledCount,
   onClassify,
+  onIngest,
   onResetAll
 }: {
   x: number
@@ -843,10 +852,13 @@ function ConversationContextMenu({
   unlabeledCount: number
   labeledCount: number
   onClassify: () => void
+  onIngest: () => void
   onResetAll: () => void
 }) {
   const W = 280
-  const H = 160
+  // 3 menu items now (Classify, Ingest, Reset); bumped from 160 so the
+  // viewport-edge clamp still keeps the whole menu on-screen.
+  const H = 220
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -922,9 +934,23 @@ function ConversationContextMenu({
         }}
         type="button"
         role="menuitem"
+        className="log-label-menu-item"
+        onClick={onIngest}
+        onKeyDown={onItemKeyDown(1)}
+        title="Embed this conversation's IC chunks into the local RAG index."
+        data-testid="log-conv-menu-ingest"
+      >
+        Ingest this chat (RAG)
+      </button>
+      <button
+        ref={(el) => {
+          itemRefs.current[2] = el
+        }}
+        type="button"
+        role="menuitem"
         className="log-label-menu-item log-label-menu-reset"
         onClick={onResetAll}
-        onKeyDown={onItemKeyDown(1)}
+        onKeyDown={onItemKeyDown(2)}
         disabled={resetDisabled}
         title={
           resetDisabled

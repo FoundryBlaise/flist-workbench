@@ -19,6 +19,11 @@ export async function startSidecar(): Promise<void> {
     })
   } else {
     const sidecarDir = join(__dirname, '../../sidecar')
+    // `uv sync` is idempotent and ~100 ms when the lockfile is clean,
+    // so we run it on every dev launch — that way a `git pull` that
+    // adds a Python dep doesn't crash the next run with a confusing
+    // ModuleNotFoundError. Cost is negligible when nothing's stale.
+    await runUvSync(sidecarDir)
     proc = spawn('uv', ['run', 'uvicorn', 'server:app', '--port', String(PORT)], {
       cwd: sidecarDir,
       env: { ...process.env, SIDECAR_PORT: String(PORT) },
@@ -39,6 +44,31 @@ export function stopSidecar(): void {
     proc.kill('SIGTERM')
     proc = null
   }
+}
+
+function runUvSync(cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('uv', ['sync'], {
+      cwd,
+      env: process.env,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      shell: process.platform === 'win32'
+    })
+    child.on('exit', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`uv sync exited with code ${code}`))
+    })
+    child.on('error', (err) => {
+      // Surface a more actionable message than the default ENOENT for
+      // the common "uv not on PATH" Windows case.
+      reject(
+        new Error(
+          `failed to spawn 'uv sync' (${err.message}). ` +
+            "Is 'uv' on PATH? See https://docs.astral.sh/uv/getting-started/installation/"
+        )
+      )
+    })
+  })
 }
 
 async function waitForHealth(port: number, timeoutMs = 30_000): Promise<void> {
