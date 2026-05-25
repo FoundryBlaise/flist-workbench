@@ -111,6 +111,9 @@ export type RagSettings = {
   rerank_candidates: number
   top_k: number
   neighbors: number
+  chunk_max_chars: number
+  chunk_soft_split_chars: number
+  chunk_overlap_msgs: number
   defaults: {
     embed_endpoint: string
     embed_model: string
@@ -125,6 +128,9 @@ export type RagSettings = {
     rerank_candidates: number
     top_k: number
     neighbors: number
+    chunk_max_chars: number
+    chunk_soft_split_chars: number
+    chunk_overlap_msgs: number
   }
 }
 

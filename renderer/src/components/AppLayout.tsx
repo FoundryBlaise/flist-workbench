@@ -182,9 +182,10 @@ export function AppLayout() {
       )}
       {ingestTarget && (
         <IngestDialog
-          key={`ingest::${ingestTarget.scope.character ?? '*'}::${ingestTarget.scope.partner ?? '*'}`}
+          key={`ingest::${ingestTarget.forceRewipe ? 'wipe' : 'add'}::${ingestTarget.scope.character ?? '*'}::${ingestTarget.scope.partner ?? '*'}`}
           scope={ingestTarget.scope}
           scopeLabel={ingestTarget.label}
+          forceRewipe={ingestTarget.forceRewipe}
           onClose={closeIngest}
         />
       )}

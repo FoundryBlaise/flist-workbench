@@ -8,13 +8,23 @@ export type IngestDialogProps = {
   // Human-readable label like "Lunii", "All partners for Auldren Nazr",
   // "All characters". Shown in the dialog header.
   scopeLabel: string
+  // When true the very first ingest call asks the sidecar to wipe the
+  // Qdrant collection before re-indexing. Used by Settings →
+  // "Re-ingest all". Default false. The model-swap-confirmation path
+  // also re-fires the job with this on, regardless of the prop.
+  forceRewipe?: boolean
   onClose: () => void
 }
 
 // Parent renders this with a key derived from the scope so re-opening
 // with a different scope remounts the component — same pattern as
 // ClassifyDialog. The job is kicked off in the mount effect.
-export function IngestDialog({ scope, scopeLabel, onClose }: IngestDialogProps) {
+export function IngestDialog({
+  scope,
+  scopeLabel,
+  forceRewipe = false,
+  onClose
+}: IngestDialogProps) {
   const [job, setJob] = useState<IngestJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pulseCancel, setPulseCancel] = useState(false)
@@ -27,7 +37,7 @@ export function IngestDialog({ scope, scopeLabel, onClose }: IngestDialogProps) 
   const pulseTimer = useRef<number | null>(null)
 
   useEffect(() => {
-    startJob({ force_rewipe: false })
+    startJob({ force_rewipe: forceRewipe })
     return () => {
       if (pollTimer.current !== null) window.clearInterval(pollTimer.current)
       if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current)

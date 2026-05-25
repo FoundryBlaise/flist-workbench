@@ -1323,6 +1323,19 @@ body {
   color: var(--text);
   letter-spacing: 0.3px;
 }
+.settings-subheading {
+  margin: 0 0 6px;
+  font-size: var(--font-heading);
+  font-weight: 600;
+  color: var(--text-dim-2, var(--text));
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.settings-divider {
+  border: none;
+  border-top: 1px dashed var(--border);
+  margin: 20px 0 16px;
+}
 .settings-field + .settings-field { margin-top: 16px; }
 .settings-input-narrow { flex: 0 0 120px; }
 .settings-preset {

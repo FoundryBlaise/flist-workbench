@@ -333,6 +333,56 @@ def test_settings_clamps_runaway_top_k(client: TestClient) -> None:
     assert res["rag"]["top_k"] == 50  # capped at 50
 
 
+def test_settings_persists_chunk_settings(client: TestClient) -> None:
+    res = client.put(
+        "/settings",
+        json={
+            "rag": {
+                "chunk_max_chars": 3000,
+                "chunk_soft_split_chars": 2400,
+                "chunk_overlap_msgs": 2,
+            }
+        },
+    ).json()
+    assert res["rag"]["chunk_max_chars"] == 3000
+    assert res["rag"]["chunk_soft_split_chars"] == 2400
+    assert res["rag"]["chunk_overlap_msgs"] == 2
+
+
+def test_settings_clamps_chunk_settings(client: TestClient) -> None:
+    res = client.put(
+        "/settings",
+        json={
+            "rag": {
+                "chunk_max_chars": 999999,  # clamped to 20000
+                "chunk_overlap_msgs": 99,  # clamped to 5
+            }
+        },
+    ).json()
+    assert res["rag"]["chunk_max_chars"] == 20000
+    assert res["rag"]["chunk_overlap_msgs"] == 5
+
+
+def test_settings_soft_split_respects_current_max(client: TestClient) -> None:
+    # Set max to 1500, then try to set soft_split to 5000 — should clamp
+    # below max so the chunker's split logic always has headroom.
+    client.put("/settings", json={"rag": {"chunk_max_chars": 1500}})
+    res = client.put(
+        "/settings", json={"rag": {"chunk_soft_split_chars": 5000}}
+    ).json()
+    assert res["rag"]["chunk_soft_split_chars"] <= 1400  # max - 100
+
+
+def test_settings_exposes_chunk_defaults(client: TestClient) -> None:
+    res = client.get("/settings").json()
+    import rag as rag_settings
+
+    d = res["rag"]["defaults"]
+    assert d["chunk_max_chars"] == rag_settings.DEFAULT_CHUNK_MAX_CHARS
+    assert d["chunk_soft_split_chars"] == rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS
+    assert d["chunk_overlap_msgs"] == rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS
+
+
 def test_settings_default_chat_prompt_is_english(client: TestClient) -> None:
     res = client.get("/settings").json()
     # The default lives in rag_query — we can't import directly here

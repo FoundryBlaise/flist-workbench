@@ -51,11 +51,15 @@ type State = {
   /** When set, a Classify-labels progress dialog is open over the app. */
   classifyTarget: { scope: { character?: string | null; partner?: string | null }; label: string } | null
 
-  /** When set, a RAG-ingest progress dialog is open over the app. */
+  /** When set, a RAG-ingest progress dialog is open over the app.
+   *  forceRewipe=true makes the dialog start the job with wipe-and-
+   *  reingest semantics; used by the Settings → RAG "Re-ingest all"
+   *  button after the user confirms. Default false. */
   ingestTarget:
     | {
         scope: { character?: string | null; partner?: string | null }
         label: string
+        forceRewipe: boolean
       }
     | null
 
@@ -111,7 +115,8 @@ type State = {
   closeClassify: () => void
   openIngest: (
     scope: { character?: string | null; partner?: string | null },
-    label: string
+    label: string,
+    opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
   toggleChatPanel: (force?: boolean) => void
@@ -331,8 +336,10 @@ export const useStore = create<State>((set, get) => ({
     set({ classifyTarget: null })
   },
 
-  openIngest(scope, label) {
-    set({ ingestTarget: { scope, label } })
+  openIngest(scope, label, opts) {
+    set({
+      ingestTarget: { scope, label, forceRewipe: opts?.forceRewipe ?? false }
+    })
   },
 
   closeIngest() {

@@ -65,6 +65,14 @@ KEY_RAG_RERANK_CANDIDATES = "rag.rerank_candidates"
 KEY_RAG_TOP_K = "rag.top_k"
 KEY_RAG_NEIGHBORS = "rag.neighbors"
 
+# Chunking tunables. Changing any of these requires a re-ingest with
+# wipe for existing data — chunk_ids encode the subchunk index, so
+# old chunks survive in Qdrant alongside new ones otherwise. The
+# Settings UI surfaces this caveat near the inputs.
+KEY_RAG_CHUNK_MAX_CHARS = "rag.chunk_max_chars"
+KEY_RAG_CHUNK_SOFT_SPLIT_CHARS = "rag.chunk_soft_split_chars"
+KEY_RAG_CHUNK_OVERLAP_MSGS = "rag.chunk_overlap_msgs"
+
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
     # Reuse documents.connect so we share the same DB file. It already
