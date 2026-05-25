@@ -6,6 +6,7 @@ import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
+import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { ChatPanel } from '../features/rag/ChatPanel'
@@ -36,6 +37,7 @@ export function AppLayout() {
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [aiSetupOpen, setAiSetupOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -118,6 +120,9 @@ export function AppLayout() {
         case 'ingest-all':
           openIngest({}, 'All characters, all partners')
           break
+        case 'ai-setup':
+          setAiSetupOpen(true)
+          break
         case 'chat-toggle':
           // Opening the chat panel also flips to logs mode — chat is
           // contextual to the log viewer, so launching it from the
@@ -172,6 +177,7 @@ export function AppLayout() {
       </header>
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {aiSetupOpen && <AISetupWizard onClose={() => setAiSetupOpen(false)} />}
       {classifyTarget && (
         <ClassifyDialog
           key={`${classifyTarget.scope.character ?? '*'}::${classifyTarget.scope.partner ?? '*'}`}

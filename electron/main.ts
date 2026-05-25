@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { startSidecar, stopSidecar } from './sidecar'
 import { buildMenu } from './menu'
@@ -42,6 +43,69 @@ type MenuFlags = {
   classifyCurrent: boolean
   classifyCharacter: boolean
 }
+// Wizard-side conveniences. All three accept fixed shapes and have
+// strict filtering so a compromised renderer can't smuggle arbitrary
+// commands into the host. Each handler also verifies the sender is
+// our main window's WebContents — IPC messages from any other source
+// (e.g. an unexpected iframe) get dropped without acting.
+
+// Hostnames we'll open in the user's browser. Locked to the two we
+// actually need so a compromised renderer can't redirect the user to
+// a phishing page that looks like Ollama.
+const EXTERNAL_HOSTS = new Set(['ollama.com', 'www.ollama.com', 'github.com'])
+
+ipcMain.on('workbench:open-external', (event, url: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  if (typeof url !== 'string') return
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return
+  }
+  if (parsed.protocol !== 'https:') return
+  if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
+  void shell.openExternal(parsed.toString())
+})
+
+// Strict allowlist for the PowerShell convenience button — only the
+// two OLLAMA_* env-var commands the wizard sets, in either
+// `$env:` (current session) or `setx` (persisted) form. Anything else
+// is rejected. Multiple commands separated by newlines are allowed.
+const POWERSHELL_LINE_RE =
+  /^\s*(\$env:OLLAMA_[A-Z_]+\s*=\s*"[A-Za-z0-9_.-]+"|setx\s+OLLAMA_[A-Z_]+\s+[A-Za-z0-9_.-]+)\s*$/
+
+ipcMain.on('workbench:spawn-powershell', (event, command: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  if (typeof command !== 'string') return
+  if (process.platform !== 'win32') return
+  const lines = command.split(/\r?\n/).filter((l) => l.trim().length > 0)
+  if (lines.length === 0) return
+  if (!lines.every((l) => POWERSHELL_LINE_RE.test(l))) {
+    console.warn('[main] spawn-powershell: rejected non-allowlisted command')
+    return
+  }
+  try {
+    // -NoExit keeps the window open after the staged commands run so
+    // the user can read setx's confirmation. Detached so the child
+    // survives the parent quitting.
+    const child = spawn(
+      'powershell.exe',
+      ['-NoExit', '-Command', lines.join('\n')],
+      { detached: true, stdio: 'ignore', windowsHide: false }
+    )
+    child.unref()
+  } catch (err) {
+    console.error('[main] spawn-powershell failed:', err)
+  }
+})
+
+ipcMain.on('workbench:open-settings', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+  win?.webContents.send('menu:action', 'settings')
+})
+
 ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   const menu = Menu.getApplicationMenu()
   if (!menu) return

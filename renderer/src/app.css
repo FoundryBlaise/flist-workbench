@@ -1475,6 +1475,240 @@ body {
   padding-top: 24px;
   border-top: 1px solid var(--border);
 }
+
+/* ---- AI Setup wizard ----
+   Linear 6-page wizard, similar chrome to the Settings rail variant
+   but without a rail. Stepper-top + body + footer. Reuses
+   .modal-backdrop, .modal-head, .settings-* tokens. */
+.wizard-modal {
+  width: 880px;
+  max-width: 96vw;
+  display: flex;
+  flex-direction: column;
+}
+.wizard-stepper {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 22px;
+  list-style: none;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2, var(--bg));
+  overflow-x: auto;
+}
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--btn-radius);
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  white-space: nowrap;
+}
+.wizard-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  font-weight: 600;
+}
+.wizard-step-current {
+  background: var(--row-hover);
+  color: var(--text);
+}
+.wizard-step-current .wizard-step-n {
+  background: var(--accent);
+  color: white;
+}
+.wizard-step-done .wizard-step-n {
+  background: var(--state-done);
+  color: white;
+}
+.wizard-step-done .wizard-step-label { color: var(--text); }
+.wizard-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px;
+}
+.wizard-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--border);
+}
+.wizard-pane-head { margin: 0 0 16px; }
+.wizard-pane-title {
+  margin: 0 0 4px;
+  font-size: var(--font-heading);
+  font-weight: 600;
+  color: var(--text);
+}
+.wizard-pane-subtitle { margin: 0; color: var(--text-dim); font-size: var(--font-body); }
+
+/* Status card on Ollama page — fluid layout that handles both
+   centered single-line "detecting" state and the multi-block error
+   state with options + recheck button. */
+.wizard-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  background: var(--bg);
+}
+.wizard-status-card .classify-state-glyph { font-size: 28px; }
+.wizard-status-detecting { color: var(--text-dim); }
+.wizard-status-ok { color: #8fcf72; }
+.wizard-status-fail { color: var(--text); }
+.wizard-missing { display: flex; flex-direction: column; gap: 14px; }
+.wizard-install-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.wizard-install-option {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  background: var(--bg-2, var(--bg));
+}
+.wizard-install-option h4 { margin: 0 0 6px; }
+
+/* Big tappable radio cards — used on GPU + Embed pages. */
+.wizard-cards { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.wizard-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.wizard-card:hover { border-color: var(--accent); }
+.wizard-card.on {
+  background: var(--row-hover);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.wizard-card-radio {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--accent);
+  margin-top: 1px;
+}
+.wizard-card-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.wizard-card-title { font-weight: 600; font-size: var(--font-row); }
+.wizard-card-model {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: var(--font-meta);
+  color: var(--accent);
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  align-self: flex-start;
+  overflow-wrap: anywhere;
+}
+.wizard-card-sub { color: var(--text-dim); font-size: var(--font-meta); }
+
+.wizard-disclosure { margin: 8px 0; }
+.wizard-disclosure summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  padding: 4px 0;
+}
+.wizard-disclosure summary:hover { color: var(--text); }
+.wizard-disclosure[open] summary { color: var(--text); }
+.wizard-disclosure .settings-help { margin-top: 8px; }
+
+/* Env-vars page — code block + per-row copy button. */
+.wizard-env-rows { display: flex; flex-direction: column; gap: 14px; }
+.wizard-env-row { display: flex; flex-direction: column; gap: 4px; }
+.wizard-codeblock {
+  display: inline-block;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font-size: var(--font-meta);
+  color: var(--accent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wizard-codeblock-grow { flex: 1; }
+.wizard-codeblock-inline {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: var(--font-meta);
+  color: var(--accent);
+  margin-left: 8px;
+  overflow-wrap: anywhere;
+}
+.wizard-pressable:hover { filter: brightness(1.05); }
+.wizard-pressed { color: var(--state-done); border-color: var(--state-done); }
+
+/* Download rows — two stacked progress widgets. */
+.wizard-download-row {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  background: var(--bg);
+  margin-bottom: 10px;
+}
+.wizard-download-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.wizard-success { color: var(--state-done); }
+.wizard-cancelled { color: var(--state-cancelled); }
+
+/* Summary table on the Done page. */
+.wizard-summary {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 6px 16px;
+  margin: 10px 0 16px;
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+}
+.wizard-summary-row { display: contents; }
+.wizard-summary-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-weight: 600;
+  color: var(--text);
+}
+.wizard-summary-value {
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  overflow-wrap: anywhere;
+}
+.wizard-summary-mark { color: var(--state-done); }
+.wizard-summary-mark.fail { color: var(--accent-2); }
 .settings-section-title {
   margin: 0 0 12px;
   font-size: var(--font-heading);

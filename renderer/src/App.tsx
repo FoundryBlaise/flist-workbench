@@ -13,6 +13,7 @@ export type MenuAction =
   | 'ingest-character'
   | 'ingest-all'
   | 'chat-toggle'
+  | 'ai-setup'
 
 declare global {
   interface Window {
@@ -24,6 +25,9 @@ declare global {
       }) => Promise<string | null>
       onMenuAction?: (listener: (action: MenuAction) => void) => () => void
       setMenuState?: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => void
+      openExternal?: (url: string) => void
+      spawnPowerShell?: (command: string) => void
+      openSettings?: () => void
     }
   }
 }

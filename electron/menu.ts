@@ -17,6 +17,7 @@ export type MenuAction =
   | 'ingest-character'
   | 'ingest-all'
   | 'chat-toggle'
+  | 'ai-setup'
 
 // Lives in the main process because it touches shell.openPath; we
 // resolve the path from the sidecar so user_data_dir() stays the one
@@ -187,6 +188,12 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
       label: '&Tools',
       submenu: [
         {
+          id: 'ai-setup-tools',
+          label: 'AI Setup…',
+          click: () => send(getWindow(), 'ai-setup')
+        },
+        { type: 'separator' },
+        {
           id: 'chat-toggle',
           label: 'Ask the logs…',
           accelerator: 'CmdOrCtrl+J',
@@ -212,6 +219,12 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
     {
       label: '&Help',
       submenu: [
+        {
+          id: 'ai-setup-help',
+          label: 'AI Setup…',
+          click: () => send(getWindow(), 'ai-setup')
+        },
+        { type: 'separator' },
         {
           label: 'About F-list Workbench',
           click: () => {
