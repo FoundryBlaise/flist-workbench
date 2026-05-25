@@ -91,6 +91,23 @@ export function PartnerList() {
     requestChatFocus()
   }
 
+  // After any alias mutation: drop the cached per-partner message
+  // arrays for every name in the (old or new) group, refresh the
+  // partner list, and re-fetch the currently-open conversation if it's
+  // touched. Without invalidation loadMessages short-circuits on the
+  // ready cache and the LogViewer keeps showing the pre-link
+  // single-file content.
+  const refreshAfterAliasChange = async (affectedNames: string[]) => {
+    if (!activeChar) return
+    await loadPartners(activeChar)
+    for (const n of affectedNames) {
+      invalidateMessages(activeChar, n)
+    }
+    if (activePartner && affectedNames.includes(activePartner)) {
+      void loadMessages(activeChar, activePartner, { force: true })
+    }
+  }
+
   const onLinkPartner = (entry: PartnerEntry) => {
     setPartnerMenu(null)
     setAliasDialog(entry)
@@ -109,12 +126,10 @@ export function PartnerList() {
     if (!confirmed) return
     try {
       await api.aliasesUnlinkGroup(activeChar, entry.name)
-      await loadPartners(activeChar)
-      // Selection might have been on a folded name — clear if it's
-      // gone from the new partner list.
-      if (activePartner && !entry.aliases.includes(activePartner)) {
-        // primary still exists; selection still valid
-      }
+      // Both the (now-defunct) primary and every alias name had been
+      // serving the merged view; invalidate the lot so each separated
+      // partner refetches its own file the next time it's opened.
+      await refreshAfterAliasChange([entry.name, ...entry.aliases])
     } catch (err) {
       window.alert(
         `Couldn't unlink: ${err instanceof Error ? err.message : String(err)}`
@@ -242,8 +257,8 @@ export function PartnerList() {
           partner={aliasDialog}
           allPartners={partners}
           onClose={() => setAliasDialog(null)}
-          onLinked={() => {
-            void loadPartners(activeChar)
+          onLinked={(groupNames) => {
+            void refreshAfterAliasChange(groupNames)
           }}
         />
       )}
