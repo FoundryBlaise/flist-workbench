@@ -9,6 +9,9 @@ export type MenuAction =
   | 'classify-current'
   | 'classify-character'
   | 'classify-all'
+  | 'ingest-current'
+  | 'ingest-character'
+  | 'ingest-all'
 
 declare global {
   interface Window {

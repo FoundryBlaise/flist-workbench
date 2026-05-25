@@ -40,6 +40,15 @@ KEY_LABELS_SYSTEM_PROMPT = "labels.system_prompt"
 KEY_LABELS_CONTEXT_BEFORE = "labels.context_before"
 KEY_LABELS_CONTEXT_AFTER = "labels.context_after"
 
+# RAG / embedding settings. Endpoint defaults to the labels endpoint
+# (most users run one LM Studio with both a chat model and an embedding
+# model loaded). Prefixes only matter for nomic-* models; default empty.
+KEY_RAG_EMBED_ENDPOINT = "rag.embed_endpoint"
+KEY_RAG_EMBED_MODEL = "rag.embed_model"
+KEY_RAG_EMBED_API_KEY = "rag.embed_api_key"
+KEY_RAG_EMBED_QUERY_PREFIX = "rag.embed_query_prefix"
+KEY_RAG_EMBED_DOCUMENT_PREFIX = "rag.embed_document_prefix"
+
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
     # Reuse documents.connect so we share the same DB file. It already

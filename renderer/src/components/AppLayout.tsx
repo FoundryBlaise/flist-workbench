@@ -7,6 +7,7 @@ import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
+import { IngestDialog } from '../features/rag/IngestDialog'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
@@ -26,6 +27,9 @@ export function AppLayout() {
   const classifyTarget = useStore((s) => s.classifyTarget)
   const openClassify = useStore((s) => s.openClassify)
   const closeClassify = useStore((s) => s.closeClassify)
+  const ingestTarget = useStore((s) => s.ingestTarget)
+  const openIngest = useStore((s) => s.openIngest)
+  const closeIngest = useStore((s) => s.closeIngest)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -92,9 +96,35 @@ export function AppLayout() {
         case 'classify-all':
           openClassify({}, 'All characters, all partners')
           break
+        case 'ingest-current':
+          if (activeChar && activePartner) {
+            openIngest(
+              { character: activeChar, partner: activePartner },
+              `${displayPartner(activePartner)} with ${displayName(activeChar)}`
+            )
+          }
+          break
+        case 'ingest-character':
+          if (activeChar) {
+            openIngest(
+              { character: activeChar },
+              `All partners for ${displayName(activeChar)}`
+            )
+          }
+          break
+        case 'ingest-all':
+          openIngest({}, 'All characters, all partners')
+          break
       }
     })
-  }, [setMode, setCrossSearchOpen, activeChar, activePartner, openClassify])
+  }, [
+    setMode,
+    setCrossSearchOpen,
+    activeChar,
+    activePartner,
+    openClassify,
+    openIngest
+  ])
 
   // The header centre piece identifies what the user is currently
   // looking at. In editor mode that's the document; in log mode it's
@@ -136,6 +166,14 @@ export function AppLayout() {
           scope={classifyTarget.scope}
           scopeLabel={classifyTarget.label}
           onClose={closeClassify}
+        />
+      )}
+      {ingestTarget && (
+        <IngestDialog
+          key={`ingest::${ingestTarget.scope.character ?? '*'}::${ingestTarget.scope.partner ?? '*'}`}
+          scope={ingestTarget.scope}
+          scopeLabel={ingestTarget.label}
+          onClose={closeIngest}
         />
       )}
       <main className={`main main-${mode}`}>

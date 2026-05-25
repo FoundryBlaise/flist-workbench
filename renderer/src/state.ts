@@ -51,6 +51,14 @@ type State = {
   /** When set, a Classify-labels progress dialog is open over the app. */
   classifyTarget: { scope: { character?: string | null; partner?: string | null }; label: string } | null
 
+  /** When set, a RAG-ingest progress dialog is open over the app. */
+  ingestTarget:
+    | {
+        scope: { character?: string | null; partner?: string | null }
+        label: string
+      }
+    | null
+
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
@@ -90,6 +98,11 @@ type State = {
     label: string
   ) => void
   closeClassify: () => void
+  openIngest: (
+    scope: { character?: string | null; partner?: string | null },
+    label: string
+  ) => void
+  closeIngest: () => void
   applyLabelOverride: (
     char: string,
     partner: string,
@@ -168,6 +181,7 @@ export const useStore = create<State>((set, get) => ({
   activePartner: null,
 
   classifyTarget: null,
+  ingestTarget: null,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -292,6 +306,14 @@ export const useStore = create<State>((set, get) => ({
 
   closeClassify() {
     set({ classifyTarget: null })
+  },
+
+  openIngest(scope, label) {
+    set({ ingestTarget: { scope, label } })
+  },
+
+  closeIngest() {
+    set({ ingestTarget: null })
   },
 
   // Patches a single message's label fields in place. `patch === null`

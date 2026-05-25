@@ -32,6 +32,12 @@ ipcMain.handle('workbench:select-directory', async (event, opts: { title?: strin
 // menu can grey out items that would otherwise no-op silently. The
 // renderer keeps the canonical state (it knows the active character
 // and partner); main just mirrors it onto the menu items.
+// The renderer reports a single "is a partner / character selected"
+// pair; both classify and ingest items mirror the same flags because
+// they share the same "active conversation / character" scoping. If we
+// ever need ingest-specific gating (e.g. "disable when no embedding
+// model is loaded") it goes in a separate flag — for now they track
+// together.
 type MenuFlags = {
   classifyCurrent: boolean
   classifyCharacter: boolean
@@ -39,10 +45,14 @@ type MenuFlags = {
 ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   const menu = Menu.getApplicationMenu()
   if (!menu) return
-  const cur = menu.getMenuItemById('classify-current')
-  const ch = menu.getMenuItemById('classify-character')
-  if (cur) cur.enabled = !!flags.classifyCurrent
-  if (ch) ch.enabled = !!flags.classifyCharacter
+  for (const id of ['classify-current', 'ingest-current'] as const) {
+    const item = menu.getMenuItemById(id)
+    if (item) item.enabled = !!flags.classifyCurrent
+  }
+  for (const id of ['classify-character', 'ingest-character'] as const) {
+    const item = menu.getMenuItemById(id)
+    if (item) item.enabled = !!flags.classifyCharacter
+  }
 })
 
 async function createWindow(): Promise<void> {
