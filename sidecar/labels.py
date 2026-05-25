@@ -110,19 +110,19 @@ Wurf sehen?"), Pausenansagen ("kurz AFK") sind OOC.
 
 BEISPIELE ZUR MUSTERERKENNUNG:
 
-NACHRICHT: "Caylene legte sanft ihre seidige Hand auf das kühle Metall des
+NACHRICHT: "Galadriel legte sanft ihre seidige Hand auf das kühle Metall des
 Türgriffs und zog die Tür langsam auf."
 ANTWORT: {"label":"IC","reason":"Szenenerzählung in dritter Person, passiert jetzt"}
 
-NACHRICHT: "[03-12 21:08 | 92 chars] Seraphina: Seraphina kommt durch die Tür,
+NACHRICHT: "[03-12 21:08 | 92 chars] Yennefer: Yennefer kommt durch die Tür,
 trägt einen langen Mantel und schaut sich suchend um."
-ANTWORT: {"label":"IC","reason":"Sprecher Seraphina beschreibt sich selbst in dritter Person"}
+ANTWORT: {"label":"IC","reason":"Sprecher Yennefer beschreibt sich selbst in dritter Person"}
 
 NACHRICHT: "\\"Das ist eine wirklich schlechte Idee\\", murmelte sie und schüttelte
 den Kopf, ohne ihn anzusehen."
 ANTWORT: {"label":"IC","reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
 
-NACHRICHT: "Alandra Falkenschuss hebt kurz einen Mundwinkel. \\"Nun, dann wünsche
+NACHRICHT: "Éowyn von Rohan hebt kurz einen Mundwinkel. \\"Nun, dann wünsche
 ich euch eine gute Nacht in der Scheune, denn ich werde dieses Zimmer beziehen.\\"
 Sie schnauft kurz aus, als sie zur Seite geschoben wird. \\"Aber ihr seid sicher
 eine dieser Straßenelfen von denen man hört. Also nehmt eure Sachen und zieht von
@@ -297,13 +297,18 @@ def upsert_label(
     speaker: str,
     label: str,
     source: str,
-    confidence: float = 1.0,
     reason: str | None = None,
 ) -> None:
     """Insert or replace a label, snapshotting any prior label.
 
-    `source` is 'llm' or 'manual'. Manual overrides ought to use
-    confidence=1.0 — they're the user's verdict, not an estimate.
+    `source` is 'llm' or 'manual'.
+
+    Note: the schema still carries a `confidence REAL NOT NULL` column
+    for backwards compatibility with on-disk DBs from earlier versions.
+    We always write 1.0 — the model never returned anything informative
+    below 0.95 and the field was dropped from the v4 prompt, so the
+    column is effectively dead weight. Leaving it in place avoids a
+    migration; no callers read it anymore.
     """
     if label not in (LABEL_IC, LABEL_OOC):
         raise ValueError(f"invalid label: {label!r}")
@@ -331,7 +336,7 @@ def upsert_label(
         """,
         (
             hash, character, partner, ts, speaker, label,
-            confidence, reason, source, prior_label, prior_source, time.time(),
+            1.0, reason, source, prior_label, prior_source, time.time(),
         ),
     )
     conn.commit()

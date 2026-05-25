@@ -211,7 +211,7 @@ function LabelsSection({
     elapsed_ms: number
     error?: string | null
     raw?: string
-    parsed?: { label: string; confidence: number; reason: string } | null
+    parsed?: { label: string; reason: string } | null
   } | null>(null)
 
   // Keep local form in sync when parent reloads settings (e.g. after save).
@@ -506,9 +506,7 @@ function LabelsSection({
             >
               {testStatus === 'ok' ? '✓ ' : testStatus === 'fail' ? '✕ ' : ''}
               {testResult.ok
-                ? `OK · ${testResult.elapsed_ms} ms · ${testResult.parsed?.label} (${(
-                    (testResult.parsed?.confidence ?? 0) * 100
-                  ).toFixed(0)}%)`
+                ? `OK · ${testResult.elapsed_ms} ms · ${testResult.parsed?.label}`
                 : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`}
             </span>
           )}
