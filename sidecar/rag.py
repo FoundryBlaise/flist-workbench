@@ -26,7 +26,15 @@ import rag_rerank
 import settings as settings_store
 
 DEFAULT_EMBED_ENDPOINT = labels_store.DEFAULT_LLM_ENDPOINT
-DEFAULT_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+# bge-m3 is multilingual out of the box, doesn't need the nomic
+# search_query/search_document prefixes (defaults below stay empty),
+# and recovers significantly better recall on German + mixed-language
+# corpora than nomic-embed-text. Slightly larger model (~568 MB vs
+# ~137 MB), still comfortable for any modern desktop. "text-embedding-
+# bge-m3" is the model id LM Studio exposes for BAAI/bge-m3 — other
+# inference servers may need a different name; user can override in
+# Settings → RAG.
+DEFAULT_EMBED_MODEL = "text-embedding-bge-m3"
 DEFAULT_EMBED_API_KEY = ""
 DEFAULT_EMBED_QUERY_PREFIX = ""
 DEFAULT_EMBED_DOCUMENT_PREFIX = ""

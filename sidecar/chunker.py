@@ -29,9 +29,16 @@ from typing import Iterable, TypedDict
 import labels as labels_store
 from labels import LabelsSettings, msg_hash
 
-DEFAULT_MAX_CHUNK_CHARS = 5000
-DEFAULT_SOFT_SPLIT_CHARS = 4000
-DEFAULT_OVERLAP_MSGS = 1
+# Chunking defaults tuned for moment-level retrieval against
+# conversational RP logs: smaller groups so a single hit lands on the
+# specific scene a question is about, slightly more overlap so a turn
+# split across chunks still retrieves as a unit. Original (5000/4000/1)
+# was inherited from Chat_RAG which targeted longer-form summarisation
+# queries; for "wann hat X gesagt …" style questions over chat logs,
+# 3000/2000/2 retrieves noticeably better.
+DEFAULT_MAX_CHUNK_CHARS = 3000
+DEFAULT_SOFT_SPLIT_CHARS = 2000
+DEFAULT_OVERLAP_MSGS = 2
 
 
 class Chunk(TypedDict):

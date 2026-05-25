@@ -128,13 +128,17 @@ DEFAULT_SYSTEM_PROMPT = (
     "roleplay logs. You receive context chunks retrieved from those logs; "
     "each chunk has a date, partner character, speakers, and chunk id.\n\n"
     "Rules:\n"
+    # Language rule promoted to first — local instruction-tuned models
+    # tended to anchor on whichever language showed up first in the
+    # rules block, and a German question would get an English answer
+    # because "respond in the language of the question" landed last.
+    "- Respond in the language of the question.\n"
     "- Answer based on the provided context only.\n"
     "- If the answer is not in the context, say so directly "
     '("I can\'t find that in the logs.").\n'
     "- Quote with the date when relevant "
     '(e.g. "On 2025-03-15, Olivia said: ...").\n'
-    "- Stay concrete and close to the source — do not invent details.\n"
-    "- Respond in the language of the question."
+    "- Stay concrete and close to the source — do not invent details."
 )
 
 
