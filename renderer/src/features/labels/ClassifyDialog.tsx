@@ -17,6 +17,12 @@ export type ClassifyDialogProps = {
 // useEffect-deps trap where the start request only fires once per
 // mount even if the scope prop changed.
 export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogProps) {
+  // Two phases: 'configuring' shows the overwrite checkbox + Start;
+  // anything past that is the running/terminal job. Splitting them
+  // lets the user opt into "Re-classify already-labeled messages"
+  // before the LLM fires, matching the IngestDialog pre-flight.
+  const [phase, setPhase] = useState<'configuring' | 'running'>('configuring')
+  const [overwrite, setOverwrite] = useState(false)
   const [job, setJob] = useState<ClassifyJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pulseCancel, setPulseCancel] = useState(false)
@@ -29,21 +35,7 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
   const invalidateMessages = useStore((s) => s.invalidateMessages)
 
   useEffect(() => {
-    let cancelled = false
-    api
-      .labelsClassifyStart(scope)
-      .then((j) => {
-        if (cancelled) return
-        setJob(j)
-        jobIdRef.current = j.id
-        startPolling(j.id)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
-      })
     return () => {
-      cancelled = true
       if (pollTimer.current !== null) {
         window.clearInterval(pollTimer.current)
       }
@@ -51,8 +43,23 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
         window.clearTimeout(pulseTimer.current)
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const startJob = () => {
+    if (phase === 'running') return
+    setPhase('running')
+    setError(null)
+    api
+      .labelsClassifyStart(scope, { overwrite })
+      .then((j) => {
+        setJob(j)
+        jobIdRef.current = j.id
+        startPolling(j.id)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err))
+      })
+  }
 
   // Refresh the open conversation if the just-finished job's scope
   // touched it. For per-conversation jobs that's the obvious case. For
@@ -107,9 +114,11 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
 
   const pct = job && job.total > 0 ? Math.round((job.classified / job.total) * 100) : 0
   const isDone = job ? isTerminal(job.state) : false
-  // The dialog is dismissable when the job reached a terminal state or
+  // The dialog is freely dismissable in the pre-flight configuring
+  // phase (no job exists yet) and also when the job reached a terminal
+  // state or
   // when the start request itself failed (no job ever existed).
-  const canClose = isDone || (!!error && !job)
+  const canClose = phase === 'configuring' || isDone || (!!error && !job)
   // The very first poll(s) of an "all characters" run report
   // `total=0` while enumeration is still walking the filesystem. Drop
   // the progress bar / counter and show an indeterminate state so the
@@ -164,14 +173,46 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
             onClick={onClose}
             aria-label="Close"
             disabled={!canClose}
-            title={!canClose ? 'Cancel the job first' : 'Close'}
+            title={!canClose ? 'Cancel the running job first' : 'Close'}
           >
             ✕
           </button>
         </header>
         <div className="modal-body">
           {error && <p className="settings-error">{error}</p>}
-          {!job && !error && <p className="settings-help">Starting job…</p>}
+          {phase === 'configuring' && !error && (
+            <>
+              <p className="settings-help">
+                Sends every Unlabeled chat/action message in scope to
+                the LLM. Short messages and <code>((…</code> openers
+                stay rule-OOC without a model call.
+              </p>
+              <label
+                className="settings-checkbox-row"
+                data-testid="classify-overwrite-row"
+              >
+                <input
+                  type="checkbox"
+                  checked={overwrite}
+                  onChange={(e) => setOverwrite(e.target.checked)}
+                  data-testid="classify-overwrite-input"
+                />
+                <span>
+                  <strong>Re-classify already-labeled messages</strong>
+                  <span className="settings-meta">
+                    Skips the "skip existing" guard and overwrites
+                    every prior LLM/manual label in scope. Useful
+                    after a prompt or model change. Manual overrides
+                    are replaced; the previous label is preserved as a
+                    one-step undo.
+                  </span>
+                </span>
+              </label>
+            </>
+          )}
+          {phase === 'running' && !job && !error && (
+            <p className="settings-help">Starting job…</p>
+          )}
           {job && (
             <>
               <div
@@ -235,7 +276,28 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
           )}
         </div>
         <div className="modal-actions">
-          {job && !isDone && (
+          {phase === 'configuring' && !error && (
+            <>
+              <button
+                type="button"
+                className="settings-clear"
+                onClick={onClose}
+                data-testid="classify-preflight-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="settings-save"
+                onClick={startJob}
+                data-testid="classify-preflight-start"
+                autoFocus
+              >
+                {overwrite ? 'Re-classify' : 'Start'}
+              </button>
+            </>
+          )}
+          {phase === 'running' && job && !isDone && (
             <button
               type="button"
               className={`settings-clear${pulseCancel ? ' classify-cancel-pulse' : ''}`}
@@ -245,7 +307,7 @@ export function ClassifyDialog({ scope, scopeLabel, onClose }: ClassifyDialogPro
               Cancel
             </button>
           )}
-          {(isDone || error) && (
+          {(isDone || (error && phase === 'running')) && (
             <button
               type="button"
               className="settings-save"

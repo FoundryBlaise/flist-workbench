@@ -238,6 +238,42 @@ def test_classify_skips_already_labeled(tmp_path: Path, monkeypatch: pytest.Monk
     assert calls == []
 
 
+def test_classify_overwrites_when_skip_existing_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """skip_existing=False re-classifies in place, replacing the prior
+    label. Used by the Re-classify (overwrite) flow after a prompt or
+    model change. Manual overrides get replaced too — caller's
+    responsibility to confirm the user actually wants that."""
+    long = "A" * 250
+    msgs = [_msg(1, long, speaker="Bob")]
+    conn = labels_store.connect(root=tmp_path)
+    try:
+        labels_store.upsert_label(
+            conn,
+            hash=labels_store.msg_hash(msgs[0]),
+            character="C", partner="P", ts=1, speaker="Bob",
+            label="OOC", source="manual",
+        )
+        fake, calls = _mk_urlopen(['{"label":"IC","reason":"narrative"}'])
+        monkeypatch.setattr(labels_llm, "urlopen", fake)
+        summary = labels_llm.classify_messages(
+            "C", "P", msgs, _settings(), conn,
+            concurrency=1, skip_existing=False,
+        )
+        rows = labels_store.labels_for_partner(conn, "C", "P")
+    finally:
+        conn.close()
+    assert summary["classified"] == 1
+    assert summary["skipped_existing"] == 0
+    assert len(calls) == 1  # the LLM was actually consulted
+    row = next(iter(rows.values()))
+    assert row["label"] == "IC"
+    assert row["source"] == "llm"  # overwritten — prior manual was replaced
+    assert row["prior_label"] == "OOC"  # snapshot preserved for undo
+    assert row["prior_source"] == "manual"
+
+
 def test_classify_records_failure_on_bad_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     long = "A" * 250
     msgs = [_msg(1, long)]

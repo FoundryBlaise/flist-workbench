@@ -184,6 +184,10 @@ class ClassifyJobRequest(BaseModel):
     # partner: Y} = a single conversation.
     character: str | None = None
     partner: str | None = None
+    # When true, ignore the skip-existing guard and re-classify every
+    # message in scope — useful after a prompt or model change. Manual
+    # overrides are NOT preserved; the LLM verdict replaces them.
+    overwrite: bool = False
 
 
 class TestConnectionRequest(BaseModel):
@@ -641,7 +645,7 @@ def labels_classify_start(body: ClassifyJobRequest) -> dict:
         scope["character"] = body.character
     if body.partner:
         scope["partner"] = body.partner
-    job = labels_jobs.start(scope)
+    job = labels_jobs.start(scope, overwrite=body.overwrite)
     return job.to_dict()
 
 

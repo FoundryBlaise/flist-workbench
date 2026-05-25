@@ -190,6 +190,7 @@ export type ClassifyJobScope = {
 export type ClassifyJob = {
   id: string
   scope: { character?: string; partner?: string }
+  overwrite: boolean
   state: 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
   classified: number
   failed: number
@@ -397,10 +398,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
-  labelsClassifyStart: (scope: ClassifyJobScope) =>
+  labelsClassifyStart: (
+    scope: ClassifyJobScope,
+    opts: { overwrite?: boolean } = {}
+  ) =>
     request<ClassifyJob>('/labels/classify', {
       method: 'POST',
-      body: JSON.stringify(scope)
+      body: JSON.stringify({ ...scope, overwrite: opts.overwrite ?? false })
     }),
   labelsTestConnection: (body: {
     llm_endpoint?: string
