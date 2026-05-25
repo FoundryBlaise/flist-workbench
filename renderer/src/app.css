@@ -1894,6 +1894,11 @@ body {
   background: var(--row-hover);
   color: var(--text);
 }
+.chat-citation-more {
+  font-family: inherit;
+  font-style: italic;
+  border-style: dashed;
+}
 .chat-input {
   display: flex;
   flex-direction: column;

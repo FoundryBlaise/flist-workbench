@@ -80,11 +80,20 @@ export function ChatPanel() {
   // can break a long generation cleanly.
   const abortRef = useRef<AbortController | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const chatFocusNonce = useStore((s) => s.chatFocusNonce)
 
   useEffect(() => {
     // Auto-scroll to the bottom whenever the last turn changes.
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [turns])
+
+  // Land the cursor in the input whenever something external (a
+  // "Chat with this log" click, the Tools menu) raises the focus
+  // nonce. Also on first mount via the initial nonce value.
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [chatFocusNonce])
 
   // Stop any in-flight request when the panel unmounts (toggle off).
   useEffect(() => {
@@ -315,21 +324,7 @@ export function ChatPanel() {
                 <div className="chat-turn-error">⚠ {t.error}</div>
               )}
               {t.citations.length > 0 && (
-                <div className="chat-citations" data-testid="chat-citations">
-                  {t.citations.map((c, i) => (
-                    <button
-                      key={c.chunk_id ?? `cite-${i}`}
-                      type="button"
-                      className="chat-citation"
-                      onClick={() => onCitationClick(c)}
-                      title={`${c.char_owner} × ${c.partner} · ${c.date} · ${c.label}${c.expanded ? ' (expanded)' : ''}`}
-                    >
-                      [{i + 1}] {c.partner ? displayPartner(c.partner) : '—'} ·{' '}
-                      {c.date}
-                      {c.expanded ? ' +' : ''}
-                    </button>
-                  ))}
-                </div>
+                <Citations citations={t.citations} onClick={onCitationClick} />
               )}
             </div>
           )
@@ -337,6 +332,7 @@ export function ChatPanel() {
       </div>
       <footer className="chat-input">
         <textarea
+          ref={inputRef}
           className="chat-textarea"
           placeholder="Ask the logs… (Enter to send, Shift+Enter for newline)"
           value={input}
@@ -403,4 +399,65 @@ let _idCounter = 0
 function makeId(): string {
   _idCounter += 1
   return `t${Date.now()}-${_idCounter}`
+}
+
+// Citations come back from /rag/query in chronological order after
+// neighbor expansion — fine for "in-context reading" but not what the
+// user wants to scan first. Re-sort by best-available score (rerank if
+// present, otherwise the raw vector score), show the top N, and hide
+// the rest behind a one-click "show more". 10+ chips strung across the
+// turn looked spammy; the tail is mostly neighbor-expanded chunks that
+// are useful as LLM context but rarely worth clicking.
+const CITATIONS_VISIBLE_BY_DEFAULT = 3
+
+function Citations({
+  citations,
+  onClick
+}: {
+  citations: RagCitation[]
+  onClick: (c: RagCitation) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const sorted = useMemo(() => {
+    const score = (c: RagCitation) => c.rerank_score ?? c.score
+    return [...citations].sort((a, b) => score(b) - score(a))
+  }, [citations])
+  const visible = expanded ? sorted : sorted.slice(0, CITATIONS_VISIBLE_BY_DEFAULT)
+  const hidden = sorted.length - visible.length
+  return (
+    <div className="chat-citations" data-testid="chat-citations">
+      {visible.map((c, i) => (
+        <button
+          key={c.chunk_id ?? `cite-${i}`}
+          type="button"
+          className="chat-citation"
+          onClick={() => onClick(c)}
+          title={`${c.char_owner} × ${c.partner} · ${c.date} · ${c.label}${c.expanded ? ' (context-expanded)' : ''}`}
+        >
+          [{i + 1}] {c.partner ? displayPartner(c.partner) : '—'} · {c.date}
+          {c.expanded ? ' +' : ''}
+        </button>
+      ))}
+      {hidden > 0 && !expanded && (
+        <button
+          type="button"
+          className="chat-citation chat-citation-more"
+          onClick={() => setExpanded(true)}
+          data-testid="chat-citations-more"
+        >
+          + {hidden} more
+        </button>
+      )}
+      {expanded && sorted.length > CITATIONS_VISIBLE_BY_DEFAULT && (
+        <button
+          type="button"
+          className="chat-citation chat-citation-more"
+          onClick={() => setExpanded(false)}
+          data-testid="chat-citations-less"
+        >
+          show less
+        </button>
+      )}
+    </div>
+  )
 }

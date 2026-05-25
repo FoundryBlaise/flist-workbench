@@ -61,6 +61,9 @@ type State = {
 
   /** Visibility of the RAG chat panel beside the Log Viewer. */
   chatPanelOpen: boolean
+  /** Bumped any time something wants the chat input focused — e.g. the
+   *  "Chat with this log" context-menu action. ChatPanel watches it. */
+  chatFocusNonce: number
   /** Pending "scroll the log viewer to this timestamp range" intent
    *  raised by a clicked citation. LogViewer consumes & clears it. */
   logJump:
@@ -112,6 +115,7 @@ type State = {
   ) => void
   closeIngest: () => void
   toggleChatPanel: (force?: boolean) => void
+  requestChatFocus: () => void
   requestLogJump: (
     character: string,
     partner: string,
@@ -199,6 +203,7 @@ export const useStore = create<State>((set, get) => ({
   classifyTarget: null,
   ingestTarget: null,
   chatPanelOpen: false,
+  chatFocusNonce: 0,
   logJump: null,
 
   messagesByPartner: {},
@@ -338,6 +343,10 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({
       chatPanelOpen: typeof force === 'boolean' ? force : !s.chatPanelOpen
     }))
+  },
+
+  requestChatFocus() {
+    set((s) => ({ chatFocusNonce: s.chatFocusNonce + 1 }))
   },
 
   requestLogJump(character, partner, ts_start, ts_end) {
