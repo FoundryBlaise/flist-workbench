@@ -8,7 +8,30 @@ export type ToolbarAction = {
   shortcut?: string
   wrap?: { open: string; close: string }
   insert?: string
+  /**
+   * When set, clicking the button opens an inline popover instead of
+   * inserting verbatim. Lets the user pick a colour swatch / fill in a
+   * URL rather than editing a placeholder string after the fact.
+   */
+  popover?: 'color' | 'url'
 }
+
+// F-list's twelve named colours, in the order F-Chat shows them in its
+// own toolbar swatch grid. Kept in sync with lib/bbcode/autocomplete.ts.
+const NAMED_COLORS: { name: string; swatch: string }[] = [
+  { name: 'red', swatch: '#e84141' },
+  { name: 'orange', swatch: '#e88541' },
+  { name: 'yellow', swatch: '#e8d041' },
+  { name: 'green', swatch: '#5fc25f' },
+  { name: 'cyan', swatch: '#5fc2c2' },
+  { name: 'blue', swatch: '#4191e8' },
+  { name: 'purple', swatch: '#a44ee8' },
+  { name: 'pink', swatch: '#e84ea4' },
+  { name: 'black', swatch: '#222' },
+  { name: 'brown', swatch: '#8a5a3b' },
+  { name: 'white', swatch: '#eee' },
+  { name: 'gray', swatch: '#888' }
+]
 
 type ToolbarGroup = {
   key: string
@@ -24,10 +47,10 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'I', title: 'Italic', shortcut: 'Mod-i', wrap: { open: '[i]', close: '[/i]' } },
   { label: 'U', title: 'Underline', shortcut: 'Mod-u', wrap: { open: '[u]', close: '[/u]' } },
   { label: 'S', title: 'Strikethrough', wrap: { open: '[s]', close: '[/s]' } },
-  { label: 'color', title: 'Colour (red)', wrap: { open: '[color=red]', close: '[/color]' } },
+  { label: 'color', title: 'Colour — pick a named swatch', popover: 'color' },
   { label: 'icon', title: 'Character icon', wrap: { open: '[icon]', close: '[/icon]' } },
   { label: 'eicon', title: 'Emote icon', wrap: { open: '[eicon]', close: '[/eicon]' } },
-  { label: 'url', title: 'URL', shortcut: 'Mod-k', wrap: { open: '[url=https://]', close: '[/url]' } },
+  { label: 'url', title: 'URL — pick a target', shortcut: 'Mod-k', popover: 'url' },
   { label: 'spoiler', title: 'Spoiler', wrap: { open: '[spoiler]', close: '[/spoiler]' } },
   {
     label: 'collapse',
@@ -61,6 +84,10 @@ function shortcutLabel(shortcut: string): string {
 }
 
 export function applyAction(view: EditorView, action: ToolbarAction) {
+  // popover-typed actions are handled by their popover components; the
+  // toolbar router skips applyAction for them. Guard here too in case a
+  // caller dispatches one directly.
+  if (action.popover) return
   view.dispatch(
     view.state.changeByRange((range) => {
       if (action.insert) {
@@ -81,6 +108,26 @@ export function applyAction(view: EditorView, action: ToolbarAction) {
   view.focus()
 }
 
+// Insert an arbitrary open/close wrap around the current selection.
+// Shared by the colour swatch and URL popovers.
+function wrapSelection(view: EditorView, open: string, close: string) {
+  view.dispatch(
+    view.state.changeByRange((range) => {
+      const selected = view.state.doc.sliceString(range.from, range.to)
+      const insert = open + selected + close
+      return {
+        changes: { from: range.from, to: range.to, insert },
+        range: {
+          ...range,
+          anchor: range.from + open.length,
+          head: range.from + open.length + selected.length
+        }
+      } as never
+    })
+  )
+  view.focus()
+}
+
 function ToolButton({
   action,
   viewRef
@@ -89,19 +136,175 @@ function ToolButton({
   viewRef: RefObject<EditorView | null>
 }) {
   const title = action.shortcut ? `${action.title} (${shortcutLabel(action.shortcut)})` : action.title
+  const [popoverOpen, setPopoverOpen] = useState(false)
+  const wrapRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!popoverOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPopoverOpen(false)
+    }
+    const onPointer = (e: PointerEvent) => {
+      const w = wrapRef.current
+      if (w && e.target instanceof Node && !w.contains(e.target)) {
+        setPopoverOpen(false)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onPointer)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPointer)
+    }
+  }, [popoverOpen])
+
+  const handleClick = () => {
+    if (action.popover) {
+      setPopoverOpen((v) => !v)
+      return
+    }
+    const view = viewRef.current
+    if (view) applyAction(view, action)
+  }
+
   return (
-    <button
-      type="button"
-      className="tool"
-      title={title}
-      aria-label={title}
-      onClick={() => {
-        const view = viewRef.current
-        if (view) applyAction(view, action)
-      }}
-    >
-      {action.label}
-    </button>
+    <span className="tool-popover-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="tool"
+        title={title}
+        aria-label={title}
+        aria-expanded={action.popover ? popoverOpen : undefined}
+        onClick={handleClick}
+      >
+        {action.label}
+      </button>
+      {action.popover === 'color' && popoverOpen && (
+        <ColorPopover
+          onPick={(name) => {
+            const view = viewRef.current
+            if (view) wrapSelection(view, `[color=${name}]`, '[/color]')
+            setPopoverOpen(false)
+          }}
+        />
+      )}
+      {action.popover === 'url' && popoverOpen && (
+        <UrlPopover
+          viewRef={viewRef}
+          onClose={() => setPopoverOpen(false)}
+        />
+      )}
+    </span>
+  )
+}
+
+function ColorPopover({ onPick }: { onPick: (name: string) => void }) {
+  return (
+    <div className="tool-popover tool-color-popover" role="menu" data-testid="toolbar-color-popover">
+      {NAMED_COLORS.map((c) => (
+        <button
+          key={c.name}
+          type="button"
+          role="menuitem"
+          className="tool-swatch"
+          style={{ background: c.swatch }}
+          title={c.name}
+          aria-label={c.name}
+          onClick={() => onPick(c.name)}
+          data-testid={`toolbar-color-${c.name}`}
+        />
+      ))}
+    </div>
+  )
+}
+
+function UrlPopover({
+  viewRef,
+  onClose
+}: {
+  viewRef: RefObject<EditorView | null>
+  onClose: () => void
+}) {
+  // Pre-fill the label input with the current selection so wrapping a
+  // selected word still feels like a one-step action.
+  const initialLabel = (() => {
+    const view = viewRef.current
+    if (!view) return ''
+    const r = view.state.selection.main
+    return view.state.doc.sliceString(r.from, r.to)
+  })()
+  const [href, setHref] = useState('https://')
+  const [label, setLabel] = useState(initialLabel)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  const apply = () => {
+    const view = viewRef.current
+    if (!view) return
+    const url = href.trim() || 'https://'
+    const text = label || url
+    // If the current selection equals the label the user just typed
+    // we replace it; otherwise we just insert at the cursor with the
+    // label as the link text.
+    view.dispatch(
+      view.state.changeByRange((range) => {
+        const insert = `[url=${url}]${text}[/url]`
+        return {
+          changes: { from: range.from, to: range.to, insert },
+          range: { ...range, anchor: range.from + insert.length, head: range.from + insert.length }
+        } as never
+      })
+    )
+    view.focus()
+    onClose()
+  }
+
+  return (
+    <div className="tool-popover tool-url-popover" role="dialog" data-testid="toolbar-url-popover">
+      <label className="tool-popover-row">
+        <span>URL</span>
+        <input
+          ref={inputRef}
+          type="url"
+          value={href}
+          onChange={(e) => setHref(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              apply()
+            }
+          }}
+          data-testid="toolbar-url-href"
+        />
+      </label>
+      <label className="tool-popover-row">
+        <span>Label</span>
+        <input
+          type="text"
+          value={label}
+          placeholder="(uses URL)"
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              apply()
+            }
+          }}
+          data-testid="toolbar-url-label"
+        />
+      </label>
+      <div className="tool-popover-actions">
+        <button type="button" onClick={onClose} className="tool-popover-cancel">
+          Cancel
+        </button>
+        <button type="button" onClick={apply} className="tool-popover-apply" data-testid="toolbar-url-apply">
+          Insert
+        </button>
+      </div>
+    </div>
   )
 }
 

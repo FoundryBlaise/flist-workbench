@@ -69,6 +69,13 @@ DEFAULT_MULTIQUERY_VARIANTS = 3
 # comfortably in any modern local model and prevents that footgun. Set
 # to 0 to suppress the field entirely (LM Studio ignores it either way).
 DEFAULT_CHAT_NUM_CTX = 8192
+# Default "30s": tell Ollama to keep bge-m3 (or whichever embed model)
+# resident only briefly after embedding a chat question. Without this,
+# a single chat query loads the embed model and pins it for ~5 minutes
+# of VRAM, which thrashes against the chat model on tight cards. Empty
+# string disables the override and lets Ollama use its own default;
+# LM Studio and other servers ignore unknown fields either way.
+DEFAULT_CHAT_EMBED_KEEP_ALIVE = "30s"
 
 DEFAULT_CHUNK_MAX_CHARS = chunker.DEFAULT_MAX_CHUNK_CHARS
 DEFAULT_CHUNK_SOFT_SPLIT_CHARS = chunker.DEFAULT_SOFT_SPLIT_CHARS
@@ -96,6 +103,7 @@ class RagSettings:
     multiquery_enabled: bool
     multiquery_variants: int
     chat_num_ctx: int
+    chat_embed_keep_alive: str
     chunk_max_chars: int
     chunk_soft_split_chars: int
     chunk_overlap_msgs: int
@@ -235,6 +243,14 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             # larger is almost certainly a typo.
             hi=131072,
         )
+        # Treat a stored None as "use the default", but a stored empty
+        # string as "user explicitly cleared it — suppress the field".
+        keep_alive_raw = settings_store.get(
+            conn, settings_store.KEY_RAG_CHAT_EMBED_KEEP_ALIVE
+        )
+        chat_embed_keep_alive = (
+            DEFAULT_CHAT_EMBED_KEEP_ALIVE if keep_alive_raw is None else keep_alive_raw
+        )
         chunk_max = _coerce_int(
             settings_store.get(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS),
             DEFAULT_CHUNK_MAX_CHARS,
@@ -275,6 +291,7 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             multiquery_enabled=multiquery_enabled,
             multiquery_variants=multiquery_variants,
             chat_num_ctx=chat_num_ctx,
+            chat_embed_keep_alive=chat_embed_keep_alive,
             chunk_max_chars=chunk_max,
             chunk_soft_split_chars=chunk_soft,
             chunk_overlap_msgs=chunk_overlap,

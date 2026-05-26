@@ -251,9 +251,27 @@ def _run_job(job: Job) -> None:
         job.error = repr(exc)
         job.state = "failed"
     finally:
+        job.finished_at = time.time()
+        # Persist a tombstone before closing the labels connection so
+        # the Settings → Labels history view survives sidecar restarts.
+        # Best-effort: a failed insert here must not mask a real job error.
+        try:
+            labels_store.record_job_history(
+                labels_conn,
+                id=job.id,
+                scope=job.scope,
+                state=job.state,
+                classified=job.progress.classified,
+                failed=job.progress.failed,
+                total=job.progress.total,
+                started_at=job.created_at,
+                finished_at=job.finished_at,
+                error=job.error,
+            )
+        except Exception:  # noqa: BLE001 — history is cosmetic
+            pass
         settings_conn.close()
         labels_conn.close()
-        job.finished_at = time.time()
 
 
 def start(scope: dict, *, overwrite: bool = False) -> Job:

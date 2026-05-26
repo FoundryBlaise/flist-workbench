@@ -19,6 +19,10 @@ type Turn =
       citations: RagCitation[]
       status: 'streaming' | 'done' | 'error' | 'cancelled'
       error?: string
+      // Retrieval trace surfaced under the answer so the user can see
+      // which retrievers fired and how many variants the multi-query
+      // expansion produced.
+      retrieval?: RetrievalMeta
     }
   | {
       kind: 'system'
@@ -27,6 +31,22 @@ type Turn =
     }
 
 type ScopeMode = 'all' | 'partner' | 'character'
+
+// "question" = grounded RAG via /rag/query (citations, scope, retrieval
+// trace). "talk" = free-form chat via /rag/talk with no retrieval, no
+// citations — the model just gets the running conversation. Persisted
+// in localStorage so the user's preference survives panel close.
+type ChatMode = 'question' | 'talk'
+const CHAT_MODE_KEY = 'workbench.chatMode'
+
+type RetrievalMeta = {
+  hitCount: number
+  hybridApplied: boolean
+  hybridLexicalHits: number
+  // Number of EXTRA variants the multi-query expansion produced
+  // (the original question is not counted). 0 if expansion was off.
+  expandedVariants: number
+}
 
 // Slim per-request overrides. Slash commands set these; saved settings
 // fill the gap on the sidecar side. Local-only so /top 8 doesn't bleed
@@ -65,6 +85,22 @@ export function ChatPanel() {
       : 'all'
   const [scopeMode, setScopeMode] = useState<ScopeMode>(initialMode)
   const [overrides, setOverrides] = useState<Overrides>({})
+  const [chatMode, setChatModeState] = useState<ChatMode>(() => {
+    try {
+      const v = localStorage.getItem(CHAT_MODE_KEY)
+      return v === 'talk' ? 'talk' : 'question'
+    } catch {
+      return 'question'
+    }
+  })
+  const setChatMode = (next: ChatMode) => {
+    setChatModeState(next)
+    try {
+      localStorage.setItem(CHAT_MODE_KEY, next)
+    } catch {
+      // localStorage unavailable — toggle still works in-session.
+    }
+  }
   // Re-sync scope mode when selection changes — but only if user hasn't
   // explicitly broadened to 'all', because then they were intentional.
   useEffect(() => {
@@ -130,12 +166,14 @@ export function ChatPanel() {
       return
     }
 
+    // In Talk mode the scope chip / retrieval trace don't apply, so we
+    // stamp the user turn with a mode-flavoured label instead.
     const userTurn: Turn = {
       kind: 'user',
       id: makeId(),
       text,
-      scope: currentScope,
-      scopeLabel
+      scope: chatMode === 'talk' ? null : currentScope,
+      scopeLabel: chatMode === 'talk' ? 'talk · free chat' : scopeLabel
     }
     const assistantId = makeId()
     const assistantTurn: Turn = {
@@ -145,6 +183,9 @@ export function ChatPanel() {
       citations: [],
       status: 'streaming'
     }
+    // Capture the history BEFORE we append the new turns so the Talk
+    // request body matches what the user actually said up to now.
+    const priorHistory = turns
     setTurns((prev) => [...prev, userTurn, assistantTurn])
     setInput('')
     setStreaming(true)
@@ -152,6 +193,39 @@ export function ChatPanel() {
     const controller = new AbortController()
     abortRef.current = controller
     try {
+      if (chatMode === 'talk') {
+        const messages = buildTalkHistory(priorHistory, text)
+        await api.ragTalk(
+          { messages },
+          {
+            onToken: (content) =>
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.kind === 'assistant' && t.id === assistantId
+                    ? { ...t, text: t.text + content }
+                    : t
+                )
+              ),
+            onDone: () =>
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.kind === 'assistant' && t.id === assistantId
+                    ? { ...t, status: 'done' }
+                    : t
+                )
+              ),
+            onError: ({ stage, message }) =>
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.kind === 'assistant' && t.id === assistantId
+                    ? { ...t, status: 'error', error: `${stage}: ${message}` }
+                    : t
+                )
+              )
+          },
+          { signal: controller.signal }
+        )
+      } else {
       await api.ragQuery(
         {
           question: text,
@@ -160,6 +234,30 @@ export function ChatPanel() {
           neighbors: overrides.neighbors
         },
         {
+          onExpanded: ({ variants }) =>
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.kind !== 'assistant' || t.id !== assistantId) return t
+                const cur = t.retrieval ?? emptyRetrieval()
+                return { ...t, retrieval: { ...cur, expandedVariants: variants.length } }
+              })
+            ),
+          onRetrieved: (info) =>
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.kind !== 'assistant' || t.id !== assistantId) return t
+                const cur = t.retrieval ?? emptyRetrieval()
+                return {
+                  ...t,
+                  retrieval: {
+                    ...cur,
+                    hitCount: info.hit_count,
+                    hybridApplied: info.hybrid_applied ?? false,
+                    hybridLexicalHits: info.hybrid_lexical_hits ?? 0
+                  }
+                }
+              })
+            ),
           onToken: (content) =>
             setTurns((prev) =>
               prev.map((t) =>
@@ -191,6 +289,7 @@ export function ChatPanel() {
         },
         { signal: controller.signal }
       )
+      }
     } catch (err) {
       const aborted = err instanceof Error && err.name === 'AbortError'
       setTurns((prev) =>
@@ -268,10 +367,45 @@ export function ChatPanel() {
   return (
     <aside className="chat-pane" data-testid="chat-pane">
       <header className="chat-head">
-        <span className="chat-title">Chat</span>
-        <span className="chat-scope-chip" data-testid="chat-scope">
-          {scopeLabel}
-        </span>
+        <div className="chat-mode-toggle" role="tablist" aria-label="Chat mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={chatMode === 'question'}
+            className={`chat-mode-btn${chatMode === 'question' ? ' on' : ''}`}
+            onClick={() => setChatMode('question')}
+            disabled={streaming}
+            title="Question — grounded answer with citations from your indexed logs"
+            data-testid="chat-mode-question"
+          >
+            Question
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={chatMode === 'talk'}
+            className={`chat-mode-btn${chatMode === 'talk' ? ' on' : ''}`}
+            onClick={() => setChatMode('talk')}
+            disabled={streaming}
+            title="Talk — free-form chat with the LLM (no retrieval, no citations)"
+            data-testid="chat-mode-talk"
+          >
+            Talk
+          </button>
+        </div>
+        {chatMode === 'question' ? (
+          <span className="chat-scope-chip" data-testid="chat-scope">
+            {scopeLabel}
+          </span>
+        ) : (
+          <span
+            className="chat-scope-chip chat-scope-chip-talk"
+            data-testid="chat-scope"
+            title="Talk mode is conversational — no retrieval, no scope filter."
+          >
+            free chat
+          </span>
+        )}
         <span className="chat-flex" />
         <button
           type="button"
@@ -286,10 +420,18 @@ export function ChatPanel() {
       <div className="chat-body" ref={listRef} data-testid="chat-body">
         {turns.length === 0 && (
           <div className="chat-empty">
-            <p>
-              Ask a question about your saved logs. The answer cites the
-              source chunks — click a citation to jump to that conversation.
-            </p>
+            {chatMode === 'question' ? (
+              <p>
+                Ask a question about your saved logs. The answer cites the
+                source chunks — click a citation to jump to that conversation.
+              </p>
+            ) : (
+              <p>
+                Free-form chat with your configured LLM. No retrieval, no
+                citations — useful for brainstorming, drafting, or chatting
+                without the logs in the prompt.
+              </p>
+            )}
             <p>Type <code>/help</code> for slash commands.</p>
           </div>
         )}
@@ -322,6 +464,9 @@ export function ChatPanel() {
               </div>
               {t.status === 'error' && t.error && (
                 <div className="chat-turn-error">⚠ {t.error}</div>
+              )}
+              {t.retrieval && (t.status === 'done' || t.status === 'cancelled') && (
+                <RetrievalLine meta={t.retrieval} />
               )}
               {t.citations.length > 0 && (
                 <Citations citations={t.citations} onClick={onCitationClick} />
@@ -399,6 +544,68 @@ let _idCounter = 0
 function makeId(): string {
   _idCounter += 1
   return `t${Date.now()}-${_idCounter}`
+}
+
+// Convert the in-panel Turn[] history into the OpenAI chat shape the
+// /rag/talk endpoint expects. System / scope-flavour turns are dropped
+// (they're UI-only). The latest user message is passed in separately
+// so the caller doesn't have to mutate `turns` before sending.
+function buildTalkHistory(
+  prior: Turn[],
+  latestUserText: string
+): { role: 'user' | 'assistant'; content: string }[] {
+  const out: { role: 'user' | 'assistant'; content: string }[] = []
+  for (const t of prior) {
+    if (t.kind === 'user') {
+      out.push({ role: 'user', content: t.text })
+    } else if (t.kind === 'assistant') {
+      // Skip empty / errored / cancelled assistant turns — they'd
+      // confuse the model. Streaming turns shouldn't appear here since
+      // we capture the history before the new turn pair is pushed.
+      if (t.status === 'done' && t.text.trim()) {
+        out.push({ role: 'assistant', content: t.text })
+      }
+    }
+    // 'system' kind is local UI feedback (slash-command output etc.)
+    // — never sent to the LLM.
+  }
+  out.push({ role: 'user', content: latestUserText })
+  return out
+}
+
+function emptyRetrieval(): RetrievalMeta {
+  return {
+    hitCount: 0,
+    hybridApplied: false,
+    hybridLexicalHits: 0,
+    expandedVariants: 0
+  }
+}
+
+function RetrievalLine({ meta }: { meta: RetrievalMeta }) {
+  const parts: string[] = []
+  if (meta.expandedVariants > 0) {
+    // +1 for the original question; that's what the user is reading
+    // when they see "3 variants".
+    parts.push(`expanded to ${meta.expandedVariants + 1} variants`)
+  }
+  if (meta.hybridApplied) {
+    parts.push(
+      meta.hybridLexicalHits > 0
+        ? `hybrid (+${meta.hybridLexicalHits} BM25)`
+        : 'hybrid'
+    )
+  }
+  if (parts.length === 0) return null
+  return (
+    <div
+      className="chat-turn-retrieval"
+      data-testid="chat-retrieval-meta"
+      title={`${meta.hitCount} chunks retrieved`}
+    >
+      {parts.join(' · ')}
+    </div>
+  )
 }
 
 // Citations come back from /rag/query in chronological order after

@@ -12,6 +12,16 @@ function formatBytes(n: number): string {
 
 const SEARCH_THRESHOLD = 20
 
+type PartnerStats = {
+  ic: number
+  ooc: number
+  unlabeled: number
+  failed: number
+  total: number
+  logMtime: number | null
+  lastLabelAt: number | null
+}
+
 type PartnerMenuState = { x: number; y: number; partner: string } | null
 
 export function PartnerList() {
@@ -30,6 +40,47 @@ export function PartnerList() {
   const [query, setQuery] = useState('')
   const [partnerMenu, setPartnerMenu] = useState<PartnerMenuState>(null)
   const [aliasDialog, setAliasDialog] = useState<PartnerEntry | null>(null)
+  // Per-partner label coverage. Keyed by primary partner name; aliases
+  // resolve through their primary entry server-side. Map is empty until
+  // the batch fetch resolves; rows render without a pip in that window.
+  const [stats, setStats] = useState<Record<string, PartnerStats>>({})
+
+  // Fetch coverage stats on character change and on partner-list change
+  // (after classify / link / unlink). Single batched roundtrip; sidecar
+  // walks every partner log under one settings + labels connection.
+  useEffect(() => {
+    if (!activeChar || !partners || partners.length === 0) {
+      setStats({})
+      return
+    }
+    let cancelled = false
+    void api
+      .labelsStatsAll(activeChar)
+      .then((res) => {
+        if (cancelled) return
+        const next: Record<string, PartnerStats> = {}
+        for (const row of res.partners) {
+          next[row.partner] = {
+            ic: row.ic,
+            ooc: row.ooc,
+            unlabeled: row.unlabeled,
+            failed: row.failed,
+            total: row.total,
+            logMtime: row.log_mtime,
+            lastLabelAt: row.last_label_at
+          }
+        }
+        setStats(next)
+      })
+      .catch(() => {
+        // Coverage pips are cosmetic — silent failure is fine; the rest
+        // of the partner list still works.
+        if (!cancelled) setStats({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeChar, partners])
 
   // Esc / outside click closes the partner-row context menu.
   useEffect(() => {
@@ -219,6 +270,7 @@ export function PartnerList() {
           activePartner={activePartner}
           onSelect={selectPartner}
           onContextMenu={onRowContextMenu}
+          stats={stats}
           testid="partner-list-channels"
         />
       )}
@@ -231,6 +283,7 @@ export function PartnerList() {
           activePartner={activePartner}
           onSelect={selectPartner}
           onContextMenu={onRowContextMenu}
+          stats={stats}
           testid="partner-list-people"
         />
       )}
@@ -392,6 +445,41 @@ function filter(entries: PartnerEntry[], query: string): PartnerEntry[] {
   return entries.filter((e) => e.name.toLowerCase().includes(q))
 }
 
+// Three-segment bar: IC / OOC / Unlabeled+Failed. Width is proportional
+// to message counts so a partner with 40% IC, 40% OOC, 20% Unlabeled
+// shows segments in those ratios. Hidden on empty conversations and on
+// partners where the labels DB hasn't seen any rows yet (no point
+// drawing a single grey rectangle that says "100% unlabeled" — which is
+// already implied by the missing pip).
+function CoverageBar({ stats }: { stats: PartnerStats }) {
+  const labeled = stats.ic + stats.ooc + stats.failed
+  if (stats.total === 0 || labeled === 0) return null
+  const pct = (n: number) => `${(n / stats.total) * 100}%`
+  return (
+    <span
+      className="sb-coverage"
+      aria-label={coverageTooltip(stats)}
+      data-testid="sb-coverage"
+    >
+      <span className="sb-coverage-ic" style={{ width: pct(stats.ic) }} />
+      <span className="sb-coverage-ooc" style={{ width: pct(stats.ooc) }} />
+      <span className="sb-coverage-failed" style={{ width: pct(stats.failed) }} />
+    </span>
+  )
+}
+
+function coverageTooltip(stats: PartnerStats): string {
+  const labeled = stats.ic + stats.ooc + stats.failed
+  const pct = stats.total > 0 ? Math.round((labeled / stats.total) * 100) : 0
+  const parts: string[] = []
+  parts.push(`${pct}% labeled (${labeled}/${stats.total})`)
+  if (stats.ic > 0) parts.push(`${stats.ic} IC`)
+  if (stats.ooc > 0) parts.push(`${stats.ooc} OOC`)
+  if (stats.failed > 0) parts.push(`${stats.failed} failed`)
+  if (stats.unlabeled > 0) parts.push(`${stats.unlabeled} unlabeled`)
+  return parts.join(' · ')
+}
+
 function PartnerSection({
   heading,
   entries,
@@ -400,6 +488,7 @@ function PartnerSection({
   activePartner,
   onSelect,
   onContextMenu,
+  stats,
   testid
 }: {
   heading: string
@@ -409,6 +498,7 @@ function PartnerSection({
   activePartner: string | null
   onSelect: (name: string) => void
   onContextMenu: (name: string, e: React.MouseEvent<HTMLButtonElement>) => void
+  stats: Record<string, PartnerStats>
   testid: string
 }) {
   return (
@@ -434,6 +524,28 @@ function PartnerSection({
               p.aliases.length > 0
                 ? `also: ${p.aliases.map(displayPartner).join(', ')}`
                 : null
+            const channelNote = isChannel
+              ? 'F-Chat types every channel message as IC regardless of content — the classifier still treats #ooc-style chatter as OOC.'
+              : null
+            const rowStats = stats[p.name]
+            const coverageTitle = rowStats
+              ? coverageTooltip(rowStats)
+              : null
+            // Stale = log file grew after the last classify run. Only
+            // makes sense to flag once at least one row has been
+            // labelled (lastLabelAt set) — otherwise every unlabelled
+            // partner would always read as stale.
+            const isStale =
+              rowStats !== undefined &&
+              rowStats.lastLabelAt !== null &&
+              rowStats.logMtime !== null &&
+              rowStats.logMtime > rowStats.lastLabelAt
+            const staleTitle = isStale
+              ? 'New messages since the last classify run — re-classify to label them.'
+              : null
+            const title = [p.name, aliasHint, channelNote, coverageTitle, staleTitle]
+              .filter(Boolean)
+              .join('\n')
             return (
               <li key={p.name}>
                 <button
@@ -441,11 +553,7 @@ function PartnerSection({
                   className={`sb-item ${isActive ? 'active' : ''}`}
                   onClick={() => onSelect(p.name)}
                   onContextMenu={(e) => onContextMenu(p.name, e)}
-                  title={
-                    aliasHint
-                      ? `${p.name}\n${aliasHint}`
-                      : p.name
-                  }
+                  title={title}
                 >
                   <span className="ic" aria-hidden>
                     {isChannel ? '#' : '•'}
@@ -458,6 +566,15 @@ function PartnerSection({
                       </span>
                     )}
                   </span>
+                  {isStale && (
+                    <span
+                      className="sb-stale-dot"
+                      aria-label="stale labels"
+                      title="stale labels"
+                      data-testid="sb-stale-dot"
+                    />
+                  )}
+                  {rowStats && <CoverageBar stats={rowStats} />}
                   <span className="meta">{formatBytes(p.bytes)}</span>
                 </button>
               </li>
