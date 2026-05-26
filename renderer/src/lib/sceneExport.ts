@@ -11,6 +11,16 @@ function formatTimestamp(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+// Resolved scene-export tag for a message. Prefers the semantic label
+// (`m.label`, set by the IC/OOC resolver) over the parser bucket
+// (`m.kind`) so an export of an IC-filtered slice doesn't carry "(OOC)"
+// on borderline lines that the resolver re-classified. Falls back to
+// the parser bucket when there's no label (system rows, untyped ads).
+function exportTag(m: LogMessage): string {
+  if (m.label) return m.label === 'IC' ? '' : m.label.toUpperCase()
+  return m.kind === 'ic' ? '' : m.kind.toUpperCase()
+}
+
 export function exportMessages(
   messages: LogMessage[],
   partner: string,
@@ -35,8 +45,9 @@ export function exportMessages(
         lastDay = day
       }
       const time = formatTimestamp(m.ts).slice(11, 19)
-      const kind = m.kind !== 'ic' ? ` *(${m.kind.toUpperCase()})*` : ''
-      lines.push(`**${time} — ${m.speaker}${kind}:** ${m.text}`)
+      const tag = exportTag(m)
+      const suffix = tag ? ` *(${tag})*` : ''
+      lines.push(`**${time} — ${m.speaker}${suffix}:** ${m.text}`)
       lines.push('')
     }
     return lines.join('\n')
@@ -55,8 +66,9 @@ export function exportMessages(
       lastDay = day
     }
     const time = formatTimestamp(m.ts).slice(11, 19)
-    const kind = m.kind !== 'ic' ? ` [${m.kind.toUpperCase()}]` : ''
-    lines.push(`[${time}] ${m.speaker}${kind}: ${m.text}`)
+    const tag = exportTag(m)
+    const suffix = tag ? ` [${tag}]` : ''
+    lines.push(`[${time}] ${m.speaker}${suffix}: ${m.text}`)
   }
   return lines.join('\n')
 }

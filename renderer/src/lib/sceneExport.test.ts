@@ -52,4 +52,24 @@ describe('exportMessages text', () => {
     const out = exportMessages([msg(t, 'Aiko', 'brb', 'ooc')], 'Aiko', 'Me', 'text')
     expect(out).toContain('[OOC]')
   })
+
+  it('prefers the resolved label over the parser kind', () => {
+    const t = Math.floor(new Date('2026-05-01T10:30:00Z').getTime() / 1000)
+    // chat-bucket message reclassified as OOC by the resolver
+    const reclassified: LogMessage = { ...msg(t, 'Aiko', 'haha brb'), label: 'OOC' }
+    // ooc-kind ad with no label still falls back to the parser bucket
+    const adNoLabel: LogMessage = msg(t + 1, 'Bot', 'Looking for RP!', 'ooc')
+    const out = exportMessages([reclassified, adNoLabel], 'Aiko', 'Me', 'text')
+    expect(out).toContain('Aiko [OOC]:')
+    expect(out).toContain('Bot [OOC]:')
+  })
+
+  it('does not tag IC-labelled messages even if the parser bucket disagrees', () => {
+    const t = Math.floor(new Date('2026-05-01T10:30:00Z').getTime() / 1000)
+    // ooc-kind line the resolver rescued as IC
+    const rescued: LogMessage = { ...msg(t, 'Aiko', '*nods*', 'ooc'), label: 'IC' }
+    const out = exportMessages([rescued], 'Aiko', 'Me', 'text')
+    expect(out).not.toContain('[OOC]')
+    expect(out).toMatch(/Aiko: \*nods\*/)
+  })
 })

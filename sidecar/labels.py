@@ -181,6 +181,155 @@ Das "reason"-Feld MAX 60 Zeichen. Verwende KEINE wörtlichen Zitate aus dem Text
 und KEINE Anführungszeichen im Reason — beschreibe das Muster, nicht den Inhalt.
 {"label":"IC"|"OOC","reason":"kurze Begründung max 60 Zeichen"}"""
 
+# English equivalent of the default German prompt. Same heuristics,
+# same JSON output contract — keeps users on a non-German chat model
+# from having to translate the bundled default themselves.
+DEFAULT_SYSTEM_PROMPT_EN = """You are a classifier for English-language F-Chat roleplay logs.
+Classify the TARGET MESSAGE strictly as "IC" (in-character) or "OOC" (out-of-character).
+
+IMPORTANT — What is the target message?
+The message to classify is ONLY the text between the markers
+">>> ZIELNACHRICHT <<<" and ">>> ENDE ZIELNACHRICHT <<<".
+The "KONTEXT VORHER" and "KONTEXT NACHHER" blocks are CLUSTER context only —
+they are NOT the classification subject. Do NOT quote or use any text from the
+context blocks in your reason field.
+
+CORE QUESTION:
+Is the described event happening NOW in the game world? (IC) Or are players
+talking ABOUT the world, planning, or sharing real-life anecdotes? (OOC)
+
+F-CHAT IC CONVENTIONS (strong IC signals):
+
+SELF-NARRATION: If the SPEAKER (before the colon) uses their OWN character name
+as the subject of an action in indicative mood (present/past tense), it is IC —
+even for mundane activities like sleeping, eating, reading, walking, cleaning.
+The mundanity of the action says NOTHING about IC vs OOC; the perspective
+(third person about the character) is the decisive marker.
+
+DIALOGUE: Direct speech in quotation marks with a dialog tag (said, murmured,
+etc.) is IC.
+
+MARKER: The "| action" header marker means IC, with two exceptions:
+(a) the content is explicitly in (…) or ((…)) player parentheses, or
+(b) the text begins with "OOC:" / "//".
+Otherwise: "| action" + third-person self-narration = IC, even without fantasy
+vocabulary.
+
+FANTASY / SETTING VOCABULARY: setting-specific terms are strong IC signals —
+barn, innkeeper, tavern, sword, magic, elf, noblewoman, city guard, carriage,
+kingdom, bed, bedside, room (in tavern context), chest, etc. When these appear
+the message is ABOUT the game world and almost never a real-life anecdote.
+
+PLOT PLANNING & BRAINSTORMING (OOC):
+
+As soon as the event is hypothetical or being proposed, it is OOC.
+
+Signal words: "for example…", "imagine…", "we could…", "idea:…"
+
+Subjunctive / conditional: "she would / could…" → OOC (not actually happening).
+
+REAL-WORLD ANECDOTES (OOC) — ONLY for IRL topics:
+
+First person ("I", "we") about the player's REAL world: work, profession,
+family, IT, crafts, studies, city, illness, politics, weather, school, sports.
+
+NOT a player anecdote (i.e. still IC) when:
+- topics come from the game world (barn, elf, innkeeper, sword, noblewoman…)
+- one character is speaking to another character — including sarcasm, mockery,
+  threats or commentary
+- "you / your / this one / that one" refers to a character, not the player
+- a sarcastic or ironic statement is made about the in-game situation
+- the narration is in THIRD person about the speaker character (indicative),
+  no matter how mundane the action.
+  Heuristic: "Galadriel read a book and went to the kitchen" → IC.
+  "I read a book yesterday and went to the kitchen" → OOC.
+
+DICE / META MESSAGES (OOC):
+
+In F-Chat, player meta-comments are often in (...) parentheses or begin with
+"OOC:" / "//". Dice rolls, rule questions, visibility checks ("want to see
+the roll?"), away announcements ("brb afk") are OOC.
+
+FORMAT (STRICT):
+Respond ONLY with a single JSON object.
+NO code fences (no ```json). NO markdown blocks. NO arrays (no [ ]).
+NO preamble, no chain-of-thought, NO text before or after the JSON.
+The "reason" field MAX 60 characters. Do NOT quote text verbatim and do NOT
+use quotation marks in reason — describe the pattern, not the content.
+{"label":"IC"|"OOC","reason":"short reason max 60 chars"}"""
+
+# Language-agnostic minimal prompt. Use this when the corpus mixes
+# multiple languages or when the chat model is small and tends to
+# overfit to the verbose German/English heuristics. Less accurate on
+# edge cases but works in any language out of the box.
+DEFAULT_SYSTEM_PROMPT_MINIMAL = """Classify the target message between ">>> ZIELNACHRICHT <<<" and ">>> ENDE ZIELNACHRICHT <<<" as either IC (in-character roleplay) or OOC (out-of-character / player chat).
+
+Use the surrounding KONTEXT blocks only as cluster context — they are NOT the classification subject.
+
+Rules of thumb:
+- Third-person narration about the speaker's own character, in indicative mood, is IC — even for mundane actions.
+- Direct speech in quotation marks with a dialog tag is IC.
+- Player parentheses (...), brackets ((...)), explicit "OOC:" / "//" prefixes, dice rolls, and planning ("we could…", "imagine…") are OOC.
+- Hypothetical / conditional / subjunctive ("would", "could") about a character is OOC.
+
+Respond with one JSON object, no code fences, no preamble:
+{"label":"IC"|"OOC","reason":"short reason, max 60 chars"}"""
+
+
+@dataclass(slots=True, frozen=True)
+class PromptPreset:
+    """Bundled classifier prompt the user can drop into Settings → Labels.
+
+    `id` is the stable key the renderer ships back when a preset is
+    selected — never displayed to the user. `language` is a coarse hint
+    surfaced as a chip ("German", "English", "Any") so non-German users
+    can see at a glance why the default isn't classifying their logs.
+    """
+
+    id: str
+    label: str
+    language: str
+    description: str
+    body: str
+
+
+# Order matters: the renderer renders them top-to-bottom and the first
+# entry is the one whose body matches DEFAULT_SYSTEM_PROMPT — that's
+# also the "Reset to default" target.
+PROMPT_PRESETS: tuple[PromptPreset, ...] = (
+    PromptPreset(
+        id="de-default",
+        label="German (default)",
+        language="German",
+        description=(
+            "F-Chat-specific heuristics in German. Best for German RP corpora; "
+            "verbose so works well with mid-size local models."
+        ),
+        body=DEFAULT_SYSTEM_PROMPT,
+    ),
+    PromptPreset(
+        id="en-default",
+        label="English",
+        language="English",
+        description=(
+            "Same heuristics as the German default, translated. Use this when "
+            "your logs are in English or your chat model is English-tuned."
+        ),
+        body=DEFAULT_SYSTEM_PROMPT_EN,
+    ),
+    PromptPreset(
+        id="minimal",
+        label="Language-agnostic (minimal)",
+        language="Any",
+        description=(
+            "Short prompt that works across languages. Less precise on edge "
+            "cases than the language-specific presets but fits in tighter "
+            "context windows."
+        ),
+        body=DEFAULT_SYSTEM_PROMPT_MINIMAL,
+    ),
+)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS labels (
     hash         TEXT PRIMARY KEY,
@@ -198,6 +347,25 @@ CREATE TABLE IF NOT EXISTS labels (
 );
 CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner);
 CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
+
+-- Persistent classify-job history. JobRegistry retains in-memory jobs
+-- for ~300s; this table survives sidecar restarts so users can see
+-- "last classified Auldren Nazr yesterday at 23:14" weeks later.
+-- Manual classify runs append on completion; nothing here is
+-- consulted by the resolver — purely for UI display.
+CREATE TABLE IF NOT EXISTS label_jobs (
+    id            TEXT PRIMARY KEY,
+    scope         TEXT NOT NULL,    -- JSON: {"character"?: X, "partner"?: Y}
+    state         TEXT NOT NULL,    -- 'done' | 'cancelled' | 'failed'
+    classified    INTEGER NOT NULL,
+    failed        INTEGER NOT NULL,
+    total         INTEGER NOT NULL,
+    started_at    REAL NOT NULL,
+    finished_at   REAL NOT NULL,
+    error         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_label_jobs_finished
+    ON label_jobs(finished_at DESC);
 
 -- Partner aliases share this DB so every labels.connect() is
 -- automatically alias-aware. aliases.py owns the read/write logic;
@@ -534,6 +702,132 @@ def delete_labels_for_partner(
     )
     conn.commit()
     return cur.rowcount
+
+
+def record_job_history(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    scope: dict,
+    state: str,
+    classified: int,
+    failed: int,
+    total: int,
+    started_at: float,
+    finished_at: float,
+    error: str | None,
+    keep: int = 200,
+) -> None:
+    """Persist one finished classify run for the Settings job-history view.
+
+    Inserts the row, then trims to the most recent `keep` entries to
+    keep the file bounded — even an aggressive user running 1 classify
+    per minute stays under 200 rows for a couple of hours of history,
+    which is the use-case the table exists for.
+    """
+    import json
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO label_jobs
+            (id, scope, state, classified, failed, total,
+             started_at, finished_at, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            id,
+            json.dumps(scope, sort_keys=True),
+            state,
+            classified,
+            failed,
+            total,
+            started_at,
+            finished_at,
+            error,
+        ),
+    )
+    conn.execute(
+        """
+        DELETE FROM label_jobs
+         WHERE id NOT IN (
+            SELECT id FROM label_jobs ORDER BY finished_at DESC LIMIT ?
+         )
+        """,
+        (keep,),
+    )
+    conn.commit()
+
+
+def list_job_history(
+    conn: sqlite3.Connection, *, limit: int = 50
+) -> list[dict]:
+    """Return the most recent finished classify runs, newest first.
+
+    Each row is the shape the renderer expects on the
+    Settings → Labels jobs panel: scope decoded back to a dict,
+    timestamps as epoch seconds.
+    """
+    import json
+
+    rows = conn.execute(
+        """
+        SELECT id, scope, state, classified, failed, total,
+               started_at, finished_at, error
+          FROM label_jobs
+      ORDER BY finished_at DESC
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        try:
+            scope = json.loads(r[1])
+        except (TypeError, ValueError):
+            scope = {}
+        out.append(
+            {
+                "id": r[0],
+                "scope": scope,
+                "state": r[2],
+                "classified": r[3],
+                "failed": r[4],
+                "total": r[5],
+                "started_at": r[6],
+                "finished_at": r[7],
+                "error": r[8],
+            }
+        )
+    return out
+
+
+def max_label_time(
+    conn: sqlite3.Connection,
+    character: str,
+    partner: str,
+    *,
+    partner_aliases: list[str] | None = None,
+) -> float | None:
+    """Return the most recent labels.updated_at for a partner (or the
+    folded alias group), or None when no label rows exist.
+
+    Used to flag stale-label rows in the partner list — compare against
+    the log file's mtime to spot conversations that grew since their
+    last classify run.
+    """
+    names = list(partner_aliases) if partner_aliases else [partner]
+    if partner not in names:
+        names.append(partner)
+    placeholders = ",".join("?" * len(names))
+    row = conn.execute(
+        f"""
+        SELECT MAX(updated_at) FROM labels
+         WHERE character = ? AND partner IN ({placeholders})
+        """,
+        (character, *names),
+    ).fetchone()
+    val = row[0] if row else None
+    return float(val) if val is not None else None
 
 
 def stats(

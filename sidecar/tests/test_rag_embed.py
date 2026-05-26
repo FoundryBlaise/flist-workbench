@@ -42,6 +42,7 @@ def _settings(
         multiquery_enabled=False,
         multiquery_variants=3,
         chat_num_ctx=0,
+        chat_embed_keep_alive="",
         chunk_max_chars=5000,
         chunk_soft_split_chars=4000,
         chunk_overlap_msgs=1,
@@ -158,6 +159,35 @@ def test_embed_texts_empty_input_short_circuits(
     assert rag_embed.embed_texts([], "document", _settings()) == []
 
 
+def test_embed_texts_forwards_keep_alive_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
+
+    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
+    rag_embed.embed_texts(["q"], "query", _settings(), keep_alive="30s")
+    assert captured["body"]["keep_alive"] == "30s"
+
+
+def test_embed_texts_omits_keep_alive_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
+
+    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
+    rag_embed.embed_texts(["q"], "query", _settings())
+    # Absent — Ollama uses its own default (~5 min), other servers ignore.
+    assert "keep_alive" not in captured["body"]
+
+
 def test_embed_texts_raises_embed_error_on_url_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -239,7 +269,30 @@ def test_try_unload_sends_keep_alive_zero(monkeypatch: pytest.MonkeyPatch) -> No
     assert rag_embed.try_unload(_settings()) is True
     assert captured["body"]["keep_alive"] == 0
     assert captured["body"]["model"] == "test-model"
+    # OpenAI-style endpoint → /embeddings path
     assert captured["url"].endswith("/embeddings")
+
+
+def test_try_unload_routes_ollama_to_native_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req, timeout):  # noqa: ANN001
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["url"] = req.full_url
+        return _OkResponse()
+
+    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
+    # Port 11434 triggers the Ollama branch — should POST /api/generate
+    # with an empty prompt + keep_alive=0 (unload-only signal that
+    # does NOT re-load the model the way /v1/embeddings used to).
+    settings = _settings(endpoint="http://localhost:11434/v1")
+    assert rag_embed.try_unload(settings) is True
+    assert captured["url"].endswith("/api/generate")
+    assert captured["body"]["keep_alive"] == 0
+    assert captured["body"]["prompt"] == ""
+    assert "input" not in captured["body"]
 
 
 def test_try_unload_swallows_failures(monkeypatch: pytest.MonkeyPatch) -> None:

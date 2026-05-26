@@ -1,7 +1,7 @@
 import json
 import os
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +26,7 @@ import settings as settings_store
 from flist import ProfileNotFound, fetch_profile
 from logs import (
     LogDirError,
+    data_dir,
     find_contacts,
     list_characters,
     list_partners,
@@ -192,6 +193,85 @@ def labels_stats(char: str, partner: str) -> dict:
         "failed": counts[labels_store.LABEL_FAILED],
         "total": sum(counts.values()),
     }
+
+
+@app.get("/labels/stats-all")
+def labels_stats_all(char: str) -> dict:
+    """Batch labels stats for every partner of a character.
+
+    The sidebar uses this to render per-partner coverage pips without
+    firing one request per row. Reuses the same resolver as
+    /labels/stats so a partner's per-row counts always match the
+    detailed view. Linked aliases are folded into their primary partner.
+
+    Also returns `log_mtime` (latest of all alias-group log files) and
+    `last_label_at` (newest labels.updated_at across the same alias
+    group). A stale partner is one where log_mtime > last_label_at —
+    log activity arrived after the last classify run for that
+    conversation.
+    """
+    try:
+        entries = list_partners(char)
+    except LogDirError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    base = data_dir() / char / "logs"
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    out: list[dict] = []
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        for entry in entries:
+            try:
+                messages = list(read_messages(char, entry.name))
+            except LogDirError:
+                # Partner present in the directory listing but unreadable
+                # (deleted between calls, permission denied) — skip silently
+                # so a single bad file doesn't 500 the whole sidebar.
+                continue
+            alias_group = aliases_store.all_names_for(
+                labels_conn, char, entry.name
+            )
+            counts = labels_store.stats(
+                labels_conn,
+                char,
+                entry.name,
+                messages,
+                lab_settings,
+                partner_aliases=alias_group,
+            )
+            # Walk every on-disk file in the alias group for the mtime
+            # high-water mark. A folded partner only counts stale when
+            # ANY of its underlying files moved after the last label.
+            log_mtime = 0.0
+            for member in alias_group or [entry.name]:
+                p = base / member
+                try:
+                    log_mtime = max(log_mtime, p.stat().st_mtime)
+                except OSError:
+                    continue
+            last_label = labels_store.max_label_time(
+                labels_conn,
+                char,
+                entry.name,
+                partner_aliases=alias_group,
+            )
+            out.append(
+                {
+                    "partner": entry.name,
+                    "ic": counts[labels_store.LABEL_IC],
+                    "ooc": counts[labels_store.LABEL_OOC],
+                    "unlabeled": counts[labels_store.LABEL_UNLABELED],
+                    "failed": counts[labels_store.LABEL_FAILED],
+                    "total": sum(counts.values()),
+                    "log_mtime": log_mtime if log_mtime > 0 else None,
+                    "last_label_at": last_label,
+                }
+            )
+    finally:
+        settings_conn.close()
+        labels_conn.close()
+    return {"character": char, "partners": out}
 
 
 class ClassifyJobRequest(BaseModel):
@@ -375,6 +455,7 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
         multiquery_enabled=saved.multiquery_enabled,
         multiquery_variants=saved.multiquery_variants,
         chat_num_ctx=saved.chat_num_ctx,
+        chat_embed_keep_alive=saved.chat_embed_keep_alive,
         chunk_max_chars=saved.chunk_max_chars,
         chunk_soft_split_chars=saved.chunk_soft_split_chars,
         chunk_overlap_msgs=saved.chunk_overlap_msgs,
@@ -591,6 +672,33 @@ def rag_wipe() -> dict:
     return {"wiped": True}
 
 
+@app.post("/rag/lexical/rebuild")
+def rag_lexical_rebuild() -> dict:
+    """Rebuild the BM25 lexical index from the existing Qdrant chunks.
+
+    Avoids a full re-ingest when the dense store is up-to-date but the
+    lexical mirror is stale (e.g. after a chunking-config change that
+    only required re-embedding once, or after upgrading from a pre-
+    hybrid install). Returns the number of chunks indexed.
+    """
+    with rag_store.RagStore() as store:
+        if not store.collection_exists():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "No chunks indexed yet — run Ingest first. The lexical "
+                    "index mirrors the dense store and has nothing to copy."
+                ),
+            )
+        with rag_lexical.LexicalStore() as lex:
+            # Wipe first so the rebuild is authoritative — otherwise a
+            # chunk_id that was removed from Qdrant since the last build
+            # would stay in FTS.
+            lex.wipe()
+            indexed = rag_lexical.backfill_from_qdrant(store, lex)
+    return {"indexed": indexed}
+
+
 @app.get("/rag/status")
 def rag_status() -> dict:
     """Snapshot of the local vector store + manifest.
@@ -634,6 +742,23 @@ class RagQueryRequest(BaseModel):
     # retrieve thousands of chunks.
     top_k: int | None = None
     neighbors: int | None = None
+
+
+class TalkMessage(BaseModel):
+    # OpenAI-shaped chat message. The renderer rebuilds the full history
+    # on every Talk turn so the server stays stateless — easier than
+    # storing per-tab conversation state we'd then have to expire.
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(max_length=8000)
+
+
+class RagTalkRequest(BaseModel):
+    # The full history including the latest user turn. Renderer enforces
+    # an upper bound on length so a runaway loop can't blow context.
+    messages: list[TalkMessage] = Field(min_length=1, max_length=80)
+    # Optional system message override. Empty / unset → no system
+    # message; Talk mode is intentionally free-form, no grounding prompt.
+    system: str | None = None
 
 
 def _sse_event(event: str, data: dict | str) -> bytes:
@@ -814,6 +939,59 @@ def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
     )
 
 
+@app.post("/rag/talk")
+def rag_talk_stream(body: RagTalkRequest) -> StreamingResponse:
+    """SSE stream: free-form chat with no retrieval, no citations.
+
+    Counterpart to /rag/query. The renderer routes user "Talk mode"
+    turns here when the user wants to brainstorm / draft / chat with
+    the model without dragging the log corpus into the prompt. Same
+    chat endpoint + model as the grounded path (rag_set.chat_*) so
+    Talk and Question share the user's one configured LLM.
+
+    Emits only `token`, `done`, and `error` events — no `retrieved`
+    or `expanded`. `done` carries an empty `citations: []` so the
+    renderer's existing handler shape works either way.
+    """
+    rag_set = rag_settings.load_settings()
+    # Build the message list. A system message (if provided) goes first;
+    # then the renderer-supplied history verbatim. We deliberately do
+    # NOT inject the grounding system prompt that /rag/query uses —
+    # Talk mode is supposed to feel like a vanilla chat surface.
+    messages: list[dict] = []
+    if body.system and body.system.strip():
+        messages.append({"role": "system", "content": body.system.strip()})
+    for m in body.messages:
+        messages.append({"role": m.role, "content": m.content})
+
+    def producer():
+        try:
+            for delta in rag_chat.stream_chat(
+                rag_set.chat_endpoint,
+                rag_set.chat_model,
+                rag_set.chat_api_key,
+                messages,
+                num_ctx=rag_set.chat_num_ctx or None,
+            ):
+                yield _sse_event("token", {"content": delta})
+            yield _sse_event("done", {"citations": []})
+        except rag_chat.ChatError as exc:
+            yield _sse_event("error", {"stage": "chat", "message": str(exc)})
+        except Exception as exc:  # noqa: BLE001 — last-resort, mirror /rag/query
+            yield _sse_event(
+                "error", {"stage": "unknown", "message": repr(exc)}
+            )
+
+    return StreamingResponse(
+        producer(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ---- labels jobs (continued) ------------------------------------------
 
 
@@ -906,6 +1084,115 @@ def labels_clear(body: LabelsClearRequest) -> dict:
         "character": body.character,
         "partner": body.partner,
         "deleted": deleted,
+    }
+
+
+@app.post("/labels/clear-all")
+def labels_clear_all() -> dict:
+    """Wipe every row from labels + label_failures across all characters.
+
+    The Settings → Labels "Reset all labels…" button calls this. After
+    it returns, every message in every conversation falls back to
+    rule-on-read — manual overrides are gone too. There is no undo;
+    the renderer must confirm before invoking this.
+    """
+    conn = labels_store.connect()
+    try:
+        labels_cur = conn.execute("DELETE FROM labels")
+        failures_cur = conn.execute("DELETE FROM label_failures")
+        conn.commit()
+        return {
+            "labels_deleted": labels_cur.rowcount,
+            "failures_deleted": failures_cur.rowcount,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/labels/job-history")
+def labels_job_history(limit: int = 50) -> dict:
+    """Recent finished classify runs, newest first.
+
+    Persisted across sidecar restarts unlike the live JobRegistry —
+    the renderer's Settings → Labels history panel queries this on
+    open and after every classify completion.
+    """
+    limit = max(1, min(200, limit))
+    conn = labels_store.connect()
+    try:
+        rows = labels_store.list_job_history(conn, limit=limit)
+    finally:
+        conn.close()
+    return {"jobs": rows, "limit": limit}
+
+
+@app.get("/labels/rollup")
+def labels_rollup() -> dict:
+    """Aggregate IC/OOC/Unlabeled/Failed counts across every character.
+
+    Walks every (character × partner) log under the configured data
+    directory; for large corpora this is a few seconds the first time
+    Settings opens. Used by the Labels rollup pane to show one-glance
+    state ("3,402 IC · 18,720 OOC · …").
+    """
+    try:
+        characters = list_characters()
+    except LogDirError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    totals = {
+        labels_store.LABEL_IC: 0,
+        labels_store.LABEL_OOC: 0,
+        labels_store.LABEL_UNLABELED: 0,
+        labels_store.LABEL_FAILED: 0,
+    }
+    # Track manual-override count separately — it's a useful "how much
+    # of this did I curate" signal independent of IC/OOC totals.
+    manual_overrides = int(
+        labels_conn.execute(
+            "SELECT COUNT(*) FROM labels WHERE source = 'manual'"
+        ).fetchone()[0]
+        or 0
+    )
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        for char in characters:
+            try:
+                entries = list_partners(char.name)
+            except LogDirError:
+                continue
+            for entry in entries:
+                try:
+                    messages = list(read_messages(char.name, entry.name))
+                except LogDirError:
+                    continue
+                alias_group = aliases_store.all_names_for(
+                    labels_conn, char.name, entry.name
+                )
+                counts = labels_store.stats(
+                    labels_conn,
+                    char.name,
+                    entry.name,
+                    messages,
+                    lab_settings,
+                    partner_aliases=alias_group,
+                )
+                for k, v in counts.items():
+                    totals[k] = totals.get(k, 0) + v
+    finally:
+        settings_conn.close()
+        labels_conn.close()
+    total = sum(totals.values())
+    return {
+        "ic": totals[labels_store.LABEL_IC],
+        "ooc": totals[labels_store.LABEL_OOC],
+        "unlabeled": totals[labels_store.LABEL_UNLABELED],
+        "failed": totals[labels_store.LABEL_FAILED],
+        "manual": manual_overrides,
+        "total": total,
+        "character_count": len(characters),
     }
 
 
@@ -1071,6 +1358,10 @@ class RagSettingsUpdate(BaseModel):
     multiquery_enabled: bool | None = None
     multiquery_variants: int | None = None
     chat_num_ctx: int | None = None
+    # Empty string clears the override and lets the server default fire
+    # (Ollama: ~5 min keep_alive). Free-text so users can write Ollama's
+    # duration grammar verbatim ("30s", "1m", "0").
+    chat_embed_keep_alive: str | None = None
     chunk_max_chars: int | None = None
     chunk_soft_split_chars: int | None = None
     chunk_overlap_msgs: int | None = None
@@ -1121,6 +1412,16 @@ def _settings_dict(conn) -> dict:
                 "context_before": labels_store.DEFAULT_CONTEXT_BEFORE,
                 "context_after": labels_store.DEFAULT_CONTEXT_AFTER,
             },
+            "prompt_presets": [
+                {
+                    "id": p.id,
+                    "label": p.label,
+                    "language": p.language,
+                    "description": p.description,
+                    "body": p.body,
+                }
+                for p in labels_store.PROMPT_PRESETS
+            ],
         },
         "rag": {
             "embed_endpoint": rag.embed_endpoint,
@@ -1142,6 +1443,7 @@ def _settings_dict(conn) -> dict:
             "multiquery_enabled": rag.multiquery_enabled,
             "multiquery_variants": rag.multiquery_variants,
             "chat_num_ctx": rag.chat_num_ctx,
+            "chat_embed_keep_alive": rag.chat_embed_keep_alive,
             "chunk_max_chars": rag.chunk_max_chars,
             "chunk_soft_split_chars": rag.chunk_soft_split_chars,
             "chunk_overlap_msgs": rag.chunk_overlap_msgs,
@@ -1167,6 +1469,7 @@ def _settings_dict(conn) -> dict:
                 "multiquery_enabled": rag_settings.DEFAULT_MULTIQUERY_ENABLED,
                 "multiquery_variants": rag_settings.DEFAULT_MULTIQUERY_VARIANTS,
                 "chat_num_ctx": rag_settings.DEFAULT_CHAT_NUM_CTX,
+                "chat_embed_keep_alive": rag_settings.DEFAULT_CHAT_EMBED_KEEP_ALIVE,
                 "chunk_max_chars": rag_settings.DEFAULT_CHUNK_MAX_CHARS,
                 "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
@@ -1423,6 +1726,15 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
     if update.chat_num_ctx is not None:
         n = max(0, min(131072, int(update.chat_num_ctx)))
         settings_store.set_value(conn, settings_store.KEY_RAG_CHAT_NUM_CTX, str(n))
+    if update.chat_embed_keep_alive is not None:
+        # Free-text: Ollama accepts "30s" / "1m" / "0" / integer seconds.
+        # Trim, clamp to a sane upper bound on length (no validation —
+        # the server returns 400 if the grammar is wrong, which surfaces
+        # to the user on the next chat query).
+        raw = update.chat_embed_keep_alive.strip()[:32]
+        settings_store.set_value(
+            conn, settings_store.KEY_RAG_CHAT_EMBED_KEEP_ALIVE, raw
+        )
     if update.chunk_max_chars is not None:
         n = max(500, min(20000, int(update.chunk_max_chars)))
         settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS, str(n))

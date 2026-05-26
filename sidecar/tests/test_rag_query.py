@@ -45,6 +45,7 @@ def rag_set() -> rag_settings.RagSettings:
         multiquery_enabled=False,
         multiquery_variants=3,
         chat_num_ctx=0,
+        chat_embed_keep_alive="",
         chunk_max_chars=5000,
         chunk_soft_split_chars=4000,
         chunk_overlap_msgs=1,

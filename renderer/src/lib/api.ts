@@ -95,6 +95,14 @@ export type LogMessage = {
   label_error?: string
 }
 
+export type PromptPreset = {
+  id: string
+  label: string
+  language: string
+  description: string
+  body: string
+}
+
 export type LabelsSettings = {
   threshold_chars: number
   llm_endpoint: string
@@ -112,6 +120,10 @@ export type LabelsSettings = {
     context_before: number
     context_after: number
   }
+  // Bundled system-prompt presets the user can pick from. First entry's
+  // body matches `defaults.system_prompt` and is therefore the
+  // "Reset to default" target.
+  prompt_presets: PromptPreset[]
 }
 
 export type RagSettings = {
@@ -134,6 +146,7 @@ export type RagSettings = {
   multiquery_enabled: boolean
   multiquery_variants: number
   chat_num_ctx: number
+  chat_embed_keep_alive: string
   chunk_max_chars: number
   chunk_soft_split_chars: number
   chunk_overlap_msgs: number
@@ -157,6 +170,7 @@ export type RagSettings = {
     multiquery_enabled: boolean
     multiquery_variants: number
     chat_num_ctx: number
+    chat_embed_keep_alive: string
     chunk_max_chars: number
     chunk_soft_split_chars: number
     chunk_overlap_msgs: number
@@ -402,6 +416,26 @@ export const api = {
     get<LabelsStats>(
       `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
     ),
+  // Batch coverage stats for every partner of a character. Lets the
+  // sidebar render per-partner pips in a single roundtrip instead of
+  // fanning out 30+ /labels/stats requests on first paint.
+  labelsStatsAll: (char: string) =>
+    get<{
+      character: string
+      partners: Array<{
+        partner: string
+        ic: number
+        ooc: number
+        unlabeled: number
+        failed: number
+        total: number
+        // Epoch seconds. `log_mtime > last_label_at` means the
+        // conversation grew since the last classify run — surfaced as
+        // a stale dot in the sidebar.
+        log_mtime: number | null
+        last_label_at: number | null
+      }>
+    }>(`/labels/stats-all?char=${encodeURIComponent(char)}`),
   labelsClear: (body: { character: string; partner: string }) =>
     request<{ character: string; partner: string; deleted: number }>(
       '/labels/clear',
@@ -410,6 +444,36 @@ export const api = {
         body: JSON.stringify(body)
       }
     ),
+  labelsClearAll: () =>
+    request<{ labels_deleted: number; failures_deleted: number }>(
+      '/labels/clear-all',
+      { method: 'POST' }
+    ),
+  labelsRollup: () =>
+    get<{
+      ic: number
+      ooc: number
+      unlabeled: number
+      failed: number
+      manual: number
+      total: number
+      character_count: number
+    }>('/labels/rollup'),
+  labelsJobHistory: (limit = 20) =>
+    get<{
+      jobs: Array<{
+        id: string
+        scope: { character?: string; partner?: string }
+        state: 'done' | 'cancelled' | 'failed'
+        classified: number
+        failed: number
+        total: number
+        started_at: number
+        finished_at: number
+        error: string | null
+      }>
+      limit: number
+    }>(`/labels/job-history?limit=${limit}`),
   labelsOverride: (body: {
     character: string
     partner: string
@@ -520,6 +584,10 @@ export const api = {
   ragStatus: () => get<RagStatus>('/rag/status'),
   ragWipe: () =>
     request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
+  // Rebuild the BM25 lexical index from the existing Qdrant chunks.
+  // Cheaper than a full re-ingest — no LLM calls, no embeddings.
+  ragLexicalRebuild: () =>
+    request<{ indexed: number }>('/rag/lexical/rebuild', { method: 'POST' }),
   ragQuery: async (
     body: {
       question: string
@@ -563,6 +631,51 @@ export const api = {
         // Tail event without trailing blank line — still dispatch.
         dispatchSseBlock(buffer, handlers)
       }
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // best-effort
+      }
+    }
+  },
+  ragTalk: async (
+    body: {
+      messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
+      system?: string
+    },
+    handlers: RagQueryHandlers,
+    opts?: ApiOptions
+  ): Promise<void> => {
+    // Free-form chat counterpart to ragQuery. Same SSE wire format
+    // minus the `retrieved` / `expanded` events; reuses dispatchSseBlock
+    // so the renderer code path stays identical to the grounded mode.
+    const res = await fetch(`${base()}/rag/talk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+      signal: opts?.signal
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          dispatchSseBlock(block, handlers)
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) dispatchSseBlock(buffer, handlers)
     } finally {
       try {
         reader.releaseLock()

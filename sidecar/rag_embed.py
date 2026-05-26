@@ -108,8 +108,16 @@ def embed_texts(
     *,
     batch: int = DEFAULT_BATCH,
     timeout: float = DEFAULT_TIMEOUT,
+    keep_alive: str | int | None = None,
 ) -> list[list[float]]:
     """Embed a list of strings, returning one vector per input.
+
+    `keep_alive` is forwarded to the server as a per-request override
+    (Ollama-specific; unknown fields are ignored by LM Studio / OpenAI /
+    vLLM / TEI). Use a short value like "30s" or 0 to make the embed
+    model drop quickly on VRAM-tight setups — see chat_embed_keep_alive
+    in rag.RagSettings. None means "don't send the field"; Ollama then
+    uses its own default (~5 minutes).
 
     Empty input → empty output (the server might reject a zero-length
     list outright; cheaper to short-circuit).
@@ -121,7 +129,9 @@ def embed_texts(
     for i in range(0, len(texts), batch):
         chunk = texts[i : i + batch]
         prefixed = [prefix + t for t in chunk] if prefix else chunk
-        body = {"model": settings.embed_model, "input": prefixed}
+        body: dict = {"model": settings.embed_model, "input": prefixed}
+        if keep_alive is not None:
+            body["keep_alive"] = keep_alive
         resp = _post(
             settings.embed_endpoint,
             settings.embed_api_key,
@@ -160,32 +170,48 @@ def try_unload(settings: RagSettings, *, timeout: float = 10.0) -> bool:
     chat or game right after. Sending `keep_alive: 0` flips that to
     "unload immediately".
 
-    Ollama supports `keep_alive` on its OpenAI-compatible endpoint as a
-    non-standard extension. LM Studio ignores unknown fields (its
-    models are loaded explicitly via the UI; nothing to evict). So
-    this is safe to call against either — the worst case on LM Studio
-    is one extra round-trip that does nothing.
+    Routing:
+      - Ollama (detected by URL shape): POST native /api/generate with
+        an empty prompt and keep_alive=0. Ollama treats this as an
+        unload-only signal and does NOT re-load the model if it wasn't
+        already resident — the OpenAI-compat /v1/embeddings path used
+        to re-load it momentarily, which defeated the point.
+      - Anything else (LM Studio, vLLM, TEI, OpenAI): the OpenAI-compat
+        path with keep_alive=0. LM Studio loads via its own UI so the
+        request is a no-op there; cheaper than skipping outright
+        because it keeps the code path uniform for non-Ollama servers
+        that may also honour keep_alive.
 
     Returns True on a 2xx response, False on any failure. Caller must
     treat this as advisory only — never raises.
     """
+    # Import locally to avoid a cycle (rag_chat imports rag_store, which
+    # in some test contexts imports rag_embed for probe).
+    from rag_chat import _ollama_base, detect_endpoint_kind  # noqa: PLC0415
+
     headers = {"Content-Type": "application/json"}
     if settings.embed_api_key:
         headers["Authorization"] = f"Bearer {settings.embed_api_key}"
-    body = {
-        "model": settings.embed_model,
-        # Empty input + keep_alive=0: Ollama treats this as "release the
-        # model from memory right now". LM Studio rejects the empty
-        # input shape; we swallow the resulting 400 since the model
-        # isn't on a timer there anyway.
-        "input": [""],
-        "keep_alive": 0,
-    }
-    req = Request(
-        f"{settings.embed_endpoint.rstrip('/')}/embeddings",
-        data=json.dumps(body).encode("utf-8"),
-        headers=headers,
-    )
+
+    kind = detect_endpoint_kind(settings.embed_endpoint)
+    if kind == "ollama":
+        # Native /api/generate with empty prompt + keep_alive=0 is the
+        # documented "unload only" recipe — see
+        # https://github.com/ollama/ollama/blob/main/docs/api.md#unload-a-model
+        url = f"{_ollama_base(settings.embed_endpoint)}/api/generate"
+        body: dict = {
+            "model": settings.embed_model,
+            "prompt": "",
+            "keep_alive": 0,
+        }
+    else:
+        url = f"{settings.embed_endpoint.rstrip('/')}/embeddings"
+        body = {
+            "model": settings.embed_model,
+            "input": [""],
+            "keep_alive": 0,
+        }
+    req = Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
     try:
         with urlopen(req, timeout=timeout) as resp:
             return 200 <= resp.status < 300

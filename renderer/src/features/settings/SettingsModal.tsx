@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   type LabelsSettings,
+  type PromptPreset,
   type RagSettings,
   type RagStatus
 } from '../../lib/api'
@@ -91,6 +92,7 @@ type Draft = {
     multiquery_enabled: boolean
     multiquery_variants: string
     chat_num_ctx: string
+    chat_embed_keep_alive: string
     chunk_max_chars: string
     chunk_soft_split_chars: string
     chunk_overlap_msgs: string
@@ -129,6 +131,7 @@ function buildDraft(state: SettingsState): Draft {
       multiquery_enabled: state.rag.multiquery_enabled,
       multiquery_variants: String(state.rag.multiquery_variants),
       chat_num_ctx: String(state.rag.chat_num_ctx),
+      chat_embed_keep_alive: state.rag.chat_embed_keep_alive,
       chunk_max_chars: String(state.rag.chunk_max_chars),
       chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
       chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
@@ -170,6 +173,7 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.rag.embed_api_key !== baseline.rag.embed_api_key ||
     draft.rag.embed_query_prefix !== baseline.rag.embed_query_prefix ||
     draft.rag.embed_document_prefix !== baseline.rag.embed_document_prefix ||
+    draft.rag.chat_embed_keep_alive !== baseline.rag.chat_embed_keep_alive ||
     draft.rag.chunk_max_chars !== baseline.rag.chunk_max_chars ||
     draft.rag.chunk_soft_split_chars !== baseline.rag.chunk_soft_split_chars ||
     draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
@@ -196,6 +200,15 @@ const clampFloat = (s: string, lo: number, hi: number, fallback: number): number
   if (!Number.isFinite(n)) return fallback
   return Math.max(lo, Math.min(hi, n))
 }
+
+// Per-endpoint discover-button cache, scoped to a single SettingsModal
+// lifetime. Cleared on close so a re-opened modal re-queries against
+// the (possibly now-running) inference server. ModelField looks up
+// `endpoint.trim()` here before issuing the network call.
+const discoverCache = new Map<
+  string,
+  { models: string[]; error: string | null }
+>()
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const loadCharacters = useStore((s) => s.loadCharacters)
@@ -226,6 +239,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       })
     return () => {
       cancelled = true
+      // Drop the discover cache on close so re-opening Settings
+      // re-queries — important after the user (typically) tabs over to
+      // LM Studio / Ollama to fix what the empty list told them about.
+      discoverCache.clear()
     }
   }, [])
 
@@ -266,10 +283,64 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     return () => cancelAnimationFrame(id)
   }, [status, draft])
 
+  // When true, edits to ANY endpoint field (labels.llm_endpoint /
+  // rag.chat_endpoint / rag.embed_endpoint) propagate to all three.
+  // Persisted in localStorage because this is a UI-mode preference,
+  // not a server-side setting — no sidecar round-trip needed.
+  const [mirrorEndpoints, setMirrorEndpoints] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('workbench.mirrorEndpoints') === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'workbench.mirrorEndpoints',
+        mirrorEndpoints ? '1' : '0'
+      )
+    } catch {
+      // Storage may be unavailable in private mode; toggle still works
+      // in-session.
+    }
+  }, [mirrorEndpoints])
+
   const updateLabels = (patch: Partial<Draft['labels']>) =>
-    setDraft((d) => (d ? { ...d, labels: { ...d.labels, ...patch } } : d))
+    setDraft((d) => {
+      if (!d) return d
+      const next = { ...d, labels: { ...d.labels, ...patch } }
+      if (mirrorEndpoints && 'llm_endpoint' in patch && patch.llm_endpoint !== undefined) {
+        next.rag = {
+          ...next.rag,
+          chat_endpoint: patch.llm_endpoint,
+          embed_endpoint: patch.llm_endpoint
+        }
+      }
+      return next
+    })
   const updateRag = (patch: Partial<Draft['rag']>) =>
-    setDraft((d) => (d ? { ...d, rag: { ...d.rag, ...patch } } : d))
+    setDraft((d) => {
+      if (!d) return d
+      const next = { ...d, rag: { ...d.rag, ...patch } }
+      if (mirrorEndpoints) {
+        const v =
+          'chat_endpoint' in patch && patch.chat_endpoint !== undefined
+            ? patch.chat_endpoint
+            : 'embed_endpoint' in patch && patch.embed_endpoint !== undefined
+              ? patch.embed_endpoint
+              : null
+        if (v !== null) {
+          next.rag = {
+            ...next.rag,
+            chat_endpoint: v,
+            embed_endpoint: v
+          }
+          next.labels = { ...next.labels, llm_endpoint: v }
+        }
+      }
+      return next
+    })
   const updateGeneral = (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d))
 
@@ -366,6 +437,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             131072,
             state.rag.chat_num_ctx
           ),
+          chat_embed_keep_alive: draft.rag.chat_embed_keep_alive.trim().slice(0, 32),
           chunk_max_chars: nextChunkMax,
           chunk_soft_split_chars: clampInt(
             draft.rag.chunk_soft_split_chars,
@@ -454,6 +526,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     draft={draft}
                     onChange={updateGeneral}
                     firstFieldRef={firstFieldRef}
+                    mirrorEndpoints={mirrorEndpoints}
+                    onMirrorEndpointsChange={setMirrorEndpoints}
                   />
                 )}
                 {activeSection === 'labels' && (
@@ -638,15 +712,33 @@ function ModelField({
   const [showList, setShowList] = useState(false)
 
   const discover = async () => {
-    if (!endpoint.trim()) {
+    const ep = endpoint.trim()
+    if (!ep) {
       setDiscoverError('Set the endpoint first.')
       setDiscoverStatus('err')
+      return
+    }
+    // Cached result from an earlier click against the same endpoint in
+    // this modal session — render it without hitting the network.
+    const cached = discoverCache.get(ep)
+    if (cached) {
+      if (cached.models.length > 0) {
+        setDiscovered(cached.models)
+        setDiscoverStatus('ok')
+        setShowList(true)
+      } else {
+        setDiscovered([])
+        setDiscoverError(cached.error ?? 'no models returned')
+        setDiscoverStatus('err')
+        setShowList(false)
+      }
       return
     }
     setDiscoverStatus('loading')
     setDiscoverError(null)
     try {
-      const res = await api.discoverModels(endpoint.trim())
+      const res = await api.discoverModels(ep)
+      discoverCache.set(ep, { models: res.models, error: res.error ?? null })
       if (res.models.length === 0) {
         setDiscovered([])
         setDiscoverError(res.error ?? 'no models returned')
@@ -759,12 +851,16 @@ function GeneralPane({
   state,
   draft,
   onChange,
-  firstFieldRef
+  firstFieldRef,
+  mirrorEndpoints,
+  onMirrorEndpointsChange
 }: {
   state: SettingsState
   draft: Draft
   onChange: (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) => void
   firstFieldRef: React.RefObject<HTMLInputElement>
+  mirrorEndpoints: boolean
+  onMirrorEndpointsChange: (v: boolean) => void
 }) {
   const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
   const envLocked = state.fchat_data_dir_env_locked
@@ -854,6 +950,31 @@ function GeneralPane({
       </div>
 
       <div className="settings-section">
+        <h3 className="settings-section-title">Inference endpoints</h3>
+        <p className="settings-help">
+          Labels, RAG chat, and embedding each have their own endpoint
+          field. Most users run one LM Studio with everything loaded side
+          by side — flip this on and edits to any endpoint propagate to
+          all three at once.
+        </p>
+        <label className="settings-checkbox-row">
+          <input
+            type="checkbox"
+            checked={mirrorEndpoints}
+            onChange={(e) => onMirrorEndpointsChange(e.target.checked)}
+            data-testid="settings-mirror-endpoints"
+          />
+          <span>
+            <strong>Use one endpoint for Labels / Chat / Embedding</strong>
+            <span className="settings-meta">
+              Editing any endpoint field syncs the other two. Toggle off
+              to set them independently.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className="settings-section">
         <h3 className="settings-section-title">RAG index status</h3>
         {indexStatus === null ? (
           <p className="settings-meta">Loading status…</p>
@@ -895,6 +1016,63 @@ function LabelsPane({
     parsed?: { label: string; reason: string } | null
   } | null>(null)
 
+  type Rollup = Awaited<ReturnType<typeof api.labelsRollup>>
+  type JobHistory = Awaited<ReturnType<typeof api.labelsJobHistory>>
+  const [rollup, setRollup] = useState<Rollup | null>(null)
+  const [rollupStatus, setRollupStatus] = useState<'idle' | 'loading' | 'error'>(
+    'loading'
+  )
+  const [history, setHistory] = useState<JobHistory | null>(null)
+  const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'done' | 'error'>(
+    'idle'
+  )
+  const [resetError, setResetError] = useState<string | null>(null)
+
+  const refreshRollup = async () => {
+    setRollupStatus('loading')
+    try {
+      const r = await api.labelsRollup()
+      setRollup(r)
+      setRollupStatus('idle')
+    } catch {
+      setRollupStatus('error')
+    }
+  }
+
+  const refreshHistory = async () => {
+    try {
+      const h = await api.labelsJobHistory(20)
+      setHistory(h)
+    } catch {
+      // History is cosmetic; silent failure.
+    }
+  }
+
+  useEffect(() => {
+    void refreshRollup()
+    void refreshHistory()
+  }, [])
+
+  const triggerResetAll = async () => {
+    const confirmed = window.confirm(
+      'Reset ALL labels across every character?\n\n' +
+        'Every LLM and manual label for every conversation reverts to ' +
+        'Unlabeled. Rule-based hints (short messages, "((", etc.) keep ' +
+        'firing as OOC. This cannot be undone.'
+    )
+    if (!confirmed) return
+    setResetStatus('resetting')
+    setResetError(null)
+    try {
+      await api.labelsClearAll()
+      setResetStatus('done')
+      void refreshRollup()
+    } catch (err) {
+      setResetStatus('error')
+      setResetError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const runTest = async () => {
     setTestStatus('running')
     setTestResult(null)
@@ -930,6 +1108,53 @@ function LabelsPane({
         title="Labels — IC / OOC classifier"
         subtitle="Settings for the on-demand classifier. Short messages and `((…` auto-OOC by rule; everything else stays Unlabeled until you run Classify on a conversation."
       />
+
+      <div className="settings-section" data-testid="labels-rollup">
+        <h3 className="settings-section-title">Coverage</h3>
+        {rollupStatus === 'loading' && (
+          <p className="settings-help">Walking every log to compute totals…</p>
+        )}
+        {rollupStatus === 'error' && (
+          <p className="settings-help">
+            Couldn't load rollup — open and close Settings to retry.
+          </p>
+        )}
+        {rollup && (
+          <p className="settings-help" data-testid="labels-rollup-line">
+            Across {rollup.character_count.toLocaleString()} character
+            {rollup.character_count === 1 ? '' : 's'}:{' '}
+            <strong>{rollup.ic.toLocaleString()}</strong> IC ·{' '}
+            <strong>{rollup.ooc.toLocaleString()}</strong> OOC ·{' '}
+            <strong>{rollup.manual.toLocaleString()}</strong> manual ·{' '}
+            <strong>{rollup.unlabeled.toLocaleString()}</strong> Unlabeled
+            {rollup.failed > 0 && (
+              <>
+                {' '}·{' '}
+                <strong>{rollup.failed.toLocaleString()}</strong> Failed
+              </>
+            )}
+          </p>
+        )}
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => void triggerResetAll()}
+            disabled={resetStatus === 'resetting' || rollup?.total === 0}
+            data-testid="labels-reset-all"
+          >
+            {resetStatus === 'resetting' ? 'Resetting…' : 'Reset all labels…'}
+          </button>
+          {resetStatus === 'done' && (
+            <span className="settings-meta">All labels cleared.</span>
+          )}
+          {resetStatus === 'error' && resetError && (
+            <span className="settings-meta classify-last-error">{resetError}</span>
+          )}
+        </div>
+      </div>
+
+      <LabelsHistorySection history={history} />
 
       <div className="settings-section">
         <div className="settings-field">
@@ -1086,6 +1311,11 @@ function LabelsPane({
           Sent as the system message before each target message + its context
           window.
         </p>
+        <PromptPresetPicker
+          presets={labels.prompt_presets}
+          currentBody={draft.system_prompt}
+          onPick={(body) => onChange({ system_prompt: body })}
+        />
         <textarea
           id="labels-prompt"
           className="settings-textarea"
@@ -1109,6 +1339,107 @@ function LabelsPane({
         </div>
       </div>
     </>
+  )
+}
+
+// Single-select dropdown that swaps the system_prompt textarea content
+// for one of the bundled presets. The "(custom)" option shows when the
+// current body doesn't match any preset verbatim — i.e. the user has
+// edited the prompt after picking a preset; selecting a preset replaces
+// the body without confirmation, but the user can still Undo via the
+// textarea's native edit history.
+function LabelsHistorySection({
+  history
+}: {
+  history: Awaited<ReturnType<typeof api.labelsJobHistory>> | null
+}) {
+  if (!history || history.jobs.length === 0) return null
+  return (
+    <div className="settings-section" data-testid="labels-history">
+      <h3 className="settings-section-title">Recent classify runs</h3>
+      <p className="settings-help">
+        Persistent across sidecar restarts — the live progress for in-flight
+        jobs lives in the Classify panel instead.
+      </p>
+      <ul className="settings-history-list">
+        {history.jobs.map((job) => {
+          const scopeLabel = formatJobScope(job.scope)
+          const when = new Date(job.finished_at * 1000).toLocaleString()
+          const failedNote = job.failed > 0 ? ` · ${job.failed} failed` : ''
+          return (
+            <li key={job.id} className={`settings-history-row state-${job.state}`}>
+              <span className="settings-history-when">{when}</span>
+              <span className="settings-history-scope">{scopeLabel}</span>
+              <span className="settings-history-counts">
+                {job.classified.toLocaleString()} / {job.total.toLocaleString()}
+                {failedNote}
+              </span>
+              <span className={`settings-history-state state-${job.state}`}>
+                {job.state}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+function formatJobScope(scope: { character?: string; partner?: string }): string {
+  if (scope.character && scope.partner) {
+    return `${scope.partner} × ${scope.character}`
+  }
+  if (scope.character) return `all partners × ${scope.character}`
+  return 'all characters'
+}
+
+function PromptPresetPicker({
+  presets,
+  currentBody,
+  onPick
+}: {
+  presets: PromptPreset[]
+  currentBody: string
+  onPick: (body: string) => void
+}) {
+  if (presets.length === 0) return null
+  const matched = presets.find((p) => p.body === currentBody)
+  const selectedId = matched?.id ?? ''
+  const selectedDesc = matched?.description ?? 'Edited prompt — no preset selected.'
+  return (
+    <div className="settings-row" style={{ marginBottom: 8 }}>
+      <label
+        htmlFor="labels-prompt-preset"
+        className="settings-row-label settings-row-label-wide"
+      >
+        Preset
+      </label>
+      <select
+        id="labels-prompt-preset"
+        className="settings-input"
+        value={selectedId}
+        onChange={(e) => {
+          const id = e.target.value
+          const next = presets.find((p) => p.id === id)
+          if (next) onPick(next.body)
+        }}
+        data-testid="labels-prompt-preset"
+      >
+        {!matched && (
+          <option value="" disabled>
+            (custom — edited)
+          </option>
+        )}
+        {presets.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label} · {p.language}
+          </option>
+        ))}
+      </select>
+      <span className="settings-meta" style={{ marginLeft: 8 }}>
+        {selectedDesc}
+      </span>
+    </div>
   )
 }
 
@@ -1593,6 +1924,30 @@ function EmbeddingPane({
     }
   }
 
+  const [lexicalStatus, setLexicalStatus] = useState<
+    'idle' | 'rebuilding' | 'done' | 'error'
+  >('idle')
+  const [lexicalResult, setLexicalResult] = useState<{
+    indexed?: number
+    error?: string
+  } | null>(null)
+
+  const triggerLexicalRebuild = async () => {
+    if (lexicalStatus === 'rebuilding') return
+    setLexicalStatus('rebuilding')
+    setLexicalResult(null)
+    try {
+      const r = await api.ragLexicalRebuild()
+      setLexicalResult({ indexed: r.indexed })
+      setLexicalStatus('done')
+    } catch (err) {
+      setLexicalResult({
+        error: err instanceof Error ? err.message : String(err)
+      })
+      setLexicalStatus('error')
+    }
+  }
+
   const triggerReingestAll = () => {
     const confirmed = window.confirm(
       'Re-ingest all logs?\n\n' +
@@ -1719,6 +2074,40 @@ function EmbeddingPane({
         </div>
 
         <div className="settings-field">
+          <label className="settings-label" htmlFor="rag-embed-keep-alive">
+            Chat query keep-alive
+          </label>
+          <p className="settings-help">
+            How long Ollama should keep the embedding model resident after
+            embedding a chat question. Short values (e.g. <code>30s</code>)
+            free VRAM quickly on tight cards so it doesn't fight your chat
+            model. Leave blank to use the server default (~5 min). Ignored
+            by LM Studio and other servers that don't honour keep_alive.
+          </p>
+          <div className="settings-row">
+            <input
+              id="rag-embed-keep-alive"
+              type="text"
+              className="settings-input"
+              value={draft.chat_embed_keep_alive}
+              placeholder="(server default)"
+              onChange={(e) => onChange({ chat_embed_keep_alive: e.target.value })}
+              data-testid="rag-embed-keep-alive-input"
+            />
+            <button
+              type="button"
+              className="settings-reset"
+              onClick={() =>
+                onChange({ chat_embed_keep_alive: rag.defaults.chat_embed_keep_alive })
+              }
+              data-testid="rag-embed-keep-alive-reset"
+            >
+              Default ({rag.defaults.chat_embed_keep_alive || 'unset'})
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-field">
           <label className="settings-label">Test connection</label>
           <p className="settings-help">
             One canned embedding roundtrip. Validates the endpoint, that the
@@ -1811,12 +2200,34 @@ function EmbeddingPane({
           >
             Re-ingest all (wipe + rebuild)…
           </button>
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => void triggerLexicalRebuild()}
+            disabled={lexicalStatus === 'rebuilding'}
+            title="Rebuild the BM25 lexical mirror from the existing Qdrant chunks. No re-embedding, no LLM calls."
+            data-testid="rag-lexical-rebuild"
+          >
+            {lexicalStatus === 'rebuilding'
+              ? 'Rebuilding lexical…'
+              : 'Rebuild lexical index'}
+          </button>
           {wipeStatus === 'wiped' && (
             <span className="settings-meta">Index wiped.</span>
           )}
           {wipeStatus === 'error' && wipeError && (
             <span className="settings-meta classify-last-error">
               Wipe failed: {wipeError}
+            </span>
+          )}
+          {lexicalStatus === 'done' && lexicalResult?.indexed !== undefined && (
+            <span className="settings-meta">
+              Lexical index rebuilt — {lexicalResult.indexed.toLocaleString()} chunks.
+            </span>
+          )}
+          {lexicalStatus === 'error' && lexicalResult?.error && (
+            <span className="settings-meta classify-last-error">
+              Rebuild failed: {lexicalResult.error}
             </span>
           )}
         </div>

@@ -130,6 +130,26 @@ export function LogViewer() {
   const [selectMode, setSelectMode] = useState(false)
   const [selRange, setSelRange] = useState<[number, number] | null>(null)
   const [labelMenu, setLabelMenu] = useState<LabelMenuState>(null)
+  // Per-action undo affordance for manual label changes — a single
+  // override or a batch one. Auto-clears after 5 seconds; replacing the
+  // toast (e.g. user makes a second override quickly) cancels the
+  // previous countdown.
+  const [undoToast, setUndoToast] = useState<{
+    text: string
+    undo: () => void
+  } | null>(null)
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showUndoToast = (text: string, undo: () => void) => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
+    setUndoToast({ text, undo })
+    undoTimerRef.current = setTimeout(() => setUndoToast(null), 5000)
+  }
+  useEffect(
+    () => () => {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
+    },
+    []
+  )
   // Separate menu for conversation-level actions (Classify whole
   // conversation, …) — right-click on the pane header. Distinct from
   // labelMenu which is per-message.
@@ -213,6 +233,11 @@ export function LogViewer() {
   const submitOverride = async (msg: LogMessage, label: 'IC' | 'OOC' | null) => {
     if (!activeChar || !partner) return
     setLabelMenu(null)
+    // Snapshot the pre-override state so the toast's Undo button can
+    // restore exactly what was there before — IC label from a previous
+    // manual override, an LLM verdict, or no row at all (Unlabeled).
+    const priorLabel: 'IC' | 'OOC' | null =
+      msg.label === 'IC' || msg.label === 'OOC' ? msg.label : null
     // Optimistic — patch the local state, then call the API. If the
     // request fails we reload the conversation to get authoritative
     // state back from the sidecar.
@@ -233,6 +258,12 @@ export function LogViewer() {
         speaker: msg.speaker,
         label
       })
+      // Only show the Undo toast on success — otherwise the soft-reset
+      // fetch below races the user's click.
+      showUndoToast(
+        label === null ? 'Label reset' : `Set ${label}`,
+        () => void submitOverride(msg, priorLabel)
+      )
     } catch (err) {
       console.error('[labels] override failed', err)
       // Soft-reset by refetching — cheap for a paged conversation.
@@ -386,7 +417,10 @@ export function LogViewer() {
     return (
       <section className="pane" data-testid="log-viewer">
         <header className="pane-head">Pick a partner</header>
-        <div className="pane-body pane-body-placeholder">Choose a partner from the sidebar.</div>
+        <div className="pane-body pane-body-placeholder">
+          Choose a partner from the sidebar.
+          <LabelsFirstRunHint />
+        </div>
       </section>
     )
   }
@@ -459,6 +493,96 @@ export function LogViewer() {
       // multi-select export so just log to console.
       console.info(`[log-export] copied ${slice.length} message(s) as ${format}`)
     })
+  }
+
+  // Apply a manual label (or reset) to every row in the current
+  // export selection. Targets only chat/action rows — system / ad /
+  // roll / warn lines aren't part of the IC/OOC classifier scope and
+  // would fail server-side anyway, so we filter them out client-side.
+  const overrideSelection = async (label: 'IC' | 'OOC' | null) => {
+    if (!messages || !partner || !activeChar || selRange === null) return
+    const slice = messages.slice(
+      Math.min(selRange[0], selRange[1]),
+      Math.max(selRange[0], selRange[1]) + 1
+    )
+    const targets = slice.filter((m) => m.kind === 'ic' || m.kind === 'ooc')
+    if (targets.length === 0) return
+    if (label !== null && targets.length > 200) {
+      // Cheap guard — accidental "Set IC for 8,000 rows" wouldn't
+      // corrupt anything (labels are idempotent) but it would saturate
+      // the sidecar for several seconds. Make the user confirm.
+      const ok = window.confirm(
+        `Apply ${label} to ${targets.length.toLocaleString()} rows? This many manual overrides is unusual — confirm to proceed.`
+      )
+      if (!ok) return
+    }
+    // Snapshot prior labels so the Undo toast can restore them. Each
+    // entry holds (hash, ts, speaker) plus the label that was there
+    // before this call — `null` covers Unlabeled / rule-derived rows.
+    const undoPlan = targets.map((m) => ({
+      hash: m.hash,
+      ts: m.ts,
+      speaker: m.speaker,
+      label:
+        m.label === 'IC' || m.label === 'OOC' ? (m.label as 'IC' | 'OOC') : null
+    }))
+    // Optimistic: stamp each row locally first so the UI reflects the
+    // change immediately, then fire requests. On failure for any one
+    // row, reload the whole conversation to reconcile.
+    for (const m of targets) {
+      applyLabelOverride(
+        activeChar,
+        partner,
+        m.hash,
+        label === null ? null : { label, label_source: 'manual' }
+      )
+    }
+    try {
+      // Sequential rather than parallel — labels DB connection is
+      // single-threaded inside the sidecar and the chat scope is
+      // small enough that latency stays sub-second.
+      for (const m of targets) {
+        await api.labelsOverride({
+          character: activeChar,
+          partner,
+          hash: m.hash,
+          ts: m.ts,
+          speaker: m.speaker,
+          label
+        })
+      }
+      const undoText =
+        label === null
+          ? `Reset ${targets.length.toLocaleString()} label${targets.length === 1 ? '' : 's'}`
+          : `Set ${targets.length.toLocaleString()} row${targets.length === 1 ? '' : 's'} → ${label}`
+      showUndoToast(undoText, () => {
+        void (async () => {
+          for (const e of undoPlan) {
+            applyLabelOverride(
+              activeChar,
+              partner,
+              e.hash,
+              e.label === null ? null : { label: e.label, label_source: 'manual' }
+            )
+            try {
+              await api.labelsOverride({
+                character: activeChar,
+                partner,
+                hash: e.hash,
+                ts: e.ts,
+                speaker: e.speaker,
+                label: e.label
+              })
+            } catch (err) {
+              console.error('[labels] undo failed', err)
+            }
+          }
+        })()
+      })
+    } catch (err) {
+      console.error('[labels] batch override failed', err)
+      void useStore.getState().loadMessages(activeChar, partner)
+    }
   }
 
   const selBounds =
@@ -685,6 +809,34 @@ export function LogViewer() {
           >
             Copy Text
           </button>
+          <span className="log-export-divider" aria-hidden />
+          <button
+            type="button"
+            onClick={() => void overrideSelection('IC')}
+            disabled={selBounds === null}
+            title="Set every chat/action row in the selection to IC"
+            data-testid="log-export-set-ic"
+          >
+            Set IC
+          </button>
+          <button
+            type="button"
+            onClick={() => void overrideSelection('OOC')}
+            disabled={selBounds === null}
+            title="Set every chat/action row in the selection to OOC"
+            data-testid="log-export-set-ooc"
+          >
+            Set OOC
+          </button>
+          <button
+            type="button"
+            onClick={() => void overrideSelection(null)}
+            disabled={selBounds === null}
+            title="Clear manual / LLM labels for the selection (rule + Unlabeled fall back)"
+            data-testid="log-export-reset"
+          >
+            Reset
+          </button>
           {selBounds !== null && (
             <button
               type="button"
@@ -765,7 +917,71 @@ export function LogViewer() {
           />
         )}
       </div>
+      {undoToast && (
+        <div className="log-undo-toast" role="status" data-testid="log-undo-toast">
+          <span>{undoToast.text}</span>
+          <button
+            type="button"
+            className="log-undo-action"
+            onClick={() => {
+              undoToast.undo()
+              if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
+              setUndoToast(null)
+            }}
+            data-testid="log-undo-action"
+          >
+            Undo
+          </button>
+        </div>
+      )}
     </section>
+  )
+}
+
+// Dismissible first-run hint that surfaces the existence of the IC/OOC
+// classifier — by the time users sit on an empty Log Viewer pane they
+// have a character selected but haven't necessarily noticed the labels
+// machinery yet. Dismissed state persists in localStorage so the card
+// doesn't return after the first time the user clicks it away.
+const LABELS_HINT_KEY = 'workbench.labelsHintDismissed'
+
+function LabelsFirstRunHint() {
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(LABELS_HINT_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  if (dismissed) return null
+  const dismiss = () => {
+    setDismissed(true)
+    try {
+      localStorage.setItem(LABELS_HINT_KEY, '1')
+    } catch {
+      // Storage may be unavailable in private mode; toggle stays in-session.
+    }
+  }
+  return (
+    <div className="labels-hint-card" data-testid="labels-first-run-hint">
+      <div className="labels-hint-body">
+        <strong>Tip:</strong> Messages are auto-labelled IC / OOC by rule —
+        short messages, <code>((…))</code> brackets and the like. Configure
+        an LLM in{' '}
+        <strong>Settings → Labels</strong> (the bundled prompt is German;
+        switch to English / minimal there if needed) and run{' '}
+        <strong>Classify</strong> on a conversation to label the rest.
+      </div>
+      <button
+        type="button"
+        className="labels-hint-dismiss"
+        onClick={dismiss}
+        aria-label="Dismiss hint"
+        data-testid="labels-first-run-hint-dismiss"
+      >
+        ✕
+      </button>
+    </div>
   )
 }
 

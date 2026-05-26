@@ -38,6 +38,7 @@ export function AppLayout() {
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [aiSetupOpen, setAiSetupOpen] = useState(false)
+  const [firstRunToast, setFirstRunToast] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -49,6 +50,50 @@ export function AppLayout() {
       cancelled = true
     }
   }, [])
+
+  // First-run detection: surface a non-blocking toast pointing at AI
+  // Setup when there's nothing indexed and no labels endpoint override.
+  // Less hostile than auto-opening the wizard; the user can dismiss
+  // permanently or click through. Runs once on mount per session.
+  useEffect(() => {
+    let cancelled = false
+    const KEY = 'workbench.firstRunDismissed'
+    try {
+      if (localStorage.getItem(KEY) === '1') return
+    } catch {
+      // localStorage unavailable — fall through and just suppress next session.
+    }
+    void (async () => {
+      try {
+        const [s, rag] = await Promise.all([api.settingsGet(), api.ragStatus()])
+        if (cancelled) return
+        const labelsDefault =
+          s.labels.llm_endpoint === s.labels.defaults.llm_endpoint
+        const ragDefault =
+          s.rag.embed_endpoint === s.rag.defaults.embed_endpoint &&
+          s.rag.chat_endpoint === s.rag.defaults.chat_endpoint
+        if (labelsDefault && ragDefault && rag.chunk_count === 0) {
+          setFirstRunToast(true)
+        }
+      } catch {
+        // Sidecar unreachable — health card already covers that case.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const dismissFirstRun = (permanent: boolean) => {
+    setFirstRunToast(false)
+    if (permanent) {
+      try {
+        localStorage.setItem('workbench.firstRunDismissed', '1')
+      } catch {
+        // No-op — see read site above.
+      }
+    }
+  }
 
   // Push activeChar/activePartner state to the native menu so items
   // requiring a selection grey out instead of silently no-op'ing.
@@ -175,6 +220,39 @@ export function AppLayout() {
           sidecar: {health}
         </span>
       </header>
+      {firstRunToast && !aiSetupOpen && (
+        <div
+          className="first-run-toast"
+          role="status"
+          data-testid="first-run-toast"
+        >
+          <span>
+            <strong>First time?</strong> Configure your local AI in{' '}
+            <strong>Tools → AI Setup…</strong> before classifying or indexing.
+          </span>
+          <button
+            type="button"
+            className="first-run-toast-open"
+            onClick={() => {
+              setAiSetupOpen(true)
+              dismissFirstRun(true)
+            }}
+            data-testid="first-run-toast-open"
+          >
+            Open AI Setup
+          </button>
+          <button
+            type="button"
+            className="first-run-toast-dismiss"
+            onClick={() => dismissFirstRun(true)}
+            aria-label="Don't show again"
+            data-testid="first-run-toast-dismiss"
+            title="Don't show again"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {aiSetupOpen && <AISetupWizard onClose={() => setAiSetupOpen(false)} />}

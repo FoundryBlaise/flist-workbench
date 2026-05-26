@@ -75,6 +75,13 @@ KEY_RAG_MULTIQUERY_VARIANTS = "rag.multiquery_variants"
 # Ollama-specific: forwarded as options.num_ctx in the chat payload.
 # LM Studio sets context at model load time and ignores this field.
 KEY_RAG_CHAT_NUM_CTX = "rag.chat_num_ctx"
+# Per-query keep_alive sent to the embed endpoint when embedding a chat
+# question. Empty string ("") suppresses the field — Ollama then keeps
+# the model resident for its default ~5 minutes. A short value like
+# "30s" lets bge-m3 drop quickly on VRAM-tight setups so it doesn't
+# thrash against the chat model. Free-text so users can write Ollama's
+# duration grammar verbatim ("30s" / "1m" / "0").
+KEY_RAG_CHAT_EMBED_KEEP_ALIVE = "rag.chat_embed_keep_alive"
 
 # Chunking tunables. Changing any of these requires a re-ingest with
 # wipe for existing data — chunk_ids encode the subchunk index, so

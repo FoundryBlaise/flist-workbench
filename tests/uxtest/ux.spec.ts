@@ -143,13 +143,15 @@ test('ux walkthrough', async () => {
       await shot(window, '08-after-image-click')
     }
 
-    // Selecting text in preview
+    // Selecting text in preview. `globalThis` inside evaluate() is the
+    // browser window; the outer `window` is Playwright's Page binding,
+    // which TS otherwise treats as the receiver of `.getSelection()`.
     await preview.evaluate((el) => {
       const range = document.createRange()
       const firstText = el.querySelector('p, .bb-heading, div')
       if (firstText && firstText.firstChild) {
         range.selectNodeContents(firstText)
-        const sel = window.getSelection()
+        const sel = globalThis.getSelection()
         sel?.removeAllRanges()
         sel?.addRange(range)
       }

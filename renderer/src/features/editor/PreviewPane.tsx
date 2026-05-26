@@ -108,9 +108,14 @@ export function PreviewPane() {
       <header className="pane-head">Live Preview <span className="preview-edit-hint">· editable</span></header>
       {showEditHint && (
         <div className="preview-edit-banner" data-testid="preview-edit-banner">
+          <span className="preview-edit-banner-icon" aria-hidden>
+            ✎
+          </span>
           <span>
-            <b>Click anywhere here to edit text in place.</b>{' '}
-            Structural changes (tags, layout) still go in the source on the left.
+            <b>This preview is live and editable.</b> Click anywhere to fix a
+            typo or rephrase a sentence — your changes flow back into the
+            source on the left. Structural changes (tags, layout) still go
+            in the editor.
           </span>
           <button
             type="button"
@@ -118,7 +123,7 @@ export function PreviewPane() {
             onClick={dismissEditHint}
             aria-label="Dismiss hint"
           >
-            ✕
+            Got it · ✕
           </button>
         </div>
       )}

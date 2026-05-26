@@ -20,7 +20,12 @@ const CHAT_MODEL_12GB =
   'hf.co/bartowski/mlabonne_gemma-3-12b-it-abliterated-GGUF:Q4_K_M'
 const CHAT_MODEL_24GB =
   'hf.co/bartowski/huihui-ai_Mistral-Small-24B-Instruct-2501-abliterated-GGUF:Q4_K_M'
-const EMBED_MODEL_DEFAULT = 'nomic-embed-text:latest'
+// bge-m3 (BAAI) is multilingual, 1024-dim, and doesn't need the
+// nomic search_query/search_document prefixes. Recovers significantly
+// better recall on German + mixed-language corpora than nomic-embed-text
+// (the original default) at the cost of ~430 MB extra download.
+// Matches sidecar/rag.py DEFAULT_EMBED_MODEL.
+const EMBED_MODEL_DEFAULT = 'bge-m3:latest'
 const NOMIC_QUERY_PREFIX = 'search_query: '
 const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
@@ -86,7 +91,9 @@ export function AISetupWizard({ onClose }: { onClose: () => void }) {
   const [envApplied, setEnvApplied] = useState(false)
   const [envSkipped, setEnvSkipped] = useState(false)
   const [embedModel, setEmbedModel] = useState(EMBED_MODEL_DEFAULT)
-  const [applyNomicPrefixes, setApplyNomicPrefixes] = useState(true)
+  // Default off: bge-m3 (recommended default) doesn't use nomic prefixes.
+  // The toggle below auto-flips on if the user picks a nomic-* model.
+  const [applyNomicPrefixes, setApplyNomicPrefixes] = useState(false)
   const [chatModelOverride, setChatModelOverride] = useState(false)
   const [embedModelOverride, setEmbedModelOverride] = useState(false)
   // Lifted from OllamaPage so the footer's Continue button can gate on
@@ -726,31 +733,45 @@ function EmbedPage({
           onClick={() => {
             setOverride(false)
             setEmbedModel(EMBED_MODEL_DEFAULT)
-            setApplyNomicPrefixes(true)
+            setApplyNomicPrefixes(false)
           }}
           testId="ai-setup-embed-default"
           title="Recommended"
           model={EMBED_MODEL_DEFAULT}
-          subtitle="274 MB · used to index logs · nomic prefixes auto-applied."
+          subtitle="~568 MB · 1024-dim multilingual · best recall on German + mixed-language logs."
         />
       </div>
       <details
         className="wizard-disclosure"
         open={override}
-        onToggle={(e) =>
-          setOverride((e.target as HTMLDetailsElement).open)
-        }
+        onToggle={(e) => {
+          const isOpen = (e.target as HTMLDetailsElement).open
+          setOverride(isOpen)
+          // Closing the override returns to the recommended bge-m3
+          // setup; reset the prefix toggle so it matches.
+          if (!isOpen) {
+            setEmbedModel(EMBED_MODEL_DEFAULT)
+            setApplyNomicPrefixes(false)
+          }
+        }}
       >
         <summary>Use a different embedding model</summary>
         <p className="settings-help">
-          If your model isn't the nomic family, untick the prefix toggle
-          below — BGE / e5 / Voyage / Gemini all ignore prefixes.
+          Tick the prefix toggle below only for the <code>nomic-embed-*</code>
+          family — BGE / e5 / Voyage / Gemini all ignore prefixes.
         </p>
         <input
           type="text"
           className="settings-input"
           value={embedModel}
-          onChange={(e) => setEmbedModel(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value
+            setEmbedModel(next)
+            // Convenience: auto-tick prefixes when the user types a
+            // nomic model name, untick otherwise. Still user-overridable
+            // via the checkbox below.
+            setApplyNomicPrefixes(next.toLowerCase().includes('nomic-embed'))
+          }}
           data-testid="ai-setup-embed-model-input"
         />
         <label className="settings-checkbox-row" style={{ marginTop: 10 }}>
@@ -763,8 +784,8 @@ function EmbedPage({
           <span>
             <strong>Apply nomic task prefixes</strong>
             <span className="settings-meta">
-              Required for <code>nomic-embed-text-*</code> models; harmless to
-              tick for other models if you're unsure.
+              Required for <code>nomic-embed-text-*</code> models; leave off
+              for BGE / e5 / Voyage / Gemini.
             </span>
           </span>
         </label>
