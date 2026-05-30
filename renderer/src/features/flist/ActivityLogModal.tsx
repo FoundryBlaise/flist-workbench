@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
+import { EmptyState } from '../../components/EmptyState'
 
 type Snapshot = Awaited<ReturnType<typeof api.flistActivity>>
 
@@ -127,10 +128,16 @@ export function ActivityLogModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
           {!loading && snap && events.length === 0 && (
-            <div className="flist-activity-empty">
-              No F-list activity recorded yet. Sign in and pull a character to
-              start the log.
-            </div>
+            <EmptyState
+              variant="modal"
+              testId="flist-activity-empty"
+              body={
+                <p>
+                  No F-list activity recorded yet. Sign in and pull a character
+                  to start the log.
+                </p>
+              }
+            />
           )}
           {events.length > 0 && (
             <ul className="flist-activity-list" data-testid="flist-activity-list">

@@ -172,6 +172,24 @@ export function UnifiedCharacterPicker() {
     pillText = '✓ Updated'
   }
 
+  // Pre-drop warning: when the sidecar's idle watchdog is about to
+  // clear the cached password (~2 min away), nudge the user to do
+  // something that resets the timer. Clicking "Stay signed in" hits
+  // the touchable /flist/characters endpoint via flistLoadRoster.
+  const idleRemaining = session.password_idle_seconds_remaining
+  const showIdleWarning =
+    session.active
+    && session.password_cached
+    && typeof idleRemaining === 'number'
+    && idleRemaining > 0
+    && idleRemaining <= 120
+  const idleMinutesLabel =
+    typeof idleRemaining === 'number'
+      ? idleRemaining >= 60
+        ? `${Math.ceil(idleRemaining / 60)} min`
+        : `${idleRemaining}s`
+      : null
+
   // Roster aggregates account + archived + log dirs server-side. Pull
   // on mount and whenever the sidecar comes online with logs ready so
   // the picker has data even when the user isn't signed in to F-list.
@@ -275,6 +293,27 @@ export function UnifiedCharacterPicker() {
           title={pillText}
         >
           {pillText}
+        </div>
+      )}
+      {showIdleWarning && (
+        <div
+          className="char-picker-idle-warning"
+          role="status"
+          data-testid="char-picker-idle-warning"
+        >
+          <span>
+            Session will be cleared in {idleMinutesLabel} from inactivity —
+            you'll need to sign in again to refresh profiles.
+          </span>
+          <button
+            type="button"
+            className="char-picker-idle-stay"
+            onClick={() => void loadRoster()}
+            data-testid="char-picker-idle-stay"
+            title="Refreshes the roster, which counts as activity"
+          >
+            Stay signed in
+          </button>
         </div>
       )}
       {open && (

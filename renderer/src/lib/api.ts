@@ -17,6 +17,13 @@ export type FlistSessionStatus = {
   expires_in_sec?: number
   needs_refresh?: boolean
   api_hourly_count?: number
+  // True while the sidecar still has the password cached for
+  // auto-refresh. False after the idle watchdog drops it.
+  password_cached?: boolean
+  // Seconds remaining until the idle watchdog drops the cached
+  // password; null when nothing is cached. Used by the renderer to
+  // surface a pre-drop warning banner.
+  password_idle_seconds_remaining?: number | null
 }
 
 export type FlistPullStatus = {

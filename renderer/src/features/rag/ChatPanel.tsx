@@ -3,6 +3,7 @@ import { api, type RagCitation, type RagQueryScope } from '../../lib/api'
 import { useStore } from '../../state'
 import { displayCharacter as displayName, displayPartner } from '../../lib/partnerName'
 import { categoriseEndpoint } from '../../lib/endpoint'
+import { EmptyState } from '../../components/EmptyState'
 
 type Turn =
   | {
@@ -111,6 +112,30 @@ export function ChatPanel() {
       cancelled = true
     }
   }, [])
+
+  // Auto-dismiss the empty-state card after a mid-conversation ingest:
+  // poll /rag/status every 5s while we're still at chunk_count==0 so
+  // the user doesn't have to close + reopen the panel to clear the
+  // card once they've filled the index. Stops polling as soon as the
+  // count flips to non-zero (the empty card unmounts naturally then).
+  useEffect(() => {
+    if (indexedChunks !== 0) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const rag = await api.ragStatus()
+        if (!cancelled) setIndexedChunks(rag.chunk_count)
+      } catch {
+        // sidecar may be momentarily unreachable mid-restart — try again next interval
+      }
+    }
+    const id = window.setInterval(() => void tick(), 5_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [indexedChunks])
+
   const openIngest = useStore((s) => s.openIngest)
   const openAiSetup = useStore((s) => s.openAiSetup)
   // Default scope mode: 'partner' if a partner is selected, else
@@ -457,41 +482,35 @@ export function ChatPanel() {
       <div className="chat-body" ref={listRef} data-testid="chat-body">
         {turns.length === 0 && (
           chatMode === 'question' && indexedChunks === 0 ? (
-            <div
-              className="chat-empty chat-empty-no-index"
-              data-testid="chat-empty-no-index"
-            >
-              <p className="chat-empty-headline">
-                <strong>No indexed logs yet.</strong>
-              </p>
-              <p>
-                Question mode searches a local vector index of your saved
-                F-Chat logs. The index is empty — questions here would just
-                come back as "I can't find that in the logs."
-              </p>
-              <div className="chat-empty-ctas">
-                <button
-                  type="button"
-                  className="chat-empty-cta chat-empty-cta-primary"
-                  onClick={() => openIngest({}, 'All characters, all partners')}
-                  data-testid="chat-empty-ingest"
-                >
-                  Ingest your logs now
-                </button>
-                <button
-                  type="button"
-                  className="chat-empty-cta"
-                  onClick={openAiSetup}
-                  data-testid="chat-empty-ai-setup"
-                >
-                  Run AI Setup
-                </button>
-              </div>
-              <p className="chat-empty-foot">
-                Already configured your LLM? Open <strong>Tools → Ingest</strong>{' '}
-                to populate the index, then come back here.
-              </p>
-            </div>
+            <EmptyState
+              variant="callout"
+              testId="chat-empty-no-index"
+              headline="No indexed logs yet."
+              body={
+                <p>
+                  Question mode searches a local vector index of your saved
+                  F-Chat logs. The index is empty — questions here would just
+                  come back as "I can't find that in the logs."
+                </p>
+              }
+              primaryCta={{
+                label: 'Ingest your logs now',
+                onClick: () => openIngest({}, 'All characters, all partners'),
+                testId: 'chat-empty-ingest'
+              }}
+              secondaryCta={{
+                label: 'Run AI Setup',
+                onClick: openAiSetup,
+                testId: 'chat-empty-ai-setup'
+              }}
+              footer={
+                <>
+                  Already configured your LLM? Open{' '}
+                  <strong>Tools → Ingest</strong> to populate the index, then
+                  come back here.
+                </>
+              }
+            />
           ) : (
             <div className="chat-empty">
               {chatMode === 'question' ? (
@@ -541,7 +560,10 @@ export function ChatPanel() {
                 <div className="chat-turn-error">⚠ {t.error}</div>
               )}
               {t.retrieval && (t.status === 'done' || t.status === 'cancelled') && (
-                <RetrievalLine meta={t.retrieval} />
+                <RetrievalLine
+                  meta={t.retrieval}
+                  remoteEndpointHost={chatEndpointHost}
+                />
               )}
               {t.citations.length > 0 && (
                 <Citations citations={t.citations} onClick={onCitationClick} />
@@ -667,7 +689,13 @@ function emptyRetrieval(): RetrievalMeta {
   }
 }
 
-function RetrievalLine({ meta }: { meta: RetrievalMeta }) {
+function RetrievalLine({
+  meta,
+  remoteEndpointHost
+}: {
+  meta: RetrievalMeta
+  remoteEndpointHost?: string | null
+}) {
   const parts: string[] = []
   // Lead with which retrievers ran so the user understands which
   // retrieval mode produced this answer, even when nothing exotic
@@ -699,6 +727,15 @@ function RetrievalLine({ meta }: { meta: RetrievalMeta }) {
       }
     >
       {parts.join(' · ')}
+      {remoteEndpointHost && (
+        <span
+          className="chat-turn-retrieval-endpoint"
+          data-testid="chat-retrieval-endpoint"
+          title={`Question + retrieved chunks were sent to ${remoteEndpointHost}`}
+        >
+          {' · sent to '}<strong>{remoteEndpointHost}</strong>
+        </span>
+      )}
     </div>
   )
 }
