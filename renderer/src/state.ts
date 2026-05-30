@@ -146,6 +146,10 @@ type State = {
    *  `<userdata>/characters/<id>/working.json` so edits survive an
    *  app restart. */
   flistWorking: Record<string, { content: string; dirty: boolean }>
+  /** AbortController for the in-flight character pull. Sign-out
+   *  aborts this before clearing the ticket so a long-running pull
+   *  doesn't continue writing to disk against a torn-down session. */
+  flistPullAbortController: AbortController | null
   /** When true, EditorPane/PreviewPane/Toolbar all switch to read-only
    *  mode. Set whenever the user opens a Live or historical Backup
    *  document. */
@@ -324,6 +328,7 @@ export const useStore = create<State>((set, get) => ({
   flistActiveCharacterId: null,
   flistArchive: {},
   flistWorking: {},
+  flistPullAbortController: null,
   editorReadOnly: false,
   flistSignInOpen: false,
   flistSignInError: null,
@@ -380,6 +385,14 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistSignOut() {
+    // Abort any in-flight pull BEFORE clearing the ticket so the
+    // sidecar's producer task doesn't keep writing live.json + image
+    // bytes against a torn-down session. The pull-lock and httpx
+    // client clean up via the producer's try/finally on disconnect.
+    const ctrl = get().flistPullAbortController
+    if (ctrl) {
+      try { ctrl.abort() } catch { /* already aborted */ }
+    }
     try {
       await api.flistSignOut()
     } catch {
@@ -390,7 +403,8 @@ export const useStore = create<State>((set, get) => ({
       flistSession: { active: false },
       flistAccountCharacters: [],
       flistActiveCharacterId: null,
-      editorReadOnly: false
+      editorReadOnly: false,
+      flistPullAbortController: null
     })
     await get().flistLoadRoster()
   },
@@ -496,6 +510,8 @@ export const useStore = create<State>((set, get) => ({
       }))
     }
     setStatus({ pullStatus: 'queued', pullError: null })
+    const ctrl = new AbortController()
+    set({ flistPullAbortController: ctrl })
     try {
       await api.flistPull(name, {
         onQueued: () => setStatus({ pullStatus: 'queued', pullStage: 'queued' }),
@@ -535,13 +551,19 @@ export const useStore = create<State>((set, get) => ({
           // If the user is sitting on this character's working copy and
           // hasn't typed anything yet, refresh the editor with the
           // freshly-pulled Live content. Skip when the working copy is
-          // dirty so we never clobber unsaved edits.
+          // dirty OR when the live editorContent has already diverged
+          // from the seeded content — covers the race where keystrokes
+          // arrived between the dirty=false snapshot we took and now.
           const isActive =
             get().flistActiveCharacterId === info.character_id &&
             get().activeDocId === null &&
             !get().editorReadOnly
           const working = get().flistWorking[info.character_id]
-          if (isActive && (!working || !working.dirty)) {
+          const liveDiverged =
+            working !== undefined &&
+            get().editorContent !== working.content
+          const safe = isActive && (!working || (!working.dirty && !liveDiverged))
+          if (safe) {
             // Clear any seeded-but-clean working entry so flistOpenWorking
             // re-reads from the new Live rather than reusing the stale
             // content it cached at the previous open.
@@ -558,10 +580,20 @@ export const useStore = create<State>((set, get) => ({
         onError: ({ message }) => {
           setStatus({ pullStatus: 'error', pullError: message })
         }
-      })
+      }, { signal: ctrl.signal })
     } catch (err) {
+      // AbortError = user-initiated (sign-out / explicit cancel).
+      // Don't surface as a scary error to the user.
       const raw = err instanceof Error ? err.message : String(err)
-      setStatus({ pullStatus: 'error', pullError: raw })
+      if (err instanceof Error && err.name === 'AbortError') {
+        setStatus({ pullStatus: 'idle', pullError: null })
+      } else {
+        setStatus({ pullStatus: 'error', pullError: raw })
+      }
+    } finally {
+      if (get().flistPullAbortController === ctrl) {
+        set({ flistPullAbortController: null })
+      }
     }
   },
 

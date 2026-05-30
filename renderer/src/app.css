@@ -3143,3 +3143,47 @@ body {
   color: var(--accent, #569cd6);
   font-style: italic;
 }
+
+/* In-memory working-copy warning. Shown when the editor is in
+   working-copy mode with unsaved edits — Tier 1 persists nothing
+   to disk yet, so a close-without-export loses the edits. */
+.editor-working-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 8px 0 8px;
+  padding: 8px 12px;
+  background: rgba(220, 160, 80, 0.10);
+  border: 1px solid rgba(220, 160, 80, 0.40);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #ffcb83;
+}
+.editor-working-banner-icon { font-size: 14px; flex-shrink: 0; }
+
+/* Logs-only character hint. Shown when the active character has logs
+   on this machine but is no longer on the user's F-list account, so
+   profile editing isn't a thing for them. */
+.editor-logsonly-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 8px 0 8px;
+  padding: 8px 12px;
+  background: var(--hover-soft);
+  border: 1px solid var(--border, #3e3e42);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-dim, #b0b0b0);
+}
+.editor-logsonly-banner-icon { font-size: 14px; flex-shrink: 0; }
+
+/* Sign-in modal error — hint on top, F-list's raw error below. */
+.flist-signin-error-hint {
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.flist-signin-error-raw {
+  font-size: 11px;
+  opacity: 0.75;
+}

@@ -166,7 +166,12 @@ def read_backup(character_id: int | str, filename: str) -> dict[str, Any] | None
 # ---- image storage ----------------------------------------------------
 
 
-_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+# Whitelist for safe filename segments. The pre-dot section must have
+# at least one non-`.` character, which is what excludes `.` and `..`
+# (both would otherwise satisfy `[A-Za-z0-9_.-]+`). Without this, the
+# inline_path("..") case resolved to the parent directory — caught by
+# the test_inline_path_rejects_unsafe_basename test added 2026-05-30.
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 
 
 def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
@@ -189,12 +194,27 @@ def inline_path(character_id: int | str, basename: str) -> Path:
 
 
 def avatar_path_for(name: str) -> Path:
-    """`<userdata>/avatars/<lowercase_name>.png`. Spaces → underscores
-    matches F-list's CDN convention (see flist_api.avatar_url)."""
+    """`<userdata>/avatars/<lowercase_name>.png` for ASCII-only names;
+    `<userdata>/avatars/<sha1>.png` for names containing Unicode or
+    other characters outside `[A-Za-z0-9_.-]`.
+
+    F-list allows Unicode in character names (e.g. "Café Noir"), but
+    we want a filesystem-safe filename — never trust the name to be
+    Windows-NTFS-clean. The sha1 fallback covers the long tail without
+    ever raising ValueError, which previously made /flist/avatar/{name}
+    return HTTP 400 for any non-ASCII character.
+    """
+    import hashlib
+
     slug = name.strip().lower().replace(" ", "_")
-    if not _SAFE_NAME_RE.match(slug):
-        raise ValueError(f"unsafe character name for avatar: {name!r}")
-    return avatars_root() / f"{slug}.png"
+    if _SAFE_NAME_RE.match(slug):
+        return avatars_root() / f"{slug}.png"
+    # Hash the original (case-preserving + space-preserving) name so
+    # two characters that only differ in casing land on distinct paths
+    # — matches the merge_roster behaviour of keying by lowercase only
+    # for collision rather than identity.
+    digest = hashlib.sha1(name.strip().lower().encode("utf-8")).hexdigest()
+    return avatars_root() / f"{digest}.png"
 
 
 # ---- roster ----------------------------------------------------------
