@@ -18,6 +18,11 @@ export type Mode = 'editor' | 'logs'
 const LAST_SEEN_KEY = 'flist-workbench:char-last-seen'
 const FLIST_ACCOUNT_KEY = 'flist-workbench:last-account'
 const FLIST_LAST_CHAR_KEY = 'flist-workbench:last-flist-char-id'
+// Auto-pull threshold. Matches the picker's own staleness display so
+// the UI and the auto-pull policy can't drift apart. F-list's hourly
+// API cap is 200 — even a user hopping between 30 characters all day
+// stays well under it at this rate.
+const STALE_AGE_SEC = 30 * 60
 
 function readLastSeen(): Record<string, number> {
   if (typeof localStorage === 'undefined') return {}
@@ -634,6 +639,19 @@ export const useStore = create<State>((set, get) => ({
         }
         set({ flistActiveCharacterId: id })
         void get().flistLoadArchive(id)
+      }
+      // Auto-pull on select when the Live snapshot is missing or older
+      // than the staleness threshold. User can still trigger a manual
+      // refresh via the FlistCharacterZone's button at any time.
+      const slot = get().flistArchive[id]
+      const lastPullAt = slot?.lastPullAt ?? match.last_pulled_at ?? null
+      const ageSec = lastPullAt
+        ? Date.now() / 1000 - lastPullAt
+        : Number.POSITIVE_INFINITY
+      const pullInFlight =
+        slot?.pullStatus === 'queued' || slot?.pullStatus === 'running'
+      if (ageSec >= STALE_AGE_SEC && !pullInFlight) {
+        void get().flistPullCharacter(match.name, id)
       }
     } else if (get().flistActiveCharacterId !== null) {
       // Picked a log-only character that isn't on F-list — clear the

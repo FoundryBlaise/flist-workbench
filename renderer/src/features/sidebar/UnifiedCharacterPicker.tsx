@@ -9,6 +9,29 @@ function initialFor(name: string): string {
   return trimmed.charAt(0).toUpperCase()
 }
 
+// 30 min — anything older we treat as stale and auto-pull on select.
+const STALE_AGE_SEC = 30 * 60
+
+function relativeAge(epoch: number | null | undefined): string {
+  if (epoch === null || epoch === undefined) return 'Never'
+  const seconds = Math.max(0, Date.now() / 1000 - epoch)
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  return new Date(epoch * 1000).toLocaleDateString()
+}
+
+function isStale(epoch: number | null | undefined): boolean {
+  if (epoch === null || epoch === undefined) return true
+  return Date.now() / 1000 - epoch >= STALE_AGE_SEC
+}
+
 // Stable colour per-character so the same character always renders the
 // same initial-circle when their avatar is missing.
 function colourFor(name: string): string {
@@ -84,7 +107,6 @@ export function UnifiedCharacterPicker() {
   const select = useStore((s) => s.selectCharacter)
   const openSignIn = useStore((s) => s.flistOpenSignIn)
   const signOut = useStore((s) => s.flistSignOut)
-  const pull = useStore((s) => s.flistPullCharacter)
   const archive = useStore((s) => s.flistArchive)
   const charactersStatus = useStore((s) => s.charactersStatus)
   const [open, setOpen] = useState(false)
@@ -232,9 +254,24 @@ export function UnifiedCharacterPicker() {
                     activeName?.toLowerCase() === entry.name.toLowerCase()
                   const id = entry.id !== null ? String(entry.id) : null
                   const slot = id ? archive[id] : undefined
+                  // Prefer the live slot's lastPullAt (which updates after
+                  // an in-session pull) over the roster's static
+                  // last_pulled_at (which only refreshes on
+                  // flistLoadRoster). Falls back to the roster value
+                  // when the slot is empty.
+                  const lastPullAt =
+                    slot?.lastPullAt ?? entry.last_pulled_at ?? null
                   const pullState = slot?.pullStatus ?? 'idle'
                   const pullStage = slot?.pullStage
                   const progress = slot?.pullProgress
+                  const ageLabel =
+                    pullState === 'queued'
+                      ? '… queued'
+                      : pullState === 'running'
+                        ? progress
+                          ? `${pullStage ?? '…'} ${progress.done}/${progress.total}`
+                          : (pullStage ?? 'refreshing…')
+                        : relativeAge(lastPullAt)
                   return (
                     <li
                       key={`acc-${entry.name}-${entry.id ?? 'noid'}`}
@@ -251,45 +288,21 @@ export function UnifiedCharacterPicker() {
                           void select(entry.name)
                           setOpen(false)
                         }}
+                        title={
+                          lastPullAt
+                            ? `Last pulled: ${new Date(lastPullAt * 1000).toLocaleString()}`
+                            : 'Never pulled — selecting will fetch profile from F-list'
+                        }
                       >
                         <Avatar name={entry.name} size={26} variant="avatar" />
                         <span className="char-picker-row-name">
                           {displayName(entry.name)}
                         </span>
-                        {entry.has_archive && (
-                          <span
-                            className="char-picker-flag"
-                            title="Local archive present"
-                          >
-                            💾
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="char-picker-pull"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void pull(entry.name, id)
-                        }}
-                        disabled={
-                          pullState === 'queued' || pullState === 'running'
-                        }
-                        title={
-                          slot?.lastPullAt
-                            ? 'Refresh from F-list'
-                            : 'Pull profile from F-list'
-                        }
-                      >
-                        {pullState === 'queued'
-                          ? '… queued'
-                          : pullState === 'running'
-                            ? progress
-                              ? `${pullStage ?? '…'} ${progress.done}/${progress.total}`
-                              : (pullStage ?? '…')
-                            : slot?.lastPullAt
-                              ? '↻ Refresh'
-                              : '↓ Pull'}
+                        <span
+                          className={`char-picker-row-age${pullState === 'running' || pullState === 'queued' ? ' is-running' : ''}`}
+                        >
+                          {ageLabel}
+                        </span>
                       </button>
                     </li>
                   )
