@@ -20,8 +20,33 @@ function colourFor(name: string): string {
   return `hsl(${hue} 45% 38%)`
 }
 
-function Avatar({ name, size }: { name: string; size: number }) {
+function Avatar({
+  name,
+  size,
+  variant = 'avatar'
+}: {
+  name: string
+  size: number
+  variant?: 'avatar' | 'archive'
+}) {
   const [errored, setErrored] = useState(false)
+  // Logs-only characters don't have a live F-list avatar to fetch
+  // (and even the deterministic CDN URL would 404 or return a stale
+  // image for a deleted character). Render a uniform archive glyph
+  // instead — communicates "this character only exists as logs on
+  // your machine" without inventing a misleading avatar for them.
+  if (variant === 'archive') {
+    return (
+      <span
+        className="char-avatar char-avatar-archive"
+        aria-hidden
+        style={{ width: size, height: size, fontSize: Math.round(size * 0.6) }}
+        title="Logs only — no longer on your F-list account"
+      >
+        🗄️
+      </span>
+    )
+  }
   if (errored || !name) {
     return (
       <span
@@ -110,10 +135,24 @@ export function UnifiedCharacterPicker() {
     return roster.filter((r) => r.name.toLowerCase().includes(q))
   }, [roster, query])
 
+  // Split into the two sources the user mental-models: characters on
+  // the F-list account (editor + Pull + everything) vs characters that
+  // only exist as F-Chat logs on this machine (Logs-tab only). Account
+  // characters come first because the user said API source is primary.
+  const accountEntries = useMemo(
+    () => visible.filter((r) => r.on_account),
+    [visible]
+  )
+  const logsOnlyEntries = useMemo(
+    () => visible.filter((r) => !r.on_account),
+    [visible]
+  )
+
   const activeEntry = activeName
     ? roster.find((r) => r.name.toLowerCase() === activeName.toLowerCase()) ?? null
     : null
   const activeDisplay = activeName ? displayName(activeName) : null
+  const activeIsLogsOnly = activeEntry !== null && !activeEntry.on_account
 
   return (
     <div className="char-picker-wrap" data-testid="char-picker" ref={wrapRef}>
@@ -124,12 +163,21 @@ export function UnifiedCharacterPicker() {
         aria-expanded={open}
         title={activeName ?? undefined}
       >
-        <Avatar name={activeName ?? ''} size={32} />
+        <Avatar
+          name={activeName ?? ''}
+          size={32}
+          variant={activeIsLogsOnly ? 'archive' : 'avatar'}
+        />
         <span className="info">
           <span className="name">{activeDisplay ?? 'Pick a character'}</span>
           <span className="meta">
             {session.active ? (
-              <>signed in · {roster.length} character{roster.length === 1 ? '' : 's'}</>
+              <>
+                signed in · {accountEntries.length} on F-list
+                {logsOnlyEntries.length > 0 && (
+                  <> · {logsOnlyEntries.length} archived</>
+                )}
+              </>
             ) : (
               <>not signed in · {roster.length} from logs</>
             )}
@@ -174,56 +222,41 @@ export function UnifiedCharacterPicker() {
               {query ? `No match for "${query}"` : 'No characters yet.'}
             </div>
           )}
-          {visible.length > 0 && (
-            <ul className="char-picker-unified-list">
-              {visible.map((entry) => {
-                const isActive =
-                  activeName?.toLowerCase() === entry.name.toLowerCase()
-                const id = entry.id !== null ? String(entry.id) : null
-                const slot = id ? archive[id] : undefined
-                const pullState = slot?.pullStatus ?? 'idle'
-                const pullStage = slot?.pullStage
-                const progress = slot?.pullProgress
-                const archivedOnly = entry.has_archive && !entry.on_account
-                return (
-                  <li
-                    key={`${entry.name}-${entry.id ?? 'noid'}`}
-                    className={
-                      isActive
-                        ? 'char-picker-row char-picker-row-active'
-                        : 'char-picker-row'
-                    }
-                  >
-                    <button
-                      type="button"
-                      className="char-picker-row-pick"
-                      onClick={() => {
-                        void select(entry.name)
-                        setOpen(false)
-                      }}
+          <div className="char-picker-scroll">
+          {accountEntries.length > 0 && (
+            <>
+              <div className="char-picker-section-h">On your F-list account</div>
+              <ul className="char-picker-unified-list">
+                {accountEntries.map((entry) => {
+                  const isActive =
+                    activeName?.toLowerCase() === entry.name.toLowerCase()
+                  const id = entry.id !== null ? String(entry.id) : null
+                  const slot = id ? archive[id] : undefined
+                  const pullState = slot?.pullStatus ?? 'idle'
+                  const pullStage = slot?.pullStage
+                  const progress = slot?.pullProgress
+                  return (
+                    <li
+                      key={`acc-${entry.name}-${entry.id ?? 'noid'}`}
+                      className={
+                        isActive
+                          ? 'char-picker-row char-picker-row-active'
+                          : 'char-picker-row'
+                      }
                     >
-                      <Avatar name={entry.name} size={26} />
-                      <span className="char-picker-row-name">
-                        {displayName(entry.name)}
-                      </span>
-                      <span className="char-picker-row-flags">
-                        {entry.has_logs && (
-                          <span
-                            className="char-picker-flag"
-                            title="Has F-Chat logs on this machine"
-                          >
-                            📜
-                          </span>
-                        )}
-                        {archivedOnly && (
-                          <span
-                            className="char-picker-flag char-picker-flag-archive"
-                            title="Archived locally — no longer on your F-list account"
-                          >
-                            📁
-                          </span>
-                        )}
-                        {entry.has_archive && !archivedOnly && (
+                      <button
+                        type="button"
+                        className="char-picker-row-pick"
+                        onClick={() => {
+                          void select(entry.name)
+                          setOpen(false)
+                        }}
+                      >
+                        <Avatar name={entry.name} size={26} variant="avatar" />
+                        <span className="char-picker-row-name">
+                          {displayName(entry.name)}
+                        </span>
+                        {entry.has_archive && (
                           <span
                             className="char-picker-flag"
                             title="Local archive present"
@@ -231,9 +264,7 @@ export function UnifiedCharacterPicker() {
                             💾
                           </span>
                         )}
-                      </span>
-                    </button>
-                    {entry.on_account && (
+                      </button>
                       <button
                         type="button"
                         className="char-picker-pull"
@@ -260,12 +291,53 @@ export function UnifiedCharacterPicker() {
                               ? '↻ Refresh'
                               : '↓ Pull'}
                       </button>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
           )}
+          {logsOnlyEntries.length > 0 && (
+            <>
+              <div
+                className="char-picker-section-h"
+                title="Characters that exist only as F-Chat logs on this machine — not on your current F-list account. Browseable in the Logs tab; cannot be edited or have their profile pulled."
+              >
+                Logs only ({logsOnlyEntries.length})
+              </div>
+              <ul className="char-picker-unified-list char-picker-unified-list-archive">
+                {logsOnlyEntries.map((entry) => {
+                  const isActive =
+                    activeName?.toLowerCase() === entry.name.toLowerCase()
+                  return (
+                    <li
+                      key={`log-${entry.name}`}
+                      className={
+                        isActive
+                          ? 'char-picker-row char-picker-row-active'
+                          : 'char-picker-row'
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="char-picker-row-pick"
+                        onClick={() => {
+                          void select(entry.name)
+                          setOpen(false)
+                        }}
+                      >
+                        <Avatar name={entry.name} size={26} variant="archive" />
+                        <span className="char-picker-row-name">
+                          {displayName(entry.name)}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          )}
+          </div>
           {session.active && (
             <div className="char-picker-foot">
               <span className="char-picker-foot-account">

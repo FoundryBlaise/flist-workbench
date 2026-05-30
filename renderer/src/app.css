@@ -3016,8 +3016,11 @@ body {
   list-style: none;
   margin: 0;
   padding: 4px 0;
+}
+.char-picker-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  flex: 1;
 }
 .char-picker-row {
   display: flex;
@@ -3098,4 +3101,32 @@ body {
   font-size: 11px;
   cursor: pointer;
   text-decoration: underline;
+}
+
+/* Logs-only character — uniform archive glyph instead of trying to
+   render an avatar that might 404 or be stale. Communicates "this
+   character only exists in your local logs, not on the F-list account". */
+.char-avatar-archive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2, rgba(255,255,255,0.04));
+  border: 1px dashed var(--border, #3e3e42);
+  border-radius: 4px;
+  color: var(--text-dim, #8a8a8a);
+  line-height: 1;
+  filter: grayscale(0.4);
+}
+
+.char-picker-section-h {
+  padding: 8px 12px 4px 12px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8a8a8a);
+  border-top: 1px solid var(--border-soft, rgba(255,255,255,0.04));
+}
+.char-picker-section-h:first-of-type { border-top: none; }
+.char-picker-unified-list-archive .char-picker-row-pick {
+  opacity: 0.85;
 }
