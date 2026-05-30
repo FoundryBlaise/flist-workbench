@@ -3115,8 +3115,8 @@ body {
   border-radius: 4px;
   color: var(--text-dim, #8a8a8a);
   line-height: 1;
-  filter: grayscale(0.4);
 }
+.char-avatar-archive svg { display: block; }
 
 .char-picker-section-h {
   padding: 8px 12px 4px 12px;

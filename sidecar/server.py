@@ -166,7 +166,14 @@ async def flist_session_create(body: FlistSignInRequest) -> dict:
     The password is held too — see flist_api docstring for why — but
     neither value crosses this endpoint boundary. Renderer gets back
     the character list and an expiry hint.
+
+    Schedules a fire-and-forget avatar warm-up for every account
+    character so the picker has avatars ready by the time the user
+    opens it (instead of waiting for 30+ lazy fetches to serialise
+    through the CDN rate limiter).
     """
+    import asyncio as _asyncio
+
     try:
         result = await flist_api.acquire_ticket(
             body.account.strip(), body.password
@@ -175,7 +182,62 @@ async def flist_session_create(body: FlistSignInRequest) -> dict:
         # Pass F-list's error string through verbatim — see Tier 1
         # decision in PHASE7_TIER1_PLAN.md.
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    names = [c["name"] for c in result["characters"] if c.get("name")]
+    if names:
+        _asyncio.create_task(_prefetch_avatars(names))
     return result
+
+
+async def _prefetch_avatars(names: list[str]) -> None:
+    """Best-effort warm-up of the avatar cache.
+
+    Each missing avatar goes through the CDN rate limiter (2 req/s),
+    so a 33-character account finishes in ~15s. Already-cached avatars
+    are skipped instantly. Errors swallowed silently — the lazy fetch
+    on `/flist/avatar/{name}` retries on demand if a download flaked.
+    """
+    import asyncio
+    import httpx
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        headers={"User-Agent": flist_api.USER_AGENT},
+        follow_redirects=True,
+    ) as client:
+
+        async def one(name: str) -> None:
+            try:
+                dest = character_archive.avatar_path_for(name)
+            except ValueError:
+                return
+            if dest.exists():
+                return
+            try:
+                await flist_api.download_to(
+                    flist_api.avatar_url(name), dest, client=client
+                )
+            except Exception:  # noqa: BLE001 — best-effort warmup
+                pass
+
+        await asyncio.gather(*(one(n) for n in names), return_exceptions=True)
+
+
+@app.post("/flist/avatars/prefetch")
+async def flist_avatars_prefetch() -> dict:
+    """Explicit re-trigger of the avatar warm-up.
+
+    Useful if a sign-in race left some avatars un-cached, or if F-list
+    avatars changed on the user's side and we want to refresh the whole
+    set. Fires immediately, returns the scheduled count, downloads
+    happen in the background.
+    """
+    import asyncio as _asyncio
+
+    chars = flist_api.ticket_store().characters()
+    names = [c["name"] for c in chars if c.get("name")]
+    if names:
+        _asyncio.create_task(_prefetch_avatars(names))
+    return {"scheduled": len(names)}
 
 
 @app.delete("/flist/session")
