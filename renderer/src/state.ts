@@ -723,13 +723,14 @@ export const useStore = create<State>((set, get) => ({
         set({ flistActiveCharacterId: id })
         void get().flistLoadArchive(id)
       }
-      // Load the working copy into the editor every time we switch
-      // characters. Previous character's edits stay in flistWorking
-      // (setEditorContent keeps it in sync per-keystroke), so a switch
-      // back restores the user's draft.
-      if (switched) {
-        void get().flistOpenWorking(id)
-      }
+      // Always reload the working copy on a picker click, even when
+      // the character id didn't change. Otherwise a user who's
+      // currently viewing the Live or a Backup (editor in read-only
+      // mode) and re-picks the same character stays stuck in read-only
+      // — the picker click looks ignored. flistOpenWorking is a no-op
+      // if the working slot already exists with the user's edits, so
+      // re-loading the same character costs nothing.
+      void get().flistOpenWorking(id)
       // Auto-pull on select when the Live snapshot is missing or older
       // than the staleness threshold. User can still trigger a manual
       // refresh via the FlistCharacterZone's button at any time.
