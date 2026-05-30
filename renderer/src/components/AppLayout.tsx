@@ -6,7 +6,6 @@ import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SignInModal } from '../features/flist/SignInModal'
-import { SessionFooterChip } from '../features/flist/SessionFooterChip'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
@@ -216,7 +215,6 @@ export function AppLayout() {
       <header className="titlebar">
         <span className="app-name">● F-list Workbench</span>
         <span className="title-doc" data-testid="titlebar-doc">{titleDoc}</span>
-        <SessionFooterChip />
         <span
           className={`sidecar-pill sidecar-${health}`}
           data-testid="sidecar-status"

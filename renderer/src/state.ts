@@ -606,6 +606,34 @@ export const useStore = create<State>((set, get) => ({
 
   selectCharacter(name) {
     set({ activeCharacter: name, activePartner: null })
+    if (!name) {
+      set({ flistActiveCharacterId: null, editorReadOnly: false })
+      return
+    }
+    // Mirror the pick into the F-list slice when the name matches a
+    // roster entry that has an F-list id. Keeps the one-active-character
+    // mental model coherent — the same selection drives both the logs
+    // filter and the F-list zone's Live/Backup docs.
+    const match = get().flistRoster.find(
+      (r) => r.name.toLowerCase() === name.toLowerCase()
+    )
+    if (match && match.id !== null) {
+      const id = String(match.id)
+      if (get().flistActiveCharacterId !== id) {
+        try {
+          localStorage.setItem(FLIST_LAST_CHAR_KEY, id)
+        } catch {
+          // ignore
+        }
+        set({ flistActiveCharacterId: id })
+        void get().flistLoadArchive(id)
+      }
+    } else if (get().flistActiveCharacterId !== null) {
+      // Picked a log-only character that isn't on F-list — clear the
+      // F-list zone so it doesn't show stale Live/Backup docs from the
+      // previous character.
+      set({ flistActiveCharacterId: null, editorReadOnly: false })
+    }
   },
 
   markCharacterSeen(name) {
