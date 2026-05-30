@@ -14,6 +14,7 @@ export type MenuAction =
   | 'ingest-all'
   | 'chat-toggle'
   | 'ai-setup'
+  | 'flist-activity'
 
 declare global {
   interface Window {

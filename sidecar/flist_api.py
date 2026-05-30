@@ -113,11 +113,21 @@ class Ticket:
 @dataclass
 class TicketStore:
     """Singleton holding the active ticket. All access goes through
-    `ticket_store()` so tests can inject a fresh one between cases."""
+    `ticket_store()` so tests can inject a fresh one between cases.
+
+    The `_last_touched` timestamp tracks user-initiated activity (any
+    `/flist/*` hit that is *not* the renderer's heartbeat poll). After
+    a configurable idle window the password is dropped from memory so
+    the process doesn't sit on it while a forgotten Workbench window
+    lingers in the background. The ticket itself is left alone — it
+    will expire naturally at the F-list-side 30-min TTL; the user just
+    can't *auto-refresh* into a fresh session without typing the
+    password again. See P0-C in REVIEW_2026-05-30."""
 
     _ticket: Ticket | None = None
     _last_characters: list[dict] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _last_touched: float = 0.0
 
     def get(self) -> Ticket | None:
         with self._lock:
@@ -131,6 +141,7 @@ class TicketStore:
     def set(self, ticket: Ticket, characters: list[dict] | None = None) -> None:
         with self._lock:
             self._ticket = ticket
+            self._last_touched = time.monotonic()
             if characters is not None:
                 self._last_characters = characters
 
@@ -138,6 +149,39 @@ class TicketStore:
         with self._lock:
             self._ticket = None
             self._last_characters = []
+            self._last_touched = 0.0
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last_touched = time.monotonic()
+
+    def idle_seconds(self) -> float:
+        with self._lock:
+            if self._last_touched == 0.0:
+                return 0.0
+            return time.monotonic() - self._last_touched
+
+    def has_password(self) -> bool:
+        with self._lock:
+            return self._ticket is not None and bool(self._ticket.password)
+
+    def clear_password_if_idle(self, threshold_sec: float) -> bool:
+        """Drop the cached password if the store has been idle long
+        enough. Ticket is preserved so the user's existing session
+        continues to work until natural expiry — only auto-refresh is
+        disabled. Returns True if the password was just dropped.
+        """
+        with self._lock:
+            t = self._ticket
+            if t is None or not t.password:
+                return False
+            if self._last_touched == 0.0:
+                return False
+            idle = time.monotonic() - self._last_touched
+            if idle < threshold_sec:
+                return False
+            t.password = ""
+            return True
 
     def characters(self) -> list[dict]:
         with self._lock:
@@ -153,6 +197,7 @@ class TicketStore:
                 "account": t.account,
                 "expires_in_sec": int(t.expires_in),
                 "needs_refresh": t.needs_refresh,
+                "password_cached": bool(t.password),
             }
 
 
@@ -350,6 +395,16 @@ async def ensure_fresh_ticket(
         raise TicketRequired("not signed in to F-list")
     if not t.needs_refresh:
         return t
+    if not t.password:
+        # Idle watchdog already cleared the cached password; we can no
+        # longer auto-refresh. The current ticket may still be valid
+        # for a few minutes — return it; if the F-list API rejects it,
+        # the caller surfaces a TicketRequired naturally on next call.
+        if t.is_expired:
+            raise TicketRequired(
+                "session timed out from inactivity — sign in again"
+            )
+        return t
     # Refresh using the cached password. Failure clears the store and
     # surfaces as AuthFailure so the caller can 401.
     try:
@@ -360,6 +415,11 @@ async def ensure_fresh_ticket(
     refreshed = _STORE.get()
     if refreshed is None:  # pragma: no cover — defensive
         raise TicketRequired("ticket disappeared mid-refresh")
+    try:
+        import flist_activity
+        flist_activity.record("ticket-refresh", account=refreshed.account)
+    except Exception:  # noqa: BLE001 — telemetry is best-effort
+        pass
     return refreshed
 
 

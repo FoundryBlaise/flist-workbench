@@ -155,6 +155,81 @@ async def test_ensure_fresh_ticket_no_session_raises():
         await flist_api.ensure_fresh_ticket()
 
 
+def test_idle_password_clear_dropped_when_no_touch():
+    # Sign-in seeds the touched timestamp. Roll the clock back past the
+    # threshold without touching — the watchdog should clear password,
+    # leave the ticket value intact, and report password_cached=False.
+    store = flist_api.ticket_store()
+    store.set(
+        flist_api.Ticket(
+            account="acct", value="t", password="pw", acquired_at=time.monotonic()
+        )
+    )
+    assert store.has_password()
+    # Force last_touched into the past so idle_seconds > threshold.
+    store._last_touched = time.monotonic() - 1200
+    dropped = store.clear_password_if_idle(threshold_sec=600)
+    assert dropped is True
+    assert not store.has_password()
+    # Ticket survived — auto-refresh disabled but session still usable
+    # until natural TTL.
+    t = store.get()
+    assert t is not None
+    assert t.value == "t"
+    assert t.account == "acct"
+
+
+def test_idle_password_clear_noop_when_recent():
+    store = flist_api.ticket_store()
+    store.set(
+        flist_api.Ticket(
+            account="acct", value="t", password="pw", acquired_at=time.monotonic()
+        )
+    )
+    # Just touched — shouldn't drop.
+    assert store.clear_password_if_idle(threshold_sec=600) is False
+    assert store.has_password()
+
+
+def test_touch_resets_idle_after_clear_signin():
+    store = flist_api.ticket_store()
+    store.set(
+        flist_api.Ticket(
+            account="acct", value="t", password="pw", acquired_at=time.monotonic()
+        )
+    )
+    store._last_touched = time.monotonic() - 1200
+    # A user action (the middleware would have called touch()) resets
+    # the timer — next idle check must not clear.
+    store.touch()
+    assert store.idle_seconds() < 1.0
+    assert store.clear_password_if_idle(threshold_sec=600) is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_fresh_ticket_no_password_returns_existing_until_expiry():
+    # After idle watchdog clears the password, ensure_fresh_ticket should
+    # NOT crash — it should return the ticket if still valid and raise
+    # TicketRequired only once the ticket itself expires.
+    store = flist_api.ticket_store()
+    store.set(
+        flist_api.Ticket(
+            account="acct",
+            value="t",
+            password="",
+            acquired_at=time.monotonic() - (24 * 60),  # past refresh threshold
+        )
+    )
+    t = await flist_api.ensure_fresh_ticket()
+    assert t.value == "t"
+    # Now expire the ticket too.
+    aged = store.get()
+    assert aged is not None
+    aged.acquired_at = time.monotonic() - (40 * 60)  # past TTL
+    with pytest.raises(flist_api.TicketRequired):
+        await flist_api.ensure_fresh_ticket()
+
+
 def test_rate_limiter_hourly_cap():
     rl = flist_api.RateLimiter(per_second=1_000.0, per_hour_cap=3)
     # Pre-populate three calls in the rolling window; the next acquire
