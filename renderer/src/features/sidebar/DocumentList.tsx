@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../state'
 import type { Document } from '../../lib/api'
+import { EmptyState } from '../../components/EmptyState'
 
 function relativeTime(epoch: number): string {
   const seconds = Math.max(0, Date.now() / 1000 - epoch)
@@ -150,39 +151,33 @@ export function DocumentList() {
         />
       )}
       {documents.every((d) => d.scratch) && (
-        <div
-          className="sb-doc-empty-state"
-          role="note"
-          data-testid="documents-empty-state"
-        >
-          <p className="sb-doc-empty-caption">
-            Documents are saved BBCode snippets — character descriptions,
-            scene drafts, kink statements.
-          </p>
-          <div className="sb-doc-empty-ctas">
-            <button
-              type="button"
-              className="sb-doc-empty-cta sb-doc-empty-cta-primary"
-              onClick={handleNew}
-              data-testid="documents-empty-new"
-            >
-              + New blank doc
-            </button>
-            <button
-              type="button"
-              className="sb-doc-empty-cta"
-              onClick={() => void handlePasteNew()}
-              data-testid="documents-empty-paste"
-            >
-              Paste BBCode from clipboard
-            </button>
-          </div>
-          {pasteError && (
-            <div className="sb-doc-empty-error" role="alert">
-              {pasteError}
-            </div>
-          )}
-        </div>
+        <EmptyState
+          variant="inline"
+          testId="documents-empty-state"
+          body={
+            <p>
+              Documents are saved BBCode snippets — character descriptions,
+              scene drafts, kink statements.
+            </p>
+          }
+          primaryCta={{
+            label: '+ New blank doc',
+            onClick: handleNew,
+            testId: 'documents-empty-new'
+          }}
+          secondaryCta={{
+            label: 'Paste BBCode from clipboard',
+            onClick: () => void handlePasteNew(),
+            testId: 'documents-empty-paste'
+          }}
+          footer={
+            pasteError ? (
+              <div className="empty-state-error" role="alert">
+                {pasteError}
+              </div>
+            ) : undefined
+          }
+        />
       )}
       <ul className="sb-list sb-list-docs" data-testid="document-list">
         {visible.map((doc) => {

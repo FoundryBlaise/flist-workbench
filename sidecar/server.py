@@ -311,9 +311,22 @@ async def flist_activity_snapshot() -> dict:
 async def flist_session_get() -> dict:
     """Footer chip polls this every 60s for session age + hourly count.
     Stateless — never refreshes the ticket on its own; refresh happens
-    on the next ticket-requiring action."""
-    status = flist_api.ticket_store().status()
+    on the next ticket-requiring action.
+
+    Also reports `password_idle_seconds_remaining` so the renderer can
+    surface a "session will be cleared in Nm" warning before the
+    watchdog drops the cached password (UX gap from the 2026-05-30 QA
+    verification of P0-C).
+    """
+    store = flist_api.ticket_store()
+    status = store.status()
     status["api_hourly_count"] = flist_api.api_rate_limiter().hourly_count()
+    if status.get("active") and status.get("password_cached"):
+        idle = store.idle_seconds()
+        remaining = max(0, int(IDLE_PASSWORD_TIMEOUT_SEC - idle))
+        status["password_idle_seconds_remaining"] = remaining
+    else:
+        status["password_idle_seconds_remaining"] = None
     return status
 
 
@@ -702,6 +715,19 @@ def _cleanup_placeholder_avatars() -> int:
         except OSError:
             continue
     return deleted
+
+
+@app.on_event("startup")
+async def _hydrate_activity_log_on_startup() -> None:
+    """Load the on-disk redacted activity log into the in-memory
+    buffer so a restart-after-incident still surfaces audit context
+    in the Help → F-list Activity Log modal."""
+    loaded = flist_activity.hydrate_from_disk()
+    if loaded > 0:
+        print(
+            f"[flist] hydrated {loaded} activity events from disk",
+            flush=True,
+        )
 
 
 @app.on_event("startup")

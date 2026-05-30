@@ -645,26 +645,55 @@ body {
 }
 .sb-doc-action:hover:not(:disabled) { border-color: var(--accent); }
 .sb-doc-action:disabled { opacity: 0.4; cursor: default; }
-.sb-doc-empty-state {
+/* Shared empty-state component (renderer/src/components/EmptyState.tsx)
+   — codifies the visual vocabulary across Documents list (F1), RAG chat
+   panel no-index (F3), and F-list activity log (F4). Three variants:
+     inline   — borderless card, fits inside a sidebar/list area
+     callout  — dashed blue border, draws the eye
+     modal    — body-of-modal copy, lets the modal frame contain it */
+.empty-state {
   margin: 8px 12px 12px;
   padding: 12px;
+  border-radius: 4px;
+  color: var(--text);
+}
+.empty-state-inline {
   background: var(--hover-soft);
   border: 1px dashed var(--border);
-  border-radius: 4px;
 }
-.sb-doc-empty-caption {
-  margin: 0 0 10px;
-  font-size: 12px;
-  line-height: 1.4;
+.empty-state-callout {
+  background: rgba(120, 160, 220, 0.08);
+  border: 1px dashed rgba(120, 160, 220, 0.45);
+  padding: 14px 14px 12px;
+}
+.empty-state-modal {
+  margin: 0;
+  padding: 16px 20px;
+  background: transparent;
+  border: none;
   color: var(--text-dim);
+  font-size: 12px;
 }
-.sb-doc-empty-ctas {
+.empty-state-headline {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.empty-state-body { line-height: 1.5; }
+.empty-state-inline .empty-state-body {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.empty-state-body p { margin: 0 0 8px; }
+.empty-state-body p:last-child { margin-bottom: 0; }
+.empty-state-ctas {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  margin: 12px 0 0;
+  flex-wrap: wrap;
 }
-.sb-doc-empty-cta {
-  padding: 6px 10px;
+.empty-state-inline .empty-state-ctas { flex-direction: column; }
+.empty-state-cta {
+  padding: 6px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -674,15 +703,20 @@ body {
   cursor: pointer;
   text-align: center;
 }
-.sb-doc-empty-cta:hover { border-color: var(--accent); }
-.sb-doc-empty-cta-primary {
+.empty-state-cta:hover { border-color: var(--accent); }
+.empty-state-cta-primary {
   background: var(--accent);
   border-color: var(--accent);
   color: #0b0b0b;
   font-weight: 600;
 }
-.sb-doc-empty-cta-primary:hover { filter: brightness(1.08); }
-.sb-doc-empty-error {
+.empty-state-cta-primary:hover { filter: brightness(1.08); }
+.empty-state-foot {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.empty-state-error {
   margin-top: 8px;
   padding: 6px 8px;
   font-size: 11px;
@@ -2582,44 +2616,6 @@ body {
   line-height: 1.5;
 }
 .chat-empty code { font-family: var(--font-mono); }
-.chat-empty-no-index {
-  padding: 14px 14px 12px;
-  background: rgba(120, 160, 220, 0.08);
-  border: 1px dashed rgba(120, 160, 220, 0.45);
-  border-radius: 4px;
-  color: var(--text);
-}
-.chat-empty-no-index p { margin: 0 0 8px; }
-.chat-empty-headline { font-size: 13px; }
-.chat-empty-ctas {
-  display: flex;
-  gap: 8px;
-  margin: 12px 0;
-  flex-wrap: wrap;
-}
-.chat-empty-cta {
-  padding: 6px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.chat-empty-cta:hover { border-color: var(--accent); }
-.chat-empty-cta-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #0b0b0b;
-  font-weight: 600;
-}
-.chat-empty-cta-primary:hover { filter: brightness(1.08); }
-.chat-empty-foot {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-dim);
-}
 .chat-turn {
   padding: 8px 10px;
   border-radius: 6px;
@@ -2663,6 +2659,10 @@ body {
   font-size: var(--font-meta);
   font-style: italic;
 }
+.chat-turn-retrieval-endpoint {
+  color: #f5d086;
+}
+.chat-turn-retrieval-endpoint strong { font-style: normal; }
 .chat-citations {
   margin-top: 8px;
   display: flex;
@@ -3206,6 +3206,31 @@ body {
   white-space: normal;
   text-align: left;
 }
+.char-picker-idle-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  background: rgba(220, 170, 80, 0.14);
+  border: 1px solid rgba(220, 170, 80, 0.5);
+  border-radius: 3px;
+  color: #f5d086;
+}
+.char-picker-idle-stay {
+  align-self: flex-start;
+  padding: 3px 8px;
+  background: rgba(220, 170, 80, 0.18);
+  border: 1px solid rgba(220, 170, 80, 0.45);
+  border-radius: 3px;
+  color: #f5d086;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.char-picker-idle-stay:hover { background: rgba(220, 170, 80, 0.28); }
 
 /* Override the legacy `.char-picker-menu button { width: 100% }` rule
    from the old CharacterPicker — the unified picker uses flex layout
