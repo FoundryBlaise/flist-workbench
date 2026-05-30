@@ -43,6 +43,7 @@ export function PreviewPane() {
   const content = useStore((s) => s.editorContent)
   const inlines = useStore((s) => s.editorInlines)
   const setContent = useStore((s) => s.setEditorContent)
+  const readOnly = useStore((s) => s.editorReadOnly)
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
@@ -75,6 +76,11 @@ export function PreviewPane() {
   }, [content, inlines])
 
   const handleInput = () => {
+    // When the surrounding editor is in read-only mode (Live / Backup
+    // documents pulled from F-list), block writeback. `contentEditable`
+    // is already set to false below, but Chromium still fires `input`
+    // for some keyboard shortcuts so we guard here too.
+    if (readOnly) return
     const el = ref.current
     if (!el) return
     const next = bbcodeFromPreviewDom(el, renderedFromRef.current)
@@ -105,8 +111,17 @@ export function PreviewPane() {
 
   return (
     <section className="pane preview" data-testid="preview-pane">
-      <header className="pane-head">Live Preview <span className="preview-edit-hint">· editable</span></header>
-      {showEditHint && (
+      <header className="pane-head">
+        Live Preview
+        {readOnly ? (
+          <span className="preview-readonly-hint" title="Pulled from F-list — read-only">
+            · read-only
+          </span>
+        ) : (
+          <span className="preview-edit-hint">· editable</span>
+        )}
+      </header>
+      {showEditHint && !readOnly && (
         <div className="preview-edit-banner" data-testid="preview-edit-banner">
           <span className="preview-edit-banner-icon" aria-hidden>
             ✎
@@ -148,9 +163,9 @@ export function PreviewPane() {
       )}
       <div
         ref={ref}
-        className="pane-body preview-body"
+        className={`pane-body preview-body${readOnly ? ' preview-readonly' : ''}`}
         data-testid="preview-body"
-        contentEditable
+        contentEditable={!readOnly}
         suppressContentEditableWarning
         spellCheck={false}
         onInput={handleInput}

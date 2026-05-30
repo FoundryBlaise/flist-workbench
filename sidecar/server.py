@@ -5,11 +5,13 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import aliases as aliases_store
+import character_archive
 import documents
+import flist_api
 import labels as labels_store
 import labels_jobs
 import labels_llm
@@ -23,7 +25,6 @@ import rag_lexical
 import rag_query
 import rag_store
 import settings as settings_store
-from flist import ProfileNotFound, fetch_profile
 from logs import (
     LogDirError,
     data_dir,
@@ -54,11 +55,437 @@ def health() -> dict[str, str]:
 
 @app.get("/profile/{name}")
 async def profile(name: str) -> dict:
+    """Public profile fetch routed through the F-list JSON API.
+
+    Replaces the previous HTML scrape (`flist.fetch_profile`). The shape
+    returned here matches the old `Profile.to_dict()` so existing
+    renderer code in EditorPane's "Fetch profile" button still works
+    against it. Requires an active sign-in — 401 surfaces a "Sign in to
+    F-list first" CTA in the renderer.
+    """
     try:
-        result = await fetch_profile(name)
-    except ProfileNotFound as exc:
-        raise HTTPException(status_code=404, detail=f"character not found: {exc}") from exc
-    return result.to_dict()
+        payload = await flist_api.fetch_character_data(name)
+    except flist_api.TicketRequired as exc:
+        raise HTTPException(
+            status_code=401, detail="not signed in to F-list"
+        ) from exc
+    except flist_api.AuthFailure as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except flist_api.FlistApiError as exc:
+        msg = str(exc).lower()
+        if "no such character" in msg or "not found" in msg:
+            raise HTTPException(
+                status_code=404, detail=f"character not found: {name}"
+            ) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    resolved_name = payload.get("name") or name
+    description = payload.get("description") or ""
+    inlines_raw = payload.get("inlines")
+    inlines: dict[str, dict] = {}
+    if isinstance(inlines_raw, dict):
+        for k, v in inlines_raw.items():
+            if isinstance(v, dict):
+                inlines[str(k)] = v
+
+    # Stats are rendered as a key:value list in the editor's profile
+    # pane. We resolve infotag IDs → labels via the cached mapping list
+    # so the user sees "Age: 28" instead of "info_1: 28".
+    stats: dict[str, str] = {}
+    infotags = payload.get("infotags")
+    if isinstance(infotags, dict) and infotags:
+        try:
+            mapping = await flist_api.fetch_mapping_list(
+                character_archive.cache_root() / "mapping-list.json"
+            )
+            stats = _resolve_infotag_stats(infotags, mapping)
+        except flist_api.FlistApiError:
+            # Mapping fetch failure is non-fatal for description-lookup
+            # — surface raw infotag IDs so the user still gets the
+            # BBCode they came for.
+            stats = {f"info_{k}": str(v) for k, v in infotags.items()}
+
+    return {
+        "name": resolved_name,
+        "avatar_url": flist_api.avatar_url(resolved_name),
+        "bbcode": description,
+        "stats": stats,
+        "inlines": inlines,
+    }
+
+
+def _resolve_infotag_stats(
+    infotags: dict, mapping: dict
+) -> dict[str, str]:
+    """Resolve `{infotag_id: value}` → `{label: human_value}` using the
+    mapping list. Enum infotags have list IDs as values; we look up the
+    list-item label too."""
+    out: dict[str, str] = {}
+    infotag_meta = {}
+    raw_infotags = mapping.get("infotags")
+    if isinstance(raw_infotags, list):
+        for entry in raw_infotags:
+            if isinstance(entry, dict) and entry.get("id") is not None:
+                infotag_meta[str(entry["id"])] = entry
+    listitems_meta: dict[str, str] = {}
+    raw_listitems = mapping.get("listitems")
+    if isinstance(raw_listitems, list):
+        for entry in raw_listitems:
+            if isinstance(entry, dict) and entry.get("id") is not None:
+                listitems_meta[str(entry["id"])] = entry.get("value", "")
+    for raw_id, raw_value in infotags.items():
+        meta = infotag_meta.get(str(raw_id))
+        label = (meta or {}).get("name") or f"info_{raw_id}"
+        text = str(raw_value)
+        # Enum-type infotags: value is a listitem id whose label lives
+        # in `listitems[*].value`.
+        if (meta or {}).get("type") == "list":
+            text = listitems_meta.get(text, text)
+        out[label] = text
+    return out
+
+
+# ---- flist archive ---------------------------------------------------
+
+
+class FlistSignInRequest(BaseModel):
+    account: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/flist/session")
+async def flist_session_create(body: FlistSignInRequest) -> dict:
+    """Trade (account, password) for an F-list session ticket.
+
+    The ticket is held in sidecar RAM only (`flist_api.TicketStore`).
+    The password is held too — see flist_api docstring for why — but
+    neither value crosses this endpoint boundary. Renderer gets back
+    the character list and an expiry hint.
+    """
+    try:
+        result = await flist_api.acquire_ticket(
+            body.account.strip(), body.password
+        )
+    except flist_api.AuthFailure as exc:
+        # Pass F-list's error string through verbatim — see Tier 1
+        # decision in PHASE7_TIER1_PLAN.md.
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return result
+
+
+@app.delete("/flist/session")
+async def flist_session_delete() -> dict:
+    flist_api.ticket_store().clear()
+    return {"signed_out": True}
+
+
+@app.get("/flist/session")
+async def flist_session_get() -> dict:
+    """Footer chip polls this every 60s for session age + hourly count.
+    Stateless — never refreshes the ticket on its own; refresh happens
+    on the next ticket-requiring action."""
+    status = flist_api.ticket_store().status()
+    status["api_hourly_count"] = flist_api.api_rate_limiter().hourly_count()
+    return status
+
+
+@app.get("/flist/characters")
+async def flist_characters() -> dict:
+    """Roster union: account roster (if signed in) + archived characters
+    + characters with local F-Chat logs. Each entry carries flags so the
+    picker can render status badges.
+    """
+    account_chars = flist_api.ticket_store().characters()
+    log_chars: list[str] = []
+    try:
+        log_chars = [c.name for c in list_characters()]
+    except LogDirError:
+        pass
+    rows = character_archive.merge_roster(account_chars, log_chars)
+    return {"characters": rows}
+
+
+@app.get("/flist/mapping-list")
+async def flist_mapping_list() -> dict:
+    try:
+        mapping = await flist_api.fetch_mapping_list(
+            character_archive.cache_root() / "mapping-list.json"
+        )
+    except flist_api.TicketRequired as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except flist_api.FlistApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return mapping
+
+
+def _character_id_from_payload(payload: dict) -> str:
+    cid = payload.get("id")
+    if cid is None:
+        raise HTTPException(status_code=502, detail="API response missing character id")
+    return str(cid)
+
+
+@app.post("/flist/character/{name}/pull")
+async def flist_character_pull(name: str) -> StreamingResponse:
+    """Pull live character data + images for `name`.
+
+    SSE events:
+      queued     → waiting on pull_lock (concurrent pulls serialise)
+      ticket     → acquiring / refreshing ticket
+      fetching   → calling character-data.php
+      images     → {total, downloaded, failed} starting image batch
+      image      → {index, total, image_id} per-image progress
+      done       → {character_id, image_count, backup_path?}
+      error      → {stage, message}
+    """
+
+    async def producer():
+        # Send queued event immediately so the renderer's row badge can
+        # flip to "queued" before the lock is acquired.
+        yield _sse_event("queued", {"name": name})
+        async with flist_api.pull_lock():
+            client = flist_api._default_client()
+            try:
+                yield _sse_event("ticket", {})
+                try:
+                    await flist_api.ensure_fresh_ticket(client=client)
+                except flist_api.TicketRequired as exc:
+                    yield _sse_event(
+                        "error", {"stage": "ticket", "message": str(exc)}
+                    )
+                    return
+                except flist_api.AuthFailure as exc:
+                    yield _sse_event(
+                        "error", {"stage": "ticket", "message": str(exc)}
+                    )
+                    return
+
+                yield _sse_event("fetching", {"name": name})
+                try:
+                    payload = await flist_api.fetch_character_data(
+                        name, client=client
+                    )
+                except flist_api.FlistApiError as exc:
+                    yield _sse_event(
+                        "error", {"stage": "fetching", "message": str(exc)}
+                    )
+                    return
+
+                try:
+                    cid = _character_id_from_payload(payload)
+                except HTTPException as exc:
+                    yield _sse_event(
+                        "error", {"stage": "fetching", "message": exc.detail}
+                    )
+                    return
+
+                # Stamp fetch time and write Live before any image work
+                # — so even if image downloads fail, the user has the
+                # JSON and can retry the gallery later.
+                import time as _t
+                live_payload = dict(payload)
+                live_payload["fetched_at"] = int(_t.time())
+                character_archive.write_live(cid, live_payload)
+
+                # Avatar — deterministic URL, no rate-limit-bucket cost
+                # against the API. Fire-and-forget; failures are
+                # non-fatal.
+                try:
+                    await flist_api.download_to(
+                        flist_api.avatar_url(name),
+                        character_archive.avatar_path_for(name),
+                        client=client,
+                    )
+                except flist_api.FlistApiError:
+                    pass
+                except ValueError:
+                    pass
+
+                images = payload.get("images")
+                image_list: list[dict] = []
+                if isinstance(images, list):
+                    for img in images:
+                        if not isinstance(img, dict):
+                            continue
+                        image_id = img.get("image_id") or img.get("id")
+                        ext = img.get("extension")
+                        if image_id is None or not ext:
+                            continue
+                        image_list.append(
+                            {"image_id": str(image_id), "extension": str(ext)}
+                        )
+
+                total = len(image_list)
+                yield _sse_event(
+                    "images", {"total": total, "downloaded": 0, "failed": 0}
+                )
+
+                downloaded = 0
+                failed = 0
+                for i, img in enumerate(image_list, start=1):
+                    image_id = img["image_id"]
+                    ext = img["extension"]
+                    url = (
+                        f"{flist_api.STATIC_BASE}/images/charimage/"
+                        f"{image_id}.{ext}"
+                    )
+                    try:
+                        dest = character_archive.image_path(cid, image_id, ext)
+                    except ValueError:
+                        failed += 1
+                        yield _sse_event(
+                            "image",
+                            {
+                                "index": i,
+                                "total": total,
+                                "image_id": image_id,
+                                "ok": False,
+                                "error": "unsafe filename",
+                            },
+                        )
+                        continue
+                    if dest.exists():
+                        # Already on disk from a prior pull. Skip the
+                        # download but still emit progress so the UI
+                        # ticks forward.
+                        downloaded += 1
+                        yield _sse_event(
+                            "image",
+                            {
+                                "index": i,
+                                "total": total,
+                                "image_id": image_id,
+                                "ok": True,
+                                "cached": True,
+                            },
+                        )
+                        continue
+                    try:
+                        await flist_api.download_to(url, dest, client=client)
+                        downloaded += 1
+                        yield _sse_event(
+                            "image",
+                            {
+                                "index": i,
+                                "total": total,
+                                "image_id": image_id,
+                                "ok": True,
+                            },
+                        )
+                    except flist_api.FlistApiError as exc:
+                        failed += 1
+                        yield _sse_event(
+                            "image",
+                            {
+                                "index": i,
+                                "total": total,
+                                "image_id": image_id,
+                                "ok": False,
+                                "error": str(exc),
+                            },
+                        )
+
+                yield _sse_event(
+                    "done",
+                    {
+                        "character_id": cid,
+                        "name": payload.get("name") or name,
+                        "image_count": downloaded,
+                        "image_failed": failed,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 — last-resort
+                yield _sse_event(
+                    "error", {"stage": "unknown", "message": repr(exc)}
+                )
+            finally:
+                await client.aclose()
+
+    return StreamingResponse(
+        producer(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/flist/character/{character_id}/backup")
+async def flist_character_backup(character_id: str) -> dict:
+    """Snapshot the current Live into `backups/<unix>.json`. 409 if no
+    Live exists yet."""
+    try:
+        return character_archive.save_backup(character_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/flist/character/{character_id}/live")
+async def flist_character_live(character_id: str) -> dict:
+    payload = character_archive.read_live(character_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="no Live snapshot yet")
+    return payload
+
+
+@app.get("/flist/character/{character_id}/backups")
+async def flist_character_backups(character_id: str) -> dict:
+    return {
+        "character_id": character_id,
+        "backups": character_archive.list_backups(character_id),
+    }
+
+
+@app.get("/flist/character/{character_id}/backups/{filename}")
+async def flist_character_backup_read(character_id: str, filename: str) -> dict:
+    payload = character_archive.read_backup(character_id, filename)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="backup not found")
+    return payload
+
+
+@app.get("/flist/character/{character_id}/images/{filename}")
+async def flist_character_image(character_id: str, filename: str) -> FileResponse:
+    # Validate filename shape so a hostile renderer call can't path-
+    # traverse out of the images directory.
+    import re as _re
+    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
+        raise HTTPException(status_code=400, detail="invalid image filename")
+    path = character_archive.images_dir(character_id) / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="image not found")
+    return FileResponse(path)
+
+
+@app.get("/flist/character/{character_id}/inlines/{filename}")
+async def flist_character_inline(character_id: str, filename: str) -> FileResponse:
+    import re as _re
+    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
+        raise HTTPException(status_code=400, detail="invalid inline filename")
+    path = character_archive.inlines_dir(character_id) / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="inline not found")
+    return FileResponse(path)
+
+
+@app.get("/flist/avatar/{name}")
+async def flist_avatar(name: str) -> FileResponse:
+    """Serve a cached avatar from `<userdata>/avatars/`. Fetches on
+    miss if signed in so the renderer can `<img src="/flist/avatar/X">`
+    without orchestrating a separate populate call."""
+    try:
+        dest = character_archive.avatar_path_for(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not dest.exists():
+        # Best-effort lazy fetch. Avatars are public — no ticket
+        # required — so we can fall back even when signed out.
+        try:
+            await flist_api.download_to(flist_api.avatar_url(name), dest)
+        except flist_api.FlistApiError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(dest)
 
 
 @app.get("/logs/characters")

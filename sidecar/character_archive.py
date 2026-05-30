@@ -1,0 +1,304 @@
+"""On-disk archive store for F-list character backups.
+
+Layout under `<userdata>/characters/<character_id>/`:
+
+    live.json                        last fetched character-data + fetch ts
+    backups/<unix>.json              snapshot of a previous Live
+    images/<image_id>.<ext>          gallery images, deduped by F-list id
+    inlines/<sha1>.<ext>             inline images referenced in BBCode
+
+Avatars sit one level up at `<userdata>/avatars/<lowercase_name>.png`
+because they survive a character being deleted from the account.
+
+`list_archived_characters()` walks `<userdata>/characters/` so a user
+who signs out (or whose character was deleted from F-list) still sees
+their archived data in the picker. Each entry carries `has_logs` and
+`on_account` flags so the renderer can render status badges.
+"""
+from __future__ import annotations
+
+import json
+import re
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+import documents
+
+CHARACTERS_DIRNAME = "characters"
+AVATARS_DIRNAME = "avatars"
+CACHE_DIRNAME = "cache"
+LIVE_FILENAME = "live.json"
+
+
+def root() -> Path:
+    p = documents.user_data_dir() / CHARACTERS_DIRNAME
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def avatars_root() -> Path:
+    p = documents.user_data_dir() / AVATARS_DIRNAME
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def cache_root() -> Path:
+    p = documents.user_data_dir() / CACHE_DIRNAME
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def character_dir(character_id: int | str) -> Path:
+    p = root() / str(character_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def images_dir(character_id: int | str) -> Path:
+    p = character_dir(character_id) / "images"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def inlines_dir(character_id: int | str) -> Path:
+    p = character_dir(character_id) / "inlines"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def backups_dir(character_id: int | str) -> Path:
+    p = character_dir(character_id) / "backups"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ---- live + backup read/write -----------------------------------------
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
+    """Overwrite the Live snapshot. Caller is responsible for stamping
+    `fetched_at` into the payload before calling."""
+    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+
+
+def read_live(character_id: int | str) -> dict[str, Any] | None:
+    p = character_dir(character_id) / LIVE_FILENAME
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def save_backup(character_id: int | str) -> dict[str, Any]:
+    """Snapshot the current Live into `backups/<unix>.json`.
+
+    Returns `{path, created_at}` so the renderer can show the new entry
+    without re-listing. Raises FileNotFoundError if there's no Live to
+    snapshot.
+    """
+    live = read_live(character_id)
+    if live is None:
+        raise FileNotFoundError("no Live snapshot to back up")
+    now = int(time.time())
+    target = backups_dir(character_id) / f"{now}.json"
+    # On the very-unlikely same-second collision, suffix with a counter.
+    i = 1
+    while target.exists():
+        target = backups_dir(character_id) / f"{now}-{i}.json"
+        i += 1
+    _atomic_write_json(target, live)
+    return {"path": str(target), "created_at": now, "filename": target.name}
+
+
+_BACKUP_FILE_RE = re.compile(r"^(\d+)(?:-\d+)?\.json$")
+
+
+def list_backups(character_id: int | str) -> list[dict[str, Any]]:
+    """List backups newest first. Each entry: `{filename, created_at, size}`."""
+    out: list[dict[str, Any]] = []
+    p = backups_dir(character_id)
+    for entry in p.iterdir():
+        if not entry.is_file():
+            continue
+        m = _BACKUP_FILE_RE.match(entry.name)
+        if not m:
+            continue
+        try:
+            stat = entry.stat()
+        except OSError:
+            continue
+        out.append(
+            {
+                "filename": entry.name,
+                "created_at": int(m.group(1)),
+                "size": stat.st_size,
+            }
+        )
+    out.sort(key=lambda r: r["created_at"], reverse=True)
+    return out
+
+
+def read_backup(character_id: int | str, filename: str) -> dict[str, Any] | None:
+    if not _BACKUP_FILE_RE.match(filename):
+        # Reject anything that doesn't match the on-disk filename shape
+        # so a caller can't path-traverse out of backups/.
+        return None
+    p = backups_dir(character_id) / filename
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+# ---- image storage ----------------------------------------------------
+
+
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
+    """`images/<image_id>.<ext>`. Both parts are validated against a
+    conservative whitelist so a hostile filename in a payload can't
+    escape the character's archive directory."""
+    if not _SAFE_NAME_RE.match(image_id):
+        raise ValueError(f"unsafe image_id: {image_id!r}")
+    if not _SAFE_NAME_RE.match(ext):
+        raise ValueError(f"unsafe extension: {ext!r}")
+    return images_dir(character_id) / f"{image_id}.{ext}"
+
+
+def inline_path(character_id: int | str, basename: str) -> Path:
+    """`inlines/<basename>`. The basename is the CDN URL's last segment
+    (typically `<sha1>.<ext>`); validated against the safe-name regex."""
+    if not _SAFE_NAME_RE.match(basename):
+        raise ValueError(f"unsafe inline name: {basename!r}")
+    return inlines_dir(character_id) / basename
+
+
+def avatar_path_for(name: str) -> Path:
+    """`<userdata>/avatars/<lowercase_name>.png`. Spaces → underscores
+    matches F-list's CDN convention (see flist_api.avatar_url)."""
+    slug = name.strip().lower().replace(" ", "_")
+    if not _SAFE_NAME_RE.match(slug):
+        raise ValueError(f"unsafe character name for avatar: {name!r}")
+    return avatars_root() / f"{slug}.png"
+
+
+# ---- roster ----------------------------------------------------------
+
+
+def list_archived_characters() -> list[dict[str, Any]]:
+    """Walk `<userdata>/characters/` and surface every directory that
+    looks like a character archive. Each entry: `{id, name, last_pulled_at,
+    backup_count}`. Name comes from the last Live snapshot if present —
+    we never had a name without a Live, so missing-name is impossible in
+    normal use.
+    """
+    out: list[dict[str, Any]] = []
+    root_p = root()
+    for entry in root_p.iterdir():
+        if not entry.is_dir():
+            continue
+        cid = entry.name
+        live = read_live(cid)
+        if live is None:
+            # No Live yet — directory created but pull never finished.
+            # Skip so the picker doesn't surface broken rows.
+            continue
+        char = live.get("character") if isinstance(live, dict) else None
+        if not isinstance(char, dict):
+            # Could be the raw character-data shape too.
+            char = live
+        name = (
+            char.get("name") if isinstance(char, dict) else None
+        ) or live.get("name")
+        backups = list_backups(cid)
+        out.append(
+            {
+                "id": cid,
+                "name": name,
+                "last_pulled_at": live.get("fetched_at"),
+                "backup_count": len(backups),
+            }
+        )
+    out.sort(key=lambda r: (r["name"] or "").lower())
+    return out
+
+
+def merge_roster(
+    account_characters: Iterable[dict[str, Any]] | None,
+    log_characters: Iterable[str] | None,
+) -> list[dict[str, Any]]:
+    """Union of (F-list account roster) + (locally archived) + (log
+    directories). Each entry carries status flags so the renderer can
+    render badges:
+
+        - `on_account`  — present in the live account roster
+        - `has_archive` — has a Live snapshot on disk
+        - `has_logs`    — has F-Chat log directories under FCHAT_DATA_DIR
+
+    `id` is the F-list character_id when we know it (account or archive
+    lookup); `null` for log-only characters whose F-list id is unknown.
+    """
+    # Key on the lowercased name so "Lady Amber Blaise" / "lady amber
+    # blaise" / "LADY AMBER BLAISE" all collapse to the same row.
+    by_key: dict[str, dict[str, Any]] = {}
+
+    def entry(name: str) -> dict[str, Any]:
+        key = name.strip().lower()
+        if key not in by_key:
+            by_key[key] = {
+                "name": name,
+                "id": None,
+                "on_account": False,
+                "has_archive": False,
+                "has_logs": False,
+                "last_pulled_at": None,
+                "backup_count": 0,
+            }
+        return by_key[key]
+
+    if account_characters:
+        for ch in account_characters:
+            name = ch.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            e = entry(name)
+            e["on_account"] = True
+            if ch.get("id") is not None and e["id"] is None:
+                e["id"] = ch["id"]
+
+    archived = list_archived_characters()
+    for a in archived:
+        name = a["name"]
+        if not isinstance(name, str) or not name:
+            continue
+        e = entry(name)
+        e["has_archive"] = True
+        if e["id"] is None:
+            e["id"] = a["id"]
+        e["last_pulled_at"] = a["last_pulled_at"]
+        e["backup_count"] = a["backup_count"]
+
+    if log_characters:
+        for name in log_characters:
+            if not isinstance(name, str) or not name:
+                continue
+            entry(name)["has_logs"] = True
+
+    rows = list(by_key.values())
+    rows.sort(key=lambda r: (r["name"] or "").lower())
+    return rows

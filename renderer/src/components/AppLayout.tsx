@@ -5,6 +5,8 @@ import { PreviewPane } from '../features/editor/PreviewPane'
 import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
+import { SignInModal } from '../features/flist/SignInModal'
+import { SessionFooterChip } from '../features/flist/SessionFooterChip'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
@@ -34,6 +36,8 @@ export function AppLayout() {
   const closeIngest = useStore((s) => s.closeIngest)
   const chatPanelOpen = useStore((s) => s.chatPanelOpen)
   const toggleChatPanel = useStore((s) => s.toggleChatPanel)
+  const flistSignInOpen = useStore((s) => s.flistSignInOpen)
+  const flistCloseSignIn = useStore((s) => s.flistCloseSignIn)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -212,6 +216,7 @@ export function AppLayout() {
       <header className="titlebar">
         <span className="app-name">● F-list Workbench</span>
         <span className="title-doc" data-testid="titlebar-doc">{titleDoc}</span>
+        <SessionFooterChip />
         <span
           className={`sidecar-pill sidecar-${health}`}
           data-testid="sidecar-status"
@@ -254,6 +259,7 @@ export function AppLayout() {
         </div>
       )}
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
+      {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {aiSetupOpen && <AISetupWizard onClose={() => setAiSetupOpen(false)} />}
       {classifyTarget && (

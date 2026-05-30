@@ -3,6 +3,10 @@ import {
   api,
   type CharacterEntry,
   type Document,
+  type FlistAccountCharacter,
+  type FlistBackupEntry,
+  type FlistRosterEntry,
+  type FlistSessionStatus,
   type InlineImage,
   type LogMessage,
   type PartnerEntry,
@@ -12,6 +16,8 @@ import {
 export type Mode = 'editor' | 'logs'
 
 const LAST_SEEN_KEY = 'flist-workbench:char-last-seen'
+const FLIST_ACCOUNT_KEY = 'flist-workbench:last-account'
+const FLIST_LAST_CHAR_KEY = 'flist-workbench:last-flist-char-id'
 
 function readLastSeen(): Record<string, number> {
   if (typeof localStorage === 'undefined') return {}
@@ -100,6 +106,44 @@ type State = {
   /** Set by EditorPane after an idle window; "draft has been flushed". */
   draftStatus: 'idle' | 'saving' | 'saved' | 'error'
 
+  // ---- F-list character archive (Phase 7 Tier 1) ----
+  /** Whether the user has signed in to F-list this session. The sidecar
+   *  holds the ticket; the renderer mirrors enough state to render the
+   *  chip + footer. */
+  flistSession: FlistSessionStatus
+  /** Account-roster characters returned by the most recent sign-in. */
+  flistAccountCharacters: FlistAccountCharacter[]
+  /** Unified roster (account + archived + log-only) from /flist/characters. */
+  flistRoster: FlistRosterEntry[]
+  flistRosterStatus: 'idle' | 'loading' | 'ready' | 'error'
+  /** ID of the F-list character whose Live/Backup docs the user is
+   *  currently viewing. Distinct from `activeCharacter` (the F-Chat-log
+   *  filter) because the two rosters don't always overlap. */
+  flistActiveCharacterId: string | null
+  /** Per-character archive state. Keyed by character_id string. */
+  flistArchive: Record<
+    string,
+    {
+      live: Record<string, unknown> | null
+      backups: FlistBackupEntry[]
+      pullStatus: 'idle' | 'queued' | 'running' | 'done' | 'error'
+      pullStage?: string
+      pullProgress?: { done: number; total: number }
+      pullError?: string | null
+      lastPullAt?: number | null
+    }
+  >
+  /** When true, EditorPane/PreviewPane/Toolbar all switch to read-only
+   *  mode. Set whenever the user opens a Live or historical Backup
+   *  document. */
+  editorReadOnly: boolean
+  /** Modal visibility for the sign-in dialog. */
+  flistSignInOpen: boolean
+  /** Last error from a sign-in attempt; passed verbatim from F-list per
+   *  the Tier 1 decision. */
+  flistSignInError: string | null
+  flistSignInStatus: 'idle' | 'submitting' | 'error'
+
   loadCharacters: () => Promise<void>
   selectCharacter: (name: string | null) => void
   markCharacterSeen: (name: string) => void
@@ -141,6 +185,21 @@ type State = {
   setEditorContent: (value: string) => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
+
+  // ---- F-list actions ----
+  flistOpenSignIn: () => void
+  flistCloseSignIn: () => void
+  flistSignIn: (account: string, password: string) => Promise<void>
+  flistSignOut: () => Promise<void>
+  flistRefreshSession: () => Promise<void>
+  flistLoadRoster: () => Promise<void>
+  flistSelectCharacter: (characterId: string | null) => Promise<void>
+  flistLoadArchive: (characterId: string) => Promise<void>
+  flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
+  flistSaveBackup: (characterId: string) => Promise<void>
+  flistOpenLive: (characterId: string) => Promise<void>
+  flistOpenBackup: (characterId: string, filename: string) => Promise<void>
+  flistGetLastAccount: () => string
 
   // Documents
   loadDocuments: () => Promise<void>
@@ -232,6 +291,301 @@ export const useStore = create<State>((set, get) => ({
   saveStatus: 'idle',
   saveError: null,
   draftStatus: 'idle',
+
+  flistSession: { active: false },
+  flistAccountCharacters: [],
+  flistRoster: [],
+  flistRosterStatus: 'idle',
+  flistActiveCharacterId: null,
+  flistArchive: {},
+  editorReadOnly: false,
+  flistSignInOpen: false,
+  flistSignInError: null,
+  flistSignInStatus: 'idle',
+
+  // ---- F-list actions ----------------------------------------------------
+
+  flistGetLastAccount() {
+    if (typeof localStorage === 'undefined') return ''
+    try {
+      return localStorage.getItem(FLIST_ACCOUNT_KEY) ?? ''
+    } catch {
+      return ''
+    }
+  },
+
+  flistOpenSignIn() {
+    set({ flistSignInOpen: true, flistSignInError: null, flistSignInStatus: 'idle' })
+  },
+
+  flistCloseSignIn() {
+    set({ flistSignInOpen: false })
+  },
+
+  async flistSignIn(account, password) {
+    set({ flistSignInStatus: 'submitting', flistSignInError: null })
+    try {
+      const res = await api.flistSignIn({ account, password })
+      try {
+        localStorage.setItem(FLIST_ACCOUNT_KEY, account)
+      } catch {
+        // localStorage unavailable — account just won't pre-fill next session
+      }
+      set({
+        flistSignInStatus: 'idle',
+        flistSignInOpen: false,
+        flistAccountCharacters: res.characters,
+        flistSession: {
+          active: true,
+          account: res.account,
+          expires_in_sec: res.expires_in_sec
+        }
+      })
+      await get().flistLoadRoster()
+    } catch (err) {
+      // F-list returns the human-readable error in `detail`; the
+      // request() helper folds it into `HTTP 401: <detail>`. Strip the
+      // prefix so the modal shows "Invalid account name or password"
+      // instead of "HTTP 401: Invalid account name or password".
+      const raw = err instanceof Error ? err.message : String(err)
+      const stripped = raw.replace(/^HTTP \d+:\s*/, '')
+      set({ flistSignInStatus: 'error', flistSignInError: stripped })
+    }
+  },
+
+  async flistSignOut() {
+    try {
+      await api.flistSignOut()
+    } catch {
+      // Server-side clear is best-effort; clearing local state is the
+      // user-visible signal that matters.
+    }
+    set({
+      flistSession: { active: false },
+      flistAccountCharacters: [],
+      flistActiveCharacterId: null,
+      editorReadOnly: false
+    })
+    await get().flistLoadRoster()
+  },
+
+  async flistRefreshSession() {
+    try {
+      const status = await api.flistSession()
+      set({ flistSession: status })
+      if (!status.active && get().flistActiveCharacterId !== null) {
+        // Session lapsed (e.g. sidecar restart). Drop active selection
+        // so the UI doesn't render stale read-only docs.
+        set({ flistActiveCharacterId: null, editorReadOnly: false })
+      }
+    } catch {
+      // Sidecar unreachable — leave existing flag, /health card already
+      // surfaces it.
+    }
+  },
+
+  async flistLoadRoster() {
+    set({ flistRosterStatus: 'loading' })
+    try {
+      const { characters } = await api.flistRoster()
+      set({ flistRoster: characters, flistRosterStatus: 'ready' })
+    } catch {
+      set({ flistRosterStatus: 'error' })
+    }
+  },
+
+  async flistSelectCharacter(characterId) {
+    set({ flistActiveCharacterId: characterId })
+    if (characterId === null) {
+      set({ editorReadOnly: false })
+      return
+    }
+    try {
+      localStorage.setItem(FLIST_LAST_CHAR_KEY, characterId)
+    } catch {
+      // ignore
+    }
+    await get().flistLoadArchive(characterId)
+  },
+
+  async flistLoadArchive(characterId) {
+    // Initialise the slot if missing so the UI has somewhere to render
+    // the "no Live yet" empty state.
+    set((s) => ({
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: s.flistArchive[characterId] ?? {
+          live: null,
+          backups: [],
+          pullStatus: 'idle'
+        }
+      }
+    }))
+    const [live, backups] = await Promise.all([
+      api.flistLive(characterId).catch(() => null),
+      api
+        .flistBackups(characterId)
+        .then((r) => r.backups)
+        .catch(() => [])
+    ])
+    set((s) => ({
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: {
+          ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
+          live,
+          backups,
+          lastPullAt:
+            (live && typeof live.fetched_at === 'number'
+              ? (live.fetched_at as number)
+              : null) ?? null
+        }
+      }
+    }))
+  },
+
+  async flistPullCharacter(name, characterId) {
+    const targetId = characterId ?? null
+    const setStatus = (
+      patch: Partial<{
+        pullStatus: 'idle' | 'queued' | 'running' | 'done' | 'error'
+        pullStage: string
+        pullProgress: { done: number; total: number }
+        pullError: string | null
+      }>
+    ) => {
+      if (!targetId) return
+      set((s) => ({
+        flistArchive: {
+          ...s.flistArchive,
+          [targetId]: {
+            ...(s.flistArchive[targetId] ?? {
+              live: null,
+              backups: [],
+              pullStatus: 'idle'
+            }),
+            ...patch
+          }
+        }
+      }))
+    }
+    setStatus({ pullStatus: 'queued', pullError: null })
+    try {
+      await api.flistPull(name, {
+        onQueued: () => setStatus({ pullStatus: 'queued', pullStage: 'queued' }),
+        onTicket: () =>
+          setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
+        onFetching: () =>
+          setStatus({ pullStatus: 'running', pullStage: 'fetching' }),
+        onImages: ({ total }) =>
+          setStatus({
+            pullStatus: 'running',
+            pullStage: 'images',
+            pullProgress: { done: 0, total }
+          }),
+        onImage: ({ index, total }) =>
+          setStatus({
+            pullProgress: { done: index, total }
+          }),
+        onDone: async (info) => {
+          // We know the character_id now even if we didn't before. Make
+          // sure the per-id slot exists and gets reloaded.
+          set((s) => ({
+            flistArchive: {
+              ...s.flistArchive,
+              [info.character_id]: {
+                ...(s.flistArchive[info.character_id] ?? {
+                  live: null,
+                  backups: [],
+                  pullStatus: 'idle'
+                }),
+                pullStatus: 'done',
+                pullStage: 'done'
+              }
+            }
+          }))
+          await get().flistLoadArchive(info.character_id)
+          await get().flistLoadRoster()
+        },
+        onError: ({ message }) => {
+          setStatus({ pullStatus: 'error', pullError: message })
+        }
+      })
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      setStatus({ pullStatus: 'error', pullError: raw })
+    }
+  },
+
+  async flistSaveBackup(characterId) {
+    try {
+      await api.flistSaveBackup(characterId)
+      await get().flistLoadArchive(characterId)
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      set((s) => ({
+        flistArchive: {
+          ...s.flistArchive,
+          [characterId]: {
+            ...(s.flistArchive[characterId] ?? {
+              live: null,
+              backups: [],
+              pullStatus: 'idle'
+            }),
+            pullError: raw
+          }
+        }
+      }))
+    }
+  },
+
+  async flistOpenLive(characterId) {
+    const archive = get().flistArchive[characterId]
+    const live = archive?.live ?? (await api.flistLive(characterId).catch(() => null))
+    if (!live) return
+    const character = (live.character ?? live) as Record<string, unknown>
+    const name =
+      (typeof character.name === 'string' && character.name) ||
+      (typeof live.name === 'string' && (live.name as string)) ||
+      'Live'
+    const bbcode =
+      (typeof character.description === 'string' && (character.description as string)) ||
+      (typeof live.description === 'string' && (live.description as string)) ||
+      ''
+    set({
+      activeDocId: null,
+      editorContent: bbcode,
+      editorTitle: `${name} — Live.bbcode`,
+      editorInlines: {},
+      editorReadOnly: true,
+      editorDirty: false,
+      saveStatus: 'idle',
+      saveError: null,
+      draftStatus: 'idle'
+    })
+  },
+
+  async flistOpenBackup(characterId, filename) {
+    const payload = await api.flistBackupRead(characterId, filename).catch(() => null)
+    if (!payload) return
+    const character = (payload.character ?? payload) as Record<string, unknown>
+    const name =
+      (typeof character.name === 'string' && character.name) || 'Backup'
+    const bbcode =
+      (typeof character.description === 'string' && (character.description as string)) ||
+      ''
+    set({
+      activeDocId: null,
+      editorContent: bbcode,
+      editorTitle: `${name} — ${filename}`,
+      editorInlines: {},
+      editorReadOnly: true,
+      editorDirty: false,
+      saveStatus: 'idle',
+      saveError: null,
+      draftStatus: 'idle'
+    })
+  },
 
   async loadCharacters() {
     set({ charactersStatus: 'loading', charactersError: null })
@@ -471,6 +825,9 @@ export const useStore = create<State>((set, get) => ({
       const { document, current } = await api.documentGet(id)
       set({
         activeDocId: document.id,
+        // Switching to a local document always exits read-only mode —
+        // local docs are always editable.
+        editorReadOnly: false,
         ...editorReplaceState({
           bbcode: current.bbcode,
           title: document.scratch ? 'Scratch.bbcode' : `${document.name}.bbcode`,
@@ -585,6 +942,10 @@ export const useStore = create<State>((set, get) => ({
 
 function humanizeFetchError(err: unknown, name: string): string {
   const raw = err instanceof Error ? err.message : String(err)
+  // 401 — JSON API path now requires sign-in. Surface a clear CTA.
+  if (/HTTP 401/.test(raw)) {
+    return 'Sign in to F-list to fetch profiles. Click the chip in the sidebar.'
+  }
   // 404 from the sidecar — F-list said "no such character".
   if (/HTTP 404/.test(raw)) return `No character named "${name}" on F-list.`
   // Network reach failures: fetch throws "Failed to fetch" / "TypeError"

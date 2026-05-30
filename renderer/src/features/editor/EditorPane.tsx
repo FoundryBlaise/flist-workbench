@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
@@ -27,6 +28,7 @@ export function EditorPane() {
   const saveActiveDocument = useStore((s) => s.saveActiveDocument)
   const saveActiveDraft = useStore((s) => s.saveActiveDraft)
   const activeCharacter = useStore((s) => s.activeCharacter)
+  const readOnly = useStore((s) => s.editorReadOnly)
   const [fetchName, setFetchName] = useState(() =>
     activeCharacter ? displayCharacter(activeCharacter) : ''
   )
@@ -127,6 +129,14 @@ export function EditorPane() {
     void fetchProfile(trimmed)
   }
 
+  const extensions = useMemo(
+    () =>
+      readOnly
+        ? [...bbcodeExtensions, EditorView.editable.of(false), EditorState.readOnly.of(true)]
+        : bbcodeExtensions,
+    [readOnly]
+  )
+
   const saveLabel =
     saveStatus === 'saving'
       ? 'Saving…'
@@ -141,70 +151,77 @@ export function EditorPane() {
   return (
     <section className="pane editor-pane" data-testid="editor-pane">
       <header className="pane-head editor-head">
-        <span className="doc-name">{dirty ? `● ${title}` : title}</span>
+        <span className="doc-name">
+          {readOnly && <span className="doc-readonly-pill" title="Read-only — pulled from F-list">read-only</span>}
+          {dirty ? `● ${title}` : title}
+        </span>
         <span
           className="editor-meta"
           title="Length of the BBCode source (the editor on the left). The preview pane shows the rendered text, which is usually shorter because tags are stripped."
         >
           {content.length} chars (source)
         </span>
-        <div className="editor-doc-actions">
-          <button
-            type="button"
-            className="doc-save"
-            data-testid="doc-save"
-            onClick={() => {
-              if (activeDocId !== null) void saveActiveDocument()
+        {!readOnly && (
+          <div className="editor-doc-actions">
+            <button
+              type="button"
+              className="doc-save"
+              data-testid="doc-save"
+              onClick={() => {
+                if (activeDocId !== null) void saveActiveDocument()
+              }}
+              disabled={saveDisabled}
+              title="Save a new revision (Ctrl+S)"
+            >
+              {saveLabel}
+            </button>
+            <button
+              type="button"
+              className="doc-revisions-toggle"
+              onClick={() => setShowRevisions((v) => !v)}
+              aria-pressed={showRevisions}
+              title="Show revision history"
+              data-testid="doc-revisions-toggle"
+            >
+              History
+            </button>
+            {draftStatus === 'saved' && dirty && (
+              <span className="draft-indicator" title="Crash-recovery draft saved">
+                draft saved
+              </span>
+            )}
+          </div>
+        )}
+        {!readOnly && (
+          <form
+            className="profile-fetch"
+            onSubmit={(e) => {
+              e.preventDefault()
+              submitFetch(fetchName)
             }}
-            disabled={saveDisabled}
-            title="Save a new revision (Ctrl+S)"
           >
-            {saveLabel}
-          </button>
-          <button
-            type="button"
-            className="doc-revisions-toggle"
-            onClick={() => setShowRevisions((v) => !v)}
-            aria-pressed={showRevisions}
-            title="Show revision history"
-            data-testid="doc-revisions-toggle"
-          >
-            History
-          </button>
-          {draftStatus === 'saved' && dirty && (
-            <span className="draft-indicator" title="Crash-recovery draft saved">
-              draft saved
-            </span>
-          )}
-        </div>
-        <form
-          className="profile-fetch"
-          onSubmit={(e) => {
-            e.preventDefault()
-            submitFetch(fetchName)
-          }}
-        >
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder="Character name…"
-            value={fetchName}
-            onChange={(e) => setFetchName(e.target.value)}
-            data-testid="profile-fetch-input"
-            disabled={fetchStatus === 'fetching'}
-          />
-          <button
-            type="submit"
-            disabled={fetchStatus === 'fetching' || !fetchName.trim()}
-            data-testid="profile-fetch-submit"
-          >
-            {fetchStatus === 'fetching'
-              ? `Fetching${'.'.repeat(progressDots)}`
-              : 'Fetch profile'}
-          </button>
-        </form>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder="Character name…"
+              value={fetchName}
+              onChange={(e) => setFetchName(e.target.value)}
+              data-testid="profile-fetch-input"
+              disabled={fetchStatus === 'fetching'}
+            />
+            <button
+              type="submit"
+              disabled={fetchStatus === 'fetching' || !fetchName.trim()}
+              data-testid="profile-fetch-submit"
+            >
+              {fetchStatus === 'fetching'
+                ? `Fetching${'.'.repeat(progressDots)}`
+                : 'Fetch profile'}
+            </button>
+          </form>
+        )}
       </header>
-      <Toolbar viewRef={viewRef} />
+      {!readOnly && <Toolbar viewRef={viewRef} />}
       {fetchStatus === 'fetching' && (
         <div className="editor-progress" data-testid="editor-progress">
           <div className="editor-progress-bar" />
@@ -223,7 +240,7 @@ export function EditorPane() {
             ref={cmRef}
             value={content}
             theme="dark"
-            extensions={bbcodeExtensions}
+            extensions={extensions}
             basicSetup={{
               lineNumbers: false,
               foldGutter: false,
