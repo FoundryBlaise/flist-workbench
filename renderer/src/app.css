@@ -2966,6 +2966,12 @@ body {
   gap: 10px;
   width: 100%;
 }
+
+/* Override the legacy `.char-picker-menu button { width: 100% }` rule
+   from the old CharacterPicker — the unified picker uses flex layout
+   per row, so a 100%-wide button collapses the name span to 0px. */
+.char-picker-menu-unified button { width: auto; }
+.char-picker-menu-unified .char-picker-row-pick { width: auto; flex: 1; }
 .char-avatar {
   width: 32px;
   height: 32px;
