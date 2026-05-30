@@ -735,11 +735,11 @@ export const useStore = create<State>((set, get) => ({
     const entry = get().flistRoster.find(
       (r) => String(r.id ?? '') === characterId
     )
-    const name = entry?.name ?? 'Working'
+    const name = entry?.name ?? 'My edits'
     set({
       activeDocId: null,
       editorContent: content,
-      editorTitle: `${name} — Working`,
+      editorTitle: `${name} — My edits (draft)`,
       editorInlines: inlines,
       editorReadOnly: false,
       editorDirty: dirty,

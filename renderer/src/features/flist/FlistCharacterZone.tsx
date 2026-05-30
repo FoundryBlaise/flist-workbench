@@ -49,7 +49,7 @@ export function FlistCharacterZone() {
             className="flist-zone-pull"
             onClick={() => void pull(name, activeId)}
             disabled={inFlight}
-            title="Refresh Live from F-list"
+            title="Refresh from F-list"
           >
             {inFlight
               ? pullProgress
@@ -65,11 +65,16 @@ export function FlistCharacterZone() {
         </div>
       )}
       <ul className="sb-list flist-zone-list">
-        <li className="flist-zone-row flist-zone-working" title="Working copy editor lands in Tier 2">
+        <li
+          className="flist-zone-row flist-zone-working"
+          title="Editing this directly is coming in a later update"
+        >
           <span className="flist-zone-row-ic">✎</span>
           <span className="flist-zone-row-label">
-            Working
-            <span className="flist-zone-row-meta">(Tier 2 — coming soon)</span>
+            My edits (draft)
+            <span className="flist-zone-row-meta">
+              (editing this directly is coming in a later update)
+            </span>
           </span>
         </li>
         <li
@@ -86,7 +91,7 @@ export function FlistCharacterZone() {
           >
             <span className="flist-zone-row-ic">●</span>
             <span className="flist-zone-row-label">
-              Live
+              From F-list
               <span className="flist-zone-row-meta">
                 {live ? `pulled ${relativeTime(lastPulledAt)}` : 'never pulled'}
               </span>
@@ -97,9 +102,9 @@ export function FlistCharacterZone() {
               type="button"
               className="flist-zone-save-backup"
               onClick={() => void saveBackup(activeId)}
-              title="Snapshot the current Live into Backups"
+              title="Save a snapshot of the current F-list pull"
             >
-              💾 Save backup
+              💾 Save snapshot
             </button>
           )}
         </li>
@@ -111,7 +116,7 @@ export function FlistCharacterZone() {
           onClick={() => setBackupsOpen((v) => !v)}
           aria-expanded={backupsOpen}
         >
-          {backupsOpen ? '▾' : '▸'} Backups ({backups.length})
+          {backupsOpen ? '▾' : '▸'} Saved snapshots ({backups.length})
         </button>
         {backupsOpen && backups.length > 0 && (
           <ul className="sb-list flist-zone-backup-list">
@@ -133,7 +138,7 @@ export function FlistCharacterZone() {
           </ul>
         )}
         {backupsOpen && backups.length === 0 && (
-          <div className="flist-zone-empty">No backups yet.</div>
+          <div className="flist-zone-empty">No saved snapshots yet.</div>
         )}
       </div>
     </div>

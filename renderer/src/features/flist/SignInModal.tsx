@@ -84,6 +84,11 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               session in memory until you sign out — your password is never
               written to disk.
             </p>
+            <ul className="flist-signin-trust" aria-label="What we do with your password">
+              <li>Stays on your computer</li>
+              <li>Same login flow F-Chat uses</li>
+              <li>Held in memory, gone when you sign out or close the app</li>
+            </ul>
           </div>
           <button
             type="button"

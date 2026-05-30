@@ -88,3 +88,43 @@ def test_read_backup_rejects_invalid_filename():
     # hostile caller can't path-traverse out of backups/.
     assert character_archive.read_backup("123", "../../../etc/passwd") is None
     assert character_archive.read_backup("123", "foo.txt") is None
+
+
+def test_merge_roster_keeps_case_only_distinct_ids():
+    # F-list permits two characters whose names differ only in case.
+    # Old lowercased-name keying silently collapsed them into one row
+    # with the wrong id surviving. With id-keying both rows persist.
+    rows = character_archive.merge_roster(
+        [{"name": "Foo", "id": 1}, {"name": "foo", "id": 2}],
+        [],
+    )
+    assert len(rows) == 2
+    ids = sorted(r["id"] for r in rows)
+    assert ids == [1, 2]
+    assert all(r["on_account"] for r in rows)
+
+
+def test_merge_roster_same_id_dedupes_across_sources():
+    # An account char and an archive entry that share an id are the same
+    # character — they must merge, not duplicate.
+    character_archive.write_live("42", {"name": "Bar", "fetched_at": 0})
+    rows = character_archive.merge_roster(
+        [{"name": "Bar", "id": "42"}],
+        [],
+    )
+    assert len(rows) == 1
+    assert rows[0]["on_account"] is True
+    assert rows[0]["has_archive"] is True
+
+
+def test_merge_roster_log_attaches_to_id_row_by_name():
+    # A log directory's only signal is the lowercased name; it should
+    # attach to the matching id-keyed row, not spawn a duplicate.
+    rows = character_archive.merge_roster(
+        [{"name": "Baz", "id": 7}],
+        ["baz"],
+    )
+    assert len(rows) == 1
+    assert rows[0]["id"] == 7
+    assert rows[0]["on_account"] is True
+    assert rows[0]["has_logs"] is True
