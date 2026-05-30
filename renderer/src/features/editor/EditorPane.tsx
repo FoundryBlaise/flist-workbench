@@ -5,6 +5,11 @@ import { EditorView } from '@codemirror/view'
 import { useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { displayCharacter } from '../../lib/partnerName'
+import { Tabs, type TabsTab } from '../../components/Tabs'
+import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
+import { CustomKinksPane, countCustomKinks } from '../flist/CustomKinksPane'
+import { StandardKinksPane, countSetStandardKinks } from '../flist/StandardKinksPane'
+import { DiffPane, countDiffChanges } from '../flist/DiffPane'
 import { Toolbar } from './Toolbar'
 import { RevisionsPanel } from './RevisionsPanel'
 
@@ -16,7 +21,20 @@ const DRAFT_IDLE_MS = 30_000
 export function EditorPane() {
   const content = useStore((s) => s.editorContent)
   const setContent = useStore((s) => s.setEditorContent)
-  const title = useStore((s) => s.editorTitle)
+  const titleRaw = useStore((s) => s.editorTitle)
+  // Reactive title — the underlying editorTitle is set once at openWorking
+  // time and stays stale as unsavedDirty flips. Wrap it here so the
+  // " — My edits (unsaved)" suffix tracks per-keystroke (QA P3-1).
+  const flistActiveIdForTitle = useStore((s) => s.flistActiveCharacterId)
+  const flistSlotForTitle = useStore((s) =>
+    s.flistActiveCharacterId ? s.flistWorking[s.flistActiveCharacterId] : undefined
+  )
+  const title = (() => {
+    if (!flistActiveIdForTitle || !flistSlotForTitle) return titleRaw
+    const m = titleRaw.match(/^(.+?) — My edits(?:\s*\(unsaved\))?$/)
+    if (!m) return titleRaw
+    return `${m[1]} — My edits${flistSlotForTitle.unsavedDirty ? ' (unsaved)' : ''}`
+  })()
   const dirty = useStore((s) => s.editorDirty)
   const fetchStatus = useStore((s) => s.editorFetchStatus)
   const fetchError = useStore((s) => s.editorFetchError)
@@ -30,9 +48,8 @@ export function EditorPane() {
   const activeCharacter = useStore((s) => s.activeCharacter)
   const readOnly = useStore((s) => s.editorReadOnly)
   // F-list working-copy + logs-only signals for the editor banners.
-  // Working copies live in memory (Tier 1 — see PHASE7_TIER1_PLAN.md);
-  // logs-only chars don't have a profile to edit. Each banner is shown
-  // when the editor is in the matching mode + not read-only.
+  // Tier 2 made working copies persistent so the "in-memory edits"
+  // warning is gone; we surface a "saving / saved / error" chip instead.
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   const flistWorkingForActive = useStore((s) =>
     s.flistActiveCharacterId ? s.flistWorking[s.flistActiveCharacterId] : undefined
@@ -44,11 +61,15 @@ export function EditorPane() {
         ) ?? null
       : null
   )
-  const workingDirty =
-    flistActiveId !== null &&
-    activeDocId === null &&
-    !readOnly &&
-    !!flistWorkingForActive?.dirty
+  const workingCopyMode =
+    flistActiveId !== null && activeDocId === null && !readOnly
+  const workingSaveStatus = workingCopyMode
+    ? flistWorkingForActive?.saveStatus ?? 'idle'
+    : 'idle'
+  const workingSaveError = workingCopyMode
+    ? flistWorkingForActive?.saveError ?? null
+    : null
+  const workingDirty = workingCopyMode && !!flistWorkingForActive?.unsavedDirty
   const isLogsOnly =
     flistActiveId === null &&
     activeDocId === null &&
@@ -247,13 +268,25 @@ export function EditorPane() {
           </form>
         )}
       </header>
-      {workingDirty && (
-        <div className="editor-working-banner" role="status" data-testid="editor-working-banner">
-          <span className="editor-working-banner-icon" aria-hidden>⚠</span>
+      {workingCopyMode && (workingSaveStatus !== 'idle' || workingDirty) && (
+        <div
+          className={`editor-working-banner editor-working-banner-${workingSaveStatus}`}
+          role="status"
+          data-testid="editor-working-banner"
+        >
+          <span className="editor-working-banner-icon" aria-hidden>
+            {workingSaveStatus === 'error' ? '⚠' : workingSaveStatus === 'saving' ? '…' : '✓'}
+          </span>
           <span>
-            <b>In-memory edits.</b> Working-copy changes live only in this
-            session until Tier 2 lands disk persistence. Closing Workbench will
-            discard them — you'll be prompted to confirm.
+            {workingSaveStatus === 'saving' && 'Saving working copy…'}
+            {workingSaveStatus === 'saved' && !workingDirty && 'Working copy saved.'}
+            {workingSaveStatus === 'error' && (
+              <>
+                <b>Couldn't save working copy:</b> {workingSaveError ?? 'unknown error'}
+              </>
+            )}
+            {workingSaveStatus === 'idle' && workingDirty && 'Working copy — unsaved edits.'}
+            {workingSaveStatus === 'saved' && workingDirty && 'Working copy — unsaved edits.'}
           </span>
         </div>
       )}
@@ -268,43 +301,199 @@ export function EditorPane() {
           </span>
         </div>
       )}
-      {!readOnly && <Toolbar viewRef={viewRef} />}
-      {fetchStatus === 'fetching' && (
-        <div className="editor-progress" data-testid="editor-progress">
-          <div className="editor-progress-bar" />
-          <span>Fetching profile from F-list…</span>
-        </div>
-      )}
-      {fetchStatus === 'error' && (
-        <div className="editor-error">Couldn't fetch: {fetchError}</div>
-      )}
-      {saveStatus === 'error' && (
-        <div className="editor-error">Couldn't save: {saveError}</div>
-      )}
-      <div className="editor-cm-row">
-        <div className="editor-cm" data-testid="editor-cm">
-          <CodeMirror
-            ref={cmRef}
-            value={content}
-            theme="dark"
-            extensions={extensions}
-            basicSetup={{
-              lineNumbers: false,
-              foldGutter: false,
-              highlightActiveLine: false,
-              highlightActiveLineGutter: false,
-              indentOnInput: false
-            }}
-            onChange={(value) => setContent(value)}
-            onCreateEditor={(view) => {
-              viewRef.current = view
-            }}
-          />
-        </div>
-        {showRevisions && activeDocId !== null && (
-          <RevisionsPanel docId={activeDocId} onClose={() => setShowRevisions(false)} />
-        )}
-      </div>
+      <EditorTabsHost
+        readOnly={readOnly}
+        content={content}
+        setContent={setContent}
+        cmRef={cmRef}
+        viewRef={viewRef}
+        extensions={extensions}
+        showRevisions={showRevisions}
+        activeDocId={activeDocId}
+        onCloseRevisions={() => setShowRevisions(false)}
+        fetchStatus={fetchStatus}
+        fetchError={fetchError}
+        saveStatus={saveStatus}
+        saveError={saveError}
+      />
     </section>
+  )
+}
+
+/** Wraps the BBCode editing surface in a Tabs primitive. Tier 2 Prep
+ *  registers the strip as a single-tab no-op via `hideStripOnSingle`;
+ *  Main PR B adds the Profile fields tab when a working copy is active.
+ *  Read-only views (Live / Backup) stay on the Description tab only.
+ */
+function EditorTabsHost(props: {
+  readOnly: boolean
+  content: string
+  setContent: (next: string) => void
+  cmRef: React.RefObject<ReactCodeMirrorRef>
+  viewRef: React.MutableRefObject<EditorView | null>
+  extensions: unknown[]
+  showRevisions: boolean
+  activeDocId: string | number | null
+  onCloseRevisions: () => void
+  fetchStatus: string
+  fetchError: string | null | undefined
+  saveStatus: string
+  saveError: string | null | undefined
+}) {
+  const flistActiveId = useStore((s) => s.flistActiveCharacterId)
+  // Per-character active tab — switching characters shouldn't pin the
+  // user on a working-copy-only tab inherited from a different
+  // character (UX P3-11). Description (BBCode) is the safe default
+  // when nothing has been persisted yet.
+  const tabKey = flistActiveId
+    ? `flist-workbench:active-editor-tab:${flistActiveId}`
+    : 'flist-workbench:active-editor-tab'
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem(tabKey) ?? 'description'
+    } catch {
+      return 'description'
+    }
+  })
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(tabKey)
+      if (stored && stored !== activeTab) setActiveTab(stored)
+      else if (!stored) setActiveTab('description')
+    } catch {
+      // ignore
+    }
+    // intentionally watch only tabKey — changing the key (character switch)
+    // re-reads the persisted choice for the new character.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabKey])
+  useEffect(() => {
+    try {
+      localStorage.setItem(tabKey, activeTab)
+    } catch {
+      // ignore
+    }
+  }, [activeTab, tabKey])
+  const activeDocIdRaw = useStore((s) => s.activeDocId)
+  const workingCopyMode =
+    flistActiveId !== null && activeDocIdRaw === null && !props.readOnly
+  const workingSlot = useStore((s) =>
+    flistActiveId ? s.flistWorking[flistActiveId] : undefined
+  )
+  const customKinkCount = countCustomKinks(workingSlot)
+  const standardKinkCount = countSetStandardKinks(workingSlot)
+  const diffChangeCount = countDiffChanges(workingSlot)
+  const tabs: TabsTab[] = useMemo(() => {
+    const descriptionTab: TabsTab = {
+      id: 'description',
+      label: 'Description (BBCode)',
+      content: (
+        <>
+          {!props.readOnly && <Toolbar viewRef={props.viewRef} />}
+          {props.fetchStatus === 'fetching' && (
+            <div className="editor-progress" data-testid="editor-progress">
+              <div className="editor-progress-bar" />
+              <span>Fetching profile from F-list…</span>
+            </div>
+          )}
+          {props.fetchStatus === 'error' && (
+            <div className="editor-error">Couldn't fetch: {props.fetchError}</div>
+          )}
+          {props.saveStatus === 'error' && (
+            <div className="editor-error">Couldn't save: {props.saveError}</div>
+          )}
+          <div className="editor-cm-row">
+            <div className="editor-cm" data-testid="editor-cm">
+              <CodeMirror
+                ref={props.cmRef}
+                value={props.content}
+                theme="dark"
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                extensions={props.extensions as any}
+                basicSetup={{
+                  lineNumbers: false,
+                  foldGutter: false,
+                  highlightActiveLine: false,
+                  highlightActiveLineGutter: false,
+                  indentOnInput: false
+                }}
+                onChange={(value) => props.setContent(value)}
+                onCreateEditor={(view) => {
+                  props.viewRef.current = view
+                }}
+              />
+            </div>
+            {props.showRevisions && props.activeDocId !== null && (
+              <RevisionsPanel
+                docId={props.activeDocId as number}
+                onClose={props.onCloseRevisions}
+              />
+            )}
+          </div>
+        </>
+      )
+    }
+    const out: TabsTab[] = [descriptionTab]
+    if (workingCopyMode && flistActiveId) {
+      out.push({
+        id: 'profile-fields',
+        label: 'Profile fields',
+        content: <ProfileFieldsTab characterId={flistActiveId} />
+      })
+      out.push({
+        id: 'custom-kinks',
+        label: 'Custom kinks',
+        badge: customKinkCount > 0 ? customKinkCount : undefined,
+        content: <CustomKinksPane characterId={flistActiveId} />
+      })
+      out.push({
+        id: 'standard-kinks',
+        label: 'Standard kinks',
+        badge: standardKinkCount > 0 ? standardKinkCount : undefined,
+        content: <StandardKinksPane characterId={flistActiveId} />
+      })
+      out.push({
+        id: 'diff',
+        label: 'Diff',
+        badge: diffChangeCount > 0 ? diffChangeCount : undefined,
+        content: <DiffPane characterId={flistActiveId} />
+      })
+    }
+    return out
+  }, [
+    props.readOnly,
+    props.fetchStatus,
+    props.fetchError,
+    props.saveStatus,
+    props.saveError,
+    props.content,
+    props.extensions,
+    props.showRevisions,
+    props.activeDocId,
+    props.cmRef,
+    props.viewRef,
+    props.setContent,
+    props.onCloseRevisions,
+    workingCopyMode,
+    flistActiveId,
+    customKinkCount,
+    standardKinkCount,
+    diffChangeCount
+  ])
+  // Snap back to description if the user signs out / switches to read-only
+  // while sitting on a working-copy-only tab.
+  useEffect(() => {
+    if (!workingCopyMode && activeTab !== 'description') {
+      setActiveTab('description')
+    }
+  }, [workingCopyMode, activeTab])
+  return (
+    <Tabs
+      tabs={tabs}
+      activeId={activeTab}
+      onChange={setActiveTab}
+      hideStripOnSingle
+      testId="editor-tabs"
+    />
   )
 }

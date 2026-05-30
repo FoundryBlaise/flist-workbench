@@ -68,24 +68,41 @@ export function AppLayout() {
     }
   }, [])
 
-  // Working copies are in-memory only in Tier 1. Warn the user before
-  // unload if any per-character working slot has unsaved edits, or if
-  // the local-document editor has uncommitted changes. The native
-  // browser prompt is the closest we get to a "you'll lose work"
-  // confirm without IPC plumbing into the Electron main process; in
-  // Electron it fires when the window's close button is clicked.
+  // Tier 2 made working copies persistent. On unload, hard-flush any
+  // pending autosaves synchronously via fetch+keepalive so unsaved
+  // edits never get stranded in the 500 ms debounce window.
   useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    const onBeforeUnload = () => {
       const s = useStore.getState()
-      const anyWorkingDirty = Object.values(s.flistWorking).some(
-        (w) => w.dirty
-      )
-      // Local-doc editor dirtiness is already covered by the autosave
-      // draft slot (crash-safety), so don't double-prompt — only the
-      // working-copy case is genuinely lossy on close.
-      if (anyWorkingDirty) {
-        e.preventDefault()
-        e.returnValue = ''
+      for (const [characterId, slot] of Object.entries(s.flistWorking)) {
+        // Skip slots already mid-save — a parallel keepalive PUT with a
+        // stale etag would race the in-flight request and lose, or
+        // worse, win and clobber it (QA P2-2). The in-flight PUT
+        // already includes the user's most recent payload.
+        if (!slot.unsavedDirty) continue
+        if (slot.saveStatus === 'saving') continue
+        try {
+          const url = `${api.base()}/flist/character/${encodeURIComponent(
+            characterId
+          )}/working`
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json'
+          }
+          if (slot.materialised && slot.etag) headers['If-Match'] = slot.etag
+          // keepalive lets the request survive the page unload — sized
+          // for the typical working-copy payload (sub-100 KB), well
+          // under the 64 KB hard cap on most browsers / Electron. If a
+          // payload exceeds the cap we just lose the in-flight save;
+          // the next open re-presents an unsaved-dirty banner.
+          fetch(url, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(slot.payload),
+            keepalive: true
+          }).catch(() => {})
+        } catch {
+          // best-effort
+        }
       }
     }
     window.addEventListener('beforeunload', onBeforeUnload)

@@ -12,6 +12,30 @@ import {
   type PartnerEntry,
   type RevisionSummary
 } from './lib/api'
+import {
+  DESCRIPTION_PATH,
+  applyEdit as flistApplyEdit,
+  applyReset as flistApplyReset,
+  descriptionOf,
+  detectLiveDrift,
+  emptyWorkingSlot,
+  extractInlines as flistExtractInlines,
+  isInfotagPath,
+  normaliseNewlines as flistNormaliseNewlines,
+  pathLookup,
+  seedWorkingFromLive,
+  WORKING_SCHEMA_VERSION,
+  type FlistSaveStatus,
+  type FlistWorkingSlot,
+  type WorkingPayload
+} from './state/flist'
+import { purgeCMStates } from './features/flist/KinkDescriptionEditor'
+
+export type {
+  FlistSaveStatus,
+  FlistWorkingSlot,
+  WorkingPayload
+} from './state/flist'
 
 export type Mode = 'editor' | 'logs'
 
@@ -147,14 +171,71 @@ type State = {
       }
     }
   >
-  /** Per-character in-memory working copies. Keyed by character_id.
-   *  Picking a character loads its working copy into the editor;
-   *  switching to another character preserves the previous one's
-   *  unsaved edits so the user can flip back without losing work.
-   *  Tier 1 keeps this strictly in-memory — Tier 2 will persist to
-   *  `<userdata>/characters/<id>/working.json` so edits survive an
-   *  app restart. */
-  flistWorking: Record<string, { content: string; dirty: boolean }>
+  /** Per-character working copies, persisted to
+   *  `<userdata>/characters/<character_id>/working.json` (Tier 2 §1).
+   *  The slot tracks the full JSON-API payload, the dotted overlay of
+   *  user-edited paths, the sha256 etag for optimistic concurrency, and
+   *  per-slot save status so the editor can surface a "saving / saved /
+   *  error" chip without storing UI-only data on disk. */
+  flistWorking: Record<string, FlistWorkingSlot>
+  flistWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
+  /** Cached mapping-list payload. Tier 2 fetches once on first mount of
+   *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
+   *  force=true. Purged on sign-out. */
+  flistMapping: {
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    payload: (Record<string, unknown> & { _etag: string | null; _fetched_at: number | null }) | null
+    fetchedAt: number | null
+    etag: string | null
+    error: string | null
+  }
+  /** "F-list-side change in N fields since you started editing — review."
+   *  Set after a Live re-pull when the new Live differs from what the
+   *  working copy is showing on a path the user has NOT edited. Keyed
+   *  by character id so per-character switches keep their own banner. */
+  flistDriftBanners: Record<string, { paths: string[]; dismissedAt: number | null }>
+  /** 5-second undo banner shown after "Reset to Live" or per-row reset.
+   *  Stores the pre-delete snapshot for the Undo affordance. */
+  flistResetUndo: {
+    characterId: string
+    snapshot: FlistWorkingSlot
+    expiresAt: number
+  } | null
+  /** 5-second undo banner shown after a custom-kink tombstone. Single
+   *  banner across both surfaces (single + bulk tombstone). Tier 3 §Step 8. */
+  flistTombstoneUndo: {
+    characterId: string
+    snapshot: FlistWorkingSlot
+    kinkIds: string[]
+    expiresAt: number
+  } | null
+  /** Tier 4 — per-character right-hand source for the Diff tab.
+   *  Ephemeral (no disk persistence — default = Live each session). */
+  flistDiffRightSource: Record<
+    string,
+    { kind: 'live' } | { kind: 'backup'; filename: string }
+  >
+  /** Tier 4 — lazy-loaded backup payloads. Keyed by
+   *  `${characterId}:${filename}`. Read-only and rarely re-opened, so
+   *  no LRU (R-2). Cleared on sign-out. */
+  flistDiffBackupCache: Record<string, Record<string, unknown>>
+  /** Tier 4 — per-(characterId, filename) load status so DiffPane can
+   *  distinguish "still fetching" from "404 / network error" (QA P3-3
+   *  / UX P1-3). */
+  flistDiffBackupStatus: Record<string, 'loading' | 'loaded' | 'error'>
+  /** Tier 3 — ephemeral UI state for the custom-kinks editor. */
+  flistCustomKinksUI: Record<
+    string,
+    {
+      selectedKinkId: string | null
+      /** Multi-selection for bulk operations (Tier 3 PR4). Order is
+       *  insignificant; rendered as a count chip in the bar. */
+      selectedKinkIds: string[]
+      showDeleted: boolean
+      sort: 'insertion' | 'name' | 'choice'
+      filter: string
+    }
+  >
   /** AbortController for the in-flight character pull. Sign-out
    *  aborts this before clearing the ticket so a long-running pull
    *  doesn't continue writing to disk against a torn-down session. */
@@ -233,12 +314,81 @@ type State = {
    *  with it, and opens it as a normal editable document. Bridges the
    *  gap until the Tier-2 working-copy persistence lands. */
   flistCopyLiveToNewDoc: (characterId: string) => Promise<Document | null>
-  /** Load the editor with this character's in-memory working copy.
+  /** Load the editor with this character's working copy.
    *  Falls back to the Live description when no working copy exists
-   *  yet. The previous character's edits stay in `flistWorking` so a
-   *  later switch-back restores them verbatim. */
+   *  yet (materialise-on-first-edit, §1.6). The previous character's
+   *  edits stay in `flistWorking` so a later switch-back restores them
+   *  verbatim. */
   flistOpenWorking: (characterId: string) => Promise<void>
   flistGetLastAccount: () => string
+  // ---- Tier 2 working-copy actions ----
+  flistLoadWorking: (characterId: string) => Promise<void>
+  flistSetWorkingField: (characterId: string, path: string, value: unknown) => void
+  flistResetWorkingField: (characterId: string, path: string) => void
+  flistFlushWorking: (characterId: string) => Promise<void>
+  flistResetWorkingToLive: (characterId: string) => Promise<void>
+  flistUndoResetWorking: () => Promise<void>
+  flistDismissDriftBanner: (characterId: string) => void
+  // ---- mapping list ----
+  flistLoadMapping: (opts?: { force?: boolean }) => Promise<void>
+  // ---- Tier 3 custom-kinks slice ----
+  flistCustomKinksSelect: (characterId: string, kinkId: string | null) => void
+  flistCustomKinksAdd: (characterId: string) => string
+  flistCustomKinksEdit: (
+    characterId: string,
+    kinkId: string,
+    field: 'name' | 'description' | 'choice',
+    value: string
+  ) => void
+  flistCustomKinksTombstone: (characterId: string, kinkId: string) => void
+  flistCustomKinksUndelete: (characterId: string, kinkId: string) => void
+  flistCustomKinksReorder: (characterId: string, nextOrder: string[]) => void
+  flistCustomKinksResetField: (
+    characterId: string,
+    kinkId: string,
+    field: 'name' | 'description' | 'choice'
+  ) => void
+  flistCustomKinksBulkSetChoice: (
+    characterId: string,
+    kinkIds: string[],
+    choice: string
+  ) => void
+  flistCustomKinksSetUI: (
+    characterId: string,
+    patch: Partial<{
+      showDeleted: boolean
+      sort: 'insertion' | 'name' | 'choice'
+      filter: string
+    }>
+  ) => void
+  flistCustomKinksToggleMulti: (
+    characterId: string,
+    kinkId: string,
+    opts?: { range?: boolean; rowsInOrder?: string[] }
+  ) => void
+  flistCustomKinksClearMulti: (characterId: string) => void
+  flistCustomKinksBulkTombstone: (characterId: string, kinkIds: string[]) => void
+  flistUndoTombstone: () => void
+  flistStandardKinkSet: (characterId: string, kinkId: string, choice: string) => void
+  flistStandardKinksBulkSetChoice: (
+    characterId: string,
+    kinkIds: string[],
+    choice: string
+  ) => void
+  /** Tier 4 — set the Diff tab's right-hand source. */
+  flistDiffSetRightSource: (
+    characterId: string,
+    source: { kind: 'live' } | { kind: 'backup'; filename: string }
+  ) => void
+  /** Tier 4 — fetch + cache a backup payload (idempotent). */
+  flistDiffLoadBackup: (characterId: string, filename: string) => Promise<void>
+  /** Tier 4 — reset working copy to a chosen backup payload.
+   *  Re-uses Tier 2's reset-undo banner so the 5-second undo flow is
+   *  consistent across reset sources. */
+  flistResetWorkingToBackup: (
+    characterId: string,
+    backupFilename: string
+  ) => Promise<void>
 
   // Documents
   loadDocuments: () => Promise<void>
@@ -255,6 +405,168 @@ type State = {
 
 function partnerKey(char: string, partner: string): string {
   return `${char}::${partner}`
+}
+
+// Reset-undo banner lives 5 seconds. Stored in module scope so the
+// timer can be cleared on user dismiss or character switch without
+// growing the store with timer ids.
+const _resetUndoTimers = new Map<string, ReturnType<typeof setTimeout>>()
+// Tombstone-undo timer is single-banner (vs per-character) since the
+// UI surfaces one toast at a time across both surfaces.
+let _tombstoneUndoTimer: ReturnType<typeof setTimeout> | null = null
+const RESET_UNDO_MS = 5_000
+
+// Per-character autosave debouncers (Tier 2 §1.5 — 500 ms quiet time).
+// Keyed by character id so per-character switches don't race.
+const _autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+// Per-character in-flight flush promise. Ensures overlapping calls to
+// flistFlushWorking serialise per character so a later flush can't
+// race a still-running PUT and "succeed" on a stale payload (QA P1-4).
+const _flushInflight = new Map<string, Promise<void>>()
+const AUTOSAVE_DEBOUNCE_MS = 500
+
+function _scheduleFlush(characterId: string, fn: () => void): void {
+  const prev = _autosaveTimers.get(characterId)
+  if (prev) clearTimeout(prev)
+  const t = setTimeout(() => {
+    _autosaveTimers.delete(characterId)
+    fn()
+  }, AUTOSAVE_DEBOUNCE_MS)
+  _autosaveTimers.set(characterId, t)
+}
+
+function _cancelFlush(characterId: string): void {
+  const prev = _autosaveTimers.get(characterId)
+  if (prev) {
+    clearTimeout(prev)
+    _autosaveTimers.delete(characterId)
+  }
+}
+
+function _cancelAllPendingTimers(): void {
+  for (const [, t] of _autosaveTimers) clearTimeout(t)
+  _autosaveTimers.clear()
+  for (const [, t] of _resetUndoTimers) clearTimeout(t)
+  _resetUndoTimers.clear()
+  if (_tombstoneUndoTimer) {
+    clearTimeout(_tombstoneUndoTimer)
+    _tombstoneUndoTimer = null
+  }
+}
+
+// In-flight mapping-list promise (QA P3-4): callers awaiting an
+// already-running flistLoadMapping get the same promise back so they
+// can sequence their work after `payload` is populated.
+let _mappingInflight: Promise<void> | null = null
+
+// Monotonic session counter bumped on sign-in / sign-out (QA P2-4).
+// Mapping-list responses that arrive after a session change are
+// discarded so a prior account's data can't be reinstated.
+let _flistSessionEpoch = 0
+
+/** Apply N tombstones in a single reducer pass — keeps the bulk action
+ *  cheap even for large selections and ensures one slot mutation lands
+ *  per click rather than N (QA P1-2 / P2-6). */
+function _applyTombstones(
+  characterId: string,
+  kinkIds: string[],
+  setFn: (
+    update:
+      | Partial<State>
+      | ((s: State) => Partial<State> | State)
+  ) => void
+): void {
+  setFn((s) => {
+    const slot = s.flistWorking[characterId]
+    if (!slot) return {}
+    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+    const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+    let overlay = [...slot.overlay]
+    const overlaySet = new Set(overlay)
+    let order = Array.isArray(payload._custom_kinks_order)
+      ? [...(payload._custom_kinks_order as string[])]
+      : Object.keys(ck)
+    for (const kinkId of kinkIds) {
+      const isLocal = kinkId.startsWith('local:')
+      if (isLocal) {
+        delete ck[kinkId]
+        order = order.filter((x) => x !== kinkId)
+        overlay = overlay.filter((p) => !p.startsWith(`custom_kinks.${kinkId}.`))
+      } else {
+        if (!ck[kinkId]) ck[kinkId] = {}
+        ck[kinkId]._deleted = true
+        if (!overlaySet.has(`custom_kinks.${kinkId}._deleted`)) {
+          overlay.push(`custom_kinks.${kinkId}._deleted`)
+          overlaySet.add(`custom_kinks.${kinkId}._deleted`)
+        }
+      }
+    }
+    payload.custom_kinks = ck
+    payload._custom_kinks_order = order
+    payload._overlay = overlay
+    return {
+      flistWorking: {
+        ...s.flistWorking,
+        [characterId]: {
+          ...slot,
+          payload,
+          overlay,
+          unsavedDirty: true,
+          saveStatus: 'idle',
+          saveError: slot.saveError
+        }
+      }
+    }
+  })
+}
+
+/** Arm the 5-second tombstone undo banner. Captures `prevSlot` so undo
+ *  restores the pre-delete payload + overlay exactly (Tier 3 §Step 8). */
+function _armTombstoneUndo(
+  characterId: string,
+  prevSlot: FlistWorkingSlot,
+  kinkIds: string[],
+  setFn: (
+    update:
+      | Partial<State>
+      | ((s: State) => Partial<State> | State)
+  ) => void,
+  getFn: () => State
+): void {
+  if (_tombstoneUndoTimer) {
+    clearTimeout(_tombstoneUndoTimer)
+    _tombstoneUndoTimer = null
+  }
+  const expiresAt = Date.now() + RESET_UNDO_MS
+  setFn({
+    flistTombstoneUndo: {
+      characterId,
+      snapshot: prevSlot,
+      kinkIds: [...kinkIds],
+      expiresAt
+    }
+  })
+  _tombstoneUndoTimer = setTimeout(() => {
+    _tombstoneUndoTimer = null
+    const undo = getFn().flistTombstoneUndo
+    if (undo && undo.expiresAt <= Date.now()) {
+      setFn({ flistTombstoneUndo: null })
+    }
+  }, RESET_UNDO_MS + 50)
+}
+
+/** Collect the dotted overlay candidate paths Tier 2 currently tracks
+ *  for drift detection: description + each infotag id present in either
+ *  payload. Tier 3 will extend with custom-kinks paths. */
+function collectOverlayCandidates(payload: WorkingPayload): string[] {
+  const paths = new Set<string>([DESCRIPTION_PATH])
+  const infotags = payload.infotags
+  if (infotags && typeof infotags === 'object' && !Array.isArray(infotags)) {
+    for (const id of Object.keys(infotags as Record<string, unknown>)) {
+      paths.add(`infotags.${id}`)
+    }
+  }
+  return Array.from(paths)
 }
 
 // F-list serves descriptions with literal CRLF / CR. Normalise before
@@ -377,6 +689,21 @@ export const useStore = create<State>((set, get) => ({
   flistActiveCharacterId: null,
   flistArchive: {},
   flistWorking: {},
+  flistWorkingLoadStatus: {},
+  flistMapping: {
+    status: 'idle',
+    payload: null,
+    fetchedAt: null,
+    etag: null,
+    error: null
+  },
+  flistDriftBanners: {},
+  flistResetUndo: null,
+  flistTombstoneUndo: null,
+  flistDiffRightSource: {},
+  flistDiffBackupCache: {},
+  flistDiffBackupStatus: {},
+  flistCustomKinksUI: {},
   flistPullAbortController: null,
   editorReadOnly: false,
   flistSignInOpen: false,
@@ -411,6 +738,10 @@ export const useStore = create<State>((set, get) => ({
       } catch {
         // localStorage unavailable — account just won't pre-fill next session
       }
+      // Bump the session epoch so any in-flight mapping-list fetch from
+      // a prior account is discarded on arrival (QA P2-4).
+      _flistSessionEpoch++
+      _mappingInflight = null
       set({
         flistSignInStatus: 'idle',
         flistSignInOpen: false,
@@ -434,6 +765,19 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistSignOut() {
+    // Flush any pending working-copy autosaves before tearing down — the
+    // 500 ms debounce window can otherwise drop the user's last edits
+    // (QA P1-1). Single-flight in flistFlushWorking keeps this safe
+    // even when a flush is already in progress.
+    const pendingIds = Array.from(_autosaveTimers.keys())
+    for (const id of pendingIds) {
+      try {
+        await get().flistFlushWorking(id)
+      } catch {
+        // best-effort
+      }
+    }
+    _cancelAllPendingTimers()
     // Abort any in-flight pull BEFORE clearing the ticket so the
     // sidecar's producer task doesn't keep writing live.json + image
     // bytes against a torn-down session. The pull-lock and httpx
@@ -448,12 +792,34 @@ export const useStore = create<State>((set, get) => ({
       // Server-side clear is best-effort; clearing local state is the
       // user-visible signal that matters.
     }
+    // Bump session epoch so any in-flight network call (mapping list,
+    // archive load, etc.) that returns after this point is discarded
+    // rather than reinstating the signed-out account's data (QA P2-4).
+    _flistSessionEpoch++
+    _mappingInflight = null
     set({
       flistSession: { active: false },
       flistAccountCharacters: [],
       flistActiveCharacterId: null,
       editorReadOnly: false,
-      flistPullAbortController: null
+      flistPullAbortController: null,
+      // Purge mapping cache + working slots so a different account
+      // logging in doesn't see another user's cached data (Tier 2 §2.x).
+      flistMapping: {
+        status: 'idle',
+        payload: null,
+        fetchedAt: null,
+        etag: null,
+        error: null
+      },
+      flistWorking: {},
+      flistWorkingLoadStatus: {},
+      flistDriftBanners: {},
+      flistResetUndo: null,
+      flistDiffRightSource: {},
+      flistDiffBackupCache: {},
+      flistDiffBackupStatus: {},
+      flistCustomKinksUI: {}
     })
     await get().flistLoadRoster()
   },
@@ -507,6 +873,23 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistSelectCharacter(characterId) {
+    // Hard-flush any pending autosave for the previously active character
+    // before switching. Per Tier 2 §1.5: a 500 ms quiet-time autosave
+    // window can otherwise strand the last edit if the user hops away
+    // quickly. Survives a SIGKILL after this point because the bytes
+    // are already on disk.
+    const prevId = get().flistActiveCharacterId
+    if (prevId && prevId !== characterId) {
+      try {
+        await get().flistFlushWorking(prevId)
+      } catch {
+        // Best-effort — the failed save's saveStatus = 'error' is the
+        // signal; don't block the switch on it.
+      }
+      // Drop the kink-description CM state cache on character switch
+      // (Tier 3 plan §R-5 — purge bounds memory growth).
+      purgeCMStates()
+    }
     set({ flistActiveCharacterId: characterId })
     if (characterId === null) {
       set({ editorReadOnly: false })
@@ -631,15 +1014,17 @@ export const useStore = create<State>((set, get) => ({
             get().activeDocId === null &&
             !get().editorReadOnly
           const working = get().flistWorking[info.character_id]
-          const liveDiverged =
-            working !== undefined &&
-            get().editorContent !== working.content
-          const safe = isActive && (!working || (!working.dirty && !liveDiverged))
+          // After a Live re-pull, only stream the new description into
+          // a non-materialised seed-from-Live slot (no edits yet AND
+          // never written to disk). Materialised working copies are
+          // user-authoritative — drift detection runs via the banner
+          // (§5.1) instead.
+          const safe =
+            isActive && (!working || (!working.materialised && !working.unsavedDirty))
           if (safe) {
-            // Clear any seeded-but-clean working entry so flistOpenWorking
-            // re-reads from the new Live rather than reusing the stale
-            // content it cached at the previous open.
             if (working) {
+              // Drop the seeded slot so flistOpenWorking re-seeds from
+              // the new Live on the next open.
               set((s) => {
                 const next = { ...s.flistWorking }
                 delete next[info.character_id]
@@ -647,6 +1032,27 @@ export const useStore = create<State>((set, get) => ({
               })
             }
             void get().flistOpenWorking(info.character_id)
+          } else if (isActive && working?.materialised) {
+            // Materialised working copy active: surface drift for non-
+            // overlaid paths against the new Live.
+            const newLive = get().flistArchive[info.character_id]?.live ?? null
+            const oldLive = working.payload as Record<string, unknown>
+            const allPaths = collectOverlayCandidates(working.payload)
+            const ignore = new Set(working.overlay)
+            const drift = detectLiveDrift(
+              oldLive,
+              newLive as Record<string, unknown>,
+              allPaths,
+              [...ignore]
+            )
+            if (drift.length > 0) {
+              set((s) => ({
+                flistDriftBanners: {
+                  ...s.flistDriftBanners,
+                  [info.character_id]: { paths: drift, dismissedAt: null }
+                }
+              }))
+            }
           }
         },
         onError: ({ message }) => {
@@ -786,54 +1192,940 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistOpenWorking(characterId) {
-    const existing = get().flistWorking[characterId]
-    let content = existing?.content ?? ''
-    let dirty = existing?.dirty ?? false
-    // Resolve inlines from the Live payload regardless of whether
-    // we use the cached working content or seed fresh — `[img=N]`
-    // tags in the BBCode need the manifest to render.
-    let inlines: Record<string, InlineImage> = {}
-    const slot = get().flistArchive[characterId]
-    let live = slot?.live
-    if (!live) {
-      live = await api.flistLive(characterId).catch(() => null)
+    // Ensure Live is loaded into flistArchive BEFORE we ask
+    // flistLoadWorking to handle a 404 — its seed-from-Live branch
+    // reads from flistArchive, so a race against the loader produces
+    // an empty `character` block and the first edit ships a bare
+    // payload (QA P1-3).
+    let archive = get().flistArchive[characterId]
+    if (!archive || archive.live === null) {
+      const fetched = await api.flistLive(characterId).catch(() => null)
+      if (fetched) {
+        set((s) => ({
+          flistArchive: {
+            ...s.flistArchive,
+            [characterId]: {
+              ...(s.flistArchive[characterId] ?? {
+                live: null,
+                backups: [],
+                pullStatus: 'idle'
+              }),
+              live: fetched as Record<string, unknown>
+            }
+          }
+        }))
+        archive = get().flistArchive[characterId]
+      }
     }
-    if (live) {
-      inlines = extractInlines(live)
-    }
-    // No working copy yet → seed from Live so the editor isn't blank.
-    // If Live isn't on disk (never pulled), fall back to empty and let
-    // the auto-pull triggered by selectCharacter refill us later via
-    // the pull-completion handler in flistPullCharacter.
-    if (!existing && live) {
-      const character = (live.character ?? live) as Record<string, unknown>
-      const desc =
-        (typeof character.description === 'string' &&
-          (character.description as string)) ||
-        ''
-      content = normaliseNewlines(desc)
-      set((s) => ({
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: { content, dirty: false }
-        }
-      }))
-    }
-    const entry = get().flistRoster.find(
-      (r) => String(r.id ?? '') === characterId
-    )
+    // Load the persisted working copy. On 404 the slot is seeded from
+    // Live in memory but not flushed to disk — first edit then PUTs
+    // (Tier 2 §1.6 materialise-on-first-edit).
+    await get().flistLoadWorking(characterId)
+    const slot = get().flistWorking[characterId]
+    const live = archive?.live ?? null
+    const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
+    const content = slot ? descriptionOf(slot.payload) : ''
+    const entry = get().flistRoster.find((r) => String(r.id ?? '') === characterId)
     const name = entry?.name ?? 'My edits'
+    const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
     set({
       activeDocId: null,
       editorContent: content,
-      editorTitle: `${name} — My edits (draft)`,
+      editorTitle: `${name} — My edits${titleSuffix}`,
       editorInlines: inlines,
       editorReadOnly: false,
-      editorDirty: dirty,
+      editorDirty: !!slot?.unsavedDirty,
       saveStatus: 'idle',
       saveError: null,
       draftStatus: 'idle'
     })
+  },
+
+  // ---- Tier 2 working-copy persistence ------------------------------
+
+  async flistLoadWorking(characterId) {
+    set((s) => ({
+      flistWorkingLoadStatus: { ...s.flistWorkingLoadStatus, [characterId]: 'loading' }
+    }))
+    try {
+      const { payload, etag } = await api.flistWorkingRead(characterId)
+      const overlay = Array.isArray((payload as WorkingPayload)._overlay)
+        ? ((payload as WorkingPayload)._overlay as string[])
+        : []
+      const slot: FlistWorkingSlot = {
+        payload: payload as WorkingPayload,
+        overlay,
+        etag,
+        unsavedDirty: false,
+        saveStatus: 'idle',
+        saveError: null,
+        lastSavedAt: null,
+        materialised: true
+      }
+      set((s) => ({
+        flistWorking: { ...s.flistWorking, [characterId]: slot },
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: 'ready'
+        }
+      }))
+    } catch (err) {
+      const isHttp404 =
+        err instanceof Error && /HTTP 404/.test(err.message)
+      if (isHttp404) {
+        // First-open: seed from Live (materialise-on-first-edit). Live
+        // may itself be missing — caller (flistOpenWorking) tolerates.
+        const live = get().flistArchive[characterId]?.live ?? null
+        const seeded = live ? seedWorkingFromLive(live) : { ...emptyWorkingSlot().payload }
+        const slot: FlistWorkingSlot = {
+          ...emptyWorkingSlot(),
+          payload: seeded,
+          materialised: false
+        }
+        set((s) => ({
+          flistWorking: { ...s.flistWorking, [characterId]: slot },
+          flistWorkingLoadStatus: {
+            ...s.flistWorkingLoadStatus,
+            [characterId]: 'ready'
+          }
+        }))
+        return
+      }
+      set((s) => ({
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: 'error'
+        }
+      }))
+    }
+  },
+
+  flistSetWorkingField(characterId, path, value) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const next = flistApplyEdit(slot, path, value)
+      return {
+        flistWorking: { ...s.flistWorking, [characterId]: next }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistResetWorkingField(characterId, path) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const live = s.flistArchive[characterId]?.live ?? null
+      const next = flistApplyReset(slot, live, path)
+      // If the reset path is the description, mirror back into the
+      // editor surface so the open BBCode editor reflects the revert
+      // without a re-render hop.
+      const patch: Partial<State> = {
+        flistWorking: { ...s.flistWorking, [characterId]: next }
+      }
+      const workingCopyMode =
+        s.flistActiveCharacterId === characterId &&
+        s.activeDocId === null &&
+        !s.editorReadOnly
+      if (path === DESCRIPTION_PATH && workingCopyMode) {
+        patch.editorContent = descriptionOf(next.payload)
+        patch.editorDirty = next.unsavedDirty
+      }
+      return patch
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  async flistFlushWorking(characterId) {
+    _cancelFlush(characterId)
+    // Per-character single-flight: if a flush is already in progress,
+    // chain after it. Otherwise the in-flight PUT could race a fresh
+    // one carrying a newer payload — the older PUT could win, leaving
+    // the user's later keystrokes unsaved while saveStatus shows 'saved'
+    // (QA P1-4).
+    const prior = _flushInflight.get(characterId)
+    if (prior) {
+      await prior.catch(() => {})
+      // Re-cancel any debounce that may have re-armed during the wait
+      // so we don't double-fire.
+      _cancelFlush(characterId)
+    }
+    const slot = get().flistWorking[characterId]
+    if (!slot || !slot.unsavedDirty) {
+      // Second cancel post-early-return — a scheduleFlush may have armed
+      // during the await above; we'd otherwise leave a stranded timer
+      // (QA P3-3).
+      _cancelFlush(characterId)
+      return
+    }
+    const inflight = (async () => {
+      // Pin the exact payload we're shipping so the success branch can
+      // tell whether new edits arrived during the round-trip.
+      const sentPayload = slot.payload
+      set((s) => {
+        const existing = s.flistWorking[characterId]
+        if (!existing) return {}
+        return {
+          flistWorking: {
+            ...s.flistWorking,
+            [characterId]: { ...existing, saveStatus: 'saving', saveError: null }
+          }
+        }
+      })
+      try {
+        const { etag } = await api.flistWorkingWrite(characterId, sentPayload, {
+          etag: slot.materialised ? slot.etag : null
+        })
+        set((s) => {
+          const existing = s.flistWorking[characterId]
+          if (!existing) return {}
+          // If the user typed something newer while we were saving, the
+          // newer slot's `payload` won't match `sentPayload` — keep
+          // unsavedDirty=true so the next flush picks up the delta.
+          const isFresh = existing.payload === sentPayload
+          return {
+            flistWorking: {
+              ...s.flistWorking,
+              [characterId]: {
+                ...existing,
+                etag,
+                unsavedDirty: isFresh ? false : existing.unsavedDirty,
+                saveStatus: isFresh ? 'saved' : existing.saveStatus,
+                saveError: null,
+                lastSavedAt: Date.now(),
+                materialised: true
+              }
+            }
+          }
+        })
+        // If a newer payload is waiting, schedule a follow-up flush so
+        // the user's most recent edits land without needing another
+        // keystroke.
+        const next = get().flistWorking[characterId]
+        if (next?.unsavedDirty) {
+          _scheduleFlush(characterId, () => {
+            void get().flistFlushWorking(characterId)
+          })
+        }
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err)
+        const conflict = err instanceof Error && err.message === 'etag_mismatch'
+        const errWith = err as Error & { currentEtag?: string | null }
+        set((s) => {
+          const existing = s.flistWorking[characterId]
+          if (!existing) return {}
+          return {
+            flistWorking: {
+              ...s.flistWorking,
+              [characterId]: {
+                ...existing,
+                saveStatus: 'error',
+                saveError: conflict
+                  ? 'Another window saved a different version. Reload to merge.'
+                  : raw,
+                etag: conflict
+                  ? errWith.currentEtag ?? existing.etag
+                  : existing.etag,
+                unsavedDirty: true
+              }
+            }
+          }
+        })
+      }
+    })()
+    _flushInflight.set(characterId, inflight)
+    try {
+      await inflight
+    } finally {
+      if (_flushInflight.get(characterId) === inflight) {
+        _flushInflight.delete(characterId)
+      }
+    }
+  },
+
+  async flistResetWorkingToLive(characterId) {
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    _cancelFlush(characterId)
+    // Drain any in-flight save before issuing the DELETE — otherwise a
+    // mid-flight PUT (saveStatus === 'saving') could resurrect the
+    // pre-reset payload after we've already cleared local state
+    // (QA P2-3). Single-flight already chains here.
+    const inflight = _flushInflight.get(characterId)
+    if (inflight) {
+      await inflight.catch(() => {})
+    }
+    // A still-newer-payload follow-up flush may have armed itself via
+    // _scheduleFlush in the success branch of the drained PUT; cancel
+    // that too or it would race ahead of our DELETE (Round 1 verifier).
+    _cancelFlush(characterId)
+    try {
+      await api.flistWorkingDelete(characterId)
+    } catch {
+      // Best-effort — even if delete failed (race with another window),
+      // dropping the in-memory slot still gives the user a recovery
+      // path. Next flush will reconcile via If-Match.
+    }
+    // Stash the pre-delete snapshot for the 5s undo banner.
+    const expiresAt = Date.now() + RESET_UNDO_MS
+    set((s) => {
+      const live = s.flistArchive[characterId]?.live ?? null
+      const seeded = live ? seedWorkingFromLive(live) : emptyWorkingSlot().payload
+      const fresh: FlistWorkingSlot = {
+        ...emptyWorkingSlot(),
+        payload: seeded,
+        materialised: false
+      }
+      return {
+        flistWorking: { ...s.flistWorking, [characterId]: fresh },
+        flistResetUndo: { characterId, snapshot: slot, expiresAt }
+      }
+    })
+    // Mirror the seeded description into the editor so the panel
+    // immediately reflects the revert.
+    const reloaded = get().flistWorking[characterId]
+    if (
+      reloaded &&
+      get().flistActiveCharacterId === characterId &&
+      get().activeDocId === null &&
+      !get().editorReadOnly
+    ) {
+      set({
+        editorContent: descriptionOf(reloaded.payload),
+        editorDirty: false
+      })
+    }
+    const prev = _resetUndoTimers.get(characterId)
+    if (prev) clearTimeout(prev)
+    const t = setTimeout(() => {
+      _resetUndoTimers.delete(characterId)
+      const undo = get().flistResetUndo
+      if (undo && undo.characterId === characterId && undo.expiresAt <= Date.now()) {
+        set({ flistResetUndo: null })
+      }
+    }, RESET_UNDO_MS + 50)
+    _resetUndoTimers.set(characterId, t)
+  },
+
+  // ---- Tier 4: diff + reset-to-backup -------------------------------
+
+  flistDiffSetRightSource(characterId, source) {
+    set((s) => ({
+      flistDiffRightSource: { ...s.flistDiffRightSource, [characterId]: source }
+    }))
+  },
+
+  async flistDiffLoadBackup(characterId, filename) {
+    const cacheKey = `${characterId}:${filename}`
+    if (get().flistDiffBackupCache[cacheKey]) return
+    if (get().flistDiffBackupStatus[cacheKey] === 'loading') return
+    set((s) => ({
+      flistDiffBackupStatus: {
+        ...s.flistDiffBackupStatus,
+        [cacheKey]: 'loading'
+      }
+    }))
+    try {
+      const payload = await api.flistBackupRead(characterId, filename)
+      set((s) => ({
+        flistDiffBackupCache: {
+          ...s.flistDiffBackupCache,
+          [cacheKey]: payload
+        },
+        flistDiffBackupStatus: {
+          ...s.flistDiffBackupStatus,
+          [cacheKey]: 'loaded'
+        }
+      }))
+    } catch {
+      // DiffPane reads `flistDiffBackupStatus` to distinguish "still
+      // loading" from "404 / disk error" — gives the user a real
+      // signal vs the previous indefinite spinner (UX P1-3).
+      set((s) => ({
+        flistDiffBackupStatus: {
+          ...s.flistDiffBackupStatus,
+          [cacheKey]: 'error'
+        }
+      }))
+    }
+  },
+
+  async flistResetWorkingToBackup(characterId, backupFilename) {
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    _cancelFlush(characterId)
+    // Drain any in-flight save before DELETE/PUT so a mid-flight save
+    // can't resurrect the pre-reset payload (mirrors Tier 2 §P2-3).
+    const inflight = _flushInflight.get(characterId)
+    if (inflight) await inflight.catch(() => {})
+    _cancelFlush(characterId)
+    let backupPayload: Record<string, unknown> | null = null
+    const cacheKey = `${characterId}:${backupFilename}`
+    backupPayload = get().flistDiffBackupCache[cacheKey] ?? null
+    if (!backupPayload) {
+      try {
+        backupPayload = await api.flistBackupRead(characterId, backupFilename)
+      } catch {
+        // Bail without mutating — surface the failure via saveError on
+        // the next flush attempt.
+        return
+      }
+    }
+    // A user keystroke during the backup-read await may have armed a
+    // fresh flush against the still-pre-reset slot — re-drain so the
+    // DELETE we're about to issue isn't racing one (QA P2-1).
+    _cancelFlush(characterId)
+    const secondInflight = _flushInflight.get(characterId)
+    if (secondInflight) await secondInflight.catch(() => {})
+    _cancelFlush(characterId)
+    // Capture the pre-reset etag so the eager-PUT after seeding can
+    // explicitly overwrite whatever's on disk. Without this, a DELETE
+    // failure followed by the eager-PUT would ship etag=null and 409
+    // against the still-present file (QA P1-1).
+    const priorEtag = slot.etag
+    try {
+      await api.flistWorkingDelete(characterId)
+    } catch {
+      // Non-404 failures will be caught by the eager PUT's If-Match;
+      // 404 (nothing to delete) is the expected path on a clean reset.
+    }
+    // Build a fresh working payload from the backup. Backup data uses
+    // the same JSON-API shape as Live; pass through seedWorkingFromLive
+    // so CRLF normalisation + kinks-list-to-dict coercion apply.
+    const seeded = seedWorkingFromLive(backupPayload)
+    const expiresAt = Date.now() + RESET_UNDO_MS
+    set((s) => {
+      const fresh: FlistWorkingSlot = {
+        ...emptyWorkingSlot(),
+        payload: seeded,
+        // Inherit the pre-reset etag and treat the slot as materialised
+        // so the eager PUT below ships If-Match against whatever was
+        // on disk before. If DELETE succeeded the etag is stale and the
+        // server returns 409 → flistFlushWorking's conflict branch
+        // updates to the new etag and re-tries; if DELETE failed the
+        // etag still matches and the PUT overwrites cleanly (QA P1-1).
+        etag: priorEtag,
+        materialised: true,
+        unsavedDirty: true
+      }
+      return {
+        flistWorking: { ...s.flistWorking, [characterId]: fresh },
+        flistResetUndo: { characterId, snapshot: slot, expiresAt }
+      }
+    })
+    const reloaded = get().flistWorking[characterId]
+    if (
+      reloaded &&
+      get().flistActiveCharacterId === characterId &&
+      get().activeDocId === null &&
+      !get().editorReadOnly
+    ) {
+      set({
+        editorContent: descriptionOf(reloaded.payload),
+        editorDirty: false
+      })
+    }
+    const prev = _resetUndoTimers.get(characterId)
+    if (prev) clearTimeout(prev)
+    const t = setTimeout(() => {
+      _resetUndoTimers.delete(characterId)
+      const undo = get().flistResetUndo
+      if (undo && undo.characterId === characterId && undo.expiresAt <= Date.now()) {
+        set({ flistResetUndo: null })
+      }
+    }, RESET_UNDO_MS + 50)
+    _resetUndoTimers.set(characterId, t)
+    // Eager-flush the seeded payload to disk so a crash before next
+    // edit doesn't lose the reset (parity with Tier 2 reset-to-Live
+    // which uses DELETE only; seed-from-backup needs a PUT because
+    // the source isn't recoverable from Live). Slot is already dirty
+    // + carries the prior etag, so flistFlushWorking handles a 409
+    // and retries through its conflict branch.
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  async flistUndoResetWorking() {
+    const undo = get().flistResetUndo
+    if (!undo) return
+    const { characterId, snapshot } = undo
+    set({ flistResetUndo: null })
+    const timer = _resetUndoTimers.get(characterId)
+    if (timer) {
+      clearTimeout(timer)
+      _resetUndoTimers.delete(characterId)
+    }
+    // Re-PUT the pre-delete snapshot. Try `If-Match: null` first (delete
+    // left disk empty); on 409 the file was touched by another window
+    // during the 5s undo window — read the current etag and retry with
+    // it so we explicitly overwrite rather than silently clobbering
+    // unknown bytes (QA P2-5).
+    const writeWith = async (etag: string | null) =>
+      api.flistWorkingWrite(characterId, snapshot.payload, { etag })
+    try {
+      let result
+      try {
+        result = await writeWith(null)
+      } catch (err) {
+        if (err instanceof Error && err.message === 'etag_mismatch') {
+          const errWith = err as Error & { currentEtag?: string | null }
+          const currentEtag = errWith.currentEtag ?? null
+          result = await writeWith(currentEtag)
+        } else {
+          throw err
+        }
+      }
+      const { etag } = result
+      set((s) => ({
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...snapshot,
+            etag,
+            unsavedDirty: false,
+            saveStatus: 'saved',
+            saveError: null,
+            lastSavedAt: Date.now(),
+            materialised: true
+          }
+        }
+      }))
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      set((s) => ({
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: { ...snapshot, saveStatus: 'error', saveError: raw }
+        }
+      }))
+    }
+    // Refresh the editor surface against the restored slot.
+    const slot = get().flistWorking[characterId]
+    if (
+      slot &&
+      get().flistActiveCharacterId === characterId &&
+      get().activeDocId === null &&
+      !get().editorReadOnly
+    ) {
+      set({
+        editorContent: descriptionOf(slot.payload),
+        editorDirty: slot.unsavedDirty
+      })
+    }
+  },
+
+  flistDismissDriftBanner(characterId) {
+    set((s) => {
+      if (!s.flistDriftBanners[characterId]) return {}
+      const next = { ...s.flistDriftBanners }
+      delete next[characterId]
+      return { flistDriftBanners: next }
+    })
+  },
+
+  // ---- mapping list -------------------------------------------------
+
+  async flistLoadMapping(opts) {
+    const status = get().flistMapping.status
+    // Return the in-flight promise instead of resolving immediately
+    // (QA P3-4) so callers can sequence reads of `flistMapping.payload`.
+    if (status === 'loading' && !opts?.force && _mappingInflight) {
+      return _mappingInflight
+    }
+    const epoch = _flistSessionEpoch
+    set((s) => ({
+      flistMapping: { ...s.flistMapping, status: 'loading', error: null }
+    }))
+    let resolvedPromise!: Promise<void>
+    const work = (async () => {
+      try {
+        const payload = await api.flistMappingList({ force: opts?.force })
+        if (epoch !== _flistSessionEpoch) return
+        set({
+          flistMapping: {
+            status: 'ready',
+            payload,
+            etag: payload._etag ?? null,
+            fetchedAt: payload._fetched_at ?? null,
+            error: null
+          }
+        })
+      } catch (err) {
+        if (epoch !== _flistSessionEpoch) return
+        const raw = err instanceof Error ? err.message : String(err)
+        set((s) => ({
+          flistMapping: { ...s.flistMapping, status: 'error', error: raw }
+        }))
+      } finally {
+        if (_mappingInflight === resolvedPromise) {
+          _mappingInflight = null
+        }
+      }
+    })()
+    resolvedPromise = work
+    _mappingInflight = resolvedPromise
+    return resolvedPromise
+  },
+
+  // ---- Tier 3 custom-kinks ------------------------------------------
+
+  flistCustomKinksSelect(characterId, kinkId) {
+    set((s) => {
+      const cur = s.flistCustomKinksUI[characterId] ?? {
+        selectedKinkId: null,
+        selectedKinkIds: [],
+        showDeleted: false,
+        sort: 'insertion',
+        filter: ''
+      }
+      return {
+        flistCustomKinksUI: {
+          ...s.flistCustomKinksUI,
+          [characterId]: { ...cur, selectedKinkId: kinkId, selectedKinkIds: [] }
+        }
+      }
+    })
+  },
+
+  flistCustomKinksToggleMulti(characterId, kinkId, opts) {
+    set((s) => {
+      const cur = s.flistCustomKinksUI[characterId] ?? {
+        selectedKinkId: null,
+        selectedKinkIds: [],
+        showDeleted: false,
+        sort: 'insertion',
+        filter: ''
+      }
+      let next: string[]
+      if (opts?.range && cur.selectedKinkId && opts.rowsInOrder) {
+        const start = opts.rowsInOrder.indexOf(cur.selectedKinkId)
+        const end = opts.rowsInOrder.indexOf(kinkId)
+        if (start === -1 || end === -1) {
+          next = Array.from(new Set([...cur.selectedKinkIds, kinkId]))
+        } else {
+          const [lo, hi] = start < end ? [start, end] : [end, start]
+          next = Array.from(
+            new Set([...cur.selectedKinkIds, ...opts.rowsInOrder.slice(lo, hi + 1)])
+          )
+        }
+      } else {
+        next = cur.selectedKinkIds.includes(kinkId)
+          ? cur.selectedKinkIds.filter((id) => id !== kinkId)
+          : [...cur.selectedKinkIds, kinkId]
+      }
+      return {
+        flistCustomKinksUI: {
+          ...s.flistCustomKinksUI,
+          [characterId]: { ...cur, selectedKinkIds: next }
+        }
+      }
+    })
+  },
+
+  flistCustomKinksClearMulti(characterId) {
+    set((s) => {
+      const cur = s.flistCustomKinksUI[characterId]
+      if (!cur) return {}
+      return {
+        flistCustomKinksUI: {
+          ...s.flistCustomKinksUI,
+          [characterId]: { ...cur, selectedKinkIds: [] }
+        }
+      }
+    })
+  },
+
+  flistCustomKinksBulkTombstone(characterId, kinkIds) {
+    if (kinkIds.length === 0) return
+    const prevSlot = get().flistWorking[characterId]
+    if (!prevSlot) return
+    _applyTombstones(characterId, kinkIds, set)
+    _armTombstoneUndo(characterId, prevSlot, kinkIds, set, get)
+    get().flistCustomKinksClearMulti(characterId)
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistUndoTombstone() {
+    const undo = get().flistTombstoneUndo
+    if (!undo) return
+    if (_tombstoneUndoTimer) {
+      clearTimeout(_tombstoneUndoTimer)
+      _tombstoneUndoTimer = null
+    }
+    set((s) => ({
+      flistWorking: {
+        ...s.flistWorking,
+        [undo.characterId]: undo.snapshot
+      },
+      flistTombstoneUndo: null
+    }))
+    _scheduleFlush(undo.characterId, () => {
+      void get().flistFlushWorking(undo.characterId)
+    })
+  },
+
+  flistStandardKinksBulkSetChoice(characterId, kinkIds, choice) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+      const existing =
+        (payload.kinks && typeof payload.kinks === 'object' && !Array.isArray(payload.kinks)
+          ? (payload.kinks as Record<string, unknown>)
+          : {}) as Record<string, unknown>
+      for (const id of kinkIds) {
+        existing[id] = choice
+      }
+      payload.kinks = existing
+      const overlay = Array.from(
+        new Set([...slot.overlay, ...kinkIds.map((id) => `kinks.${id}`)])
+      )
+      payload._overlay = overlay
+      return {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload,
+            overlay,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: slot.saveError
+          }
+        }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistCustomKinksAdd(characterId) {
+    const localId = `local:${
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2) + Date.now().toString(36)
+    }`
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+      const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+      ck[localId] = {
+        name: '',
+        description: '',
+        choice: 'undecided',
+        children: []
+      }
+      payload.custom_kinks = ck
+      const order = Array.isArray(payload._custom_kinks_order)
+        ? [...(payload._custom_kinks_order as string[])]
+        : Object.keys(ck)
+      if (!order.includes(localId)) order.push(localId)
+      payload._custom_kinks_order = order
+      // Only `_order` is overlaid at Add time — `.name`/`.description`/
+      // `.choice` join the overlay when the user actually edits them
+      // (QA P2-1). Otherwise a brand-new `local:` row's first reset
+      // would clobber the empty name with itself.
+      const overlayAdds = ['custom_kinks._order']
+      const overlay = Array.from(new Set([...slot.overlay, ...overlayAdds]))
+      payload._overlay = overlay
+      const next: FlistWorkingSlot = {
+        ...slot,
+        payload,
+        overlay,
+        unsavedDirty: true,
+        saveStatus: 'idle',
+        saveError: null
+      }
+      return {
+        flistWorking: { ...s.flistWorking, [characterId]: next },
+        flistCustomKinksUI: {
+          ...s.flistCustomKinksUI,
+          [characterId]: {
+            ...(s.flistCustomKinksUI[characterId] ?? {
+              selectedKinkId: null,
+              selectedKinkIds: [],
+              showDeleted: false,
+              sort: 'insertion',
+              filter: ''
+            }),
+            selectedKinkId: localId
+          }
+        }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+    return localId
+  },
+
+  flistCustomKinksEdit(characterId, kinkId, field, value) {
+    const path = `custom_kinks.${kinkId}.${field}`
+    get().flistSetWorkingField(characterId, path, value)
+  },
+
+  flistCustomKinksTombstone(characterId, kinkId) {
+    const prevSlot = get().flistWorking[characterId]
+    if (!prevSlot) return
+    _applyTombstones(characterId, [kinkId], set)
+    _armTombstoneUndo(characterId, prevSlot, [kinkId], set, get)
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistCustomKinksUndelete(characterId, kinkId) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+      const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+      if (ck[kinkId]) {
+        delete ck[kinkId]._deleted
+        payload.custom_kinks = ck
+      }
+      const overlay = slot.overlay.filter(
+        (p) => p !== `custom_kinks.${kinkId}._deleted`
+      )
+      payload._overlay = overlay
+      return {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload,
+            overlay,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: null
+          }
+        }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistCustomKinksReorder(characterId, nextOrder) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+      payload._custom_kinks_order = [...nextOrder]
+      const overlay = Array.from(new Set([...slot.overlay, 'custom_kinks._order']))
+      payload._overlay = overlay
+      return {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload,
+            overlay,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: null
+          }
+        }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistCustomKinksResetField(characterId, kinkId, field) {
+    const path = `custom_kinks.${kinkId}.${field}`
+    get().flistResetWorkingField(characterId, path)
+  },
+
+  flistCustomKinksBulkSetChoice(characterId, kinkIds, choice) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+      const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+      // Validate ids against the dict before mutating — a stale selection
+      // surviving a tombstone-purge of a `local:` id would otherwise
+      // resurrect that id as an empty stub (QA P3-4).
+      const additions: string[] = []
+      for (const kinkId of kinkIds) {
+        if (!ck[kinkId]) continue
+        ck[kinkId].choice = choice
+        additions.push(`custom_kinks.${kinkId}.choice`)
+      }
+      if (additions.length === 0) return {}
+      payload.custom_kinks = ck
+      const overlay = Array.from(new Set([...slot.overlay, ...additions]))
+      payload._overlay = overlay
+      return {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload,
+            overlay,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: slot.saveError
+          }
+        }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistCustomKinksSetUI(characterId, patch) {
+    set((s) => {
+      const cur = s.flistCustomKinksUI[characterId] ?? {
+        selectedKinkId: null,
+        selectedKinkIds: [],
+        showDeleted: false,
+        sort: 'insertion',
+        filter: ''
+      }
+      return {
+        flistCustomKinksUI: {
+          ...s.flistCustomKinksUI,
+          [characterId]: { ...cur, ...patch }
+        }
+      }
+    })
+  },
+
+  flistStandardKinkSet(characterId, kinkId, choice) {
+    // Defensive: if `payload.kinks` is still the F-list empty-array
+    // shape `[]`, pathSet would set a non-numeric property on an Array
+    // and JSON.stringify would drop it (QA P1-4). Coerce to dict before
+    // routing through the regular field setter.
+    const slot = get().flistWorking[characterId]
+    if (slot && Array.isArray(slot.payload.kinks)) {
+      set((s) => {
+        const existing = s.flistWorking[characterId]
+        if (!existing) return {}
+        const payload = { ...existing.payload, kinks: {} }
+        return {
+          flistWorking: {
+            ...s.flistWorking,
+            [characterId]: { ...existing, payload }
+          }
+        }
+      })
+    }
+    const path = `kinks.${kinkId}`
+    get().flistSetWorkingField(characterId, path, choice)
   },
 
   async loadCharacters() {
@@ -1058,35 +2350,27 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setEditorContent(value) {
-    set((s) => {
-      // Working-copy mode: editor is showing an F-list character's
-      // editable copy (no local doc active, not in read-only Live /
-      // Backup view). Keep the per-character working slot in sync so
-      // switching characters and back doesn't lose edits.
-      const isWorkingCopyMode =
-        s.flistActiveCharacterId !== null &&
-        s.activeDocId === null &&
-        !s.editorReadOnly
-      const workingPatch = isWorkingCopyMode
-        ? {
-            flistWorking: {
-              ...s.flistWorking,
-              [s.flistActiveCharacterId!]: {
-                content: value,
-                dirty: true
-              }
-            }
-          }
-        : {}
-      return {
-        editorContent: value,
-        editorDirty: s.editorDirty || value !== s.editorContent,
-        // Mark draft stale as soon as the user types — the autosave
-        // effect will pick this up and flush after the idle window.
-        draftStatus: 'idle',
-        ...workingPatch
-      }
-    })
+    const before = get().editorContent
+    set((s) => ({
+      editorContent: value,
+      editorDirty: s.editorDirty || value !== before,
+      // Mark draft stale as soon as the user types — the autosave
+      // effect will pick this up and flush after the idle window.
+      draftStatus: 'idle'
+    }))
+    // Working-copy mode: editor is showing an F-list character's
+    // editable copy (no local doc active, not in read-only Live /
+    // Backup view). Route description edits through the persisted
+    // working-copy slice so the 500 ms debounce + If-Match flush apply
+    // uniformly with the other infotag / kink edits.
+    const s = get()
+    const isWorkingCopyMode =
+      s.flistActiveCharacterId !== null &&
+      s.activeDocId === null &&
+      !s.editorReadOnly
+    if (isWorkingCopyMode && value !== before) {
+      get().flistSetWorkingField(s.flistActiveCharacterId!, DESCRIPTION_PATH, value)
+    }
   },
 
   resetEditorDirty() {

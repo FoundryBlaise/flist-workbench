@@ -1,0 +1,79 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`infotag field renderers > TextField set + overlaid matches snapshot (renders F-list muted line) 1`] = `
+<DocumentFragment>
+  <div
+    class="infotag-field infotag-field-overlaid"
+    data-testid="infotag-field-9"
+  >
+    <label
+      class="infotag-field-label"
+    >
+      <span
+        class="infotag-field-name"
+      >
+        Species
+      </span>
+      <button
+        aria-label="Reset Species to F-list value"
+        class="infotag-field-reset"
+        data-testid="infotag-9-reset"
+        title="Reset to F-list value"
+        type="button"
+      >
+        ↺ reset
+      </button>
+    </label>
+    <div
+      class="infotag-field-control"
+    >
+      <input
+        class="infotag-field-input"
+        data-testid="infotag-9-input"
+        placeholder="—"
+        type="text"
+        value="Human (mod)"
+      />
+    </div>
+    <p
+      class="infotag-field-meta"
+    >
+      <span
+        class="infotag-field-meta-live"
+      >
+        F-list: Human
+      </span>
+    </p>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`infotag field renderers > TextField unset matches snapshot 1`] = `
+<DocumentFragment>
+  <div
+    class="infotag-field"
+    data-testid="infotag-field-9"
+  >
+    <label
+      class="infotag-field-label"
+    >
+      <span
+        class="infotag-field-name"
+      >
+        Species
+      </span>
+    </label>
+    <div
+      class="infotag-field-control"
+    >
+      <input
+        class="infotag-field-input"
+        data-testid="infotag-9-input"
+        placeholder="—"
+        type="text"
+        value=""
+      />
+    </div>
+  </div>
+</DocumentFragment>
+`;
