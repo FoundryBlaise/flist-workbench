@@ -138,6 +138,14 @@ type State = {
       lastPullAt?: number | null
     }
   >
+  /** Per-character in-memory working copies. Keyed by character_id.
+   *  Picking a character loads its working copy into the editor;
+   *  switching to another character preserves the previous one's
+   *  unsaved edits so the user can flip back without losing work.
+   *  Tier 1 keeps this strictly in-memory — Tier 2 will persist to
+   *  `<userdata>/characters/<id>/working.json` so edits survive an
+   *  app restart. */
+  flistWorking: Record<string, { content: string; dirty: boolean }>
   /** When true, EditorPane/PreviewPane/Toolbar all switch to read-only
    *  mode. Set whenever the user opens a Live or historical Backup
    *  document. */
@@ -204,6 +212,11 @@ type State = {
   flistSaveBackup: (characterId: string) => Promise<void>
   flistOpenLive: (characterId: string) => Promise<void>
   flistOpenBackup: (characterId: string, filename: string) => Promise<void>
+  /** Load the editor with this character's in-memory working copy.
+   *  Falls back to the Live description when no working copy exists
+   *  yet. The previous character's edits stay in `flistWorking` so a
+   *  later switch-back restores them verbatim. */
+  flistOpenWorking: (characterId: string) => Promise<void>
   flistGetLastAccount: () => string
 
   // Documents
@@ -310,6 +323,7 @@ export const useStore = create<State>((set, get) => ({
   flistRosterStatus: 'idle',
   flistActiveCharacterId: null,
   flistArchive: {},
+  flistWorking: {},
   editorReadOnly: false,
   flistSignInOpen: false,
   flistSignInError: null,
@@ -518,6 +532,28 @@ export const useStore = create<State>((set, get) => ({
           }))
           await get().flistLoadArchive(info.character_id)
           await get().flistLoadRoster()
+          // If the user is sitting on this character's working copy and
+          // hasn't typed anything yet, refresh the editor with the
+          // freshly-pulled Live content. Skip when the working copy is
+          // dirty so we never clobber unsaved edits.
+          const isActive =
+            get().flistActiveCharacterId === info.character_id &&
+            get().activeDocId === null &&
+            !get().editorReadOnly
+          const working = get().flistWorking[info.character_id]
+          if (isActive && (!working || !working.dirty)) {
+            // Clear any seeded-but-clean working entry so flistOpenWorking
+            // re-reads from the new Live rather than reusing the stale
+            // content it cached at the previous open.
+            if (working) {
+              set((s) => {
+                const next = { ...s.flistWorking }
+                delete next[info.character_id]
+                return { flistWorking: next }
+              })
+            }
+            void get().flistOpenWorking(info.character_id)
+          }
         },
         onError: ({ message }) => {
           setStatus({ pullStatus: 'error', pullError: message })
@@ -599,6 +635,52 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  async flistOpenWorking(characterId) {
+    const existing = get().flistWorking[characterId]
+    let content = existing?.content ?? ''
+    let dirty = existing?.dirty ?? false
+    // No working copy yet → seed from Live so the editor isn't blank.
+    // If Live isn't on disk (never pulled), fall back to empty and let
+    // the auto-pull triggered by selectCharacter refill us later via
+    // the pull-completion handler in flistPullCharacter.
+    if (!existing) {
+      const slot = get().flistArchive[characterId]
+      let live = slot?.live
+      if (!live) {
+        live = await api.flistLive(characterId).catch(() => null)
+      }
+      if (live) {
+        const character = (live.character ?? live) as Record<string, unknown>
+        const desc =
+          (typeof character.description === 'string' &&
+            (character.description as string)) ||
+          ''
+        content = normaliseNewlines(desc)
+        set((s) => ({
+          flistWorking: {
+            ...s.flistWorking,
+            [characterId]: { content, dirty: false }
+          }
+        }))
+      }
+    }
+    const entry = get().flistRoster.find(
+      (r) => String(r.id ?? '') === characterId
+    )
+    const name = entry?.name ?? 'Working'
+    set({
+      activeDocId: null,
+      editorContent: content,
+      editorTitle: `${name} — Working`,
+      editorInlines: {},
+      editorReadOnly: false,
+      editorDirty: dirty,
+      saveStatus: 'idle',
+      saveError: null,
+      draftStatus: 'idle'
+    })
+  },
+
   async loadCharacters() {
     set({ charactersStatus: 'loading', charactersError: null })
     try {
@@ -631,7 +713,8 @@ export const useStore = create<State>((set, get) => ({
     )
     if (match && match.id !== null) {
       const id = String(match.id)
-      if (get().flistActiveCharacterId !== id) {
+      const switched = get().flistActiveCharacterId !== id
+      if (switched) {
         try {
           localStorage.setItem(FLIST_LAST_CHAR_KEY, id)
         } catch {
@@ -639,6 +722,13 @@ export const useStore = create<State>((set, get) => ({
         }
         set({ flistActiveCharacterId: id })
         void get().flistLoadArchive(id)
+      }
+      // Load the working copy into the editor every time we switch
+      // characters. Previous character's edits stay in flistWorking
+      // (setEditorContent keeps it in sync per-keystroke), so a switch
+      // back restores the user's draft.
+      if (switched) {
+        void get().flistOpenWorking(id)
       }
       // Auto-pull on select when the Live snapshot is missing or older
       // than the staleness threshold. User can still trigger a manual
@@ -806,13 +896,35 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setEditorContent(value) {
-    set((s) => ({
-      editorContent: value,
-      editorDirty: s.editorDirty || value !== s.editorContent,
-      // Mark draft stale as soon as the user types — the autosave
-      // effect will pick this up and flush after the idle window.
-      draftStatus: 'idle'
-    }))
+    set((s) => {
+      // Working-copy mode: editor is showing an F-list character's
+      // editable copy (no local doc active, not in read-only Live /
+      // Backup view). Keep the per-character working slot in sync so
+      // switching characters and back doesn't lose edits.
+      const isWorkingCopyMode =
+        s.flistActiveCharacterId !== null &&
+        s.activeDocId === null &&
+        !s.editorReadOnly
+      const workingPatch = isWorkingCopyMode
+        ? {
+            flistWorking: {
+              ...s.flistWorking,
+              [s.flistActiveCharacterId!]: {
+                content: value,
+                dirty: true
+              }
+            }
+          }
+        : {}
+      return {
+        editorContent: value,
+        editorDirty: s.editorDirty || value !== s.editorContent,
+        // Mark draft stale as soon as the user types — the autosave
+        // effect will pick this up and flush after the idle window.
+        draftStatus: 'idle',
+        ...workingPatch
+      }
+    })
   },
 
   resetEditorDirty() {
