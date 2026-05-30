@@ -247,6 +247,37 @@ function normaliseNewlines(s: string): string {
   return s.replace(/\r\n?/g, '\n')
 }
 
+// character-data.php returns `inlines` as a top-level dict mapping
+// inline-image id → {hash, extension, nsfw}. The renderer's BBCode
+// transformer needs that dict to resolve `[img=<id>]` tags to CDN
+// URLs (`static.f-list.net/images/charinline/<hash>.<ext>`). Without
+// it, every inline tag renders as a broken image — caught after the
+// JSON-API swap because the working/Live/Backup loaders hardcoded
+// `editorInlines: {}` and only the old Fetch-profile path extracted
+// them properly.
+function extractInlines(payload: unknown): Record<string, InlineImage> {
+  if (!payload || typeof payload !== 'object') return {}
+  const raw = (payload as { inlines?: unknown }).inlines
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, InlineImage> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (
+      v &&
+      typeof v === 'object' &&
+      typeof (v as { hash?: unknown }).hash === 'string' &&
+      typeof (v as { extension?: unknown }).extension === 'string'
+    ) {
+      const entry = v as { hash: string; extension: string; nsfw?: unknown }
+      out[String(k)] = {
+        hash: entry.hash,
+        extension: entry.extension,
+        nsfw: Boolean(entry.nsfw)
+      }
+    }
+  }
+  return out
+}
+
 // Pulled out so fetchProfile and openDocument can both reset shared
 // editor state cleanly.
 function editorReplaceState(profile: {
@@ -636,7 +667,7 @@ export const useStore = create<State>((set, get) => ({
       activeDocId: null,
       editorContent: normaliseNewlines(rawBbcode),
       editorTitle: `${name} — Live.bbcode`,
-      editorInlines: {},
+      editorInlines: extractInlines(live),
       editorReadOnly: true,
       editorDirty: false,
       saveStatus: 'idle',
@@ -658,7 +689,7 @@ export const useStore = create<State>((set, get) => ({
       activeDocId: null,
       editorContent: normaliseNewlines(rawBbcode),
       editorTitle: `${name} — ${filename}`,
-      editorInlines: {},
+      editorInlines: extractInlines(payload),
       editorReadOnly: true,
       editorDirty: false,
       saveStatus: 'idle',
@@ -671,30 +702,35 @@ export const useStore = create<State>((set, get) => ({
     const existing = get().flistWorking[characterId]
     let content = existing?.content ?? ''
     let dirty = existing?.dirty ?? false
+    // Resolve inlines from the Live payload regardless of whether
+    // we use the cached working content or seed fresh — `[img=N]`
+    // tags in the BBCode need the manifest to render.
+    let inlines: Record<string, InlineImage> = {}
+    const slot = get().flistArchive[characterId]
+    let live = slot?.live
+    if (!live) {
+      live = await api.flistLive(characterId).catch(() => null)
+    }
+    if (live) {
+      inlines = extractInlines(live)
+    }
     // No working copy yet → seed from Live so the editor isn't blank.
     // If Live isn't on disk (never pulled), fall back to empty and let
     // the auto-pull triggered by selectCharacter refill us later via
     // the pull-completion handler in flistPullCharacter.
-    if (!existing) {
-      const slot = get().flistArchive[characterId]
-      let live = slot?.live
-      if (!live) {
-        live = await api.flistLive(characterId).catch(() => null)
-      }
-      if (live) {
-        const character = (live.character ?? live) as Record<string, unknown>
-        const desc =
-          (typeof character.description === 'string' &&
-            (character.description as string)) ||
-          ''
-        content = normaliseNewlines(desc)
-        set((s) => ({
-          flistWorking: {
-            ...s.flistWorking,
-            [characterId]: { content, dirty: false }
-          }
-        }))
-      }
+    if (!existing && live) {
+      const character = (live.character ?? live) as Record<string, unknown>
+      const desc =
+        (typeof character.description === 'string' &&
+          (character.description as string)) ||
+        ''
+      content = normaliseNewlines(desc)
+      set((s) => ({
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: { content, dirty: false }
+        }
+      }))
     }
     const entry = get().flistRoster.find(
       (r) => String(r.id ?? '') === characterId
@@ -704,7 +740,7 @@ export const useStore = create<State>((set, get) => ({
       activeDocId: null,
       editorContent: content,
       editorTitle: `${name} — Working`,
-      editorInlines: {},
+      editorInlines: inlines,
       editorReadOnly: false,
       editorDirty: dirty,
       saveStatus: 'idle',
