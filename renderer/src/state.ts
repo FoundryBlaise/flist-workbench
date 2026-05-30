@@ -218,6 +218,13 @@ function partnerKey(char: string, partner: string): string {
   return `${char}::${partner}`
 }
 
+// F-list serves descriptions with literal CRLF / CR. Normalise before
+// they hit CodeMirror + the BBCode→HTML preview so they don't render
+// as doubled blank lines.
+function normaliseNewlines(s: string): string {
+  return s.replace(/\r\n?/g, '\n')
+}
+
 // Pulled out so fetchProfile and openDocument can both reset shared
 // editor state cleanly.
 function editorReplaceState(profile: {
@@ -548,13 +555,13 @@ export const useStore = create<State>((set, get) => ({
       (typeof character.name === 'string' && character.name) ||
       (typeof live.name === 'string' && (live.name as string)) ||
       'Live'
-    const bbcode =
+    const rawBbcode =
       (typeof character.description === 'string' && (character.description as string)) ||
       (typeof live.description === 'string' && (live.description as string)) ||
       ''
     set({
       activeDocId: null,
-      editorContent: bbcode,
+      editorContent: normaliseNewlines(rawBbcode),
       editorTitle: `${name} — Live.bbcode`,
       editorInlines: {},
       editorReadOnly: true,
@@ -571,12 +578,12 @@ export const useStore = create<State>((set, get) => ({
     const character = (payload.character ?? payload) as Record<string, unknown>
     const name =
       (typeof character.name === 'string' && character.name) || 'Backup'
-    const bbcode =
+    const rawBbcode =
       (typeof character.description === 'string' && (character.description as string)) ||
       ''
     set({
       activeDocId: null,
-      editorContent: bbcode,
+      editorContent: normaliseNewlines(rawBbcode),
       editorTitle: `${name} — ${filename}`,
       editorInlines: {},
       editorReadOnly: true,
