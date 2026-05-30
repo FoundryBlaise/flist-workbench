@@ -6,6 +6,11 @@ import {
   type RagSettings,
   type RagStatus
 } from '../../lib/api'
+import {
+  categoriseEndpoint,
+  isRemoteEndpointAcknowledged,
+  acknowledgeRemoteEndpoint
+} from '../../lib/endpoint'
 import { useStore } from '../../state'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
@@ -346,6 +351,38 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
   const saveAll = async () => {
     if (!state || !draft || !dirtyByDraft) return
+    // First-save consent for remote endpoints. A user typing
+    // api.openai.com into any endpoint field is about to ship their
+    // RP chunks to a third party — gate Save behind an explicit
+    // confirm the first time per host, then remember the
+    // acknowledgement so we don't nag on every Save.
+    const candidateEndpoints: string[] = []
+    if (dirtyByDraft.labels) candidateEndpoints.push(draft.labels.llm_endpoint)
+    if (dirtyByDraft.chat) candidateEndpoints.push(draft.rag.chat_endpoint)
+    if (dirtyByDraft.embedding) candidateEndpoints.push(draft.rag.embed_endpoint)
+    const unconsented = candidateEndpoints.filter(
+      (ep) =>
+        categoriseEndpoint(ep) === 'remote'
+        && !isRemoteEndpointAcknowledged(ep)
+    )
+    if (unconsented.length > 0) {
+      const hosts = unconsented
+        .map((ep) => {
+          try {
+            return new URL(ep).host
+          } catch {
+            return ep
+          }
+        })
+        .join(', ')
+      const ok = window.confirm(
+        `Workbench is about to save an external endpoint:\n\n  ${hosts}\n\n`
+          + 'Messages, retrieved log chunks, and any prompt text will be '
+          + 'sent to this host. Continue?'
+      )
+      if (!ok) return
+      for (const ep of unconsented) acknowledgeRemoteEndpoint(ep)
+    }
     setStatus('saving')
     setSaveError(null)
     // Validate Labels threshold up-front — non-finite or zero would
@@ -636,6 +673,39 @@ function EndpointField({
         onChange={(e) => onChange(e.target.value)}
         data-testid={testId}
       />
+      <EndpointCategoryBadge url={value} />
+    </div>
+  )
+}
+
+function EndpointCategoryBadge({ url }: { url: string }) {
+  const category = categoriseEndpoint(url)
+  if (category === 'unknown') return null
+  if (category === 'local') {
+    return (
+      <div
+        className="endpoint-badge endpoint-badge-local"
+        data-testid="endpoint-badge-local"
+      >
+        ● Local — traffic stays on your machine or LAN
+      </div>
+    )
+  }
+  // remote
+  let host = ''
+  try {
+    host = new URL(url).host
+  } catch {
+    host = url
+  }
+  return (
+    <div
+      className="endpoint-badge endpoint-badge-remote"
+      role="status"
+      data-testid="endpoint-badge-remote"
+    >
+      ⚠ External endpoint — messages and log excerpts will be sent to{' '}
+      <strong>{host}</strong>
     </div>
   )
 }

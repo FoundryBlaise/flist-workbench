@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type RagCitation, type RagQueryScope } from '../../lib/api'
 import { useStore } from '../../state'
 import { displayCharacter as displayName, displayPartner } from '../../lib/partnerName'
+import { categoriseEndpoint } from '../../lib/endpoint'
 
 type Turn =
   | {
@@ -76,6 +77,30 @@ export function ChatPanel() {
   const [turns, setTurns] = useState<Turn[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // Surfaced near the input so a user about to send their RP to a
+  // remote LLM sees the host they're about to send to. Fetched once on
+  // mount; if the user changes endpoints via Settings while the panel
+  // stays open, the badge can be stale until next remount — acceptable.
+  const [chatEndpointHost, setChatEndpointHost] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void api.settingsGet().then((s) => {
+      if (cancelled) return
+      const ep = s.rag.chat_endpoint
+      if (categoriseEndpoint(ep) === 'remote') {
+        try {
+          setChatEndpointHost(new URL(ep).host)
+        } catch {
+          setChatEndpointHost(ep)
+        }
+      }
+    }).catch(() => {
+      // sidecar unreachable — silently skip; health card surfaces it
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   // Default scope mode: 'partner' if a partner is selected, else
   // 'character' if a character is selected, else 'all'.
   const initialMode: ScopeMode = activePartner
@@ -476,6 +501,16 @@ export function ChatPanel() {
         )}
       </div>
       <footer className="chat-input">
+        {chatEndpointHost && (
+          <div
+            className="chat-endpoint-warning"
+            role="status"
+            data-testid="chat-endpoint-warning"
+          >
+            ⚠ External endpoint — messages and retrieved log chunks will be
+            sent to <strong>{chatEndpointHost}</strong>
+          </div>
+        )}
         <textarea
           ref={inputRef}
           className="chat-textarea"
