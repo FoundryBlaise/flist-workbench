@@ -58,15 +58,34 @@ function Avatar({
   // image for a deleted character). Render a uniform archive glyph
   // instead — communicates "this character only exists as logs on
   // your machine" without inventing a misleading avatar for them.
+  //
+  // SVG instead of the 🗄️ emoji because Windows / Linux emoji fonts
+  // render filing-cabinet glyphs inconsistently at small sizes; the
+  // inline SVG scales crisply at any size and follows the dark theme.
   if (variant === 'archive') {
+    const inset = Math.max(2, Math.round(size * 0.15))
     return (
       <span
         className="char-avatar char-avatar-archive"
         aria-hidden
-        style={{ width: size, height: size, fontSize: Math.round(size * 0.6) }}
+        style={{ width: size, height: size }}
         title="Logs only — no longer on your F-list account"
       >
-        🗄️
+        <svg
+          width={size - inset * 2}
+          height={size - inset * 2}
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.25"
+        >
+          <rect x="2" y="2" width="12" height="12" rx="1.5" />
+          <line x1="2" y1="6" x2="14" y2="6" />
+          <line x1="2" y1="10" x2="14" y2="10" />
+          <circle cx="8" cy="4" r="0.5" fill="currentColor" stroke="none" />
+          <circle cx="8" cy="8" r="0.5" fill="currentColor" stroke="none" />
+          <circle cx="8" cy="12" r="0.5" fill="currentColor" stroke="none" />
+        </svg>
       </span>
     )
   }
