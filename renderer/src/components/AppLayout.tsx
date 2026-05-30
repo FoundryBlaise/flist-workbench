@@ -37,11 +37,21 @@ export function AppLayout() {
   const toggleChatPanel = useStore((s) => s.toggleChatPanel)
   const flistSignInOpen = useStore((s) => s.flistSignInOpen)
   const flistCloseSignIn = useStore((s) => s.flistCloseSignIn)
+  const flistOpenSignIn = useStore((s) => s.flistOpenSignIn)
+  const flistSession = useStore((s) => s.flistSession)
+  const flistRoster = useStore((s) => s.flistRoster)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [aiSetupOpen, setAiSetupOpen] = useState(false)
   const [firstRunToast, setFirstRunToast] = useState(false)
+  const [flistHintDismissed, setFlistHintDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('workbench.flistHintDismissed') === '1'
+    } catch {
+      return false
+    }
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -121,6 +131,27 @@ export function AppLayout() {
       }
     }
   }
+
+  const dismissFlistHint = () => {
+    setFlistHintDismissed(true)
+    try {
+      localStorage.setItem('workbench.flistHintDismissed', '1')
+    } catch {
+      // localStorage unavailable — accept session-only dismissal.
+    }
+  }
+
+  // Show only when the user clearly hasn't found F-list integration yet:
+  // not signed in, no archived characters, and they haven't dismissed it.
+  // Suppressed while any modal is open (sign-in, AI setup) so we don't
+  // stack toasts above modals.
+  const showFlistHint =
+    !flistHintDismissed
+    && !flistSession.active
+    && flistRoster.length === 0
+    && !flistSignInOpen
+    && !aiSetupOpen
+    && !firstRunToast
 
   // Push activeChar/activePartner state to the native menu so items
   // requiring a selection grey out instead of silently no-op'ing.
@@ -274,6 +305,39 @@ export function AppLayout() {
             onClick={() => dismissFirstRun(true)}
             aria-label="Don't show again"
             data-testid="first-run-toast-dismiss"
+            title="Don't show again"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {showFlistHint && (
+        <div
+          className="first-run-toast"
+          role="status"
+          data-testid="flist-hint-toast"
+        >
+          <span>
+            <strong>Edit your F-list profile?</strong> Sign in to pull your
+            characters — the character chip in the sidebar opens the picker.
+          </span>
+          <button
+            type="button"
+            className="first-run-toast-open"
+            onClick={() => {
+              flistOpenSignIn()
+              dismissFlistHint()
+            }}
+            data-testid="flist-hint-toast-open"
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            className="first-run-toast-dismiss"
+            onClick={dismissFlistHint}
+            aria-label="Don't show again"
+            data-testid="flist-hint-toast-dismiss"
             title="Don't show again"
           >
             ✕

@@ -127,11 +127,50 @@ export function UnifiedCharacterPicker() {
   const openSignIn = useStore((s) => s.flistOpenSignIn)
   const signOut = useStore((s) => s.flistSignOut)
   const archive = useStore((s) => s.flistArchive)
+  const activeCharacterId = useStore((s) => s.flistActiveCharacterId)
   const charactersStatus = useStore((s) => s.charactersStatus)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+
+  // Surface pull progress + completion + failure for the active
+  // character regardless of which view is showing — the F-list zone
+  // hides itself in logs-only mode, so a long pull would otherwise
+  // happen with no visible signal. Tracks the most recent in-flight
+  // pull, flashes "✓ Updated" briefly on success, and persists the
+  // error message until the next pull clears it.
+  const activeSlot = activeCharacterId ? archive[activeCharacterId] : undefined
+  const pullStatus = activeSlot?.pullStatus
+  const pullStage = activeSlot?.pullStage
+  const pullProgress = activeSlot?.pullProgress
+  const pullError = activeSlot?.pullError
+  const [flashDone, setFlashDone] = useState(false)
+  const prevPullStatusRef = useRef<string | undefined>(pullStatus)
+  useEffect(() => {
+    if (prevPullStatusRef.current === 'running' && pullStatus === 'done') {
+      setFlashDone(true)
+      const t = setTimeout(() => setFlashDone(false), 3000)
+      prevPullStatusRef.current = pullStatus
+      return () => clearTimeout(t)
+    }
+    prevPullStatusRef.current = pullStatus
+  }, [pullStatus])
+
+  let pillKind: 'progress' | 'done' | 'error' | null = null
+  let pillText = ''
+  if (pullStatus === 'queued' || pullStatus === 'running') {
+    pillKind = 'progress'
+    pillText = pullProgress
+      ? `${pullStage ?? 'pulling'} ${pullProgress.done}/${pullProgress.total}`
+      : (pullStage ?? 'pulling…')
+  } else if (pullError) {
+    pillKind = 'error'
+    pillText = pullError
+  } else if (flashDone) {
+    pillKind = 'done'
+    pillText = '✓ Updated'
+  }
 
   // Roster aggregates account + archived + log dirs server-side. Pull
   // on mount and whenever the sidecar comes online with logs ready so
@@ -228,6 +267,16 @@ export function UnifiedCharacterPicker() {
           {open ? '▴' : '▾'}
         </span>
       </button>
+      {pillKind && (
+        <div
+          className={`char-picker-pull-pill char-picker-pull-pill-${pillKind}`}
+          role={pillKind === 'error' ? 'alert' : 'status'}
+          data-testid="char-picker-pull-pill"
+          title={pillText}
+        >
+          {pillText}
+        </div>
+      )}
       {open && (
         <div className="char-picker-menu char-picker-menu-unified" role="listbox">
           {!session.active && (

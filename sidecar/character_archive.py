@@ -273,52 +273,82 @@ def merge_roster(
     `id` is the F-list character_id when we know it (account or archive
     lookup); `null` for log-only characters whose F-list id is unknown.
     """
-    # Key on the lowercased name so "Lady Amber Blaise" / "lady amber
-    # blaise" / "LADY AMBER BLAISE" all collapse to the same row.
-    by_key: dict[str, dict[str, Any]] = {}
+    # Identity for rows whose F-list id we know comes from the id, not the
+    # name — F-list permits two characters whose names differ only in case
+    # ("Foo" and "foo"), and case-collapsing them would silently fuse two
+    # real characters into one row with the wrong id auto-pulled. Rows
+    # with no known id (log-only directories, defensive cases) still fall
+    # back to lowercased name so on-disk casing drift still collapses.
+    by_id: dict[Any, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
 
-    def entry(name: str) -> dict[str, Any]:
+    def _new(name: str) -> dict[str, Any]:
+        return {
+            "name": name,
+            "id": None,
+            "on_account": False,
+            "has_archive": False,
+            "has_logs": False,
+            "last_pulled_at": None,
+            "backup_count": 0,
+        }
+
+    def _upsert_by_id(name: str, cid: Any) -> dict[str, Any]:
+        row = by_id.get(cid)
+        if row is None:
+            row = _new(name)
+            row["id"] = cid
+            by_id[cid] = row
+        return row
+
+    def _upsert_by_name(name: str) -> dict[str, Any]:
         key = name.strip().lower()
-        if key not in by_key:
-            by_key[key] = {
-                "name": name,
-                "id": None,
-                "on_account": False,
-                "has_archive": False,
-                "has_logs": False,
-                "last_pulled_at": None,
-                "backup_count": 0,
-            }
-        return by_key[key]
+        row = by_name.get(key)
+        if row is None:
+            row = _new(name)
+            by_name[key] = row
+        return row
 
     if account_characters:
         for ch in account_characters:
             name = ch.get("name")
             if not isinstance(name, str) or not name:
                 continue
-            e = entry(name)
-            e["on_account"] = True
-            if ch.get("id") is not None and e["id"] is None:
-                e["id"] = ch["id"]
+            cid = ch.get("id")
+            row = _upsert_by_id(name, cid) if cid is not None else _upsert_by_name(name)
+            row["on_account"] = True
 
     archived = list_archived_characters()
     for a in archived:
         name = a["name"]
         if not isinstance(name, str) or not name:
             continue
-        e = entry(name)
-        e["has_archive"] = True
-        if e["id"] is None:
-            e["id"] = a["id"]
-        e["last_pulled_at"] = a["last_pulled_at"]
-        e["backup_count"] = a["backup_count"]
+        cid = a.get("id")
+        row = _upsert_by_id(name, cid) if cid is not None else _upsert_by_name(name)
+        row["has_archive"] = True
+        row["last_pulled_at"] = a["last_pulled_at"]
+        row["backup_count"] = a["backup_count"]
 
     if log_characters:
+        # Log directories have no id — fall back to name match. Prefer
+        # an existing id-keyed row with the same lowercased name so we
+        # don't create a phantom log-only row alongside the canonical
+        # one. With case-collision ids this is ambiguous; pick the
+        # first id-keyed row deterministically.
+        id_name_index: dict[str, dict[str, Any]] = {}
+        for row in by_id.values():
+            key = (row["name"] or "").strip().lower()
+            id_name_index.setdefault(key, row)
         for name in log_characters:
             if not isinstance(name, str) or not name:
                 continue
-            entry(name)["has_logs"] = True
+            key = name.strip().lower()
+            row = id_name_index.get(key) or by_name.get(key)
+            if row is None:
+                row = _new(name)
+                by_name[key] = row
+            row["has_logs"] = True
 
-    rows = list(by_key.values())
+    rows = list(by_id.values()) + list(by_name.values())
     rows.sort(key=lambda r: (r["name"] or "").lower())
     return rows
