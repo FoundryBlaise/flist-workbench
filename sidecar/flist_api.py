@@ -300,12 +300,17 @@ async def acquire_ticket(
     if not isinstance(ticket_value, str) or not ticket_value:
         raise AuthFailure("F-list returned no ticket")
     characters: list[dict] = []
-    raw_list = payload.get("characters", [])
-    if isinstance(raw_list, list):
-        for entry in raw_list:
-            # new_character_list=true returns [{name, id}, ...]; fall
-            # back gracefully if the server returned the legacy
-            # name-only array.
+    raw_chars = payload.get("characters")
+    # F-list with `new_character_list=true` actually returns a dict
+    # mapping {name: id}, not the list-of-objects the wiki suggested.
+    # Verified by live probe 2026-05-30. Still accept the other shapes
+    # defensively in case F-list changes the response again.
+    if isinstance(raw_chars, dict):
+        for name, cid in raw_chars.items():
+            if isinstance(name, str) and name:
+                characters.append({"name": name, "id": cid})
+    elif isinstance(raw_chars, list):
+        for entry in raw_chars:
             if isinstance(entry, dict):
                 name = entry.get("name")
                 cid = entry.get("id")
@@ -313,6 +318,9 @@ async def acquire_ticket(
                     characters.append({"name": name, "id": cid})
             elif isinstance(entry, str):
                 characters.append({"name": entry, "id": None})
+    # Sort by name for stable picker ordering — F-list returns them in
+    # an unspecified order which renders differently per sign-in.
+    characters.sort(key=lambda c: c["name"].lower())
     ticket = Ticket(
         account=account,
         value=ticket_value,
