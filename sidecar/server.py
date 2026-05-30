@@ -469,22 +469,39 @@ async def flist_character_inline(character_id: str, filename: str) -> FileRespon
     return FileResponse(path)
 
 
+_PLACEHOLDER_AVATAR_SIZE = 5827  # bytes returned by F-list when a name has no avatar
+
+
 @app.get("/flist/avatar/{name}")
 async def flist_avatar(name: str) -> FileResponse:
     """Serve a cached avatar from `<userdata>/avatars/`. Fetches on
-    miss if signed in so the renderer can `<img src="/flist/avatar/X">`
-    without orchestrating a separate populate call."""
+    miss; avatars are public so this works signed-out too.
+
+    F-list returns a 5827-byte placeholder PNG (HTTP 200) for any name
+    without an uploaded avatar — there's no 404 path. We detect that
+    by size and surface a real 404 so the renderer's `onError` fires
+    and the initial-circle fallback renders instead of an alien
+    placeholder graphic.
+    """
     try:
         dest = character_archive.avatar_path_for(name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not dest.exists():
-        # Best-effort lazy fetch. Avatars are public — no ticket
-        # required — so we can fall back even when signed out.
         try:
             await flist_api.download_to(flist_api.avatar_url(name), dest)
         except flist_api.FlistApiError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        size = dest.stat().st_size
+    except OSError:
+        size = -1
+    if size == _PLACEHOLDER_AVATAR_SIZE:
+        # F-list's "no avatar" placeholder. Keep the cached file (it's
+        # tiny and avoids re-fetching the same placeholder on every
+        # request) but surface 404 so the renderer's onError fires and
+        # the initial-circle fallback renders.
+        raise HTTPException(status_code=404, detail="no avatar uploaded")
     return FileResponse(dest)
 
 

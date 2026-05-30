@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -404,10 +405,13 @@ async def fetch_mapping_list(
 
 
 def avatar_url(name: str) -> str:
-    """F-list avatars are content-addressed by lowercased name with
-    spaces → underscores, served as .png. No ticket required."""
-    slug = name.strip().lower().replace(" ", "_")
-    return f"{STATIC_BASE}/images/avatar/{slug}.png"
+    """F-list avatars live at /images/avatar/<lowercased_name>.png with
+    spaces preserved verbatim (URL-encoded as %20 in HTTP). Verified
+    2026-05-30 by probing — the underscore variant returns a 5827-byte
+    placeholder PNG, the space variant returns the real avatar. No
+    ticket required."""
+    slug = name.strip().lower()
+    return f"{STATIC_BASE}/images/avatar/{quote(slug, safe='')}.png"
 
 
 async def download_to(
