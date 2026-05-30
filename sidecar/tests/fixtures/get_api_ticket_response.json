@@ -1,0 +1,10 @@
+{
+  "default_character": 1000001,
+  "characters": {
+    "Test Character One": 1000001,
+    "Test Character Two": 1000002,
+    "Solo Name": 1000003
+  },
+  "ticket": "REDACTED-TEST-TICKET-XXXXXXXXXXXXXXXX",
+  "error": ""
+}
