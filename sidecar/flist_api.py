@@ -442,14 +442,17 @@ async def fetch_mapping_list(
     *,
     client: httpx.AsyncClient | None = None,
     ttl_sec: float = 7 * 24 * 3600,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Cached mapping-list. Refresh every week — F-list rarely changes
-    these but we still want occasional drift to land."""
+    these but we still want occasional drift to land. `force=True` skips
+    the TTL check; renderer uses it from the staleness chip ↻ and the
+    Unknown-field "Refresh mapping list" CTA."""
     import json
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    if cache_path.exists():
+    if not force and cache_path.exists():
         age = now - cache_path.stat().st_mtime
         if age < ttl_sec:
             try:

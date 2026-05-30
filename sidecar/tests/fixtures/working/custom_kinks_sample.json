@@ -1,0 +1,73 @@
+{
+  "_schema_version": 2,
+  "_overlay": [
+    "custom_kinks.31712022.choice",
+    "custom_kinks.local:abc123.name",
+    "custom_kinks.31712023._deleted",
+    "custom_kinks._order"
+  ],
+  "_custom_kinks_order": [
+    "31712021",
+    "31712022",
+    "local:abc123",
+    "31712023",
+    "31712024",
+    "31712025"
+  ],
+  "custom_kinks": {
+    "31712021": {
+      "name": "Custom kink A",
+      "description": "[b]bold[/b] description",
+      "choice": "fave",
+      "children": []
+    },
+    "31712022": {
+      "name": "Custom kink B Ünïcøde",
+      "description": "",
+      "choice": "yes",
+      "children": [42, 99]
+    },
+    "local:abc123": {
+      "name": "Newly added",
+      "description": "Not yet on F-list",
+      "choice": "undecided",
+      "children": []
+    },
+    "31712023": {
+      "name": "Tombstoned",
+      "description": "User deleted locally",
+      "choice": "no",
+      "children": [],
+      "_deleted": true
+    },
+    "31712024": {
+      "name": "Maybe one",
+      "description": "Short",
+      "choice": "maybe",
+      "children": []
+    },
+    "31712025": {
+      "name": "No-fallback",
+      "description": "Missing choice gets undecided",
+      "choice": "undecided",
+      "children": []
+    }
+  },
+  "kinks": {
+    "fetish_71": "fave",
+    "fetish_300": "yes",
+    "fetish_580": "undecided"
+  },
+  "character": {
+    "id": "9999999",
+    "name": "Synth Character",
+    "description": "Synthesised fixture—never a real RP profile"
+  },
+  "settings": {
+    "public": true,
+    "customs_first": false,
+    "show_friends": false,
+    "prevent_bookmarks": false,
+    "guestbook": true
+  }
+}

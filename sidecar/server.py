@@ -3,7 +3,7 @@ import os
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -354,16 +354,31 @@ async def flist_characters() -> dict:
 
 
 @app.get("/flist/mapping-list")
-async def flist_mapping_list() -> dict:
+async def flist_mapping_list(force: bool = False) -> dict:
+    cache_path = character_archive.cache_root() / "mapping-list.json"
     try:
-        mapping = await flist_api.fetch_mapping_list(
-            character_archive.cache_root() / "mapping-list.json"
-        )
+        mapping = await flist_api.fetch_mapping_list(cache_path, force=force)
     except flist_api.TicketRequired as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except flist_api.FlistApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return mapping
+    # Decorate with cache metadata so the renderer can drive the staleness
+    # chip (§2.4) without a second filesystem peek. `_etag` is the cache
+    # key for the resolver memo (§3 step 3); `_fetched_at` is the file
+    # mtime in unix seconds.
+    try:
+        st = cache_path.stat()
+        fetched_at: int | None = int(st.st_mtime)
+    except OSError:
+        fetched_at = None
+    etag: str | None = None
+    try:
+        import hashlib
+
+        etag = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+    except OSError:
+        pass
+    return {**mapping, "_etag": etag, "_fetched_at": fetched_at}
 
 
 def _character_id_from_payload(payload: dict) -> str:
@@ -644,6 +659,60 @@ async def flist_character_live(character_id: str) -> dict:
     if payload is None:
         raise HTTPException(status_code=404, detail="no Live snapshot yet")
     return payload
+
+
+@app.get("/flist/character/{character_id}/working")
+async def flist_character_working_get(character_id: str) -> dict:
+    """Return the on-disk working copy + its current sha256 etag.
+
+    The etag is returned even on a clean read so the renderer can pin it
+    for the next PUT's `If-Match`. 404 means no file yet — renderer
+    seeds from Live, materialise-on-first-edit (Tier 2 §1.6).
+    """
+    payload = character_archive.read_working(character_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="no working copy")
+    etag = character_archive.working_etag(character_id)
+    return {"payload": payload, "etag": etag}
+
+
+@app.put("/flist/character/{character_id}/working")
+async def flist_character_working_put(
+    character_id: str,
+    request: Request,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict:
+    """Persist the working copy atomically.
+
+    Body is the whole payload. Optional `If-Match: <sha256>` enables
+    optimistic concurrency — mismatch returns 409 with the current etag.
+    Renderer caches the returned etag and ships it on the next PUT.
+    """
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
+    try:
+        new_etag = character_archive.write_working(
+            character_id, body, expected_etag=if_match
+        )
+    except character_archive.EtagMismatch as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": "etag_mismatch",
+                "current_etag": exc.current_etag,
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"etag": new_etag}
+
+
+@app.delete("/flist/character/{character_id}/working")
+async def flist_character_working_delete(character_id: str) -> dict:
+    """Drop the working copy. Idempotent — `deleted: false` on a no-op."""
+    return {"deleted": character_archive.delete_working(character_id)}
 
 
 @app.get("/flist/character/{character_id}/backups")

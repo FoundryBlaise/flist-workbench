@@ -23,7 +23,11 @@ export function FlistCharacterZone() {
   const saveBackup = useStore((s) => s.flistSaveBackup)
   const openLive = useStore((s) => s.flistOpenLive)
   const openBackup = useStore((s) => s.flistOpenBackup)
+  const openWorking = useStore((s) => s.flistOpenWorking)
   const copyLiveToNewDoc = useStore((s) => s.flistCopyLiveToNewDoc)
+  const workingSlot = useStore((s) =>
+    activeId ? s.flistWorking[activeId] : undefined
+  )
   const [backupsOpen, setBackupsOpen] = useState(true)
 
   if (!session.active || !activeId) return null
@@ -94,16 +98,31 @@ export function FlistCharacterZone() {
       )}
       <ul className="sb-list flist-zone-list">
         <li
-          className="flist-zone-row flist-zone-working"
-          title="Editing this directly is coming in a later update"
+          className={`flist-zone-row flist-zone-working${
+            workingSlot?.unsavedDirty ? ' flist-zone-working-dirty' : ''
+          }`}
         >
-          <span className="flist-zone-row-ic">✎</span>
-          <span className="flist-zone-row-label">
-            My edits (draft)
-            <span className="flist-zone-row-meta">
-              (editing this directly is coming in a later update)
+          <button
+            type="button"
+            className="flist-zone-row-pick"
+            onClick={() => void openWorking(activeId)}
+            data-testid="flist-zone-working-pick"
+            title="Edit this character's working copy"
+          >
+            <span className="flist-zone-row-ic">✎</span>
+            <span className="flist-zone-row-label">
+              My edits
+              <span className="flist-zone-row-meta">
+                {workingSlot?.unsavedDirty
+                  ? 'unsaved'
+                  : workingSlot?.lastSavedAt
+                    ? `saved ${relativeTime(workingSlot.lastSavedAt / 1000)}`
+                    : workingSlot?.materialised
+                      ? 'saved'
+                      : 'click to start editing'}
+              </span>
             </span>
-          </span>
+          </button>
         </li>
         <li
           className={`flist-zone-row flist-zone-live${live ? '' : ' is-empty'}`}

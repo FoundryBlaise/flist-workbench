@@ -31,6 +31,26 @@ AVATARS_DIRNAME = "avatars"
 CACHE_DIRNAME = "cache"
 LIVE_FILENAME = "live.json"
 PULL_STATE_FILENAME = "pull_state.json"
+WORKING_FILENAME = "working.json"
+
+# Bumped to 2 in Tier 3 (local: ids, _custom_kinks_order, tombstones).
+# Tier 2 writers/readers tolerate both versions; see read_working migration
+# shim. Existing v1 files round-trip cleanly because the renderer flushes
+# whole payloads — any unknown keys (incl. v2 additions) are preserved.
+WORKING_SCHEMA_VERSION = 2
+
+
+class EtagMismatch(ValueError):
+    """Raised by write_working when expected_etag != current on-disk etag.
+
+    The PUT /working endpoint translates this into a 409 with the
+    current etag so the renderer can show the refresh-or-overwrite modal
+    (Tier 2 §8.1).
+    """
+
+    def __init__(self, current_etag: str | None) -> None:
+        super().__init__("etag_mismatch")
+        self.current_etag = current_etag
 
 
 def root() -> Path:
@@ -79,10 +99,35 @@ def backups_dir(character_id: int | str) -> Path:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomic JSON write. Retries `Path.replace` once on OSError with a
+    short jittered backoff — OneDrive / Dropbox-synced directories can
+    return EBUSY for milliseconds when their sync agent has the target
+    file open. The retry costs nothing on healthy filesystems and is
+    the documented fix for the open question in PHASE7_TIER2_PLAN §1.3
+    (QA P3-6).
+
+    If the retry also fails, the leftover `.tmp` is unlinked so the
+    archive directory doesn't accumulate orphan temp files
+    (Round 1 verifier follow-up).
+    """
+    import random
+    import time as _time
+
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.replace(path)
+    except OSError:
+        _time.sleep(0.05 + random.random() * 0.05)
+        try:
+            tmp.replace(path)
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
 
 def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
@@ -162,6 +207,142 @@ def read_backup(character_id: int | str, filename: str) -> dict[str, Any] | None
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+# ---- working-copy (offline edits, persisted to working.json) ---------
+
+
+def working_path(character_id: int | str) -> Path:
+    return character_dir(character_id) / WORKING_FILENAME
+
+
+def _file_sha256(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    import hashlib
+
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def working_etag(character_id: int | str) -> str | None:
+    """SHA-256 of working.json bytes on disk. None when absent.
+
+    Renderer holds this between GET and the next PUT and sends it as
+    `If-Match`; PUT returns the new etag on success. Used to detect a
+    second window racing the same file (Tier 2 §8.1).
+    """
+    return _file_sha256(working_path(character_id))
+
+
+def _migrate_working_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Forward-compatible schema-version migration. Pure on the input
+    dict; never touches disk. v1 → v2 derives `_custom_kinks_order` from
+    dict iteration order when missing so the rail renders in a stable
+    order without a fresh edit.
+    """
+    version = payload.get("_schema_version")
+    if version is None:
+        version = 1
+        payload["_schema_version"] = 1
+    if version == 1:
+        ck = payload.get("custom_kinks")
+        if isinstance(ck, dict) and "_custom_kinks_order" not in payload:
+            payload["_custom_kinks_order"] = list(ck.keys())
+        payload["_schema_version"] = WORKING_SCHEMA_VERSION
+    return payload
+
+
+def read_working(character_id: int | str) -> dict[str, Any] | None:
+    """Return the working-copy payload or None if absent.
+
+    On a JSONDecodeError, the corrupt file is renamed with a unix-
+    timestamp suffix (`working.json.corrupt-<unix>`) so the user keeps
+    the bytes for forensics — mirrors `read_live`'s broader silent-None
+    behaviour but recovers more information for a file the user is
+    actively editing.
+    """
+    p = working_path(character_id)
+    if not p.exists():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        # Quarantine the broken file; renderer falls back to a fresh
+        # seed-from-Live on the next load.
+        try:
+            p.rename(p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+        except OSError:
+            pass
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return _migrate_working_payload(payload)
+
+
+_WORKING_TOP_LEVEL_KEYS = {
+    "character",
+    "settings",
+    "infotags",
+    "kinks",
+    "custom_kinks",
+    "images",
+    "inlines",
+}
+
+
+def write_working(
+    character_id: int | str,
+    payload: dict[str, Any],
+    *,
+    expected_etag: str | None = None,
+) -> str:
+    """Persist `payload` atomically; return the new sha256 etag.
+
+    When `expected_etag` is provided, the on-disk etag must match (or
+    both must be None on a first write) or `EtagMismatch` is raised
+    carrying the current etag. Schema-version + `_overlay` are required;
+    at least one of the recognised top-level content keys must be
+    present (defensive — catches a renderer regression silently writing
+    an empty payload).
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("working payload must be a dict")
+    payload = _migrate_working_payload(dict(payload))
+    overlay = payload.get("_overlay")
+    if not isinstance(overlay, list) or not all(isinstance(s, str) for s in overlay):
+        raise ValueError("_overlay must be a list of strings")
+    if not any(k in payload for k in _WORKING_TOP_LEVEL_KEYS):
+        raise ValueError(
+            "working payload must carry at least one of "
+            f"{sorted(_WORKING_TOP_LEVEL_KEYS)}"
+        )
+    p = working_path(character_id)
+    current = _file_sha256(p)
+    if expected_etag is not None and current != expected_etag:
+        raise EtagMismatch(current)
+    _atomic_write_json(p, payload)
+    new_etag = _file_sha256(p)
+    assert new_etag is not None
+    return new_etag
+
+
+def delete_working(character_id: int | str) -> bool:
+    """Remove working.json. Idempotent — returns whether it existed."""
+    p = working_path(character_id)
+    if not p.exists():
+        return False
+    try:
+        p.unlink()
+        return True
+    except OSError:
+        return False
 
 
 # ---- image storage ----------------------------------------------------

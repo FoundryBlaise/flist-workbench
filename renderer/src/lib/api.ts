@@ -417,6 +417,7 @@ async function get<T>(path: string, opts?: ApiOptions): Promise<T> {
 }
 
 export const api = {
+  base,
   health: () => get<{ status: string; version: string }>('/health'),
   characters: () => get<{ characters: CharacterEntry[] }>('/logs/characters'),
   partners: (char: string) =>
@@ -804,6 +805,57 @@ export const api = {
     request<{ path: string; created_at: number; filename: string }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/backup`,
       { method: 'POST' }
+    ),
+  // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
+  flistMappingList: (opts?: { force?: boolean }) =>
+    get<
+      Record<string, unknown> & {
+        _etag: string | null
+        _fetched_at: number | null
+      }
+    >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
+  // ---- F-list working copy (Tier 2: §1 persistence) ----
+  flistWorkingRead: (characterId: string | number) =>
+    get<{ payload: Record<string, unknown>; etag: string | null }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/working`
+    ),
+  flistWorkingWrite: async (
+    characterId: string | number,
+    payload: Record<string, unknown>,
+    opts?: { etag?: string | null }
+  ): Promise<{ etag: string }> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    }
+    if (opts?.etag) headers['If-Match'] = opts.etag
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/working`,
+      {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(payload)
+      }
+    )
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => null)) as
+        | { detail?: { detail: string; current_etag: string | null } }
+        | null
+      const current = body?.detail?.current_etag ?? null
+      const err = new Error('etag_mismatch') as Error & {
+        currentEtag: string | null
+      }
+      err.currentEtag = current
+      throw err
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    return (await res.json()) as { etag: string }
+  },
+  flistWorkingDelete: (characterId: string | number) =>
+    request<{ deleted: boolean }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/working`,
+      { method: 'DELETE' }
     ),
   flistAvatarUrl: (name: string) =>
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
