@@ -29,6 +29,32 @@ export function EditorPane() {
   const saveActiveDraft = useStore((s) => s.saveActiveDraft)
   const activeCharacter = useStore((s) => s.activeCharacter)
   const readOnly = useStore((s) => s.editorReadOnly)
+  // F-list working-copy + logs-only signals for the editor banners.
+  // Working copies live in memory (Tier 1 — see PHASE7_TIER1_PLAN.md);
+  // logs-only chars don't have a profile to edit. Each banner is shown
+  // when the editor is in the matching mode + not read-only.
+  const flistActiveId = useStore((s) => s.flistActiveCharacterId)
+  const flistWorkingForActive = useStore((s) =>
+    s.flistActiveCharacterId ? s.flistWorking[s.flistActiveCharacterId] : undefined
+  )
+  const flistActiveRosterEntry = useStore((s) =>
+    s.activeCharacter
+      ? s.flistRoster.find(
+          (r) => r.name.toLowerCase() === s.activeCharacter!.toLowerCase()
+        ) ?? null
+      : null
+  )
+  const workingDirty =
+    flistActiveId !== null &&
+    activeDocId === null &&
+    !readOnly &&
+    !!flistWorkingForActive?.dirty
+  const isLogsOnly =
+    flistActiveId === null &&
+    activeDocId === null &&
+    !readOnly &&
+    flistActiveRosterEntry !== null &&
+    !flistActiveRosterEntry.on_account
   const [fetchName, setFetchName] = useState(() =>
     activeCharacter ? displayCharacter(activeCharacter) : ''
   )
@@ -221,6 +247,27 @@ export function EditorPane() {
           </form>
         )}
       </header>
+      {workingDirty && (
+        <div className="editor-working-banner" role="status" data-testid="editor-working-banner">
+          <span className="editor-working-banner-icon" aria-hidden>⚠</span>
+          <span>
+            <b>In-memory edits.</b> Working-copy changes live only in this
+            session until Tier 2 lands disk persistence. Closing Workbench will
+            discard them — you'll be prompted to confirm.
+          </span>
+        </div>
+      )}
+      {isLogsOnly && (
+        <div className="editor-logsonly-banner" role="status" data-testid="editor-logsonly-banner">
+          <span className="editor-logsonly-banner-icon" aria-hidden>📁</span>
+          <span>
+            <b>Logs-only character.</b> {activeCharacter} only exists in your
+            local F-Chat logs — not on your F-list account. Switch to Logs to
+            browse conversations, or pick a different character to edit a
+            profile.
+          </span>
+        </div>
+      )}
       {!readOnly && <Toolbar viewRef={viewRef} />}
       {fetchStatus === 'fetching' && (
         <div className="editor-progress" data-testid="editor-progress">

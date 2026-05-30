@@ -1,19 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../state'
 
+// Hint we prepend to F-list's verbatim "Login Failed…" string so users
+// have a checklist of common causes (caps lock, trailing space, signing
+// in with a character name instead of the account login) instead of
+// only the bare F-list error which reads as an accusation.
+function friendlierAuthHint(rawError: string | null): string | null {
+  if (!rawError) return null
+  if (/Login Failed|Invalid account/i.test(rawError)) {
+    return (
+      "F-list rejected this login. Common causes: Caps Lock is on, a trailing "
+      + "space, or you used a character name instead of your account login."
+    )
+  }
+  return null
+}
+
 export function SignInModal({ onClose }: { onClose: () => void }) {
   const signIn = useStore((s) => s.flistSignIn)
   const getLastAccount = useStore((s) => s.flistGetLastAccount)
   const status = useStore((s) => s.flistSignInStatus)
   const error = useStore((s) => s.flistSignInError)
-  const [account, setAccount] = useState('')
+  // Lazy initializer reads the saved account BEFORE first paint so the
+  // focus useEffect below sees the right `value` and routes initial
+  // focus to the password field when an account is pre-filled. Without
+  // this, the setAccount-in-useEffect race meant focus always landed on
+  // the (now-pre-filled) account field.
+  const [account, setAccount] = useState(() => getLastAccount())
   const [password, setPassword] = useState('')
   const accountRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    setAccount(getLastAccount())
-  }, [getLastAccount])
 
   // Focus the first empty field on mount. requestAnimationFrame lets
   // the modal mount before we steal focus from whatever opened it.
@@ -46,6 +62,17 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
     setPassword('')
   }
 
+  // Pressing Enter in the account field should advance to password when
+  // password is empty, rather than submitting an incomplete form.
+  const onAccountKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !password) {
+      e.preventDefault()
+      passwordRef.current?.focus()
+    }
+  }
+
+  const friendly = friendlierAuthHint(error)
+
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <div className="modal flist-signin-modal">
@@ -76,6 +103,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               autoComplete="username"
               value={account}
               onChange={(e) => setAccount(e.target.value)}
+              onKeyDown={onAccountKeyDown}
               spellCheck={false}
               data-testid="flist-signin-account"
             />
@@ -94,7 +122,8 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
           </label>
           {error && (
             <div className="flist-signin-error" role="alert" data-testid="flist-signin-error">
-              {error}
+              {friendly && <div className="flist-signin-error-hint">{friendly}</div>}
+              <div className="flist-signin-error-raw">{error}</div>
             </div>
           )}
           <footer className="modal-foot">

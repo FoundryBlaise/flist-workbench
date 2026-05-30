@@ -461,6 +461,26 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         "image_failed": failed,
                     },
                 )
+            except flist_api.RateLimited as exc:
+                # Specific catch so the renderer gets a human-readable
+                # message + a "rate-limited" stage instead of an
+                # `unknown / RateLimited(...)` repr. The hourly cap is
+                # the most likely place this fires inside a long pull.
+                yield _sse_event(
+                    "error", {"stage": "rate-limited", "message": str(exc)}
+                )
+            except flist_api.AuthFailure as exc:
+                # Auto-refresh during the pull could trip on a password
+                # the user changed elsewhere. Surface cleanly.
+                yield _sse_event(
+                    "error", {"stage": "ticket", "message": str(exc)}
+                )
+            except flist_api.FlistApiError as exc:
+                # Any other F-list error past the early stages — still
+                # better than a class-repr to the user.
+                yield _sse_event(
+                    "error", {"stage": "fetching", "message": str(exc)}
+                )
             except Exception as exc:  # noqa: BLE001 — last-resort
                 yield _sse_event(
                     "error", {"stage": "unknown", "message": repr(exc)}

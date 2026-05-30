@@ -54,6 +54,30 @@ export function AppLayout() {
     }
   }, [])
 
+  // Working copies are in-memory only in Tier 1. Warn the user before
+  // unload if any per-character working slot has unsaved edits, or if
+  // the local-document editor has uncommitted changes. The native
+  // browser prompt is the closest we get to a "you'll lose work"
+  // confirm without IPC plumbing into the Electron main process; in
+  // Electron it fires when the window's close button is clicked.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const s = useStore.getState()
+      const anyWorkingDirty = Object.values(s.flistWorking).some(
+        (w) => w.dirty
+      )
+      // Local-doc editor dirtiness is already covered by the autosave
+      // draft slot (crash-safety), so don't double-prompt — only the
+      // working-copy case is genuinely lossy on close.
+      if (anyWorkingDirty) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [])
+
   // First-run detection: surface a non-blocking toast pointing at AI
   // Setup when there's nothing indexed and no labels endpoint override.
   // Less hostile than auto-opening the wizard; the user can dismiss
