@@ -23,6 +23,7 @@ export function FlistCharacterZone() {
   const saveBackup = useStore((s) => s.flistSaveBackup)
   const openLive = useStore((s) => s.flistOpenLive)
   const openBackup = useStore((s) => s.flistOpenBackup)
+  const copyLiveToNewDoc = useStore((s) => s.flistCopyLiveToNewDoc)
   const [backupsOpen, setBackupsOpen] = useState(true)
 
   if (!session.active || !activeId) return null
@@ -125,14 +126,25 @@ export function FlistCharacterZone() {
             </span>
           </button>
           {live && (
-            <button
-              type="button"
-              className="flist-zone-save-backup"
-              onClick={() => void saveBackup(activeId)}
-              title="Save a snapshot of the current F-list pull"
-            >
-              💾 Save snapshot
-            </button>
+            <div className="flist-zone-row-actions">
+              <button
+                type="button"
+                className="flist-zone-copy-draft"
+                onClick={() => void copyLiveToNewDoc(activeId)}
+                title="Create a new editable Document seeded with this description"
+                data-testid="flist-zone-copy-draft"
+              >
+                ✎ Copy as new draft
+              </button>
+              <button
+                type="button"
+                className="flist-zone-save-backup"
+                onClick={() => void saveBackup(activeId)}
+                title="Save a snapshot of the current F-list pull"
+              >
+                💾 Save snapshot
+              </button>
+            </div>
           )}
         </li>
       </ul>

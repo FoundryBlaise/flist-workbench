@@ -18,6 +18,7 @@ export type MenuAction =
   | 'ingest-all'
   | 'chat-toggle'
   | 'ai-setup'
+  | 'flist-activity'
 
 // Lives in the main process because it touches shell.openPath; we
 // resolve the path from the sidecar so user_data_dir() stays the one
@@ -217,6 +218,11 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           id: 'ai-setup-help',
           label: 'AI Setup…',
           click: () => send(getWindow(), 'ai-setup')
+        },
+        {
+          id: 'flist-activity',
+          label: 'F-list Activity Log…',
+          click: () => send(getWindow(), 'flist-activity')
         },
         { type: 'separator' },
         {

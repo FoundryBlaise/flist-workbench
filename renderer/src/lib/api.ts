@@ -773,6 +773,13 @@ export const api = {
   flistSignOut: () =>
     request<{ signed_out: true }>('/flist/session', { method: 'DELETE' }),
   flistSession: () => get<FlistSessionStatus>('/flist/session'),
+  flistActivity: () =>
+    get<{
+      started_at: number
+      event_count: number
+      max_events: number
+      events: { t: number; kind: string; [k: string]: unknown }[]
+    }>('/flist/activity'),
   flistRoster: () => get<{ characters: FlistRosterEntry[] }>('/flist/characters'),
   flistLive: (characterId: string | number) =>
     get<Record<string, unknown>>(

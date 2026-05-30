@@ -6,6 +6,7 @@ import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SignInModal } from '../features/flist/SignInModal'
+import { ActivityLogModal } from '../features/flist/ActivityLogModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
@@ -40,10 +41,13 @@ export function AppLayout() {
   const flistOpenSignIn = useStore((s) => s.flistOpenSignIn)
   const flistSession = useStore((s) => s.flistSession)
   const flistRoster = useStore((s) => s.flistRoster)
+  const aiSetupOpen = useStore((s) => s.aiSetupOpen)
+  const openAiSetup = useStore((s) => s.openAiSetup)
+  const closeAiSetup = useStore((s) => s.closeAiSetup)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [aiSetupOpen, setAiSetupOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
   const [firstRunToast, setFirstRunToast] = useState(false)
   const [flistHintDismissed, setFlistHintDismissed] = useState<boolean>(() => {
     try {
@@ -224,7 +228,10 @@ export function AppLayout() {
           openIngest({}, 'All characters, all partners')
           break
         case 'ai-setup':
-          setAiSetupOpen(true)
+          openAiSetup()
+          break
+        case 'flist-activity':
+          setActivityOpen(true)
           break
         case 'chat-toggle':
           // Opening the chat panel also flips to logs mode — chat is
@@ -292,7 +299,7 @@ export function AppLayout() {
             type="button"
             className="first-run-toast-open"
             onClick={() => {
-              setAiSetupOpen(true)
+              openAiSetup()
               dismissFirstRun(true)
             }}
             data-testid="first-run-toast-open"
@@ -347,7 +354,8 @@ export function AppLayout() {
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-      {aiSetupOpen && <AISetupWizard onClose={() => setAiSetupOpen(false)} />}
+      {aiSetupOpen && <AISetupWizard onClose={closeAiSetup} />}
+      {activityOpen && <ActivityLogModal onClose={() => setActivityOpen(false)} />}
       {classifyTarget && (
         <ClassifyDialog
           key={`${classifyTarget.scope.character ?? '*'}::${classifyTarget.scope.partner ?? '*'}`}

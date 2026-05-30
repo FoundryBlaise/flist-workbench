@@ -82,25 +82,37 @@ export function ChatPanel() {
   // mount; if the user changes endpoints via Settings while the panel
   // stays open, the badge can be stale until next remount — acceptable.
   const [chatEndpointHost, setChatEndpointHost] = useState<string | null>(null)
+  // Total indexed chunks — when zero, the empty-state explains why
+  // "no matches" is not the model's fault. Re-fetched on mount only;
+  // an ingest that completes while the panel is open won't update the
+  // count until next remount, but the first turn after ingest will
+  // produce a non-empty answer naturally, so the empty-state will be
+  // dismissed by the user's own progress.
+  const [indexedChunks, setIndexedChunks] = useState<number | null>(null)
   useEffect(() => {
     let cancelled = false
-    void api.settingsGet().then((s) => {
-      if (cancelled) return
-      const ep = s.rag.chat_endpoint
-      if (categoriseEndpoint(ep) === 'remote') {
-        try {
-          setChatEndpointHost(new URL(ep).host)
-        } catch {
-          setChatEndpointHost(ep)
+    void Promise.all([api.settingsGet(), api.ragStatus()])
+      .then(([s, rag]) => {
+        if (cancelled) return
+        const ep = s.rag.chat_endpoint
+        if (categoriseEndpoint(ep) === 'remote') {
+          try {
+            setChatEndpointHost(new URL(ep).host)
+          } catch {
+            setChatEndpointHost(ep)
+          }
         }
-      }
-    }).catch(() => {
-      // sidecar unreachable — silently skip; health card surfaces it
-    })
+        setIndexedChunks(rag.chunk_count)
+      })
+      .catch(() => {
+        // sidecar unreachable — silently skip; health card surfaces it
+      })
     return () => {
       cancelled = true
     }
   }, [])
+  const openIngest = useStore((s) => s.openIngest)
+  const openAiSetup = useStore((s) => s.openAiSetup)
   // Default scope mode: 'partner' if a partner is selected, else
   // 'character' if a character is selected, else 'all'.
   const initialMode: ScopeMode = activePartner
@@ -444,21 +456,59 @@ export function ChatPanel() {
       </header>
       <div className="chat-body" ref={listRef} data-testid="chat-body">
         {turns.length === 0 && (
-          <div className="chat-empty">
-            {chatMode === 'question' ? (
-              <p>
-                Ask a question about your saved logs. The answer cites the
-                source chunks — click a citation to jump to that conversation.
+          chatMode === 'question' && indexedChunks === 0 ? (
+            <div
+              className="chat-empty chat-empty-no-index"
+              data-testid="chat-empty-no-index"
+            >
+              <p className="chat-empty-headline">
+                <strong>No indexed logs yet.</strong>
               </p>
-            ) : (
               <p>
-                Free-form chat with your configured LLM. No retrieval, no
-                citations — useful for brainstorming, drafting, or chatting
-                without the logs in the prompt.
+                Question mode searches a local vector index of your saved
+                F-Chat logs. The index is empty — questions here would just
+                come back as "I can't find that in the logs."
               </p>
-            )}
-            <p>Type <code>/help</code> for slash commands.</p>
-          </div>
+              <div className="chat-empty-ctas">
+                <button
+                  type="button"
+                  className="chat-empty-cta chat-empty-cta-primary"
+                  onClick={() => openIngest({}, 'All characters, all partners')}
+                  data-testid="chat-empty-ingest"
+                >
+                  Ingest your logs now
+                </button>
+                <button
+                  type="button"
+                  className="chat-empty-cta"
+                  onClick={openAiSetup}
+                  data-testid="chat-empty-ai-setup"
+                >
+                  Run AI Setup
+                </button>
+              </div>
+              <p className="chat-empty-foot">
+                Already configured your LLM? Open <strong>Tools → Ingest</strong>{' '}
+                to populate the index, then come back here.
+              </p>
+            </div>
+          ) : (
+            <div className="chat-empty">
+              {chatMode === 'question' ? (
+                <p>
+                  Ask a question about your saved logs. The answer cites the
+                  source chunks — click a citation to jump to that conversation.
+                </p>
+              ) : (
+                <p>
+                  Free-form chat with your configured LLM. No retrieval, no
+                  citations — useful for brainstorming, drafting, or chatting
+                  without the logs in the prompt.
+                </p>
+              )}
+              <p>Type <code>/help</code> for slash commands.</p>
+            </div>
+          )
         )}
         {turns.map((t) =>
           t.kind === 'user' ? (
@@ -619,24 +669,34 @@ function emptyRetrieval(): RetrievalMeta {
 
 function RetrievalLine({ meta }: { meta: RetrievalMeta }) {
   const parts: string[] = []
-  if (meta.expandedVariants > 0) {
-    // +1 for the original question; that's what the user is reading
-    // when they see "3 variants".
-    parts.push(`expanded to ${meta.expandedVariants + 1} variants`)
-  }
+  // Lead with which retrievers ran so the user understands which
+  // retrieval mode produced this answer, even when nothing exotic
+  // fired. "vector only · 12 chunks" is more informative than silence.
   if (meta.hybridApplied) {
     parts.push(
       meta.hybridLexicalHits > 0
         ? `hybrid (+${meta.hybridLexicalHits} BM25)`
         : 'hybrid'
     )
+  } else {
+    parts.push('vector only')
   }
-  if (parts.length === 0) return null
+  if (meta.expandedVariants > 0) {
+    // +1 for the original question; that's what the user is reading
+    // when they see "3 variants".
+    parts.push(`MQ ${meta.expandedVariants + 1}`)
+  }
+  parts.push(`${meta.hitCount} chunk${meta.hitCount === 1 ? '' : 's'}`)
   return (
     <div
       className="chat-turn-retrieval"
       data-testid="chat-retrieval-meta"
-      title={`${meta.hitCount} chunks retrieved`}
+      title={
+        `retrieval: ${parts.join(' · ')}`
+        + (meta.expandedVariants > 0
+          ? ` — multi-query expansion produced ${meta.expandedVariants} extra question variants`
+          : '')
+      }
     >
       {parts.join(' · ')}
     </div>

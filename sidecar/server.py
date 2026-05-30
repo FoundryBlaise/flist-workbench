@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import aliases as aliases_store
 import character_archive
 import documents
+import flist_activity
 import flist_api
 import labels as labels_store
 import labels_jobs
@@ -46,6 +47,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Password is dropped from RAM after this many seconds of no user-
+# initiated /flist/* activity. Ticket itself stays until natural F-list
+# TTL — only auto-refresh is disabled, so the user can finish what
+# they were doing but a forgotten window doesn't keep the password warm
+# overnight. The renderer's /flist/session poll is excluded from
+# touch-counting below so it can't trivially defeat the timer.
+IDLE_PASSWORD_TIMEOUT_SEC = int(
+    os.environ.get("FLIST_WORKBENCH_PASSWORD_IDLE_SEC", "600")
+)
+_PASSWORD_WATCHDOG_INTERVAL_SEC = 60
+
+
+_TOUCH_EXEMPT_PATHS = {
+    # Renderer's heartbeat poll — would defeat the idle timer trivially.
+    ("/flist/session", "GET"),
+    # Audit-log fetch — reading the log is not session work; if the
+    # user only opens the activity modal, they're auditing, not using.
+    # (QA verification pass 2026-05-30 explicitly flagged this.)
+    ("/flist/activity", "GET"),
+}
+
+
+@app.middleware("http")
+async def _flist_touch_middleware(request, call_next):
+    """Mark TicketStore as touched on any user-initiated /flist/*
+    request. Heartbeat polls and audit-log reads are excluded so a
+    backgrounded Workbench window can't keep the password cached
+    just by polling or auditing.
+    """
+    path = request.url.path
+    if path.startswith("/flist/") and (path, request.method) not in _TOUCH_EXEMPT_PATHS:
+        flist_api.ticket_store().touch()
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -179,10 +215,20 @@ async def flist_session_create(body: FlistSignInRequest) -> dict:
             body.account.strip(), body.password
         )
     except flist_api.AuthFailure as exc:
+        flist_activity.record(
+            "sign-in-failed",
+            account=body.account.strip(),
+            error=str(exc),
+        )
         # Pass F-list's error string through verbatim — see Tier 1
         # decision in PHASE7_TIER1_PLAN.md.
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     names = [c["name"] for c in result["characters"] if c.get("name")]
+    flist_activity.record(
+        "sign-in",
+        account=body.account.strip(),
+        character_count=len(names),
+    )
     if names:
         _asyncio.create_task(_prefetch_avatars(names))
     return result
@@ -242,8 +288,23 @@ async def flist_avatars_prefetch() -> dict:
 
 @app.delete("/flist/session")
 async def flist_session_delete() -> dict:
+    status = flist_api.ticket_store().status()
     flist_api.ticket_store().clear()
+    flist_activity.record(
+        "sign-out",
+        account=status.get("account"),
+    )
     return {"signed_out": True}
+
+
+@app.get("/flist/activity")
+async def flist_activity_snapshot() -> dict:
+    """In-memory append-only audit log of F-list operations (sign-in,
+    ticket refresh, per-character pull stages, idle password clear,
+    sign-out). Closes the trust-question gap surfaced by the
+    2026-05-30 UX subagent review — see UX F4 in
+    REVIEW_2026-05-30_post_tier1_polish.md."""
+    return flist_activity.snapshot()
 
 
 @app.get("/flist/session")
@@ -317,6 +378,7 @@ async def flist_character_pull(name: str) -> StreamingResponse:
         # Send queued event immediately so the renderer's row badge can
         # flip to "queued" before the lock is acquired.
         yield _sse_event("queued", {"name": name})
+        flist_activity.record("pull-start", name=name)
         async with flist_api.pull_lock():
             client = flist_api._default_client()
             try:
@@ -483,6 +545,15 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                     finished_at=int(_t.time()),
                 )
                 pull_status = character_archive.compute_pull_status(cid)
+                flist_activity.record(
+                    "pull-done",
+                    name=payload.get("name") or name,
+                    character_id=cid,
+                    image_count=downloaded,
+                    image_failed=failed,
+                    status=pull_status["status"],
+                    missing=len(pull_status["missing_image_ids"]),
+                )
                 yield _sse_event(
                     "done",
                     {
@@ -499,22 +570,35 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                 # message + a "rate-limited" stage instead of an
                 # `unknown / RateLimited(...)` repr. The hourly cap is
                 # the most likely place this fires inside a long pull.
+                flist_activity.record(
+                    "pull-error", name=name, stage="rate-limited",
+                    error=str(exc),
+                )
                 yield _sse_event(
                     "error", {"stage": "rate-limited", "message": str(exc)}
                 )
             except flist_api.AuthFailure as exc:
                 # Auto-refresh during the pull could trip on a password
                 # the user changed elsewhere. Surface cleanly.
+                flist_activity.record(
+                    "pull-error", name=name, stage="ticket", error=str(exc),
+                )
                 yield _sse_event(
                     "error", {"stage": "ticket", "message": str(exc)}
                 )
             except flist_api.FlistApiError as exc:
                 # Any other F-list error past the early stages — still
                 # better than a class-repr to the user.
+                flist_activity.record(
+                    "pull-error", name=name, stage="fetching", error=str(exc),
+                )
                 yield _sse_event(
                     "error", {"stage": "fetching", "message": str(exc)}
                 )
             except Exception as exc:  # noqa: BLE001 — last-resort
+                flist_activity.record(
+                    "pull-error", name=name, stage="unknown", error=repr(exc),
+                )
                 yield _sse_event(
                     "error", {"stage": "unknown", "message": repr(exc)}
                 )
@@ -629,6 +713,34 @@ async def _avatar_cleanup_on_startup() -> None:
             "(left over from pre-URL-fix sidecar)",
             flush=True,
         )
+
+
+@app.on_event("startup")
+async def _password_idle_watchdog() -> None:
+    """Periodically drop the cached F-list password after idle. Ticket
+    is preserved so any in-flight session completes naturally."""
+    import asyncio
+
+    async def _loop() -> None:
+        while True:
+            try:
+                await asyncio.sleep(_PASSWORD_WATCHDOG_INTERVAL_SEC)
+                store = flist_api.ticket_store()
+                if store.clear_password_if_idle(IDLE_PASSWORD_TIMEOUT_SEC):
+                    flist_activity.record(
+                        "password-idle-clear",
+                        idle_seconds=int(IDLE_PASSWORD_TIMEOUT_SEC),
+                    )
+                    print(
+                        "[flist] idle password timeout — cached password "
+                        "dropped (ticket left in place until natural expiry)",
+                        flush=True,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                # Don't let a transient hiccup kill the watchdog.
+                print(f"[flist] password watchdog error: {exc!r}", flush=True)
+
+    asyncio.create_task(_loop())
 
 
 @app.get("/flist/avatar/{name}")

@@ -179,6 +179,9 @@ type State = {
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
+  aiSetupOpen: boolean
+  openAiSetup: () => void
+  closeAiSetup: () => void
   openClassify: (
     scope: { character?: string | null; partner?: string | null },
     label: string
@@ -225,6 +228,11 @@ type State = {
   flistSaveBackup: (characterId: string) => Promise<void>
   flistOpenLive: (characterId: string) => Promise<void>
   flistOpenBackup: (characterId: string, filename: string) => Promise<void>
+  /** One-click "I want to fix that typo" affordance on the F-list zone.
+   *  Reads the live description BBCode, creates a new Document seeded
+   *  with it, and opens it as a normal editable document. Bridges the
+   *  gap until the Tier-2 working-copy persistence lands. */
+  flistCopyLiveToNewDoc: (characterId: string) => Promise<Document | null>
   /** Load the editor with this character's in-memory working copy.
    *  Falls back to the Live description when no working copy exists
    *  yet. The previous character's edits stay in `flistWorking` so a
@@ -334,6 +342,7 @@ export const useStore = create<State>((set, get) => ({
   activePartner: null,
 
   classifyTarget: null,
+  aiSetupOpen: false,
   ingestTarget: null,
   chatPanelOpen: false,
   chatFocusNonce: 0,
@@ -708,6 +717,52 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  async flistCopyLiveToNewDoc(characterId) {
+    const archive = get().flistArchive[characterId]
+    const live = archive?.live ?? (await api.flistLive(characterId).catch(() => null))
+    if (!live) return null
+    const character = (live.character ?? live) as Record<string, unknown>
+    const charName =
+      (typeof character.name === 'string' && character.name) ||
+      (typeof live.name === 'string' && (live.name as string)) ||
+      'Character'
+    const rawBbcode =
+      (typeof character.description === 'string' && (character.description as string)) ||
+      (typeof live.description === 'string' && (live.description as string)) ||
+      ''
+    // The current pulled description is the most useful seed — empty
+    // descriptions still get a doc so the user has somewhere to start.
+    const docName = `${charName} description (draft)`
+    // If a draft for this character already exists (user clicked Copy
+    // a second time, or returned after closing it), focus it instead
+    // of stacking up identical-name siblings. QA verification pass
+    // 2026-05-30 explicitly flagged this duplicate-click case.
+    await get().loadDocuments()
+    const existing = get().documents.find((d) => !d.scratch && d.name === docName)
+    if (existing) {
+      await get().openDocument(existing.id)
+      return existing
+    }
+    const doc = await api.documentCreate(docName)
+    await get().loadDocuments()
+    // Bypass openDocument's content-load by setting everything ourselves
+    // — we want the BBCode from F-list in the editor, not the doc's
+    // empty body. saveActiveDraft will flush the seeded content.
+    set({
+      activeDocId: doc.id,
+      editorContent: normaliseNewlines(rawBbcode),
+      editorTitle: `${docName}.bbcode`,
+      editorInlines: extractInlines(live),
+      editorReadOnly: false,
+      editorDirty: true,
+      saveStatus: 'idle',
+      saveError: null,
+      draftStatus: 'idle'
+    })
+    void get().saveActiveDraft()
+    return doc
+  },
+
   async flistOpenBackup(characterId, filename) {
     const payload = await api.flistBackupRead(characterId, filename).catch(() => null)
     if (!payload) return
@@ -926,6 +981,12 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  openAiSetup() {
+    set({ aiSetupOpen: true })
+  },
+  closeAiSetup() {
+    set({ aiSetupOpen: false })
+  },
   openClassify(scope, label) {
     set({ classifyTarget: { scope, label } })
   },
