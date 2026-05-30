@@ -4,6 +4,59 @@ export type InlineImage = { hash: string; extension: string; nsfw: boolean }
 
 export type CharacterEntry = { name: string; mtime: number }
 
+// ---- F-list character archive (Phase 7 Tier 1) ----
+
+export type FlistAccountCharacter = {
+  name: string
+  id: number | string | null
+}
+
+export type FlistSessionStatus = {
+  active: boolean
+  account?: string
+  expires_in_sec?: number
+  needs_refresh?: boolean
+  api_hourly_count?: number
+}
+
+export type FlistRosterEntry = {
+  name: string
+  id: number | string | null
+  on_account: boolean
+  has_archive: boolean
+  has_logs: boolean
+  last_pulled_at: number | null
+  backup_count: number
+}
+
+export type FlistBackupEntry = {
+  filename: string
+  created_at: number
+  size: number
+}
+
+export type FlistPullHandlers = {
+  onQueued?: () => void
+  onTicket?: () => void
+  onFetching?: () => void
+  onImages?: (info: { total: number }) => void
+  onImage?: (info: {
+    index: number
+    total: number
+    image_id: string
+    ok: boolean
+    cached?: boolean
+    error?: string
+  }) => void
+  onDone?: (info: {
+    character_id: string
+    name: string
+    image_count: number
+    image_failed: number
+  }) => void
+  onError?: (info: { stage: string; message: string }) => void
+}
+
 export type Profile = {
   name: string
   avatar_url: string | null
@@ -693,6 +746,80 @@ export const api = {
     ),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
+  // ---- F-list character archive ----
+  flistSignIn: (body: { account: string; password: string }) =>
+    request<{
+      characters: FlistAccountCharacter[]
+      expires_in_sec: number
+      account: string
+    }>('/flist/session', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  flistSignOut: () =>
+    request<{ signed_out: true }>('/flist/session', { method: 'DELETE' }),
+  flistSession: () => get<FlistSessionStatus>('/flist/session'),
+  flistRoster: () => get<{ characters: FlistRosterEntry[] }>('/flist/characters'),
+  flistLive: (characterId: string | number) =>
+    get<Record<string, unknown>>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/live`
+    ),
+  flistBackups: (characterId: string | number) =>
+    get<{ character_id: string; backups: FlistBackupEntry[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/backups`
+    ),
+  flistBackupRead: (characterId: string | number, filename: string) =>
+    get<Record<string, unknown>>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/backups/${encodeURIComponent(filename)}`
+    ),
+  flistSaveBackup: (characterId: string | number) =>
+    request<{ path: string; created_at: number; filename: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/backup`,
+      { method: 'POST' }
+    ),
+  flistAvatarUrl: (name: string) =>
+    `${base()}/flist/avatar/${encodeURIComponent(name)}`,
+  flistImageUrl: (characterId: string | number, filename: string) =>
+    `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(filename)}`,
+  flistPull: async (
+    name: string,
+    handlers: FlistPullHandlers,
+    opts?: ApiOptions
+  ): Promise<void> => {
+    const res = await fetch(`${base()}/flist/character/${encodeURIComponent(name)}/pull`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream' },
+      signal: opts?.signal
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          dispatchPullStream(block, handlers)
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) dispatchPullStream(buffer, handlers)
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // best-effort
+      }
+    }
+  },
+
   // Documents
   documents: () => get<{ documents: Document[] }>('/documents'),
   documentCreate: (name: string, bbcode = '', inlines: Record<string, InlineImage> = {}) =>
@@ -795,6 +922,45 @@ export type OllamaPullProgress = {
   digest: string | null
   completed: number | null
   total: number | null
+}
+
+function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
+  let event: string | null = null
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
+  }
+  if (!event) return
+  let parsed: unknown = {}
+  try {
+    parsed = JSON.parse(dataLines.join('\n'))
+  } catch {
+    parsed = {}
+  }
+  switch (event) {
+    case 'queued':
+      handlers.onQueued?.()
+      break
+    case 'ticket':
+      handlers.onTicket?.()
+      break
+    case 'fetching':
+      handlers.onFetching?.()
+      break
+    case 'images':
+      handlers.onImages?.(parsed as { total: number })
+      break
+    case 'image':
+      handlers.onImage?.(parsed as Parameters<NonNullable<FlistPullHandlers['onImage']>>[0])
+      break
+    case 'done':
+      handlers.onDone?.(parsed as Parameters<NonNullable<FlistPullHandlers['onDone']>>[0])
+      break
+    case 'error':
+      handlers.onError?.(parsed as { stage: string; message: string })
+      break
+  }
 }
 
 function dispatchPullBlock(
