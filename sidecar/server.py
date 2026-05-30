@@ -80,7 +80,12 @@ async def profile(name: str) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     resolved_name = payload.get("name") or name
-    description = payload.get("description") or ""
+    # F-list serves descriptions with literal CRLF / CR line endings.
+    # CodeMirror tolerates them but our contentEditable PreviewPane +
+    # BBCode→HTML transformer render them as visible artifacts. Match
+    # what the old HTML-scrape path did (flist.parse_profile) and
+    # normalise to LF for editor consumers.
+    description = (payload.get("description") or "").replace("\r\n", "\n").replace("\r", "\n")
     inlines_raw = payload.get("inlines")
     inlines: dict[str, dict] = {}
     if isinstance(inlines_raw, dict):
