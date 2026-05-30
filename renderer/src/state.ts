@@ -136,6 +136,15 @@ type State = {
       pullProgress?: { done: number; total: number }
       pullError?: string | null
       lastPullAt?: number | null
+      // On-disk integrity status: was the prior pull complete, or was
+      // it interrupted / did some images fail? Sourced from
+      // /flist/characters (server walks images_dir) and updated when a
+      // new pull's "done" event arrives. Drives the "Pull incomplete"
+      // affordance in FlistCharacterZone.
+      integrity?: {
+        status: 'complete' | 'partial' | 'interrupted' | 'unknown' | 'never_pulled'
+        missing: number
+      }
     }
   >
   /** Per-character in-memory working copies. Keyed by character_id.
@@ -459,7 +468,30 @@ export const useStore = create<State>((set, get) => ({
     set({ flistRosterStatus: 'loading' })
     try {
       const { characters } = await api.flistRoster()
-      set({ flistRoster: characters, flistRosterStatus: 'ready' })
+      set((s) => {
+        const archive = { ...s.flistArchive }
+        for (const entry of characters) {
+          if (entry.id === null || !entry.pull_status) continue
+          const key = String(entry.id)
+          const prev = archive[key] ?? {
+            live: null,
+            backups: [],
+            pullStatus: 'idle' as const,
+          }
+          archive[key] = {
+            ...prev,
+            integrity: {
+              status: entry.pull_status.status,
+              missing: entry.pull_status.missing_image_ids.length,
+            },
+          }
+        }
+        return {
+          flistRoster: characters,
+          flistRosterStatus: 'ready',
+          flistArchive: archive,
+        }
+      })
     } catch {
       set({ flistRosterStatus: 'error' })
     }

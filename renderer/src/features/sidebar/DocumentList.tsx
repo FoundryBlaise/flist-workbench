@@ -28,7 +28,9 @@ export function DocumentList() {
   const duplicateActiveDocument = useStore((s) => s.duplicateActiveDocument)
   const renameDocument = useStore((s) => s.renameDocument)
   const deleteDocument = useStore((s) => s.deleteDocument)
+  const setEditorContent = useStore((s) => s.setEditorContent)
   const [filter, setFilter] = useState('')
+  const [pasteError, setPasteError] = useState<string | null>(null)
 
   const visible = useMemo(() => {
     if (!filter.trim()) return documents
@@ -51,6 +53,35 @@ export function DocumentList() {
     const name = window.prompt('Name the new document:', 'Untitled')
     if (!name || !name.trim()) return
     void createDocument(name.trim())
+  }
+
+  // First-run friendly shortcut: read clipboard, make a new doc, drop
+  // the clipboard text into the editor. Most onboarding users already
+  // have BBCode in hand from F-Chat / Frolic / a forum — pasting it in
+  // is the fastest way to feel productive.
+  const handlePasteNew = async () => {
+    setPasteError(null)
+    if (!navigator.clipboard?.readText) {
+      setPasteError("Clipboard access isn't available in this environment.")
+      return
+    }
+    let text: string
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      setPasteError(
+        'Could not read clipboard. Try copying again, or use "+ New blank doc".'
+      )
+      return
+    }
+    if (!text.trim()) {
+      setPasteError('Clipboard is empty.')
+      return
+    }
+    const name = window.prompt('Name the new document:', 'Pasted')
+    if (!name || !name.trim()) return
+    await createDocument(name.trim())
+    setEditorContent(text)
   }
 
   const handleDuplicate = () => {
@@ -117,6 +148,41 @@ export function DocumentList() {
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter documents"
         />
+      )}
+      {documents.every((d) => d.scratch) && (
+        <div
+          className="sb-doc-empty-state"
+          role="note"
+          data-testid="documents-empty-state"
+        >
+          <p className="sb-doc-empty-caption">
+            Documents are saved BBCode snippets — character descriptions,
+            scene drafts, kink statements.
+          </p>
+          <div className="sb-doc-empty-ctas">
+            <button
+              type="button"
+              className="sb-doc-empty-cta sb-doc-empty-cta-primary"
+              onClick={handleNew}
+              data-testid="documents-empty-new"
+            >
+              + New blank doc
+            </button>
+            <button
+              type="button"
+              className="sb-doc-empty-cta"
+              onClick={() => void handlePasteNew()}
+              data-testid="documents-empty-paste"
+            >
+              Paste BBCode from clipboard
+            </button>
+          </div>
+          {pasteError && (
+            <div className="sb-doc-empty-error" role="alert">
+              {pasteError}
+            </div>
+          )}
+        </div>
       )}
       <ul className="sb-list sb-list-docs" data-testid="document-list">
         {visible.map((doc) => {

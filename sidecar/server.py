@@ -269,6 +269,13 @@ async def flist_characters() -> dict:
     except LogDirError:
         pass
     rows = character_archive.merge_roster(account_chars, log_chars)
+    # Annotate every has_archive row with its on-disk pull integrity so
+    # the picker / F-list zone can surface "incomplete — N missing" for
+    # archives where a prior pull was interrupted or had image failures.
+    # Cheap: each call is one dir-walk under images/.
+    for row in rows:
+        if row.get("has_archive") and row.get("id") is not None:
+            row["pull_status"] = character_archive.compute_pull_status(row["id"])
     return {"characters": rows}
 
 
@@ -383,6 +390,19 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         )
 
                 total = len(image_list)
+                # Record what this pull intends to fetch before downloading
+                # anything. If the user's PC sleeps / crashes / loses
+                # network mid-loop, the manifest's `finished_at=None` is
+                # the marker compute_pull_status uses to surface "Pull
+                # incomplete — N missing" on next launch.
+                import time as _t
+                pull_started_at = int(_t.time())
+                character_archive.write_pull_state(
+                    cid,
+                    image_list,
+                    started_at=pull_started_at,
+                    finished_at=None,
+                )
                 yield _sse_event(
                     "images", {"total": total, "downloaded": 0, "failed": 0}
                 )
@@ -452,6 +472,17 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                             },
                         )
 
+                # Seal the manifest: finished_at marks the loop ran to
+                # completion (success or with per-image failures). The
+                # absence of this write is what compute_pull_status uses
+                # to distinguish "interrupted" from "partial".
+                character_archive.write_pull_state(
+                    cid,
+                    image_list,
+                    started_at=pull_started_at,
+                    finished_at=int(_t.time()),
+                )
+                pull_status = character_archive.compute_pull_status(cid)
                 yield _sse_event(
                     "done",
                     {
@@ -459,6 +490,8 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         "name": payload.get("name") or name,
                         "image_count": downloaded,
                         "image_failed": failed,
+                        "pull_status": pull_status["status"],
+                        "pull_missing": len(pull_status["missing_image_ids"]),
                     },
                 )
             except flist_api.RateLimited as exc:

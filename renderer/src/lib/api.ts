@@ -19,6 +19,14 @@ export type FlistSessionStatus = {
   api_hourly_count?: number
 }
 
+export type FlistPullStatus = {
+  status: 'never_pulled' | 'unknown' | 'interrupted' | 'partial' | 'complete'
+  missing_image_ids: { image_id: string; extension: string }[]
+  expected: number
+  present: number
+  last_attempt_ts: number | null
+}
+
 export type FlistRosterEntry = {
   name: string
   id: number | string | null
@@ -27,6 +35,10 @@ export type FlistRosterEntry = {
   has_logs: boolean
   last_pulled_at: number | null
   backup_count: number
+  // Only present for rows where has_archive is true. Surfaces whether
+  // a prior pull was interrupted or had image failures so the renderer
+  // can prompt the user to resume.
+  pull_status?: FlistPullStatus
 }
 
 export type FlistBackupEntry = {
@@ -53,6 +65,8 @@ export type FlistPullHandlers = {
     name: string
     image_count: number
     image_failed: number
+    pull_status?: FlistPullStatus['status']
+    pull_missing?: number
   }) => void
   onError?: (info: { stage: string; message: string }) => void
 }

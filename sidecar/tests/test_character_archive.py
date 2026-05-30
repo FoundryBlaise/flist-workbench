@@ -117,6 +117,105 @@ def test_merge_roster_same_id_dedupes_across_sources():
     assert rows[0]["has_archive"] is True
 
 
+def test_compute_pull_status_never_pulled():
+    s = character_archive.compute_pull_status("404")
+    assert s["status"] == "never_pulled"
+    assert s["missing_image_ids"] == []
+    assert s["expected"] == 0
+
+
+def test_compute_pull_status_complete():
+    cid = "100"
+    character_archive.write_live(cid, {
+        "name": "Test", "fetched_at": 100,
+        "images": [{"image_id": "a1", "extension": "png"},
+                   {"image_id": "b2", "extension": "jpg"}],
+    })
+    # Drop both image files into images_dir to simulate a successful pull
+    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    (character_archive.images_dir(cid) / "b2.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+    character_archive.write_pull_state(
+        cid,
+        [{"image_id": "a1", "extension": "png"},
+         {"image_id": "b2", "extension": "jpg"}],
+        started_at=100,
+        finished_at=150,
+    )
+    s = character_archive.compute_pull_status(cid)
+    assert s["status"] == "complete"
+    assert s["missing_image_ids"] == []
+    assert s["expected"] == 2
+    assert s["present"] == 2
+    assert s["last_attempt_ts"] == 150
+
+
+def test_compute_pull_status_interrupted_mid_pull():
+    # Pull crashed mid-loop: manifest written with finished_at=None and
+    # only some images on disk. Renderer should see "interrupted" so the
+    # user can resume.
+    cid = "200"
+    character_archive.write_live(cid, {"name": "Test", "fetched_at": 100, "images": []})
+    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    character_archive.write_pull_state(
+        cid,
+        [{"image_id": "a1", "extension": "png"},
+         {"image_id": "b2", "extension": "jpg"},
+         {"image_id": "c3", "extension": "png"}],
+        started_at=100,
+        finished_at=None,
+    )
+    s = character_archive.compute_pull_status(cid)
+    assert s["status"] == "interrupted"
+    assert len(s["missing_image_ids"]) == 2
+    assert s["present"] == 1
+    assert s["expected"] == 3
+
+
+def test_compute_pull_status_partial_after_failures():
+    # Pull ran to completion but some images failed mid-loop. Loop sealed
+    # the manifest with finished_at, but disk is short two images.
+    cid = "300"
+    character_archive.write_live(cid, {"name": "Test", "fetched_at": 100, "images": []})
+    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    character_archive.write_pull_state(
+        cid,
+        [{"image_id": "a1", "extension": "png"},
+         {"image_id": "b2", "extension": "jpg"}],
+        started_at=100,
+        finished_at=120,
+    )
+    s = character_archive.compute_pull_status(cid)
+    assert s["status"] == "partial"
+    assert len(s["missing_image_ids"]) == 1
+    assert s["missing_image_ids"][0]["image_id"] == "b2"
+
+
+def test_compute_pull_status_legacy_archive_no_manifest():
+    # Archives created before pull_state.json shipped — derive from
+    # live.json.images vs disk so users still get the "incomplete" surface.
+    cid = "400"
+    character_archive.write_live(cid, {
+        "name": "Test", "fetched_at": 100,
+        "images": [{"image_id": "a1", "extension": "png"},
+                   {"image_id": "b2", "extension": "jpg"}],
+    })
+    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    s = character_archive.compute_pull_status(cid)
+    assert s["status"] == "partial"
+    assert len(s["missing_image_ids"]) == 1
+
+
+def test_compute_pull_status_legacy_archive_complete():
+    cid = "500"
+    character_archive.write_live(cid, {
+        "name": "Test", "fetched_at": 100,
+        "images": [{"image_id": "a1", "extension": "png"}],
+    })
+    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    s = character_archive.compute_pull_status(cid)
+    assert s["status"] == "complete"
+
+
 def test_merge_roster_log_attaches_to_id_row_by_name():
     # A log directory's only signal is the lowercased name; it should
     # attach to the matching id-keyed row, not spawn a duplicate.

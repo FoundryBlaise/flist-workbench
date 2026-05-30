@@ -30,6 +30,7 @@ CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
 CACHE_DIRNAME = "cache"
 LIVE_FILENAME = "live.json"
+PULL_STATE_FILENAME = "pull_state.json"
 
 
 def root() -> Path:
@@ -172,6 +173,133 @@ def read_backup(character_id: int | str, filename: str) -> dict[str, Any] | None
 # inline_path("..") case resolved to the parent directory — caught by
 # the test_inline_path_rejects_unsafe_basename test added 2026-05-30.
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
+
+
+# ---- pull integrity manifest -----------------------------------------
+
+
+def pull_state_path(character_id: int | str) -> Path:
+    return character_dir(character_id) / PULL_STATE_FILENAME
+
+
+def write_pull_state(
+    character_id: int | str,
+    expected_image_ids: Iterable[dict[str, Any]],
+    started_at: int,
+    finished_at: int | None,
+) -> None:
+    """Record the manifest of what a pull attempted. Written twice per
+    pull — once at the start of the image loop with `finished_at=None`,
+    once at the end with `finished_at=<unix>`. A `None` finished_at on
+    next launch means the pull was killed mid-flight (sleep, crash,
+    network drop) — `compute_pull_status` surfaces that to the renderer.
+
+    expected_image_ids: list of {"image_id": str, "extension": str}
+    """
+    normalized: list[dict[str, str]] = []
+    for entry in expected_image_ids:
+        if not isinstance(entry, dict):
+            continue
+        iid = entry.get("image_id")
+        ext = entry.get("extension")
+        if iid and ext:
+            normalized.append({"image_id": str(iid), "extension": str(ext)})
+    _atomic_write_json(
+        pull_state_path(character_id),
+        {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "expected_image_ids": normalized,
+        },
+    )
+
+
+def read_pull_state(character_id: int | str) -> dict[str, Any] | None:
+    p = pull_state_path(character_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _images_present_ids(character_id: int | str) -> set[str]:
+    """Stems (image_id) of files currently in images_dir. Source of
+    truth — manifest can lie if a user manually deletes the dir, this
+    can't."""
+    d = images_dir(character_id)
+    if not d.exists():
+        return set()
+    return {p.stem for p in d.iterdir() if p.is_file()}
+
+
+def compute_pull_status(character_id: int | str) -> dict[str, Any]:
+    """Reconcile manifest with disk and return a renderer-ready status.
+
+    status:
+      'never_pulled' — no live.json yet
+      'unknown'      — live.json exists but no manifest (pre-fix archive)
+      'interrupted'  — manifest's finished_at is null (killed mid-pull)
+      'partial'      — finished_at set but some expected images aren't on disk
+      'complete'     — finished_at set and every expected image is present
+    """
+    live = read_live(character_id)
+    if live is None:
+        return {
+            "status": "never_pulled",
+            "missing_image_ids": [],
+            "expected": 0,
+            "present": 0,
+            "last_attempt_ts": None,
+        }
+    state = read_pull_state(character_id)
+    present_ids = _images_present_ids(character_id)
+    if state is None:
+        # Legacy archive — no manifest. Best-guess from live.json's image
+        # list; treat as complete if disk matches, partial otherwise. Means
+        # users with archives from before this commit still get the warning
+        # surfaced if their previous pull was actually incomplete.
+        expected = _expected_from_live(live)
+        missing = [e for e in expected if e["image_id"] not in present_ids]
+        return {
+            "status": "complete" if not missing else "partial",
+            "missing_image_ids": missing,
+            "expected": len(expected),
+            "present": len(expected) - len(missing),
+            "last_attempt_ts": live.get("fetched_at"),
+        }
+    expected = state.get("expected_image_ids") or []
+    expected = [e for e in expected if isinstance(e, dict) and e.get("image_id") and e.get("extension")]
+    missing = [e for e in expected if str(e["image_id"]) not in present_ids]
+    finished_at = state.get("finished_at")
+    started_at = state.get("started_at")
+    last_attempt_ts = finished_at or started_at or live.get("fetched_at")
+    if finished_at is None:
+        status = "interrupted"
+    elif missing:
+        status = "partial"
+    else:
+        status = "complete"
+    return {
+        "status": status,
+        "missing_image_ids": missing,
+        "expected": len(expected),
+        "present": len(expected) - len(missing),
+        "last_attempt_ts": last_attempt_ts,
+    }
+
+
+def _expected_from_live(live: dict[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for img in (live.get("images") or []):
+        if not isinstance(img, dict):
+            continue
+        iid = img.get("image_id") or img.get("id")
+        ext = img.get("extension")
+        if iid and ext:
+            out.append({"image_id": str(iid), "extension": str(ext)})
+    return out
 
 
 def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
