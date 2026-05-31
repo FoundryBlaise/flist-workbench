@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { startSidecar, stopSidecar } from './sidecar'
 import { buildMenu } from './menu'
+import { attachContextMenu } from './contextMenu'
 
 const isDev = !app.isPackaged
 
@@ -142,6 +143,8 @@ async function createWindow(): Promise<void> {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  attachContextMenu(mainWindow)
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (isDev && devUrl) {

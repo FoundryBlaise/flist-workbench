@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
+import {
+  EDITOR_SELECTION_EVENT,
+  type EditorSelectionDetail
+} from '../../lib/bbcode/codemirror'
 
 const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
 
@@ -108,6 +112,45 @@ export function PreviewPane() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [lightbox])
+
+  // Mirror the editor selection: light up every text span whose source
+  // range overlaps the editor's selection. Granularity is per-span (the
+  // BBCode renderer wraps each text segment with [data-bb-start/end]),
+  // so selecting half a word lights up the whole containing span — we
+  // can't sub-highlight without splitting nodes and fighting the
+  // bidirectional-edit path. rAF-batched to coalesce caret-drag bursts.
+  useEffect(() => {
+    let raf = 0
+    const apply = (from: number, to: number) => {
+      const el = ref.current
+      if (!el) return
+      const prev = el.querySelectorAll<HTMLElement>('.bb-selected')
+      for (const node of prev) node.classList.remove('bb-selected')
+      // Don't paint a mirror while the user is typing in the preview —
+      // the highlight would overlap their own caret-area edits and read
+      // as a glitch. The editor's own selection still drives the
+      // CodeMirror caret as usual.
+      if (focusedRef.current) return
+      if (from === to) return
+      const spans = el.querySelectorAll<HTMLElement>('[data-bb-start]')
+      for (const node of spans) {
+        const s = Number(node.getAttribute('data-bb-start'))
+        const e = Number(node.getAttribute('data-bb-end'))
+        if (s < to && e > from) node.classList.add('bb-selected')
+      }
+    }
+    const onSel = (e: Event) => {
+      const detail = (e as CustomEvent<EditorSelectionDetail>).detail
+      if (!detail) return
+      if (raf) cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => apply(detail.from, detail.to))
+    }
+    window.addEventListener(EDITOR_SELECTION_EVENT, onSel)
+    return () => {
+      window.removeEventListener(EDITOR_SELECTION_EVENT, onSel)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [])
 
   return (
     <section className="pane preview" data-testid="preview-pane">
