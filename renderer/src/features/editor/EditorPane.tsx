@@ -276,6 +276,10 @@ function EditorTabsHost(props: {
       // ignore
     }
   }, [activeTab, tabKey])
+  const setEditorActiveTab = useStore((s) => s.setEditorActiveTab)
+  useEffect(() => {
+    setEditorActiveTab(activeTab)
+  }, [activeTab, setEditorActiveTab])
   const activeDocIdRaw = useStore((s) => s.activeDocId)
   const workingCopyMode =
     flistActiveId !== null && activeDocIdRaw === null && !props.readOnly
