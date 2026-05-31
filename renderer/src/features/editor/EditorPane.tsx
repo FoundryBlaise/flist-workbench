@@ -155,6 +155,23 @@ export function EditorPane() {
             </button>
             <button
               type="button"
+              className="doc-copy"
+              onClick={() => {
+                void navigator.clipboard
+                  ?.writeText(content)
+                  .catch(() => {
+                    // Clipboard may be denied in some sandboxes; surface
+                    // nothing — the user can always select-all + ctrl-c.
+                  })
+              }}
+              title="Copy this snippet's BBCode to the clipboard"
+              data-testid="doc-copy"
+              disabled={!content}
+            >
+              Copy BBCode
+            </button>
+            <button
+              type="button"
               className="doc-revisions-toggle"
               onClick={() => setShowRevisions((v) => !v)}
               aria-pressed={showRevisions}

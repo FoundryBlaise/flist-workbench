@@ -3,7 +3,7 @@ import { useStore } from '../../state'
 import { UnifiedCharacterPicker } from './UnifiedCharacterPicker'
 import { ModeToggle } from './ModeToggle'
 import { PartnerList } from './PartnerList'
-import { DocumentList, useEnsureDocumentsLoaded } from './DocumentList'
+import { SnippetList, useEnsureSnippetsLoaded } from './SnippetList'
 import { FlistCharacterZone } from '../flist/FlistCharacterZone'
 
 export function Sidebar() {
@@ -23,7 +23,7 @@ export function Sidebar() {
     void refreshSession()
   }, [refreshSession])
 
-  useEnsureDocumentsLoaded()
+  useEnsureSnippetsLoaded()
 
   return (
     <aside className="sidebar" data-testid="sidebar">
@@ -33,8 +33,8 @@ export function Sidebar() {
       {mode === 'editor' ? (
         <>
           <FlistCharacterZone />
-          <div className="sb-section-h">Documents</div>
-          <DocumentList />
+          <div className="sb-section-h">Snippets</div>
+          <SnippetList />
         </>
       ) : (
         <>
