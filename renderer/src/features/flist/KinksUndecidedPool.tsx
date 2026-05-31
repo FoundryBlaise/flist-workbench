@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../state'
-import type { KinkChoice } from './ChoiceButtons'
+import { CHOICE_LABELS, type KinkChoice } from './ChoiceButtons'
 import {
   buildUnifiedKinks,
   readCustomsFirst,
@@ -60,9 +60,19 @@ export function KinksUndecidedPool() {
     () => filtered.filter((u) => u.type === 'standard'),
     [filtered]
   )
+  // Customs always appear in the pool — assigned OR undecided — so the
+  // user can edit name/description at any time without first dragging
+  // the card back to the pool. The pool is the canonical custom editor.
+  const allCustoms = useMemo(
+    () => unified.filter((u) => u.type === 'custom'),
+    [unified]
+  )
   const customsFiltered = useMemo(
-    () => filtered.filter((u) => u.type === 'custom'),
-    [filtered]
+    () =>
+      filterLower
+        ? allCustoms.filter((u) => u.name.toLowerCase().includes(filterLower))
+        : allCustoms,
+    [allCustoms, filterLower]
   )
   const sortedStandards = useMemo(
     () => sortUnifiedKinks(standardsFiltered, customsFirst),
@@ -137,8 +147,6 @@ export function KinksUndecidedPool() {
     )
   }
 
-  const totalUndecided = sortedStandards.length + sortedCustoms.length
-
   return (
     <div
       className={`kinks-pool${over ? ' kinks-pool-over' : ''}`}
@@ -153,10 +161,6 @@ export function KinksUndecidedPool() {
       onDragLeave={() => setOver(false)}
       onDrop={handleDrop}
     >
-      <header className="kinks-pool-header">
-        <span className="kinks-pool-title">Undecided</span>
-        <span className="kinks-pool-count">{totalUndecided}</span>
-      </header>
       <div className="kinks-pool-controls">
         <input
           type="search"
@@ -169,7 +173,34 @@ export function KinksUndecidedPool() {
       </div>
 
       <section className="kinks-pool-section" data-testid="kinks-pool-standards">
-        <h3 className="kinks-pool-section-title">Standard kinks</h3>
+        <header className="kinks-pool-section-header">
+          <h3 className="kinks-pool-section-title">
+            Standard kinks{' '}
+            <span className="kinks-pool-section-sub">· undecided</span>
+          </h3>
+          <div className="kinks-pool-section-actions">
+            <button
+              type="button"
+              className="kinks-pool-section-btn"
+              onClick={() => {
+                const next: Record<string, boolean> = {}
+                for (const g of standardsByGroup) next[g.id] = false
+                setCollapsed(next)
+              }}
+              title="Expand every category"
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              className="kinks-pool-section-btn"
+              onClick={() => setCollapsed({})}
+              title="Collapse every category"
+            >
+              Collapse all
+            </button>
+          </div>
+        </header>
         {standardsByGroup.length === 0 ? (
           <div className="kinks-pool-empty-list">
             {filterLower
@@ -231,8 +262,11 @@ export function KinksUndecidedPool() {
       <hr className="kinks-pool-sep" />
 
       <section className="kinks-pool-section" data-testid="kinks-pool-customs">
-        <header className="kinks-pool-customs-header">
-          <h3 className="kinks-pool-section-title">Custom kinks</h3>
+        <header className="kinks-pool-section-header">
+          <h3 className="kinks-pool-section-title">
+            Custom kinks{' '}
+            <span className="kinks-pool-section-sub">· always editable</span>
+          </h3>
           <button
             type="button"
             className="kinks-pool-add"
@@ -245,8 +279,8 @@ export function KinksUndecidedPool() {
         {sortedCustoms.length === 0 ? (
           <div className="kinks-pool-empty-list">
             {filterLower
-              ? 'No undecided custom kinks match that filter.'
-              : 'No undecided custom kinks. Click "+ New custom kink" to add one.'}
+              ? 'No custom kinks match that filter.'
+              : 'No custom kinks yet. Click "+ New custom kink" to add one.'}
           </div>
         ) : (
           <ul className="kinks-pool-customs-list">
@@ -357,11 +391,15 @@ function CustomKinkCard({
   }, [description, entry.description, onDescribe])
 
   return (
-    <li className="kink-card" data-kink-id={entry.id}>
+    <li className="kink-card" data-kink-id={entry.id} data-kink-choice={entry.choice}>
       <span
         className="kink-card-handle"
         draggable
-        title="Drag to a bucket on the left"
+        title={
+          entry.choice === 'undecided'
+            ? 'Drag to a bucket on the left'
+            : `Drag to move (currently in ${CHOICE_LABELS[entry.choice]})`
+        }
         onDragStart={(e) => {
           e.dataTransfer.setData(
             KINK_DRAG_MIME,
@@ -374,17 +412,25 @@ function CustomKinkCard({
         ⋮⋮
       </span>
       <div className="kink-card-body">
-        <input
-          type="text"
-          className="kink-card-name"
-          value={name}
-          placeholder="Custom kink name"
-          onChange={(e) => setName(e.target.value)}
-        />
+        <div className="kink-card-row">
+          <input
+            type="text"
+            className="kink-card-name"
+            value={name}
+            placeholder="Custom kink name"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <span
+            className={`kink-card-choice kink-choice-${entry.choice}`}
+            title={`Current choice: ${CHOICE_LABELS[entry.choice]}`}
+          >
+            {CHOICE_LABELS[entry.choice]}
+          </span>
+        </div>
         <textarea
           className="kink-card-description"
           value={description}
-          placeholder="Description (BBCode allowed)"
+          placeholder="Description (plain text)"
           rows={2}
           onChange={(e) => setDescription(e.target.value)}
         />
