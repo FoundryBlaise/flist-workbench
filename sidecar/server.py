@@ -2582,9 +2582,22 @@ class DocCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     bbcode: str = ""
     inlines: dict[str, Any] = Field(default_factory=dict)
+    folder_id: int | None = None
 
 
 class DocRename(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class DocMove(BaseModel):
+    folder_id: int | None = None
+
+
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class FolderRename(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
@@ -2597,6 +2610,7 @@ def _doc_dict(doc: documents.Document) -> dict:
     return {
         "id": doc.id,
         "name": doc.name,
+        "folder_id": doc.folder_id,
         "scratch": doc.scratch,
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
@@ -2605,6 +2619,10 @@ def _doc_dict(doc: documents.Document) -> dict:
         "latest_created_at": doc.latest_created_at,
         "has_draft": doc.has_draft,
     }
+
+
+def _folder_dict(f: documents.Folder) -> dict:
+    return {"id": f.id, "name": f.name, "created_at": f.created_at}
 
 
 # ---- system / setup ----------------------------------------------------
@@ -2690,10 +2708,56 @@ def documents_list(conn=Depends(_db)) -> dict:
 @app.post("/documents", status_code=201)
 def documents_create(body: DocCreate, conn=Depends(_db)) -> dict:
     try:
-        doc = documents.create_document(conn, body.name, bbcode=body.bbcode, inlines=body.inlines)
+        doc = documents.create_document(
+            conn,
+            body.name,
+            bbcode=body.bbcode,
+            inlines=body.inlines,
+            folder_id=body.folder_id,
+        )
     except documents.DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _doc_dict(doc)
+
+
+@app.post("/documents/{doc_id}/move")
+def documents_move(doc_id: int, body: DocMove, conn=Depends(_db)) -> dict:
+    try:
+        return _doc_dict(documents.move_document(conn, doc_id, body.folder_id))
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---- folders ----------------------------------------------------------
+
+
+@app.get("/folders")
+def folders_list(conn=Depends(_db)) -> dict:
+    return {"folders": [_folder_dict(f) for f in documents.list_folders(conn)]}
+
+
+@app.post("/folders", status_code=201)
+def folders_create(body: FolderCreate, conn=Depends(_db)) -> dict:
+    try:
+        return _folder_dict(documents.create_folder(conn, body.name))
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/folders/{folder_id}")
+def folders_rename(folder_id: int, body: FolderRename, conn=Depends(_db)) -> dict:
+    try:
+        return _folder_dict(documents.rename_folder(conn, folder_id, body.name))
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/folders/{folder_id}", status_code=204)
+def folders_delete(folder_id: int, conn=Depends(_db)) -> None:
+    try:
+        documents.delete_folder(conn, folder_id)
+    except documents.DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/documents/{doc_id}")

@@ -7,6 +7,7 @@ import {
   type FlistBackupEntry,
   type FlistRosterEntry,
   type FlistSessionStatus,
+  type Folder,
   type InlineImage,
   type LogMessage,
   type PartnerEntry,
@@ -113,10 +114,14 @@ type State = {
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
 
-  // Documents — F5 persisted document store
+  // Snippets — persistent BBCode-snippet store with a single-level
+  // folder tree. Internal type/var names stay as `document` / `doc` /
+  // `folder_id` (see api.ts comment); only user-facing UI uses the
+  // "Snippet" terminology.
   documents: Document[]
   documentsStatus: 'idle' | 'loading' | 'ready' | 'error'
   documentsError: string | null
+  folders: Folder[]
   activeDocId: number | null
   /** Revision summaries per doc (lazy). */
   revisionsByDoc: Record<number, RevisionSummary[]>
@@ -394,17 +399,23 @@ type State = {
     backupFilename: string
   ) => Promise<void>
 
-  // Documents
+  // Snippets (internal name still `document`)
   loadDocuments: () => Promise<void>
   openDocument: (id: number) => Promise<void>
-  createDocument: (name: string) => Promise<Document>
+  createDocument: (name: string, folderId?: number | null) => Promise<Document>
   duplicateActiveDocument: (name: string) => Promise<Document | null>
   renameDocument: (id: number, name: string) => Promise<void>
   deleteDocument: (id: number) => Promise<void>
+  moveDocument: (id: number, folderId: number | null) => Promise<void>
   saveActiveDocument: () => Promise<void>
   saveActiveDraft: () => Promise<void>
   loadRevisions: (id: number) => Promise<void>
   restoreRevision: (revId: number) => Promise<void>
+  // Folders (single-level)
+  loadFolders: () => Promise<void>
+  createFolder: (name: string) => Promise<Folder | null>
+  renameFolder: (id: number, name: string) => Promise<void>
+  deleteFolder: (id: number) => Promise<void>
 }
 
 function partnerKey(char: string, partner: string): string {
@@ -671,6 +682,7 @@ export const useStore = create<State>((set, get) => ({
   documents: [],
   documentsStatus: 'idle',
   documentsError: null,
+  folders: [],
   activeDocId: null,
   revisionsByDoc: {},
   revisionsStatus: {},
@@ -2459,12 +2471,53 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async createDocument(name) {
-    const doc = await api.documentCreate(name)
+  async createDocument(name, folderId = null) {
+    const doc = await api.documentCreate(name, '', {}, folderId ?? null)
     // Refresh the list so the new entry shows in the sidebar.
     await get().loadDocuments()
     await get().openDocument(doc.id)
     return doc
+  },
+
+  async moveDocument(id, folderId) {
+    await api.documentMove(id, folderId)
+    await get().loadDocuments()
+  },
+
+  // ---- folders --------------------------------------------------------
+
+  async loadFolders() {
+    try {
+      const { folders } = await api.folders()
+      set({ folders })
+    } catch (err) {
+      // Folders are non-critical; failure leaves the list empty.
+      console.error('[state] loadFolders failed:', err)
+    }
+  },
+
+  async createFolder(name) {
+    try {
+      const folder = await api.folderCreate(name)
+      await get().loadFolders()
+      return folder
+    } catch (err) {
+      console.error('[state] createFolder failed:', err)
+      return null
+    }
+  },
+
+  async renameFolder(id, name) {
+    await api.folderRename(id, name)
+    await get().loadFolders()
+  },
+
+  async deleteFolder(id) {
+    await api.folderDelete(id)
+    // Snippets inside the folder return to the root via ON DELETE SET
+    // NULL — refresh both lists so the tree re-renders correctly.
+    await get().loadFolders()
+    await get().loadDocuments()
   },
 
   async duplicateActiveDocument(name) {

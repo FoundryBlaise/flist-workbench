@@ -100,6 +100,7 @@ export type AliasGroups = Record<string, string[]>
 export type Document = {
   id: number
   name: string
+  folder_id: number | null
   scratch: boolean
   created_at: number
   updated_at: number
@@ -107,6 +108,12 @@ export type Document = {
   latest_char_count: number | null
   latest_created_at: number | null
   has_draft: boolean
+}
+
+export type Folder = {
+  id: number
+  name: string
+  created_at: number
 }
 
 export type Revision = {
@@ -900,12 +907,19 @@ export const api = {
     }
   },
 
-  // Documents
+  // Snippets (UI label) — internal naming is still "documents" to bound
+  // the rename churn. Endpoints, types, and store fields keep `document`
+  // / `doc` terminology; only user-facing labels switched.
   documents: () => get<{ documents: Document[] }>('/documents'),
-  documentCreate: (name: string, bbcode = '', inlines: Record<string, InlineImage> = {}) =>
+  documentCreate: (
+    name: string,
+    bbcode = '',
+    inlines: Record<string, InlineImage> = {},
+    folderId: number | null = null
+  ) =>
     request<Document>('/documents', {
       method: 'POST',
-      body: JSON.stringify({ name, bbcode, inlines })
+      body: JSON.stringify({ name, bbcode, inlines, folder_id: folderId })
     }),
   documentGet: (id: number) =>
     get<{ document: Document; current: Revision }>(`/documents/${id}`),
@@ -921,6 +935,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name })
     }),
+  documentMove: (id: number, folderId: number | null) =>
+    request<Document>(`/documents/${id}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ folder_id: folderId })
+    }),
+  folders: () => get<{ folders: Folder[] }>('/folders'),
+  folderCreate: (name: string) =>
+    request<Folder>('/folders', {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    }),
+  folderRename: (id: number, name: string) =>
+    request<Folder>(`/folders/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name })
+    }),
+  folderDelete: (id: number) =>
+    request<void>(`/folders/${id}`, { method: 'DELETE' }),
   revisionsList: (id: number) =>
     get<{ doc_id: number; revisions: RevisionSummary[] }>(`/documents/${id}/revisions`),
   revisionGet: (id: number, revId: number) =>

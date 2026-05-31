@@ -1,22 +1,25 @@
-"""Per-user document storage with append-only revision history.
+"""Per-user document (a.k.a. "snippet") storage with append-only
+revision history and a single-level folder tree.
 
-Three tables, two storage layers:
+Four tables, two storage layers:
 
-  - `documents(id, name, scratch, created_at, updated_at)` — doc metadata.
-    The `scratch` flag marks the always-present Scratch document so the
-    UI can give it special treatment (can't be deleted or renamed).
+  - `documents(id, name, folder_id, scratch, created_at, updated_at)` —
+    doc metadata. `folder_id` is nullable; NULL means "at root". The
+    `scratch` flag marks the always-present Scratch document.
+  - `folders(id, name, created_at)` — single-level container. Folders
+    cannot contain folders. Deleting a folder relocates its snippets to
+    the root (NULL folder_id).
   - `revisions(id, doc_id, bbcode, inlines_json, created_at)` — explicit
     saves. Append-only, linear: "restore an old revision" writes a NEW
     revision at HEAD with the old content, so history is never destroyed.
   - `drafts(doc_id PRIMARY KEY, bbcode, inlines_json, updated_at)` —
     crash-safety. One slot per doc, overwrites itself on autosave.
-    Recovered on relaunch when the renderer asks for the doc's current
-    content and a draft is newer than the latest revision.
 
-Storage location follows the OS-appropriate user data dir; tests pass an
-explicit path. BBCode-only payloads are typically a few KB per revision
-so a thousand revisions per doc is still single-digit MB — no
-deduplication needed at this scope.
+Migration policy (2026-05-31): the v2 schema is a clean break — when
+SQLite reports user_version < 2, the documents/revisions/drafts tables
+are dropped and re-created from scratch. Internally the data model is
+still called "documents" / "doc" to bound rename churn; the
+user-facing UI rebrands them as "Snippets".
 """
 
 from __future__ import annotations
@@ -30,14 +33,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+SCHEMA_VERSION = 2
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
     scratch INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id);
 CREATE TABLE IF NOT EXISTS revisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -79,9 +91,17 @@ class DocumentError(Exception):
 
 
 @dataclass(slots=True, frozen=True)
+class Folder:
+    id: int
+    name: str
+    created_at: float
+
+
+@dataclass(slots=True, frozen=True)
 class Document:
     id: int
     name: str
+    folder_id: int | None
     scratch: bool
     created_at: float
     updated_at: float
@@ -124,9 +144,31 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path(root))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    _migrate(conn)
     conn.executescript(SCHEMA)
     _ensure_scratch(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Wipe-and-rebuild on a schema break. v2 (2026-05-31) introduces
+    folders + folder_id on documents; the rebrand from "Documents" to
+    "Snippets" was an opportunity to drop the old data, so this
+    migration discards everything < v2 rather than carrying it forward.
+    """
+    current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if current >= SCHEMA_VERSION:
+        return
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS drafts;
+        DROP TABLE IF EXISTS revisions;
+        DROP TABLE IF EXISTS documents;
+        DROP TABLE IF EXISTS folders;
+        """
+    )
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
 
 
 def _ensure_scratch(conn: sqlite3.Connection) -> None:
@@ -149,6 +191,7 @@ def _doc_from_row(row: sqlite3.Row) -> Document:
     return Document(
         id=row["id"],
         name=row["name"],
+        folder_id=row["folder_id"],
         scratch=bool(row["scratch"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -163,6 +206,7 @@ _LIST_QUERY = """
 SELECT
     d.id,
     d.name,
+    d.folder_id,
     d.scratch,
     d.created_at,
     d.updated_at,
@@ -196,14 +240,21 @@ def create_document(
     *,
     bbcode: str = "",
     inlines: dict[str, Any] | None = None,
+    folder_id: int | None = None,
 ) -> Document:
     name = name.strip()
     if not name:
         raise DocumentError("name must not be blank")
+    if folder_id is not None:
+        # Validate the folder exists so callers get a 400 rather than
+        # a silent NULL when the id is stale.
+        row = conn.execute("SELECT id FROM folders WHERE id = ?", (folder_id,)).fetchone()
+        if row is None:
+            raise DocumentError(f"folder not found: {folder_id}")
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO documents (name, scratch, created_at, updated_at) VALUES (?, 0, ?, ?)",
-        (name, now, now),
+        "INSERT INTO documents (name, folder_id, scratch, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+        (name, folder_id, now, now),
     )
     doc_id = int(cur.lastrowid)
     conn.execute(
@@ -215,8 +266,85 @@ def create_document(
 
 
 def duplicate_document(conn: sqlite3.Connection, source_id: int, new_name: str) -> Document:
+    source = get_document(conn, source_id)
     rev = current_content(conn, source_id)
-    return create_document(conn, new_name, bbcode=rev.bbcode, inlines=rev.inlines)
+    return create_document(
+        conn,
+        new_name,
+        bbcode=rev.bbcode,
+        inlines=rev.inlines,
+        folder_id=source.folder_id,
+    )
+
+
+def move_document(
+    conn: sqlite3.Connection, doc_id: int, folder_id: int | None
+) -> Document:
+    """Move a document into a folder, or back to the root with folder_id=None."""
+    doc = get_document(conn, doc_id)
+    if doc.scratch and folder_id is not None:
+        # The Scratch document is the always-there empty-state landing
+        # surface — keeping it at the root means an unfiltered first
+        # impression always greets users with something to render.
+        raise DocumentError("the Scratch document stays at the root")
+    if folder_id is not None:
+        row = conn.execute("SELECT id FROM folders WHERE id = ?", (folder_id,)).fetchone()
+        if row is None:
+            raise DocumentError(f"folder not found: {folder_id}")
+    conn.execute(
+        "UPDATE documents SET folder_id = ?, updated_at = ? WHERE id = ?",
+        (folder_id, time.time(), doc_id),
+    )
+    conn.commit()
+    return get_document(conn, doc_id)
+
+
+# ---- folders --------------------------------------------------------
+
+
+def list_folders(conn: sqlite3.Connection) -> list[Folder]:
+    rows = conn.execute(
+        "SELECT id, name, created_at FROM folders ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    return [Folder(id=r["id"], name=r["name"], created_at=r["created_at"]) for r in rows]
+
+
+def create_folder(conn: sqlite3.Connection, name: str) -> Folder:
+    name = name.strip()
+    if not name:
+        raise DocumentError("folder name must not be blank")
+    now = time.time()
+    cur = conn.execute(
+        "INSERT INTO folders (name, created_at) VALUES (?, ?)",
+        (name, now),
+    )
+    return Folder(id=int(cur.lastrowid), name=name, created_at=now)
+
+
+def rename_folder(conn: sqlite3.Connection, folder_id: int, new_name: str) -> Folder:
+    new_name = new_name.strip()
+    if not new_name:
+        raise DocumentError("folder name must not be blank")
+    cur = conn.execute(
+        "UPDATE folders SET name = ? WHERE id = ?",
+        (new_name, folder_id),
+    )
+    if cur.rowcount == 0:
+        raise DocumentError(f"folder not found: {folder_id}")
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, name, created_at FROM folders WHERE id = ?", (folder_id,)
+    ).fetchone()
+    return Folder(id=row["id"], name=row["name"], created_at=row["created_at"])
+
+
+def delete_folder(conn: sqlite3.Connection, folder_id: int) -> None:
+    """Delete a folder. Snippets inside relocate to the root
+    (ON DELETE SET NULL on the FK)."""
+    cur = conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+    if cur.rowcount == 0:
+        raise DocumentError(f"folder not found: {folder_id}")
+    conn.commit()
 
 
 def rename_document(conn: sqlite3.Connection, doc_id: int, new_name: str) -> Document:

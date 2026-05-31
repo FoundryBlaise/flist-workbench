@@ -782,7 +782,90 @@ body {
   flex: 1;
   overflow-y: auto;
   border-top: 1px solid var(--border);
+  transition: background 80ms ease;
 }
+.sb-list-drop-over { background: rgba(86, 156, 214, 0.08); }
+
+/* Snippet folder tree (single level) */
+.sb-folder {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+.sb-folder-over { background: rgba(86, 156, 214, 0.10); }
+.sb-folder-row {
+  display: flex;
+  align-items: center;
+}
+.sb-folder-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 5px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-body);
+  text-align: left;
+  min-width: 0;
+}
+.sb-folder-toggle:hover { background: rgba(255, 255, 255, 0.04); }
+.sb-folder-chev { width: 12px; flex: 0 0 auto; color: var(--text-dim); }
+.sb-folder-ic { flex: 0 0 auto; }
+.sb-folder-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-folder-count {
+  font-size: var(--font-meta);
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+.sb-folder-actions {
+  display: none;
+  gap: 2px;
+  padding-right: 8px;
+}
+.sb-folder-row:hover .sb-folder-actions { display: inline-flex; }
+.sb-folder-actions button {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  font-size: var(--font-body);
+}
+.sb-folder-actions button:hover {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.sb-folder-children {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px 18px;
+}
+.sb-folder-empty {
+  padding: 6px 8px 8px 30px;
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  font-style: italic;
+}
+
+.doc-copy {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--btn-radius);
+  padding: var(--btn-pad-y-sm) var(--btn-pad-x-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-body);
+}
+.doc-copy:hover:not(:disabled) { background: rgba(86, 156, 214, 0.10); }
+.doc-copy:disabled { opacity: 0.4; cursor: default; }
 .sb-doc-item {
   display: flex;
   align-items: center;
