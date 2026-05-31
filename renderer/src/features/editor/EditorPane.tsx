@@ -4,7 +4,6 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
-import { displayCharacter } from '../../lib/partnerName'
 import { Tabs, type TabsTab } from '../../components/Tabs'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { CustomKinksPane, countCustomKinks } from '../flist/CustomKinksPane'
@@ -38,7 +37,6 @@ export function EditorPane() {
   const dirty = useStore((s) => s.editorDirty)
   const fetchStatus = useStore((s) => s.editorFetchStatus)
   const fetchError = useStore((s) => s.editorFetchError)
-  const fetchProfile = useStore((s) => s.fetchProfile)
   const saveStatus = useStore((s) => s.saveStatus)
   const saveError = useStore((s) => s.saveError)
   const draftStatus = useStore((s) => s.draftStatus)
@@ -76,63 +74,10 @@ export function EditorPane() {
     !readOnly &&
     flistActiveRosterEntry !== null &&
     !flistActiveRosterEntry.on_account
-  const [fetchName, setFetchName] = useState(() =>
-    activeCharacter ? displayCharacter(activeCharacter) : ''
-  )
-  const [progressDots, setProgressDots] = useState(0)
   const [showRevisions, setShowRevisions] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  // Track which char name (if any) the input was last auto-seeded
-  // from. If the user has typed something else we leave the input
-  // alone; if they're still showing the previous auto-seed (or it's
-  // empty) we update on character switch.
-  const seededFromRef = useRef<string | null>(activeCharacter)
 
   const cmRef = useRef<ReactCodeMirrorRef>(null)
   const viewRef = useRef<EditorView | null>(null)
-  const prevStatusRef = useRef(fetchStatus)
-
-  // Switching the active character seeds the Fetch input with that
-  // character's name so it's a one-click "fetch this alt's profile"
-  // instead of typing the name again. Only overwrites the input when
-  // the user hasn't typed something custom into it.
-  useEffect(() => {
-    if (!activeCharacter) return
-    const proposed = displayCharacter(activeCharacter)
-    const wasAutoSeeded =
-      fetchName === '' ||
-      (seededFromRef.current !== null && fetchName === displayCharacter(seededFromRef.current))
-    if (wasAutoSeeded) {
-      setFetchName(proposed)
-      seededFromRef.current = activeCharacter
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCharacter])
-
-  // Slow F-list profile fetches (5-10 s on a cold CDN) only changed the
-  // button label, which reads as "frozen UI" to anyone not watching the
-  // word. Tick a dots animation so users see motion. Cleared as soon as
-  // the fetch resolves.
-  useEffect(() => {
-    if (fetchStatus !== 'fetching') {
-      setProgressDots(0)
-      return
-    }
-    const t = setInterval(() => setProgressDots((n) => (n + 1) % 4), 350)
-    return () => clearInterval(t)
-  }, [fetchStatus])
-
-  // On a successful fetch, clear the seed name and hand focus to the
-  // editor — the user is done with the fetch input now, and leaving the
-  // last name in the field invites accidental re-clobber on the next
-  // Enter.
-  useEffect(() => {
-    if (prevStatusRef.current === 'fetching' && fetchStatus === 'ok') {
-      setFetchName('')
-      viewRef.current?.focus()
-    }
-    prevStatusRef.current = fetchStatus
-  }, [fetchStatus])
 
   // Autosave to draft slot after the user has been idle for a moment.
   // Drafts are crash-safety, not history — they overwrite the same row
@@ -160,21 +105,6 @@ export function EditorPane() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [activeDocId, dirty, saveActiveDocument])
-
-  const submitFetch = (name: string) => {
-    const trimmed = name.trim()
-    // Drop empty submits silently — the button is disabled but Enter
-    // on the input would otherwise still hit the API with a blank.
-    if (!trimmed) return
-    if (fetchStatus === 'fetching') return
-    if (dirty) {
-      const ok = window.confirm(
-        `Replace the current document with "${trimmed}"? Your unsaved edits will be lost.`
-      )
-      if (!ok) return
-    }
-    void fetchProfile(trimmed)
-  }
 
   const extensions = useMemo(
     () =>
@@ -238,34 +168,6 @@ export function EditorPane() {
               </span>
             )}
           </div>
-        )}
-        {!readOnly && (
-          <form
-            className="profile-fetch"
-            onSubmit={(e) => {
-              e.preventDefault()
-              submitFetch(fetchName)
-            }}
-          >
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Character name…"
-              value={fetchName}
-              onChange={(e) => setFetchName(e.target.value)}
-              data-testid="profile-fetch-input"
-              disabled={fetchStatus === 'fetching'}
-            />
-            <button
-              type="submit"
-              disabled={fetchStatus === 'fetching' || !fetchName.trim()}
-              data-testid="profile-fetch-submit"
-            >
-              {fetchStatus === 'fetching'
-                ? `Fetching${'.'.repeat(progressDots)}`
-                : 'Fetch profile'}
-            </button>
-          </form>
         )}
       </header>
       {workingCopyMode && (workingSaveStatus !== 'idle' || workingDirty) && (

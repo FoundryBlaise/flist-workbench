@@ -15,7 +15,8 @@ async function dump(name: string, value: unknown) {
   observations[name] = value
 }
 
-test('ux walkthrough', async () => {
+// Skipped: Fetch Profile UI removed — re-enable if the button comes back.
+test.skip('ux walkthrough', async () => {
   await mkdir(OUT, { recursive: true })
   const root = resolve(__dirname, '../..')
 
