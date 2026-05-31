@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { startSidecar, stopSidecar } from './sidecar'
+import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
 import { attachContextMenu } from './contextMenu'
 
@@ -174,6 +174,30 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+// Quit-time ticket invalidation. The TicketStore lives in sidecar RAM,
+// which normally dies with the SIGTERM in stopSidecar() — but `uv run`
+// in dev doesn't always propagate the signal cleanly to its uvicorn
+// child, and any orphaned sidecar process would keep answering with
+// the cached ticket on the next launch (same port → renderer talks to
+// the survivor). Belt-and-braces fix: explicitly tell the sidecar to
+// clear the ticket via the same endpoint the renderer's sign-out path
+// uses, then kill the process. Bounded to 1.5s so a frozen sidecar
+// can't hang the shutdown.
+let quitInvalidationDone = false
+app.on('before-quit', async (event) => {
+  if (quitInvalidationDone) return
+  event.preventDefault()
+  quitInvalidationDone = true
+  try {
+    await Promise.race([
+      fetch(`${sidecarUrl}/flist/session`, { method: 'DELETE' }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 1500)
+      )
+    ])
+  } catch {
+    // Sidecar unreachable / already gone — SIGTERM below covers it.
+  }
   stopSidecar()
+  app.quit()
 })
