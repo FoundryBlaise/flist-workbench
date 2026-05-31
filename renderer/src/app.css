@@ -501,6 +501,23 @@ body {
 }
 .editor-head .editor-meta { color: var(--text-dim); font-size: var(--font-meta); }
 
+/* Matching [tag] / [/tag] pair, lit when the caret sits on either side.
+   Layered on top of .cm-bb-tag / .cm-bb-tag-close so colour is preserved. */
+.cm-bb-tag-match {
+  background: rgba(86, 156, 214, 0.22);
+  border-radius: 2px;
+  box-shadow: inset 0 -1px 0 rgba(86, 156, 214, 0.7);
+}
+
+/* Preview spans whose source range overlaps the current editor
+   selection. Subtle so it doesn't fight the existing bb-* colour
+   choices, but readable on the preview's warm grey background. */
+.preview-body .bb-selected {
+  background: rgba(86, 156, 214, 0.28);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(86, 156, 214, 0.45);
+}
+
 .editor-error {
   padding: 6px 12px;
   background: #3a2727;
