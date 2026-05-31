@@ -10,7 +10,8 @@ async function shot(window: Page, name: string, fullPage = false) {
   await window.screenshot({ path: resolve(OUT, `${name}.png`), fullPage })
 }
 
-test('ux part 3 – error/edge', async () => {
+// Skipped: Fetch Profile UI removed — re-enable if the button comes back.
+test.skip('ux part 3 – error/edge', async () => {
   await mkdir(OUT, { recursive: true })
   const root = resolve(__dirname, '../..')
   const app: ElectronApplication = await electron.launch({

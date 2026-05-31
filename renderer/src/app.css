@@ -500,35 +500,6 @@ body {
   font-size: var(--font-body);
 }
 .editor-head .editor-meta { color: var(--text-dim); font-size: var(--font-meta); }
-.profile-fetch {
-  margin-left: auto;
-  display: flex;
-  gap: 6px;
-}
-.profile-fetch input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 3px;
-  padding: 3px 8px;
-  font: inherit;
-  font-size: var(--font-body);
-  width: 180px;
-}
-.profile-fetch button {
-  background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: var(--btn-radius);
-  padding: var(--btn-pad-y-sm) var(--btn-pad-x-sm);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--font-body);
-}
-.profile-fetch button:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
 
 .editor-error {
   padding: 6px 12px;
@@ -589,6 +560,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 .doc-save {
   background: var(--accent);

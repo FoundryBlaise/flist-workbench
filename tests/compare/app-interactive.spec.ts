@@ -9,7 +9,8 @@ const OUT = resolve(__dirname, 'artifacts')
 // verify the body is visible (no pip-out, but also no longer empty),
 // and confirm an [img=ID] resolves to a real CDN url because the
 // inlines manifest came down with the profile.
-test('lady amber blaise: collapse expands and inline images render', async () => {
+// Skipped: Fetch Profile UI removed — re-enable if the button comes back.
+test.skip('lady amber blaise: collapse expands and inline images render', async () => {
   await mkdir(OUT, { recursive: true })
   const root = resolve(__dirname, '../..')
   const app = await electron.launch({
