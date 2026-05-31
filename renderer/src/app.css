@@ -3928,19 +3928,38 @@ body {
 
 /* Pool — section + group + separator + custom cards */
 .kinks-pool-section { display: flex; flex-direction: column; gap: 6px; }
+.kinks-pool-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
 .kinks-pool-section-title {
   margin: 4px 0 2px;
   font-size: 1.15em;
   font-weight: 700;
   letter-spacing: 0.2px;
   color: var(--text);
+  flex: 1 1 auto;
 }
-.kinks-pool-customs-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
+.kinks-pool-section-sub {
+  font-size: var(--font-meta);
+  font-weight: 400;
+  color: var(--text-dim);
+  letter-spacing: 0;
 }
+.kinks-pool-section-actions { display: inline-flex; gap: 6px; }
+.kinks-pool-section-btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-meta);
+}
+.kinks-pool-section-btn:hover { border-color: var(--accent); color: var(--accent); }
 .kinks-pool-sep {
   border: 0;
   border-top: 1px solid var(--border);
@@ -4019,7 +4038,19 @@ body {
 }
 .kink-card-handle:active { cursor: grabbing; color: var(--accent); }
 .kink-card-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kink-card-row { display: flex; align-items: center; gap: 6px; }
+.kink-card-choice {
+  flex: 0 0 auto;
+  font-size: var(--font-meta);
+  font-weight: 600;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.25);
+}
 .kink-card-name {
+  flex: 1 1 auto;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
