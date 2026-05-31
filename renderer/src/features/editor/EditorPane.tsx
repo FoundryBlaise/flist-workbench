@@ -6,7 +6,6 @@ import { useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { Tabs, type TabsTab } from '../../components/Tabs'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
-import { CustomKinksPane, countCustomKinks } from '../flist/CustomKinksPane'
 import { KinksPane } from '../flist/KinksPane'
 import { countKinksWithChoice } from '../flist/kinksUnified'
 import { DiffPane, countDiffChanges } from '../flist/DiffPane'
@@ -287,7 +286,6 @@ function EditorTabsHost(props: {
   const workingSlot = useStore((s) =>
     flistActiveId ? s.flistWorking[flistActiveId] : undefined
   )
-  const customKinkCount = countCustomKinks(workingSlot)
   const kinksCount = countKinksWithChoice(workingSlot)
   const diffChangeCount = countDiffChanges(workingSlot)
   const tabs: TabsTab[] = useMemo(() => {
@@ -348,12 +346,6 @@ function EditorTabsHost(props: {
         content: <ProfileFieldsTab characterId={flistActiveId} />
       })
       out.push({
-        id: 'custom-kinks',
-        label: 'Custom kinks',
-        badge: customKinkCount > 0 ? customKinkCount : undefined,
-        content: <CustomKinksPane characterId={flistActiveId} />
-      })
-      out.push({
         id: 'kinks',
         label: 'Kinks',
         badge: kinksCount > 0 ? kinksCount : undefined,
@@ -383,7 +375,6 @@ function EditorTabsHost(props: {
     props.onCloseRevisions,
     workingCopyMode,
     flistActiveId,
-    customKinkCount,
     kinksCount,
     diffChangeCount
   ])
