@@ -9,15 +9,17 @@ import {
   type UnifiedKink
 } from './kinksUnified'
 import { KinkRow, parseKinkDrag } from './KinkRow'
+import { useKinkSelection } from './useKinkSelection'
 
 const BUCKET_ORDER: KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
 
-// Unified Kinks tab. Replaces the old Standard kinks pane: 4 columns
-// for the assignable choices (Fave/Yes/Maybe/No), flat alphabetical
-// lists, customs and standards interleaved (or customs-first if the
-// character's `settings.customs_first` is on). The 5th choice
-// (undecided) lives in the right preview pane as a pool that the user
-// drags from.
+// Unified Kinks tab. 4 columns for the assignable choices, flat
+// alphabetical lists with customs and standards interleaved (or
+// customs-first when `settings.customs_first` is set). Click a row to
+// focus, Shift/Ctrl-click for multi-select. Drag any row to move it
+// — if it's selected, the drag carries every selected row at once.
+// Hotkeys F/Y/M/N/U and 1/2/3/4/0 apply to the focused row's
+// selection (or just the focused row when not selected).
 export function KinksPane({ characterId }: { characterId: string }) {
   const slot = useStore((s) => s.flistWorking[characterId])
   const mapping = useStore((s) => s.flistMapping.payload)
@@ -26,6 +28,7 @@ export function KinksPane({ characterId }: { characterId: string }) {
   const setStandardKink = useStore((s) => s.flistStandardKinkSet)
   const editCustom = useStore((s) => s.flistCustomKinksEdit)
   const [filter, setFilter] = useState('')
+  const selection = useKinkSelection()
 
   useEffect(() => {
     if (mappingStatus === 'idle') void loadMapping()
@@ -45,13 +48,21 @@ export function KinksPane({ characterId }: { characterId: string }) {
     [visible, customsFirst]
   )
   const buckets = useMemo(() => bucketByChoice(sorted), [sorted])
+  const byCompositeId = useMemo(() => {
+    const map = new Map<string, UnifiedKink>()
+    for (const u of unified) map.set(u.id, u)
+    return map
+  }, [unified])
 
   const setChoice = useCallback(
-    (entry: UnifiedKink, next: KinkChoice) => {
-      if (entry.type === 'standard') {
-        setStandardKink(characterId, entry.rawId, next)
-      } else {
-        editCustom(characterId, entry.rawId, 'choice', next)
+    (entries: UnifiedKink[], next: KinkChoice) => {
+      for (const entry of entries) {
+        if (entry.choice === next) continue
+        if (entry.type === 'standard') {
+          setStandardKink(characterId, entry.rawId, next)
+        } else {
+          editCustom(characterId, entry.rawId, 'choice', next)
+        }
       }
     },
     [characterId, setStandardKink, editCustom]
@@ -60,13 +71,30 @@ export function KinksPane({ characterId }: { characterId: string }) {
   const handleDrop = useCallback(
     (e: React.DragEvent, bucket: KinkChoice) => {
       e.preventDefault()
-      const drag = parseKinkDrag(e)
-      if (!drag) return
-      const entry = unified.find((u) => u.type === drag.type && u.rawId === drag.id)
-      if (entry && entry.choice !== bucket) setChoice(entry, bucket)
+      const payload = parseKinkDrag(e)
+      if (payload.length === 0) return
+      const entries: UnifiedKink[] = []
+      for (const item of payload) {
+        const entry = unified.find(
+          (u) => u.type === item.type && u.rawId === item.id
+        )
+        if (entry && entry.choice !== bucket) entries.push(entry)
+      }
+      if (entries.length > 0) setChoice(entries, bucket)
+      selection.clear()
     },
-    [unified, setChoice]
+    [unified, setChoice, selection]
   )
+
+  const selectionForDrag = useMemo(() => {
+    if (selection.selected.size === 0) return []
+    const out: UnifiedKink[] = []
+    for (const id of selection.selected) {
+      const entry = byCompositeId.get(id)
+      if (entry) out.push(entry)
+    }
+    return out
+  }, [selection.selected, byCompositeId])
 
   if (!slot) {
     return <div className="kinks-pane kinks-pane-loading">Loading working copy…</div>
@@ -84,7 +112,8 @@ export function KinksPane({ characterId }: { characterId: string }) {
           data-testid="kinks-pane-search"
         />
         <span className="kinks-pane-hint">
-          Drag rows between columns, or focus a row and press <kbd>F</kbd>/<kbd>Y</kbd>/<kbd>M</kbd>/<kbd>N</kbd>/<kbd>U</kbd> (or <kbd>1</kbd>–<kbd>4</kbd>/<kbd>0</kbd>).
+          Drag, or focus a row + <kbd>F</kbd>/<kbd>Y</kbd>/<kbd>M</kbd>/<kbd>N</kbd>/<kbd>U</kbd>
+          {' '}(or <kbd>1</kbd>–<kbd>4</kbd>/<kbd>0</kbd>). Shift/Ctrl-click for multi-select.
         </span>
       </div>
       <div className="kinks-pane-columns">
@@ -93,6 +122,8 @@ export function KinksPane({ characterId }: { characterId: string }) {
             key={bucket}
             bucket={bucket}
             entries={buckets[bucket]}
+            selection={selection}
+            selectionForDrag={selectionForDrag}
             setChoice={setChoice}
             onDrop={(e) => handleDrop(e, bucket)}
           />
@@ -105,15 +136,20 @@ export function KinksPane({ characterId }: { characterId: string }) {
 function KinkColumn({
   bucket,
   entries,
+  selection,
+  selectionForDrag,
   setChoice,
   onDrop
 }: {
   bucket: KinkChoice
   entries: UnifiedKink[]
-  setChoice: (entry: UnifiedKink, next: KinkChoice) => void
+  selection: ReturnType<typeof useKinkSelection>
+  selectionForDrag: UnifiedKink[]
+  setChoice: (entries: UnifiedKink[], next: KinkChoice) => void
   onDrop: (e: React.DragEvent) => void
 }) {
   const [over, setOver] = useState(false)
+  const orderedIds = entries.map((e) => e.id)
   return (
     <section
       className={`kink-column kink-column-${bucket}${over ? ' kink-column-over' : ''}`}
@@ -139,7 +175,16 @@ function KinkColumn({
       ) : (
         <ul className="kink-column-list">
           {entries.map((entry) => (
-            <KinkRow key={entry.id} entry={entry} onChoice={setChoice} />
+            <KinkRow
+              key={entry.id}
+              entry={entry}
+              selected={selection.isSelected(entry.id)}
+              selectionForDrag={selectionForDrag}
+              onChoice={setChoice}
+              onClick={(e, ev) =>
+                selection.handleRowClick(e.id, orderedIds, ev)
+              }
+            />
           ))}
         </ul>
       )}

@@ -16,12 +16,21 @@ export interface UnifiedKink {
   name: string
   description: string
   choice: KinkChoice
+  /** F-list-side category id (mapping.kink_groups). Only populated for
+   *  standards; customs don't carry a group. */
+  groupId?: string
 }
 
 interface CatalogueEntry {
   id: string
   name: string
   description: string
+  groupId: string
+}
+
+export interface KinkGroup {
+  id: string
+  name: string
 }
 
 function readChoice(value: unknown): KinkChoice {
@@ -37,14 +46,40 @@ function buildStandardCatalogue(
   if (Array.isArray(raw)) {
     for (const entry of raw as unknown[]) {
       if (entry && typeof entry === 'object') {
-        const e = entry as { id?: unknown; name?: unknown; description?: unknown }
+        const e = entry as {
+          id?: unknown
+          name?: unknown
+          description?: unknown
+          group_id?: unknown
+        }
         if (e.id == null) continue
         out.push({
           id: String(e.id),
           name: typeof e.name === 'string' ? e.name : `kink#${e.id}`,
-          description: typeof e.description === 'string' ? e.description : ''
+          description: typeof e.description === 'string' ? e.description : '',
+          groupId: e.group_id != null ? String(e.group_id) : 'misc'
         })
       }
+    }
+  }
+  return out
+}
+
+export function readKinkGroups(
+  mapping: Record<string, unknown> | null
+): KinkGroup[] {
+  if (!mapping) return []
+  const raw = mapping.kink_groups
+  if (!Array.isArray(raw)) return []
+  const out: KinkGroup[] = []
+  for (const entry of raw as unknown[]) {
+    if (entry && typeof entry === 'object') {
+      const e = entry as { id?: unknown; name?: unknown }
+      if (e.id == null) continue
+      out.push({
+        id: String(e.id),
+        name: typeof e.name === 'string' ? e.name : `group#${e.id}`
+      })
     }
   }
   return out
@@ -64,7 +99,8 @@ export function buildUnifiedKinks(
     type: 'standard',
     name: entry.name,
     description: entry.description,
-    choice: readChoice(choices[entry.id])
+    choice: readChoice(choices[entry.id]),
+    groupId: entry.groupId
   }))
   const customsDict =
     (slot.payload.custom_kinks as Record<string, Record<string, unknown>> | undefined) ??

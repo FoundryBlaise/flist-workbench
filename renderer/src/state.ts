@@ -29,7 +29,6 @@ import {
   type FlistWorkingSlot,
   type WorkingPayload
 } from './state/flist'
-import { purgeCMStates } from './features/flist/KinkDescriptionEditor'
 
 export type {
   FlistSaveStatus,
@@ -892,9 +891,6 @@ export const useStore = create<State>((set, get) => ({
         // Best-effort — the failed save's saveStatus = 'error' is the
         // signal; don't block the switch on it.
       }
-      // Drop the kink-description CM state cache on character switch
-      // (Tier 3 plan §R-5 — purge bounds memory growth).
-      purgeCMStates()
     }
     set({ flistActiveCharacterId: characterId })
     if (characterId === null) {
