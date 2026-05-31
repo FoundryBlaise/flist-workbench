@@ -129,6 +129,10 @@ type State = {
   editorFetchStatus: 'idle' | 'fetching' | 'ok' | 'error'
   editorFetchError: string | null
   editorDirty: boolean
+  /** Which editor tab is active. Mirrored from EditorTabsHost so the
+   *  preview pane can swap content per tab (e.g. show a website-style
+   *  Info-pane view when the user is on Profile fields). */
+  editorActiveTab: string
 
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
   saveError: string | null
@@ -293,6 +297,7 @@ type State = {
     } | null
   ) => void
   setEditorContent: (value: string) => void
+  setEditorActiveTab: (tab: string) => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
 
@@ -677,6 +682,7 @@ export const useStore = create<State>((set, get) => ({
   editorFetchStatus: 'idle',
   editorFetchError: null,
   editorDirty: false,
+  editorActiveTab: 'description',
 
   saveStatus: 'idle',
   saveError: null,
@@ -2375,6 +2381,11 @@ export const useStore = create<State>((set, get) => ({
 
   resetEditorDirty() {
     set({ editorDirty: false })
+  },
+
+  setEditorActiveTab(tab) {
+    if (get().editorActiveTab === tab) return
+    set({ editorActiveTab: tab })
   },
 
   async fetchProfile(name) {

@@ -5,6 +5,7 @@ import {
   EDITOR_SELECTION_EVENT,
   type EditorSelectionDetail
 } from '../../lib/bbcode/codemirror'
+import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 
 const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
 
@@ -48,6 +49,14 @@ export function PreviewPane() {
   const inlines = useStore((s) => s.editorInlines)
   const setContent = useStore((s) => s.setEditorContent)
   const readOnly = useStore((s) => s.editorReadOnly)
+  const editorActiveTab = useStore((s) => s.editorActiveTab)
+  const flistActiveId = useStore((s) => s.flistActiveCharacterId)
+  // Profile fields tab gets a website-style Info-pane preview instead
+  // of the BBCode preview — the BBCode renderer has nothing to show
+  // for that tab's edits. Only the Description tab actually drives the
+  // BBCode preview; the other working-copy tabs stay on it for now.
+  const showProfileFieldsPreview =
+    editorActiveTab === 'profile-fields' && flistActiveId !== null
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
@@ -69,15 +78,19 @@ export function PreviewPane() {
   const renderedFromRef = useRef('')
 
   useEffect(() => {
+    if (showProfileFieldsPreview) return
     const el = ref.current
     if (!el) return
     if (focusedRef.current) return
-    if (renderedFromRef.current === content) return
+    // Empty innerHTML wins over the cached-source guard — that's the
+    // signal that the <div> just remounted after a tab swap and needs
+    // re-population even though `content` hasn't changed.
+    if (renderedFromRef.current === content && el.innerHTML !== '') return
     const opens = captureOpenCollapses(el)
     el.innerHTML = bbcodeToHtml(content, { withSourceMap: true, inlines })
     applyOpenCollapses(el, opens)
     renderedFromRef.current = content
-  }, [content, inlines])
+  }, [content, inlines, showProfileFieldsPreview])
 
   const handleInput = () => {
     // When the surrounding editor is in read-only mode (Live / Backup
@@ -155,8 +168,8 @@ export function PreviewPane() {
   return (
     <section className="pane preview" data-testid="preview-pane">
       <header className="pane-head">
-        Live Preview
-        {readOnly ? (
+        {showProfileFieldsPreview ? 'Info Preview' : 'Live Preview'}
+        {showProfileFieldsPreview ? null : readOnly ? (
           <span className="preview-readonly-hint" title="Pulled from F-list — read-only">
             · read-only
           </span>
@@ -164,7 +177,7 @@ export function PreviewPane() {
           <span className="preview-edit-hint">· editable</span>
         )}
       </header>
-      {showEditHint && !readOnly && (
+      {showEditHint && !readOnly && !showProfileFieldsPreview && (
         <div className="preview-edit-banner" data-testid="preview-edit-banner">
           <span className="preview-edit-banner-icon" aria-hidden>
             ✎
@@ -204,37 +217,41 @@ export function PreviewPane() {
           </button>
         </div>
       )}
-      <div
-        ref={ref}
-        className={`pane-body preview-body${readOnly ? ' preview-readonly' : ''}`}
-        data-testid="preview-body"
-        contentEditable={!readOnly}
-        suppressContentEditableWarning
-        spellCheck={false}
-        onInput={handleInput}
-        onClick={handleClick}
-        onFocus={() => {
-          focusedRef.current = true
-        }}
-        onBlur={() => {
-          focusedRef.current = false
-          // Re-render only if source actually changed during this edit
-          // session — otherwise we'd needlessly reset open collapses,
-          // scroll position, and anything else outside React's
-          // knowledge. Source-map offsets only need refreshing when
-          // source moved.
-          if (!ref.current) return
-          const s = useStore.getState()
-          if (renderedFromRef.current === s.editorContent) return
-          const opens = captureOpenCollapses(ref.current)
-          ref.current.innerHTML = bbcodeToHtml(s.editorContent, {
-            withSourceMap: true,
-            inlines: s.editorInlines
-          })
-          applyOpenCollapses(ref.current, opens)
-          renderedFromRef.current = s.editorContent
-        }}
-      />
+      {showProfileFieldsPreview ? (
+        <ProfileFieldsPreview />
+      ) : (
+        <div
+          ref={ref}
+          className={`pane-body preview-body${readOnly ? ' preview-readonly' : ''}`}
+          data-testid="preview-body"
+          contentEditable={!readOnly}
+          suppressContentEditableWarning
+          spellCheck={false}
+          onInput={handleInput}
+          onClick={handleClick}
+          onFocus={() => {
+            focusedRef.current = true
+          }}
+          onBlur={() => {
+            focusedRef.current = false
+            // Re-render only if source actually changed during this edit
+            // session — otherwise we'd needlessly reset open collapses,
+            // scroll position, and anything else outside React's
+            // knowledge. Source-map offsets only need refreshing when
+            // source moved.
+            if (!ref.current) return
+            const s = useStore.getState()
+            if (renderedFromRef.current === s.editorContent) return
+            const opens = captureOpenCollapses(ref.current)
+            ref.current.innerHTML = bbcodeToHtml(s.editorContent, {
+              withSourceMap: true,
+              inlines: s.editorInlines
+            })
+            applyOpenCollapses(ref.current, opens)
+            renderedFromRef.current = s.editorContent
+          }}
+        />
+      )}
     </section>
   )
 }

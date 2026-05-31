@@ -518,6 +518,61 @@ body {
   box-shadow: 0 0 0 1px rgba(86, 156, 214, 0.45);
 }
 
+/* Profile fields preview — rendered on the right pane while the user
+   is on the Profile fields tab. Roughly mirrors F-list's Info-pane
+   look: dark surface, multi-column grouped layout, bold label + value
+   on each row. Not pixel-perfect to the site; close enough to
+   sanity-check edits without leaving the workbench. */
+.profile-preview {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+  background: #2e2828;
+  color: #d4d4d4;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: var(--font-body);
+  line-height: 1.5;
+}
+.profile-preview-empty {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.profile-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 24px 28px;
+  align-items: start;
+}
+.profile-preview-group-title {
+  margin: 0 0 8px;
+  font-size: 1.05em;
+  font-weight: 700;
+  color: #e8d6a8;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.profile-preview-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.profile-preview-row {
+  display: block;
+  margin: 0;
+}
+.profile-preview-row dt {
+  display: inline;
+  font-weight: 700;
+  color: #c9b58a;
+  margin-right: 4px;
+}
+.profile-preview-row dd {
+  display: inline;
+  margin: 0;
+  color: #d4d4d4;
+}
+
 .editor-error {
   padding: 6px 12px;
   background: #3a2727;
