@@ -1,9 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import type { Document, Folder } from '../../lib/api'
-import { EmptyState } from '../../components/EmptyState'
 
 const SNIPPET_DRAG_MIME = 'application/x-snippet-id'
+
+const HELP_TEXT =
+  'Snippets are reusable BBCode blocks — greetings, profile fragments, OOC disclaimers. ' +
+  'Render them on the right and copy what you need into F-list.'
+
+// Sandboxed Electron blocks window.prompt (silently returns null), so
+// every "name this thing" flow uses an inline-edit input rendered
+// directly in the sidebar. One slot at a time — clicking another
+// surface commits/cancels the previous edit.
+type EditTarget =
+  | { kind: 'new-snippet'; folderId: number | null }
+  | { kind: 'new-folder' }
+  | { kind: 'rename-snippet'; id: number; initial: string }
+  | { kind: 'rename-folder'; id: number; initial: string }
 
 function relativeTime(epoch: number): string {
   const seconds = Math.max(0, Date.now() / 1000 - epoch)
@@ -35,14 +48,12 @@ export function SnippetList() {
   const createFolder = useStore((s) => s.createFolder)
   const renameFolder = useStore((s) => s.renameFolder)
   const deleteFolder = useStore((s) => s.deleteFolder)
-  const setEditorContent = useStore((s) => s.setEditorContent)
   const [filter, setFilter] = useState('')
   const [collapsed, setCollapsed] = useState<Record<number, boolean>>({})
-  const [pasteError, setPasteError] = useState<string | null>(null)
   const [rootDropOver, setRootDropOver] = useState(false)
+  const [edit, setEdit] = useState<EditTarget | null>(null)
+  const [editValue, setEditValue] = useState('')
 
-  // Filter applies across snippets only — folder names always show so
-  // the tree shape stays stable while typing.
   const filterLower = filter.trim().toLowerCase()
   const filtered = useMemo(() => {
     if (!filterLower) return documents
@@ -61,6 +72,33 @@ export function SnippetList() {
     return { rootSnippets: root, snippetsByFolder: byFolder }
   }, [filtered])
 
+  const startEdit = (target: EditTarget, initial: string) => {
+    setEdit(target)
+    setEditValue(initial)
+  }
+  const cancelEdit = () => setEdit(null)
+
+  const commitEdit = async () => {
+    const target = edit
+    if (!target) return
+    const v = editValue.trim()
+    setEdit(null)
+    if (!v) return
+    try {
+      if (target.kind === 'new-snippet') {
+        await createDocument(v, target.folderId)
+      } else if (target.kind === 'new-folder') {
+        await createFolder(v)
+      } else if (target.kind === 'rename-snippet') {
+        if (v !== target.initial) await renameDocument(target.id, v)
+      } else if (target.kind === 'rename-folder') {
+        if (v !== target.initial) await renameFolder(target.id, v)
+      }
+    } catch (err) {
+      console.error('[SnippetList] edit failed:', err)
+    }
+  }
+
   const handleSwitch = (doc: Document) => {
     if (doc.id === activeDocId) return
     if (editorDirty) {
@@ -72,50 +110,6 @@ export function SnippetList() {
     void openDocument(doc.id)
   }
 
-  const handleNewSnippet = (folderId: number | null) => {
-    const name = window.prompt('Name the new snippet:', 'Untitled')
-    if (!name || !name.trim()) return
-    void createDocument(name.trim(), folderId)
-  }
-
-  const handleNewFolder = () => {
-    const name = window.prompt('Name the new folder:', 'New folder')
-    if (!name || !name.trim()) return
-    void createFolder(name.trim())
-  }
-
-  const handlePasteNew = async () => {
-    setPasteError(null)
-    if (!navigator.clipboard?.readText) {
-      setPasteError("Clipboard access isn't available in this environment.")
-      return
-    }
-    let text: string
-    try {
-      text = await navigator.clipboard.readText()
-    } catch {
-      setPasteError(
-        'Could not read clipboard. Try copying again, or use "+ New snippet".'
-      )
-      return
-    }
-    if (!text.trim()) {
-      setPasteError('Clipboard is empty.')
-      return
-    }
-    const name = window.prompt('Name the new snippet:', 'Pasted')
-    if (!name || !name.trim()) return
-    await createDocument(name.trim(), null)
-    setEditorContent(text)
-  }
-
-  const handleRenameSnippet = (doc: Document) => {
-    if (doc.scratch) return
-    const name = window.prompt('Rename to:', doc.name)
-    if (!name || !name.trim() || name.trim() === doc.name) return
-    void renameDocument(doc.id, name.trim())
-  }
-
   const handleDeleteSnippet = (doc: Document) => {
     if (doc.scratch) return
     const ok = window.confirm(
@@ -123,12 +117,6 @@ export function SnippetList() {
     )
     if (!ok) return
     void deleteDocument(doc.id)
-  }
-
-  const handleRenameFolder = (folder: Folder) => {
-    const name = window.prompt('Rename folder to:', folder.name)
-    if (!name || !name.trim() || name.trim() === folder.name) return
-    void renameFolder(folder.id, name.trim())
   }
 
   const handleDeleteFolder = (folder: Folder) => {
@@ -148,7 +136,7 @@ export function SnippetList() {
     if (!Number.isFinite(id)) return
     const doc = documents.find((d) => d.id === id)
     if (!doc) return
-    if (doc.scratch && folderId !== null) return // Scratch sticks to root
+    if (doc.scratch && folderId !== null) return
     if ((doc.folder_id ?? null) === folderId) return
     void moveDocument(id, folderId)
   }
@@ -161,6 +149,9 @@ export function SnippetList() {
   }
 
   const tooFew = documents.length <= 8 && folders.length === 0
+  const editingNewSnippetRoot =
+    edit?.kind === 'new-snippet' && edit.folderId === null
+  const editingNewFolder = edit?.kind === 'new-folder'
 
   return (
     <div className="sb-doc-wrap">
@@ -168,19 +159,28 @@ export function SnippetList() {
         <button
           type="button"
           className="sb-doc-action"
-          onClick={() => handleNewSnippet(null)}
-          title="Create a new empty snippet at the top level"
+          onClick={() => startEdit({ kind: 'new-snippet', folderId: null }, '')}
+          title="Create a new snippet at the top level"
         >
           + Snippet
         </button>
         <button
           type="button"
           className="sb-doc-action"
-          onClick={handleNewFolder}
+          onClick={() => startEdit({ kind: 'new-folder' }, '')}
           title="Create a new folder"
         >
           + Folder
         </button>
+        <span
+          className="sb-doc-help"
+          tabIndex={0}
+          role="img"
+          aria-label="About snippets"
+          title={HELP_TEXT}
+        >
+          (?)
+        </span>
       </div>
       {!tooFew && (
         <input
@@ -190,36 +190,6 @@ export function SnippetList() {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter snippets"
-        />
-      )}
-      {documents.every((d) => d.scratch) && folders.length === 0 && (
-        <EmptyState
-          variant="inline"
-          testId="snippets-empty-state"
-          body={
-            <p>
-              Snippets are reusable BBCode blocks — greetings, profile
-              fragments, OOC disclaimers. Render them on the right and
-              copy what you need into F-list.
-            </p>
-          }
-          primaryCta={{
-            label: '+ New blank snippet',
-            onClick: () => handleNewSnippet(null),
-            testId: 'snippets-empty-new'
-          }}
-          secondaryCta={{
-            label: 'Paste BBCode from clipboard',
-            onClick: () => void handlePasteNew(),
-            testId: 'snippets-empty-paste'
-          }}
-          footer={
-            pasteError ? (
-              <div className="empty-state-error" role="alert">
-                {pasteError}
-              </div>
-            ) : undefined
-          }
         />
       )}
       <ul
@@ -236,9 +206,24 @@ export function SnippetList() {
           dropToFolder(null)(e)
         }}
       >
+        {editingNewFolder && (
+          <li className="sb-folder sb-folder-editing">
+            <InlineEdit
+              value={editValue}
+              placeholder="Folder name"
+              onChange={setEditValue}
+              onCommit={commitEdit}
+              onCancel={cancelEdit}
+            />
+          </li>
+        )}
         {folders.map((folder) => {
           const inside = snippetsByFolder[folder.id] ?? []
           const isCollapsed = !!collapsed[folder.id]
+          const renamingThisFolder =
+            edit?.kind === 'rename-folder' && edit.id === folder.id
+          const newSnippetInThisFolder =
+            edit?.kind === 'new-snippet' && edit.folderId === folder.id
           return (
             <FolderRow
               key={folder.id}
@@ -247,35 +232,126 @@ export function SnippetList() {
               isCollapsed={isCollapsed}
               activeDocId={activeDocId}
               editorDirty={editorDirty}
+              renaming={renamingThisFolder}
+              renameValue={editValue}
+              renamingSnippetId={
+                edit?.kind === 'rename-snippet' ? edit.id : null
+              }
+              newSnippetInline={newSnippetInThisFolder}
+              editValue={editValue}
+              onEditValueChange={setEditValue}
+              onCommit={commitEdit}
+              onCancel={cancelEdit}
               onToggle={() =>
                 setCollapsed((c) => ({ ...c, [folder.id]: !isCollapsed }))
               }
-              onAddSnippet={() => handleNewSnippet(folder.id)}
-              onRenameFolder={() => handleRenameFolder(folder)}
+              onAddSnippet={() =>
+                startEdit(
+                  { kind: 'new-snippet', folderId: folder.id },
+                  ''
+                )
+              }
+              onRenameFolder={() =>
+                startEdit(
+                  { kind: 'rename-folder', id: folder.id, initial: folder.name },
+                  folder.name
+                )
+              }
               onDeleteFolder={() => handleDeleteFolder(folder)}
               onPickSnippet={handleSwitch}
-              onRenameSnippet={handleRenameSnippet}
+              onRenameSnippet={(d) =>
+                startEdit(
+                  { kind: 'rename-snippet', id: d.id, initial: d.name },
+                  d.name
+                )
+              }
               onDeleteSnippet={handleDeleteSnippet}
               onDropSnippet={dropToFolder(folder.id)}
             />
           )
         })}
-        {rootSnippets.map((doc) => (
-          <SnippetRow
-            key={doc.id}
-            doc={doc}
-            active={doc.id === activeDocId}
-            editorDirty={editorDirty}
-            onPick={() => handleSwitch(doc)}
-            onRename={() => handleRenameSnippet(doc)}
-            onDelete={() => handleDeleteSnippet(doc)}
-          />
-        ))}
-        {filterLower && rootSnippets.length === 0 && folders.every((f) => (snippetsByFolder[f.id]?.length ?? 0) === 0) && (
+        {editingNewSnippetRoot && (
+          <li className="sb-doc-item sb-doc-item-editing">
+            <InlineEdit
+              value={editValue}
+              placeholder="Snippet name"
+              onChange={setEditValue}
+              onCommit={commitEdit}
+              onCancel={cancelEdit}
+            />
+          </li>
+        )}
+        {rootSnippets.map((doc) => {
+          const isRenaming =
+            edit?.kind === 'rename-snippet' && edit.id === doc.id
+          return (
+            <SnippetRow
+              key={doc.id}
+              doc={doc}
+              active={doc.id === activeDocId}
+              editorDirty={editorDirty}
+              renaming={isRenaming}
+              renameValue={editValue}
+              onRenameChange={setEditValue}
+              onRenameCommit={commitEdit}
+              onRenameCancel={cancelEdit}
+              onPick={() => handleSwitch(doc)}
+              onRename={() =>
+                startEdit(
+                  { kind: 'rename-snippet', id: doc.id, initial: doc.name },
+                  doc.name
+                )
+              }
+              onDelete={() => handleDeleteSnippet(doc)}
+            />
+          )
+        })}
+        {filterLower && rootSnippets.length === 0 &&
+          folders.every((f) => (snippetsByFolder[f.id]?.length ?? 0) === 0) && (
           <li className="sb-empty-inline">No snippets match "{filter}".</li>
         )}
       </ul>
     </div>
+  )
+}
+
+function InlineEdit({
+  value,
+  placeholder,
+  onChange,
+  onCommit,
+  onCancel
+}: {
+  value: string
+  placeholder: string
+  onChange: (next: string) => void
+  onCommit: () => void
+  onCancel: () => void
+}) {
+  const ref = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    ref.current?.focus()
+    ref.current?.select()
+  }, [])
+  return (
+    <input
+      ref={ref}
+      className="sb-inline-edit"
+      type="text"
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          onCommit()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          onCancel()
+        }
+      }}
+      onBlur={onCommit}
+    />
   )
 }
 
@@ -285,6 +361,14 @@ function FolderRow({
   isCollapsed,
   activeDocId,
   editorDirty,
+  renaming,
+  renameValue,
+  renamingSnippetId,
+  newSnippetInline,
+  editValue,
+  onEditValueChange,
+  onCommit,
+  onCancel,
   onToggle,
   onAddSnippet,
   onRenameFolder,
@@ -299,6 +383,14 @@ function FolderRow({
   isCollapsed: boolean
   activeDocId: number | null
   editorDirty: boolean
+  renaming: boolean
+  renameValue: string
+  renamingSnippetId: number | null
+  newSnippetInline: boolean
+  editValue: string
+  onEditValueChange: (next: string) => void
+  onCommit: () => void
+  onCancel: () => void
   onToggle: () => void
   onAddSnippet: () => void
   onRenameFolder: () => void
@@ -309,6 +401,7 @@ function FolderRow({
   onDropSnippet: (e: React.DragEvent) => void
 }) {
   const [over, setOver] = useState(false)
+  const expanded = !isCollapsed || newSnippetInline || renaming
   return (
     <li className={`sb-folder${over ? ' sb-folder-over' : ''}`}>
       <div
@@ -324,43 +417,73 @@ function FolderRow({
           onDropSnippet(e)
         }}
       >
-        <button
-          type="button"
-          className="sb-folder-toggle"
-          onClick={onToggle}
-          aria-expanded={!isCollapsed}
-          title={isCollapsed ? 'Expand folder' : 'Collapse folder'}
-        >
-          <span className="sb-folder-chev" aria-hidden>
-            {isCollapsed ? '▸' : '▾'}
-          </span>
-          <span className="sb-folder-ic" aria-hidden>📁</span>
-          <span className="sb-folder-name">{folder.name}</span>
-          <span className="sb-folder-count">{snippets.length}</span>
-        </button>
+        {renaming ? (
+          <div className="sb-folder-toggle sb-folder-toggle-editing">
+            <span className="sb-folder-chev" aria-hidden>▾</span>
+            <span className="sb-folder-ic" aria-hidden>📁</span>
+            <InlineEdit
+              value={renameValue}
+              placeholder="Folder name"
+              onChange={onEditValueChange}
+              onCommit={onCommit}
+              onCancel={onCancel}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="sb-folder-toggle"
+            onClick={onToggle}
+            aria-expanded={!isCollapsed}
+            title={isCollapsed ? 'Expand folder' : 'Collapse folder'}
+          >
+            <span className="sb-folder-chev" aria-hidden>
+              {expanded ? '▾' : '▸'}
+            </span>
+            <span className="sb-folder-ic" aria-hidden>📁</span>
+            <span className="sb-folder-name">{folder.name}</span>
+            <span className="sb-folder-count">{snippets.length}</span>
+          </button>
+        )}
         <div className="sb-folder-actions">
           <button type="button" onClick={onAddSnippet} title="Add snippet to this folder" aria-label="Add snippet">+</button>
           <button type="button" onClick={onRenameFolder} title="Rename folder" aria-label="Rename folder">✎</button>
           <button type="button" onClick={onDeleteFolder} title="Delete folder" aria-label="Delete folder">✕</button>
         </div>
       </div>
-      {!isCollapsed && snippets.length > 0 && (
+      {expanded && (
         <ul className="sb-folder-children">
+          {newSnippetInline && (
+            <li className="sb-doc-item sb-doc-item-editing">
+              <InlineEdit
+                value={editValue}
+                placeholder="Snippet name"
+                onChange={onEditValueChange}
+                onCommit={onCommit}
+                onCancel={onCancel}
+              />
+            </li>
+          )}
           {snippets.map((doc) => (
             <SnippetRow
               key={doc.id}
               doc={doc}
               active={doc.id === activeDocId}
               editorDirty={editorDirty}
+              renaming={renamingSnippetId === doc.id}
+              renameValue={editValue}
+              onRenameChange={onEditValueChange}
+              onRenameCommit={onCommit}
+              onRenameCancel={onCancel}
               onPick={() => onPickSnippet(doc)}
               onRename={() => onRenameSnippet(doc)}
               onDelete={() => onDeleteSnippet(doc)}
             />
           ))}
+          {snippets.length === 0 && !newSnippetInline && (
+            <li className="sb-folder-empty">Drop a snippet here.</li>
+          )}
         </ul>
-      )}
-      {!isCollapsed && snippets.length === 0 && (
-        <div className="sb-folder-empty">Drop a snippet here.</div>
       )}
     </li>
   )
@@ -370,6 +493,11 @@ function SnippetRow({
   doc,
   active,
   editorDirty,
+  renaming,
+  renameValue,
+  onRenameChange,
+  onRenameCommit,
+  onRenameCancel,
   onPick,
   onRename,
   onDelete
@@ -377,6 +505,11 @@ function SnippetRow({
   doc: Document
   active: boolean
   editorDirty: boolean
+  renaming: boolean
+  renameValue: string
+  onRenameChange: (next: string) => void
+  onRenameCommit: () => void
+  onRenameCancel: () => void
   onPick: () => void
   onRename: () => void
   onDelete: () => void
@@ -388,8 +521,8 @@ function SnippetRow({
       : 'never saved'
   return (
     <li
-      className={active ? 'sb-doc-item active' : 'sb-doc-item'}
-      draggable={!doc.scratch}
+      className={`${active ? 'sb-doc-item active' : 'sb-doc-item'}${renaming ? ' sb-doc-item-editing' : ''}`}
+      draggable={!doc.scratch && !renaming}
       onDragStart={(e) => {
         if (doc.scratch) {
           e.preventDefault()
@@ -399,24 +532,36 @@ function SnippetRow({
         e.dataTransfer.effectAllowed = 'move'
       }}
     >
-      <button
-        type="button"
-        className="sb-item sb-doc-button"
-        onClick={onPick}
-        title={doc.name}
-      >
-        <span className="ic" aria-hidden>{doc.scratch ? '✱' : '·'}</span>
-        <span className="label">
-          {active && editorDirty && <span className="sb-doc-dot">● </span>}
-          {snippetDisplayName(doc)}
-        </span>
-        <span className="meta sb-doc-meta">{subtitle}</span>
-      </button>
-      {!doc.scratch && (
-        <div className="sb-doc-actions">
-          <button type="button" onClick={onRename} title="Rename" aria-label="Rename">✎</button>
-          <button type="button" onClick={onDelete} title="Delete" aria-label="Delete">✕</button>
-        </div>
+      {renaming ? (
+        <InlineEdit
+          value={renameValue}
+          placeholder="Snippet name"
+          onChange={onRenameChange}
+          onCommit={onRenameCommit}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            className="sb-item sb-doc-button"
+            onClick={onPick}
+            title={doc.name}
+          >
+            <span className="ic" aria-hidden>{doc.scratch ? '✱' : '·'}</span>
+            <span className="label">
+              {active && editorDirty && <span className="sb-doc-dot">● </span>}
+              {snippetDisplayName(doc)}
+            </span>
+            <span className="meta sb-doc-meta">{subtitle}</span>
+          </button>
+          {!doc.scratch && (
+            <div className="sb-doc-actions">
+              <button type="button" onClick={onRename} title="Rename" aria-label="Rename">✎</button>
+              <button type="button" onClick={onDelete} title="Delete" aria-label="Delete">✕</button>
+            </div>
+          )}
+        </>
       )}
     </li>
   )

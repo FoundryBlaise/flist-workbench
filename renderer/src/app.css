@@ -866,6 +866,41 @@ body {
 }
 .doc-copy:hover:not(:disabled) { background: rgba(86, 156, 214, 0.10); }
 .doc-copy:disabled { opacity: 0.4; cursor: default; }
+
+/* Inline rename input + (?) help marker in the Snippets sidebar */
+.sb-doc-help {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  cursor: help;
+  user-select: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.sb-doc-help:hover, .sb-doc-help:focus { color: var(--text); outline: none; background: rgba(255,255,255,0.04); }
+
+.sb-inline-edit {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: var(--font-body);
+  margin: 2px 4px;
+}
+.sb-doc-item-editing { padding: 0; }
+.sb-folder-editing { padding: 4px 8px; }
+.sb-folder-toggle-editing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .sb-doc-item {
   display: flex;
   align-items: center;
