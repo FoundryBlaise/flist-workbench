@@ -27,6 +27,10 @@ export function KinksUndecidedPool() {
   const slot = useStore((s) =>
     flistActiveId ? s.flistWorking[flistActiveId] : undefined
   )
+  const liveArchive = useStore((s) =>
+    flistActiveId ? (s.flistArchive[flistActiveId]?.live ?? null) : null
+  )
+  const readOnly = useStore((s) => s.editorReadOnly)
   const mapping = useStore((s) => s.flistMapping.payload)
   const setStandardKink = useStore((s) => s.flistStandardKinkSet)
   const editCustom = useStore((s) => s.flistCustomKinksEdit)
@@ -41,8 +45,18 @@ export function KinksUndecidedPool() {
 
   useEffect(() => writeCollapsed(collapsed), [collapsed])
 
-  const unified = useMemo(() => buildUnifiedKinks(slot, mapping), [slot, mapping])
-  const customsFirst = useMemo(() => readCustomsFirst(slot), [slot])
+  const sourceSlot = useMemo(
+    () =>
+      readOnly && liveArchive
+        ? { payload: liveArchive as Record<string, unknown> }
+        : slot,
+    [readOnly, liveArchive, slot]
+  )
+  const unified = useMemo(
+    () => buildUnifiedKinks(sourceSlot, mapping),
+    [sourceSlot, mapping]
+  )
+  const customsFirst = useMemo(() => readCustomsFirst(sourceSlot), [sourceSlot])
   const groups = useMemo(() => readKinkGroups(mapping), [mapping])
   const filterLower = filter.trim().toLowerCase()
   const undecided = useMemo(
@@ -139,27 +153,31 @@ export function KinksUndecidedPool() {
     [unified, setChoice, selection]
   )
 
-  if (!flistActiveId || !slot) {
+  if (!flistActiveId || !sourceSlot) {
     return (
       <div className="kinks-pool kinks-pool-empty">
-        <p>No working copy active.</p>
+        <p>No data yet.</p>
       </div>
     )
   }
 
   return (
     <div
-      className={`kinks-pool${over ? ' kinks-pool-over' : ''}`}
+      className={`kinks-pool${over ? ' kinks-pool-over' : ''}${
+        readOnly ? ' kinks-pool-readonly' : ''
+      }`}
       data-testid="kinks-pool"
-      onDragOver={(e) => {
-        // Only react to drags carrying our payload (avoids hijacking
-        // unrelated drags like text/file).
-        if (!e.dataTransfer.types.includes(KINK_DRAG_MIME)) return
-        e.preventDefault()
-        setOver(true)
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={handleDrop}
+      onDragOver={
+        readOnly
+          ? undefined
+          : (e) => {
+              if (!e.dataTransfer.types.includes(KINK_DRAG_MIME)) return
+              e.preventDefault()
+              setOver(true)
+            }
+      }
+      onDragLeave={readOnly ? undefined : () => setOver(false)}
+      onDrop={readOnly ? undefined : handleDrop}
     >
       <div className="kinks-pool-controls">
         <input
@@ -176,7 +194,9 @@ export function KinksUndecidedPool() {
         <header className="kinks-pool-section-header">
           <h3 className="kinks-pool-section-title">
             Standard kinks{' '}
-            <span className="kinks-pool-section-sub">· undecided</span>
+            <span className="kinks-pool-section-sub">
+              {readOnly ? '· read-only' : '· undecided'}
+            </span>
           </h3>
           <div className="kinks-pool-section-actions">
             <button
@@ -244,6 +264,7 @@ export function KinksUndecidedPool() {
                           entry={entry}
                           selected={selection.isSelected(entry.id)}
                           selectionForDrag={selectionForDrag}
+                          readOnly={readOnly}
                           onChoice={setChoice}
                           onClick={(e, ev) =>
                             selection.handleRowClick(e.id, orderedIds, ev)
@@ -265,22 +286,28 @@ export function KinksUndecidedPool() {
         <header className="kinks-pool-section-header">
           <h3 className="kinks-pool-section-title">
             Custom kinks{' '}
-            <span className="kinks-pool-section-sub">· always editable</span>
+            <span className="kinks-pool-section-sub">
+              {readOnly ? '· read-only' : '· always editable'}
+            </span>
           </h3>
-          <button
-            type="button"
-            className="kinks-pool-add"
-            onClick={() => addCustom(flistActiveId)}
-            data-testid="kinks-pool-add"
-          >
-            + New custom kink
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              className="kinks-pool-add"
+              onClick={() => addCustom(flistActiveId)}
+              data-testid="kinks-pool-add"
+            >
+              + New custom kink
+            </button>
+          )}
         </header>
         {sortedCustoms.length === 0 ? (
           <div className="kinks-pool-empty-list">
             {filterLower
               ? 'No custom kinks match that filter.'
-              : 'No custom kinks yet. Click "+ New custom kink" to add one.'}
+              : readOnly
+                ? 'No custom kinks on F-list for this character.'
+                : 'No custom kinks yet. Click "+ New custom kink" to add one.'}
           </div>
         ) : (
           <ul className="kinks-pool-customs-list">
@@ -288,6 +315,7 @@ export function KinksUndecidedPool() {
               <CustomKinkCard
                 key={entry.id}
                 entry={entry}
+                readOnly={readOnly}
                 onRename={(value) =>
                   editCustom(flistActiveId, entry.rawId, 'name', value)
                 }
@@ -362,11 +390,13 @@ function writeCollapsed(value: Record<string, boolean>): void {
 // the .kink-card-handle so the inputs remain focusable.
 function CustomKinkCard({
   entry,
+  readOnly,
   onRename,
   onDescribe,
   onDelete
 }: {
   entry: UnifiedKink
+  readOnly: boolean
   onRename: (value: string) => void
   onDescribe: (value: string) => void
   onDelete: () => void
@@ -391,16 +421,26 @@ function CustomKinkCard({
   }, [description, entry.description, onDescribe])
 
   return (
-    <li className="kink-card" data-kink-id={entry.id} data-kink-choice={entry.choice}>
+    <li
+      className={`kink-card${readOnly ? ' kink-card-readonly' : ''}`}
+      data-kink-id={entry.id}
+      data-kink-choice={entry.choice}
+    >
       <span
         className="kink-card-handle"
-        draggable
+        draggable={!readOnly}
         title={
-          entry.choice === 'undecided'
-            ? 'Drag to a bucket on the left'
-            : `Drag to move (currently in ${CHOICE_LABELS[entry.choice]})`
+          readOnly
+            ? 'Read-only'
+            : entry.choice === 'undecided'
+              ? 'Drag to a bucket on the left'
+              : `Drag to move (currently in ${CHOICE_LABELS[entry.choice]})`
         }
         onDragStart={(e) => {
+          if (readOnly) {
+            e.preventDefault()
+            return
+          }
           e.dataTransfer.setData(
             KINK_DRAG_MIME,
             JSON.stringify([{ type: 'custom', id: entry.rawId }])
@@ -419,6 +459,8 @@ function CustomKinkCard({
             value={name}
             placeholder="Custom kink name"
             onChange={(e) => setName(e.target.value)}
+            readOnly={readOnly}
+            disabled={readOnly}
           />
           <span
             className={`kink-card-choice kink-choice-${entry.choice}`}
@@ -433,17 +475,21 @@ function CustomKinkCard({
           placeholder="Description (plain text)"
           rows={2}
           onChange={(e) => setDescription(e.target.value)}
+          readOnly={readOnly}
+          disabled={readOnly}
         />
       </div>
-      <button
-        type="button"
-        className="kink-card-delete"
-        title="Delete this custom kink"
-        onClick={onDelete}
-        aria-label="Delete custom kink"
-      >
-        ✕
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          className="kink-card-delete"
+          title="Delete this custom kink"
+          onClick={onDelete}
+          aria-label="Delete custom kink"
+        >
+          ✕
+        </button>
+      )}
     </li>
   )
 }
