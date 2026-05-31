@@ -53,17 +53,18 @@ export function PreviewPane() {
   const editorActiveTab = useStore((s) => s.editorActiveTab)
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   // Per-tab right pane:
-  //   profile-fields (editing) → website-style Info preview
-  //   kinks (editing)          → interactive Undecided pool
-  //   anything else, or any read-only view → BBCode preview
-  // In read-only views the left pane already shows the tab content
-  // for that mode (preview-styled / locked-down kinks); the right
-  // pane falls back to the BBCode preview so the user always has the
-  // rendered description visible alongside the structured tab.
+  //   profile-fields → website-style Info preview
+  //   kinks          → Undecided pool (interactive in edit mode, locked
+  //                    in read-only — same surface, same scroll position
+  //                    when you toggle between My edits and From F-list)
+  //   anything else  → BBCode preview
+  // Read-only just changes how each component sources its data
+  // (live archive instead of working copy) — the right-pane shape
+  // stays identical so the editor↔read-only switch has zero
+  // structural friction.
   const showProfileFieldsPreview =
-    editorActiveTab === 'profile-fields' && flistActiveId !== null && !readOnly
-  const showKinksPool =
-    editorActiveTab === 'kinks' && flistActiveId !== null && !readOnly
+    editorActiveTab === 'profile-fields' && flistActiveId !== null
+  const showKinksPool = editorActiveTab === 'kinks' && flistActiveId !== null
   const showAlternatePreview = showProfileFieldsPreview || showKinksPool
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
