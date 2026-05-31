@@ -3858,16 +3858,20 @@ body {
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
+  border: 1px solid var(--border);
   border-radius: 3px;
+  margin-bottom: 3px;
+  background: var(--panel);
   cursor: grab;
   color: var(--text);
   font-size: var(--font-body);
   user-select: none;
 }
-.kink-row:hover { background: var(--panel-2); }
+.kink-row:hover { background: var(--panel-2); border-color: var(--text-dim); }
 .kink-row:focus {
   outline: none;
   background: rgba(86, 156, 214, 0.18);
+  border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 .kink-row:active { cursor: grabbing; }
@@ -3923,14 +3927,13 @@ body {
 }
 
 /* Pool — section + group + separator + custom cards */
-.kinks-pool-section { display: flex; flex-direction: column; gap: 4px; }
+.kinks-pool-section { display: flex; flex-direction: column; gap: 6px; }
 .kinks-pool-section-title {
-  margin: 0;
-  font-size: var(--font-meta);
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  color: var(--text-dim);
-  text-transform: uppercase;
+  margin: 4px 0 2px;
+  font-size: 1.15em;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--text);
 }
 .kinks-pool-customs-header {
   display: flex;
@@ -3944,7 +3947,25 @@ body {
   margin: 4px 0;
 }
 
-.kinks-pool-group { display: flex; flex-direction: column; }
+/* Standards groups stack horizontally when the pool is wide enough.
+   auto-fill keeps a sensible minimum column width and only fills the
+   row with as many columns as fit — collapsed groups become tight
+   tiles, expanded ones take the rest of the row. */
+.kinks-pool-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 10px;
+  align-items: start;
+}
+.kinks-pool-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+.kinks-pool-group-open { box-shadow: inset 0 -2px 0 var(--accent); }
+.kinks-pool-group .kinks-pool-list { padding: 4px 6px 6px; }
 .kinks-pool-group-toggle {
   display: flex;
   align-items: center;

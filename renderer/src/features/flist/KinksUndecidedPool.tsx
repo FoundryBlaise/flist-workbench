@@ -169,7 +169,7 @@ export function KinksUndecidedPool() {
       </div>
 
       <section className="kinks-pool-section" data-testid="kinks-pool-standards">
-        <h4 className="kinks-pool-section-title">Standard kinks</h4>
+        <h3 className="kinks-pool-section-title">Standard kinks</h3>
         {standardsByGroup.length === 0 ? (
           <div className="kinks-pool-empty-list">
             {filterLower
@@ -177,44 +177,54 @@ export function KinksUndecidedPool() {
               : 'Every standard kink is assigned.'}
           </div>
         ) : (
-          standardsByGroup.map((g) => {
-            const isCollapsed = collapsed[g.id] === true
-            const orderedIds = g.entries.map((u) => u.id)
-            return (
-              <div key={g.id} className="kinks-pool-group">
-                <button
-                  type="button"
-                  className="kinks-pool-group-toggle"
-                  aria-expanded={!isCollapsed}
-                  onClick={() =>
-                    setCollapsed((c) => ({ ...c, [g.id]: !isCollapsed }))
-                  }
+          <div className="kinks-pool-groups-grid">
+            {standardsByGroup.map((g) => {
+              // Groups are collapsed by default — the only way to mark
+              // a group "open" is to click it, which writes `false`
+              // (sentinel for "user-expanded"). Stored separately from
+              // a filter expansion so the user's choice survives
+              // search-clear.
+              const isCollapsed = collapsed[g.id] !== false
+              const orderedIds = g.entries.map((u) => u.id)
+              return (
+                <div
+                  key={g.id}
+                  className={`kinks-pool-group${isCollapsed ? '' : ' kinks-pool-group-open'}`}
                 >
-                  <span className="kinks-pool-group-chev">
-                    {isCollapsed ? '▸' : '▾'}
-                  </span>
-                  <span className="kinks-pool-group-name">{g.name}</span>
-                  <span className="kinks-pool-group-count">{g.entries.length}</span>
-                </button>
-                {!isCollapsed && (
-                  <ul className="kinks-pool-list">
-                    {g.entries.map((entry) => (
-                      <KinkRow
-                        key={entry.id}
-                        entry={entry}
-                        selected={selection.isSelected(entry.id)}
-                        selectionForDrag={selectionForDrag}
-                        onChoice={setChoice}
-                        onClick={(e, ev) =>
-                          selection.handleRowClick(e.id, orderedIds, ev)
-                        }
-                      />
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )
-          })
+                  <button
+                    type="button"
+                    className="kinks-pool-group-toggle"
+                    aria-expanded={!isCollapsed}
+                    onClick={() =>
+                      setCollapsed((c) => ({ ...c, [g.id]: !isCollapsed ? true : false }))
+                    }
+                  >
+                    <span className="kinks-pool-group-chev">
+                      {isCollapsed ? '▸' : '▾'}
+                    </span>
+                    <span className="kinks-pool-group-name">{g.name}</span>
+                    <span className="kinks-pool-group-count">{g.entries.length}</span>
+                  </button>
+                  {!isCollapsed && (
+                    <ul className="kinks-pool-list">
+                      {g.entries.map((entry) => (
+                        <KinkRow
+                          key={entry.id}
+                          entry={entry}
+                          selected={selection.isSelected(entry.id)}
+                          selectionForDrag={selectionForDrag}
+                          onChoice={setChoice}
+                          onClick={(e, ev) =>
+                            selection.handleRowClick(e.id, orderedIds, ev)
+                          }
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         )}
       </section>
 
@@ -222,7 +232,7 @@ export function KinksUndecidedPool() {
 
       <section className="kinks-pool-section" data-testid="kinks-pool-customs">
         <header className="kinks-pool-customs-header">
-          <h4 className="kinks-pool-section-title">Custom kinks</h4>
+          <h3 className="kinks-pool-section-title">Custom kinks</h3>
           <button
             type="button"
             className="kinks-pool-add"
