@@ -169,8 +169,8 @@ export function seedWorkingFromLive(live: Record<string, unknown>): WorkingPaylo
     if (value === undefined) continue
     // F-list returns `kinks: []` when nothing's set (probe-verified
     // 2026-05-30) but a populated character has `kinks: {fetish_id:
-    // choice}`. Reshape on seed so downstream code (pathSet,
-    // StandardKinksPane catalogue, ZIP serialiser) always sees a dict.
+    // choice}`. Reshape on seed so downstream code (pathSet, KinksPane
+    // unified-kinks reader, ZIP serialiser) always sees a dict.
     if (key === 'kinks' && Array.isArray(value)) {
       out.kinks = {}
       continue

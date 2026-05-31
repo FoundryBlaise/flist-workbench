@@ -7,7 +7,8 @@ import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { Tabs, type TabsTab } from '../../components/Tabs'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { CustomKinksPane, countCustomKinks } from '../flist/CustomKinksPane'
-import { StandardKinksPane, countSetStandardKinks } from '../flist/StandardKinksPane'
+import { KinksPane } from '../flist/KinksPane'
+import { countKinksWithChoice } from '../flist/kinksUnified'
 import { DiffPane, countDiffChanges } from '../flist/DiffPane'
 import { Toolbar } from './Toolbar'
 import { RevisionsPanel } from './RevisionsPanel'
@@ -287,7 +288,7 @@ function EditorTabsHost(props: {
     flistActiveId ? s.flistWorking[flistActiveId] : undefined
   )
   const customKinkCount = countCustomKinks(workingSlot)
-  const standardKinkCount = countSetStandardKinks(workingSlot)
+  const kinksCount = countKinksWithChoice(workingSlot)
   const diffChangeCount = countDiffChanges(workingSlot)
   const tabs: TabsTab[] = useMemo(() => {
     const descriptionTab: TabsTab = {
@@ -353,10 +354,10 @@ function EditorTabsHost(props: {
         content: <CustomKinksPane characterId={flistActiveId} />
       })
       out.push({
-        id: 'standard-kinks',
-        label: 'Standard kinks',
-        badge: standardKinkCount > 0 ? standardKinkCount : undefined,
-        content: <StandardKinksPane characterId={flistActiveId} />
+        id: 'kinks',
+        label: 'Kinks',
+        badge: kinksCount > 0 ? kinksCount : undefined,
+        content: <KinksPane characterId={flistActiveId} />
       })
       out.push({
         id: 'diff',
@@ -383,7 +384,7 @@ function EditorTabsHost(props: {
     workingCopyMode,
     flistActiveId,
     customKinkCount,
-    standardKinkCount,
+    kinksCount,
     diffChangeCount
   ])
   // Snap back to description if the user signs out / switches to read-only

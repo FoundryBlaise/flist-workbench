@@ -3940,7 +3940,8 @@ body {
   font-size: var(--font-meta);
 }
 
-.standard-kinks-pane {
+/* ---- Unified Kinks tab + Undecided pool ------------------------- */
+.kinks-pane {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -3948,25 +3949,47 @@ body {
   padding: 8px 12px 16px;
   gap: 8px;
 }
-.standard-kinks-loading { padding: 20px; color: var(--text-dim); }
-.standard-kinks-controls { display: flex; align-items: center; gap: 12px; }
-.standard-kinks-search {
+.kinks-pane-loading { padding: 20px; color: var(--text-dim); }
+.kinks-pane-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.kinks-pane-search,
+.kinks-pool-search {
   flex: 1 1 auto;
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 3px;
   padding: 6px 8px;
+  font: inherit;
+  font-size: var(--font-body);
 }
-.standard-kinks-summary { color: var(--text-dim); font-size: var(--font-meta); }
-.standard-kinks-columns {
+.kinks-pane-hint {
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+}
+.kinks-pane-hint kbd {
+  display: inline-block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 0.85em;
+  color: var(--text);
+  margin: 0 1px;
+}
+
+.kinks-pane-columns {
   display: grid;
-  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: 8px;
   flex: 1 1 auto;
   min-height: 0;
 }
-.standard-kinks-column {
+.kink-column {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -3974,8 +3997,13 @@ body {
   background: var(--panel);
   overflow: hidden;
   min-height: 0;
+  transition: border-color 80ms ease, background 80ms ease;
 }
-.standard-kinks-column-header {
+.kink-column-over {
+  border-color: var(--accent);
+  background: rgba(86, 156, 214, 0.08);
+}
+.kink-column-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3984,31 +4012,98 @@ body {
   background: var(--panel-2);
   font-weight: 600;
 }
-.standard-kinks-column-list {
+.kink-column-count {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: var(--font-meta);
+}
+.kink-column-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  font-style: italic;
+}
+.kink-column-list {
   list-style: none;
   margin: 0;
-  padding: 4px 8px 8px;
+  padding: 4px 6px 8px;
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
 }
-.standard-kinks-group { padding: 4px 0; border-bottom: 1px solid var(--border); }
-.standard-kinks-group summary {
-  cursor: pointer;
-  font-size: var(--font-meta);
-  color: var(--text-dim);
-}
-.standard-kinks-group ul { list-style: none; padding: 4px 0 0 12px; margin: 0; }
-.standard-kinks-entry {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 4px;
+
+.kink-row {
+  display: flex;
   align-items: center;
-  padding: 3px 0;
-  font-size: var(--font-meta);
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: grab;
+  color: var(--text);
+  font-size: var(--font-body);
+  user-select: none;
 }
-.standard-kinks-entry-name { font-size: var(--font-body); }
-.standard-kinks-entry-overlay { color: #d4a04a; }
+.kink-row:hover { background: var(--panel-2); }
+.kink-row:focus {
+  outline: none;
+  background: rgba(86, 156, 214, 0.18);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.kink-row:active { cursor: grabbing; }
+.kink-row-pip { color: #f0c060; font-size: 0.85em; flex: 0 0 auto; }
+.kink-row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Right-pane Undecided pool — replaces the BBCode preview while the
+   Kinks tab is active. Single scrolling list of every kink with
+   choice === 'undecided'. */
+.kinks-pool {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 12px 16px;
+  gap: 8px;
+  background: #2e2828;
+  color: var(--text);
+  transition: background 80ms ease;
+}
+.kinks-pool-over { background: rgba(86, 156, 214, 0.12); }
+.kinks-pool-empty,
+.kinks-pool-empty-list {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 12px;
+  text-align: center;
+}
+.kinks-pool-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.kinks-pool-title { font-weight: 600; font-size: var(--font-body); }
+.kinks-pool-count { color: var(--text-dim); font-size: var(--font-meta); }
+.kinks-pool-add {
+  margin-left: auto;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--btn-radius);
+  padding: var(--btn-pad-y-sm) var(--btn-pad-x-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-body);
+}
+.kinks-pool-add:hover { filter: brightness(1.08); }
+.kinks-pool-controls { display: flex; align-items: center; gap: 8px; }
+.kinks-pool-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 8px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 /* Tier 2 review polish */
 .profile-fields-banner-action {
@@ -4117,41 +4212,6 @@ body {
   color: var(--text-dim);
 }
 
-/* Tier 3 P1-4 / P1-5 polish */
-.standard-kinks-empty {
-  padding: 12px;
-  text-align: center;
-  color: var(--text-dim);
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  margin: 12px;
-}
-.standard-kinks-empty-clear {
-  background: transparent;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  text-decoration: underline;
-}
-.standard-kinks-column-empty {
-  padding: 12px;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: var(--font-meta);
-}
-.standard-kinks-group-toggle {
-  width: 100%;
-  background: var(--panel-2);
-  color: var(--text);
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-  padding: 4px 8px;
-  cursor: pointer;
-  font-size: var(--font-meta);
-}
-.standard-kinks-group-toggle:hover { color: var(--accent); }
-
 /* Round 1 UX polish */
 .profile-fields-controls-spacer { flex: 1 1 auto; }
 .profile-fields-collapse-all {
@@ -4169,18 +4229,6 @@ body {
   gap: 6px;
 }
 
-.standard-kinks-expand-all,
-.standard-kinks-collapse-all {
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 4px 10px;
-  cursor: pointer;
-  font-size: var(--font-meta);
-}
-.standard-kinks-expand-all:hover,
-.standard-kinks-collapse-all:hover { border-color: var(--accent); }
 .kink-detail-children-loading { color: var(--text-dim); font-style: italic; }
 
 /* ---- Tier 4: Diff tab ------------------------------------------- */

@@ -6,6 +6,7 @@ import {
   type EditorSelectionDetail
 } from '../../lib/bbcode/codemirror'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
+import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
 
 const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
 
@@ -51,12 +52,14 @@ export function PreviewPane() {
   const readOnly = useStore((s) => s.editorReadOnly)
   const editorActiveTab = useStore((s) => s.editorActiveTab)
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
-  // Profile fields tab gets a website-style Info-pane preview instead
-  // of the BBCode preview — the BBCode renderer has nothing to show
-  // for that tab's edits. Only the Description tab actually drives the
-  // BBCode preview; the other working-copy tabs stay on it for now.
+  // Per-tab right pane:
+  //   profile-fields → website-style Info preview
+  //   kinks         → interactive Undecided pool (drag-source / drop-target)
+  //   anything else → BBCode preview (description-editing surface)
   const showProfileFieldsPreview =
     editorActiveTab === 'profile-fields' && flistActiveId !== null
+  const showKinksPool = editorActiveTab === 'kinks' && flistActiveId !== null
+  const showAlternatePreview = showProfileFieldsPreview || showKinksPool
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
@@ -78,7 +81,7 @@ export function PreviewPane() {
   const renderedFromRef = useRef('')
 
   useEffect(() => {
-    if (showProfileFieldsPreview) return
+    if (showAlternatePreview) return
     const el = ref.current
     if (!el) return
     if (focusedRef.current) return
@@ -90,7 +93,7 @@ export function PreviewPane() {
     el.innerHTML = bbcodeToHtml(content, { withSourceMap: true, inlines })
     applyOpenCollapses(el, opens)
     renderedFromRef.current = content
-  }, [content, inlines, showProfileFieldsPreview])
+  }, [content, inlines, showAlternatePreview])
 
   const handleInput = () => {
     // When the surrounding editor is in read-only mode (Live / Backup
@@ -168,8 +171,12 @@ export function PreviewPane() {
   return (
     <section className="pane preview" data-testid="preview-pane">
       <header className="pane-head">
-        {showProfileFieldsPreview ? 'Info Preview' : 'Live Preview'}
-        {showProfileFieldsPreview ? null : readOnly ? (
+        {showProfileFieldsPreview
+          ? 'Info Preview'
+          : showKinksPool
+            ? 'Undecided Kinks'
+            : 'Live Preview'}
+        {showAlternatePreview ? null : readOnly ? (
           <span className="preview-readonly-hint" title="Pulled from F-list — read-only">
             · read-only
           </span>
@@ -177,7 +184,7 @@ export function PreviewPane() {
           <span className="preview-edit-hint">· editable</span>
         )}
       </header>
-      {showEditHint && !readOnly && !showProfileFieldsPreview && (
+      {showEditHint && !readOnly && !showAlternatePreview && (
         <div className="preview-edit-banner" data-testid="preview-edit-banner">
           <span className="preview-edit-banner-icon" aria-hidden>
             ✎
@@ -219,6 +226,8 @@ export function PreviewPane() {
       )}
       {showProfileFieldsPreview ? (
         <ProfileFieldsPreview />
+      ) : showKinksPool ? (
+        <KinksUndecidedPool />
       ) : (
         <div
           ref={ref}
