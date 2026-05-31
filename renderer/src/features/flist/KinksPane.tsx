@@ -22,6 +22,10 @@ const BUCKET_ORDER: KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
 // selection (or just the focused row when not selected).
 export function KinksPane({ characterId }: { characterId: string }) {
   const slot = useStore((s) => s.flistWorking[characterId])
+  const liveArchive = useStore(
+    (s) => s.flistArchive[characterId]?.live ?? null
+  )
+  const readOnly = useStore((s) => s.editorReadOnly)
   const mapping = useStore((s) => s.flistMapping.payload)
   const mappingStatus = useStore((s) => s.flistMapping.status)
   const loadMapping = useStore((s) => s.flistLoadMapping)
@@ -34,8 +38,21 @@ export function KinksPane({ characterId }: { characterId: string }) {
     if (mappingStatus === 'idle') void loadMapping()
   }, [mappingStatus, loadMapping])
 
-  const unified = useMemo(() => buildUnifiedKinks(slot, mapping), [slot, mapping])
-  const customsFirst = useMemo(() => readCustomsFirst(slot), [slot])
+  // In read-only views (From F-list / Backup) drive the bucket
+  // columns from the live archive so the user sees what's actually
+  // on F-list, not their staged edits.
+  const sourceSlot = useMemo(
+    () =>
+      readOnly && liveArchive
+        ? { payload: liveArchive as Record<string, unknown> }
+        : slot,
+    [readOnly, liveArchive, slot]
+  )
+  const unified = useMemo(
+    () => buildUnifiedKinks(sourceSlot, mapping),
+    [sourceSlot, mapping]
+  )
+  const customsFirst = useMemo(() => readCustomsFirst(sourceSlot), [sourceSlot])
   const filterLower = filter.trim().toLowerCase()
   const visible = useMemo(() => {
     const assigned = unified.filter((u) => u.choice !== 'undecided')
@@ -96,8 +113,8 @@ export function KinksPane({ characterId }: { characterId: string }) {
     return out
   }, [selection.selected, byCompositeId])
 
-  if (!slot) {
-    return <div className="kinks-pane kinks-pane-loading">Loading working copy…</div>
+  if (!sourceSlot) {
+    return <div className="kinks-pane kinks-pane-loading">Loading…</div>
   }
 
   return (
@@ -106,14 +123,20 @@ export function KinksPane({ characterId }: { characterId: string }) {
         <input
           type="search"
           className="kinks-pane-search"
-          placeholder="Filter assigned kinks…"
+          placeholder={readOnly ? 'Filter live kinks…' : 'Filter assigned kinks…'}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           data-testid="kinks-pane-search"
         />
         <span className="kinks-pane-hint">
-          Drag, or focus a row + <kbd>F</kbd>/<kbd>Y</kbd>/<kbd>M</kbd>/<kbd>N</kbd>/<kbd>U</kbd>
-          {' '}(or <kbd>1</kbd>–<kbd>4</kbd>/<kbd>0</kbd>). Shift/Ctrl-click for multi-select.
+          {readOnly ? (
+            <>Read-only — switch to <b>My edits</b> to assign or change.</>
+          ) : (
+            <>
+              Drag, or focus a row + <kbd>F</kbd>/<kbd>Y</kbd>/<kbd>M</kbd>/<kbd>N</kbd>/<kbd>U</kbd>
+              {' '}(or <kbd>1</kbd>–<kbd>4</kbd>/<kbd>0</kbd>). Shift/Ctrl-click for multi-select.
+            </>
+          )}
         </span>
       </div>
       <div className="kinks-pane-columns">
@@ -124,6 +147,7 @@ export function KinksPane({ characterId }: { characterId: string }) {
             entries={buckets[bucket]}
             selection={selection}
             selectionForDrag={selectionForDrag}
+            readOnly={readOnly}
             setChoice={setChoice}
             onDrop={(e) => handleDrop(e, bucket)}
           />
@@ -138,6 +162,7 @@ function KinkColumn({
   entries,
   selection,
   selectionForDrag,
+  readOnly,
   setChoice,
   onDrop
 }: {
@@ -145,6 +170,7 @@ function KinkColumn({
   entries: UnifiedKink[]
   selection: ReturnType<typeof useKinkSelection>
   selectionForDrag: UnifiedKink[]
+  readOnly: boolean
   setChoice: (entries: UnifiedKink[], next: KinkChoice) => void
   onDrop: (e: React.DragEvent) => void
 }) {
@@ -154,15 +180,23 @@ function KinkColumn({
     <section
       className={`kink-column kink-column-${bucket}${over ? ' kink-column-over' : ''}`}
       data-testid={`kink-column-${bucket}`}
-      onDragOver={(e) => {
-        e.preventDefault()
-        setOver(true)
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        setOver(false)
-        onDrop(e)
-      }}
+      onDragOver={
+        readOnly
+          ? undefined
+          : (e) => {
+              e.preventDefault()
+              setOver(true)
+            }
+      }
+      onDragLeave={readOnly ? undefined : () => setOver(false)}
+      onDrop={
+        readOnly
+          ? undefined
+          : (e) => {
+              setOver(false)
+              onDrop(e)
+            }
+      }
     >
       <header className="kink-column-header">
         <span className={`kink-column-title kink-choice-${bucket}`}>
@@ -171,7 +205,7 @@ function KinkColumn({
         <span className="kink-column-count">{entries.length}</span>
       </header>
       {entries.length === 0 ? (
-        <div className="kink-column-empty">drop here</div>
+        <div className="kink-column-empty">{readOnly ? '—' : 'drop here'}</div>
       ) : (
         <ul className="kink-column-list">
           {entries.map((entry) => (
@@ -180,6 +214,7 @@ function KinkColumn({
               entry={entry}
               selected={selection.isSelected(entry.id)}
               selectionForDrag={selectionForDrag}
+              readOnly={readOnly}
               onChoice={setChoice}
               onClick={(e, ev) =>
                 selection.handleRowClick(e.id, orderedIds, ev)

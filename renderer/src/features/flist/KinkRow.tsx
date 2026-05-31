@@ -27,6 +27,7 @@ interface KinkRowProps {
   entry: UnifiedKink
   selected: boolean
   selectionForDrag: UnifiedKink[]
+  readOnly?: boolean
   onChoice: (entries: UnifiedKink[], next: KinkChoice) => void
   onClick: (entry: UnifiedKink, e: React.MouseEvent) => void
 }
@@ -35,6 +36,7 @@ export function KinkRow({
   entry,
   selected,
   selectionForDrag,
+  readOnly,
   onChoice,
   onClick
 }: KinkRowProps) {
@@ -42,16 +44,21 @@ export function KinkRow({
     <li
       className={`kink-row kink-row-${entry.type} kink-row-${entry.choice}${
         selected ? ' kink-row-selected' : ''
-      }`}
-      draggable
+      }${readOnly ? ' kink-row-readonly' : ''}`}
+      draggable={!readOnly}
       title={entry.description || undefined}
-      tabIndex={0}
+      tabIndex={readOnly ? -1 : 0}
       data-kink-id={entry.id}
       data-kink-type={entry.type}
-      onClick={(e) => onClick(entry, e)}
+      onClick={(e) => {
+        if (readOnly) return
+        onClick(entry, e)
+      }}
       onDragStart={(e) => {
-        // When the dragged row is part of the multi-selection, carry
-        // every selected entry; otherwise the drag is solo.
+        if (readOnly) {
+          e.preventDefault()
+          return
+        }
         const payload: KinkDragPayload = selected
           ? selectionForDrag.map((u) => ({ type: u.type, id: u.rawId }))
           : [{ type: entry.type, id: entry.rawId }]
@@ -59,11 +66,10 @@ export function KinkRow({
         e.dataTransfer.effectAllowed = 'move'
       }}
       onKeyDown={(e) => {
+        if (readOnly) return
         const next = HOTKEY_TO_CHOICE[e.key]
         if (!next) return
         e.preventDefault()
-        // Hotkeys apply to the selection when this row is part of it,
-        // otherwise to just this row.
         onChoice(selected ? selectionForDrag : [entry], next)
       }}
     >

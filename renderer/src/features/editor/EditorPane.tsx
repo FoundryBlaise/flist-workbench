@@ -8,6 +8,7 @@ import { Tabs, type TabsTab } from '../../components/Tabs'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { KinksPane } from '../flist/KinksPane'
 import { countKinksWithChoice } from '../flist/kinksUnified'
+import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane, countDiffChanges } from '../flist/DiffPane'
 import { Toolbar } from './Toolbar'
 import { RevisionsPanel } from './RevisionsPanel'
@@ -281,8 +282,14 @@ function EditorTabsHost(props: {
     setEditorActiveTab(activeTab)
   }, [activeTab, setEditorActiveTab])
   const activeDocIdRaw = useStore((s) => s.activeDocId)
+  // The 4 F-list tabs (Description, Profile fields, Kinks, Diff) are
+  // visible whenever a character is active and no doc is open — both
+  // editing the working copy ("My edits") and viewing the live or a
+  // backup snapshot. readOnly is no longer a visibility gate; each
+  // tab handles read-only mode internally.
+  const flistTabsVisible = flistActiveId !== null && activeDocIdRaw === null
   const workingCopyMode =
-    flistActiveId !== null && activeDocIdRaw === null && !props.readOnly
+    flistTabsVisible && !props.readOnly
   const workingSlot = useStore((s) =>
     flistActiveId ? s.flistWorking[flistActiveId] : undefined
   )
@@ -339,11 +346,18 @@ function EditorTabsHost(props: {
       )
     }
     const out: TabsTab[] = [descriptionTab]
-    if (workingCopyMode && flistActiveId) {
+    if (flistTabsVisible && flistActiveId) {
       out.push({
         id: 'profile-fields',
         label: 'Profile fields',
-        content: <ProfileFieldsTab characterId={flistActiveId} />
+        // In read-only views (Live / Backup) the editing rail/forms
+        // don't apply — substitute the website-style preview, which
+        // already renders a clean read-only Info pane.
+        content: props.readOnly ? (
+          <ProfileFieldsPreview />
+        ) : (
+          <ProfileFieldsTab characterId={flistActiveId} />
+        )
       })
       out.push({
         id: 'kinks',
@@ -373,18 +387,20 @@ function EditorTabsHost(props: {
     props.viewRef,
     props.setContent,
     props.onCloseRevisions,
-    workingCopyMode,
+    flistTabsVisible,
     flistActiveId,
     kinksCount,
     diffChangeCount
   ])
-  // Snap back to description if the user signs out / switches to read-only
-  // while sitting on a working-copy-only tab.
+  // Snap back to description only when the F-list-tab surface itself
+  // is gone (no character, or a document is open). Switching between
+  // My edits / From F-list / Backup should keep the user on whichever
+  // tab they were on — that's the whole point of read-only tabs.
   useEffect(() => {
-    if (!workingCopyMode && activeTab !== 'description') {
+    if (!flistTabsVisible && activeTab !== 'description') {
       setActiveTab('description')
     }
-  }, [workingCopyMode, activeTab])
+  }, [flistTabsVisible, activeTab])
   return (
     <Tabs
       tabs={tabs}

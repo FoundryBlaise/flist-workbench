@@ -18,28 +18,38 @@ import {
 export function ProfileFieldsPreview() {
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   const slot = useStore((s) => (flistActiveId ? s.flistWorking[flistActiveId] : undefined))
+  const liveArchive = useStore((s) =>
+    flistActiveId ? (s.flistArchive[flistActiveId]?.live ?? null) : null
+  )
+  const readOnly = useStore((s) => s.editorReadOnly)
   const mapping = useStore((s) => s.flistMapping.payload)
+
+  // In read-only views (From F-list / Backup) we mirror the live
+  // payload directly; otherwise we follow the working copy. Either
+  // way the data shape is the same (the F-list character payload).
+  const effectivePayload: Record<string, unknown> | null =
+    readOnly && liveArchive ? (liveArchive as Record<string, unknown>) : slot?.payload ?? null
 
   const model = useMemo(() => {
     const infotagsPayload =
-      slot?.payload && typeof slot.payload === 'object'
-        ? ((slot.payload.infotags as Record<string, unknown>) ?? {})
+      effectivePayload && typeof effectivePayload === 'object'
+        ? ((effectivePayload.infotags as Record<string, unknown>) ?? {})
         : {}
     return resolveInfotagDescriptors(mapping, {
       overlay: slot?.overlay ?? [],
       infotagsPayload
     })
-  }, [mapping, slot?.overlay, slot?.payload])
+  }, [mapping, slot?.overlay, effectivePayload])
 
-  if (!flistActiveId || !slot) {
+  if (!flistActiveId || !effectivePayload) {
     return (
       <div className="profile-preview profile-preview-empty">
-        <p>No working copy active.</p>
+        <p>No data to show yet.</p>
       </div>
     )
   }
 
-  const infotags = (slot.payload?.infotags as Record<string, unknown> | undefined) ?? {}
+  const infotags = (effectivePayload.infotags as Record<string, unknown> | undefined) ?? {}
 
   const rendered = model.groups
     .map((g) => ({
