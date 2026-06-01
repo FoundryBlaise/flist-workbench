@@ -233,7 +233,7 @@ export function ImagesTab({
   const avatarUrl = characterName ? api.flistAvatarUrl(characterName) : null
 
   return (
-    <div className="flist-images-tab flist-images-tab--three">
+    <div className="flist-images-tab">
       <div className="flist-images-tab__panes">
         {/* ---- Pool pane (25%) ---- */}
         <section
@@ -414,17 +414,6 @@ export function ImagesTab({
           </ol>
         </section>
 
-        {/* ---- Preview pane (50%) — built in task #6 ---- */}
-        <section className="flist-images-pane flist-images-pane--preview">
-          <header className="flist-images-pane__header">
-            <h3>Preview</h3>
-          </header>
-          <GalleryPreview
-            characterId={characterId}
-            characterName={characterName}
-            gallery={gallery}
-          />
-        </section>
       </div>
 
       {!readOnly && (
@@ -662,43 +651,3 @@ function CharacterImageThumb({
   )
 }
 
-function GalleryPreview({
-  characterId,
-  characterName,
-  gallery
-}: {
-  characterId: string
-  characterName: string | null
-  gallery: GalleryEntry[]
-}) {
-  if (!gallery.length) {
-    return (
-      <div className="flist-images-preview flist-images-preview--empty">
-        Empty gallery. Add images from the pool to preview how the profile
-        would look.
-      </div>
-    )
-  }
-  return (
-    <div className="flist-images-preview">
-      <div className="flist-images-preview__header">
-        {characterName ?? 'Profile'} gallery preview
-      </div>
-      <div className="flist-images-preview__grid">
-        {gallery.map((entry) => (
-          <figure key={entry.image_id} className="flist-images-preview__tile">
-            <CharacterImageThumb
-              characterId={characterId}
-              imageId={entry.image_id}
-            />
-            {entry.description && (
-              <figcaption className="flist-images-preview__caption">
-                {entry.description}
-              </figcaption>
-            )}
-          </figure>
-        ))}
-      </div>
-    </div>
-  )
-}
