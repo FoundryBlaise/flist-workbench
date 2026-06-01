@@ -797,6 +797,25 @@ async def flist_character_images_list(character_id: str) -> dict:
     }
 
 
+@app.get("/flist/character/{character_id}/image/{image_id}")
+async def flist_character_image_by_id(
+    character_id: str, image_id: str
+) -> FileResponse:
+    """Serve `images/<image_id>.<ext>` without the renderer having to
+    know the extension. Tries the supported set in order; 404 when none
+    exists. Lets the gallery render thumbnails reliably without a
+    separate round-trip to look up extensions."""
+    import re as _re
+    if not _re.match(r"^[A-Za-z0-9_-]+$", image_id):
+        raise HTTPException(status_code=400, detail="invalid image_id")
+    d = character_archive.images_dir(character_id)
+    for ext in ("png", "jpg", "gif"):
+        candidate = d / f"{image_id}.{ext}"
+        if candidate.exists():
+            return FileResponse(candidate)
+    raise HTTPException(status_code=404, detail="image not found")
+
+
 @app.post("/flist/character/{character_id}/images/from-pool/{sha}")
 async def flist_character_image_from_pool(
     character_id: str, sha: str
