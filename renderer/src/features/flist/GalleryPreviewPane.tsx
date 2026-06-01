@@ -39,10 +39,15 @@ function readGallery(payload: unknown): GalleryRow[] {
 
 /**
  * Right-pane gallery preview shown when the Images tab is active.
- * Mirrors F-list's profile-page Images section: big main image with a
- * description, plus a horizontal thumbnail strip the user can click to
- * page through. Keyboard arrows step through too so a curator can
- * sanity-check the order without reaching for the mouse.
+ * Mirrors F-list's profile-page Images section:
+ *
+ *   - Tile heap: every thumbnail rendered at a fixed display height,
+ *     width derived from the image's natural aspect ratio (no cropping).
+ *     Flex-wraps into rows so portrait + landscape images coexist
+ *     naturally.
+ *   - Click a tile → fullscreen overlay with the image centered, back
+ *     button top-left, caption underneath, ESC / arrow-keys / click-
+ *     outside-image to navigate or dismiss.
  */
 export function GalleryPreviewPane() {
   const characterId = useStore((s) => s.flistActiveCharacterId)
@@ -53,27 +58,27 @@ export function GalleryPreviewPane() {
     () => (slot ? readGallery(slot.payload) : []),
     [slot]
   )
-  const [activeIndex, setActiveIndex] = useState(0)
+  const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null)
 
-  // Reset selection if the gallery shrinks past our cursor.
+  // Keyboard nav while fullscreen is open. ESC closes, ←/→ paginate.
   useEffect(() => {
-    if (activeIndex >= gallery.length && gallery.length > 0) {
-      setActiveIndex(gallery.length - 1)
-    }
-  }, [activeIndex, gallery.length])
-
-  useEffect(() => {
-    if (!gallery.length) return
+    if (fullscreenIndex === null) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight') {
-        setActiveIndex((i) => Math.min(gallery.length - 1, i + 1))
+      if (e.key === 'Escape') {
+        setFullscreenIndex(null)
+      } else if (e.key === 'ArrowRight') {
+        setFullscreenIndex((i) =>
+          i === null ? null : Math.min(gallery.length - 1, i + 1)
+        )
       } else if (e.key === 'ArrowLeft') {
-        setActiveIndex((i) => Math.max(0, i - 1))
+        setFullscreenIndex((i) =>
+          i === null ? null : Math.max(0, i - 1)
+        )
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [gallery.length])
+  }, [fullscreenIndex, gallery.length])
 
   if (!characterId) {
     return (
@@ -91,51 +96,119 @@ export function GalleryPreviewPane() {
     )
   }
 
-  const active = gallery[Math.min(activeIndex, gallery.length - 1)]
-  const mainUrl = api.flistImageByIdUrl(characterId, active.image_id)
-
   return (
-    <div className="flist-gallery-preview">
-      <div className="flist-gallery-preview__main">
-        <img
-          src={mainUrl}
-          alt={active.description || `Image ${activeIndex + 1}`}
-          className="flist-gallery-preview__main-img"
+    <>
+      <div className="flist-gallery-preview" data-testid="flist-gallery-preview">
+        <div className="flist-gallery-preview__heading">Images</div>
+        <ul className="flist-gallery-preview__heap">
+          {gallery.map((row, i) => (
+            <li key={row.image_id} className="flist-gallery-preview__tile">
+              <button
+                type="button"
+                className="flist-gallery-preview__tile-btn"
+                title={row.description || `Image ${i + 1}`}
+                onClick={() => setFullscreenIndex(i)}
+              >
+                <img
+                  src={api.flistImageByIdUrl(characterId, row.image_id)}
+                  alt={row.description || `Image ${i + 1}`}
+                  loading="lazy"
+                />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+      {fullscreenIndex !== null && (
+        <FullscreenViewer
+          characterId={characterId}
+          gallery={gallery}
+          index={fullscreenIndex}
+          onClose={() => setFullscreenIndex(null)}
+          onNavigate={(next) => setFullscreenIndex(next)}
         />
+      )}
+    </>
+  )
+}
+
+function FullscreenViewer({
+  characterId,
+  gallery,
+  index,
+  onClose,
+  onNavigate
+}: {
+  characterId: string
+  gallery: GalleryRow[]
+  index: number
+  onClose: () => void
+  onNavigate: (next: number) => void
+}) {
+  const active = gallery[index]
+  if (!active) return null
+  const url = api.flistImageByIdUrl(characterId, active.image_id)
+  const hasPrev = index > 0
+  const hasNext = index < gallery.length - 1
+  return (
+    <div
+      className="flist-gallery-fullscreen"
+      role="dialog"
+      aria-modal="true"
+      aria-label={active.description || `Image ${index + 1}`}
+      data-testid="flist-gallery-fullscreen"
+      onClick={(e) => {
+        // Click on the backdrop (anything that isn't an action / the
+        // image itself) closes. The image + the action buttons stop
+        // propagation so they don't dismiss accidentally.
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <header className="flist-gallery-fullscreen__bar">
+        <button
+          type="button"
+          className="flist-gallery-fullscreen__back"
+          onClick={onClose}
+          data-testid="flist-gallery-fullscreen-back"
+        >
+          ← Back to gallery
+        </button>
+        <span className="flist-gallery-fullscreen__counter">
+          {index + 1} / {gallery.length}
+        </span>
+      </header>
+      <div className="flist-gallery-fullscreen__stage">
+        {hasPrev && (
+          <button
+            type="button"
+            className="flist-gallery-fullscreen__nav flist-gallery-fullscreen__nav--prev"
+            onClick={() => onNavigate(index - 1)}
+            aria-label="Previous image"
+          >
+            ‹
+          </button>
+        )}
+        <img
+          src={url}
+          alt={active.description || `Image ${index + 1}`}
+          className="flist-gallery-fullscreen__img"
+        />
+        {hasNext && (
+          <button
+            type="button"
+            className="flist-gallery-fullscreen__nav flist-gallery-fullscreen__nav--next"
+            onClick={() => onNavigate(index + 1)}
+            aria-label="Next image"
+          >
+            ›
+          </button>
+        )}
       </div>
       {active.description && (
-        <div className="flist-gallery-preview__caption">
+        <div className="flist-gallery-fullscreen__caption">
           {active.description}
         </div>
       )}
-      <div className="flist-gallery-preview__strip-wrap">
-        <div className="flist-gallery-preview__counter">
-          {activeIndex + 1} / {gallery.length}
-        </div>
-        <ol className="flist-gallery-preview__strip">
-          {gallery.map((row, i) => {
-            const url = api.flistImageByIdUrl(characterId, row.image_id)
-            const isActive = i === activeIndex
-            return (
-              <li
-                key={row.image_id}
-                className={`flist-gallery-preview__strip-item${
-                  isActive ? ' flist-gallery-preview__strip-item--active' : ''
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => setActiveIndex(i)}
-                  className="flist-gallery-preview__strip-btn"
-                  title={row.description || `Image ${i + 1}`}
-                >
-                  <img src={url} alt="" loading="lazy" />
-                </button>
-              </li>
-            )
-          })}
-        </ol>
-      </div>
     </div>
   )
 }
