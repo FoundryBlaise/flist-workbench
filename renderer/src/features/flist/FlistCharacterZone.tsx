@@ -24,6 +24,7 @@ export function FlistCharacterZone() {
   const openLive = useStore((s) => s.flistOpenLive)
   const openBackup = useStore((s) => s.flistOpenBackup)
   const openWorking = useStore((s) => s.flistOpenWorking)
+  const openExportRestore = useStore((s) => s.flistOpenExportRestore)
   const copyLiveToNewDoc = useStore((s) => s.flistCopyLiveToNewDoc)
   const workingSlot = useStore((s) =>
     activeId ? s.flistWorking[activeId] : undefined
@@ -123,6 +124,17 @@ export function FlistCharacterZone() {
               </span>
             </span>
           </button>
+          <div className="flist-zone-row-actions">
+            <button
+              type="button"
+              className="flist-zone-export-zip"
+              onClick={() => openExportRestore(activeId)}
+              title="Review what will be in the ZIP and download for restore via the flistcharexporter userscript"
+              data-testid="flist-zone-export-zip"
+            >
+              ⬇ Export for restore…
+            </button>
+          </div>
         </li>
         <li
           className={`flist-zone-row flist-zone-live${live ? '' : ' is-empty'}`}

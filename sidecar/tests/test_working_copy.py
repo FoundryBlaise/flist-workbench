@@ -219,12 +219,13 @@ def test_put_rejects_invalid_payload(client: TestClient) -> None:
 # ---- Tier 3: schema v2 (custom_kinks_order, tombstones, local: ids) ---
 
 
-def test_tier2_v1_file_reads_as_v2_with_derived_order(archive_module) -> None:
+def test_tier2_v1_file_reads_as_current_with_derived_order(archive_module) -> None:
     """A working.json written by a Tier 2 (v1) sidecar must read cleanly
-    under Tier 3: the in-memory payload gets stamped v2 and the
-    `_custom_kinks_order` array is derived from dict-insertion order
-    so the rail renders without a fresh edit. Disk is *not* mutated on
-    read — the on-disk file stays v1 until the next write."""
+    under later tiers: the in-memory payload gets stamped to the current
+    schema version and the `_custom_kinks_order` array is derived from
+    dict-insertion order so the rail renders without a fresh edit. Disk
+    is *not* mutated on read — the on-disk file stays v1 until the next
+    write."""
     target = archive_module.working_path("123")
     target.parent.mkdir(parents=True, exist_ok=True)
     import json as _json
@@ -244,7 +245,7 @@ def test_tier2_v1_file_reads_as_v2_with_derived_order(archive_module) -> None:
     )
     out = archive_module.read_working("123")
     assert out is not None
-    assert out["_schema_version"] == 2
+    assert out["_schema_version"] == archive_module.WORKING_SCHEMA_VERSION
     assert out["_custom_kinks_order"] == ["31712021", "31712022"]
     on_disk = _json.loads(target.read_text(encoding="utf-8"))
     assert on_disk["_schema_version"] == 1

@@ -5,6 +5,7 @@ import {
   type Document,
   type FlistAccountCharacter,
   type FlistBackupEntry,
+  type FlistPoolEntry,
   type FlistRosterEntry,
   type FlistSessionStatus,
   type Folder,
@@ -179,6 +180,23 @@ type State = {
       }
     }
   >
+  /** Open-restore-preview-modal target. When non-null, the export
+   *  preview modal is open for this character; clicking "Download" in
+   *  the modal navigates to the export.zip route. Lives in the store so
+   *  the menu / sidebar / Images tab can all open it from anywhere. */
+  flistExportRestoreCharacterId: string | null
+  /** Per-character image pool (Tier 6). Each entry is one PNG/JPG/GIF
+   *  on disk; the working copy's `images: [{sha256, description}]`
+   *  array references entries by sha256. Status is per-character so a
+   *  fresh switch shows a loading indicator while the list arrives. */
+  flistPool: Record<
+    string,
+    {
+      entries: FlistPoolEntry[]
+      status: 'idle' | 'loading' | 'ready' | 'error'
+      error: string | null
+    }
+  >
   /** Per-character working copies, persisted to
    *  `<userdata>/characters/<character_id>/working.json` (Tier 2 §1).
    *  The slot tracks the full JSON-API payload, the dotted overlay of
@@ -316,6 +334,17 @@ type State = {
   flistLoadArchive: (characterId: string) => Promise<void>
   flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
   flistSaveBackup: (characterId: string) => Promise<void>
+  // ---- Tier 6 export-restore preview ----
+  flistOpenExportRestore: (characterId: string) => void
+  flistCloseExportRestore: () => void
+  // ---- Tier 6 image-pool actions ----
+  flistLoadPool: (characterId: string) => Promise<void>
+  flistUploadPoolImage: (characterId: string, file: File | Blob) => Promise<FlistPoolEntry>
+  flistDeletePoolImage: (characterId: string, sha: string) => Promise<void>
+  flistSetGalleryImages: (
+    characterId: string,
+    images: { sha256: string; description: string }[]
+  ) => void
   flistOpenLive: (characterId: string) => Promise<void>
   flistOpenBackup: (characterId: string, filename: string) => Promise<void>
   /** One-click "I want to fix that typo" affordance on the F-list zone.
@@ -705,6 +734,8 @@ export const useStore = create<State>((set, get) => ({
   flistRosterStatus: 'idle',
   flistActiveCharacterId: null,
   flistArchive: {},
+  flistPool: {},
+  flistExportRestoreCharacterId: null,
   flistWorking: {},
   flistWorkingLoadStatus: {},
   flistMapping: {
@@ -1109,6 +1140,130 @@ export const useStore = create<State>((set, get) => ({
         }
       }))
     }
+  },
+
+  flistOpenExportRestore(characterId) {
+    set({ flistExportRestoreCharacterId: characterId })
+  },
+
+  flistCloseExportRestore() {
+    set({ flistExportRestoreCharacterId: null })
+  },
+
+  async flistLoadPool(characterId) {
+    set((s) => ({
+      flistPool: {
+        ...s.flistPool,
+        [characterId]: {
+          entries: s.flistPool[characterId]?.entries ?? [],
+          status: 'loading',
+          error: null
+        }
+      }
+    }))
+    try {
+      const res = await api.flistPoolList(characterId)
+      set((s) => ({
+        flistPool: {
+          ...s.flistPool,
+          [characterId]: {
+            entries: res.pool,
+            status: 'ready',
+            error: null
+          }
+        }
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set((s) => ({
+        flistPool: {
+          ...s.flistPool,
+          [characterId]: {
+            entries: s.flistPool[characterId]?.entries ?? [],
+            status: 'error',
+            error: message
+          }
+        }
+      }))
+    }
+  },
+
+  async flistUploadPoolImage(characterId, file) {
+    const entry = await api.flistPoolUpload(characterId, file)
+    set((s) => {
+      const prev = s.flistPool[characterId]?.entries ?? []
+      // Dedup against the existing list — a re-upload of identical
+      // bytes returns the same sha and shouldn't double up.
+      const filtered = prev.filter((e) => e.sha256 !== entry.sha256)
+      return {
+        flistPool: {
+          ...s.flistPool,
+          [characterId]: {
+            entries: [entry, ...filtered],
+            status: 'ready',
+            error: null
+          }
+        }
+      }
+    })
+    return entry
+  },
+
+  async flistDeletePoolImage(characterId, sha) {
+    await api.flistPoolDelete(characterId, sha)
+    set((s) => {
+      const prev = s.flistPool[characterId]
+      if (!prev) return {}
+      return {
+        flistPool: {
+          ...s.flistPool,
+          [characterId]: {
+            ...prev,
+            entries: prev.entries.filter((e) => e.sha256 !== sha)
+          }
+        }
+      }
+    })
+    // Strip the gallery reference too — the working copy carries the
+    // sha as part of its `images` array, and a dangling reference
+    // would leave a broken thumbnail in the gallery pane.
+    const slot = get().flistWorking[characterId]
+    if (slot) {
+      const images = Array.isArray((slot.payload as { images?: unknown }).images)
+        ? ((slot.payload as { images: { sha256: string; description: string }[] }).images)
+        : []
+      if (images.some((e) => e.sha256 === sha)) {
+        get().flistSetGalleryImages(
+          characterId,
+          images.filter((e) => e.sha256 !== sha)
+        )
+      }
+    }
+  },
+
+  flistSetGalleryImages(characterId, images) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const payload = { ...slot.payload, images }
+      const overlay = slot.overlay.includes('images')
+        ? slot.overlay
+        : [...slot.overlay, 'images']
+      payload._overlay = [...overlay]
+      return {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload,
+            overlay,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: slot.saveError
+          }
+        }
+      }
+    })
   },
 
   async flistOpenLive(characterId) {

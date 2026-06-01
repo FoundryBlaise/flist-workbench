@@ -149,17 +149,146 @@ def test_zip_serialise_standard_kinks_passthrough():
     assert len(out["kinks"]) == 559
 
 
-# ---- Tier 6 anchor against OOC Hub fixture (when ZIP_SCHEMA_FIXTURE lands)
+# ---- Tier 6 format-drift canary -------------------------------------
 
 
-def test_round_trip_against_ooc_hub_fixture():
-    fixture = (
-        FIXTURE_DIR.parent / "flist_OOC_Hub_1766849657193.zip"
-    )
-    if not fixture.exists():
-        pytest.skip("OOC Hub ZIP fixture not in tree until Tier 6")
+def _candidate_fixture_paths():
+    """Look up a real flistcharexporter export to canary against. The
+    fixture isn't committed (treat real character exports as sensitive),
+    so the test scans:
+      1. `tests/fixtures/working/flist_OOC_Hub_*.zip` — local checkout
+      2. `/sideprojects/flistcharexporter/flist_OOC_Hub_*.zip` — read-only
+         mount inside the devcontainer
+    First match wins; skip if neither is present (e.g. CI without the
+    sideprojects mount)."""
+    in_tree = list(FIXTURE_DIR.glob("flist_OOC_Hub_*.zip"))
+    if in_tree:
+        return in_tree[0]
+    side = Path("/sideprojects/flistcharexporter")
+    if side.exists():
+        matches = list(side.glob("flist_OOC_Hub_*.zip"))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _derive_working_from_character_json(character_json: dict) -> tuple[dict, dict]:
+    """Invert the flistcharexporter shape into a working.json + pool
+    manifest so the round-trip canary can re-serialise and compare.
+    Implemented as the test fixture, not production code — the production
+    inverse (loading a Tier 6 ZIP back into the editor for Diff) is a
+    follow-up after the userscript-side restore lands."""
+    import zip_serialise as zs
+
+    # Invert the settings rename map.
+    reverse_rename = {v: k for k, v in zs._SETTINGS_RENAME.items()}
+    settings = {
+        reverse_rename.get(k, k): v
+        for k, v in character_json.get("settings", {}).items()
+    }
+    # Reshape custom kinks back to a dict + order.
+    custom_kinks: dict = {}
+    order: list = []
+    for entry in character_json.get("customKinks", []):
+        key = (
+            entry["id"]
+            if entry.get("id") is not None
+            else f"local:{entry['name'][:8]}"
+        )
+        custom_kinks[key] = {
+            "name": entry["name"],
+            "description": entry.get("description", ""),
+            "choice": entry.get("choice", "undecided"),
+            "children": [],
+        }
+        order.append(key)
+    # Reshape images: synthesise a pool manifest so the round-trip has
+    # somewhere to look up the image_id during re-serialisation.
+    pool_manifest: dict = {}
+    working_images: list = []
+    for entry in character_json.get("images", {}).get("list", []):
+        filename = entry["filename"]
+        stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)
+        image_id, ext = stem[0], stem[1]
+        # Use a synthetic sha derived from the image_id so the inverse
+        # is deterministic.
+        fake_sha = f"shacanary{image_id}".ljust(64, "0")[:64]
+        pool_manifest[fake_sha] = {"extension": ext, "image_id": image_id}
+        working_images.append(
+            {"sha256": fake_sha, "description": entry.get("description", "")}
+        )
+    char = character_json.get("character", {})
+    working = {
+        "_schema_version": 3,
+        "_overlay": [],
+        "character": {
+            "id": char.get("id"),
+            "name": char.get("name"),
+            "description": char.get("description", ""),
+            "custom_title": char.get("customTitle", ""),
+        },
+        "settings": settings,
+        "infotags": character_json.get("infotags", {}),
+        "kinks": character_json.get("kinks", {}),
+        "custom_kinks": custom_kinks,
+        "_custom_kinks_order": order,
+        "images": working_images,
+        "inlines": {
+            sid: {"hash": "x", "extension": "png", "nsfw": False}
+            for sid in character_json.get("inlines", [])
+        },
+    }
+    return working, pool_manifest
+
+
+def test_round_trip_against_real_export_fixture():
+    """Canary against a real flistcharexporter export. Builds an
+    equivalent working.json from the captured character.json, runs the
+    serialiser, and asserts shape-equivalence modulo `meta`. Catches
+    F-list form-field renames that would otherwise ship a corrupt
+    restore bundle (QA feedback BLOCK #11)."""
+    import zipfile
+
+    fixture = _candidate_fixture_paths()
+    if fixture is None:
+        pytest.skip(
+            "no flistcharexporter OOC Hub sample available (commit one to "
+            "tests/fixtures/working/ or mount /sideprojects/flistcharexporter)"
+        )
     serialiser = _load_serialiser()
-    # Tier 6 implementer fills in: load ZIP, derive matching working.json,
-    # call serialiser.to_zip_character_json, byte-compare modulo
-    # meta.exportedAt.
-    pytest.fail("Tier 6: implement the round-trip when the serialiser lands")
+    with zipfile.ZipFile(fixture) as z:
+        original = json.loads(z.read("character.json"))
+    working, manifest = _derive_working_from_character_json(original)
+    reproduced = serialiser.to_zip_character_json(
+        working, pool_manifest=manifest
+    )
+
+    # Compare modulo meta (exportedAt + version are emitter-specific).
+    original_no_meta = {k: v for k, v in original.items() if k != "meta"}
+    reproduced_no_meta = {k: v for k, v in reproduced.items() if k != "meta"}
+    assert reproduced_no_meta == original_no_meta, (
+        "round-trip diverged from original export — "
+        "the userscript's reader will fail to consume the Workbench ZIP"
+    )
+
+
+# ---- pinned local_ prefix length (NIT #9) ----------------------------
+
+
+def test_local_image_id_prefix_is_pinned_length():
+    """User-uploaded images get a stable synthetic image_id derived from
+    the sha. The prefix length is pinned at 16 hex chars (~64 bits) so
+    collisions across a heavy user's lifetime pool are astronomically
+    unlikely; shorter would court collisions, longer adds no value."""
+    serialiser = _load_serialiser()
+    sha = "a" * 64
+    payload = {
+        "_schema_version": 3,
+        "_overlay": [],
+        "images": [{"sha256": sha, "description": ""}],
+    }
+    manifest = {sha: {"extension": "png", "image_id": None, "source": "user_upload"}}
+    out = serialiser.to_zip_character_json(payload, pool_manifest=manifest)
+    filename = out["images"]["list"][0]["filename"]
+    # images/local_<16 hex chars>.png
+    assert filename == f"images/local_{'a' * 16}.png"

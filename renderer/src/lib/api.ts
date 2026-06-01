@@ -54,6 +54,15 @@ export type FlistBackupEntry = {
   size: number
 }
 
+export type FlistPoolEntry = {
+  sha256: string
+  extension: string
+  image_id: string | null
+  source: string
+  added_at: number
+  size: number
+}
+
 export type FlistPullHandlers = {
   onQueued?: () => void
   onTicket?: () => void
@@ -868,6 +877,47 @@ export const api = {
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(filename)}`,
+  // ---- F-list per-character pool (Tier 6) ------------------------------
+  flistPoolList: (characterId: string | number) =>
+    get<{ character_id: string; pool: FlistPoolEntry[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/pool`
+    ),
+  flistPoolUpload: async (
+    characterId: string | number,
+    data: Blob
+  ): Promise<FlistPoolEntry> => {
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/pool`,
+      {
+        method: 'POST',
+        body: data
+      }
+    )
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`
+      try {
+        const body = (await res.json()) as { detail?: string }
+        if (typeof body?.detail === 'string') detail = body.detail
+      } catch {
+        // best-effort — server may not have returned JSON
+      }
+      throw new Error(detail)
+    }
+    return (await res.json()) as FlistPoolEntry
+  },
+  flistPoolDelete: (characterId: string | number, sha: string) =>
+    request<{ deleted: boolean; sha256: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/pool/${encodeURIComponent(sha)}`,
+      { method: 'DELETE' }
+    ),
+  flistPoolFileUrl: (
+    characterId: string | number,
+    sha: string,
+    extension: string
+  ) =>
+    `${base()}/flist/character/${encodeURIComponent(String(characterId))}/pool/${encodeURIComponent(`${sha}.${extension}`)}`,
+  flistExportZipUrl: (characterId: string | number) =>
+    `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
   flistPull: async (
     name: string,
     handlers: FlistPullHandlers,

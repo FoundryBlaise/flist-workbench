@@ -510,3 +510,26 @@ async def download_to(
     finally:
         if own:
             await c.aclose()
+
+
+async def fetch_bytes(
+    url: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+    rate_limiter: RateLimiter | None = None,
+) -> bytes:
+    """Fetch `url` and return its raw bytes. Subject to the same CDN
+    rate limiter as `download_to`; lets a caller hash/route the bytes
+    in-memory before deciding where (or whether) to write."""
+    rl = rate_limiter or _CDN_LIMITER
+    own = client is None
+    c = client or _default_client()
+    try:
+        await rl.acquire()
+        res = await c.get(url)
+        if res.status_code >= 400:
+            raise FlistApiError(f"HTTP {res.status_code} fetching {url}")
+        return res.content
+    finally:
+        if own:
+            await c.aclose()

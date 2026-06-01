@@ -227,3 +227,174 @@ def test_merge_roster_log_attaches_to_id_row_by_name():
     assert rows[0]["id"] == 7
     assert rows[0]["on_account"] is True
     assert rows[0]["has_logs"] is True
+
+
+# ---- pool storage (Tier 6) -------------------------------------------
+
+
+_PNG_HEADER = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def test_add_to_pool_dedupes_identical_bytes():
+    cid = "501"
+    sha_a = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", image_id="30012128", source="flist_pull"
+    )
+    sha_b = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", image_id="30012128", source="flist_pull"
+    )
+    assert sha_a == sha_b
+    files = list(character_archive.pool_dir(cid).glob("*.png"))
+    assert len(files) == 1
+
+
+def test_add_to_pool_rejects_unsupported_extension():
+    with pytest.raises(ValueError):
+        character_archive.add_to_pool("502", b"\x00\x00", "bmp", source="user_upload")
+
+
+def test_add_to_pool_normalises_jpeg_to_jpg():
+    data = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+    sha = character_archive.add_to_pool(
+        "503", data, "jpeg", image_id=None, source="user_upload"
+    )
+    manifest = character_archive.read_pool_manifest("503")
+    assert manifest[sha]["extension"] == "jpg"
+    assert (character_archive.pool_dir("503") / f"{sha}.jpg").exists()
+
+
+def test_add_to_pool_merges_image_id_on_second_call():
+    # First call is a user upload (no image_id known). Second call learns
+    # the F-list image_id from a pull — manifest should now carry it.
+    cid = "504"
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", image_id=None, source="user_upload"
+    )
+    assert character_archive.read_pool_manifest(cid)[sha]["image_id"] is None
+    character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", image_id="30012128", source="flist_pull"
+    )
+    assert (
+        character_archive.read_pool_manifest(cid)[sha]["image_id"] == "30012128"
+    )
+    # Source stays as the original — once "user_upload" the provenance
+    # of the bytes doesn't change.
+    assert character_archive.read_pool_manifest(cid)[sha]["source"] == "user_upload"
+
+
+def test_list_pool_entries_skips_missing_files():
+    cid = "505"
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", source="user_upload"
+    )
+    # Manually remove the file but leave the manifest entry — a corrupt
+    # disk state shouldn't surface a phantom row.
+    (character_archive.pool_dir(cid) / f"{sha}.png").unlink()
+    assert character_archive.list_pool_entries(cid) == []
+
+
+def test_lookup_pool_by_image_id_returns_sha():
+    cid = "506"
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", image_id="42", source="flist_pull"
+    )
+    assert character_archive.lookup_pool_by_image_id(cid, "42") == sha
+    assert character_archive.lookup_pool_by_image_id(cid, "99") is None
+
+
+def test_remove_from_pool_drops_file_and_manifest():
+    cid = "507"
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", source="user_upload"
+    )
+    ok = character_archive.remove_from_pool(cid, sha)
+    assert ok is True
+    assert character_archive.read_pool_manifest(cid) == {}
+    assert not (character_archive.pool_dir(cid) / f"{sha}.png").exists()
+
+
+def test_migrate_images_to_pool_moves_files_and_rewrites_working():
+    cid = "508"
+    legacy = character_archive.images_dir(cid)
+    a = legacy / "30012128.png"
+    a.write_bytes(_PNG_HEADER)
+    b = legacy / "30012129.png"
+    b.write_bytes(_PNG_HEADER + b"\x01")
+    # Old-shape working.json with image_id references.
+    character_archive.write_working(
+        cid,
+        {
+            "_schema_version": 2,
+            "_overlay": [],
+            "images": [
+                {"image_id": "30012128", "extension": "png", "description": "first"},
+                {"image_id": "30012129", "extension": "png", "description": ""},
+            ],
+        },
+    )
+    moved = character_archive.migrate_images_to_pool(cid)
+    assert moved == 2
+    assert not legacy.exists()
+    manifest = character_archive.read_pool_manifest(cid)
+    assert {m["image_id"] for m in manifest.values()} == {"30012128", "30012129"}
+    working = character_archive.read_working(cid)
+    assert working is not None
+    images = working["images"]
+    assert len(images) == 2
+    assert all("sha256" in entry for entry in images)
+    assert images[0]["description"] == "first"
+
+
+def test_migrate_images_to_pool_is_idempotent():
+    cid = "509"
+    legacy = character_archive.images_dir(cid)
+    (legacy / "1.png").write_bytes(_PNG_HEADER)
+    first = character_archive.migrate_images_to_pool(cid)
+    second = character_archive.migrate_images_to_pool(cid)
+    assert first == 1
+    assert second == 0
+
+
+def test_read_working_refuses_future_schema_version():
+    """A working.json written by a newer build must be refused, not
+    silently mis-interpreted. The renderer falls back to seed-from-Live
+    on None, so the file stays intact for a future re-open with the
+    matching version (QA feedback BLOCK #4)."""
+    cid = "510"
+    target = character_archive.working_path(cid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+
+    target.write_text(
+        _json.dumps(
+            {
+                "_schema_version": character_archive.WORKING_SCHEMA_VERSION + 1,
+                "_overlay": [],
+                "character": {"id": "1", "name": "X"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert character_archive.read_working(cid) is None
+    # File stays on disk untouched — no quarantine for a future-version
+    # file; we want it readable again after upgrade.
+    assert target.exists()
+
+
+def test_migrate_images_to_pool_stamps_current_schema_version():
+    cid = "511"
+    (character_archive.images_dir(cid) / "1.png").write_bytes(_PNG_HEADER)
+    character_archive.write_working(
+        cid,
+        {
+            "_schema_version": 2,
+            "_overlay": [],
+            "images": [
+                {"image_id": "1", "extension": "png", "description": "d"},
+            ],
+        },
+    )
+    character_archive.migrate_images_to_pool(cid)
+    out = character_archive.read_working(cid)
+    assert out is not None
+    assert out["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION

@@ -499,6 +499,11 @@ async def flist_character_pull(name: str) -> StreamingResponse:
 
                 downloaded = 0
                 failed = 0
+                # image_id -> sha256, populated as each download (or pool
+                # cache hit) resolves. Used after the loop to stamp sha
+                # into live.json's images array so seedWorkingFromLive
+                # can carry pool references through to the working copy.
+                image_shas: dict[str, str] = {}
                 for i, img in enumerate(image_list, start=1):
                     image_id = img["image_id"]
                     ext = img["extension"]
@@ -506,25 +511,11 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         f"{flist_api.STATIC_BASE}/images/charimage/"
                         f"{image_id}.{ext}"
                     )
-                    try:
-                        dest = character_archive.image_path(cid, image_id, ext)
-                    except ValueError:
-                        failed += 1
-                        yield _sse_event(
-                            "image",
-                            {
-                                "index": i,
-                                "total": total,
-                                "image_id": image_id,
-                                "ok": False,
-                                "error": "unsafe filename",
-                            },
-                        )
-                        continue
-                    if dest.exists():
-                        # Already on disk from a prior pull. Skip the
-                        # download but still emit progress so the UI
-                        # ticks forward.
+                    cached_sha = character_archive.lookup_pool_by_image_id(
+                        cid, image_id
+                    )
+                    if cached_sha is not None:
+                        image_shas[image_id] = cached_sha
                         downloaded += 1
                         yield _sse_event(
                             "image",
@@ -538,7 +529,15 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         )
                         continue
                     try:
-                        await flist_api.download_to(url, dest, client=client)
+                        data = await flist_api.fetch_bytes(url, client=client)
+                        sha = character_archive.add_to_pool(
+                            cid,
+                            data,
+                            ext,
+                            image_id=image_id,
+                            source="flist_pull",
+                        )
+                        image_shas[image_id] = sha
                         downloaded += 1
                         yield _sse_event(
                             "image",
@@ -547,6 +546,20 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                                 "total": total,
                                 "image_id": image_id,
                                 "ok": True,
+                            },
+                        )
+                    except ValueError as exc:
+                        # add_to_pool rejected the extension. Treat like a
+                        # download failure so the pull keeps going.
+                        failed += 1
+                        yield _sse_event(
+                            "image",
+                            {
+                                "index": i,
+                                "total": total,
+                                "image_id": image_id,
+                                "ok": False,
+                                "error": str(exc),
                             },
                         )
                     except flist_api.FlistApiError as exc:
@@ -561,6 +574,24 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                                 "error": str(exc),
                             },
                         )
+
+                # Re-stamp live.json so each image entry carries its sha
+                # alongside the F-list image_id. seedWorkingFromLive reads
+                # the augmented array to populate the working copy's
+                # `images: [{sha256, description}]` gallery (Tier 6).
+                if image_shas:
+                    imgs_ref = live_payload.get("images")
+                    if isinstance(imgs_ref, list):
+                        for entry in imgs_ref:
+                            if not isinstance(entry, dict):
+                                continue
+                            iid_raw = entry.get("image_id") or entry.get("id")
+                            if iid_raw is None:
+                                continue
+                            sha = image_shas.get(str(iid_raw))
+                            if sha is not None:
+                                entry["sha256"] = sha
+                        character_archive.write_live(cid, live_payload)
 
                 # Seal the manifest: finished_at marks the loop ran to
                 # completion (success or with per-image failures). The
@@ -734,14 +765,225 @@ async def flist_character_backup_read(character_id: str, filename: str) -> dict:
 @app.get("/flist/character/{character_id}/images/{filename}")
 async def flist_character_image(character_id: str, filename: str) -> FileResponse:
     # Validate filename shape so a hostile renderer call can't path-
-    # traverse out of the images directory.
+    # traverse out of the images directory. Post-Tier 6 the legacy
+    # images/ dir is migrated into pool/<sha>.<ext>; fall back to the
+    # pool when the on-disk legacy file is gone but the manifest knows
+    # the F-list image_id.
     import re as _re
     if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
         raise HTTPException(status_code=400, detail="invalid image filename")
-    path = character_archive.images_dir(character_id) / filename
+    legacy = character_archive.images_dir(character_id) / filename
+    if legacy.exists():
+        return FileResponse(legacy)
+    stem, dot, _ext = filename.partition(".")
+    if dot:
+        sha = character_archive.lookup_pool_by_image_id(character_id, stem)
+        if sha is not None:
+            manifest = character_archive.read_pool_manifest(character_id)
+            meta = manifest.get(sha, {})
+            pool_ext = meta.get("extension")
+            if isinstance(pool_ext, str):
+                pool_file = character_archive.pool_dir(character_id) / f"{sha}.{pool_ext}"
+                if pool_file.exists():
+                    return FileResponse(pool_file)
+    raise HTTPException(status_code=404, detail="image not found")
+
+
+@app.get("/flist/character/{character_id}/pool")
+async def flist_character_pool_list(character_id: str) -> dict:
+    """List per-character pool entries (Tier 6). Each row carries the
+    sha256 the renderer uses to reference the file, the source flag for
+    the UI badge, and the F-list image_id when known."""
+    return {
+        "character_id": character_id,
+        "pool": character_archive.list_pool_entries(character_id),
+    }
+
+
+@app.post("/flist/character/{character_id}/pool")
+async def flist_character_pool_upload(
+    character_id: str, request: Request
+) -> dict:
+    """Upload an image into the per-character pool. The body is the raw
+    image bytes; the server sniffs magic bytes to decide the extension
+    (no client-supplied Content-Type trust). Returns the manifest row.
+
+    Idempotent — re-uploading identical bytes returns the same sha and
+    does not duplicate on disk."""
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    if len(body) > 16 * 1024 * 1024:
+        # Defensive — F-list itself caps images well below this, and a
+        # multi-MB body would block the loop on disk write. 16 MB is
+        # generous headroom over the largest sample image we've seen.
+        raise HTTPException(status_code=413, detail="image too large")
+    ext = _detect_image_ext(body)
+    if ext is None:
+        raise HTTPException(
+            status_code=415, detail="unsupported image type (png/jpg/gif only)"
+        )
+    sha = character_archive.add_to_pool(
+        character_id, body, ext, image_id=None, source="user_upload"
+    )
+    manifest = character_archive.read_pool_manifest(character_id)
+    meta = manifest.get(sha, {})
+    return {
+        "sha256": sha,
+        "extension": meta.get("extension", ext),
+        "image_id": meta.get("image_id"),
+        "source": meta.get("source", "user_upload"),
+        "added_at": meta.get("added_at", 0),
+        "size": meta.get("size", len(body)),
+    }
+
+
+@app.delete("/flist/character/{character_id}/pool/{sha}")
+async def flist_character_pool_remove(character_id: str, sha: str) -> dict:
+    """Remove a pool entry. Manual affordance only — the renderer's
+    Images tab is the sole caller. The gallery may still reference this
+    sha after removal; the renderer is responsible for unreferencing it
+    first. 404 when the manifest doesn't know the sha."""
+    ok = character_archive.remove_from_pool(character_id, sha)
+    if not ok:
+        raise HTTPException(status_code=404, detail="pool entry not found")
+    return {"deleted": True, "sha256": sha}
+
+
+@app.get("/flist/character/{character_id}/pool/{filename}")
+async def flist_character_pool_file(
+    character_id: str, filename: str
+) -> FileResponse:
+    """Serve a pool file by `<sha>.<ext>`. Filename shape is validated
+    against the same conservative regex as the other archive routes."""
+    import re as _re
+    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
+        raise HTTPException(status_code=400, detail="invalid pool filename")
+    path = character_archive.pool_dir(character_id) / filename
     if not path.exists():
-        raise HTTPException(status_code=404, detail="image not found")
+        raise HTTPException(status_code=404, detail="pool file not found")
     return FileResponse(path)
+
+
+@app.get("/flist/character/{character_id}/export.zip")
+async def flist_character_export_zip(character_id: str) -> Response:
+    """Build the userscript-compatible restore ZIP (Tier 6).
+
+    Bundles `character.json` + every pool image referenced by the
+    working copy's gallery + the avatar. The renderer triggers a
+    download by navigating to this URL, so the response stamps a
+    `Content-Disposition: attachment` with a filename derived from
+    the character name.
+    """
+    import zip_serialise
+
+    working = character_archive.read_working(character_id)
+    if working is None:
+        # Fall back to a Live-seeded payload so a user who hasn't yet
+        # edited the working copy can still export. Seeds inline since
+        # the renderer's seedWorkingFromLive isn't reachable from here.
+        live = character_archive.read_live(character_id)
+        if live is None:
+            raise HTTPException(
+                status_code=404,
+                detail="no working copy or Live snapshot to export",
+            )
+        working = _seed_working_from_live(live)
+    pool_manifest = character_archive.read_pool_manifest(character_id)
+    name_for_file = "character"
+    char = working.get("character")
+    if isinstance(char, dict):
+        nm = char.get("name")
+        if isinstance(nm, str) and nm:
+            name_for_file = nm
+    avatar_path = (
+        character_archive.avatar_path_for(name_for_file)
+        if name_for_file != "character"
+        else None
+    )
+    data = zip_serialise.build_zip(
+        character_id,
+        working,
+        pool_manifest=pool_manifest,
+        pool_dir=character_archive.pool_dir(character_id),
+        avatar_path=avatar_path,
+    )
+    import time as _t
+
+    download_name = (
+        f"flist_{_safe_filename_part(name_for_file)}_{int(_t.time() * 1000)}.zip"
+    )
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"'
+        },
+    )
+
+
+def _seed_working_from_live(live: dict) -> dict:
+    """Sidecar-side mirror of `seedWorkingFromLive` for the export
+    fallback path (user hasn't edited yet). Only the fields the ZIP
+    serialiser reads are populated; everything else can stay missing."""
+    out: dict[str, Any] = {"_schema_version": 2, "_overlay": []}
+    if isinstance(live.get("character"), dict):
+        out["character"] = dict(live["character"])
+    else:
+        out["character"] = {
+            "id": live.get("id"),
+            "name": live.get("name"),
+            "description": live.get("description", ""),
+            "custom_title": live.get("custom_title"),
+        }
+    for key in ("settings", "infotags", "custom_kinks", "inlines"):
+        if key in live:
+            out[key] = live[key]
+    kinks = live.get("kinks")
+    out["kinks"] = {} if isinstance(kinks, list) else (kinks or {})
+    gallery: list[dict] = []
+    raw_images = live.get("images")
+    if isinstance(raw_images, list):
+        for entry in raw_images:
+            if not isinstance(entry, dict):
+                continue
+            sha = entry.get("sha256")
+            if not isinstance(sha, str):
+                continue
+            gallery.append(
+                {
+                    "sha256": sha,
+                    "description": entry.get("description", "") or "",
+                }
+            )
+    out["images"] = gallery
+    return out
+
+
+def _safe_filename_part(name: str) -> str:
+    """Lower-risk Content-Disposition filename component. F-list permits
+    Unicode names; downloaders on Windows reject some characters in
+    attachment filenames, so we replace anything outside an ASCII safe
+    set with `_` and trim to a sensible length."""
+    import re as _re
+
+    cleaned = _re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip()) or "character"
+    return cleaned[:64]
+
+
+def _detect_image_ext(data: bytes) -> str | None:
+    """Sniff PNG/JPG/GIF magic bytes. Returns the pool's canonical ext
+    string or None for anything else. JPEG normalises to "jpg" to match
+    the pool's accepted set."""
+    if len(data) < 8:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    return None
 
 
 @app.get("/flist/character/{character_id}/inlines/{filename}")
@@ -808,6 +1050,41 @@ async def _avatar_cleanup_on_startup() -> None:
             "(left over from pre-URL-fix sidecar)",
             flush=True,
         )
+
+
+@app.on_event("startup")
+async def _migrate_images_to_pool_on_startup() -> None:
+    """Move legacy `images/<image_id>.<ext>` files into
+    `pool/<sha>.<ext>` with a manifest of original image_ids, and
+    translate `working.json`'s images array to sha references. Walks
+    every character archive once; idempotent past the first run.
+    Off the hot path — runs in a background task so a slow archive
+    walk on Dropbox/OneDrive-synced userdata can't block FastAPI's
+    startup-complete signal."""
+    import asyncio
+
+    async def _run() -> None:
+        root = character_archive.root()
+        total = 0
+        chars = 0
+        for entry in list(root.iterdir()):
+            if not entry.is_dir():
+                continue
+            try:
+                moved = character_archive.migrate_images_to_pool(entry.name)
+            except OSError:
+                continue
+            if moved > 0:
+                chars += 1
+                total += moved
+        if total > 0:
+            print(
+                f"[flist] migrated {total} legacy images to pool/ "
+                f"across {chars} character archives (Tier 6)",
+                flush=True,
+            )
+
+    asyncio.create_task(_run())
 
 
 @app.on_event("startup")

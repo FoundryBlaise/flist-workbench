@@ -72,16 +72,43 @@ describe('applyReset', () => {
 })
 
 describe('seedWorkingFromLive', () => {
-  it('normalises CRLF + carries inlines/images verbatim', () => {
+  it('normalises CRLF + carries inlines verbatim', () => {
     const live = {
       character: { description: 'a\r\nb', id: '1', name: 'A' },
-      inlines: { '5': { hash: 'x', extension: 'png', nsfw: false } },
-      images: [{ image_id: '1', extension: 'jpg' }]
+      inlines: { '5': { hash: 'x', extension: 'png', nsfw: false } }
     }
     const seeded = seedWorkingFromLive(live)
     const desc = (seeded.character as Record<string, unknown>).description as string
     expect(desc).toBe('a\nb')
-    expect(seeded.images).toEqual(live.images)
+    expect(seeded.inlines).toEqual(live.inlines)
+  })
+  it('translates live.images to sha-keyed gallery (Tier 6)', () => {
+    // Post-Tier-6 pulls augment each live.images entry with sha256;
+    // the working slot's gallery is the curated subset that carries
+    // through to the ZIP serialiser.
+    const live = {
+      character: { description: 'x' },
+      images: [
+        { image_id: '1', extension: 'jpg', sha256: 'aaa', description: 'first' },
+        { image_id: '2', extension: 'png', sha256: 'bbb' }
+      ]
+    } as Record<string, unknown>
+    const seeded = seedWorkingFromLive(live)
+    expect(seeded.images).toEqual([
+      { sha256: 'aaa', description: 'first' },
+      { sha256: 'bbb', description: '' }
+    ])
+  })
+  it('drops live.images entries without sha256 (pre-Tier-6 archive)', () => {
+    // Old live.json that never got re-pulled after the migration
+    // carries entries without sha256 — those drop out so the gallery
+    // doesn't render broken thumbnails. User re-pulls to repopulate.
+    const live = {
+      character: { description: 'x' },
+      images: [{ image_id: '1', extension: 'jpg' }]
+    } as Record<string, unknown>
+    const seeded = seedWorkingFromLive(live)
+    expect(seeded.images).toEqual([])
   })
   it('preserves unknown top-level keys (forward-compat round-trip)', () => {
     const live = {

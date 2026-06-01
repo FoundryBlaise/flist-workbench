@@ -175,6 +175,27 @@ export function seedWorkingFromLive(live: Record<string, unknown>): WorkingPaylo
       out.kinks = {}
       continue
     }
+    // Tier 6: the gallery model is sha-keyed. Live carries the F-list
+    // image_id + extension + description + (post-Tier-6 pull) sha256.
+    // Drop everything except sha256 + description so the working copy
+    // is portable across re-pulls — image_id/extension are pool
+    // manifest concerns. Entries without sha256 (pre-Tier-6 live.json
+    // that never got re-pulled after migration) drop out so the
+    // gallery renders empty rather than carrying broken refs.
+    if (key === 'images' && Array.isArray(value)) {
+      const gallery: { sha256: string; description: string }[] = []
+      for (const entry of value as unknown[]) {
+        if (!entry || typeof entry !== 'object') continue
+        const e = entry as { sha256?: unknown; description?: unknown }
+        if (typeof e.sha256 !== 'string') continue
+        gallery.push({
+          sha256: e.sha256,
+          description: typeof e.description === 'string' ? e.description : ''
+        })
+      }
+      out.images = gallery
+      continue
+    }
     out[key] = value
   }
   // Tier 3 invariant: when custom_kinks is a dict, materialise the order

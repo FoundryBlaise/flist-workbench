@@ -10,6 +10,7 @@ import { KinksPane } from '../flist/KinksPane'
 import { countKinksWithChoice } from '../flist/kinksUnified'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane, countDiffChanges } from '../flist/DiffPane'
+import { ImagesTab } from '../flist/ImagesTab'
 import { Toolbar } from './Toolbar'
 import { RevisionsPanel } from './RevisionsPanel'
 
@@ -381,6 +382,16 @@ function EditorTabsHost(props: {
         label: 'Kinks',
         badge: kinksCount > 0 ? kinksCount : undefined,
         content: <KinksPane characterId={flistActiveId} />
+      })
+      out.push({
+        id: 'images',
+        label: 'Images',
+        content: (
+          <ImagesTab
+            characterId={flistActiveId}
+            readOnly={props.readOnly}
+          />
+        )
       })
       out.push({
         id: 'diff',
