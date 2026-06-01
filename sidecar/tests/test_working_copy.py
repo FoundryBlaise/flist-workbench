@@ -223,9 +223,10 @@ def test_tier2_v1_file_reads_as_current_with_derived_order(archive_module) -> No
     """A working.json written by a Tier 2 (v1) sidecar must read cleanly
     under later tiers: the in-memory payload gets stamped to the current
     schema version and the `_custom_kinks_order` array is derived from
-    dict-insertion order so the rail renders without a fresh edit. Disk
-    is *not* mutated on read — the on-disk file stays v1 until the next
-    write."""
+    dict-insertion order so the rail renders without a fresh edit.
+    Tier 6 v2 update: read also writes the migrated shape back to disk
+    so external tools and the next read see the canonical layout — the
+    in-memory + on-disk views are kept in sync."""
     target = archive_module.working_path("123")
     target.parent.mkdir(parents=True, exist_ok=True)
     import json as _json
@@ -248,8 +249,8 @@ def test_tier2_v1_file_reads_as_current_with_derived_order(archive_module) -> No
     assert out["_schema_version"] == archive_module.WORKING_SCHEMA_VERSION
     assert out["_custom_kinks_order"] == ["31712021", "31712022"]
     on_disk = _json.loads(target.read_text(encoding="utf-8"))
-    assert on_disk["_schema_version"] == 1
-    assert "_custom_kinks_order" not in on_disk
+    assert on_disk["_schema_version"] == archive_module.WORKING_SCHEMA_VERSION
+    assert on_disk["_custom_kinks_order"] == ["31712021", "31712022"]
 
 
 def test_custom_kinks_order_round_trip(archive_module) -> None:

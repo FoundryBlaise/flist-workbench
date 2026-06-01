@@ -36,8 +36,10 @@ def test_pool_upload_returns_manifest_entry(client: TestClient) -> None:
     body = res.json()
     assert body["extension"] == "png"
     assert body["source"] == "user_upload"
-    assert body["image_id"] is None
     assert len(body["sha256"]) == 64
+    # v2 design: the pool does not track F-list image_ids — those belong
+    # to `images/<image_id>.<ext>` in the per-character images dir.
+    assert "image_id" not in body
 
 
 def test_pool_upload_rejects_unsupported_type(client: TestClient) -> None:
@@ -96,8 +98,8 @@ def _seed_working_with_gallery(
     images: list[dict],
 ) -> None:
     """Drop a live + working pair onto disk so the export route has
-    something to bundle. Pool entries are populated by direct calls to
-    `add_to_pool` so the manifest carries the F-list image_id when set."""
+    something to bundle. Caller is responsible for placing the actual
+    image bytes in <char>/images/ via write_character_image."""
     character_archive.write_live(
         character_id,
         {
@@ -110,7 +112,7 @@ def _seed_working_with_gallery(
     character_archive.write_working(
         character_id,
         {
-            "_schema_version": 2,
+            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"id": character_id, "name": name, "description": "test profile"},
             "images": images,
@@ -121,18 +123,22 @@ def _seed_working_with_gallery(
 def test_export_zip_includes_character_json_and_images(
     client: TestClient,
 ) -> None:
-    sha_a = character_archive.add_to_pool(
-        "9999", _PNG, "png", image_id="30012128", source="flist_pull"
-    )
-    sha_b = character_archive.add_to_pool(
+    # F-list-pulled image — both images/30012128.png AND pool/<sha>.png
+    # are written by write_character_image.
+    character_archive.write_character_image("9999", "30012128", "png", _PNG)
+    # User-uploaded pool entry, then materialised into images/ as a
+    # local-<sha8> id.
+    sha_local = character_archive.add_to_pool(
         "9999", _PNG_VARIANT, "png", source="user_upload"
     )
+    local_id = character_archive.materialise_pool_to_character("9999", sha_local)
+    assert local_id is not None
     _seed_working_with_gallery(
         "9999",
         "OOC Hub",
         [
-            {"sha256": sha_a, "description": "first"},
-            {"sha256": sha_b, "description": ""},
+            {"image_id": "30012128", "description": "first", "sort_order": 0},
+            {"image_id": local_id, "description": "", "sort_order": 1},
         ],
     )
     res = client.get("/flist/character/9999/export.zip")
@@ -142,10 +148,8 @@ def test_export_zip_includes_character_json_and_images(
     z = zipfile.ZipFile(io.BytesIO(res.content))
     names = set(z.namelist())
     assert "character.json" in names
-    # F-list-known image keeps its image_id; user-uploaded gets a
-    # local_<sha-prefix> stem so the ZIP entry is stable across exports.
     assert "images/30012128.png" in names
-    assert any(n.startswith("images/local_") and n.endswith(".png") for n in names)
+    assert f"images/{local_id}.png" in names
     character_json = json.loads(z.read("character.json"))
     assert character_json["character"]["name"] == "OOC Hub"
     assert len(character_json["images"]["list"]) == 2
@@ -155,9 +159,7 @@ def test_export_zip_includes_character_json_and_images(
 def test_export_zip_falls_back_to_live_when_no_working(
     client: TestClient,
 ) -> None:
-    sha = character_archive.add_to_pool(
-        "8888", _PNG, "png", image_id="42", source="flist_pull"
-    )
+    character_archive.write_character_image("8888", "42", "png", _PNG)
     character_archive.write_live(
         "8888",
         {
@@ -165,7 +167,7 @@ def test_export_zip_falls_back_to_live_when_no_working(
             "name": "Solo",
             "description": "Live-only",
             "images": [
-                {"image_id": "42", "extension": "png", "sha256": sha, "description": ""},
+                {"image_id": "42", "extension": "png", "description": ""},
             ],
             "fetched_at": 1,
         },

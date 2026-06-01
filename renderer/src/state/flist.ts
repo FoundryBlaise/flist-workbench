@@ -41,7 +41,7 @@ export interface FlistWorkingSlot {
   materialised: boolean
 }
 
-export const WORKING_SCHEMA_VERSION = 2
+export const WORKING_SCHEMA_VERSION = 4
 
 // Top-level container keys carried by working.json. Renderer flushes the
 // whole payload — unknown keys (older + future tiers) round-trip cleanly.
@@ -175,24 +175,38 @@ export function seedWorkingFromLive(live: Record<string, unknown>): WorkingPaylo
       out.kinks = {}
       continue
     }
-    // Tier 6: the gallery model is sha-keyed. Live carries the F-list
-    // image_id + extension + description + (post-Tier-6 pull) sha256.
-    // Drop everything except sha256 + description so the working copy
-    // is portable across re-pulls — image_id/extension are pool
-    // manifest concerns. Entries without sha256 (pre-Tier-6 live.json
-    // that never got re-pulled after migration) drop out so the
-    // gallery renders empty rather than carrying broken refs.
+    // v4: gallery is image_id-keyed. Live carries
+    // {image_id, extension, description, sort_order} per entry — we keep
+    // image_id + description + sort_order; the extension lives on disk
+    // (images/<image_id>.<ext>) so the renderer can resolve thumbnails
+    // without it. Local synthetic ids (`local-<sha8>`) get added later
+    // when the user drags a pool-only image into the gallery.
     if (key === 'images' && Array.isArray(value)) {
-      const gallery: { sha256: string; description: string }[] = []
+      const gallery: { image_id: string; description: string; sort_order: number }[] = []
       for (const entry of value as unknown[]) {
         if (!entry || typeof entry !== 'object') continue
-        const e = entry as { sha256?: unknown; description?: unknown }
-        if (typeof e.sha256 !== 'string') continue
+        const e = entry as {
+          image_id?: unknown
+          id?: unknown
+          description?: unknown
+          sort_order?: unknown
+        }
+        const iid = e.image_id ?? e.id
+        if (iid === null || iid === undefined) continue
+        const sortRaw = e.sort_order
+        const sort =
+          typeof sortRaw === 'number'
+            ? sortRaw
+            : typeof sortRaw === 'string' && sortRaw !== ''
+              ? Number(sortRaw)
+              : gallery.length
         gallery.push({
-          sha256: e.sha256,
-          description: typeof e.description === 'string' ? e.description : ''
+          image_id: String(iid),
+          description: typeof e.description === 'string' ? e.description : '',
+          sort_order: Number.isFinite(sort) ? (sort as number) : gallery.length
         })
       }
+      gallery.sort((a, b) => a.sort_order - b.sort_order)
       out.images = gallery
       continue
     }

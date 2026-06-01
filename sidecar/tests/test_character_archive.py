@@ -238,10 +238,10 @@ _PNG_HEADER = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 def test_add_to_pool_dedupes_identical_bytes():
     cid = "501"
     sha_a = character_archive.add_to_pool(
-        cid, _PNG_HEADER, "png", image_id="30012128", source="flist_pull"
+        cid, _PNG_HEADER, "png", source="flist_pull"
     )
     sha_b = character_archive.add_to_pool(
-        cid, _PNG_HEADER, "png", image_id="30012128", source="flist_pull"
+        cid, _PNG_HEADER, "png", source="flist_pull"
     )
     assert sha_a == sha_b
     files = list(character_archive.pool_dir(cid).glob("*.png"))
@@ -256,30 +256,24 @@ def test_add_to_pool_rejects_unsupported_extension():
 def test_add_to_pool_normalises_jpeg_to_jpg():
     data = b"\xff\xd8\xff\xe0" + b"\x00" * 16
     sha = character_archive.add_to_pool(
-        "503", data, "jpeg", image_id=None, source="user_upload"
+        "503", data, "jpeg", source="user_upload"
     )
     manifest = character_archive.read_pool_manifest("503")
     assert manifest[sha]["extension"] == "jpg"
     assert (character_archive.pool_dir("503") / f"{sha}.jpg").exists()
 
 
-def test_add_to_pool_merges_image_id_on_second_call():
-    # First call is a user upload (no image_id known). Second call learns
-    # the F-list image_id from a pull — manifest should now carry it.
+def test_pool_manifest_does_not_carry_image_id():
+    # v2 design: the pool is a sha-keyed forever archive. F-list
+    # image_ids belong on `images/<image_id>.<ext>` files, not on pool
+    # manifest entries.
     cid = "504"
     sha = character_archive.add_to_pool(
-        cid, _PNG_HEADER, "png", image_id=None, source="user_upload"
+        cid, _PNG_HEADER, "png", source="flist_pull"
     )
-    assert character_archive.read_pool_manifest(cid)[sha]["image_id"] is None
-    character_archive.add_to_pool(
-        cid, _PNG_HEADER, "png", image_id="30012128", source="flist_pull"
-    )
-    assert (
-        character_archive.read_pool_manifest(cid)[sha]["image_id"] == "30012128"
-    )
-    # Source stays as the original — once "user_upload" the provenance
-    # of the bytes doesn't change.
-    assert character_archive.read_pool_manifest(cid)[sha]["source"] == "user_upload"
+    meta = character_archive.read_pool_manifest(cid)[sha]
+    assert "image_id" not in meta
+    assert meta["source"] == "flist_pull"
 
 
 def test_list_pool_entries_skips_missing_files():
@@ -287,19 +281,8 @@ def test_list_pool_entries_skips_missing_files():
     sha = character_archive.add_to_pool(
         cid, _PNG_HEADER, "png", source="user_upload"
     )
-    # Manually remove the file but leave the manifest entry — a corrupt
-    # disk state shouldn't surface a phantom row.
     (character_archive.pool_dir(cid) / f"{sha}.png").unlink()
     assert character_archive.list_pool_entries(cid) == []
-
-
-def test_lookup_pool_by_image_id_returns_sha():
-    cid = "506"
-    sha = character_archive.add_to_pool(
-        cid, _PNG_HEADER, "png", image_id="42", source="flist_pull"
-    )
-    assert character_archive.lookup_pool_by_image_id(cid, "42") == sha
-    assert character_archive.lookup_pool_by_image_id(cid, "99") is None
 
 
 def test_remove_from_pool_drops_file_and_manifest():
@@ -313,46 +296,122 @@ def test_remove_from_pool_drops_file_and_manifest():
     assert not (character_archive.pool_dir(cid) / f"{sha}.png").exists()
 
 
-def test_migrate_images_to_pool_moves_files_and_rewrites_working():
+def test_write_character_image_writes_to_both_images_and_pool():
     cid = "508"
-    legacy = character_archive.images_dir(cid)
-    a = legacy / "30012128.png"
-    a.write_bytes(_PNG_HEADER)
-    b = legacy / "30012129.png"
-    b.write_bytes(_PNG_HEADER + b"\x01")
-    # Old-shape working.json with image_id references.
-    character_archive.write_working(
-        cid,
-        {
-            "_schema_version": 2,
-            "_overlay": [],
-            "images": [
-                {"image_id": "30012128", "extension": "png", "description": "first"},
-                {"image_id": "30012129", "extension": "png", "description": ""},
-            ],
-        },
-    )
-    moved = character_archive.migrate_images_to_pool(cid)
-    assert moved == 2
-    assert not legacy.exists()
+    character_archive.write_character_image(cid, "30012128", "png", _PNG_HEADER)
+    assert (character_archive.images_dir(cid) / "30012128.png").exists()
+    # pool gets a sha-keyed copy too.
+    pool_files = list(character_archive.pool_dir(cid).glob("*.png"))
+    assert len(pool_files) == 1
+    # The pool entry records the source as flist_pull.
     manifest = character_archive.read_pool_manifest(cid)
-    assert {m["image_id"] for m in manifest.values()} == {"30012128", "30012129"}
-    working = character_archive.read_working(cid)
-    assert working is not None
-    images = working["images"]
-    assert len(images) == 2
-    assert all("sha256" in entry for entry in images)
-    assert images[0]["description"] == "first"
+    assert next(iter(manifest.values()))["source"] == "flist_pull"
 
 
-def test_migrate_images_to_pool_is_idempotent():
+def test_materialise_pool_to_character_creates_local_id():
     cid = "509"
-    legacy = character_archive.images_dir(cid)
-    (legacy / "1.png").write_bytes(_PNG_HEADER)
-    first = character_archive.migrate_images_to_pool(cid)
-    second = character_archive.migrate_images_to_pool(cid)
-    assert first == 1
-    assert second == 0
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", source="user_upload"
+    )
+    local_id = character_archive.materialise_pool_to_character(cid, sha)
+    assert local_id is not None
+    assert local_id.startswith("local-")
+    assert local_id == f"local-{sha[:8]}"
+    assert (character_archive.images_dir(cid) / f"{local_id}.png").exists()
+
+
+def test_materialise_pool_is_idempotent_per_sha():
+    cid = "510"
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", source="user_upload"
+    )
+    first = character_archive.materialise_pool_to_character(cid, sha)
+    second = character_archive.materialise_pool_to_character(cid, sha)
+    assert first == second
+    files = list(character_archive.images_dir(cid).glob("local-*.png"))
+    assert len(files) == 1
+
+
+def test_remove_character_image_deletes_from_images_only():
+    cid = "512"
+    character_archive.write_character_image(cid, "999", "png", _PNG_HEADER)
+    pool_files_before = list(character_archive.pool_dir(cid).glob("*.png"))
+    assert len(pool_files_before) == 1
+    ok = character_archive.remove_character_image(cid, "999")
+    assert ok is True
+    assert not (character_archive.images_dir(cid) / "999.png").exists()
+    # Pool keeps the bytes — that's the whole point of the forever archive.
+    assert list(character_archive.pool_dir(cid).glob("*.png")) == pool_files_before
+
+
+def test_sync_character_images_to_flist_prunes_removed_ids():
+    cid = "513"
+    character_archive.write_character_image(cid, "111", "png", _PNG_HEADER)
+    character_archive.write_character_image(cid, "222", "png", _PNG_HEADER + b"\x01")
+    # User also added a pool-only image; this must NOT be pruned by an
+    # F-list mirror sync.
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER + b"\x02", "png", source="user_upload"
+    )
+    character_archive.materialise_pool_to_character(cid, sha)
+    removed = character_archive.sync_character_images_to_flist(cid, ["111"])
+    assert removed == ["222"]
+    assert (character_archive.images_dir(cid) / "111.png").exists()
+    assert not (character_archive.images_dir(cid) / "222.png").exists()
+    # local-* synthetic id survives the sync.
+    assert (character_archive.images_dir(cid) / f"local-{sha[:8]}.png").exists()
+
+
+def test_list_character_images_excludes_pool():
+    cid = "514"
+    character_archive.write_character_image(cid, "333", "png", _PNG_HEADER)
+    # add_to_pool alone (without write_character_image) shouldn't show up
+    # in the character image list — pool ≠ images/.
+    character_archive.add_to_pool(
+        cid, _PNG_HEADER + b"\xff", "png", source="user_upload"
+    )
+    rows = character_archive.list_character_images(cid)
+    assert [r["image_id"] for r in rows] == ["333"]
+    assert rows[0]["extension"] == "png"
+
+
+def test_migrate_working_v3_drops_sha_only_images():
+    cid = "515"
+    target = character_archive.working_path(cid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    target.write_text(
+        _json.dumps(
+            {
+                "_schema_version": 3,
+                "_overlay": [],
+                "images": [
+                    {"sha256": "abc", "description": "first"},
+                ],
+                "character": {"id": "1", "name": "X"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = character_archive.read_working(cid)
+    assert out is not None
+    # v3 → v4 strips the sha-only images array; caller re-seeds from Live.
+    assert "images" not in out
+    assert out["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
+    # And the migrated shape gets persisted so external tools / the next
+    # read see v4 directly — the on-disk file is no longer v3.
+    on_disk = _json.loads(target.read_text(encoding="utf-8"))
+    assert on_disk["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
+    assert "images" not in on_disk
+
+
+def test_normalise_image_ext_jpeg_to_jpg():
+    # Pinned because the pull cache check depends on this normalisation
+    # to match what write_character_image stores. If F-list ever returns
+    # "jpeg" the pull must hit the cache for an existing .jpg file.
+    assert character_archive.normalise_image_ext("jpeg") == "jpg"
+    assert character_archive.normalise_image_ext("JPEG") == "jpg"
+    assert character_archive.normalise_image_ext(".png") == "png"
 
 
 def test_read_working_refuses_future_schema_version():
@@ -381,20 +440,3 @@ def test_read_working_refuses_future_schema_version():
     assert target.exists()
 
 
-def test_migrate_images_to_pool_stamps_current_schema_version():
-    cid = "511"
-    (character_archive.images_dir(cid) / "1.png").write_bytes(_PNG_HEADER)
-    character_archive.write_working(
-        cid,
-        {
-            "_schema_version": 2,
-            "_overlay": [],
-            "images": [
-                {"image_id": "1", "extension": "png", "description": "d"},
-            ],
-        },
-    )
-    character_archive.migrate_images_to_pool(cid)
-    out = character_archive.read_working(cid)
-    assert out is not None
-    assert out["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION

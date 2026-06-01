@@ -57,9 +57,14 @@ export type FlistBackupEntry = {
 export type FlistPoolEntry = {
   sha256: string
   extension: string
-  image_id: string | null
   source: string
   added_at: number
+  size: number
+}
+
+export type FlistCharacterImage = {
+  image_id: string
+  extension: string
   size: number
 }
 
@@ -80,7 +85,10 @@ export type FlistPullHandlers = {
     character_id: string
     name: string
     image_count: number
+    image_downloaded?: number
+    image_cached?: number
     image_failed: number
+    image_pruned?: number
     pull_status?: FlistPullStatus['status']
     pull_missing?: number
   }) => void
@@ -916,6 +924,21 @@ export const api = {
     extension: string
   ) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/pool/${encodeURIComponent(`${sha}.${extension}`)}`,
+  // ---- F-list per-character images/ (image_id-keyed) -------------------
+  flistCharacterImages: (characterId: string | number) =>
+    get<{ character_id: string; images: FlistCharacterImage[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images`
+    ),
+  flistImageFromPool: (characterId: string | number, sha: string) =>
+    request<{ image_id: string; extension: string; sha256: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images/from-pool/${encodeURIComponent(sha)}`,
+      { method: 'POST' }
+    ),
+  flistImageRemove: (characterId: string | number, imageId: string) =>
+    request<{ deleted: boolean; image_id: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(imageId)}`,
+      { method: 'DELETE' }
+    ),
   flistExportZipUrl: (characterId: string | number) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
   flistPull: async (
