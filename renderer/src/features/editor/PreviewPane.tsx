@@ -7,6 +7,7 @@ import {
 } from '../../lib/bbcode/codemirror'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
+import { GalleryPreviewPane } from '../flist/GalleryPreviewPane'
 
 const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
 
@@ -65,7 +66,10 @@ export function PreviewPane() {
   const showProfileFieldsPreview =
     editorActiveTab === 'profile-fields' && flistActiveId !== null
   const showKinksPool = editorActiveTab === 'kinks' && flistActiveId !== null
-  const showAlternatePreview = showProfileFieldsPreview || showKinksPool
+  const showImagesPreview =
+    editorActiveTab === 'images' && flistActiveId !== null
+  const showAlternatePreview =
+    showProfileFieldsPreview || showKinksPool || showImagesPreview
   const ref = useRef<HTMLDivElement>(null)
   const focusedRef = useRef(false)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
@@ -181,7 +185,9 @@ export function PreviewPane() {
           ? 'Info Preview'
           : showKinksPool
             ? 'Undecided Kinks'
-            : 'Live Preview'}
+            : showImagesPreview
+              ? 'Gallery Preview'
+              : 'Live Preview'}
         {showAlternatePreview ? null : readOnly ? (
           <span className="preview-readonly-hint" title="Pulled from F-list — read-only">
             · read-only
@@ -234,6 +240,8 @@ export function PreviewPane() {
         <ProfileFieldsPreview />
       ) : showKinksPool ? (
         <KinksUndecidedPool />
+      ) : showImagesPreview ? (
+        <GalleryPreviewPane />
       ) : (
         <div
           ref={ref}
