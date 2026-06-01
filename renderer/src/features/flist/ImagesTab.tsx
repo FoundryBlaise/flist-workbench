@@ -38,6 +38,11 @@ function galleryFromSlot(payload: unknown): GalleryEntry[] {
 
 const TOAST_MS = 5000
 
+// MIME marker for dragging a profile row into the Pool pane. Custom so
+// it doesn't conflict with text/uri-list or text/plain that the system
+// also dispatches during drags.
+const DRAG_MIME_PROFILE_IMAGE = 'application/x-flist-profile-image-id'
+
 // Synthetic ids for pool-only images materialised into a character look
 // like `local-<8 hex>` where the suffix is the sha256 prefix of the
 // underlying pool entry.
@@ -248,6 +253,11 @@ export function ImagesTab({
           }`}
           onDragOver={(e) => {
             if (readOnly) return
+            const dt = e.dataTransfer
+            const droppingProfileRow =
+              dt && Array.from(dt.types).includes(DRAG_MIME_PROFILE_IMAGE)
+            const droppingFiles = dt && dt.types.includes('Files')
+            if (!droppingProfileRow && !droppingFiles) return
             e.preventDefault()
             setDragActive(true)
           }}
@@ -256,6 +266,14 @@ export function ImagesTab({
             if (readOnly) return
             e.preventDefault()
             setDragActive(false)
+            const profileId = e.dataTransfer?.getData(DRAG_MIME_PROFILE_IMAGE)
+            if (profileId) {
+              // Drag-out-of-profile: remove from gallery. Bytes stay in
+              // the pool entry that already represents this image, so
+              // the user can drag it back later via "→ Add to profile".
+              void removeFromGallery(profileId)
+              return
+            }
             if (e.dataTransfer?.files?.length) {
               void uploadFiles(e.dataTransfer.files)
             }
@@ -361,6 +379,12 @@ export function ImagesTab({
                 key={entry.image_id}
                 className="flist-images-gallery-item"
                 tabIndex={readOnly ? -1 : 0}
+                draggable={!readOnly}
+                onDragStart={(e) => {
+                  if (readOnly) return
+                  e.dataTransfer.setData(DRAG_MIME_PROFILE_IMAGE, entry.image_id)
+                  e.dataTransfer.effectAllowed = 'move'
+                }}
                 onKeyDown={(e) => {
                   if (readOnly) return
                   if (e.altKey && e.key === 'ArrowUp') {
@@ -626,11 +650,14 @@ function PoolThumb({
   return (
     <button
       type="button"
-      className="flist-images-thumb"
+      className="flist-images-thumb flist-images-thumb-hover"
       onClick={onClick}
       title={`Pool · ${entry.sha256.slice(0, 12)}… (${entry.extension})`}
     >
       <img src={url} alt="" loading="lazy" />
+      <span className="flist-images-thumb-hover__zoom" aria-hidden>
+        <img src={url} alt="" />
+      </span>
     </button>
   )
 }
@@ -646,8 +673,11 @@ function CharacterImageThumb({
   // waiting for the /images list. The sidecar tries png/jpg/gif on disk.
   const url = api.flistImageByIdUrl(characterId, imageId)
   return (
-    <div className="flist-images-gallery-item__thumb">
+    <div className="flist-images-gallery-item__thumb flist-images-thumb-hover">
       <img src={url} alt="" loading="lazy" />
+      <div className="flist-images-thumb-hover__zoom" aria-hidden>
+        <img src={url} alt="" />
+      </div>
     </div>
   )
 }
