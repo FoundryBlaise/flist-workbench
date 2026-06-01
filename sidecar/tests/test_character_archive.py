@@ -405,6 +405,43 @@ def test_migrate_working_v3_drops_sha_only_images():
     assert "images" not in on_disk
 
 
+def test_remove_then_readd_via_pool_restores_original_image_id():
+    """After a profile-delete, the pool keeps the bytes AND remembers
+    the original F-list image_id. Re-adding via materialise should
+    restore the file under that original id (not a `local-<sha8>`
+    synthetic) so the gallery preview and restore ZIP both see the same
+    image identity the user had before the delete."""
+    cid = "601"
+    character_archive.write_character_image(cid, "30012128", "png", _PNG_HEADER)
+    img_path = character_archive.images_dir(cid) / "30012128.png"
+    assert img_path.exists()
+    # User removes from profile — file gone, pool intact.
+    character_archive.remove_character_image(cid, "30012128")
+    assert not img_path.exists()
+    # Find the pool sha for these bytes.
+    pool = character_archive.list_pool_entries(cid)
+    assert len(pool) == 1
+    sha = pool[0]["sha256"]
+    assert pool[0]["image_ids"] == ["30012128"]
+    # Re-add from pool, preferring the original id.
+    restored = character_archive.materialise_pool_to_character(
+        cid, sha, preferred_image_id="30012128"
+    )
+    assert restored == "30012128"
+    assert img_path.exists()
+
+
+def test_materialise_falls_back_to_local_when_no_history():
+    # User-uploaded pool entry that never went through F-list: no
+    # image_ids in the manifest, so materialise should mint a local-*.
+    cid = "602"
+    sha = character_archive.add_to_pool(
+        cid, _PNG_HEADER, "png", source="user_upload"
+    )
+    chosen = character_archive.materialise_pool_to_character(cid, sha)
+    assert chosen == f"local-{sha[:8]}"
+
+
 def test_normalise_image_ext_jpeg_to_jpg():
     # Pinned because the pull cache check depends on this normalisation
     # to match what write_character_image stores. If F-list ever returns

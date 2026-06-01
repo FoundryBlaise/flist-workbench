@@ -638,13 +638,15 @@ def add_to_pool(
     ext: str,
     *,
     source: str = "user_upload",
+    image_id: str | None = None,
 ) -> str:
     """Hash + store image bytes; return sha256 hex. Idempotent — re-
     adding identical bytes does not duplicate on disk. The pool is a
-    sha-keyed forever archive; F-list image_ids live next to the bytes
-    in `images/<image_id>.<ext>` and are NOT tracked in the pool
-    manifest (the pool doesn't care which F-list character or image_id
-    a byte sequence came from)."""
+    sha-keyed forever archive; when `image_id` is supplied (F-list pull
+    or a restored upload) it's appended to the entry's `image_ids` list
+    so the UI can re-materialise a deleted-from-profile image back to
+    its original `image_id` rather than minting a `local-*` synthetic.
+    """
     ext_n = _normalise_pool_ext(ext)
     sha = _hash_bytes(data)
     dest = pool_dir(character_id) / f"{sha}.{ext_n}"
@@ -652,11 +654,18 @@ def add_to_pool(
         dest.write_bytes(data)
     manifest = read_pool_manifest(character_id)
     existing = manifest.get(sha, {})
+    image_ids_raw = existing.get("image_ids")
+    image_ids: list[str] = (
+        list(image_ids_raw) if isinstance(image_ids_raw, list) else []
+    )
+    if image_id is not None and image_id not in image_ids:
+        image_ids.append(image_id)
     merged: dict[str, Any] = {
         "extension": ext_n,
         "source": existing.get("source") or source,
         "added_at": existing.get("added_at") or int(time.time()),
         "size": len(data),
+        "image_ids": image_ids,
     }
     manifest[sha] = merged
     write_pool_manifest(character_id, manifest)
@@ -668,6 +677,7 @@ def add_path_to_pool(
     path: Path,
     *,
     source: str = "flist_pull",
+    image_id: str | None = None,
 ) -> str | None:
     """Copy a file from `path` into the pool. Returns sha or None if
     the file is unreadable or carries an unrecognised extension.
@@ -683,14 +693,19 @@ def add_path_to_pool(
         data = path.read_bytes()
     except OSError:
         return None
-    return add_to_pool(character_id, data, ext, source=source)
+    return add_to_pool(
+        character_id, data, ext, source=source, image_id=image_id
+    )
 
 
 def list_pool_entries(character_id: int | str) -> list[dict[str, Any]]:
     """Pool entries sorted newest first. Each row:
-    `{sha256, extension, source, added_at, size}`. Entries whose
-    backing file is missing are skipped so the renderer never sees a
-    phantom thumbnail."""
+    `{sha256, extension, source, added_at, size, image_ids}`. Entries
+    whose backing file is missing are skipped so the renderer never
+    sees a phantom thumbnail. `image_ids` is the list of F-list / local
+    ids that have ever pointed at this sha — used by the UI to badge
+    the entry as already-in-gallery and to re-materialise with the
+    original id after a profile-delete."""
     manifest = read_pool_manifest(character_id)
     out: list[dict[str, Any]] = []
     for sha, meta in manifest.items():
@@ -700,6 +715,12 @@ def list_pool_entries(character_id: int | str) -> list[dict[str, Any]]:
         path = pool_dir(character_id) / f"{sha}.{ext}"
         if not path.exists():
             continue
+        image_ids_raw = meta.get("image_ids")
+        image_ids = (
+            [str(x) for x in image_ids_raw if isinstance(x, (str, int))]
+            if isinstance(image_ids_raw, list)
+            else []
+        )
         out.append(
             {
                 "sha256": sha,
@@ -707,6 +728,7 @@ def list_pool_entries(character_id: int | str) -> list[dict[str, Any]]:
                 "source": meta.get("source") or "unknown",
                 "added_at": meta.get("added_at") or 0,
                 "size": meta.get("size") or 0,
+                "image_ids": image_ids,
             }
         )
     out.sort(key=lambda r: r["added_at"], reverse=True)
@@ -776,7 +798,10 @@ def write_character_image(
 ) -> None:
     """Write `data` to `images/<image_id>.<ext>` AND copy into the pool
     (sha-keyed) so the bytes are doubly-stored: once for restore, once
-    for the forever archive. Both writes are idempotent."""
+    for the forever archive. The image_id is recorded in the pool
+    manifest entry's `image_ids` list so a later re-add from the pool
+    can restore to the original id rather than a `local-*` synthetic.
+    Both writes are idempotent."""
     if not _SAFE_NAME_RE.match(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
     ext_n = _normalise_pool_ext(ext)
@@ -784,18 +809,32 @@ def write_character_image(
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_bytes(data)
     tmp.replace(target)
-    add_to_pool(character_id, data, ext_n, source="flist_pull")
+    add_to_pool(
+        character_id, data, ext_n, source="flist_pull", image_id=image_id
+    )
 
 
 def materialise_pool_to_character(
     character_id: int | str,
     sha: str,
+    *,
+    preferred_image_id: str | None = None,
 ) -> str | None:
-    """Copy a pool image into `images/local-<sha8>.<ext>` so it can be
-    bundled in the restore ZIP and reordered alongside F-list images.
-    Returns the synthetic local image_id (e.g. `local-248fffe4`) or None
-    when the pool entry is missing. Idempotent — re-calling for the same
-    sha returns the existing local id without re-writing bytes."""
+    """Copy a pool image into `images/<id>.<ext>` so it can be bundled
+    in the restore ZIP and reordered alongside F-list images. The image
+    id is, in priority order:
+
+      1. `preferred_image_id` if it's listed in the pool entry's
+         `image_ids` (e.g. an F-list mirror entry the user just deleted
+         from their profile — re-adding restores the original id).
+      2. The first id in `image_ids` not already present on disk.
+      3. `local-<sha8>` synthetic fallback (user uploads that never
+         went through F-list).
+
+    Returns the chosen image_id or None when the pool entry / file is
+    missing. Idempotent — re-calling for the same sha returns the
+    existing id without re-writing bytes.
+    """
     manifest = read_pool_manifest(character_id)
     meta = manifest.get(sha)
     if not meta:
@@ -806,11 +845,30 @@ def materialise_pool_to_character(
     src = pool_dir(character_id) / f"{sha}.{ext}"
     if not src.exists():
         return None
-    local_id = f"local-{sha[:8]}"
-    target = images_dir(character_id) / f"{local_id}.{ext}"
+    image_ids_raw = meta.get("image_ids")
+    known_ids: list[str] = (
+        [str(x) for x in image_ids_raw if isinstance(x, (str, int))]
+        if isinstance(image_ids_raw, list)
+        else []
+    )
+    chosen: str | None = None
+    if preferred_image_id and preferred_image_id in known_ids:
+        chosen = preferred_image_id
+    if chosen is None:
+        for iid in known_ids:
+            if not _SAFE_NAME_RE.match(iid):
+                continue
+            if not (images_dir(character_id) / f"{iid}.{ext}").exists():
+                chosen = iid
+                break
+    if chosen is None:
+        chosen = f"local-{sha[:8]}"
+    if not _SAFE_NAME_RE.match(chosen):
+        return None
+    target = images_dir(character_id) / f"{chosen}.{ext}"
     if not target.exists():
         target.write_bytes(src.read_bytes())
-    return local_id
+    return chosen
 
 
 def remove_character_image(character_id: int | str, image_id: str) -> bool:

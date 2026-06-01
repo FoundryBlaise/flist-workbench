@@ -60,6 +60,11 @@ export type FlistPoolEntry = {
   source: string
   added_at: number
   size: number
+  /** F-list / local image_ids that have ever pointed at this sha. The
+   *  UI uses this to decide whether the entry is currently in the
+   *  gallery (any id present in working.images) and to re-add with the
+   *  original id rather than minting a `local-*` synthetic. */
+  image_ids: string[]
 }
 
 export type FlistCharacterImage = {
@@ -934,11 +939,19 @@ export const api = {
     get<{ character_id: string; images: FlistCharacterImage[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images`
     ),
-  flistImageFromPool: (characterId: string | number, sha: string) =>
-    request<{ image_id: string; extension: string; sha256: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/from-pool/${encodeURIComponent(sha)}`,
+  flistImageFromPool: (
+    characterId: string | number,
+    sha: string,
+    preferredImageId?: string
+  ) => {
+    const qs = preferredImageId
+      ? `?image_id=${encodeURIComponent(preferredImageId)}`
+      : ''
+    return request<{ image_id: string; extension: string; sha256: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images/from-pool/${encodeURIComponent(sha)}${qs}`,
       { method: 'POST' }
-    ),
+    )
+  },
   flistImageRemove: (characterId: string | number, imageId: string) =>
     request<{ deleted: boolean; image_id: string }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(imageId)}`,

@@ -87,19 +87,14 @@ export function ImagesTab({
 
   const poolEntries = pool?.entries ?? []
 
-  // Set of local-<sha8> ids currently in the gallery — used to badge the
-  // pool with "✓ In gallery" for entries the user has already pulled
-  // into the character.
-  const galleryLocalIds = useMemo(
-    () => new Set(gallery.map((e) => e.image_id).filter((id) => id.startsWith('local-'))),
+  // Set of image_ids currently in the gallery. Used to check whether a
+  // pool entry (which carries its own list of historical image_ids) has
+  // any of them in the active working gallery — if so the entry is
+  // "✓ In gallery", else "→ Add".
+  const galleryImageIds = useMemo(
+    () => new Set(gallery.map((e) => e.image_id)),
     [gallery]
   )
-
-  // F-list-pulled images live in both `pool/` (sha-keyed) and
-  // `images/<image_id>.<ext>` (image_id-keyed). We can't cheaply map
-  // between the two without hashing, so the Pool pane's "in gallery"
-  // affordance is exact only for local-* ids. For F-list entries we
-  // show neutral state.
   const sortedPool = useMemo(() => {
     return poolEntries
       .slice()
@@ -151,7 +146,18 @@ export function ImagesTab({
   }, [addToast])
 
   const addToGallery = async (entry: FlistPoolEntry) => {
-    const res = await addPoolToCharacter(characterId, entry.sha256)
+    // Prefer re-adding under an existing image_id from this entry's
+    // history that the gallery doesn't already carry — that way an
+    // F-list image the user deleted from profile comes back as the
+    // original id, not a new `local-*`.
+    const reusable = entry.image_ids.find(
+      (id) => !galleryImageIds.has(id)
+    )
+    const res = await addPoolToCharacter(
+      characterId,
+      entry.sha256,
+      reusable
+    )
     if (res && !res.added) {
       setAddToast(`Already in the gallery as ${res.image_id}.`)
     }
@@ -287,20 +293,28 @@ export function ImagesTab({
             <div className="flist-images-pane__loading">Loading pool…</div>
           )}
           <ul className="flist-images-pool-list">
-            {sortedPool.map((entry) => (
-              <PoolRow
-                key={entry.sha256}
-                characterId={characterId}
-                entry={entry}
-                inGallery={galleryLocalIds.has(localIdForSha(entry.sha256))}
-                readOnly={readOnly}
-                onAdd={() => void addToGallery(entry)}
-                confirming={confirmDelete === entry.sha256}
-                onConfirmStart={() => setConfirmDelete(entry.sha256)}
-                onConfirmCancel={() => setConfirmDelete(null)}
-                onConfirmDelete={() => void doDeletePool(entry.sha256)}
-              />
-            ))}
+            {sortedPool.map((entry) => {
+              const inGalleryViaHistory = entry.image_ids.some((id) =>
+                galleryImageIds.has(id)
+              )
+              const inGalleryViaLocal = galleryImageIds.has(
+                localIdForSha(entry.sha256)
+              )
+              return (
+                <PoolRow
+                  key={entry.sha256}
+                  characterId={characterId}
+                  entry={entry}
+                  inGallery={inGalleryViaHistory || inGalleryViaLocal}
+                  readOnly={readOnly}
+                  onAdd={() => void addToGallery(entry)}
+                  confirming={confirmDelete === entry.sha256}
+                  onConfirmStart={() => setConfirmDelete(entry.sha256)}
+                  onConfirmCancel={() => setConfirmDelete(null)}
+                  onConfirmDelete={() => void doDeletePool(entry.sha256)}
+                />
+              )
+            })}
             {!sortedPool.length && pool?.status === 'ready' && (
               <li className="flist-images-pool-empty">
                 {readOnly
@@ -509,34 +523,21 @@ function PoolRow({
   onConfirmCancel: () => void
   onConfirmDelete: () => void
 }) {
-  const isFlistMirror = entry.source === 'flist_pull'
   return (
     <li className="flist-images-pool-item">
       <PoolThumb
         characterId={characterId}
         entry={entry}
-        onClick={() => !readOnly && onAdd()}
+        onClick={() => !readOnly && !inGallery && onAdd()}
       />
       <div className="flist-images-pool-item__meta">
         <SourceBadge entry={entry} />
         {!readOnly && (
           <>
-            {isFlistMirror ? (
-              // F-list-pulled bytes already mirror to images/<image_id>.<ext>
-              // and are auto-seeded into the gallery from Live. Adding from
-              // the pool here would create a duplicate `local-*` row with a
-              // fresh image_id — confusing. Leave the action off; user can
-              // re-pull if they want the F-list entry back in the gallery.
+            {inGallery ? (
               <span
                 className="flist-images-pool-item__in-gallery"
-                title="F-list-pulled images are auto-mirrored to the gallery on each pull. To remove or re-add, edit the gallery directly."
-              >
-                F-list mirror
-              </span>
-            ) : inGallery ? (
-              <span
-                className="flist-images-pool-item__in-gallery"
-                title="Already added to the gallery as a local image"
+                title="Already in the profile gallery"
               >
                 ✓ In gallery
               </span>
@@ -545,9 +546,9 @@ function PoolRow({
                 type="button"
                 className="flist-images-pool-item__btn flist-images-pool-item__btn--add"
                 onClick={onAdd}
-                title="Add to gallery"
+                title="Add to gallery (restores to the original F-list id when known)"
               >
-                → Add
+                → Add to profile
               </button>
             )}
             {confirming ? (

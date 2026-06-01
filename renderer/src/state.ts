@@ -356,15 +356,19 @@ type State = {
     characterId: string,
     images: { image_id: string; description: string; sort_order: number }[]
   ) => void
-  /** Materialise a pool entry into this character's images/ as a
-   *  `local-<sha8>` synthetic id, then append it to the working
-   *  gallery. Returns `{image_id, added}` where `added=false` means the
-   *  id was already in the gallery (idempotent no-op for the UI to
-   *  surface as a toast).
+  /** Materialise a pool entry into this character's images/ and
+   *  append it to the working gallery. Restores to the original
+   *  F-list image_id when the pool entry has one in its history,
+   *  otherwise mints a `local-<sha8>` synthetic. `preferredImageId`
+   *  lets the caller force a specific id from the entry's history
+   *  (handy when an entry has multiple — pick the one the user just
+   *  deleted). Returns `{image_id, added}` where `added=false` means
+   *  the id was already in the gallery.
    */
   flistAddPoolToCharacter: (
     characterId: string,
-    sha: string
+    sha: string,
+    preferredImageId?: string
   ) => Promise<{ image_id: string; added: boolean } | null>
   /** Remove an image from this character — deletes images/<image_id>.<ext>
    *  and drops it from the working gallery. Pool keeps the bytes.
@@ -1305,8 +1309,10 @@ export const useStore = create<State>((set, get) => ({
     // same bytes after deletion would re-create the pool entry.
   },
 
-  async flistAddPoolToCharacter(characterId, sha) {
-    const res = await api.flistImageFromPool(characterId, sha).catch(() => null)
+  async flistAddPoolToCharacter(characterId, sha, preferredImageId) {
+    const res = await api
+      .flistImageFromPool(characterId, sha, preferredImageId)
+      .catch(() => null)
     if (!res) return null
     // Stamp the freshly-materialised image into the per-character images
     // map so the renderer has the extension immediately, without a round-
