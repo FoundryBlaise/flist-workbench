@@ -818,21 +818,25 @@ async def flist_character_image_by_id(
 
 @app.post("/flist/character/{character_id}/images/from-pool/{sha}")
 async def flist_character_image_from_pool(
-    character_id: str, sha: str
+    character_id: str, sha: str, image_id: str | None = None
 ) -> dict:
     """Materialise a pool entry into the character's `images/` so it
-    can be bundled in the restore ZIP. Returns the synthetic
-    `local-<sha8>` image_id the renderer should add to the gallery.
-    404 when the pool sha is unknown or its file is missing."""
-    local_id = character_archive.materialise_pool_to_character(
-        character_id, sha
+    can be bundled in the restore ZIP. Returns the image_id the
+    renderer should add to the gallery — either a previously-known
+    image_id from the pool's history (the common path for re-adding a
+    deleted-from-profile F-list image) or a `local-<sha8>` synthetic
+    when the pool entry has no history. 404 when the pool sha is
+    unknown or its file is missing.
+    """
+    chosen = character_archive.materialise_pool_to_character(
+        character_id, sha, preferred_image_id=image_id
     )
-    if local_id is None:
+    if chosen is None:
         raise HTTPException(status_code=404, detail="pool entry not found")
     manifest = character_archive.read_pool_manifest(character_id)
     meta = manifest.get(sha, {})
     return {
-        "image_id": local_id,
+        "image_id": chosen,
         "extension": meta.get("extension", ""),
         "sha256": sha,
     }
