@@ -19,6 +19,7 @@ export type MenuAction =
   | 'chat-toggle'
   | 'ai-setup'
   | 'flist-activity'
+  | 'restore-userscript-help'
 
 // Lives in the main process because it touches shell.openPath; we
 // resolve the path from the sidecar so user_data_dir() stays the one
@@ -223,6 +224,11 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           id: 'flist-activity',
           label: 'F-list Activity Log…',
           click: () => send(getWindow(), 'flist-activity')
+        },
+        {
+          id: 'restore-userscript-help',
+          label: 'Install Restore Userscript…',
+          click: () => send(getWindow(), 'restore-userscript-help')
         },
         { type: 'separator' },
         {

@@ -15,6 +15,7 @@ export type MenuAction =
   | 'chat-toggle'
   | 'ai-setup'
   | 'flist-activity'
+  | 'restore-userscript-help'
 
 declare global {
   interface Window {

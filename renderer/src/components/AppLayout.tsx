@@ -7,6 +7,8 @@ import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SignInModal } from '../features/flist/SignInModal'
 import { ActivityLogModal } from '../features/flist/ActivityLogModal'
+import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
+import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
@@ -48,6 +50,9 @@ export function AppLayout() {
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activityOpen, setActivityOpen] = useState(false)
+  const [userscriptHelpOpen, setUserscriptHelpOpen] = useState(false)
+  const exportRestoreOpen = useStore((s) => s.flistExportRestoreCharacterId)
+  const closeExportRestore = useStore((s) => s.flistCloseExportRestore)
   const [firstRunToast, setFirstRunToast] = useState(false)
   const [flistHintDismissed, setFlistHintDismissed] = useState<boolean>(() => {
     try {
@@ -250,6 +255,9 @@ export function AppLayout() {
         case 'flist-activity':
           setActivityOpen(true)
           break
+        case 'restore-userscript-help':
+          setUserscriptHelpOpen(true)
+          break
         case 'chat-toggle':
           // Opening the chat panel also flips to logs mode — chat is
           // contextual to the log viewer, so launching it from the
@@ -373,6 +381,19 @@ export function AppLayout() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {aiSetupOpen && <AISetupWizard onClose={closeAiSetup} />}
       {activityOpen && <ActivityLogModal onClose={() => setActivityOpen(false)} />}
+      {userscriptHelpOpen && (
+        <UserscriptHelpModal onClose={() => setUserscriptHelpOpen(false)} />
+      )}
+      {exportRestoreOpen && (
+        <ExportRestoreModal
+          characterId={exportRestoreOpen}
+          onClose={closeExportRestore}
+          onShowUserscriptHelp={() => {
+            closeExportRestore()
+            setUserscriptHelpOpen(true)
+          }}
+        />
+      )}
       {classifyTarget && (
         <ClassifyDialog
           key={`${classifyTarget.scope.character ?? '*'}::${classifyTarget.scope.partner ?? '*'}`}
