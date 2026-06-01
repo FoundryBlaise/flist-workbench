@@ -652,13 +652,9 @@ function CharacterImageThumb({
   characterId: string
   imageId: string
 }) {
-  const ext = useStore(
-    (s) => s.flistCharacterImages[characterId]?.byId[imageId]?.extension ?? null
-  )
-  if (!ext) {
-    return <div className="flist-images-gallery-item__thumb" />
-  }
-  const url = api.flistImageUrl(characterId, `${imageId}.${ext}`)
+  // Use the extension-blind server route so the thumb renders without
+  // waiting for the /images list. The sidecar tries png/jpg/gif on disk.
+  const url = api.flistImageByIdUrl(characterId, imageId)
   return (
     <div className="flist-images-gallery-item__thumb">
       <img src={url} alt="" loading="lazy" />

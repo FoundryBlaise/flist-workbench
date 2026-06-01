@@ -885,6 +885,11 @@ export const api = {
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(filename)}`,
+  /** Extension-blind variant — the sidecar tries png/jpg/gif on disk
+   *  and serves whichever exists. Lets the renderer render thumbnails
+   *  without first round-tripping the /images list. */
+  flistImageByIdUrl: (characterId: string | number, imageId: string) =>
+    `${base()}/flist/character/${encodeURIComponent(String(characterId))}/image/${encodeURIComponent(imageId)}`,
   // ---- F-list per-character pool (Tier 6) ------------------------------
   flistPoolList: (characterId: string | number) =>
     get<{ character_id: string; pool: FlistPoolEntry[] }>(
