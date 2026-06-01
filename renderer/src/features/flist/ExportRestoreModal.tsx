@@ -2,32 +2,34 @@ import { useEffect, useMemo } from 'react'
 import { api } from '../../lib/api'
 import { useStore } from '../../state'
 
-function galleryFromSlot(payload: unknown): { sha256: string; description: string }[] {
+function galleryFromSlot(payload: unknown): { image_id: string; description: string }[] {
   if (!payload || typeof payload !== 'object') return []
   const raw = (payload as { images?: unknown }).images
   if (!Array.isArray(raw)) return []
-  const out: { sha256: string; description: string }[] = []
+  const out: { image_id: string; description: string }[] = []
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') continue
-    const e = entry as { sha256?: unknown; description?: unknown }
-    if (typeof e.sha256 !== 'string') continue
+    const e = entry as { image_id?: unknown; description?: unknown }
+    if (typeof e.image_id !== 'string') continue
     out.push({
-      sha256: e.sha256,
+      image_id: e.image_id,
       description: typeof e.description === 'string' ? e.description : ''
     })
   }
   return out
 }
 
-function liveGalleryShas(live: unknown): Set<string> {
+function liveGalleryImageIds(live: unknown): Set<string> {
   const out = new Set<string>()
   if (!live || typeof live !== 'object') return out
   const raw = (live as { images?: unknown }).images
   if (!Array.isArray(raw)) return out
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') continue
-    const sha = (entry as { sha256?: unknown }).sha256
-    if (typeof sha === 'string') out.add(sha)
+    const iid = (entry as { image_id?: unknown; id?: unknown }).image_id
+      ?? (entry as { image_id?: unknown; id?: unknown }).id
+    if (typeof iid === 'string') out.add(iid)
+    else if (typeof iid === 'number') out.add(String(iid))
   }
   return out
 }
@@ -64,11 +66,17 @@ export function ExportRestoreModal({
   }, [onClose])
 
   const gallery = galleryFromSlot(slot?.payload)
-  const liveShas = liveGalleryShas(live)
-  const newOnRestore = gallery.filter((e) => !liveShas.has(e.sha256))
-  const reusedOnRestore = gallery.filter((e) => liveShas.has(e.sha256))
-  const onLiveNotInSet = [...liveShas].filter(
-    (sha) => !gallery.some((e) => e.sha256 === sha)
+  const liveIds = liveGalleryImageIds(live)
+  // local-<sha8> ids are always new-on-restore (synthetic). F-list-shaped
+  // ids that match Live are skipped by the userscript (already uploaded).
+  const newOnRestore = gallery.filter(
+    (e) => e.image_id.startsWith('local-') || !liveIds.has(e.image_id)
+  )
+  const reusedOnRestore = gallery.filter(
+    (e) => !e.image_id.startsWith('local-') && liveIds.has(e.image_id)
+  )
+  const onLiveNotInSet = [...liveIds].filter(
+    (iid) => !gallery.some((e) => e.image_id === iid)
   )
 
   const customKinkCount = (() => {
@@ -116,17 +124,19 @@ export function ExportRestoreModal({
             <div>
               <dt>Gallery images</dt>
               <dd>
-                {gallery.length}
+                {gallery.length} total
                 {newOnRestore.length > 0 && (
                   <span className="flist-export-restore-detail">
                     {' '}
-                    · {newOnRestore.length} new to upload
+                    · {newOnRestore.length} new upload
+                    {newOnRestore.length === 1 ? '' : 's'}
                   </span>
                 )}
                 {reusedOnRestore.length > 0 && (
                   <span className="flist-export-restore-detail">
                     {' '}
-                    · {reusedOnRestore.length} already on Live (skipped on restore)
+                    · {reusedOnRestore.length} retained from F-list
+                    {' '}(captions / order may still differ)
                   </span>
                 )}
               </dd>

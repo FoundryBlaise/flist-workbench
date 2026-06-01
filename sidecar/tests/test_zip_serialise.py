@@ -202,24 +202,25 @@ def _derive_working_from_character_json(character_json: dict) -> tuple[dict, dic
             "children": [],
         }
         order.append(key)
-    # Reshape images: synthesise a pool manifest so the round-trip has
-    # somewhere to look up the image_id during re-serialisation.
-    pool_manifest: dict = {}
+    # Reshape images: working refs are image_id + description + sort_order;
+    # extensions are looked up from the per-image_id map (image_extensions).
+    image_extensions: dict[str, str] = {}
     working_images: list = []
-    for entry in character_json.get("images", {}).get("list", []):
+    for index, entry in enumerate(character_json.get("images", {}).get("list", [])):
         filename = entry["filename"]
         stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)
         image_id, ext = stem[0], stem[1]
-        # Use a synthetic sha derived from the image_id so the inverse
-        # is deterministic.
-        fake_sha = f"shacanary{image_id}".ljust(64, "0")[:64]
-        pool_manifest[fake_sha] = {"extension": ext, "image_id": image_id}
+        image_extensions[image_id] = ext
         working_images.append(
-            {"sha256": fake_sha, "description": entry.get("description", "")}
+            {
+                "image_id": image_id,
+                "description": entry.get("description", ""),
+                "sort_order": entry.get("position", index),
+            }
         )
     char = character_json.get("character", {})
     working = {
-        "_schema_version": 3,
+        "_schema_version": 4,
         "_overlay": [],
         "character": {
             "id": char.get("id"),
@@ -238,7 +239,7 @@ def _derive_working_from_character_json(character_json: dict) -> tuple[dict, dic
             for sid in character_json.get("inlines", [])
         },
     }
-    return working, pool_manifest
+    return working, image_extensions
 
 
 def test_round_trip_against_real_export_fixture():
@@ -258,9 +259,9 @@ def test_round_trip_against_real_export_fixture():
     serialiser = _load_serialiser()
     with zipfile.ZipFile(fixture) as z:
         original = json.loads(z.read("character.json"))
-    working, manifest = _derive_working_from_character_json(original)
+    working, image_extensions = _derive_working_from_character_json(original)
     reproduced = serialiser.to_zip_character_json(
-        working, pool_manifest=manifest
+        working, image_extensions=image_extensions
     )
 
     # Compare modulo meta (exportedAt + version are emitter-specific).
@@ -272,23 +273,24 @@ def test_round_trip_against_real_export_fixture():
     )
 
 
-# ---- pinned local_ prefix length (NIT #9) ----------------------------
+# ---- synthetic local-<sha8> filename round-trip ----------------------
 
 
-def test_local_image_id_prefix_is_pinned_length():
-    """User-uploaded images get a stable synthetic image_id derived from
-    the sha. The prefix length is pinned at 16 hex chars (~64 bits) so
-    collisions across a heavy user's lifetime pool are astronomically
-    unlikely; shorter would court collisions, longer adds no value."""
+def test_local_image_id_serialises_through_image_id_directly():
+    """User-uploaded images that have been materialised into images/
+    carry a `local-<sha8>` image_id in the working gallery; the ZIP
+    serialiser passes that through to `images/<id>.<ext>` unchanged so
+    the file on disk and the ZIP entry agree."""
     serialiser = _load_serialiser()
-    sha = "a" * 64
     payload = {
-        "_schema_version": 3,
+        "_schema_version": 4,
         "_overlay": [],
-        "images": [{"sha256": sha, "description": ""}],
+        "images": [
+            {"image_id": "local-abcdef12", "description": "", "sort_order": 0},
+        ],
     }
-    manifest = {sha: {"extension": "png", "image_id": None, "source": "user_upload"}}
-    out = serialiser.to_zip_character_json(payload, pool_manifest=manifest)
+    out = serialiser.to_zip_character_json(
+        payload, image_extensions={"local-abcdef12": "png"}
+    )
     filename = out["images"]["list"][0]["filename"]
-    # images/local_<16 hex chars>.png
-    assert filename == f"images/local_{'a' * 16}.png"
+    assert filename == "images/local-abcdef12.png"

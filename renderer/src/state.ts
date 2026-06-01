@@ -185,16 +185,26 @@ type State = {
    *  the modal navigates to the export.zip route. Lives in the store so
    *  the menu / sidebar / Images tab can all open it from anywhere. */
   flistExportRestoreCharacterId: string | null
-  /** Per-character image pool (Tier 6). Each entry is one PNG/JPG/GIF
-   *  on disk; the working copy's `images: [{sha256, description}]`
-   *  array references entries by sha256. Status is per-character so a
-   *  fresh switch shows a loading indicator while the list arrives. */
+  /** Per-character image pool — the forever archive (Tier 6 v2). Sha-
+   *  keyed, deduped. Separate from the working gallery, which lives in
+   *  working.json as `images: [{image_id, description, sort_order}]`
+   *  and references files in `<char>/images/<image_id>.<ext>`. */
   flistPool: Record<
     string,
     {
       entries: FlistPoolEntry[]
       status: 'idle' | 'loading' | 'ready' | 'error'
       error: string | null
+    }
+  >
+  /** Per-character snapshot of files in `<char>/images/`, keyed by
+   *  image_id. Loaded lazily by the Images tab so thumbnails can be
+   *  rendered with the correct extension without guessing. */
+  flistCharacterImages: Record<
+    string,
+    {
+      byId: Record<string, { extension: string; size: number }>
+      status: 'idle' | 'loading' | 'ready' | 'error'
     }
   >
   /** Per-character working copies, persisted to
@@ -339,12 +349,30 @@ type State = {
   flistCloseExportRestore: () => void
   // ---- Tier 6 image-pool actions ----
   flistLoadPool: (characterId: string) => Promise<void>
+  flistLoadCharacterImages: (characterId: string) => Promise<void>
   flistUploadPoolImage: (characterId: string, file: File | Blob) => Promise<FlistPoolEntry>
   flistDeletePoolImage: (characterId: string, sha: string) => Promise<void>
   flistSetGalleryImages: (
     characterId: string,
-    images: { sha256: string; description: string }[]
+    images: { image_id: string; description: string; sort_order: number }[]
   ) => void
+  /** Materialise a pool entry into this character's images/ as a
+   *  `local-<sha8>` synthetic id, then append it to the working
+   *  gallery. Returns `{image_id, added}` where `added=false` means the
+   *  id was already in the gallery (idempotent no-op for the UI to
+   *  surface as a toast).
+   */
+  flistAddPoolToCharacter: (
+    characterId: string,
+    sha: string
+  ) => Promise<{ image_id: string; added: boolean } | null>
+  /** Remove an image from this character — deletes images/<image_id>.<ext>
+   *  and drops it from the working gallery. Pool keeps the bytes.
+   */
+  flistRemoveCharacterImage: (
+    characterId: string,
+    imageId: string
+  ) => Promise<void>
   flistOpenLive: (characterId: string) => Promise<void>
   flistOpenBackup: (characterId: string, filename: string) => Promise<void>
   /** One-click "I want to fix that typo" affordance on the F-list zone.
@@ -735,6 +763,7 @@ export const useStore = create<State>((set, get) => ({
   flistActiveCharacterId: null,
   flistArchive: {},
   flistPool: {},
+  flistCharacterImages: {},
   flistExportRestoreCharacterId: null,
   flistWorking: {},
   flistWorkingLoadStatus: {},
@@ -1025,10 +1054,18 @@ export const useStore = create<State>((set, get) => ({
             pullStage: 'images',
             pullProgress: { done: 0, total }
           }),
-        onImage: ({ index, total }) =>
-          setStatus({
-            pullProgress: { done: index, total }
-          }),
+        onImage: ({ index, total, ok, cached }) => {
+          setStatus({ pullProgress: { done: index, total } })
+          // Refresh the per-character images map so the Images tab's
+          // thumbnails update as files arrive. Only every 10th image to
+          // avoid hammering the sidecar with one HTTP GET per download
+          // (the rate-limited CDN already paces us at ~2/s, so a 10x
+          // skip means the Images tab refreshes every ~5 seconds during
+          // a long pull). Cached events don't change disk state.
+          if (targetId && ok && !cached && (index % 10 === 0 || index === total)) {
+            void get().flistLoadCharacterImages(targetId)
+          }
+        },
         onDone: async (info) => {
           // We know the character_id now even if we didn't before. Make
           // sure the per-id slot exists and gets reloaded.
@@ -1047,6 +1084,7 @@ export const useStore = create<State>((set, get) => ({
             }
           }))
           await get().flistLoadArchive(info.character_id)
+          await get().flistLoadCharacterImages(info.character_id)
           await get().flistLoadRoster()
           // If the user is sitting on this character's working copy and
           // hasn't typed anything yet, refresh the editor with the
@@ -1150,6 +1188,41 @@ export const useStore = create<State>((set, get) => ({
     set({ flistExportRestoreCharacterId: null })
   },
 
+  async flistLoadCharacterImages(characterId) {
+    set((s) => ({
+      flistCharacterImages: {
+        ...s.flistCharacterImages,
+        [characterId]: {
+          byId: s.flistCharacterImages[characterId]?.byId ?? {},
+          status: 'loading'
+        }
+      }
+    }))
+    try {
+      const res = await api.flistCharacterImages(characterId)
+      const byId: Record<string, { extension: string; size: number }> = {}
+      for (const img of res.images) {
+        byId[img.image_id] = { extension: img.extension, size: img.size }
+      }
+      set((s) => ({
+        flistCharacterImages: {
+          ...s.flistCharacterImages,
+          [characterId]: { byId, status: 'ready' }
+        }
+      }))
+    } catch {
+      set((s) => ({
+        flistCharacterImages: {
+          ...s.flistCharacterImages,
+          [characterId]: {
+            byId: s.flistCharacterImages[characterId]?.byId ?? {},
+            status: 'error'
+          }
+        }
+      }))
+    }
+  },
+
   async flistLoadPool(characterId) {
     set((s) => ({
       flistPool: {
@@ -1224,21 +1297,74 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     })
-    // Strip the gallery reference too — the working copy carries the
-    // sha as part of its `images` array, and a dangling reference
-    // would leave a broken thumbnail in the gallery pane.
-    const slot = get().flistWorking[characterId]
-    if (slot) {
-      const images = Array.isArray((slot.payload as { images?: unknown }).images)
-        ? ((slot.payload as { images: { sha256: string; description: string }[] }).images)
-        : []
-      if (images.some((e) => e.sha256 === sha)) {
-        get().flistSetGalleryImages(
-          characterId,
-          images.filter((e) => e.sha256 !== sha)
-        )
+    // Pool delete doesn't cascade into the working gallery anymore —
+    // the gallery references image_ids in images/, not pool shas. A pool
+    // entry that's been materialised into images/ as a local-<sha8>
+    // file keeps that file (and its gallery row); the pool deletion just
+    // removes the original sha-keyed backup copy. Re-materialising the
+    // same bytes after deletion would re-create the pool entry.
+  },
+
+  async flistAddPoolToCharacter(characterId, sha) {
+    const res = await api.flistImageFromPool(characterId, sha).catch(() => null)
+    if (!res) return null
+    // Stamp the freshly-materialised image into the per-character images
+    // map so the renderer has the extension immediately, without a round-
+    // trip through the list endpoint.
+    set((s) => {
+      const prev = s.flistCharacterImages[characterId]
+      const nextById = { ...(prev?.byId ?? {}) }
+      nextById[res.image_id] = { extension: res.extension, size: 0 }
+      return {
+        flistCharacterImages: {
+          ...s.flistCharacterImages,
+          [characterId]: { byId: nextById, status: prev?.status ?? 'ready' }
+        }
       }
+    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return { image_id: res.image_id, added: false }
+    const images = Array.isArray((slot.payload as { images?: unknown }).images)
+      ? ((slot.payload as { images: { image_id: string; description: string; sort_order: number }[] }).images)
+      : []
+    if (images.some((e) => e.image_id === res.image_id)) {
+      return { image_id: res.image_id, added: false }
     }
+    const nextOrder =
+      images.length === 0
+        ? 0
+        : Math.max(...images.map((e) => e.sort_order)) + 1
+    get().flistSetGalleryImages(characterId, [
+      ...images,
+      { image_id: res.image_id, description: '', sort_order: nextOrder }
+    ])
+    return { image_id: res.image_id, added: true }
+  },
+
+  async flistRemoveCharacterImage(characterId, imageId) {
+    await api.flistImageRemove(characterId, imageId).catch(() => null)
+    set((s) => {
+      const prev = s.flistCharacterImages[characterId]
+      if (!prev) return {}
+      const nextById = { ...prev.byId }
+      delete nextById[imageId]
+      return {
+        flistCharacterImages: {
+          ...s.flistCharacterImages,
+          [characterId]: { byId: nextById, status: prev.status }
+        }
+      }
+    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const images = Array.isArray((slot.payload as { images?: unknown }).images)
+      ? ((slot.payload as { images: { image_id: string; description: string; sort_order: number }[] }).images)
+      : []
+    if (!images.some((e) => e.image_id === imageId)) return
+    get().flistSetGalleryImages(
+      characterId,
+      images.filter((e) => e.image_id !== imageId)
+    )
   },
 
   flistSetGalleryImages(characterId, images) {
@@ -1421,8 +1547,23 @@ export const useStore = create<State>((set, get) => ({
       const overlay = Array.isArray((payload as WorkingPayload)._overlay)
         ? ((payload as WorkingPayload)._overlay as string[])
         : []
+      // A v3 file migrated to v4 has its sha-keyed `images` stripped
+      // (sidecar can't translate without re-querying F-list). Backfill
+      // the gallery from live.json so the user doesn't see an empty
+      // pane after upgrading.
+      const workingPayload = payload as WorkingPayload
+      const images = (workingPayload as { images?: unknown }).images
+      if (!Array.isArray(images) || images.length === 0) {
+        const live = get().flistArchive[characterId]?.live ?? null
+        if (live) {
+          const seeded = seedWorkingFromLive(live)
+          if (Array.isArray(seeded.images) && seeded.images.length > 0) {
+            workingPayload.images = seeded.images
+          }
+        }
+      }
       const slot: FlistWorkingSlot = {
-        payload: payload as WorkingPayload,
+        payload: workingPayload,
         overlay,
         etag,
         unsavedDirty: false,

@@ -1,15 +1,15 @@
 """Tier 6 ZIP serialisation — translate a working.json payload into the
 `character.json` shape the `flistcharexporter` userscript reads, and
-package it with the referenced pool images into a userscript-compatible
-ZIP.
+package it with the referenced character images into a userscript-
+compatible ZIP.
 
 Two entry points:
 
-    to_zip_character_json(working_payload, *, pool_manifest=None) -> dict
+    to_zip_character_json(working_payload, *, image_extensions=None) -> dict
         Pure shape transform. Tested by `test_zip_serialise.py`.
 
-    build_zip(character_id, working_payload, *, pool_dir, avatar_path) -> bytes
-        Bundles the JSON + each referenced pool image at
+    build_zip(character_id, working_payload, *, images_dir, avatar_path) -> bytes
+        Bundles the JSON + each gallery image at
         `images/<image_id>.<ext>` + `avatar.png` at the root.
 
 Shape contract: see the Vanessa sample at
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,18 +55,21 @@ _VALID_CHOICES = {"fave", "yes", "maybe", "no", "undecided"}
 
 _EXPORT_FORMAT_VERSION = "0.0.0"
 
+_IMAGE_FILE_RE = re.compile(r"^([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$")
+
 
 def to_zip_character_json(
     working_payload: dict[str, Any],
     *,
-    pool_manifest: dict[str, dict[str, Any]] | None = None,
+    image_extensions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Translate `working_payload` into the userscript's character.json.
 
-    `pool_manifest` is the per-character `pool/manifest.json` mapping
-    `sha256 -> {extension, image_id, …}`. Optional so the pinned
-    contract tests can drive the serialiser without a real archive —
-    they pass `image_id`+`extension` directly on image entries.
+    `image_extensions` maps gallery `image_id` → file extension (e.g.
+    `{"17924625": "jpg"}`). Built from `<char>/images/` by `build_zip`.
+    Optional; when omitted, entries that don't carry an `extension`
+    field fall through to `"png"` so the pinned contract tests can
+    drive the serialiser without a real archive.
     """
     return {
         "meta": _build_meta(),
@@ -75,7 +79,8 @@ def to_zip_character_json(
         "kinks": _reshape_kinks(working_payload.get("kinks")),
         "customKinks": _reshape_custom_kinks(working_payload),
         "images": _reshape_images(
-            working_payload.get("images"), pool_manifest=pool_manifest
+            working_payload.get("images"),
+            image_extensions=image_extensions,
         ),
         "inlines": _reshape_inlines(working_payload.get("inlines")),
     }
@@ -85,23 +90,54 @@ def build_zip(
     character_id: str | int,
     working_payload: dict[str, Any],
     *,
-    pool_manifest: dict[str, dict[str, Any]],
-    pool_dir: Path,
+    images_dir: Path,
     avatar_path: Path | None = None,
 ) -> bytes:
-    """Pack `character.json` + referenced pool images + the avatar into
-    a ZIP, returning the bytes. Skips image entries whose pool file is
-    missing rather than failing the whole export — the userscript will
-    still upload the JSON + any images that resolved.
+    """Pack `character.json` + the gallery images + the avatar into a
+    ZIP, returning the bytes. Skips entries whose `<image_id>.<ext>`
+    file is missing rather than failing the whole export — the user-
+    script will still upload the JSON + any images that resolved.
 
     `character_id` is currently ignored; reserved for future per-set
-    routing (Tier 7) so the signature doesn't churn then.
+    routing so the signature doesn't churn then.
     """
-    del character_id  # not yet used; signature reserved for Tier 7
+    del character_id  # not yet used; signature reserved for later
+
+    # Walk images/ once so the serialiser knows each image_id's
+    # extension. This mirrors `list_character_images` without going
+    # through character_archive — keeps the serialiser pure / testable.
+    image_extensions: dict[str, str] = {}
+    if images_dir.exists():
+        for entry in images_dir.iterdir():
+            if not entry.is_file():
+                continue
+            m = _IMAGE_FILE_RE.match(entry.name)
+            if not m:
+                continue
+            image_extensions[m.group(1)] = m.group(2).lower()
 
     character_json = to_zip_character_json(
-        working_payload, pool_manifest=pool_manifest
+        working_payload, image_extensions=image_extensions
     )
+
+    # Drop gallery entries whose bytes aren't on disk so the userscript
+    # never sees a JSON row referencing a missing file. Happens when
+    # F-list deleted an image (pull pruned images/) but the user hadn't
+    # yet removed the row from the working gallery. Positions are
+    # renumbered so the rendered order matches what the userscript will
+    # actually upload.
+    present: list[dict[str, Any]] = []
+    for entry in character_json["images"]["list"]:
+        filename = entry.get("filename")
+        if not isinstance(filename, str):
+            continue
+        src = images_dir / Path(filename).name
+        if not src.exists():
+            continue
+        present.append(entry)
+    for position, entry in enumerate(present):
+        entry["position"] = position
+    character_json["images"]["list"] = present
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -109,28 +145,12 @@ def build_zip(
             "character.json",
             json.dumps(character_json, indent=2, ensure_ascii=False),
         )
-        # Each ZIP entry name must be unique. Two images in the gallery
-        # could resolve to the same `images/<image_id>.<ext>` path if
-        # the working payload duplicates a sha — skip the dup.
         written: set[str] = set()
-        for entry in character_json["images"]["list"]:
-            filename = entry.get("filename")
-            if not isinstance(filename, str) or filename in written:
+        for entry in present:
+            filename = entry["filename"]
+            if filename in written:
                 continue
-            sha = _sha_for_image_filename(
-                filename, working_payload.get("images"), pool_manifest
-            )
-            if sha is None:
-                continue
-            meta = pool_manifest.get(sha)
-            if not isinstance(meta, dict):
-                continue
-            ext = meta.get("extension")
-            if not isinstance(ext, str):
-                continue
-            src = pool_dir / f"{sha}.{ext}"
-            if not src.exists():
-                continue
+            src = images_dir / Path(filename).name
             zf.write(src, filename)
             written.add(filename)
         if avatar_path is not None and avatar_path.exists():
@@ -181,8 +201,6 @@ def _reshape_settings(settings: Any) -> dict[str, Any]:
 def _reshape_infotags(infotags: Any) -> dict[str, Any]:
     if not isinstance(infotags, dict):
         return {}
-    # Tier 2 convention: cleared infotags are absent (not ""); pass
-    # through whatever the working payload carries.
     return {str(k): v for k, v in infotags.items()}
 
 
@@ -231,45 +249,55 @@ def _reshape_custom_kinks(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def _reshape_images(
     images: Any,
     *,
-    pool_manifest: dict[str, dict[str, Any]] | None = None,
+    image_extensions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Two input shapes are accepted:
-
-    1. Tier 6+: `[{sha256, description}]` — needs `pool_manifest` to
-       resolve sha → (image_id, extension). When the manifest entry has
-       no F-list image_id (user-uploaded, never restored), a local
-       filename is synthesised so the ZIP entry has a stable name.
-
-    2. Pinned-test legacy: `[{image_id, extension, description?}]` —
-       used directly without manifest lookup.
+    """Working `images` is `[{image_id, description, sort_order}]`. The
+    ZIP entry name is `images/<image_id>.<ext>` where ext comes from
+    `image_extensions` (built by walking `<char>/images/`). Entries are
+    emitted in sort_order; positions are renumbered 0..n-1 in that
+    order so the userscript's display matches the user's curation.
     """
     out_list: list[dict[str, Any]] = []
     if isinstance(images, list):
+        ordered: list[dict[str, Any]] = []
         for index, entry in enumerate(images):
             if not isinstance(entry, dict):
                 continue
-            sha = entry.get("sha256")
             image_id = entry.get("image_id") or entry.get("id")
+            if image_id is None:
+                continue
+            sort_raw = entry.get("sort_order")
+            if isinstance(sort_raw, (int, float)):
+                sort_val = int(sort_raw)
+            elif isinstance(sort_raw, str) and sort_raw:
+                try:
+                    sort_val = int(sort_raw)
+                except ValueError:
+                    sort_val = index
+            else:
+                sort_val = index
             ext = entry.get("extension")
-            if isinstance(sha, str) and pool_manifest is not None:
-                meta = pool_manifest.get(sha, {})
-                if not image_id:
-                    image_id = meta.get("image_id")
-                if not ext:
-                    ext = meta.get("extension")
-            if not image_id:
-                # User-uploaded image with no F-list id yet. Use a short
-                # sha-derived stem so the ZIP entry name stays stable
-                # across exports.
-                stem = sha[:16] if isinstance(sha, str) and sha else f"unknown_{index}"
-                image_id = f"local_{stem}"
-            if not ext:
-                ext = "png"
+            if not isinstance(ext, str) or not ext:
+                ext = (
+                    image_extensions.get(str(image_id))
+                    if image_extensions
+                    else None
+                ) or "png"
+            ordered.append(
+                {
+                    "_sort": sort_val,
+                    "image_id": str(image_id),
+                    "ext": ext,
+                    "description": _as_str(entry.get("description")),
+                }
+            )
+        ordered.sort(key=lambda r: r["_sort"])
+        for position, row in enumerate(ordered):
             out_list.append(
                 {
-                    "position": index,
-                    "filename": f"images/{image_id}.{ext}",
-                    "description": _as_str(entry.get("description")),
+                    "position": position,
+                    "filename": f"images/{row['image_id']}.{row['ext']}",
+                    "description": row["description"],
                 }
             )
     return {
@@ -288,42 +316,6 @@ def _reshape_inlines(inlines: Any) -> list[str]:
     if isinstance(inlines, list):
         return [str(x) for x in inlines if x is not None]
     return []
-
-
-def _sha_for_image_filename(
-    filename: str,
-    images: Any,
-    pool_manifest: dict[str, dict[str, Any]],
-) -> str | None:
-    """Reverse-lookup: given an `images/<image_id>.<ext>` entry, return
-    the pool sha so `build_zip` knows which file to embed. Handles both
-    F-list image_id stems and the `local_<sha-prefix>` synthetic stems
-    from `_reshape_images`."""
-    stem = Path(filename).stem
-    if stem.startswith("local_"):
-        prefix = stem[len("local_") :]
-        # Match a manifest entry whose sha starts with the prefix.
-        for sha in pool_manifest.keys():
-            if sha.startswith(prefix):
-                return sha
-        # Fall through to image-array sha lookup.
-    # Try matching the stem against pool manifest's image_id field.
-    for sha, meta in pool_manifest.items():
-        if meta.get("image_id") == stem:
-            return sha
-    # Last resort: scan the images array for an entry whose sha would
-    # serialise to this filename. Useful when a Tier 6 working payload
-    # carries the sha but no F-list image_id resolves via manifest.
-    if isinstance(images, list):
-        for entry in images:
-            if not isinstance(entry, dict):
-                continue
-            sha = entry.get("sha256")
-            if not isinstance(sha, str):
-                continue
-            if stem == f"local_{sha[:16]}":
-                return sha
-    return None
 
 
 def _as_str(value: Any) -> str:

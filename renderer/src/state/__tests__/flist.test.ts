@@ -82,30 +82,27 @@ describe('seedWorkingFromLive', () => {
     expect(desc).toBe('a\nb')
     expect(seeded.inlines).toEqual(live.inlines)
   })
-  it('translates live.images to sha-keyed gallery (Tier 6)', () => {
-    // Post-Tier-6 pulls augment each live.images entry with sha256;
-    // the working slot's gallery is the curated subset that carries
-    // through to the ZIP serialiser.
+  it('seeds image_id-keyed gallery from live.images', () => {
+    // v4: working.images carries image_id + description + sort_order.
+    // The actual bytes live on disk at images/<image_id>.<ext>, fetched
+    // separately by the renderer when rendering thumbnails.
     const live = {
       character: { description: 'x' },
       images: [
-        { image_id: '1', extension: 'jpg', sha256: 'aaa', description: 'first' },
-        { image_id: '2', extension: 'png', sha256: 'bbb' }
+        { image_id: '1', extension: 'jpg', description: 'first', sort_order: '2' },
+        { image_id: '2', extension: 'png', sort_order: '8' }
       ]
     } as Record<string, unknown>
     const seeded = seedWorkingFromLive(live)
     expect(seeded.images).toEqual([
-      { sha256: 'aaa', description: 'first' },
-      { sha256: 'bbb', description: '' }
+      { image_id: '1', description: 'first', sort_order: 2 },
+      { image_id: '2', description: '', sort_order: 8 }
     ])
   })
-  it('drops live.images entries without sha256 (pre-Tier-6 archive)', () => {
-    // Old live.json that never got re-pulled after the migration
-    // carries entries without sha256 — those drop out so the gallery
-    // doesn't render broken thumbnails. User re-pulls to repopulate.
+  it('drops live.images entries without an image_id', () => {
     const live = {
       character: { description: 'x' },
-      images: [{ image_id: '1', extension: 'jpg' }]
+      images: [{ extension: 'jpg' }]
     } as Record<string, unknown>
     const seeded = seedWorkingFromLive(live)
     expect(seeded.images).toEqual([])
