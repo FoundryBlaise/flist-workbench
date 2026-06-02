@@ -1,4 +1,4 @@
-"""HTTP tests for the per-character image pool + export ZIP (Tier 6)."""
+"""HTTP tests for the v5 unified-images upload + export ZIP."""
 
 from __future__ import annotations
 
@@ -27,64 +27,64 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app)
 
 
-# ---- pool upload / list / delete -------------------------------------
+# ---- image upload / list / delete ------------------------------------
 
 
-def test_pool_upload_returns_manifest_entry(client: TestClient) -> None:
-    res = client.post("/flist/character/9999/pool", content=_PNG)
+def test_image_upload_returns_local_image_id(client: TestClient) -> None:
+    res = client.post("/flist/character/9999/images", content=_PNG)
     assert res.status_code == 200
     body = res.json()
     assert body["extension"] == "png"
-    assert body["source"] == "user_upload"
-    assert len(body["sha256"]) == 64
-    # v2 design: the pool does not track F-list image_ids — those belong
-    # to `images/<image_id>.<ext>` in the per-character images dir.
-    assert "image_id" not in body
+    assert body["image_id"].startswith("local-")
+    assert isinstance(body["added_at"], int)
 
 
-def test_pool_upload_rejects_unsupported_type(client: TestClient) -> None:
-    res = client.post("/flist/character/9999/pool", content=b"not-an-image")
+def test_image_upload_rejects_unsupported_type(client: TestClient) -> None:
+    res = client.post("/flist/character/9999/images", content=b"not-an-image")
     assert res.status_code == 415
 
 
-def test_pool_upload_rejects_empty_body(client: TestClient) -> None:
-    res = client.post("/flist/character/9999/pool", content=b"")
+def test_image_upload_rejects_empty_body(client: TestClient) -> None:
+    res = client.post("/flist/character/9999/images", content=b"")
     assert res.status_code == 400
 
 
-def test_pool_upload_then_list_round_trip(client: TestClient) -> None:
-    client.post("/flist/character/9999/pool", content=_PNG)
-    client.post("/flist/character/9999/pool", content=_JPG)
-    client.post("/flist/character/9999/pool", content=_GIF)
-    res = client.get("/flist/character/9999/pool").json()
-    extensions = {e["extension"] for e in res["pool"]}
+def test_image_upload_then_list_round_trip(client: TestClient) -> None:
+    client.post("/flist/character/9999/images", content=_PNG)
+    client.post("/flist/character/9999/images", content=_JPG)
+    client.post("/flist/character/9999/images", content=_GIF)
+    res = client.get("/flist/character/9999/images").json()
+    extensions = {e["extension"] for e in res["images"]}
     assert extensions == {"png", "jpg", "gif"}
 
 
-def test_pool_upload_is_idempotent_on_identical_bytes(client: TestClient) -> None:
-    first = client.post("/flist/character/9999/pool", content=_PNG).json()
-    second = client.post("/flist/character/9999/pool", content=_PNG).json()
-    assert first["sha256"] == second["sha256"]
-    pool = client.get("/flist/character/9999/pool").json()["pool"]
-    assert len(pool) == 1
+def test_image_upload_is_idempotent_on_identical_bytes(client: TestClient) -> None:
+    first = client.post("/flist/character/9999/images", content=_PNG).json()
+    second = client.post("/flist/character/9999/images", content=_PNG).json()
+    assert first["image_id"] == second["image_id"]
+    images = client.get("/flist/character/9999/images").json()["images"]
+    assert len(images) == 1
 
 
-def test_pool_delete_removes_entry(client: TestClient) -> None:
-    sha = client.post("/flist/character/9999/pool", content=_PNG).json()["sha256"]
-    res = client.delete(f"/flist/character/9999/pool/{sha}")
+def test_image_delete_removes_file(client: TestClient) -> None:
+    iid = client.post(
+        "/flist/character/9999/images", content=_PNG
+    ).json()["image_id"]
+    res = client.delete(f"/flist/character/9999/images/{iid}")
     assert res.status_code == 200
-    pool = client.get("/flist/character/9999/pool").json()["pool"]
-    assert pool == []
+    images = client.get("/flist/character/9999/images").json()["images"]
+    assert images == []
 
 
-def test_pool_delete_404_for_unknown_sha(client: TestClient) -> None:
-    res = client.delete("/flist/character/9999/pool/" + "0" * 64)
+def test_image_delete_404_for_unknown_id(client: TestClient) -> None:
+    res = client.delete("/flist/character/9999/images/local-deadbeef")
     assert res.status_code == 404
 
 
-def test_pool_file_serves_uploaded_bytes(client: TestClient) -> None:
-    sha = client.post("/flist/character/9999/pool", content=_PNG).json()["sha256"]
-    res = client.get(f"/flist/character/9999/pool/{sha}.png")
+def test_image_serves_uploaded_bytes(client: TestClient) -> None:
+    body = client.post("/flist/character/9999/images", content=_PNG).json()
+    iid = body["image_id"]
+    res = client.get(f"/flist/character/9999/images/{iid}.png")
     assert res.status_code == 200
     assert res.content == _PNG
 
@@ -123,16 +123,13 @@ def _seed_working_with_gallery(
 def test_export_zip_includes_character_json_and_images(
     client: TestClient,
 ) -> None:
-    # F-list-pulled image — both images/30012128.png AND pool/<sha>.png
-    # are written by write_character_image.
+    # F-list-pulled image goes to images/<id>.png via write_character_image.
     character_archive.write_character_image("9999", "30012128", "png", _PNG)
-    # User-uploaded pool entry, then materialised into images/ as a
-    # local-<sha8> id.
-    sha_local = character_archive.add_to_pool(
-        "9999", _PNG_VARIANT, "png", source="user_upload"
-    )
-    local_id = character_archive.materialise_pool_to_character("9999", sha_local)
-    assert local_id is not None
+    # User-uploaded image lands as local-<sha8> directly via add_uploaded_image
+    # — v5 has no separate pool to materialise from.
+    row = character_archive.add_uploaded_image("9999", _PNG_VARIANT)
+    assert row is not None
+    local_id = row["image_id"]
     _seed_working_with_gallery(
         "9999",
         "OOC Hub",

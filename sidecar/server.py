@@ -589,13 +589,13 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                             },
                         )
 
-                # Mirror sync: anything in images/ with an F-list-shaped
-                # id that's NOT in the API's image list got removed on
-                # F-list. Drop it from images/ so the gallery doesn't
-                # show ghosts. The pool keeps the bytes.
-                pruned = character_archive.sync_character_images_to_flist(
-                    cid, (img["image_id"] for img in image_list)
-                )
+                # Under the v5 unified store, pulls no longer delete
+                # images/ files that F-list dropped — the bytes stay
+                # on disk and surface in the renderer's Pool view (any
+                # image_id not referenced by working.json's gallery is
+                # "in the pool"). The working copy's gallery is the only
+                # source of truth for what shows on-profile, and only
+                # the explicit pool-delete UI removes bytes.
 
                 # Seal the manifest: finished_at marks the loop ran to
                 # completion (success or with per-image failures). The
@@ -616,7 +616,6 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                     image_downloaded=downloaded,
                     image_cached=cached,
                     image_failed=failed,
-                    image_pruned=len(pruned),
                     status=pull_status["status"],
                     missing=len(pull_status["missing_image_ids"]),
                 )
@@ -629,7 +628,6 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         "image_downloaded": downloaded,
                         "image_cached": cached,
                         "image_failed": failed,
-                        "image_pruned": len(pruned),
                         "pull_status": pull_status["status"],
                         "pull_missing": len(pull_status["missing_image_ids"]),
                     },
@@ -789,8 +787,9 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
 @app.get("/flist/character/{character_id}/images")
 async def flist_character_images_list(character_id: str) -> dict:
     """List the files in `images/`. Each row: `{image_id, extension,
-    size}`. Renderer pairs these with description/sort_order from
-    working.json to render the Character pane."""
+    size, added_at}`. Renderer pairs these with description/sort_order
+    from working.json to decide which are on the profile vs. in the
+    pool view."""
     return {
         "character_id": character_id,
         "images": character_archive.list_character_images(character_id),
@@ -816,118 +815,49 @@ async def flist_character_image_by_id(
     raise HTTPException(status_code=404, detail="image not found")
 
 
-@app.post("/flist/character/{character_id}/images/from-pool/{sha}")
-async def flist_character_image_from_pool(
-    character_id: str, sha: str, image_id: str | None = None
+@app.post("/flist/character/{character_id}/images")
+async def flist_character_image_upload(
+    character_id: str, request: Request
 ) -> dict:
-    """Materialise a pool entry into the character's `images/` so it
-    can be bundled in the restore ZIP. Returns the image_id the
-    renderer should add to the gallery — either a previously-known
-    image_id from the pool's history (the common path for re-adding a
-    deleted-from-profile F-list image) or a `local-<sha8>` synthetic
-    when the pool entry has no history. 404 when the pool sha is
-    unknown or its file is missing.
-    """
-    chosen = character_archive.materialise_pool_to_character(
-        character_id, sha, preferred_image_id=image_id
-    )
-    if chosen is None:
-        raise HTTPException(status_code=404, detail="pool entry not found")
-    manifest = character_archive.read_pool_manifest(character_id)
-    meta = manifest.get(sha, {})
-    return {
-        "image_id": chosen,
-        "extension": meta.get("extension", ""),
-        "sha256": sha,
-    }
+    """Upload an image into `images/` under a `local-<sha8>` synthetic
+    id. The body is the raw image bytes; the server sniffs magic bytes
+    to decide the extension (Content-Type is never trusted). The
+    uploaded image lands in the renderer's Pool view by default — it
+    only appears on-profile after the user moves it via a working.json
+    gallery edit.
+
+    Idempotent — identical bytes always produce the same `local-<sha8>`
+    id and skip re-writing the file."""
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    if len(body) > 16 * 1024 * 1024:
+        # F-list itself caps images well below this; the bound is here
+        # to keep a hostile body from blocking the loop on disk write.
+        raise HTTPException(status_code=413, detail="image too large")
+    row = character_archive.add_uploaded_image(character_id, body)
+    if row is None:
+        raise HTTPException(
+            status_code=415,
+            detail="unsupported image type (png/jpg/gif only)",
+        )
+    return row
 
 
 @app.delete("/flist/character/{character_id}/images/{image_id}")
 async def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> dict:
-    """Remove `images/<image_id>.<ext>`. Pool keeps the bytes so the
-    user can re-add later. The renderer should also drop the matching
-    row from working.json's gallery before/after this call."""
+    """Permanently delete `images/<image_id>.<ext>`. There's no
+    secondary store under v5; once the file is gone the bytes are
+    gone. The renderer is responsible for wrapping every call in an
+    explicit confirm dialog (the Images tab's only destructive path)
+    and for dropping the matching gallery row from working.json
+    before/after this call."""
     ok = character_archive.remove_character_image(character_id, image_id)
     if not ok:
         raise HTTPException(status_code=404, detail="image not found")
     return {"deleted": True, "image_id": image_id}
-
-
-@app.get("/flist/character/{character_id}/pool")
-async def flist_character_pool_list(character_id: str) -> dict:
-    """List per-character pool entries (Tier 6). Each row carries the
-    sha256 the renderer uses to reference the file, the source flag for
-    the UI badge, and the F-list image_id when known."""
-    return {
-        "character_id": character_id,
-        "pool": character_archive.list_pool_entries(character_id),
-    }
-
-
-@app.post("/flist/character/{character_id}/pool")
-async def flist_character_pool_upload(
-    character_id: str, request: Request
-) -> dict:
-    """Upload an image into the per-character pool. The body is the raw
-    image bytes; the server sniffs magic bytes to decide the extension
-    (no client-supplied Content-Type trust). Returns the manifest row.
-
-    Idempotent — re-uploading identical bytes returns the same sha and
-    does not duplicate on disk."""
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="empty body")
-    if len(body) > 16 * 1024 * 1024:
-        # Defensive — F-list itself caps images well below this, and a
-        # multi-MB body would block the loop on disk write. 16 MB is
-        # generous headroom over the largest sample image we've seen.
-        raise HTTPException(status_code=413, detail="image too large")
-    ext = _detect_image_ext(body)
-    if ext is None:
-        raise HTTPException(
-            status_code=415, detail="unsupported image type (png/jpg/gif only)"
-        )
-    sha = character_archive.add_to_pool(
-        character_id, body, ext, source="user_upload"
-    )
-    manifest = character_archive.read_pool_manifest(character_id)
-    meta = manifest.get(sha, {})
-    return {
-        "sha256": sha,
-        "extension": meta.get("extension", ext),
-        "source": meta.get("source", "user_upload"),
-        "added_at": meta.get("added_at", 0),
-        "size": meta.get("size", len(body)),
-    }
-
-
-@app.delete("/flist/character/{character_id}/pool/{sha}")
-async def flist_character_pool_remove(character_id: str, sha: str) -> dict:
-    """Remove a pool entry. Manual affordance only — the renderer's
-    Images tab is the sole caller. The gallery may still reference this
-    sha after removal; the renderer is responsible for unreferencing it
-    first. 404 when the manifest doesn't know the sha."""
-    ok = character_archive.remove_from_pool(character_id, sha)
-    if not ok:
-        raise HTTPException(status_code=404, detail="pool entry not found")
-    return {"deleted": True, "sha256": sha}
-
-
-@app.get("/flist/character/{character_id}/pool/{filename}")
-async def flist_character_pool_file(
-    character_id: str, filename: str
-) -> FileResponse:
-    """Serve a pool file by `<sha>.<ext>`. Filename shape is validated
-    against the same conservative regex as the other archive routes."""
-    import re as _re
-    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
-        raise HTTPException(status_code=400, detail="invalid pool filename")
-    path = character_archive.pool_dir(character_id) / filename
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="pool file not found")
-    return FileResponse(path)
 
 
 @app.get("/flist/character/{character_id}/export.zip")
@@ -1047,21 +977,6 @@ def _safe_filename_part(name: str) -> str:
 
     cleaned = _re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip()) or "character"
     return cleaned[:64]
-
-
-def _detect_image_ext(data: bytes) -> str | None:
-    """Sniff PNG/JPG/GIF magic bytes. Returns the pool's canonical ext
-    string or None for anything else. JPEG normalises to "jpg" to match
-    the pool's accepted set."""
-    if len(data) < 8:
-        return None
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
-        return "png"
-    if data[:3] == b"\xff\xd8\xff":
-        return "jpg"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    return None
 
 
 @app.get("/flist/character/{character_id}/inlines/{filename}")
