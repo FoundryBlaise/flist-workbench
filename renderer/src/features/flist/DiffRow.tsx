@@ -104,10 +104,7 @@ export function DiffRow({
         </>
       )}
       <td className="diff-cell diff-cell-action">
-        {/* Per-row reset on image rows would need a custom store action
-            (restore position + caption + presence for a single id). Out
-            of this iteration's scope — see BACKLOG. */}
-        {!isImageRow && onReset && row.inOverlay && row.kind !== 'unchanged' && (
+        {onReset && row.inOverlay && row.kind !== 'unchanged' && (
           <button
             type="button"
             className="diff-row-reset"
@@ -118,7 +115,7 @@ export function DiffRow({
             ↺ Reset
           </button>
         )}
-        {!isImageRow && !onReset && backupResetDisabled && row.inOverlay && row.kind !== 'unchanged' && (
+        {!onReset && backupResetDisabled && row.inOverlay && row.kind !== 'unchanged' && (
           <button
             type="button"
             className="diff-row-reset diff-row-reset-disabled"
