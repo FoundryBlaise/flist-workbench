@@ -12,7 +12,8 @@ import {
   type InlineImage,
   type LogMessage,
   type PartnerEntry,
-  type RevisionSummary
+  type RevisionSummary,
+  type SetMetaWire
 } from './lib/api'
 import {
   DESCRIPTION_PATH,
@@ -26,17 +27,22 @@ import {
   normaliseNewlines as flistNormaliseNewlines,
   pathLookup,
   seedWorkingFromLive,
+  selectWorkingSlot as flistSelectWorkingSlot,
   WORKING_SCHEMA_VERSION,
   type FlistSaveStatus,
   type FlistWorkingSlot,
+  type SetMeta,
   type WorkingPayload
 } from './state/flist'
 
 export type {
   FlistSaveStatus,
   FlistWorkingSlot,
+  SetMeta,
   WorkingPayload
 } from './state/flist'
+
+export { selectWorkingSlot } from './state/flist'
 
 export type Mode = 'editor' | 'logs'
 
@@ -206,9 +212,27 @@ type State = {
    *  The slot tracks the full JSON-API payload, the dotted overlay of
    *  user-edited paths, the sha256 etag for optimistic concurrency, and
    *  per-slot save status so the editor can surface a "saving / saved /
-   *  error" chip without storing UI-only data on disk. */
+   *  error" chip without storing UI-only data on disk.
+   *
+   *  TODO(working-sets v2): remove after consumer sweep — the editable
+   *  slot now lives at `flistSetWorking[activeSetId]`, surfaced through
+   *  `selectWorkingSlot`. This field stays as the back-compat mirror so
+   *  the legacy Tier 2/3/4 actions still typecheck until that round. */
   flistWorking: Record<string, FlistWorkingSlot>
   flistWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
+  // ---- Working sets v2 ----
+  /** Per-character ordered list of working-set metadata, sorted most-
+   *  recently-updated first. Populated by `flistLoadSets`. */
+  flistSets: Record<string, SetMeta[]>
+  flistSetsStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
+  /** Active working set per character. `null` = user is viewing the
+   *  read-only F-list row (no editable slot). Mirrors the sidecar's
+   *  `active_set.json`. */
+  flistActiveSetId: Record<string, string | null>
+  /** Per-set working slot, keyed by set id. The editor's edits land here
+   *  via `flistSetWorkingMaterialise` + the autosave path. */
+  flistSetWorking: Record<string, FlistWorkingSlot>
+  flistSetWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
@@ -389,6 +413,31 @@ type State = {
    *  verbatim. */
   flistOpenWorking: (characterId: string) => Promise<void>
   flistGetLastAccount: () => string
+  // ---- Working-sets v2 actions ----
+  flistLoadSets: (characterId: string) => Promise<void>
+  flistCreateSet: (characterId: string, name: string) => Promise<SetMeta | null>
+  flistRenameSet: (
+    characterId: string,
+    setId: string,
+    name: string
+  ) => Promise<void>
+  flistDuplicateSet: (
+    characterId: string,
+    setId: string,
+    name: string
+  ) => Promise<SetMeta | null>
+  flistDeleteSet: (characterId: string, setId: string) => Promise<void>
+  flistActivateSet: (characterId: string, setId: string) => Promise<void>
+  flistActivateFromFlist: (characterId: string) => Promise<void>
+  flistSetWorkingMaterialise: (
+    characterId: string,
+    setId: string
+  ) => Promise<void>
+  flistSetWorkingFlushPending: (
+    characterId: string,
+    setId: string
+  ) => Promise<void>
+
   // ---- Tier 2 working-copy actions ----
   flistLoadWorking: (characterId: string) => Promise<void>
   flistSetWorkingField: (characterId: string, path: string, value: unknown) => void
@@ -503,6 +552,13 @@ const _autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const _flushInflight = new Map<string, Promise<void>>()
 const AUTOSAVE_DEBOUNCE_MS = 500
 
+// Working-sets v2: autosave debouncer + single-flight, keyed by **set id**
+// rather than character id. Multiple sets can be open simultaneously in
+// memory; their writes are independent so the debounce + serialisation
+// guarantees apply per-set.
+const _setAutosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const _setFlushInflight = new Map<string, Promise<void>>()
+
 function _scheduleFlush(characterId: string, fn: () => void): void {
   const prev = _autosaveTimers.get(characterId)
   if (prev) clearTimeout(prev)
@@ -524,11 +580,42 @@ function _cancelFlush(characterId: string): void {
 function _cancelAllPendingTimers(): void {
   for (const [, t] of _autosaveTimers) clearTimeout(t)
   _autosaveTimers.clear()
+  for (const [, t] of _setAutosaveTimers) clearTimeout(t)
+  _setAutosaveTimers.clear()
   for (const [, t] of _resetUndoTimers) clearTimeout(t)
   _resetUndoTimers.clear()
   if (_tombstoneUndoTimer) {
     clearTimeout(_tombstoneUndoTimer)
     _tombstoneUndoTimer = null
+  }
+}
+
+function _scheduleSetFlush(setId: string, fn: () => void): void {
+  const prev = _setAutosaveTimers.get(setId)
+  if (prev) clearTimeout(prev)
+  const t = setTimeout(() => {
+    _setAutosaveTimers.delete(setId)
+    fn()
+  }, AUTOSAVE_DEBOUNCE_MS)
+  _setAutosaveTimers.set(setId, t)
+}
+
+function _cancelSetFlush(setId: string): void {
+  const prev = _setAutosaveTimers.get(setId)
+  if (prev) {
+    clearTimeout(prev)
+    _setAutosaveTimers.delete(setId)
+  }
+}
+
+/** Convert a wire-format SetMeta to in-memory camelCase. Single converter
+ *  so the wire-vs-memory boundary lives in one place. */
+function _setMetaFromWire(wire: SetMetaWire): SetMeta {
+  return {
+    id: wire.id,
+    name: wire.name,
+    createdAt: wire.created_at,
+    updatedAt: wire.updated_at
   }
 }
 
@@ -772,6 +859,11 @@ export const useStore = create<State>((set, get) => ({
   flistExportRestoreCharacterId: null,
   flistWorking: {},
   flistWorkingLoadStatus: {},
+  flistSets: {},
+  flistSetsStatus: {},
+  flistActiveSetId: {},
+  flistSetWorking: {},
+  flistSetWorkingLoadStatus: {},
   flistMapping: {
     status: 'idle',
     payload: null,
@@ -896,6 +988,11 @@ export const useStore = create<State>((set, get) => ({
       },
       flistWorking: {},
       flistWorkingLoadStatus: {},
+      flistSets: {},
+      flistSetsStatus: {},
+      flistActiveSetId: {},
+      flistSetWorking: {},
+      flistSetWorkingLoadStatus: {},
       flistDriftBanners: {},
       flistResetUndo: null,
       flistDiffRightSource: {},
@@ -1854,6 +1951,314 @@ export const useStore = create<State>((set, get) => ({
       }
     }, RESET_UNDO_MS + 50)
     _resetUndoTimers.set(characterId, t)
+  },
+
+  // ---- Working sets v2 ----------------------------------------------
+
+  async flistLoadSets(characterId) {
+    set((s) => ({
+      flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'loading' }
+    }))
+    try {
+      const wire = await api.flistSetsList(characterId)
+      const sets = wire.sets.map(_setMetaFromWire)
+      sets.sort((a, b) => b.updatedAt - a.updatedAt)
+      set((s) => ({
+        flistSets: { ...s.flistSets, [characterId]: sets },
+        flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'ready' },
+        flistActiveSetId: {
+          ...s.flistActiveSetId,
+          [characterId]: wire.active_set_id
+        }
+      }))
+      if (wire.active_set_id) {
+        await get().flistSetWorkingMaterialise(characterId, wire.active_set_id)
+      }
+    } catch {
+      set((s) => ({
+        flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'error' }
+      }))
+    }
+  },
+
+  async flistCreateSet(characterId, name) {
+    try {
+      const wire = await api.flistSetCreate(characterId, { name })
+      const meta = _setMetaFromWire(wire.set)
+      set((s) => {
+        const list = s.flistSets[characterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [characterId]: [meta, ...list.filter((m) => m.id !== meta.id)]
+          },
+          flistActiveSetId: {
+            ...s.flistActiveSetId,
+            [characterId]: meta.id
+          }
+        }
+      })
+      await get().flistSetWorkingMaterialise(characterId, meta.id)
+      return meta
+    } catch {
+      return null
+    }
+  },
+
+  async flistRenameSet(characterId, setId, name) {
+    try {
+      const wire = await api.flistSetRename(characterId, setId, { name })
+      const meta = _setMetaFromWire(wire.set)
+      set((s) => {
+        const list = s.flistSets[characterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [characterId]: list.map((m) => (m.id === meta.id ? meta : m))
+          }
+        }
+      })
+    } catch {
+      // Rename is a meta-only op; surface error via the next list reload
+      // rather than a dedicated error field this round.
+    }
+  },
+
+  async flistDuplicateSet(characterId, setId, name) {
+    try {
+      const wire = await api.flistSetDuplicate(characterId, setId, { name })
+      const meta = _setMetaFromWire(wire.set)
+      // Photoshop "Duplicate layer" semantics: append at top of list,
+      // **do not** activate. The orchestrator's UI handles the selection
+      // flow if the user wants to switch.
+      set((s) => {
+        const list = s.flistSets[characterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [characterId]: [meta, ...list.filter((m) => m.id !== meta.id)]
+          }
+        }
+      })
+      return meta
+    } catch {
+      return null
+    }
+  },
+
+  async flistDeleteSet(characterId, setId) {
+    // Cancel any pending autosave for the doomed set so a stranded timer
+    // can't fire a PUT against a now-deleted folder.
+    _cancelSetFlush(setId)
+    try {
+      const res = await api.flistSetDelete(characterId, setId)
+      set((s) => {
+        const list = (s.flistSets[characterId] ?? []).filter((m) => m.id !== setId)
+        const nextSetWorking = { ...s.flistSetWorking }
+        delete nextSetWorking[setId]
+        const nextLoadStatus = { ...s.flistSetWorkingLoadStatus }
+        delete nextLoadStatus[setId]
+        const wasActive = s.flistActiveSetId[characterId] === setId
+        return {
+          flistSets: { ...s.flistSets, [characterId]: list },
+          flistSetWorking: nextSetWorking,
+          flistSetWorkingLoadStatus: nextLoadStatus,
+          flistActiveSetId: wasActive
+            ? { ...s.flistActiveSetId, [characterId]: res.active_set_id }
+            : s.flistActiveSetId
+        }
+      })
+      // Server returns the new active set id (or null) when the deleted
+      // one was active — pull its payload so the editor doesn't render
+      // against an empty slot.
+      const nextActive = get().flistActiveSetId[characterId]
+      if (nextActive && !get().flistSetWorking[nextActive]) {
+        await get().flistSetWorkingMaterialise(characterId, nextActive)
+      }
+    } catch {
+      // Failure leaves local state untouched; user can retry from the
+      // confirm dialog the next round adds.
+    }
+  },
+
+  async flistActivateSet(characterId, setId) {
+    const prevSetId = get().flistActiveSetId[characterId]
+    if (prevSetId && prevSetId !== setId) {
+      // Flush the outgoing set BEFORE the activate call so a still-pending
+      // autosave can't land after we've already swapped active id (the
+      // user could then edit the new set and the prior debounce would
+      // PUT to the old set looking fine, but the chip would mislead).
+      try {
+        await get().flistSetWorkingFlushPending(characterId, prevSetId)
+      } catch {
+        // best-effort; saveError on the prior slot is the user signal
+      }
+    }
+    try {
+      await api.flistSetActivate(characterId, setId)
+      set((s) => ({
+        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: setId }
+      }))
+      if (!get().flistSetWorking[setId]) {
+        await get().flistSetWorkingMaterialise(characterId, setId)
+      }
+    } catch {
+      // Server rejected (404 / 409). Leave the prior active id in place.
+    }
+  },
+
+  async flistActivateFromFlist(characterId) {
+    const prevSetId = get().flistActiveSetId[characterId]
+    if (prevSetId) {
+      try {
+        await get().flistSetWorkingFlushPending(characterId, prevSetId)
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      await api.flistFromFlistActivate(characterId)
+      set((s) => ({
+        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: null }
+      }))
+    } catch {
+      // Leave previous selection intact on failure.
+    }
+  },
+
+  async flistSetWorkingMaterialise(characterId, setId) {
+    set((s) => ({
+      flistSetWorkingLoadStatus: {
+        ...s.flistSetWorkingLoadStatus,
+        [setId]: 'loading'
+      }
+    }))
+    try {
+      const { payload, etag } = await api.flistSetPayloadRead(characterId, setId)
+      const overlay = Array.isArray((payload as WorkingPayload)._overlay)
+        ? ((payload as WorkingPayload)._overlay as string[])
+        : []
+      const slot: FlistWorkingSlot = {
+        payload: payload as WorkingPayload,
+        overlay,
+        etag,
+        unsavedDirty: false,
+        saveStatus: 'idle',
+        saveError: null,
+        lastSavedAt: null,
+        // Per-set payloads are seeded server-side on create — they're on
+        // disk by the time we read them, so the slot is materialised.
+        materialised: true
+      }
+      set((s) => ({
+        flistSetWorking: { ...s.flistSetWorking, [setId]: slot },
+        flistSetWorkingLoadStatus: {
+          ...s.flistSetWorkingLoadStatus,
+          [setId]: 'ready'
+        }
+      }))
+    } catch {
+      set((s) => ({
+        flistSetWorkingLoadStatus: {
+          ...s.flistSetWorkingLoadStatus,
+          [setId]: 'error'
+        }
+      }))
+    }
+  },
+
+  async flistSetWorkingFlushPending(characterId, setId) {
+    _cancelSetFlush(setId)
+    // Chain after any in-flight PUT so we don't race ahead and ship a
+    // stale payload (mirrors the per-character single-flight pattern).
+    const prior = _setFlushInflight.get(setId)
+    if (prior) {
+      await prior.catch(() => {})
+      _cancelSetFlush(setId)
+    }
+    const slot = get().flistSetWorking[setId]
+    if (!slot || !slot.unsavedDirty) {
+      _cancelSetFlush(setId)
+      return
+    }
+    const inflight = (async () => {
+      const sentPayload = slot.payload
+      set((s) => {
+        const existing = s.flistSetWorking[setId]
+        if (!existing) return {}
+        return {
+          flistSetWorking: {
+            ...s.flistSetWorking,
+            [setId]: { ...existing, saveStatus: 'saving', saveError: null }
+          }
+        }
+      })
+      try {
+        const { etag } = await api.flistSetPayloadPut(
+          characterId,
+          setId,
+          sentPayload,
+          slot.etag
+        )
+        set((s) => {
+          const existing = s.flistSetWorking[setId]
+          if (!existing) return {}
+          const isFresh = existing.payload === sentPayload
+          return {
+            flistSetWorking: {
+              ...s.flistSetWorking,
+              [setId]: {
+                ...existing,
+                etag,
+                unsavedDirty: isFresh ? false : existing.unsavedDirty,
+                saveStatus: isFresh ? 'saved' : existing.saveStatus,
+                saveError: null,
+                lastSavedAt: Date.now(),
+                materialised: true
+              }
+            }
+          }
+        })
+        const next = get().flistSetWorking[setId]
+        if (next?.unsavedDirty) {
+          _scheduleSetFlush(setId, () => {
+            void get().flistSetWorkingFlushPending(characterId, setId)
+          })
+        }
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err)
+        const conflict = err instanceof Error && err.message === 'etag_mismatch'
+        const errWith = err as Error & { currentEtag?: string | null }
+        set((s) => {
+          const existing = s.flistSetWorking[setId]
+          if (!existing) return {}
+          return {
+            flistSetWorking: {
+              ...s.flistSetWorking,
+              [setId]: {
+                ...existing,
+                saveStatus: 'error',
+                saveError: conflict
+                  ? 'Another window saved a different version. Reload to merge.'
+                  : raw,
+                etag: conflict
+                  ? errWith.currentEtag ?? existing.etag
+                  : existing.etag,
+                unsavedDirty: true
+              }
+            }
+          }
+        })
+      }
+    })()
+    _setFlushInflight.set(setId, inflight)
+    try {
+      await inflight
+    } finally {
+      if (_setFlushInflight.get(setId) === inflight) {
+        _setFlushInflight.delete(setId)
+      }
+    }
   },
 
   // ---- Tier 4: diff + reset-to-backup -------------------------------

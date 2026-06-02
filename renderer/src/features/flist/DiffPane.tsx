@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStore } from '../../state'
+import { selectWorkingSlot, useStore } from '../../state'
 import { resolveInfotagDescriptors } from './infotagsResolver'
 import {
   computeDiff,
@@ -35,7 +35,7 @@ const CATEGORY_ORDER: DiffCategory[] = [
 ]
 
 export function DiffPane({ characterId }: { characterId: string }) {
-  const slot = useStore((s) => s.flistWorking[characterId])
+  const slot = useStore((s) => selectWorkingSlot(s, characterId))
   const archive = useStore((s) => s.flistArchive[characterId])
   const mapping = useStore((s) => s.flistMapping.payload)
   const mappingStatus = useStore((s) => s.flistMapping.status)

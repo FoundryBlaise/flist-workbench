@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useStore } from '../../state'
+import { selectWorkingSlot, useStore } from '../../state'
 import {
   resolveInfotagDescriptors,
   type InfotagDescriptor
@@ -17,7 +17,7 @@ import {
 
 export function ProfileFieldsPreview() {
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
-  const slot = useStore((s) => (flistActiveId ? s.flistWorking[flistActiveId] : undefined))
+  const slot = useStore((s) => (flistActiveId ? selectWorkingSlot(s, flistActiveId) : undefined))
   const liveArchive = useStore((s) =>
     flistActiveId ? (s.flistArchive[flistActiveId]?.live ?? null) : null
   )

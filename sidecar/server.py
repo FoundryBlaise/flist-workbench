@@ -754,6 +754,158 @@ async def flist_character_working_delete(character_id: str) -> dict:
     return {"deleted": character_archive.delete_working(character_id)}
 
 
+# ---- working sets v2 -------------------------------------------------
+
+
+class _SetNameBody(BaseModel):
+    name: str
+
+
+def _set_meta_to_json(meta: character_archive.SetMeta) -> dict:
+    return meta.to_dict()
+
+
+def _require_valid_set_id(set_id: str) -> None:
+    """Path-traversal guard before any disk touch on an id-bearing route."""
+    if not character_archive._is_valid_set_id(set_id):
+        raise HTTPException(status_code=404, detail="set not found")
+
+
+@app.get("/flist/character/{character_id}/sets")
+async def flist_character_sets_list(character_id: str) -> dict:
+    sets = character_archive.list_sets(character_id)
+    return {
+        "sets": [_set_meta_to_json(m) for m in sets],
+        "active_set_id": character_archive.read_active_set_id(character_id),
+    }
+
+
+@app.post("/flist/character/{character_id}/sets", status_code=201)
+async def flist_character_sets_create(
+    character_id: str, body: _SetNameBody
+) -> dict:
+    try:
+        clean = character_archive.validate_set_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        meta = character_archive.create_set_from_live(character_id, clean)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"set": _set_meta_to_json(meta)}
+
+
+@app.patch("/flist/character/{character_id}/sets/{set_id}")
+async def flist_character_sets_rename(
+    character_id: str, set_id: str, body: _SetNameBody
+) -> dict:
+    _require_valid_set_id(set_id)
+    try:
+        clean = character_archive.validate_set_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        meta = character_archive.rename_set(character_id, set_id, clean)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"set": _set_meta_to_json(meta)}
+
+
+@app.delete("/flist/character/{character_id}/sets/{set_id}")
+async def flist_character_sets_delete(
+    character_id: str, set_id: str
+) -> dict:
+    _require_valid_set_id(set_id)
+    try:
+        character_archive.delete_set(character_id, set_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "deleted": True,
+        "active_set_id": character_archive.read_active_set_id(character_id),
+    }
+
+
+@app.post(
+    "/flist/character/{character_id}/sets/{set_id}/duplicate",
+    status_code=201,
+)
+async def flist_character_sets_duplicate(
+    character_id: str, set_id: str, body: _SetNameBody
+) -> dict:
+    _require_valid_set_id(set_id)
+    try:
+        clean = character_archive.validate_set_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        meta = character_archive.duplicate_set(character_id, set_id, clean)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"set": _set_meta_to_json(meta)}
+
+
+@app.post("/flist/character/{character_id}/sets/{set_id}/activate")
+async def flist_character_sets_activate(
+    character_id: str, set_id: str
+) -> dict:
+    _require_valid_set_id(set_id)
+    meta = character_archive.read_set_meta(character_id, set_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="set not found")
+    character_archive.set_active_set_id(character_id, set_id)
+    return {"active_set_id": set_id}
+
+
+@app.post("/flist/character/{character_id}/from-flist/activate")
+async def flist_character_from_flist_activate(character_id: str) -> dict:
+    character_archive.clear_active_set_id(character_id)
+    return {"active_set_id": None}
+
+
+@app.get("/flist/character/{character_id}/sets/{set_id}/payload")
+async def flist_character_set_payload_get(
+    character_id: str, set_id: str
+) -> dict:
+    _require_valid_set_id(set_id)
+    payload = character_archive.read_set_payload(character_id, set_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="set not found")
+    etag = character_archive.set_payload_etag(character_id, set_id)
+    return {"payload": payload, "etag": etag}
+
+
+@app.put("/flist/character/{character_id}/sets/{set_id}/payload")
+async def flist_character_set_payload_put(
+    character_id: str,
+    set_id: str,
+    request: Request,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict:
+    _require_valid_set_id(set_id)
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
+    try:
+        new_etag = character_archive.write_set_payload(
+            character_id, set_id, body, expected_etag=if_match
+        )
+    except character_archive.EtagMismatch as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": "etag_mismatch",
+                "current_etag": exc.current_etag,
+            },
+        ) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"etag": new_etag}
+
+
 @app.get("/flist/character/{character_id}/backups")
 async def flist_character_backups(character_id: str) -> dict:
     return {
