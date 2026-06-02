@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useStore, selectWorkingSlot } from '../../state'
+import { useStore } from '../../state'
 import { CHOICE_LABELS, type KinkChoice } from './ChoiceButtons'
 import {
   bucketByChoice,
@@ -21,7 +21,7 @@ const BUCKET_ORDER: KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
 // Hotkeys F/Y/M/N/U and 1/2/3/4/0 apply to the focused row's
 // selection (or just the focused row when not selected).
 export function KinksPane({ characterId }: { characterId: string }) {
-  const slot = useStore((s) => selectWorkingSlot(s, characterId))
+  const slot = useStore((s) => s.flistWorking[characterId])
   const liveArchive = useStore(
     (s) => s.flistArchive[characterId]?.live ?? null
   )

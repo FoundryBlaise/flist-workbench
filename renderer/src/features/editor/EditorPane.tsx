@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { useStore, selectWorkingSlot } from '../../state'
+import { useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { Tabs, type TabsTab } from '../../components/Tabs'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
@@ -28,9 +28,7 @@ export function EditorPane() {
   // " — My edits (unsaved)" suffix tracks per-keystroke (QA P3-1).
   const flistActiveIdForTitle = useStore((s) => s.flistActiveCharacterId)
   const flistSlotForTitle = useStore((s) =>
-    s.flistActiveCharacterId
-      ? selectWorkingSlot(s, s.flistActiveCharacterId)
-      : undefined
+    s.flistActiveCharacterId ? s.flistWorking[s.flistActiveCharacterId] : undefined
   )
   const title = (() => {
     if (!flistActiveIdForTitle || !flistSlotForTitle) return titleRaw
@@ -54,9 +52,7 @@ export function EditorPane() {
   // warning is gone; we surface a "saving / saved / error" chip instead.
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   const flistWorkingForActive = useStore((s) =>
-    s.flistActiveCharacterId
-      ? selectWorkingSlot(s, s.flistActiveCharacterId)
-      : undefined
+    s.flistActiveCharacterId ? s.flistWorking[s.flistActiveCharacterId] : undefined
   )
   const flistActiveRosterEntry = useStore((s) =>
     s.activeCharacter
@@ -313,7 +309,7 @@ function EditorTabsHost(props: {
   const workingCopyMode =
     flistTabsVisible && !props.readOnly
   const workingSlot = useStore((s) =>
-    flistActiveId ? selectWorkingSlot(s, flistActiveId) : undefined
+    flistActiveId ? s.flistWorking[flistActiveId] : undefined
   )
   const kinksCount = countKinksWithChoice(workingSlot)
   const diffChangeCount = countDiffChanges(workingSlot)

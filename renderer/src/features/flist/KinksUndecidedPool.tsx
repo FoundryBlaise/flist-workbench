@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useStore, selectWorkingSlot } from '../../state'
+import { useStore } from '../../state'
 import { CHOICE_LABELS, type KinkChoice } from './ChoiceButtons'
 import {
   buildUnifiedKinks,
@@ -25,7 +25,7 @@ const COLLAPSE_KEY = 'flist-workbench:kinks-pool-group-collapsed'
 export function KinksUndecidedPool() {
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   const slot = useStore((s) =>
-    flistActiveId ? selectWorkingSlot(s, flistActiveId) : undefined
+    flistActiveId ? s.flistWorking[flistActiveId] : undefined
   )
   const liveArchive = useStore((s) =>
     flistActiveId ? (s.flistArchive[flistActiveId]?.live ?? null) : null
