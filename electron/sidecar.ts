@@ -28,10 +28,16 @@ export async function startSidecar(): Promise<void> {
     // adds a Python dep doesn't crash the next run with a confusing
     // ModuleNotFoundError. Cost is negligible when nothing's stale.
     await runUvSync(sidecarDir)
+    // detached: true puts the sidecar into its own process group on
+    // POSIX. `uv run` shells out to uvicorn → python; killing only
+    // `uv` leaves the python grandchild bound to the port. With its
+    // own pgid we can kill the entire tree at quit time. No effect
+    // on Windows (no pgid), which uses a different stop path below.
     proc = spawn('uv', ['run', 'uvicorn', 'server:app', '--port', String(PORT)], {
       cwd: sidecarDir,
       env: { ...process.env, SIDECAR_PORT: String(PORT) },
-      stdio: ['ignore', 'inherit', 'inherit']
+      stdio: ['ignore', 'inherit', 'inherit'],
+      detached: process.platform !== 'win32'
     })
   }
 
@@ -44,10 +50,33 @@ export async function startSidecar(): Promise<void> {
 }
 
 export function stopSidecar(): void {
-  if (proc && !proc.killed) {
-    proc.kill('SIGTERM')
+  if (!proc || proc.killed || proc.pid == null) {
     proc = null
+    return
   }
+  if (process.platform === 'win32') {
+    // taskkill /T kills the whole tree, including the uv-spawned
+    // python grandchild that survives a plain proc.kill().
+    spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
+      stdio: 'ignore'
+    })
+  } else {
+    // Negative pid → SIGTERM to the whole process group, which
+    // includes the python grandchild that `uv run` would otherwise
+    // orphan when we kill only the `uv` parent.
+    try {
+      process.kill(-proc.pid, 'SIGTERM')
+    } catch {
+      // Process group already gone — fall through to a direct kill
+      // so we still try the leader.
+      try {
+        proc.kill('SIGTERM')
+      } catch {
+        /* nothing left to kill */
+      }
+    }
+  }
+  proc = null
 }
 
 function runUvSync(cwd: string): Promise<void> {

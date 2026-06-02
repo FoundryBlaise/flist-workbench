@@ -1804,6 +1804,14 @@ export const useStore = create<State>((set, get) => ({
       _cancelFlush(characterId)
       return
     }
+    // Working-sets v2: every PUT routes through the active set's payload
+    // endpoint. When no set is active, the editor is in F-list read-only
+    // mode; nothing to flush, so silently drop the schedule.
+    const activeSetId = get().flistActiveSetId[characterId]
+    if (!activeSetId) {
+      _cancelFlush(characterId)
+      return
+    }
     const inflight = (async () => {
       // Pin the exact payload we're shipping so the success branch can
       // tell whether new edits arrived during the round-trip.
@@ -1819,9 +1827,12 @@ export const useStore = create<State>((set, get) => ({
         }
       })
       try {
-        const { etag } = await api.flistWorkingWrite(characterId, sentPayload, {
-          etag: slot.materialised ? slot.etag : null
-        })
+        const { etag } = await api.flistSetPayloadPut(
+          characterId,
+          activeSetId,
+          sentPayload,
+          slot.materialised ? slot.etag : null
+        )
         set((s) => {
           const existing = s.flistWorking[characterId]
           if (!existing) return {}
@@ -1829,18 +1840,32 @@ export const useStore = create<State>((set, get) => ({
           // newer slot's `payload` won't match `sentPayload` — keep
           // unsavedDirty=true so the next flush picks up the delta.
           const isFresh = existing.payload === sentPayload
+          const nextSlot: FlistWorkingSlot = {
+            ...existing,
+            etag,
+            unsavedDirty: isFresh ? false : existing.unsavedDirty,
+            saveStatus: isFresh ? 'saved' : existing.saveStatus,
+            saveError: null,
+            lastSavedAt: Date.now(),
+            materialised: true
+          }
+          // Mirror into the per-set cache so any consumer reading
+          // flistSetWorking[setId] sees the freshest payload, and bump
+          // the set's updatedAt so the "saved Xm ago" suffix refreshes.
+          const setsList = s.flistSets[characterId] ?? []
           return {
-            flistWorking: {
-              ...s.flistWorking,
-              [characterId]: {
-                ...existing,
-                etag,
-                unsavedDirty: isFresh ? false : existing.unsavedDirty,
-                saveStatus: isFresh ? 'saved' : existing.saveStatus,
-                saveError: null,
-                lastSavedAt: Date.now(),
-                materialised: true
-              }
+            flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
+            flistSetWorking: {
+              ...s.flistSetWorking,
+              [activeSetId]: nextSlot
+            },
+            flistSets: {
+              ...s.flistSets,
+              [characterId]: setsList.map((m) =>
+                m.id === activeSetId
+                  ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
+                  : m
+              )
             }
           }
         })
@@ -1965,14 +1990,21 @@ export const useStore = create<State>((set, get) => ({
       sets.sort((a, b) => b.updatedAt - a.updatedAt)
       set((s) => ({
         flistSets: { ...s.flistSets, [characterId]: sets },
-        flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'ready' },
-        flistActiveSetId: {
-          ...s.flistActiveSetId,
-          [characterId]: wire.active_set_id
-        }
+        flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'ready' }
       }))
+      // Drive the activate flow so the editor's view slot
+      // (flistWorking[characterId]) lands in sync with the server-side
+      // active_set.json — either an editable set or read-only live.
       if (wire.active_set_id) {
-        await get().flistSetWorkingMaterialise(characterId, wire.active_set_id)
+        // Clear the local pointer so flistActivateSet doesn't short-
+        // circuit when char-switching and the prior session had this
+        // same setId active.
+        set((s) => ({
+          flistActiveSetId: { ...s.flistActiveSetId, [characterId]: null }
+        }))
+        await get().flistActivateSet(characterId, wire.active_set_id)
+      } else {
+        await get().flistActivateFromFlist(characterId)
       }
     } catch {
       set((s) => ({
@@ -1985,20 +2017,19 @@ export const useStore = create<State>((set, get) => ({
     try {
       const wire = await api.flistSetCreate(characterId, { name })
       const meta = _setMetaFromWire(wire.set)
+      // Insert the new meta into the list first; flistActivateSet will
+      // do the flush-outgoing + load-incoming + editorContent dance and
+      // set this set as active.
       set((s) => {
         const list = s.flistSets[characterId] ?? []
         return {
           flistSets: {
             ...s.flistSets,
             [characterId]: [meta, ...list.filter((m) => m.id !== meta.id)]
-          },
-          flistActiveSetId: {
-            ...s.flistActiveSetId,
-            [characterId]: meta.id
           }
         }
       })
-      await get().flistSetWorkingMaterialise(characterId, meta.id)
+      await get().flistActivateSet(characterId, meta.id)
       return meta
     } catch {
       return null
@@ -2048,8 +2079,11 @@ export const useStore = create<State>((set, get) => ({
 
   async flistDeleteSet(characterId, setId) {
     // Cancel any pending autosave for the doomed set so a stranded timer
-    // can't fire a PUT against a now-deleted folder.
+    // can't fire a PUT against a now-deleted folder. Also clear the
+    // legacy view slot if it was the active one.
     _cancelSetFlush(setId)
+    const wasActive = get().flistActiveSetId[characterId] === setId
+    if (wasActive) _cancelFlush(characterId)
     try {
       const res = await api.flistSetDelete(characterId, setId)
       set((s) => {
@@ -2058,22 +2092,34 @@ export const useStore = create<State>((set, get) => ({
         delete nextSetWorking[setId]
         const nextLoadStatus = { ...s.flistSetWorkingLoadStatus }
         delete nextLoadStatus[setId]
-        const wasActive = s.flistActiveSetId[characterId] === setId
-        return {
+        const patch: Partial<State> = {
           flistSets: { ...s.flistSets, [characterId]: list },
           flistSetWorking: nextSetWorking,
-          flistSetWorkingLoadStatus: nextLoadStatus,
-          flistActiveSetId: wasActive
-            ? { ...s.flistActiveSetId, [characterId]: res.active_set_id }
-            : s.flistActiveSetId
+          flistSetWorkingLoadStatus: nextLoadStatus
         }
+        if (wasActive) {
+          patch.flistActiveSetId = {
+            ...s.flistActiveSetId,
+            [characterId]: res.active_set_id
+          }
+        }
+        return patch
       })
-      // Server returns the new active set id (or null) when the deleted
-      // one was active — pull its payload so the editor doesn't render
-      // against an empty slot.
-      const nextActive = get().flistActiveSetId[characterId]
-      if (nextActive && !get().flistSetWorking[nextActive]) {
-        await get().flistSetWorkingMaterialise(characterId, nextActive)
+      if (wasActive) {
+        // Re-route the editor to whichever set the server picked as the
+        // new active one — or to F-list read-only when there are none.
+        const nextActive = get().flistActiveSetId[characterId]
+        if (nextActive) {
+          // flistActivateSet flushes outgoing + loads incoming; activeSetId
+          // was set to nextActive above, so prevent the early-return path
+          // by clearing it first then re-activating.
+          set((s) => ({
+            flistActiveSetId: { ...s.flistActiveSetId, [characterId]: null }
+          }))
+          await get().flistActivateSet(characterId, nextActive)
+        } else {
+          await get().flistActivateFromFlist(characterId)
+        }
       }
     } catch {
       // Failure leaves local state untouched; user can retry from the
@@ -2083,47 +2129,116 @@ export const useStore = create<State>((set, get) => ({
 
   async flistActivateSet(characterId, setId) {
     const prevSetId = get().flistActiveSetId[characterId]
-    if (prevSetId && prevSetId !== setId) {
-      // Flush the outgoing set BEFORE the activate call so a still-pending
-      // autosave can't land after we've already swapped active id (the
-      // user could then edit the new set and the prior debounce would
-      // PUT to the old set looking fine, but the chip would mislead).
+    if (prevSetId === setId) return
+    // Flush the outgoing slot synchronously so its edits land under the
+    // PREVIOUS set's id (flistFlushWorking reads activeSetId at PUT time
+    // — we cancel any debounce, drain the in-flight save, then flush
+    // explicitly before flipping the pointer).
+    if (prevSetId && get().flistWorking[characterId]?.unsavedDirty) {
+      _cancelFlush(characterId)
       try {
-        await get().flistSetWorkingFlushPending(characterId, prevSetId)
+        await get().flistFlushWorking(characterId)
       } catch {
-        // best-effort; saveError on the prior slot is the user signal
+        // best-effort; saveError on the slot is the user signal
       }
     }
     try {
       await api.flistSetActivate(characterId, setId)
-      set((s) => ({
-        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: setId }
-      }))
-      if (!get().flistSetWorking[setId]) {
-        await get().flistSetWorkingMaterialise(characterId, setId)
-      }
     } catch {
       // Server rejected (404 / 409). Leave the prior active id in place.
+      return
     }
+    // Fetch the new set's payload fresh from disk every time — each
+    // set has its own payload.json so this is what gives them
+    // byte-isolated identity.
+    let payload: WorkingPayload
+    let etag: string | null = null
+    try {
+      const res = await api.flistSetPayloadRead(characterId, setId)
+      payload = res.payload as WorkingPayload
+      etag = res.etag
+    } catch {
+      payload = { ...emptyWorkingSlot().payload }
+    }
+    const overlay = Array.isArray(payload._overlay) ? payload._overlay : []
+    const slot: FlistWorkingSlot = {
+      payload,
+      overlay,
+      etag,
+      unsavedDirty: false,
+      saveStatus: 'idle',
+      saveError: null,
+      lastSavedAt: null,
+      materialised: true
+    }
+    set((s) => {
+      const patch: Partial<State> = {
+        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: setId },
+        editorReadOnly: false,
+        flistWorking: { ...s.flistWorking, [characterId]: slot },
+        flistSetWorking: { ...s.flistSetWorking, [setId]: slot }
+      }
+      // Mirror the new set's description into the editor so the panel
+      // immediately reflects the switch.
+      if (
+        s.flistActiveCharacterId === characterId &&
+        s.activeDocId === null
+      ) {
+        patch.editorContent = descriptionOf(payload)
+        patch.editorDirty = false
+      }
+      return patch
+    })
   },
 
   async flistActivateFromFlist(characterId) {
     const prevSetId = get().flistActiveSetId[characterId]
-    if (prevSetId) {
+    if (prevSetId && get().flistWorking[characterId]?.unsavedDirty) {
+      _cancelFlush(characterId)
       try {
-        await get().flistSetWorkingFlushPending(characterId, prevSetId)
+        await get().flistFlushWorking(characterId)
       } catch {
         // best-effort
       }
     }
     try {
       await api.flistFromFlistActivate(characterId)
-      set((s) => ({
-        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: null }
-      }))
     } catch {
       // Leave previous selection intact on failure.
+      return
     }
+    // Build a read-only view slot from the local live.json. The tabs
+    // (Profile / Kinks / Images / Editor) read this slot; the editor
+    // and any edit handlers honor editorReadOnly to block mutations.
+    const live = get().flistArchive[characterId]?.live ?? null
+    const payload = live
+      ? seedWorkingFromLive(live)
+      : { ...emptyWorkingSlot().payload }
+    const slot: FlistWorkingSlot = {
+      payload,
+      overlay: [],
+      etag: null,
+      unsavedDirty: false,
+      saveStatus: 'idle',
+      saveError: null,
+      lastSavedAt: null,
+      materialised: true
+    }
+    set((s) => {
+      const patch: Partial<State> = {
+        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: null },
+        editorReadOnly: true,
+        flistWorking: { ...s.flistWorking, [characterId]: slot }
+      }
+      if (
+        s.flistActiveCharacterId === characterId &&
+        s.activeDocId === null
+      ) {
+        patch.editorContent = descriptionOf(payload)
+        patch.editorDirty = false
+      }
+      return patch
+    })
   },
 
   async flistSetWorkingMaterialise(characterId, setId) {
