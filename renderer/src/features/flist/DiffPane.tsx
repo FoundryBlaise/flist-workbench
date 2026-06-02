@@ -21,7 +21,8 @@ const CATEGORY_LABEL: Record<DiffCategory, string> = {
   settings: 'Settings',
   infotag: 'Profile fields',
   custom_kink: 'Custom kinks',
-  standard_kink: 'Standard kinks'
+  standard_kink: 'Standard kinks',
+  image: 'Images'
 }
 
 const CATEGORY_ORDER: DiffCategory[] = [
@@ -29,7 +30,8 @@ const CATEGORY_ORDER: DiffCategory[] = [
   'settings',
   'infotag',
   'custom_kink',
-  'standard_kink'
+  'standard_kink',
+  'image'
 ]
 
 export function DiffPane({ characterId }: { characterId: string }) {
@@ -309,6 +311,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
                       <DiffRow
                         key={row.path}
                         row={row}
+                        characterId={characterId}
                         rightLabel={rightLabel}
                         onReset={source.kind === 'live' ? onRowReset(row) : null}
                         backupResetDisabled={source.kind === 'backup'}

@@ -8,6 +8,26 @@ type GalleryRow = {
   sort_order: number
 }
 
+// Shared with ImagesTab. Drop is accepted by any gallery item rendering
+// in either view, so reordering on one side reflects on the other via
+// working.json's `images` array.
+const DRAG_MIME_GALLERY_REORDER = 'application/x-flist-gallery-reorder'
+
+function reorderGallery(
+  list: GalleryRow[],
+  movedId: string,
+  targetId: string
+): GalleryRow[] {
+  if (movedId === targetId) return list
+  const from = list.findIndex((e) => e.image_id === movedId)
+  const to = list.findIndex((e) => e.image_id === targetId)
+  if (from < 0 || to < 0) return list
+  const next = list.slice()
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  return next.map((e, i) => ({ ...e, sort_order: i }))
+}
+
 function readGallery(payload: unknown): GalleryRow[] {
   if (!payload || typeof payload !== 'object') return []
   const raw = (payload as { images?: unknown }).images
@@ -54,10 +74,14 @@ export function GalleryPreviewPane() {
   const slot = useStore((s) =>
     characterId ? s.flistWorking[characterId] : null
   )
+  const setGallery = useStore((s) => s.flistSetGalleryImages)
   const gallery = useMemo(
     () => (slot ? readGallery(slot.payload) : []),
     [slot]
   )
+  // Reorder is only meaningful when there's an editable working slot
+  // backing the gallery. Without one, the tile heap stays read-only.
+  const reorderEnabled = Boolean(characterId && slot)
   const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null)
 
   // Keyboard nav while fullscreen is open. ESC closes, ←/→ paginate.
@@ -102,7 +126,36 @@ export function GalleryPreviewPane() {
         <div className="flist-gallery-preview__heading">Images</div>
         <ul className="flist-gallery-preview__heap">
           {gallery.map((row, i) => (
-            <li key={row.image_id} className="flist-gallery-preview__tile">
+            <li
+              key={row.image_id}
+              className="flist-gallery-preview__tile"
+              draggable={reorderEnabled}
+              onDragStart={(e) => {
+                if (!reorderEnabled) return
+                e.dataTransfer.setData(
+                  DRAG_MIME_GALLERY_REORDER,
+                  row.image_id
+                )
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onDragOver={(e) => {
+                if (!reorderEnabled) return
+                if (!e.dataTransfer.types.includes(DRAG_MIME_GALLERY_REORDER)) return
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+              }}
+              onDrop={(e) => {
+                if (!reorderEnabled || !characterId) return
+                const movedId = e.dataTransfer.getData(DRAG_MIME_GALLERY_REORDER)
+                if (!movedId || movedId === row.image_id) return
+                e.preventDefault()
+                e.stopPropagation()
+                setGallery(
+                  characterId,
+                  reorderGallery(gallery, movedId, row.image_id)
+                )
+              }}
+            >
               <button
                 type="button"
                 className="flist-gallery-preview__tile-btn"
@@ -113,6 +166,7 @@ export function GalleryPreviewPane() {
                   src={api.flistImageByIdUrl(characterId, row.image_id)}
                   alt={row.description || `Image ${i + 1}`}
                   loading="lazy"
+                  draggable={false}
                 />
               </button>
             </li>

@@ -44,6 +44,25 @@ const TOAST_MS = 5000
 // the wrong direction (e.g. profile pane shouldn't accept profile→pool).
 const DRAG_MIME_PROFILE_TO_POOL = 'application/x-flist-image-to-pool'
 const DRAG_MIME_POOL_TO_PROFILE = 'application/x-flist-image-to-profile'
+// Drag from any gallery view (here or the right-pane preview) onto
+// another gallery item — reorders within working.json's `images`.
+// Same MIME both panes use so reorders sync automatically.
+const DRAG_MIME_GALLERY_REORDER = 'application/x-flist-gallery-reorder'
+
+function reorderGallery(
+  list: GalleryEntry[],
+  movedId: string,
+  targetId: string
+): GalleryEntry[] {
+  if (movedId === targetId) return list
+  const from = list.findIndex((e) => e.image_id === movedId)
+  const to = list.findIndex((e) => e.image_id === targetId)
+  if (from < 0 || to < 0) return list
+  const next = list.slice()
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  return next.map((e, i) => ({ ...e, sort_order: i }))
+}
 
 type PoolEntry = {
   image_id: string
@@ -371,7 +390,28 @@ export function ImagesTab({
                     DRAG_MIME_PROFILE_TO_POOL,
                     entry.image_id
                   )
+                  e.dataTransfer.setData(
+                    DRAG_MIME_GALLERY_REORDER,
+                    entry.image_id
+                  )
                   e.dataTransfer.effectAllowed = 'move'
+                }}
+                onDragOver={(e) => {
+                  if (readOnly) return
+                  if (!e.dataTransfer.types.includes(DRAG_MIME_GALLERY_REORDER)) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                }}
+                onDrop={(e) => {
+                  if (readOnly) return
+                  const movedId = e.dataTransfer.getData(DRAG_MIME_GALLERY_REORDER)
+                  if (!movedId || movedId === entry.image_id) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setGallery(
+                    characterId,
+                    reorderGallery(gallery, movedId, entry.image_id)
+                  )
                 }}
                 onKeyDown={(e) => {
                   if (readOnly) return

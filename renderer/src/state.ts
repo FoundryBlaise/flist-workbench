@@ -945,6 +945,24 @@ export const useStore = create<State>((set, get) => ({
           flistArchive: archive,
         }
       })
+      // Restore the previously-selected character so signing back in
+      // lands the user on their default rather than the picker's
+      // empty state. Only fires when nothing is currently selected
+      // and the saved id still resolves against the fresh roster.
+      if (get().flistActiveCharacterId === null) {
+        let savedId: string | null = null
+        try {
+          savedId = localStorage.getItem(FLIST_LAST_CHAR_KEY)
+        } catch {
+          savedId = null
+        }
+        if (savedId) {
+          const known = characters.some((c) => String(c.id ?? '') === savedId)
+          if (known) {
+            await get().flistSelectCharacter(savedId)
+          }
+        }
+      }
     } catch {
       set({ flistRosterStatus: 'error' })
     }
