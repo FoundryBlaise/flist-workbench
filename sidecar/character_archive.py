@@ -4,8 +4,18 @@ Layout under `<userdata>/characters/<character_id>/`:
 
     live.json                        last fetched character-data + fetch ts
     backups/<unix>.json              snapshot of a previous Live
-    images/<image_id>.<ext>          gallery images, deduped by F-list id
+    images/<image_id>.<ext>          all on-disk image bytes (Pool view in
+                                     the UI is whatever isn't currently in
+                                     working.json's gallery)
     inlines/<sha1>.<ext>             inline images referenced in BBCode
+
+`<image_id>` is digits for F-list-pulled images, `local-<sha8>` for user
+uploads that haven't been restored to F-list yet. There's no separate
+sha-keyed pool — bytes live in `images/` once, and the renderer treats
+files not referenced by working.json's gallery as "in the pool" for the
+UI. The only path that ever deletes bytes is an explicit user delete
+from the pool view (DELETE /images/<image_id>); pulls overwrite the
+same id in place, profile→pool moves are pure working.json edits.
 
 Avatars sit one level up at `<userdata>/avatars/<lowercase_name>.png`
 because they survive a character being deleted from the account.
@@ -35,14 +45,18 @@ WORKING_FILENAME = "working.json"
 
 # v1 → v2 (Tier 3): added local: ids, _custom_kinks_order, tombstones.
 # v2 → v3 (Tier 6 attempt 1): sha256-keyed gallery refs. Reverted in v4.
-# v3 → v4 (Tier 6 attempt 2): gallery refs back to image_id (string), with
-#   a `local-<sha8>` synthetic id for pool images not yet uploaded to
-#   F-list. Pool stays sha-keyed for its own dedup but is no longer the
-#   primary key for what a character displays.
-# Writers stamp the current version; readers refuse files older than v4
-# (v3 carried sha-only refs and can't be auto-migrated without re-pulling)
-# AND files newer than v4.
-WORKING_SCHEMA_VERSION = 4
+# v3 → v4 (Tier 6 attempt 2): gallery refs back to image_id, with `local-
+#   <sha8>` synthetic ids for non-F-list uploads. Bytes still doubly-
+#   stored in a sha-keyed pool/ dir.
+# v4 → v5 (refinement): drop the sha-keyed pool/ directory entirely.
+#   Bytes live once under `images/<image_id>.<ext>`; the renderer's "Pool"
+#   pane is a view over files not referenced by working.json's gallery.
+#   Migration: pool/<sha>.<ext> entries are moved into `images/` under
+#   their first-known F-list id (if not already on disk) or under
+#   `local-<sha8>`; pool/ + manifest.json are then removed.
+# Writers stamp the current version; readers refuse files newer than v5
+# and silently migrate v1..v4 in place.
+WORKING_SCHEMA_VERSION = 5
 
 
 class EtagMismatch(ValueError):
@@ -246,8 +260,9 @@ def _migrate_working_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """In-memory schema migration. v1 → v2 fills _custom_kinks_order
     from the dict; v2 → v4 drops any sha256-keyed images array (the
     short-lived v3 shape) since we can't infer image_ids from shas
-    without re-querying F-list. The caller is responsible for re-seeding
-    the gallery from live.json after a v3-or-older file lands here.
+    without re-querying F-list. v4 → v5 is a no-op on the payload (gallery
+    refs are unchanged); the actual disk side-effect (pool/ → images/) is
+    driven by `migrate_v4_pool_to_images` in `read_working`.
     """
     version = payload.get("_schema_version")
     if version is None:
@@ -310,9 +325,12 @@ def read_working(character_id: int | str) -> dict[str, Any] | None:
         return None
     migrated = _migrate_working_payload(payload)
     # Write the migrated shape back to disk so the next read (and any
-    # external tooling inspecting working.json) sees the canonical v4
-    # layout — otherwise a renderer that never edits would carry the
-    # in-memory migration forever and the on-disk file would stay v3.
+    # external tooling inspecting working.json) sees the canonical
+    # current-version layout — otherwise a renderer that never edits
+    # would carry the in-memory migration forever and the on-disk file
+    # would stay behind. v4 → v5 also drives the pool/→images/ disk
+    # migration: payload's shape doesn't change but the byte store
+    # collapses to a single directory.
     if (
         isinstance(version, int)
         and version < WORKING_SCHEMA_VERSION
@@ -321,6 +339,8 @@ def read_working(character_id: int | str) -> dict[str, Any] | None:
             _atomic_write_json(p, migrated)
         except OSError:
             pass
+        if version <= 4:
+            migrate_v4_pool_to_images(character_id)
     return migrated
 
 
@@ -556,40 +576,24 @@ def inline_path(character_id: int | str, basename: str) -> Path:
     return inlines_dir(character_id) / basename
 
 
-# ---- image pool (Tier 6) ----------------------------------------------
+# ---- per-character images/ (unified store, image_id-keyed) -----------
 
-POOL_DIRNAME = "pool"
-POOL_MANIFEST_FILENAME = "manifest.json"
-
-# F-list only accepts these on upload; rejecting other extensions in the
-# pool keeps the manifest honest as the source of truth for what's
-# restorable.
-_POOL_EXTS = frozenset({"png", "jpg", "jpeg", "gif"})
-
-
-def pool_dir(character_id: int | str) -> Path:
-    p = character_dir(character_id) / POOL_DIRNAME
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def pool_manifest_path(character_id: int | str) -> Path:
-    return pool_dir(character_id) / POOL_MANIFEST_FILENAME
-
-
-def _normalise_pool_ext(ext: str) -> str:
-    e = ext.lower().lstrip(".")
-    if e == "jpeg":
-        e = "jpg"
-    if e not in _POOL_EXTS:
-        raise ValueError(f"unsupported pool extension: {ext!r}")
-    return e
+# F-list only accepts these on upload, so the image store mirrors that
+# whitelist — the userscript would reject anything else on restore.
+_IMAGE_EXTS = frozenset({"png", "jpg", "jpeg", "gif"})
 
 
 def normalise_image_ext(ext: str) -> str:
-    """Public wrapper around `_normalise_pool_ext` so callers outside
-    this module (server.py's pull loop) don't have to import a private."""
-    return _normalise_pool_ext(ext)
+    """Lowercase + jpeg→jpg + whitelist check. Raises ValueError on
+    anything outside `{png, jpg, gif}`. Public so the server's pull loop
+    can normalise raw extensions from F-list without reaching into a
+    private."""
+    e = ext.lower().lstrip(".")
+    if e == "jpeg":
+        e = "jpg"
+    if e not in {"png", "jpg", "gif"}:
+        raise ValueError(f"unsupported image extension: {ext!r}")
+    return e
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -598,177 +602,33 @@ def _hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def read_pool_manifest(character_id: int | str) -> dict[str, dict[str, Any]]:
-    p = pool_manifest_path(character_id)
-    if not p.exists():
-        return {}
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        k: v
-        for k, v in raw.items()
-        if isinstance(k, str) and isinstance(v, dict)
-    }
-
-
-def write_pool_manifest(
-    character_id: int | str,
-    manifest: dict[str, dict[str, Any]],
-) -> None:
-    _atomic_write_json(pool_manifest_path(character_id), manifest)
-
-
-def pool_path(character_id: int | str, sha: str, ext: str) -> Path:
-    """`pool/<sha>.<ext>`. Sha validated as a safe filename segment
-    (sha256 hex satisfies `_SAFE_NAME_RE`); ext normalised to the
-    pool's accepted set."""
-    if not _SAFE_NAME_RE.match(sha):
-        raise ValueError(f"unsafe pool sha: {sha!r}")
-    e = _normalise_pool_ext(ext)
-    return pool_dir(character_id) / f"{sha}.{e}"
-
-
-def add_to_pool(
-    character_id: int | str,
-    data: bytes,
-    ext: str,
-    *,
-    source: str = "user_upload",
-    image_id: str | None = None,
-) -> str:
-    """Hash + store image bytes; return sha256 hex. Idempotent — re-
-    adding identical bytes does not duplicate on disk. The pool is a
-    sha-keyed forever archive; when `image_id` is supplied (F-list pull
-    or a restored upload) it's appended to the entry's `image_ids` list
-    so the UI can re-materialise a deleted-from-profile image back to
-    its original `image_id` rather than minting a `local-*` synthetic.
-    """
-    ext_n = _normalise_pool_ext(ext)
-    sha = _hash_bytes(data)
-    dest = pool_dir(character_id) / f"{sha}.{ext_n}"
-    if not dest.exists():
-        dest.write_bytes(data)
-    manifest = read_pool_manifest(character_id)
-    existing = manifest.get(sha, {})
-    image_ids_raw = existing.get("image_ids")
-    image_ids: list[str] = (
-        list(image_ids_raw) if isinstance(image_ids_raw, list) else []
-    )
-    if image_id is not None and image_id not in image_ids:
-        image_ids.append(image_id)
-    merged: dict[str, Any] = {
-        "extension": ext_n,
-        "source": existing.get("source") or source,
-        "added_at": existing.get("added_at") or int(time.time()),
-        "size": len(data),
-        "image_ids": image_ids,
-    }
-    manifest[sha] = merged
-    write_pool_manifest(character_id, manifest)
-    return sha
-
-
-def add_path_to_pool(
-    character_id: int | str,
-    path: Path,
-    *,
-    source: str = "flist_pull",
-    image_id: str | None = None,
-) -> str | None:
-    """Copy a file from `path` into the pool. Returns sha or None if
-    the file is unreadable or carries an unrecognised extension.
-    Caller is responsible for unlinking the source if it's a move."""
-    if not path.exists():
-        return None
-    ext = path.suffix.lstrip(".").lower()
-    try:
-        _normalise_pool_ext(ext)
-    except ValueError:
-        return None
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return None
-    return add_to_pool(
-        character_id, data, ext, source=source, image_id=image_id
-    )
-
-
-def list_pool_entries(character_id: int | str) -> list[dict[str, Any]]:
-    """Pool entries sorted newest first. Each row:
-    `{sha256, extension, source, added_at, size, image_ids}`. Entries
-    whose backing file is missing are skipped so the renderer never
-    sees a phantom thumbnail. `image_ids` is the list of F-list / local
-    ids that have ever pointed at this sha — used by the UI to badge
-    the entry as already-in-gallery and to re-materialise with the
-    original id after a profile-delete."""
-    manifest = read_pool_manifest(character_id)
-    out: list[dict[str, Any]] = []
-    for sha, meta in manifest.items():
-        ext = meta.get("extension")
-        if not isinstance(ext, str):
-            continue
-        path = pool_dir(character_id) / f"{sha}.{ext}"
-        if not path.exists():
-            continue
-        image_ids_raw = meta.get("image_ids")
-        image_ids = (
-            [str(x) for x in image_ids_raw if isinstance(x, (str, int))]
-            if isinstance(image_ids_raw, list)
-            else []
-        )
-        out.append(
-            {
-                "sha256": sha,
-                "extension": ext,
-                "source": meta.get("source") or "unknown",
-                "added_at": meta.get("added_at") or 0,
-                "size": meta.get("size") or 0,
-                "image_ids": image_ids,
-            }
-        )
-    out.sort(key=lambda r: r["added_at"], reverse=True)
-    return out
-
-
-def remove_from_pool(character_id: int | str, sha: str) -> bool:
-    """Delete a pool entry. Manual affordance only — no auto-GC. Returns
-    True when the file was removed (or was already gone but tracked)."""
-    if not _SAFE_NAME_RE.match(sha):
-        return False
-    manifest = read_pool_manifest(character_id)
-    meta = manifest.get(sha)
-    if not meta:
-        return False
-    ext = meta.get("extension")
-    if not isinstance(ext, str):
-        return False
-    path = pool_dir(character_id) / f"{sha}.{ext}"
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return False
-    manifest.pop(sha, None)
-    write_pool_manifest(character_id, manifest)
-    return True
-
-
-# ---- per-character images/ (F-list image_id-keyed) -------------------
+def _detect_image_ext_from_bytes(data: bytes) -> str | None:
+    """Sniff PNG/JPEG/GIF magic bytes and return the canonical extension
+    ('png'/'jpg'/'gif'). Returns None when the bytes don't match any
+    supported format — callers should reject the upload."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "gif"
+    return None
 
 
 def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     """Walk `images/` and return one row per file: `{image_id, extension,
-    size}`. The renderer pairs these with `description`/`sort_order`
-    from working.json. Order is by image_id (string-sorted) — the user-
-    facing order comes from the working copy."""
+    size, added_at}`. `added_at` is the file mtime (unix seconds) so the
+    renderer can sort the Pool pane newest-first. The renderer pairs
+    these rows with `description`/`sort_order` from working.json to
+    decide which are on the profile vs. in the pool view.
+
+    Side-effect: triggers the v4 → v5 pool migration if a legacy pool/
+    directory is present. Idempotent — no-op once collapsed."""
+    migrate_v4_pool_to_images(character_id)
     out: list[dict[str, Any]] = []
     d = images_dir(character_id)
+    if not d.exists():
+        return out
     for entry in d.iterdir():
         if not entry.is_file():
             continue
@@ -776,14 +636,15 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
         if not m:
             continue
         try:
-            size = entry.stat().st_size
+            stat = entry.stat()
         except OSError:
             continue
         out.append(
             {
                 "image_id": m.group(1),
                 "extension": m.group(2).lower(),
-                "size": size,
+                "size": stat.st_size,
+                "added_at": int(stat.st_mtime),
             }
         )
     out.sort(key=lambda r: r["image_id"])
@@ -796,88 +657,64 @@ def write_character_image(
     ext: str,
     data: bytes,
 ) -> None:
-    """Write `data` to `images/<image_id>.<ext>` AND copy into the pool
-    (sha-keyed) so the bytes are doubly-stored: once for restore, once
-    for the forever archive. The image_id is recorded in the pool
-    manifest entry's `image_ids` list so a later re-add from the pool
-    can restore to the original id rather than a `local-*` synthetic.
-    Both writes are idempotent."""
+    """Atomically write `data` to `images/<image_id>.<ext>`. Idempotent
+    — re-calling with the same id+ext overwrites in place (pull loop
+    relies on this for re-pulls). `image_id` and `ext` are validated
+    against the safe-name regex; `ext` is normalised (jpeg → jpg)."""
     if not _SAFE_NAME_RE.match(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
-    ext_n = _normalise_pool_ext(ext)
+    ext_n = normalise_image_ext(ext)
     target = images_dir(character_id) / f"{image_id}.{ext_n}"
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_bytes(data)
     tmp.replace(target)
-    add_to_pool(
-        character_id, data, ext_n, source="flist_pull", image_id=image_id
-    )
 
 
-def materialise_pool_to_character(
+def add_uploaded_image(
     character_id: int | str,
-    sha: str,
-    *,
-    preferred_image_id: str | None = None,
-) -> str | None:
-    """Copy a pool image into `images/<id>.<ext>` so it can be bundled
-    in the restore ZIP and reordered alongside F-list images. The image
-    id is, in priority order:
-
-      1. `preferred_image_id` if it's listed in the pool entry's
-         `image_ids` (e.g. an F-list mirror entry the user just deleted
-         from their profile — re-adding restores the original id).
-      2. The first id in `image_ids` not already present on disk.
-      3. `local-<sha8>` synthetic fallback (user uploads that never
-         went through F-list).
-
-    Returns the chosen image_id or None when the pool entry / file is
-    missing. Idempotent — re-calling for the same sha returns the
-    existing id without re-writing bytes.
-    """
-    manifest = read_pool_manifest(character_id)
-    meta = manifest.get(sha)
-    if not meta:
+    data: bytes,
+) -> dict[str, Any] | None:
+    """Save user-uploaded bytes under `images/local-<sha8>.<ext>`.
+    Extension is sniffed from magic bytes — Content-Type is never
+    trusted. Returns the metadata row (`{image_id, extension, size,
+    added_at}`) or None when the bytes don't match a supported format.
+    Idempotent — identical bytes always produce the same `local-<sha8>`
+    and the file is written only when missing."""
+    ext = _detect_image_ext_from_bytes(data)
+    if ext is None:
         return None
-    ext = meta.get("extension")
-    if not isinstance(ext, str):
-        return None
-    src = pool_dir(character_id) / f"{sha}.{ext}"
-    if not src.exists():
-        return None
-    image_ids_raw = meta.get("image_ids")
-    known_ids: list[str] = (
-        [str(x) for x in image_ids_raw if isinstance(x, (str, int))]
-        if isinstance(image_ids_raw, list)
-        else []
-    )
-    chosen: str | None = None
-    if preferred_image_id and preferred_image_id in known_ids:
-        chosen = preferred_image_id
-    if chosen is None:
-        for iid in known_ids:
-            if not _SAFE_NAME_RE.match(iid):
-                continue
-            if not (images_dir(character_id) / f"{iid}.{ext}").exists():
-                chosen = iid
-                break
-    if chosen is None:
-        chosen = f"local-{sha[:8]}"
-    if not _SAFE_NAME_RE.match(chosen):
-        return None
-    target = images_dir(character_id) / f"{chosen}.{ext}"
+    sha = _hash_bytes(data)
+    image_id = f"local-{sha[:8]}"
+    target = images_dir(character_id) / f"{image_id}.{ext}"
     if not target.exists():
-        target.write_bytes(src.read_bytes())
-    return chosen
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(target)
+    try:
+        stat = target.stat()
+        added_at = int(stat.st_mtime)
+        size = stat.st_size
+    except OSError:
+        added_at = int(time.time())
+        size = len(data)
+    return {
+        "image_id": image_id,
+        "extension": ext,
+        "size": size,
+        "added_at": added_at,
+    }
 
 
 def remove_character_image(character_id: int | str, image_id: str) -> bool:
-    """Delete `images/<image_id>.<ext>`. Pool entry stays intact — the
-    user can re-add the same image later without re-downloading.
+    """Delete `images/<image_id>.<ext>`. Permanent — there's no
+    secondary pool to fall back on under the v5 model, which is why the
+    renderer wraps every call to this in an explicit confirm dialog.
     Returns True iff a file was removed."""
     if not _SAFE_NAME_RE.match(image_id):
         return False
     d = images_dir(character_id)
+    if not d.exists():
+        return False
     for entry in d.iterdir():
         if not entry.is_file():
             continue
@@ -892,37 +729,123 @@ def remove_character_image(character_id: int | str, image_id: str) -> bool:
     return False
 
 
-def sync_character_images_to_flist(
-    character_id: int | str,
-    expected_ids: Iterable[str],
-) -> list[str]:
-    """Delete from `images/` any F-list-shaped id (digits only) not in
-    `expected_ids`. Local synthetic ids (`local-*`) are preserved —
-    they're user uploads the userscript hasn't restored to F-list yet.
-    Returns the list of image_ids that were removed.
+# ---- v4 → v5 pool migration ------------------------------------------
+
+# v4 stored bytes twice: once under `images/<image_id>.<ext>` and once
+# under `pool/<sha>.<ext>` with a sha→{image_ids[]} manifest. v5 keeps
+# only the `images/` store; migration moves any pool-only bytes into
+# `images/` under their first-known F-list id (or a `local-<sha8>`
+# synthetic) and deletes the pool/ directory.
+
+_LEGACY_POOL_DIRNAME = "pool"
+_LEGACY_POOL_MANIFEST = "manifest.json"
+
+
+def migrate_v4_pool_to_images(character_id: int | str) -> int:
+    """One-shot disk migration from v4's `pool/<sha>` store to v5's
+    unified `images/<image_id>` store. Returns the number of pool files
+    promoted (informational; legacy archive with no pool/ returns 0).
+    Idempotent — re-runs are no-ops once pool/ is gone.
     """
-    keep = {str(i) for i in expected_ids}
-    removed: list[str] = []
-    d = images_dir(character_id)
-    for entry in list(d.iterdir()):
-        if not entry.is_file():
-            continue
-        m = _IMAGE_FILE_RE.match(entry.name)
-        if not m:
-            continue
-        iid = m.group(1)
-        if iid.startswith("local-"):
-            # User uploads not yet on F-list — left alone by the mirror
-            # sync. Only the user removes these explicitly.
-            continue
-        if iid in keep:
+    cdir = character_dir(character_id)
+    pool_d = cdir / _LEGACY_POOL_DIRNAME
+    if not pool_d.exists():
+        return 0
+    manifest_path = pool_d / _LEGACY_POOL_MANIFEST
+    manifest: dict[str, dict[str, Any]] = {}
+    if manifest_path.exists():
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                manifest = {
+                    k: v for k, v in raw.items()
+                    if isinstance(k, str) and isinstance(v, dict)
+                }
+        except (OSError, ValueError):
+            manifest = {}
+    images_d = images_dir(character_id)
+    promoted = 0
+    seen_pool_files: set[str] = set()
+    for sha, meta in manifest.items():
+        ext_raw = meta.get("extension")
+        if not isinstance(ext_raw, str):
             continue
         try:
+            ext = normalise_image_ext(ext_raw)
+        except ValueError:
+            continue
+        sha_file = pool_d / f"{sha}.{ext}"
+        seen_pool_files.add(sha_file.name)
+        if not sha_file.exists():
+            continue
+        image_ids_raw = meta.get("image_ids")
+        image_ids: list[str] = (
+            [str(x) for x in image_ids_raw if isinstance(x, (str, int))]
+            if isinstance(image_ids_raw, list)
+            else []
+        )
+        # If any of this sha's historical image_ids is already a file in
+        # images/<id>.<ext>, the bytes are already preserved under that
+        # id — skip rather than mint a redundant `local-<sha8>` copy.
+        already_preserved = any(
+            _SAFE_NAME_RE.match(iid) and (images_d / f"{iid}.{ext}").exists()
+            for iid in image_ids
+        )
+        if already_preserved:
+            continue
+        chosen: str | None = None
+        for iid in image_ids:
+            if not _SAFE_NAME_RE.match(iid):
+                continue
+            chosen = iid
+            break
+        if chosen is None:
+            chosen = f"local-{sha[:8]}"
+        if not _SAFE_NAME_RE.match(chosen):
+            continue
+        target = images_d / f"{chosen}.{ext}"
+        if not target.exists():
+            try:
+                target.write_bytes(sha_file.read_bytes())
+                promoted += 1
+            except OSError:
+                continue
+    # Also catch orphan files in pool/ that weren't in the manifest —
+    # they only carry sha+ext, so they always land as `local-<sha8>`.
+    for entry in list(pool_d.iterdir()):
+        if not entry.is_file():
+            continue
+        if entry.name == _LEGACY_POOL_MANIFEST:
+            continue
+        if entry.name in seen_pool_files:
+            continue
+        stem = entry.stem
+        ext_part = entry.suffix.lstrip(".")
+        try:
+            ext = normalise_image_ext(ext_part)
+        except ValueError:
+            continue
+        if len(stem) < 8 or not _SAFE_NAME_RE.match(stem):
+            continue
+        chosen = f"local-{stem[:8]}"
+        target = images_d / f"{chosen}.{ext}"
+        if not target.exists():
+            try:
+                target.write_bytes(entry.read_bytes())
+                promoted += 1
+            except OSError:
+                continue
+    # Tear down pool/ — best-effort, leaves directory intact on errors.
+    for entry in list(pool_d.iterdir()):
+        try:
             entry.unlink()
-            removed.append(iid)
         except OSError:
             pass
-    return removed
+    try:
+        pool_d.rmdir()
+    except OSError:
+        pass
+    return promoted
 
 
 def avatar_path_for(name: str) -> Path:

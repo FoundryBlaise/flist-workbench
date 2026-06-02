@@ -4534,8 +4534,10 @@ body {
   gap: 4px;
   font-size: 11px;
 }
-.flist-images-pool-item__source--flist_pull { color: #6aa3ff; }
-.flist-images-pool-item__source--user_upload { color: #84c97a; }
+.flist-images-pool-item__source {
+  font-size: 11px;
+  color: var(--text-dim);
+}
 .flist-images-thumb {
   flex-shrink: 0;
   width: 72px;
@@ -4642,34 +4644,56 @@ body {
 .flist-images-pool-item__btn--add { border-color: #84c97a; color: #84c97a; }
 .flist-images-pool-item__btn--danger { border-color: #d04a4a; color: #d04a4a; }
 
-.flist-images-pool-item__in-gallery {
-  font-size: 11px;
-  color: #84c97a;
-  font-style: italic;
-  padding: 2px 6px;
+.flist-images-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
 }
-
-.flist-images-pool-item__confirm {
+.flist-images-modal {
+  background: var(--bg, #1a1a1d);
+  border: 1px solid var(--border, #2c2c30);
+  border-radius: 6px;
+  padding: 16px;
+  max-width: 380px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  align-items: stretch;
-  margin-top: 4px;
-  padding: 6px;
-  background: rgba(208, 74, 74, 0.08);
-  border: 1px solid rgba(208, 74, 74, 0.4);
-  border-radius: 4px;
-  max-width: 220px;
+  gap: 12px;
 }
-.flist-images-pool-item__confirm-msg {
-  font-size: 11px;
+.flist-images-modal__title {
+  margin: 0;
+  font-size: 14px;
   color: var(--text);
 }
-.flist-images-pool-item__confirm-actions {
+.flist-images-modal__body {
   display: flex;
-  gap: 4px;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.flist-images-modal__body p { margin: 0; }
+.flist-images-modal__actions {
+  display: flex;
+  gap: 8px;
   justify-content: flex-end;
 }
+.flist-images-modal__btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border, #2c2c30);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.flist-images-modal__btn:hover { background: var(--row-hover, rgba(255, 255, 255, 0.04)); }
+.flist-images-modal__btn--danger { border-color: #d04a4a; color: #d04a4a; }
 
 .flist-images-gallery-item__btn {
   background: transparent;

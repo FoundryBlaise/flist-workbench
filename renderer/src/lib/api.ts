@@ -54,23 +54,14 @@ export type FlistBackupEntry = {
   size: number
 }
 
-export type FlistPoolEntry = {
-  sha256: string
-  extension: string
-  source: string
-  added_at: number
-  size: number
-  /** F-list / local image_ids that have ever pointed at this sha. The
-   *  UI uses this to decide whether the entry is currently in the
-   *  gallery (any id present in working.images) and to re-add with the
-   *  original id rather than minting a `local-*` synthetic. */
-  image_ids: string[]
-}
-
 export type FlistCharacterImage = {
   image_id: string
   extension: string
   size: number
+  /** File mtime in unix seconds. Used to sort the Pool pane newest-
+   *  first; absent on older sidecar builds, in which case the renderer
+   *  falls back to image_id order. */
+  added_at?: number
 }
 
 export type FlistPullHandlers = {
@@ -93,7 +84,6 @@ export type FlistPullHandlers = {
     image_downloaded?: number
     image_cached?: number
     image_failed: number
-    image_pruned?: number
     pull_status?: FlistPullStatus['status']
     pull_missing?: number
   }) => void
@@ -895,21 +885,21 @@ export const api = {
    *  without first round-tripping the /images list. */
   flistImageByIdUrl: (characterId: string | number, imageId: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/image/${encodeURIComponent(imageId)}`,
-  // ---- F-list per-character pool (Tier 6) ------------------------------
-  flistPoolList: (characterId: string | number) =>
-    get<{ character_id: string; pool: FlistPoolEntry[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/pool`
+  // ---- F-list per-character images/ (unified store, v5) ----------------
+  flistCharacterImages: (characterId: string | number) =>
+    get<{ character_id: string; images: FlistCharacterImage[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images`
     ),
-  flistPoolUpload: async (
+  /** Upload a local image (PNG/JPG/GIF). Lands as `images/local-<sha8>.<ext>`
+   *  and shows up in the renderer's Pool view; only a working.json
+   *  gallery edit moves it on-profile. */
+  flistImageUpload: async (
     characterId: string | number,
     data: Blob
-  ): Promise<FlistPoolEntry> => {
+  ): Promise<FlistCharacterImage> => {
     const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/pool`,
-      {
-        method: 'POST',
-        body: data
-      }
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images`,
+      { method: 'POST', body: data }
     )
     if (!res.ok) {
       let detail = `HTTP ${res.status}`
@@ -921,37 +911,11 @@ export const api = {
       }
       throw new Error(detail)
     }
-    return (await res.json()) as FlistPoolEntry
+    return (await res.json()) as FlistCharacterImage
   },
-  flistPoolDelete: (characterId: string | number, sha: string) =>
-    request<{ deleted: boolean; sha256: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/pool/${encodeURIComponent(sha)}`,
-      { method: 'DELETE' }
-    ),
-  flistPoolFileUrl: (
-    characterId: string | number,
-    sha: string,
-    extension: string
-  ) =>
-    `${base()}/flist/character/${encodeURIComponent(String(characterId))}/pool/${encodeURIComponent(`${sha}.${extension}`)}`,
-  // ---- F-list per-character images/ (image_id-keyed) -------------------
-  flistCharacterImages: (characterId: string | number) =>
-    get<{ character_id: string; images: FlistCharacterImage[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images`
-    ),
-  flistImageFromPool: (
-    characterId: string | number,
-    sha: string,
-    preferredImageId?: string
-  ) => {
-    const qs = preferredImageId
-      ? `?image_id=${encodeURIComponent(preferredImageId)}`
-      : ''
-    return request<{ image_id: string; extension: string; sha256: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/from-pool/${encodeURIComponent(sha)}${qs}`,
-      { method: 'POST' }
-    )
-  },
+  /** Permanently remove `images/<image_id>.<ext>` from disk. There's no
+   *  secondary store, so the renderer wraps every call in an explicit
+   *  confirm dialog (the Images tab's only destructive path). */
   flistImageRemove: (characterId: string | number, imageId: string) =>
     request<{ deleted: boolean; image_id: string }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(imageId)}`,

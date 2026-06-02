@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type FlistPoolEntry } from '../../lib/api'
+import { api } from '../../lib/api'
 import { useStore } from '../../state'
 
 type GalleryEntry = { image_id: string; description: string; sort_order: number }
@@ -38,16 +38,18 @@ function galleryFromSlot(payload: unknown): GalleryEntry[] {
 
 const TOAST_MS = 5000
 
-// MIME marker for dragging a profile row into the Pool pane. Custom so
-// it doesn't conflict with text/uri-list or text/plain that the system
-// also dispatches during drags.
-const DRAG_MIME_PROFILE_IMAGE = 'application/x-flist-profile-image-id'
+// MIME markers for cross-pane drags. Custom types so they don't conflict
+// with the system's text/uri-list or text/plain that drag events also
+// dispatch. Each direction has its own type so a drop handler can refuse
+// the wrong direction (e.g. profile pane shouldn't accept profile→pool).
+const DRAG_MIME_PROFILE_TO_POOL = 'application/x-flist-image-to-pool'
+const DRAG_MIME_POOL_TO_PROFILE = 'application/x-flist-image-to-profile'
 
-// Synthetic ids for pool-only images materialised into a character look
-// like `local-<8 hex>` where the suffix is the sha256 prefix of the
-// underlying pool entry.
-function localIdForSha(sha: string): string {
-  return `local-${sha.slice(0, 8)}`
+type PoolEntry = {
+  image_id: string
+  extension: string
+  size: number
+  added_at?: number
 }
 
 export function ImagesTab({
@@ -58,27 +60,22 @@ export function ImagesTab({
   readOnly?: boolean
 }) {
   const slot = useStore((s) => s.flistWorking[characterId])
-  const pool = useStore((s) => s.flistPool[characterId])
   const characterImages = useStore((s) => s.flistCharacterImages[characterId])
   const roster = useStore((s) => s.flistRoster)
-  const loadPool = useStore((s) => s.flistLoadPool)
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)
-  const uploadPool = useStore((s) => s.flistUploadPoolImage)
-  const deletePool = useStore((s) => s.flistDeletePoolImage)
+  const uploadImage = useStore((s) => s.flistUploadImage)
+  const deleteImage = useStore((s) => s.flistDeleteImage)
+  const moveToProfile = useStore((s) => s.flistMoveImageToProfile)
+  const moveToPool = useStore((s) => s.flistMoveImageToPool)
   const setGallery = useStore((s) => s.flistSetGalleryImages)
-  const addPoolToCharacter = useStore((s) => s.flistAddPoolToCharacter)
-  const removeCharacterImage = useStore((s) => s.flistRemoveCharacterImage)
   const openExportRestore = useStore((s) => s.flistOpenExportRestore)
 
   useEffect(() => {
     if (!characterId) return
-    if (!pool || pool.status === 'idle') {
-      void loadPool(characterId)
-    }
     if (!characterImages || characterImages.status === 'idle') {
       void loadCharacterImages(characterId)
     }
-  }, [characterId, pool, characterImages, loadPool, loadCharacterImages])
+  }, [characterId, characterImages, loadCharacterImages])
 
   const characterName = useMemo(() => {
     const entry = roster.find((r) => String(r.id ?? '') === characterId)
@@ -90,32 +87,35 @@ export function ImagesTab({
     [slot]
   )
 
-  const poolEntries = pool?.entries ?? []
-
-  // Set of image_ids currently in the gallery. Used to check whether a
-  // pool entry (which carries its own list of historical image_ids) has
-  // any of them in the active working gallery — if so the entry is
-  // "✓ In gallery", else "→ Add".
   const galleryImageIds = useMemo(
     () => new Set(gallery.map((e) => e.image_id)),
     [gallery]
   )
-  const sortedPool = useMemo(() => {
-    return poolEntries
-      .slice()
-      .sort((a, b) => {
-        if (a.source !== b.source) {
-          if (a.source === 'flist_pull') return -1
-          if (b.source === 'flist_pull') return 1
-        }
-        return b.added_at - a.added_at
+
+  // Pool view: every file in `<char>/images/` that working.json's
+  // gallery does NOT currently reference. Newest-first by mtime so
+  // a fresh upload lands at the top of the pane.
+  const poolEntries = useMemo<PoolEntry[]>(() => {
+    const byId = characterImages?.byId ?? {}
+    const out: PoolEntry[] = []
+    for (const [imageId, meta] of Object.entries(byId)) {
+      if (galleryImageIds.has(imageId)) continue
+      out.push({
+        image_id: imageId,
+        extension: meta.extension,
+        size: meta.size,
+        added_at: meta.added_at
       })
-  }, [poolEntries])
+    }
+    out.sort((a, b) => (b.added_at ?? 0) - (a.added_at ?? 0))
+    return out
+  }, [characterImages, galleryImageIds])
 
   // ---- file drop / picker + upload error toast ------------------------
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [dragActive, setDragActive] = useState(false)
+  const [poolDragActive, setPoolDragActive] = useState(false)
+  const [profileDragActive, setProfileDragActive] = useState(false)
 
   useEffect(() => {
     if (!uploadError) return
@@ -133,7 +133,7 @@ export function ImagesTab({
         break
       }
       try {
-        await uploadPool(characterId, file)
+        await uploadImage(characterId, file)
       } catch (err) {
         const raw = err instanceof Error ? err.message : String(err)
         setUploadError(`"${file.name}" wasn't accepted: ${raw}`)
@@ -142,58 +142,40 @@ export function ImagesTab({
     }
   }
 
-  // ---- gallery actions -------------------------------------------------
-  const [addToast, setAddToast] = useState<string | null>(null)
-  useEffect(() => {
-    if (!addToast) return
-    const id = window.setTimeout(() => setAddToast(null), TOAST_MS)
-    return () => window.clearTimeout(id)
-  }, [addToast])
-
-  const addToGallery = async (entry: FlistPoolEntry) => {
-    // Prefer re-adding under an existing image_id from this entry's
-    // history that the gallery doesn't already carry — that way an
-    // F-list image the user deleted from profile comes back as the
-    // original id, not a new `local-*`.
-    const reusable = entry.image_ids.find(
-      (id) => !galleryImageIds.has(id)
-    )
-    const res = await addPoolToCharacter(
-      characterId,
-      entry.sha256,
-      reusable
-    )
-    if (res && !res.added) {
-      setAddToast(`Already in the gallery as ${res.image_id}.`)
-    }
-  }
-
-  // Gallery-remove with 5s undo. Removing from the character deletes the
-  // file in images/ — the pool keeps the bytes.
-  const [galleryUndo, setGalleryUndo] = useState<
-    | { previous: GalleryEntry[]; removedImageId: string }
+  // ---- gallery <-> pool moves (5s undo toast) -------------------------
+  const [moveUndo, setMoveUndo] = useState<
+    | {
+        previous: GalleryEntry[]
+        message: string
+      }
     | null
   >(null)
   useEffect(() => {
-    if (!galleryUndo) return
-    const id = window.setTimeout(() => setGalleryUndo(null), TOAST_MS)
+    if (!moveUndo) return
+    const id = window.setTimeout(() => setMoveUndo(null), TOAST_MS)
     return () => window.clearTimeout(id)
-  }, [galleryUndo])
+  }, [moveUndo])
 
-  const removeFromGallery = async (imageId: string) => {
-    setGalleryUndo({ previous: gallery, removedImageId: imageId })
-    await removeCharacterImage(characterId, imageId)
+  const handleMoveToPool = (imageId: string) => {
+    setMoveUndo({
+      previous: gallery,
+      message: 'Moved to pool. Bytes stay on disk.'
+    })
+    moveToPool(characterId, imageId)
   }
 
-  const undoGalleryRemove = async () => {
-    if (!galleryUndo) return
-    // Best-effort restore: re-materialise from pool if local-*, otherwise
-    // re-pull would be needed. Pool keeps bytes either way, but for F-list
-    // images the user would need to re-pull to get the bytes back.
-    // For simplicity, just restore the working-copy entry; the file
-    // resurrection lives in a follow-up.
-    setGallery(characterId, galleryUndo.previous)
-    setGalleryUndo(null)
+  const handleMoveToProfile = (imageId: string) => {
+    setMoveUndo({
+      previous: gallery,
+      message: 'Added to profile.'
+    })
+    moveToProfile(characterId, imageId)
+  }
+
+  const undoMove = () => {
+    if (!moveUndo) return
+    setGallery(characterId, moveUndo.previous)
+    setMoveUndo(null)
   }
 
   const moveGalleryEntry = (imageId: string, dir: -1 | 1) => {
@@ -205,7 +187,6 @@ export function ImagesTab({
     const tmp = next[idx]
     next[idx] = next[target]
     next[target] = tmp
-    // Re-stamp sort_order so the persisted order matches the visible one.
     setGallery(
       characterId,
       next.map((e, i) => ({ ...e, sort_order: i }))
@@ -219,17 +200,18 @@ export function ImagesTab({
     )
   }
 
-  // ---- pool delete (with confirm step; no cascade in the new model) ---
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  // ---- permanent delete (modal confirm) --------------------------------
+  const [confirmDelete, setConfirmDelete] = useState<PoolEntry | null>(null)
 
-  const doDeletePool = async (sha: string) => {
+  const handleDelete = async () => {
+    if (!confirmDelete) return
+    const entry = confirmDelete
+    setConfirmDelete(null)
     try {
-      await deletePool(characterId, sha)
-    } catch {
-      // ignore; the store already strips the row on a successful call,
-      // and surface other errors only via the upload-toast surface.
-    } finally {
-      setConfirmDelete(null)
+      await deleteImage(characterId, entry.image_id)
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      setUploadError(`Couldn’t delete: ${raw}`)
     }
   }
 
@@ -246,32 +228,29 @@ export function ImagesTab({
   return (
     <div className="flist-images-tab">
       <div className="flist-images-tab__panes">
-        {/* ---- Pool pane (25%) ---- */}
+        {/* ---- Pool pane (left) ---- */}
         <section
           className={`flist-images-pane flist-images-pane--pool ${
-            dragActive ? 'flist-images-pane--drag' : ''
+            poolDragActive ? 'flist-images-pane--drag' : ''
           }`}
           onDragOver={(e) => {
             if (readOnly) return
             const dt = e.dataTransfer
             const droppingProfileRow =
-              dt && Array.from(dt.types).includes(DRAG_MIME_PROFILE_IMAGE)
+              dt && Array.from(dt.types).includes(DRAG_MIME_PROFILE_TO_POOL)
             const droppingFiles = dt && dt.types.includes('Files')
             if (!droppingProfileRow && !droppingFiles) return
             e.preventDefault()
-            setDragActive(true)
+            setPoolDragActive(true)
           }}
-          onDragLeave={() => setDragActive(false)}
+          onDragLeave={() => setPoolDragActive(false)}
           onDrop={(e) => {
             if (readOnly) return
             e.preventDefault()
-            setDragActive(false)
-            const profileId = e.dataTransfer?.getData(DRAG_MIME_PROFILE_IMAGE)
+            setPoolDragActive(false)
+            const profileId = e.dataTransfer?.getData(DRAG_MIME_PROFILE_TO_POOL)
             if (profileId) {
-              // Drag-out-of-profile: remove from gallery. Bytes stay in
-              // the pool entry that already represents this image, so
-              // the user can drag it back later via "→ Add to profile".
-              void removeFromGallery(profileId)
+              handleMoveToPool(profileId)
               return
             }
             if (e.dataTransfer?.files?.length) {
@@ -307,53 +286,59 @@ export function ImagesTab({
               }}
             />
           </header>
-          {pool?.status === 'loading' && (
-            <div className="flist-images-pane__loading">Loading pool…</div>
+          {characterImages?.status === 'loading' && (
+            <div className="flist-images-pane__loading">Loading images…</div>
           )}
           <ul className="flist-images-pool-list">
-            {sortedPool.map((entry) => {
-              const inGalleryViaHistory = entry.image_ids.some((id) =>
-                galleryImageIds.has(id)
-              )
-              const inGalleryViaLocal = galleryImageIds.has(
-                localIdForSha(entry.sha256)
-              )
-              return (
-                <PoolRow
-                  key={entry.sha256}
-                  characterId={characterId}
-                  entry={entry}
-                  inGallery={inGalleryViaHistory || inGalleryViaLocal}
-                  readOnly={readOnly}
-                  onAdd={() => void addToGallery(entry)}
-                  confirming={confirmDelete === entry.sha256}
-                  onConfirmStart={() => setConfirmDelete(entry.sha256)}
-                  onConfirmCancel={() => setConfirmDelete(null)}
-                  onConfirmDelete={() => void doDeletePool(entry.sha256)}
-                />
-              )
-            })}
-            {!sortedPool.length && pool?.status === 'ready' && (
+            {poolEntries.map((entry) => (
+              <PoolRow
+                key={entry.image_id}
+                characterId={characterId}
+                entry={entry}
+                readOnly={readOnly}
+                onAdd={() => handleMoveToProfile(entry.image_id)}
+                onDelete={() => setConfirmDelete(entry)}
+              />
+            ))}
+            {!poolEntries.length && characterImages?.status === 'ready' && (
               <li className="flist-images-pool-empty">
                 {readOnly
-                  ? 'Pool is empty for this character.'
-                  : 'No images yet. Drop PNG / JPG / GIF files here or click + Add image. Pulls from F-list also populate this pool.'}
+                  ? 'Pool is empty.'
+                  : 'Nothing here. Drop PNG / JPG / GIF files to add one, or drag an image off the profile.'}
               </li>
             )}
           </ul>
         </section>
 
-        {/* ---- Character / gallery pane (25%) ---- */}
-        <section className="flist-images-pane flist-images-pane--gallery">
+        {/* ---- Profile pane (right) ---- */}
+        <section
+          className={`flist-images-pane flist-images-pane--gallery ${
+            profileDragActive ? 'flist-images-pane--drag' : ''
+          }`}
+          onDragOver={(e) => {
+            if (readOnly) return
+            const dt = e.dataTransfer
+            if (!dt || !Array.from(dt.types).includes(DRAG_MIME_POOL_TO_PROFILE)) return
+            e.preventDefault()
+            setProfileDragActive(true)
+          }}
+          onDragLeave={() => setProfileDragActive(false)}
+          onDrop={(e) => {
+            if (readOnly) return
+            e.preventDefault()
+            setProfileDragActive(false)
+            const poolId = e.dataTransfer?.getData(DRAG_MIME_POOL_TO_PROFILE)
+            if (poolId) {
+              handleMoveToProfile(poolId)
+            }
+          }}
+        >
           <header className="flist-images-pane__header">
             <h3>On profile</h3>
             <span className="flist-images-pane__count">
               {gallery.length} image{gallery.length === 1 ? '' : 's'}
             </span>
           </header>
-          {characterImages?.status === 'loading' && (
-            <div className="flist-images-pane__loading">Loading images…</div>
-          )}
           {avatarUrl && (
             <div
               className="flist-images-avatar-slot"
@@ -382,7 +367,10 @@ export function ImagesTab({
                 draggable={!readOnly}
                 onDragStart={(e) => {
                   if (readOnly) return
-                  e.dataTransfer.setData(DRAG_MIME_PROFILE_IMAGE, entry.image_id)
+                  e.dataTransfer.setData(
+                    DRAG_MIME_PROFILE_TO_POOL,
+                    entry.image_id
+                  )
                   e.dataTransfer.effectAllowed = 'move'
                 }}
                 onKeyDown={(e) => {
@@ -434,8 +422,8 @@ export function ImagesTab({
                     <button
                       type="button"
                       className="flist-images-gallery-item__btn"
-                      onClick={() => void removeFromGallery(entry.image_id)}
-                      title="Remove from gallery (keeps pool entry)"
+                      onClick={() => handleMoveToPool(entry.image_id)}
+                      title="Move to pool (image stays on disk)"
                     >
                       ×
                     </button>
@@ -446,12 +434,13 @@ export function ImagesTab({
             {!gallery.length && (
               <li className="flist-images-gallery-empty">
                 Empty gallery.{' '}
-                {readOnly ? '' : 'Add images from the pool on the left.'}
+                {readOnly
+                  ? ''
+                  : 'Drag from the pool, or use → on a pool row to add.'}
               </li>
             )}
           </ol>
         </section>
-
       </div>
 
       {!readOnly && (
@@ -489,38 +478,31 @@ export function ImagesTab({
           </button>
         </div>
       )}
-      {galleryUndo && (
+      {moveUndo && (
         <div
           className="flist-images-toast flist-images-toast--undo"
           role="status"
         >
-          <span>
-            Removed from gallery. Bytes stay in the pool — undo restores
-            the row, but the thumbnail won’t render until you re-add
-            from the pool (or re-pull).
-          </span>
+          <span>{moveUndo.message}</span>
           <button
             type="button"
             className="flist-images-toast__action"
-            onClick={() => void undoGalleryRemove()}
-            data-testid="flist-images-gallery-undo"
+            onClick={undoMove}
+            data-testid="flist-images-move-undo"
           >
             Undo
           </button>
         </div>
       )}
-      {addToast && (
-        <div className="flist-images-toast flist-images-toast--undo" role="status">
-          <span>{addToast}</span>
-          <button
-            type="button"
-            className="flist-images-toast__close"
-            onClick={() => setAddToast(null)}
-            aria-label="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
+
+      {/* ---- Delete-confirmation modal (only destructive path) ---- */}
+      {confirmDelete && (
+        <DeleteConfirmModal
+          entry={confirmDelete}
+          characterId={characterId}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => void handleDelete()}
+        />
       )}
     </div>
   )
@@ -529,86 +511,58 @@ export function ImagesTab({
 function PoolRow({
   characterId,
   entry,
-  inGallery,
   readOnly,
   onAdd,
-  confirming,
-  onConfirmStart,
-  onConfirmCancel,
-  onConfirmDelete
+  onDelete
 }: {
   characterId: string
-  entry: FlistPoolEntry
-  inGallery: boolean
+  entry: PoolEntry
   readOnly: boolean
   onAdd: () => void
-  confirming: boolean
-  onConfirmStart: () => void
-  onConfirmCancel: () => void
-  onConfirmDelete: () => void
+  onDelete: () => void
 }) {
   return (
-    <li className="flist-images-pool-item">
-      <PoolThumb
-        characterId={characterId}
-        entry={entry}
-        onClick={() => !readOnly && !inGallery && onAdd()}
-      />
+    <li
+      className="flist-images-pool-item"
+      draggable={!readOnly}
+      onDragStart={(e) => {
+        if (readOnly) return
+        e.dataTransfer.setData(DRAG_MIME_POOL_TO_PROFILE, entry.image_id)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+    >
+      <PoolThumb characterId={characterId} entry={entry} onClick={onAdd} />
       <div className="flist-images-pool-item__meta">
-        <SourceBadge entry={entry} />
+        <span
+          className="flist-images-pool-item__source"
+          title={
+            entry.image_id.startsWith('local-')
+              ? 'Local upload — not yet on F-list'
+              : 'F-list image id ' + entry.image_id
+          }
+        >
+          {entry.image_id.startsWith('local-')
+            ? `Local · ${entry.image_id.slice(6)}`
+            : `id ${entry.image_id}`}
+        </span>
         {!readOnly && (
           <>
-            {inGallery ? (
-              <span
-                className="flist-images-pool-item__in-gallery"
-                title="Already in the profile gallery"
-              >
-                ✓ In gallery
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="flist-images-pool-item__btn flist-images-pool-item__btn--add"
-                onClick={onAdd}
-                title="Add to gallery (restores to the original F-list id when known)"
-              >
-                → Add to profile
-              </button>
-            )}
-            {confirming ? (
-              <div className="flist-images-pool-item__confirm">
-                <div className="flist-images-pool-item__confirm-msg">
-                  Delete from pool? The image bytes are removed from disk —
-                  the character gallery is unaffected, but you won’t be able
-                  to re-add this image without re-pulling or re-uploading.
-                </div>
-                <div className="flist-images-pool-item__confirm-actions">
-                  <button
-                    type="button"
-                    className="flist-images-pool-item__btn flist-images-pool-item__btn--danger"
-                    onClick={onConfirmDelete}
-                  >
-                    Delete
-                  </button>
-                  <button
-                    type="button"
-                    className="flist-images-pool-item__btn"
-                    onClick={onConfirmCancel}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="flist-images-pool-item__btn"
-                onClick={onConfirmStart}
-                title="Remove from pool (file deleted)"
-              >
-                ×
-              </button>
-            )}
+            <button
+              type="button"
+              className="flist-images-pool-item__btn flist-images-pool-item__btn--add"
+              onClick={onAdd}
+              title="Add to profile"
+            >
+              → Add to profile
+            </button>
+            <button
+              type="button"
+              className="flist-images-pool-item__btn"
+              onClick={onDelete}
+              title="Delete permanently"
+            >
+              ×
+            </button>
           </>
         )}
       </div>
@@ -616,24 +570,78 @@ function PoolRow({
   )
 }
 
-function SourceBadge({ entry }: { entry: FlistPoolEntry }) {
-  if (entry.source === 'flist_pull') {
-    return (
-      <span
-        className="flist-images-pool-item__source flist-images-pool-item__source--flist_pull"
-        title="Originally pulled from F-list"
-      >
-        F-list pull
-      </span>
-    )
-  }
+function DeleteConfirmModal({
+  entry,
+  characterId,
+  onCancel,
+  onConfirm
+}: {
+  entry: PoolEntry
+  characterId: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCancel()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    dialogRef.current?.querySelector<HTMLButtonElement>(
+      'button[data-autofocus]'
+    )?.focus()
+    return () => window.removeEventListener('keydown', handler)
+  }, [onCancel])
+
   return (
-    <span
-      className="flist-images-pool-item__source flist-images-pool-item__source--user_upload"
-      title={`Local upload · sha ${entry.sha256.slice(0, 12)}…`}
+    <div
+      className="flist-images-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="flist-images-delete-title"
     >
-      Local · {entry.sha256.slice(0, 8)}
-    </span>
+      <div
+        ref={dialogRef}
+        className="flist-images-modal"
+        data-testid="flist-images-delete-confirm"
+      >
+        <h3 id="flist-images-delete-title" className="flist-images-modal__title">
+          Delete this image permanently?
+        </h3>
+        <div className="flist-images-modal__body">
+          <CharacterImageThumb
+            characterId={characterId}
+            imageId={entry.image_id}
+          />
+          <p>
+            You’re about to permanently delete this picture. The bytes are
+            removed from disk — there’s no other copy. Are you sure?
+          </p>
+        </div>
+        <div className="flist-images-modal__actions">
+          <button
+            type="button"
+            className="flist-images-modal__btn"
+            onClick={onCancel}
+            data-autofocus
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="flist-images-modal__btn flist-images-modal__btn--danger"
+            onClick={onConfirm}
+            data-testid="flist-images-delete-confirm-btn"
+          >
+            Delete permanently
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -643,16 +651,19 @@ function PoolThumb({
   onClick
 }: {
   characterId: string
-  entry: FlistPoolEntry
+  entry: PoolEntry
   onClick?: () => void
 }) {
-  const url = api.flistPoolFileUrl(characterId, entry.sha256, entry.extension)
+  const url = api.flistImageUrl(
+    characterId,
+    `${entry.image_id}.${entry.extension}`
+  )
   return (
     <button
       type="button"
       className="flist-images-thumb flist-images-thumb-hover"
       onClick={onClick}
-      title={`Pool · ${entry.sha256.slice(0, 12)}… (${entry.extension})`}
+      title={`${entry.image_id} (${entry.extension})`}
     >
       <img src={url} alt="" loading="lazy" />
       <span className="flist-images-thumb-hover__zoom" aria-hidden>
@@ -669,8 +680,8 @@ function CharacterImageThumb({
   characterId: string
   imageId: string
 }) {
-  // Use the extension-blind server route so the thumb renders without
-  // waiting for the /images list. The sidecar tries png/jpg/gif on disk.
+  // Extension-blind URL — the sidecar probes png/jpg/gif on disk so the
+  // gallery renders even without knowing the extension up front.
   const url = api.flistImageByIdUrl(characterId, imageId)
   return (
     <div className="flist-images-gallery-item__thumb flist-images-thumb-hover">
@@ -681,4 +692,3 @@ function CharacterImageThumb({
     </div>
   )
 }
-

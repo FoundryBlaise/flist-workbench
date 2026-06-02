@@ -8,7 +8,6 @@ populates `<datadir>/characters/9999/`:
 
     live.json                 fake character with 24 image entries
     images/<image_id>.<ext>   24 synthetic PNGs, varied aspect ratios
-    pool/<sha>.<ext>          sha-keyed copies + manifest
 
 Each image is a flat color block — varied aspect ratios (portrait,
 landscape, square) so the tile-heap demonstrates the wrap behaviour.
