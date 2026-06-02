@@ -3,7 +3,7 @@ import { useStore } from '../../state'
 import { UnifiedCharacterPicker } from './UnifiedCharacterPicker'
 import { ModeToggle } from './ModeToggle'
 import { PartnerList } from './PartnerList'
-import { SnippetList, useEnsureSnippetsLoaded } from './SnippetList'
+import { Tier7Pane } from './Tier7Pane'
 import { FlistCharacterZone } from '../flist/FlistCharacterZone'
 
 export function Sidebar() {
@@ -16,14 +16,9 @@ export function Sidebar() {
     if (status === 'idle') void loadCharacters()
   }, [status, loadCharacters])
 
-  // Probe whether a sidecar-side session already exists (e.g. user
-  // signed in earlier in this sidecar process, then the renderer
-  // reloaded). The unified picker handles roster loading on its own.
   useEffect(() => {
     void refreshSession()
   }, [refreshSession])
-
-  useEnsureSnippetsLoaded()
 
   return (
     <aside className="sidebar" data-testid="sidebar">
@@ -33,8 +28,7 @@ export function Sidebar() {
       {mode === 'editor' ? (
         <>
           <FlistCharacterZone />
-          <div className="sb-section-h">Snippets</div>
-          <SnippetList />
+          <Tier7Pane />
         </>
       ) : (
         <>

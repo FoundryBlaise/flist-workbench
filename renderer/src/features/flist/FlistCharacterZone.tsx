@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { useStore } from '../../state'
+import { useStore, selectWorkingSlot } from '../../state'
 
 function relativeTime(epoch: number | null | undefined): string {
   if (!epoch) return 'never'
@@ -22,14 +21,12 @@ export function FlistCharacterZone() {
   const pull = useStore((s) => s.flistPullCharacter)
   const saveBackup = useStore((s) => s.flistSaveBackup)
   const openLive = useStore((s) => s.flistOpenLive)
-  const openBackup = useStore((s) => s.flistOpenBackup)
   const openWorking = useStore((s) => s.flistOpenWorking)
   const openExportRestore = useStore((s) => s.flistOpenExportRestore)
   const copyLiveToNewDoc = useStore((s) => s.flistCopyLiveToNewDoc)
   const workingSlot = useStore((s) =>
-    activeId ? s.flistWorking[activeId] : undefined
+    activeId ? selectWorkingSlot(s, activeId) : undefined
   )
-  const [backupsOpen, setBackupsOpen] = useState(true)
 
   if (!session.active || !activeId) return null
   const entry = roster.find((r) => String(r.id ?? '') === activeId)
@@ -37,7 +34,6 @@ export function FlistCharacterZone() {
   const slot = archive[activeId]
   const live = slot?.live
   const lastPulledAt = slot?.lastPullAt
-  const backups = slot?.backups ?? []
   const pullStatus = slot?.pullStatus ?? 'idle'
   const pullStage = slot?.pullStage
   const pullProgress = slot?.pullProgress
@@ -179,38 +175,6 @@ export function FlistCharacterZone() {
           )}
         </li>
       </ul>
-      <div className="flist-zone-backups">
-        <button
-          type="button"
-          className="flist-zone-backups-toggle"
-          onClick={() => setBackupsOpen((v) => !v)}
-          aria-expanded={backupsOpen}
-        >
-          {backupsOpen ? '▾' : '▸'} Saved snapshots ({backups.length})
-        </button>
-        {backupsOpen && backups.length > 0 && (
-          <ul className="sb-list flist-zone-backup-list">
-            {backups.map((b) => (
-              <li key={b.filename} className="flist-zone-backup-row">
-                <button
-                  type="button"
-                  className="flist-zone-row-pick"
-                  onClick={() => void openBackup(activeId, b.filename)}
-                  title={`${b.size.toLocaleString()} bytes`}
-                >
-                  <span className="flist-zone-row-ic">●</span>
-                  <span className="flist-zone-row-label">
-                    {new Date(b.created_at * 1000).toLocaleString()}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {backupsOpen && backups.length === 0 && (
-          <div className="flist-zone-empty">No saved snapshots yet.</div>
-        )}
-      </div>
     </div>
   )
 }

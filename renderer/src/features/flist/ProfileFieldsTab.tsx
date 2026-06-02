@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStore } from '../../state'
+import { useStore, selectWorkingSlot } from '../../state'
 import { pathLookup } from '../../state/flist'
 import {
   resolveInfotagDescriptors,
@@ -31,7 +31,7 @@ function writeCollapsed(map: Record<string, boolean>): void {
 }
 
 export function ProfileFieldsTab({ characterId }: { characterId: string }) {
-  const slot = useStore((s) => s.flistWorking[characterId])
+  const slot = useStore((s) => selectWorkingSlot(s, characterId))
   const live = useStore((s) => s.flistArchive[characterId]?.live ?? null)
   const mapping = useStore((s) => s.flistMapping)
   const mappingStatus = useStore((s) => s.flistMapping.status)
