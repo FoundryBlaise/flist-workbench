@@ -16,6 +16,15 @@
 
 import type { InlineImage } from '../lib/api'
 
+/** Working-sets v2: per-character list of named working sets. The active
+ *  set's payload is what the editor edits; null active = viewing F-list. */
+export interface SetMeta {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+}
+
 export type WorkingPayload = Record<string, unknown> & {
   _schema_version?: number
   _overlay?: string[]
@@ -394,4 +403,26 @@ export function descriptionOf(payload: WorkingPayload): string {
   const v = pathLookup(payload, DESCRIPTION_PATH)
   if (typeof v !== 'string') return ''
   return normaliseNewlines(v)
+}
+
+// ---- Working-sets v2 selector ---------------------------------------
+
+/** Shape the selector reads. The store's full State extends this; isolating
+ *  the dependency keeps `selectWorkingSlot` testable without importing the
+ *  whole store contract. */
+export interface FlistWorkingSetsState {
+  flistActiveSetId: Record<string, string | null>
+  flistSetWorking: Record<string, FlistWorkingSlot>
+}
+
+/** Resolve the editable working slot for `characterId`. Returns the slot
+ *  for the active set, or `undefined` when the active id is null (user
+ *  is viewing F-list — there's no editable slot in that state). */
+export function selectWorkingSlot(
+  s: FlistWorkingSetsState,
+  characterId: string
+): FlistWorkingSlot | undefined {
+  const setId = s.flistActiveSetId[characterId]
+  if (!setId) return undefined
+  return s.flistSetWorking[setId]
 }

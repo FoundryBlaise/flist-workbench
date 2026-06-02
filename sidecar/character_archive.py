@@ -54,9 +54,11 @@ WORKING_FILENAME = "working.json"
 #   Migration: pool/<sha>.<ext> entries are moved into `images/` under
 #   their first-known F-list id (if not already on disk) or under
 #   `local-<sha8>`; pool/ + manifest.json are then removed.
-# Writers stamp the current version; readers refuse files newer than v5
-# and silently migrate v1..v4 in place.
-WORKING_SCHEMA_VERSION = 5
+# v5 → v6 (working sets v2): payload moves out of `working.json` into a
+#   per-set folder `sets/<set_id>/payload.json`. Structurally the payload
+#   shape is unchanged. M3 migration unlinks the legacy `working.json` on
+#   first read of any v5-era character directory under the new build.
+WORKING_SCHEMA_VERSION = 6
 
 
 class EtagMismatch(ValueError):
@@ -401,6 +403,412 @@ def delete_working(character_id: int | str) -> bool:
         return True
     except OSError:
         return False
+
+
+# ---- working sets v2 -------------------------------------------------
+
+SETS_DIRNAME = "sets"
+SET_PAYLOAD_FILENAME = "payload.json"
+SET_META_FILENAME = "meta.json"
+ACTIVE_SET_FILENAME = "active_set.json"
+
+_SET_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+_MAX_SET_NAME_LEN = 80
+
+
+@dataclass(frozen=True)
+class SetMeta:
+    id: str
+    name: str
+    created_at: int
+    updated_at: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+def _is_valid_set_id(set_id: str) -> bool:
+    return isinstance(set_id, str) and bool(_SET_ID_RE.match(set_id))
+
+
+def _new_set_id() -> str:
+    import uuid
+
+    return uuid.uuid4().hex[:12]
+
+
+def validate_set_name(name: Any) -> str:
+    """Strip + length-check a set name. Duplicates are allowed — the
+    underlying set_id is the unique identity per the design doc."""
+    if not isinstance(name, str):
+        raise ValueError("set name must be a string")
+    stripped = name.strip()
+    if not stripped:
+        raise ValueError("set name is empty")
+    if "\x00" in stripped:
+        raise ValueError("set name contains NUL")
+    if len(stripped) > _MAX_SET_NAME_LEN:
+        raise ValueError(f"set name longer than {_MAX_SET_NAME_LEN} chars")
+    return stripped
+
+
+def sets_dir(character_id: int | str) -> Path:
+    p = character_dir(character_id) / SETS_DIRNAME
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def set_dir(character_id: int | str, set_id: str) -> Path:
+    if not _is_valid_set_id(set_id):
+        raise ValueError(f"invalid set_id: {set_id!r}")
+    return sets_dir(character_id) / set_id
+
+
+def set_payload_path(character_id: int | str, set_id: str) -> Path:
+    return set_dir(character_id, set_id) / SET_PAYLOAD_FILENAME
+
+
+def set_meta_path(character_id: int | str, set_id: str) -> Path:
+    return set_dir(character_id, set_id) / SET_META_FILENAME
+
+
+def active_set_path(character_id: int | str) -> Path:
+    return character_dir(character_id) / ACTIVE_SET_FILENAME
+
+
+def _migrate_working_v2(character_id: int | str) -> None:
+    """M3: drop the legacy `working.json` (and any orphan tmp/bak siblings)
+    on first read of a v5-era character directory under the working-sets
+    v2 build. Owner-chosen (2026-06-02) — all current users are test users
+    and a clean disk is preferred over importing a stale single-set blob.
+
+    Idempotent: re-running on a directory with no legacy file is a no-op.
+    Safe to call from every working-sets-v2 helper that touches a
+    character directory.
+    """
+    cdir = character_dir(character_id)
+    for name in (WORKING_FILENAME, f"{WORKING_FILENAME}.tmp", "working.bak"):
+        path = cdir / name
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def read_set_meta(character_id: int | str, set_id: str) -> SetMeta | None:
+    if not _is_valid_set_id(set_id):
+        return None
+    p = set_meta_path(character_id, set_id)
+    if not p.exists():
+        return None
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    rid = raw.get("id")
+    rname = raw.get("name")
+    rcreated = raw.get("created_at")
+    rupdated = raw.get("updated_at")
+    if not isinstance(rid, str) or not isinstance(rname, str):
+        return None
+    if not isinstance(rcreated, int) or not isinstance(rupdated, int):
+        return None
+    return SetMeta(id=rid, name=rname, created_at=rcreated, updated_at=rupdated)
+
+
+def write_set_meta(
+    character_id: int | str,
+    set_id: str,
+    *,
+    name: str,
+    created_at: int,
+    updated_at: int,
+) -> SetMeta:
+    if not _is_valid_set_id(set_id):
+        raise ValueError(f"invalid set_id: {set_id!r}")
+    clean = validate_set_name(name)
+    meta = SetMeta(
+        id=set_id,
+        name=clean,
+        created_at=int(created_at),
+        updated_at=int(updated_at),
+    )
+    _atomic_write_json(set_meta_path(character_id, set_id), meta.to_dict())
+    return meta
+
+
+def read_set_payload(character_id: int | str, set_id: str) -> dict[str, Any] | None:
+    if not _is_valid_set_id(set_id):
+        return None
+    p = set_payload_path(character_id, set_id)
+    if not p.exists():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def set_payload_etag(character_id: int | str, set_id: str) -> str | None:
+    if not _is_valid_set_id(set_id):
+        return None
+    return _file_sha256(set_payload_path(character_id, set_id))
+
+
+def write_set_payload(
+    character_id: int | str,
+    set_id: str,
+    payload: dict[str, Any],
+    *,
+    expected_etag: str | None,
+) -> str:
+    """Persist a set's payload atomically; return the new sha256 etag.
+
+    Mirrors `write_working`'s validation: `_overlay` must be a list of
+    strings; at least one recognised top-level content key must be
+    present; schema version is stamped to v6.
+    """
+    if not _is_valid_set_id(set_id):
+        raise ValueError(f"invalid set_id: {set_id!r}")
+    if not isinstance(payload, dict):
+        raise ValueError("set payload must be a dict")
+    payload = _migrate_working_payload(dict(payload))
+    overlay = payload.get("_overlay")
+    if not isinstance(overlay, list) or not all(isinstance(s, str) for s in overlay):
+        raise ValueError("_overlay must be a list of strings")
+    if not any(k in payload for k in _WORKING_TOP_LEVEL_KEYS):
+        raise ValueError(
+            "set payload must carry at least one of "
+            f"{sorted(_WORKING_TOP_LEVEL_KEYS)}"
+        )
+    meta = read_set_meta(character_id, set_id)
+    if meta is None:
+        raise FileNotFoundError(f"set {set_id} not found")
+    p = set_payload_path(character_id, set_id)
+    current = _file_sha256(p)
+    if expected_etag is not None and current != expected_etag:
+        raise EtagMismatch(current)
+    _atomic_write_json(p, payload)
+    now = int(time.time())
+    write_set_meta(
+        character_id,
+        set_id,
+        name=meta.name,
+        created_at=meta.created_at,
+        updated_at=now,
+    )
+    new_etag = _file_sha256(p)
+    assert new_etag is not None
+    return new_etag
+
+
+def read_active_set_id(character_id: int | str) -> str | None:
+    p = active_set_path(character_id)
+    if not p.exists():
+        return None
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    val = raw.get("active_set_id")
+    if val is None:
+        return None
+    if isinstance(val, str) and _is_valid_set_id(val):
+        return val
+    return None
+
+
+def set_active_set_id(character_id: int | str, set_id: str) -> None:
+    if not _is_valid_set_id(set_id):
+        raise ValueError(f"invalid set_id: {set_id!r}")
+    _atomic_write_json(active_set_path(character_id), {"active_set_id": set_id})
+
+
+def clear_active_set_id(character_id: int | str) -> None:
+    _atomic_write_json(active_set_path(character_id), {"active_set_id": None})
+
+
+def list_sets(character_id: int | str) -> list[SetMeta]:
+    """List every set on disk for a character, newest first.
+
+    Triggers the M3 migration once per directory before walking. Sets
+    with corrupt or missing meta.json are skipped — a half-written set
+    folder is invisible until repaired by another write.
+    """
+    _migrate_working_v2(character_id)
+    out: list[SetMeta] = []
+    d = sets_dir(character_id)
+    if not d.exists():
+        return out
+    for entry in d.iterdir():
+        if not entry.is_dir():
+            continue
+        if not _is_valid_set_id(entry.name):
+            continue
+        meta = read_set_meta(character_id, entry.name)
+        if meta is None:
+            continue
+        out.append(meta)
+    out.sort(key=lambda m: (-m.updated_at, m.id))
+    return out
+
+
+def create_set_from_live(character_id: int | str, name: str) -> SetMeta:
+    """Seed a new set from `live.json`. Raises ValueError if no Live
+    exists yet — the renderer disables `+ New working set` in that case
+    (design doc §"Seed-from-F-list on create")."""
+    _migrate_working_v2(character_id)
+    clean = validate_set_name(name)
+    live = read_live(character_id)
+    if live is None:
+        raise ValueError("no live snapshot to seed from")
+    payload = _seed_payload_from_live(live)
+    return _materialise_set(character_id, clean, payload)
+
+
+def duplicate_set(
+    character_id: int | str,
+    source_set_id: str,
+    name: str,
+) -> SetMeta:
+    """Copy `source_set_id`'s payload into a new set with a fresh id and
+    meta. Raises FileNotFoundError if the source set is missing."""
+    _migrate_working_v2(character_id)
+    clean = validate_set_name(name)
+    if not _is_valid_set_id(source_set_id):
+        raise FileNotFoundError(f"set {source_set_id} not found")
+    src_payload = read_set_payload(character_id, source_set_id)
+    src_meta = read_set_meta(character_id, source_set_id)
+    if src_payload is None or src_meta is None:
+        raise FileNotFoundError(f"set {source_set_id} not found")
+    return _materialise_set(character_id, clean, src_payload)
+
+
+def rename_set(
+    character_id: int | str,
+    set_id: str,
+    new_name: str,
+) -> SetMeta:
+    _migrate_working_v2(character_id)
+    clean = validate_set_name(new_name)
+    meta = read_set_meta(character_id, set_id)
+    if meta is None:
+        raise FileNotFoundError(f"set {set_id} not found")
+    now = int(time.time())
+    return write_set_meta(
+        character_id,
+        set_id,
+        name=clean,
+        created_at=meta.created_at,
+        updated_at=now,
+    )
+
+
+def delete_set(character_id: int | str, set_id: str) -> None:
+    """Unlink `sets/<set_id>/` and, if it was active, clear the active
+    pointer. Raises FileNotFoundError if the set does not exist."""
+    _migrate_working_v2(character_id)
+    if not _is_valid_set_id(set_id):
+        raise FileNotFoundError(f"set {set_id} not found")
+    d = set_dir(character_id, set_id)
+    if not d.exists():
+        raise FileNotFoundError(f"set {set_id} not found")
+    import shutil
+
+    shutil.rmtree(d, ignore_errors=True)
+    if read_active_set_id(character_id) == set_id:
+        clear_active_set_id(character_id)
+
+
+def _materialise_set(
+    character_id: int | str,
+    name: str,
+    payload: dict[str, Any],
+) -> SetMeta:
+    sid = _new_set_id()
+    while set_dir(character_id, sid).exists():
+        sid = _new_set_id()
+    set_dir(character_id, sid).mkdir(parents=True, exist_ok=True)
+    stamped = _migrate_working_payload(dict(payload))
+    _atomic_write_json(set_payload_path(character_id, sid), stamped)
+    now = int(time.time())
+    return write_set_meta(
+        character_id,
+        sid,
+        name=name,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
+    """Build a fresh working payload from a Live snapshot. Mirrors the
+    renderer's `seedWorkingFromLive` so a sidecar-only create still hands
+    the editor something structurally complete."""
+    out: dict[str, Any] = {
+        "_schema_version": WORKING_SCHEMA_VERSION,
+        "_overlay": [],
+    }
+    if isinstance(live.get("character"), dict):
+        out["character"] = dict(live["character"])
+    else:
+        out["character"] = {
+            "id": live.get("id"),
+            "name": live.get("name"),
+            "description": live.get("description", ""),
+            "custom_title": live.get("custom_title"),
+        }
+    for key in ("settings", "infotags", "custom_kinks", "inlines"):
+        if key in live:
+            out[key] = live[key]
+    kinks = live.get("kinks")
+    out["kinks"] = {} if isinstance(kinks, list) else (kinks or {})
+    gallery: list[dict[str, Any]] = []
+    raw_images = live.get("images")
+    if isinstance(raw_images, list):
+        for index, entry in enumerate(raw_images):
+            if not isinstance(entry, dict):
+                continue
+            iid = entry.get("image_id") or entry.get("id")
+            if iid is None:
+                continue
+            sort_raw = entry.get("sort_order")
+            if isinstance(sort_raw, (int, float)):
+                sort = int(sort_raw)
+            elif isinstance(sort_raw, str) and sort_raw:
+                try:
+                    sort = int(sort_raw)
+                except ValueError:
+                    sort = index
+            else:
+                sort = index
+            gallery.append(
+                {
+                    "image_id": str(iid),
+                    "description": entry.get("description", "") or "",
+                    "sort_order": sort,
+                }
+            )
+    gallery.sort(key=lambda e: e["sort_order"])
+    out["images"] = gallery
+    return out
 
 
 # ---- image storage ----------------------------------------------------

@@ -64,6 +64,28 @@ export type FlistCharacterImage = {
   added_at?: number
 }
 
+// ---- Working-sets v2 wire types -------------------------------------
+//
+// Snake_case at the wire layer matches the sidecar contract; the store
+// converts to camelCase via _setMetaFromWire so in-memory `SetMeta`
+// stays consistent with the rest of the slice (e.g. `lastSavedAt`).
+
+export type SetMetaWire = {
+  id: string
+  name: string
+  created_at: number
+  updated_at: number
+}
+
+export type SetsListResponseWire = {
+  sets: SetMetaWire[]
+  active_set_id: string | null
+}
+
+export type SetActivateResponseWire = {
+  active_set_id: string | null
+}
+
 export type FlistPullHandlers = {
   onQueued?: () => void
   onTicket?: () => void
@@ -876,6 +898,83 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/working`,
       { method: 'DELETE' }
     ),
+  // ---- F-list working sets v2 (sets list + per-set payload) ----
+  flistSetsList: (characterId: string | number) =>
+    get<SetsListResponseWire>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets`
+    ),
+  flistSetCreate: (characterId: string | number, body: { name: string }) =>
+    request<{ set: SetMetaWire }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  flistSetRename: (
+    characterId: string | number,
+    setId: string,
+    body: { name: string }
+  ) =>
+    request<{ set: SetMetaWire }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    ),
+  flistSetDelete: (characterId: string | number, setId: string) =>
+    request<SetActivateResponseWire>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}`,
+      { method: 'DELETE' }
+    ),
+  flistSetDuplicate: (
+    characterId: string | number,
+    setId: string,
+    body: { name: string }
+  ) =>
+    request<{ set: SetMetaWire }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/duplicate`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
+  flistSetActivate: (characterId: string | number, setId: string) =>
+    request<SetActivateResponseWire>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/activate`,
+      { method: 'POST' }
+    ),
+  flistFromFlistActivate: (characterId: string | number) =>
+    request<SetActivateResponseWire>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/from-flist/activate`,
+      { method: 'POST' }
+    ),
+  flistSetPayloadRead: (characterId: string | number, setId: string) =>
+    get<{ payload: Record<string, unknown>; etag: string | null }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`
+    ),
+  flistSetPayloadPut: async (
+    characterId: string | number,
+    setId: string,
+    payload: Record<string, unknown>,
+    etag: string | null
+  ): Promise<{ etag: string }> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    }
+    if (etag) headers['If-Match'] = etag
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`,
+      { method: 'PUT', headers, body: JSON.stringify(payload) }
+    )
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => null)) as
+        | { detail?: { detail: string; current_etag: string | null } }
+        | null
+      const current = body?.detail?.current_etag ?? null
+      const err = new Error('etag_mismatch') as Error & {
+        currentEtag: string | null
+      }
+      err.currentEtag = current
+      throw err
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    return (await res.json()) as { etag: string }
+  },
   flistAvatarUrl: (name: string) =>
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>

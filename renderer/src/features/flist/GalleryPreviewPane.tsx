@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
-import { useStore } from '../../state'
+import { selectWorkingSlot, useStore } from '../../state'
 
 type GalleryRow = {
   image_id: string
@@ -72,7 +72,7 @@ function readGallery(payload: unknown): GalleryRow[] {
 export function GalleryPreviewPane() {
   const characterId = useStore((s) => s.flistActiveCharacterId)
   const slot = useStore((s) =>
-    characterId ? s.flistWorking[characterId] : null
+    characterId ? selectWorkingSlot(s, characterId) ?? null : null
   )
   const setGallery = useStore((s) => s.flistSetGalleryImages)
   const gallery = useMemo(

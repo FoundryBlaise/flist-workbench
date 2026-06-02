@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
-import { useStore } from '../../state'
+import { selectWorkingSlot, useStore } from '../../state'
 
 type GalleryEntry = { image_id: string; description: string; sort_order: number }
 
@@ -78,7 +78,7 @@ export function ImagesTab({
   characterId: string
   readOnly?: boolean
 }) {
-  const slot = useStore((s) => s.flistWorking[characterId])
+  const slot = useStore((s) => selectWorkingSlot(s, characterId))
   const characterImages = useStore((s) => s.flistCharacterImages[characterId])
   const roster = useStore((s) => s.flistRoster)
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)

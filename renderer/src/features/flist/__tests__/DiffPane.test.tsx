@@ -21,21 +21,25 @@ function seed(state: {
   live?: Record<string, unknown> | null
   backups?: { filename: string; created_at: number; size: number }[]
 }) {
+  const slot = {
+    payload: { _schema_version: 2, _overlay: [], ...state.payload },
+    overlay: Array.isArray(state.payload._overlay)
+      ? (state.payload._overlay as string[])
+      : [],
+    etag: null,
+    unsavedDirty: false,
+    saveStatus: 'idle' as const,
+    saveError: null,
+    lastSavedAt: null,
+    materialised: true
+  }
+  // Working-sets v2: consumers read via selectWorkingSlot, which routes
+  // through the active-set pointer. Seed both shapes so the same fixture
+  // satisfies the legacy direct-read paths AND the new selector.
   useStore.setState({
-    flistWorking: {
-      '99': {
-        payload: { _schema_version: 2, _overlay: [], ...state.payload },
-        overlay: Array.isArray(state.payload._overlay)
-          ? (state.payload._overlay as string[])
-          : [],
-        etag: null,
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
-    },
+    flistWorking: { '99': slot },
+    flistActiveSetId: { '99': 'set99' },
+    flistSetWorking: { 'set99': slot },
     flistArchive: {
       '99': {
         live: (state.live ?? null) as Record<string, unknown> | null,
@@ -58,6 +62,8 @@ function seed(state: {
 beforeEach(() => {
   useStore.setState({
     flistWorking: {},
+    flistActiveSetId: {},
+    flistSetWorking: {},
     flistArchive: {},
     flistMapping: {
       status: 'idle',
