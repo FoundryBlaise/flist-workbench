@@ -14,6 +14,16 @@ export type DiffCategory =
   | 'infotag'
   | 'custom_kink'
   | 'standard_kink'
+  | 'image'
+
+/** Shape carried in workingValue / rightValue for `image` rows. Lets
+ *  the DiffRow renderer reach the thumbnail (via image_id from the row
+ *  path) plus the caption + position without re-walking the payload. */
+export interface ImageDiffSide {
+  present: boolean
+  description: string
+  position: number
+}
 
 export interface DiffRow {
   path: string
@@ -305,6 +315,39 @@ export function computeDiff(
     })
   }
 
+  // 7) images.<image_id> — union of the gallery on either side. A row
+  //    is `modified` when caption or position changed; `added` when
+  //    working has the image but right doesn't (or vice versa for
+  //    `removed`). The whole `images` array is one overlay path so
+  //    every image row shares the same inOverlay flag.
+  const workingImages = pickGallery(workingPayload)
+  const rightImages = pickGallery(rightPayload)
+  const imageIds = new Set<string>([
+    ...workingImages.keys(),
+    ...rightImages.keys()
+  ])
+  const imagesInOverlay = overlay.has('images')
+  for (const id of Array.from(imageIds).sort(imageIdComparator(workingImages, rightImages))) {
+    const w = workingImages.get(id)
+    const r = rightImages.get(id)
+    const workingValue: ImageDiffSide | undefined = w
+      ? { present: true, description: w.description, position: w.position }
+      : undefined
+    const rightValue: ImageDiffSide | undefined = r
+      ? { present: true, description: r.description, position: r.position }
+      : undefined
+    rows.push({
+      path: `images.${id}`,
+      category: 'image',
+      label: id.startsWith('local-') ? `Local · ${id.slice(6)}` : `Image ${id}`,
+      workingValue,
+      rightValue,
+      kind: classify(workingValue, rightValue),
+      inOverlay: imagesInOverlay,
+      order: order++
+    })
+  }
+
   const counts: Record<DiffKind, number> = {
     unchanged: 0,
     modified: 0,
@@ -318,6 +361,60 @@ export function computeDiff(
   }
   const changedRowCount = counts.modified + counts.added + counts.removed
   return { rows, counts, changedCategories, changedRowCount }
+}
+
+function pickGallery(
+  payload: unknown
+): Map<string, { description: string; position: number }> {
+  const out = new Map<string, { description: string; position: number }>()
+  if (!payload || typeof payload !== 'object') return out
+  const raw = (payload as { images?: unknown }).images
+  if (!Array.isArray(raw)) return out
+  // Walk in array order so `position` is stable even when sort_order
+  // is missing or malformed — that's also how every other consumer of
+  // working.images reads the list.
+  const sorted = raw
+    .map((entry, idx) => ({ entry, idx }))
+    .sort((a, b) => {
+      const so = (e: unknown): number => {
+        if (!e || typeof e !== 'object') return 0
+        const v = (e as { sort_order?: unknown }).sort_order
+        return typeof v === 'number' ? v : Number(v ?? 0) || 0
+      }
+      return so(a.entry) - so(b.entry)
+    })
+  let position = 0
+  for (const { entry } of sorted) {
+    if (!entry || typeof entry !== 'object') continue
+    const e = entry as { image_id?: unknown; description?: unknown }
+    if (typeof e.image_id !== 'string') continue
+    out.set(e.image_id, {
+      description: typeof e.description === 'string' ? e.description : '',
+      position
+    })
+    position++
+  }
+  return out
+}
+
+function imageIdComparator(
+  working: Map<string, { description: string; position: number }>,
+  right: Map<string, { description: string; position: number }>
+) {
+  // Order rows by working-side position first (so the diff reads top-
+  // down like the gallery), then by right-side position for ids that
+  // only exist on the right, then lexicographically as a tiebreak.
+  return (a: string, b: string): number => {
+    const wa = working.get(a)?.position
+    const wb = working.get(b)?.position
+    if (wa !== undefined && wb !== undefined) return wa - wb
+    if (wa !== undefined) return -1
+    if (wb !== undefined) return 1
+    const ra = right.get(a)?.position ?? 0
+    const rb = right.get(b)?.position ?? 0
+    if (ra !== rb) return ra - rb
+    return a < b ? -1 : a > b ? 1 : 0
+  }
 }
 
 function unionKeys(

@@ -4357,6 +4357,44 @@ body {
 .diff-row-removed .diff-cell-right { background: rgba(201, 112, 112, 0.10); }
 .diff-row-unchanged { color: var(--text-dim); }
 
+.diff-cell-image {
+  vertical-align: top;
+  padding: 6px 8px;
+}
+.diff-image-cell {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.diff-image-cell__thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #0d0d10;
+  border: 1px solid var(--border, #2c2c30);
+  flex-shrink: 0;
+}
+.diff-image-cell__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  min-width: 0;
+}
+.diff-image-cell__pos {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.diff-image-cell__caption {
+  color: var(--text);
+  word-break: break-word;
+}
+.diff-image-absent {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 .diff-badge {
   display: inline-block;
   width: 1.4em;
@@ -5043,6 +5081,8 @@ body {
   height: 96px;
   flex-shrink: 0;
 }
+.flist-gallery-preview__tile[draggable="true"] { cursor: grab; }
+.flist-gallery-preview__tile[draggable="true"]:active { cursor: grabbing; }
 .flist-gallery-preview__tile-btn {
   height: 100%;
   padding: 0;

@@ -1,4 +1,9 @@
-import type { DiffRow as DiffRowModel, DiffKind } from './diff/diffEngine'
+import type {
+  DiffRow as DiffRowModel,
+  DiffKind,
+  ImageDiffSide
+} from './diff/diffEngine'
+import { api } from '../../lib/api'
 
 const KIND_BADGE: Record<DiffKind, string> = {
   unchanged: '◯',
@@ -34,11 +39,15 @@ function renderValue(value: unknown): string {
 
 export function DiffRow({
   row,
+  characterId,
   rightLabel,
   onReset,
   backupResetDisabled = false
 }: {
   row: DiffRowModel
+  /** Character id for the row's character. Currently used only by
+   *  `image` rows to render thumbnails — scalar rows ignore it. */
+  characterId: string
   /** What to call the right-hand source in the row. */
   rightLabel: string
   onReset: (() => void) | null
@@ -47,6 +56,8 @@ export function DiffRow({
    *  signal rather than wondering why the affordance is missing. */
   backupResetDisabled?: boolean
 }) {
+  const isImageRow = row.category === 'image'
+  const imageId = isImageRow ? row.path.slice('images.'.length) : ''
   return (
     <tr
       className={`diff-row ${KIND_CLASS[row.kind]}`}
@@ -59,17 +70,44 @@ export function DiffRow({
         </span>
       </td>
       <td className="diff-cell diff-cell-label">{row.label}</td>
-      <td className="diff-cell diff-cell-working" title={String(row.workingValue ?? '')}>
-        {renderValue(row.workingValue)}
-      </td>
-      <td
-        className="diff-cell diff-cell-right"
-        title={String(row.rightValue ?? '')}
-      >
-        {renderValue(row.rightValue)}
-      </td>
+      {isImageRow ? (
+        <>
+          <td className="diff-cell diff-cell-working diff-cell-image">
+            <ImageDiffCell
+              characterId={characterId}
+              imageId={imageId}
+              side={row.workingValue as ImageDiffSide | undefined}
+            />
+          </td>
+          <td className="diff-cell diff-cell-right diff-cell-image">
+            <ImageDiffCell
+              characterId={characterId}
+              imageId={imageId}
+              side={row.rightValue as ImageDiffSide | undefined}
+            />
+          </td>
+        </>
+      ) : (
+        <>
+          <td
+            className="diff-cell diff-cell-working"
+            title={String(row.workingValue ?? '')}
+          >
+            {renderValue(row.workingValue)}
+          </td>
+          <td
+            className="diff-cell diff-cell-right"
+            title={String(row.rightValue ?? '')}
+          >
+            {renderValue(row.rightValue)}
+          </td>
+        </>
+      )}
       <td className="diff-cell diff-cell-action">
-        {onReset && row.inOverlay && row.kind !== 'unchanged' && (
+        {/* Per-row reset on image rows would need a custom store action
+            (restore position + caption + presence for a single id). Out
+            of this iteration's scope — see BACKLOG. */}
+        {!isImageRow && onReset && row.inOverlay && row.kind !== 'unchanged' && (
           <button
             type="button"
             className="diff-row-reset"
@@ -80,7 +118,7 @@ export function DiffRow({
             ↺ Reset
           </button>
         )}
-        {!onReset && backupResetDisabled && row.inOverlay && row.kind !== 'unchanged' && (
+        {!isImageRow && !onReset && backupResetDisabled && row.inOverlay && row.kind !== 'unchanged' && (
           <button
             type="button"
             className="diff-row-reset diff-row-reset-disabled"
@@ -95,5 +133,43 @@ export function DiffRow({
         )}
       </td>
     </tr>
+  )
+}
+
+function ImageDiffCell({
+  characterId,
+  imageId,
+  side
+}: {
+  characterId: string
+  imageId: string
+  side: ImageDiffSide | undefined
+}) {
+  if (!side) {
+    return <span className="diff-image-absent">—</span>
+  }
+  const url = api.flistImageByIdUrl(characterId, imageId)
+  return (
+    <div className="diff-image-cell">
+      <img
+        src={url}
+        alt={side.description || `Image ${imageId}`}
+        className="diff-image-cell__thumb"
+        loading="lazy"
+      />
+      <div className="diff-image-cell__meta">
+        <div className="diff-image-cell__pos">#{side.position + 1}</div>
+        {side.description && (
+          <div
+            className="diff-image-cell__caption"
+            title={side.description}
+          >
+            {side.description.length > 60
+              ? side.description.slice(0, 57) + '…'
+              : side.description}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }

@@ -213,3 +213,60 @@ describe('computeDiff — counts', () => {
     )
   })
 })
+
+describe('computeDiff — images', () => {
+  const w = (gallery: unknown) =>
+    working({ images: gallery, _overlay: ['images'] })
+
+  it('flags an added image when working has it but right does not', () => {
+    const wp = w([{ image_id: '42', description: 'hi', sort_order: 0 }])
+    const rp = { images: [] }
+    const out = computeDiff(wp, rp, model(), [])
+    const row = out.rows.find((r) => r.path === 'images.42')
+    expect(row?.kind).toBe('added')
+    expect(row?.category).toBe('image')
+    expect(row?.inOverlay).toBe(true)
+  })
+
+  it('flags a removed image when right has it but working does not', () => {
+    const wp = w([])
+    const rp = { images: [{ image_id: '42', description: '', sort_order: 0 }] }
+    const out = computeDiff(wp, rp, model(), [])
+    const row = out.rows.find((r) => r.path === 'images.42')
+    expect(row?.kind).toBe('removed')
+  })
+
+  it('flags a caption change as modified', () => {
+    const wp = w([{ image_id: '42', description: 'new', sort_order: 0 }])
+    const rp = { images: [{ image_id: '42', description: 'old', sort_order: 0 }] }
+    const out = computeDiff(wp, rp, model(), [])
+    const row = out.rows.find((r) => r.path === 'images.42')
+    expect(row?.kind).toBe('modified')
+  })
+
+  it('flags a reorder as modified for both moved images', () => {
+    const wp = w([
+      { image_id: 'a', description: '', sort_order: 0 },
+      { image_id: 'b', description: '', sort_order: 1 }
+    ])
+    const rp = {
+      images: [
+        { image_id: 'b', description: '', sort_order: 0 },
+        { image_id: 'a', description: '', sort_order: 1 }
+      ]
+    }
+    const out = computeDiff(wp, rp, model(), [])
+    const rowA = out.rows.find((r) => r.path === 'images.a')
+    const rowB = out.rows.find((r) => r.path === 'images.b')
+    expect(rowA?.kind).toBe('modified')
+    expect(rowB?.kind).toBe('modified')
+  })
+
+  it('unchanged when caption + position match', () => {
+    const wp = w([{ image_id: '42', description: 'same', sort_order: 0 }])
+    const rp = { images: [{ image_id: '42', description: 'same', sort_order: 0 }] }
+    const out = computeDiff(wp, rp, model(), [])
+    const row = out.rows.find((r) => r.path === 'images.42')
+    expect(row?.kind).toBe('unchanged')
+  })
+})
