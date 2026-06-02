@@ -413,16 +413,17 @@ export function descriptionOf(payload: WorkingPayload): string {
 export interface FlistWorkingSetsState {
   flistActiveSetId: Record<string, string | null>
   flistSetWorking: Record<string, FlistWorkingSlot>
+  /** The active view slot — mirrors whichever set is active (or live in
+   *  read-only mode). Edit machinery from Tier 2 still writes here; the
+   *  activate flow synchronises with `flistSetWorking[setId]` and the
+   *  per-set payload on disk. */
+  flistWorking: Record<string, FlistWorkingSlot>
 }
 
-/** Resolve the editable working slot for `characterId`. Returns the slot
- *  for the active set, or `undefined` when the active id is null (user
- *  is viewing F-list — there's no editable slot in that state). */
+/** Resolve the editable working slot for `characterId`. */
 export function selectWorkingSlot(
   s: FlistWorkingSetsState,
   characterId: string
 ): FlistWorkingSlot | undefined {
-  const setId = s.flistActiveSetId[characterId]
-  if (!setId) return undefined
-  return s.flistSetWorking[setId]
+  return s.flistWorking[characterId]
 }

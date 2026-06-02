@@ -97,8 +97,7 @@ export function FlistCharacterZone() {
 
   const defaultName = useMemo(() => defaultNewSetName(sets), [sets])
 
-  if (!activeId) return null
-  void session
+  if (!session.active || !activeId) return null
 
   const entry = roster.find((r) => String(r.id ?? '') === activeId)
   const name = entry?.name ?? 'Selected character'
