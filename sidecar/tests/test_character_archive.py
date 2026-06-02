@@ -428,6 +428,188 @@ def test_normalise_image_ext_jpeg_to_jpg():
     assert character_archive.normalise_image_ext(".png") == "png"
 
 
+# ---- v6 set helpers ---------------------------------------------------
+
+
+def test_create_set_seed_empty_writes_payload_and_meta():
+    meta = character_archive.create_set("700", name=" Main ", seed="empty")
+    assert meta.name == "Main"
+    payload = character_archive.read_set_payload("700", meta.id)
+    assert payload is not None
+    assert payload["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
+    assert payload["_overlay"] == []
+    # First created set is auto-activated.
+    assert character_archive.read_active_set_id("700") == meta.id
+
+
+def test_create_set_seed_live_uses_live_payload():
+    cid = "701"
+    character_archive.write_live(
+        cid,
+        {
+            "name": "Probe",
+            "fetched_at": 10,
+            "character": {"id": cid, "name": "Probe", "description": "hi"},
+            "images": [{"image_id": "42", "extension": "png"}],
+        },
+    )
+    meta = character_archive.create_set(cid, name="From live", seed="live")
+    payload = character_archive.read_set_payload(cid, meta.id)
+    assert payload is not None
+    assert payload["character"]["description"] == "hi"
+    assert payload["images"][0]["image_id"] == "42"
+
+
+def test_create_set_seed_fork_deep_copies():
+    cid = "702"
+    base = character_archive.create_set(cid, name="Base", seed="empty")
+    character_archive.write_set_payload(
+        cid,
+        base.id,
+        {
+            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+            "_overlay": [],
+            "character": {"id": cid, "name": "Base"},
+        },
+    )
+    forked = character_archive.create_set(
+        cid, name="Fork", seed={"fork": base.id}
+    )
+    forked_payload = character_archive.read_set_payload(cid, forked.id)
+    assert forked_payload is not None
+    assert forked_payload["character"]["name"] == "Base"
+    # Mutate the fork's payload; the base should stay untouched (proves
+    # the copy is a deep clone, not a reference).
+    forked_payload["character"]["name"] = "Fork"
+    character_archive.write_set_payload(cid, forked.id, forked_payload)
+    base_again = character_archive.read_set_payload(cid, base.id)
+    assert base_again is not None
+    assert base_again["character"]["name"] == "Base"
+
+
+def test_validate_set_name_rejects_blank_and_nul_and_too_long():
+    with pytest.raises(ValueError):
+        character_archive.validate_set_name("")
+    with pytest.raises(ValueError):
+        character_archive.validate_set_name("   ")
+    with pytest.raises(ValueError):
+        character_archive.validate_set_name("a\x00b")
+    with pytest.raises(ValueError):
+        character_archive.validate_set_name("x" * 100)
+
+
+def test_rename_set_updates_meta():
+    cid = "703"
+    meta = character_archive.create_set(cid, name="Old", seed="empty")
+    new = character_archive.rename_set(cid, meta.id, name="New")
+    assert new.name == "New"
+    on_disk = character_archive.read_set_meta(cid, meta.id)
+    assert on_disk is not None and on_disk.name == "New"
+
+
+def test_delete_set_removes_directory_tree():
+    cid = "704"
+    a = character_archive.create_set(cid, name="A", seed="empty")
+    b = character_archive.create_set(cid, name="B", seed="empty")
+    # Snapshot inside B so we exercise the rmtree path.
+    character_archive.write_snapshot(cid, b.id, name="S1")
+    assert character_archive.delete_set(cid, b.id) is True
+    assert not character_archive.set_dir(cid, b.id).exists()
+    # A is untouched.
+    assert character_archive.read_set_meta(cid, a.id) is not None
+
+
+def test_active_set_pointer_falls_back_to_existing_set_when_missing():
+    cid = "705"
+    a = character_archive.create_set(cid, name="A", seed="empty")
+    b = character_archive.create_set(cid, name="B", seed="empty")
+    # Stomp the pointer to a non-existent id.
+    character_archive._atomic_write_json(
+        character_archive.active_set_path(cid),
+        {"active_set_id": "doesnotexist"},
+    )
+    resolved = character_archive.read_active_set_id(cid)
+    # Fallback resolves to one of the real sets (sub-second-tied
+    # creation times mean ordering is by id within the same second).
+    assert resolved in (a.id, b.id)
+    # And the pointer file is rewritten so the next read is stable.
+    again = character_archive.read_active_set_id(cid)
+    assert again == resolved
+
+
+def test_snapshot_write_read_round_trip():
+    cid = "706"
+    meta = character_archive.create_set(cid, name="Main", seed="empty")
+    character_archive.write_set_payload(
+        cid,
+        meta.id,
+        {
+            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+            "_overlay": ["character.description"],
+            "character": {"id": cid, "name": "X", "description": "before"},
+        },
+    )
+    snap = character_archive.write_snapshot(cid, meta.id, name="S1")
+    snaps = character_archive.list_snapshots(cid, meta.id)
+    assert len(snaps) == 1
+    assert snaps[0].id == snap.id
+    payload = character_archive.read_snapshot_payload(cid, meta.id, snap.id)
+    assert payload is not None
+    assert payload["character"]["description"] == "before"
+
+
+def test_snapshot_rename_and_delete():
+    cid = "707"
+    meta = character_archive.create_set(cid, name="Main", seed="empty")
+    character_archive.write_set_payload(
+        cid,
+        meta.id,
+        {
+            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+            "_overlay": [],
+            "character": {"id": cid},
+        },
+    )
+    snap = character_archive.write_snapshot(cid, meta.id, name="Original")
+    renamed = character_archive.rename_snapshot(
+        cid, meta.id, snap.id, name="Updated"
+    )
+    assert renamed.name == "Updated"
+    assert character_archive.delete_snapshot(cid, meta.id, snap.id) is True
+    assert character_archive.list_snapshots(cid, meta.id) == []
+
+
+def test_backup_filename_regex_only_accepts_safe_zips():
+    re_ = character_archive.BACKUP_FILENAME_RE
+    assert re_.match("2026-06-02T18-44-00__auto-pull__d2f8.zip")
+    assert re_.match("2026-06-02T18-44-00__manual-set__My_set__a401.zip")
+    assert not re_.match("../etc/passwd.zip")
+    assert not re_.match("foo/bar.zip")
+    assert not re_.match("foo.json")
+
+
+def test_compose_backup_filename_pieces_match_plan():
+    name = character_archive.compose_backup_filename(
+        source="manual-set",
+        source_name="My Set",
+        payload_hash="abcd1234",
+        ts=1748889600,
+    )
+    assert name.endswith("__abcd1234.zip")
+    assert "__manual-set__" in name
+    # ISO ts uses `-` not `:`.
+    assert ":" not in name
+    auto = character_archive.compose_backup_filename(
+        source="auto-pull",
+        source_name=None,
+        payload_hash="00112233",
+        ts=1748889600,
+    )
+    assert "__auto-pull__" in auto
+    # Auto-pull has no source-name segment.
+    assert auto.count("__") == 2
+
+
 def test_read_working_refuses_future_schema_version():
     """A working.json written by a newer build must be refused, not
     silently mis-interpreted. The renderer falls back to seed-from-Live

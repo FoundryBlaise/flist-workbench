@@ -13,6 +13,10 @@
 // Tier 3 adds custom-kinks order normalisation + drift suppression for
 // the `children` array — same conventions, kept here so the store stays
 // thin.
+//
+// Tier 7 adds working-set / snapshot / backup metadata types + the
+// `selectWorkingSlot` selector + undo-patch shape — pure helpers only,
+// the store wires them into actions.
 
 import type { InlineImage } from '../lib/api'
 
@@ -394,4 +398,97 @@ export function descriptionOf(payload: WorkingPayload): string {
   const v = pathLookup(payload, DESCRIPTION_PATH)
   if (typeof v !== 'string') return ''
   return normaliseNewlines(v)
+}
+
+// ---- Tier 7 — working sets / snapshots / backups --------------------
+
+export interface SetMeta {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  snapshotCount: number
+}
+
+export interface SnapshotMeta {
+  id: string
+  name: string
+  createdAt: number
+}
+
+export type BackupSource =
+  | 'auto-pull'
+  | 'manual-set'
+  | 'manual-snapshot'
+  | 'legacy-json'
+
+export interface BackupListing {
+  filename: string
+  createdAt: number
+  size: number
+  source: BackupSource
+  sourceName: string | null
+  payloadHash: string
+}
+
+/** A patch applied by a single user-meaningful action. Used by both
+ *  undo (revert) and redo (re-apply). Tagged-action shape so the
+ *  reducer can fast-path single-field edits and bucket multi-path edits
+ *  (bulk choice, reset, gallery reorder) into a single `replace-overlay`
+ *  step. */
+export type UndoPatch =
+  | {
+      kind: 'set'
+      path: string
+      before: unknown
+      after: unknown
+    }
+  | {
+      kind: 'replace-overlay'
+      beforePayload: WorkingPayload
+      beforeOverlay: string[]
+      afterPayload: WorkingPayload
+      afterOverlay: string[]
+    }
+  | {
+      kind: 'rename-set'
+      setId: string
+      before: string
+      after: string
+    }
+
+/** Hard cap on per-set undo stack depth. Worst-case memory: ~300 KB
+ *  per `replace-overlay` × 50 ≈ 15 MB per set; documented in Tier 7
+ *  Risks (R-2). */
+export const UNDO_STACK_CAP = 50
+
+/** Minimal shape needed by `selectWorkingSlot`. The store's full state
+ *  is a superset; typing the selector against just the slice keeps the
+ *  helper testable without dragging in the whole `State`. The optional
+ *  `flistWorking` mirror is the Tier 7 Step 7+8 back-compat field — it's
+ *  removed in Step 16 once every action wires through `flistSetWorking`
+ *  natively. */
+export interface FlistSetWorkingSlice {
+  flistActiveSetId: Record<string, string>
+  flistSetWorking: Record<string, FlistWorkingSlot>
+  flistWorking?: Record<string, FlistWorkingSlot>
+}
+
+/** Resolve the working slot for a character by going through the
+ *  active-set pointer. Tier 7 Step 7+8 fall back to the legacy
+ *  `flistWorking[characterId]` mirror when no active-set pointer exists
+ *  yet — the sidecar v6 `/sets` API isn't wired into every action in
+ *  this release, so mutators that still write the legacy slice keep
+ *  rendering correctly through the selector. Step 16 removes the
+ *  fallback once every action routes through the set-aware writes. */
+export function selectWorkingSlot(
+  s: FlistSetWorkingSlice,
+  characterId: string
+): FlistWorkingSlot | undefined {
+  const setId = s.flistActiveSetId[characterId]
+  if (setId) {
+    const slot = s.flistSetWorking[setId]
+    if (slot) return slot
+  }
+  return s.flistWorking?.[characterId]
 }
