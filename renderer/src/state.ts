@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import {
   api,
-  type BackupListingWire,
   type CharacterEntry,
   type Document,
   type FlistAccountCharacter,
@@ -13,9 +12,7 @@ import {
   type InlineImage,
   type LogMessage,
   type PartnerEntry,
-  type RevisionSummary,
-  type SetMetaWire,
-  type SnapshotMetaWire
+  type RevisionSummary
 } from './lib/api'
 import {
   DESCRIPTION_PATH,
@@ -28,30 +25,18 @@ import {
   isInfotagPath,
   normaliseNewlines as flistNormaliseNewlines,
   pathLookup,
-  pathSet,
   seedWorkingFromLive,
-  selectWorkingSlot,
-  UNDO_STACK_CAP,
   WORKING_SCHEMA_VERSION,
-  type BackupListing,
   type FlistSaveStatus,
   type FlistWorkingSlot,
-  type SetMeta,
-  type SnapshotMeta,
-  type UndoPatch,
   type WorkingPayload
 } from './state/flist'
 
 export type {
-  BackupListing,
   FlistSaveStatus,
   FlistWorkingSlot,
-  SetMeta,
-  SnapshotMeta,
-  UndoPatch,
   WorkingPayload
 } from './state/flist'
-export { selectWorkingSlot } from './state/flist'
 
 export type Mode = 'editor' | 'logs'
 
@@ -224,33 +209,6 @@ type State = {
    *  error" chip without storing UI-only data on disk. */
   flistWorking: Record<string, FlistWorkingSlot>
   flistWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
-  // ---- Tier 7 — working sets / snapshots / backup ZIPs ----
-  /** Per-character ordered set list (newest-first by updatedAt). */
-  flistSets: Record<string, SetMeta[]>
-  flistSetsStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
-  /** Active set id per character; mirrors `active_set.json` on disk. */
-  flistActiveSetId: Record<string, string>
-  /** Snapshots keyed by setId (uuids are globally unique). */
-  flistSetSnapshots: Record<string, SnapshotMeta[]>
-  /** Per-set working slot. Source of truth for Tier 7+; `flistWorking`
-   *  above is a back-compat mirror keyed by character id, removed in
-   *  Step 16. */
-  flistSetWorking: Record<string, FlistWorkingSlot>
-  flistSetWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
-  /** In-memory undo / redo stacks per set. Not persisted to disk —
-   *  session affordance only. Capped at UNDO_STACK_CAP entries. */
-  flistSetUndoStack: Record<string, UndoPatch[]>
-  flistSetRedoStack: Record<string, UndoPatch[]>
-  /** ZIP-shaped backups per character, newest-first. Replaces the
-   *  pre-Tier-7 `flistArchive[id].backups` list once consumers migrate. */
-  flistBackupsList: Record<string, BackupListing[]>
-  flistBackupsStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
-  /** Per-character accordion open/closed mirror; persisted to
-   *  `localStorage['flist-workbench:accordion:<characterId>']`. */
-  flistAccordion: Record<
-    string,
-    { snippets: boolean; sets: boolean; backups: boolean }
-  >
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
@@ -504,71 +462,6 @@ type State = {
     backupFilename: string
   ) => Promise<void>
 
-  // ---- Tier 7 — working sets / snapshots / backups ----
-  flistLoadSets: (characterId: string) => Promise<void>
-  flistCreateSet: (
-    characterId: string,
-    args: { name: string; seed: 'live' | 'empty' | { fork: string } }
-  ) => Promise<SetMeta>
-  flistRenameSet: (
-    characterId: string,
-    setId: string,
-    name: string
-  ) => Promise<void>
-  flistDeleteSet: (
-    characterId: string,
-    setId: string,
-    nextActiveSetId?: string
-  ) => Promise<void>
-  flistActivateSet: (characterId: string, setId: string) => Promise<void>
-
-  flistLoadSnapshots: (characterId: string, setId: string) => Promise<void>
-  flistTakeSnapshot: (
-    characterId: string,
-    setId: string,
-    name: string
-  ) => Promise<SnapshotMeta>
-  flistRenameSnapshot: (
-    characterId: string,
-    setId: string,
-    snapshotId: string,
-    name: string
-  ) => Promise<void>
-  flistRevertToSnapshot: (
-    characterId: string,
-    setId: string,
-    snapshotId: string
-  ) => Promise<{ safetySnapshotId: string }>
-  flistDeleteSnapshot: (
-    characterId: string,
-    setId: string,
-    snapshotId: string
-  ) => Promise<void>
-
-  flistLoadBackups: (characterId: string) => Promise<void>
-  flistCreateBackup: (
-    characterId: string,
-    args:
-      | { from: 'set'; setId: string }
-      | { from: 'snapshot'; setId: string; snapshotId: string }
-  ) => Promise<BackupListing>
-  flistDeleteBackup: (characterId: string, filename: string) => Promise<void>
-  flistBackupAbsPath: (
-    characterId: string,
-    filename: string
-  ) => Promise<string>
-
-  /** Push an undo patch onto the active set's stack. Clears redo. Caps
-   *  at UNDO_STACK_CAP — oldest drops when full. */
-  flistRecordPatch: (setId: string, patch: UndoPatch) => void
-  flistUndo: (characterId: string) => void
-  flistRedo: (characterId: string) => void
-  flistSetAccordion: (
-    characterId: string,
-    section: 'snippets' | 'sets' | 'backups',
-    open: boolean
-  ) => void
-
   // Snippets (internal name still `document`)
   loadDocuments: () => Promise<void>
   openDocument: (id: number) => Promise<void>
@@ -648,107 +541,6 @@ let _mappingInflight: Promise<void> | null = null
 // Mapping-list responses that arrive after a session change are
 // discarded so a prior account's data can't be reinstated.
 let _flistSessionEpoch = 0
-
-// ---- Tier 7 — wire ↔ in-memory translation + undo apply layer ------
-
-function _setMetaFromWire(w: SetMetaWire): SetMeta {
-  return {
-    id: w.id,
-    name: w.name,
-    createdAt: w.createdAt,
-    updatedAt: w.updatedAt,
-    snapshotCount: w.snapshotCount
-  }
-}
-
-function _snapshotMetaFromWire(w: SnapshotMetaWire): SnapshotMeta {
-  return { id: w.id, name: w.name, createdAt: w.createdAt }
-}
-
-function _backupListingFromWire(w: BackupListingWire): BackupListing {
-  return {
-    filename: w.filename,
-    createdAt: w.createdAt,
-    size: w.size,
-    source: w.source,
-    sourceName: w.sourceName,
-    payloadHash: w.payloadHash
-  }
-}
-
-function _cloneSlotPayload<T>(value: T): T {
-  // why: structuredClone is widely available in Node 17+/Electron 33,
-  // but tests that mock globals may strip it — fall back to JSON
-  // round-trip for plain payloads.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const fn = (globalThis as any).structuredClone
-  if (typeof fn === 'function') return fn(value) as T
-  return JSON.parse(JSON.stringify(value)) as T
-}
-
-function _applyValueAtPath(
-  slot: FlistWorkingSlot,
-  path: string,
-  value: unknown
-): FlistWorkingSlot {
-  const payload = _cloneSlotPayload(slot.payload) as WorkingPayload
-  pathSet(payload, path, value)
-  const overlay = slot.overlay.includes(path) ? slot.overlay : [...slot.overlay, path]
-  payload._overlay = [...overlay]
-  return {
-    ...slot,
-    payload,
-    overlay,
-    unsavedDirty: true,
-    saveStatus: 'idle',
-    saveError: slot.saveError
-  }
-}
-
-function _revertPatch(
-  slot: FlistWorkingSlot,
-  patch: UndoPatch
-): FlistWorkingSlot {
-  switch (patch.kind) {
-    case 'set':
-      return _applyValueAtPath(slot, patch.path, patch.before)
-    case 'replace-overlay':
-      return {
-        ...slot,
-        payload: _cloneSlotPayload(patch.beforePayload),
-        overlay: [...patch.beforeOverlay],
-        unsavedDirty: true,
-        saveStatus: 'idle',
-        saveError: slot.saveError
-      }
-    case 'rename-set':
-      // why: rename lives at the set-meta layer; the working slot itself
-      // is unaffected. flistSets reconciliation happens via flistRenameSet
-      // on the redo path.
-      return slot
-  }
-}
-
-function _reapplyPatch(
-  slot: FlistWorkingSlot,
-  patch: UndoPatch
-): FlistWorkingSlot {
-  switch (patch.kind) {
-    case 'set':
-      return _applyValueAtPath(slot, patch.path, patch.after)
-    case 'replace-overlay':
-      return {
-        ...slot,
-        payload: _cloneSlotPayload(patch.afterPayload),
-        overlay: [...patch.afterOverlay],
-        unsavedDirty: true,
-        saveStatus: 'idle',
-        saveError: slot.saveError
-      }
-    case 'rename-set':
-      return slot
-  }
-}
 
 /** Apply N tombstones in a single reducer pass — keeps the bulk action
  *  cheap even for large selections and ensures one slot mutation lands
@@ -980,17 +772,6 @@ export const useStore = create<State>((set, get) => ({
   flistExportRestoreCharacterId: null,
   flistWorking: {},
   flistWorkingLoadStatus: {},
-  flistSets: {},
-  flistSetsStatus: {},
-  flistActiveSetId: {},
-  flistSetSnapshots: {},
-  flistSetWorking: {},
-  flistSetWorkingLoadStatus: {},
-  flistSetUndoStack: {},
-  flistSetRedoStack: {},
-  flistBackupsList: {},
-  flistBackupsStatus: {},
-  flistAccordion: {},
   flistMapping: {
     status: 'idle',
     payload: null,
@@ -1115,17 +896,6 @@ export const useStore = create<State>((set, get) => ({
       },
       flistWorking: {},
       flistWorkingLoadStatus: {},
-      flistSets: {},
-      flistSetsStatus: {},
-      flistActiveSetId: {},
-      flistSetSnapshots: {},
-      flistSetWorking: {},
-      flistSetWorkingLoadStatus: {},
-      flistSetUndoStack: {},
-      flistSetRedoStack: {},
-      flistBackupsList: {},
-      flistBackupsStatus: {},
-      flistAccordion: {},
       flistDriftBanners: {},
       flistResetUndo: null,
       flistDiffRightSource: {},
@@ -2700,366 +2470,6 @@ export const useStore = create<State>((set, get) => ({
     }
     const path = `kinks.${kinkId}`
     get().flistSetWorkingField(characterId, path, choice)
-  },
-
-  // ---- Tier 7 — working sets / snapshots / backups ------------------
-  //
-  // TODO(Tier 7 Step 13): wire flistRecordPatch into mutator actions
-  //   (flistSetWorkingField, flistResetWorkingField, flistCustomKinks*,
-  //   flistStandardKinkSet, flistMoveImage*, etc.). For Step 7, only the
-  //   undo *stack* mechanics ship — recording is deferred.
-
-  async flistLoadSets(characterId) {
-    set((s) => ({
-      flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'loading' }
-    }))
-    try {
-      const res = await api.flistSetsList(characterId)
-      const sets = res.sets.map(_setMetaFromWire)
-      set((s) => ({
-        flistSets: { ...s.flistSets, [characterId]: sets },
-        flistActiveSetId: {
-          ...s.flistActiveSetId,
-          [characterId]: res.active_set_id
-        },
-        flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'ready' }
-      }))
-    } catch {
-      set((s) => ({
-        flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'error' }
-      }))
-    }
-  },
-
-  async flistCreateSet(characterId, args) {
-    const res = await api.flistSetsCreate(characterId, args)
-    const set_ = _setMetaFromWire(res.set)
-    set((s) => {
-      const prior = s.flistSets[characterId] ?? []
-      return {
-        flistSets: {
-          ...s.flistSets,
-          [characterId]: [set_, ...prior]
-        }
-      }
-    })
-    return set_
-  },
-
-  async flistRenameSet(characterId, setId, name) {
-    const prior = get().flistSets[characterId]?.find((m) => m.id === setId)
-    const res = await api.flistSetsRename(characterId, setId, name)
-    const next = _setMetaFromWire(res.set)
-    set((s) => {
-      const list = s.flistSets[characterId] ?? []
-      return {
-        flistSets: {
-          ...s.flistSets,
-          [characterId]: list.map((m) => (m.id === setId ? next : m))
-        }
-      }
-    })
-    if (prior && prior.name !== next.name) {
-      get().flistRecordPatch(setId, {
-        kind: 'rename-set',
-        setId,
-        before: prior.name,
-        after: next.name
-      })
-    }
-  },
-
-  async flistDeleteSet(characterId, setId, nextActiveSetId) {
-    const res = await api.flistSetsDelete(characterId, setId, nextActiveSetId)
-    set((s) => {
-      const list = s.flistSets[characterId] ?? []
-      const nextWorking = { ...s.flistSetWorking }
-      delete nextWorking[setId]
-      const nextUndo = { ...s.flistSetUndoStack }
-      delete nextUndo[setId]
-      const nextRedo = { ...s.flistSetRedoStack }
-      delete nextRedo[setId]
-      const nextSnaps = { ...s.flistSetSnapshots }
-      delete nextSnaps[setId]
-      return {
-        flistSets: {
-          ...s.flistSets,
-          [characterId]: list.filter((m) => m.id !== setId)
-        },
-        flistActiveSetId: {
-          ...s.flistActiveSetId,
-          [characterId]: res.new_active_set_id
-        },
-        flistSetWorking: nextWorking,
-        flistSetUndoStack: nextUndo,
-        flistSetRedoStack: nextRedo,
-        flistSetSnapshots: nextSnaps
-      }
-    })
-  },
-
-  async flistActivateSet(characterId, setId) {
-    await api.flistSetsActivate(characterId, setId)
-    set((s) => ({
-      flistActiveSetId: { ...s.flistActiveSetId, [characterId]: setId }
-    }))
-    // Mirror the now-active set's slot into the legacy flistWorking
-    // bucket so Step 7+8 consumers (still reading the legacy path
-    // directly OR going through selectWorkingSlot's fallback) see the
-    // right payload after a switch.
-    const slot = get().flistSetWorking[setId]
-    if (slot) {
-      set((s) => ({
-        flistWorking: { ...s.flistWorking, [characterId]: slot }
-      }))
-    }
-  },
-
-  async flistLoadSnapshots(characterId, setId) {
-    try {
-      const res = await api.flistSnapshotsList(characterId, setId)
-      const snaps = res.snapshots.map(_snapshotMetaFromWire)
-      set((s) => ({
-        flistSetSnapshots: { ...s.flistSetSnapshots, [setId]: snaps }
-      }))
-    } catch {
-      // Best-effort — leave prior cache in place.
-    }
-  },
-
-  async flistTakeSnapshot(characterId, setId, name) {
-    const res = await api.flistSnapshotCreate(characterId, setId, name)
-    const snap = _snapshotMetaFromWire(res.snapshot)
-    set((s) => {
-      const prior = s.flistSetSnapshots[setId] ?? []
-      return {
-        flistSetSnapshots: {
-          ...s.flistSetSnapshots,
-          [setId]: [snap, ...prior]
-        }
-      }
-    })
-    return snap
-  },
-
-  async flistRenameSnapshot(characterId, setId, snapshotId, name) {
-    const res = await api.flistSnapshotRename(characterId, setId, snapshotId, name)
-    const next = _snapshotMetaFromWire(res.snapshot)
-    set((s) => {
-      const list = s.flistSetSnapshots[setId] ?? []
-      return {
-        flistSetSnapshots: {
-          ...s.flistSetSnapshots,
-          [setId]: list.map((m) => (m.id === snapshotId ? next : m))
-        }
-      }
-    })
-  },
-
-  async flistRevertToSnapshot(characterId, setId, snapshotId) {
-    const res = await api.flistSnapshotRevert(characterId, setId, snapshotId)
-    // Surface the just-created safety snapshot so the 5s undo banner can
-    // wire its caller to revert again. Refresh the snapshot list so the
-    // safety entry appears in the rail without an extra round-trip.
-    await get().flistLoadSnapshots(characterId, setId)
-    // Re-load the set's payload so the editor reflects the revert.
-    try {
-      const payload = await api.flistSetPayloadRead(characterId, setId)
-      set((s) => {
-        const slot: FlistWorkingSlot = {
-          ...(s.flistSetWorking[setId] ?? emptyWorkingSlot()),
-          payload: payload.payload as WorkingPayload,
-          overlay: Array.isArray((payload.payload as WorkingPayload)._overlay)
-            ? ((payload.payload as WorkingPayload)._overlay as string[])
-            : [],
-          etag: payload.etag,
-          unsavedDirty: false,
-          saveStatus: 'idle',
-          saveError: null,
-          materialised: true
-        }
-        const patch: Partial<State> = {
-          flistSetWorking: { ...s.flistSetWorking, [setId]: slot }
-        }
-        // Mirror into legacy slot when this set is the active one.
-        if (s.flistActiveSetId[characterId] === setId) {
-          patch.flistWorking = { ...s.flistWorking, [characterId]: slot }
-        }
-        return patch
-      })
-    } catch {
-      // Best-effort — caller can re-load on next render tick.
-    }
-    void _setMetaFromWire(res.set)
-    return { safetySnapshotId: res.safety_snapshot_id }
-  },
-
-  async flistDeleteSnapshot(characterId, setId, snapshotId) {
-    await api.flistSnapshotDelete(characterId, setId, snapshotId)
-    set((s) => {
-      const list = s.flistSetSnapshots[setId] ?? []
-      return {
-        flistSetSnapshots: {
-          ...s.flistSetSnapshots,
-          [setId]: list.filter((m) => m.id !== snapshotId)
-        }
-      }
-    })
-  },
-
-  async flistLoadBackups(characterId) {
-    set((s) => ({
-      flistBackupsStatus: { ...s.flistBackupsStatus, [characterId]: 'loading' }
-    }))
-    try {
-      const res = await api.flistBackupsListV6(characterId)
-      set((s) => ({
-        flistBackupsList: {
-          ...s.flistBackupsList,
-          [characterId]: res.backups.map(_backupListingFromWire)
-        },
-        flistBackupsStatus: {
-          ...s.flistBackupsStatus,
-          [characterId]: 'ready'
-        }
-      }))
-    } catch {
-      set((s) => ({
-        flistBackupsStatus: { ...s.flistBackupsStatus, [characterId]: 'error' }
-      }))
-    }
-  },
-
-  async flistCreateBackup(characterId, args) {
-    const body =
-      args.from === 'set'
-        ? ({ source: 'set' as const, set_id: args.setId })
-        : ({
-            source: 'snapshot' as const,
-            set_id: args.setId,
-            snapshot_id: args.snapshotId
-          })
-    const res = await api.flistBackupCreate(characterId, body)
-    const listing = _backupListingFromWire(res.backup)
-    set((s) => {
-      const prior = s.flistBackupsList[characterId] ?? []
-      return {
-        flistBackupsList: {
-          ...s.flistBackupsList,
-          [characterId]: [listing, ...prior]
-        }
-      }
-    })
-    return listing
-  },
-
-  async flistDeleteBackup(characterId, filename) {
-    await api.flistBackupDelete(characterId, filename)
-    set((s) => {
-      const prior = s.flistBackupsList[characterId] ?? []
-      return {
-        flistBackupsList: {
-          ...s.flistBackupsList,
-          [characterId]: prior.filter((b) => b.filename !== filename)
-        }
-      }
-    })
-  },
-
-  async flistBackupAbsPath(characterId, filename) {
-    const res = await api.flistBackupPath(characterId, filename)
-    return res.abs_path
-  },
-
-  flistRecordPatch(setId, patch) {
-    set((s) => {
-      const priorUndo = s.flistSetUndoStack[setId] ?? []
-      const nextUndo = priorUndo.length >= UNDO_STACK_CAP
-        ? [...priorUndo.slice(priorUndo.length - UNDO_STACK_CAP + 1), patch]
-        : [...priorUndo, patch]
-      return {
-        flistSetUndoStack: { ...s.flistSetUndoStack, [setId]: nextUndo },
-        flistSetRedoStack: { ...s.flistSetRedoStack, [setId]: [] }
-      }
-    })
-  },
-
-  flistUndo(characterId) {
-    const setId = get().flistActiveSetId[characterId]
-    if (!setId) return
-    const stack = get().flistSetUndoStack[setId] ?? []
-    if (stack.length === 0) return
-    const patch = stack[stack.length - 1]
-    set((s) => {
-      const slot = s.flistSetWorking[setId] ?? s.flistWorking[characterId]
-      const reverted = slot ? _revertPatch(slot, patch) : slot
-      const nextUndo = stack.slice(0, -1)
-      const priorRedo = s.flistSetRedoStack[setId] ?? []
-      const patch_: Partial<State> = {
-        flistSetUndoStack: { ...s.flistSetUndoStack, [setId]: nextUndo },
-        flistSetRedoStack: {
-          ...s.flistSetRedoStack,
-          [setId]: [...priorRedo, patch]
-        }
-      }
-      if (reverted) {
-        patch_.flistSetWorking = { ...s.flistSetWorking, [setId]: reverted }
-        if (s.flistActiveSetId[characterId] === setId) {
-          patch_.flistWorking = { ...s.flistWorking, [characterId]: reverted }
-        }
-      }
-      return patch_
-    })
-  },
-
-  flistRedo(characterId) {
-    const setId = get().flistActiveSetId[characterId]
-    if (!setId) return
-    const stack = get().flistSetRedoStack[setId] ?? []
-    if (stack.length === 0) return
-    const patch = stack[stack.length - 1]
-    set((s) => {
-      const slot = s.flistSetWorking[setId] ?? s.flistWorking[characterId]
-      const reapplied = slot ? _reapplyPatch(slot, patch) : slot
-      const nextRedo = stack.slice(0, -1)
-      const priorUndo = s.flistSetUndoStack[setId] ?? []
-      const patch_: Partial<State> = {
-        flistSetRedoStack: { ...s.flistSetRedoStack, [setId]: nextRedo },
-        flistSetUndoStack: {
-          ...s.flistSetUndoStack,
-          [setId]: [...priorUndo, patch]
-        }
-      }
-      if (reapplied) {
-        patch_.flistSetWorking = { ...s.flistSetWorking, [setId]: reapplied }
-        if (s.flistActiveSetId[characterId] === setId) {
-          patch_.flistWorking = { ...s.flistWorking, [characterId]: reapplied }
-        }
-      }
-      return patch_
-    })
-  },
-
-  flistSetAccordion(characterId, section, open) {
-    set((s) => {
-      const cur = s.flistAccordion[characterId] ?? {
-        snippets: false,
-        sets: true,
-        backups: true
-      }
-      const next = { ...cur, [section]: open }
-      try {
-        localStorage.setItem(
-          `flist-workbench:accordion:${characterId}`,
-          JSON.stringify(next)
-        )
-      } catch {
-        // private mode / storage full — UI still updates this session
-      }
-      return {
-        flistAccordion: { ...s.flistAccordion, [characterId]: next }
-      }
-    })
   },
 
   async loadCharacters() {

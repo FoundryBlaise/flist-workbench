@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { api } from '../../lib/api'
-import { useStore, selectWorkingSlot } from '../../state'
+import { useStore } from '../../state'
 
 function galleryFromSlot(payload: unknown): { image_id: string; description: string }[] {
   if (!payload || typeof payload !== 'object') return []
@@ -43,7 +43,7 @@ export function ExportRestoreModal({
   onClose: () => void
   onShowUserscriptHelp: () => void
 }) {
-  const slot = useStore((s) => selectWorkingSlot(s, characterId))
+  const slot = useStore((s) => s.flistWorking[characterId])
   const live = useStore((s) => s.flistArchive[characterId]?.live ?? null)
   const roster = useStore((s) => s.flistRoster)
   const characterName = useMemo(() => {
