@@ -393,6 +393,10 @@ type State = {
   flistLoadWorking: (characterId: string) => Promise<void>
   flistSetWorkingField: (characterId: string, path: string, value: unknown) => void
   flistResetWorkingField: (characterId: string, path: string) => void
+  /** Restore a single image row in working.json's gallery to match Live —
+   *  add/remove/update the entry for `imageId` so working aligns with
+   *  Live for that one image, leaving other gallery edits intact. */
+  flistResetImageRow: (characterId: string, imageId: string) => void
   flistFlushWorking: (characterId: string) => Promise<void>
   flistResetWorkingToLive: (characterId: string) => Promise<void>
   flistUndoResetWorking: () => Promise<void>
@@ -1575,6 +1579,78 @@ export const useStore = create<State>((set, get) => ({
       const next = flistApplyEdit(slot, path, value)
       return {
         flistWorking: { ...s.flistWorking, [characterId]: next }
+      }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  },
+
+  flistResetImageRow(characterId, imageId) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      if (!slot) return {}
+      const live = s.flistArchive[characterId]?.live ?? null
+      type GalleryRow = { image_id: string; description: string; sort_order: number }
+      const readGallery = (payload: unknown): GalleryRow[] => {
+        if (!payload || typeof payload !== 'object') return []
+        const raw = (payload as { images?: unknown }).images
+        if (!Array.isArray(raw)) return []
+        const out: GalleryRow[] = []
+        for (const e of raw) {
+          if (!e || typeof e !== 'object') continue
+          const r = e as { image_id?: unknown; description?: unknown; sort_order?: unknown }
+          if (typeof r.image_id !== 'string') continue
+          const so =
+            typeof r.sort_order === 'number'
+              ? r.sort_order
+              : Number(r.sort_order ?? out.length) || out.length
+          out.push({
+            image_id: r.image_id,
+            description: typeof r.description === 'string' ? r.description : '',
+            sort_order: so
+          })
+        }
+        out.sort((a, b) => a.sort_order - b.sort_order)
+        return out
+      }
+      const liveGallery = readGallery(live)
+      const workingGallery = readGallery(slot.payload)
+      const target = liveGallery.find((e) => e.image_id === imageId)
+      let next: GalleryRow[]
+      if (!target) {
+        // Live doesn't have this image — reset = drop from working.
+        next = workingGallery.filter((e) => e.image_id !== imageId)
+      } else {
+        const without = workingGallery.filter((e) => e.image_id !== imageId)
+        // Live's position is authoritative for where the reset row lands.
+        // Clamp against the post-removal length so an out-of-range index
+        // still inserts at the tail rather than throwing.
+        const insertAt = Math.max(0, Math.min(target.sort_order, without.length))
+        next = [
+          ...without.slice(0, insertAt),
+          { ...target },
+          ...without.slice(insertAt)
+        ]
+      }
+      const renumbered = next.map((e, i) => ({ ...e, sort_order: i }))
+      const payload = { ...slot.payload, images: renumbered }
+      const overlay = slot.overlay.includes('images')
+        ? slot.overlay
+        : [...slot.overlay, 'images']
+      payload._overlay = [...overlay]
+      return {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload,
+            overlay,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: slot.saveError
+          }
+        }
       }
     })
     _scheduleFlush(characterId, () => {

@@ -49,6 +49,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const setSource = useStore((s) => s.flistDiffSetRightSource)
   const resetField = useStore((s) => s.flistResetWorkingField)
   const resetCustomKink = useStore((s) => s.flistCustomKinksResetField)
+  const resetImageRow = useStore((s) => s.flistResetImageRow)
   const resetToLive = useStore((s) => s.flistResetWorkingToLive)
   const resetToBackup = useStore((s) => s.flistResetWorkingToBackup)
 
@@ -190,6 +191,11 @@ export function DiffPane({ characterId }: { characterId: string }) {
     // Reset only routes when source is Live — backup-side reset would
     // need a per-row store action; out of Tier 4 scope (see backlog).
     if (source.kind !== 'live') return
+    if (row.category === 'image') {
+      const imageId = row.path.slice('images.'.length)
+      resetImageRow(characterId, imageId)
+      return
+    }
     if (row.path.startsWith('custom_kinks.')) {
       const [, id, field] = row.path.split('.')
       if (field === 'name' || field === 'description' || field === 'choice') {
