@@ -54,7 +54,11 @@ contextBridge.exposeInMainWorld('workbench', {
       ipcRenderer.removeListener('menu:action', wrapped)
     }
   },
-  setMenuState: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => {
+  setMenuState: (flags: {
+    classifyCurrent: boolean
+    classifyCharacter: boolean
+    flistSessionActive: boolean
+  }) => {
     ipcRenderer.send('menu:set-state', flags)
   },
   // Used by the AI Setup wizard to open ollama.com/download in the user's

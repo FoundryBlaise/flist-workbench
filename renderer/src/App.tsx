@@ -38,7 +38,11 @@ declare global {
       readFile?: (filePath: string) => Promise<Uint8Array | null>
       writeFile?: (filePath: string, bytes: Uint8Array) => Promise<boolean>
       onMenuAction?: (listener: (action: MenuAction) => void) => () => void
-      setMenuState?: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => void
+      setMenuState?: (flags: {
+        classifyCurrent: boolean
+        classifyCharacter: boolean
+        flistSessionActive: boolean
+      }) => void
       openExternal?: (url: string) => void
       spawnPowerShell?: (command: string) => void
       openSettings?: () => void

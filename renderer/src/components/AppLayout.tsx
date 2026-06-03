@@ -8,6 +8,7 @@ import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SignInModal } from '../features/flist/SignInModal'
 import { ActivityLogModal } from '../features/flist/ActivityLogModal'
 import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
+import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
@@ -184,9 +185,10 @@ export function AppLayout() {
   useEffect(() => {
     window.workbench?.setMenuState?.({
       classifyCurrent: !!(activeChar && activePartner),
-      classifyCharacter: !!activeChar
+      classifyCharacter: !!activeChar,
+      flistSessionActive: !!flistSession.active
     })
-  }, [activeChar, activePartner])
+  }, [activeChar, activePartner, flistSession.active])
 
   // Native menu (electron/menu.ts) dispatches actions over IPC. Route
   // them to the existing local/store handlers so the menu items are
@@ -264,6 +266,9 @@ export function AppLayout() {
           // editor surface should put the user where the panel lives.
           if (mode !== 'logs') setMode('logs')
           toggleChatPanel()
+          break
+        case 'backup-all':
+          void useStore.getState().flistBackupAll()
           break
       }
     })
@@ -376,6 +381,7 @@ export function AppLayout() {
           </button>
         </div>
       )}
+      <BackupAllBanner />
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

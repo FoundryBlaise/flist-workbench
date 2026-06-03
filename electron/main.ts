@@ -138,6 +138,7 @@ ipcMain.handle(
 type MenuFlags = {
   classifyCurrent: boolean
   classifyCharacter: boolean
+  flistSessionActive: boolean
 }
 // Wizard-side conveniences. All three accept fixed shapes and have
 // strict filtering so a compromised renderer can't smuggle arbitrary
@@ -213,6 +214,8 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
     const item = menu.getMenuItemById(id)
     if (item) item.enabled = !!flags.classifyCharacter
   }
+  const backupAll = menu.getMenuItemById('backup-all')
+  if (backupAll) backupAll.enabled = !!flags.flistSessionActive
 })
 
 async function createWindow(): Promise<void> {

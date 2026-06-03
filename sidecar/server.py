@@ -461,6 +461,26 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                 live_payload["fetched_at"] = int(_t.time())
                 character_archive.write_live(cid, live_payload)
 
+                # Forever-history: auto-snapshot the Live JSON if the
+                # F-list content actually changed since the last backup.
+                # `fetched_at` is excluded from the dedup hash so a
+                # no-op pull doesn't bloat the backup folder. JSON
+                # snapshots are a few KB each and never pruned —
+                # explicit owner decision: every change archived.
+                try:
+                    backup_result = character_archive.save_backup_if_changed(cid)
+                except OSError as exc:
+                    backup_result = {"saved": False, "reason": f"oserror: {exc}"}
+                if backup_result.get("saved"):
+                    yield _sse_event(
+                        "backup",
+                        {
+                            "saved": True,
+                            "filename": backup_result.get("filename"),
+                            "created_at": backup_result.get("created_at"),
+                        },
+                    )
+
                 # Avatar — deterministic URL, no rate-limit-bucket cost
                 # against the API. Fire-and-forget; failures are
                 # non-fatal.
@@ -700,6 +720,155 @@ async def flist_character_backup(character_id: str) -> dict:
         return character_archive.save_backup(character_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/flist/backup-all")
+async def flist_backup_all() -> StreamingResponse:
+    """Walk the signed-in account's character roster and snapshot a
+    fresh JSON backup for every character whose F-list content has
+    changed since the last backup.
+
+    Distinct from the per-character ↻ Refresh: this endpoint does
+    JSON-only pulls (no image downloads, no avatar). The user's intent
+    is a forever change-log of profile state, not a full archive sync;
+    image bytes already on disk from prior refreshes stay put.
+
+    SSE events:
+      start     → {total}
+      character → {name, character_id?, status: 'fetching'|'saved'|
+                   'unchanged'|'error', filename?, message?}
+      done      → {total, saved, unchanged, failed}
+      error     → fatal (no session, etc.)
+    """
+
+    async def producer():
+        store = flist_api.ticket_store()
+        roster = store.characters()
+        if not roster:
+            yield _sse_event(
+                "error",
+                {
+                    "stage": "session",
+                    "message": "not signed in to F-list — sign in first",
+                },
+            )
+            return
+
+        yield _sse_event("start", {"total": len(roster)})
+        saved = 0
+        unchanged = 0
+        failed = 0
+
+        # One client for the entire sweep so we reuse the connection
+        # pool. pull_lock makes individual per-character pulls
+        # serialise behind this loop and vice versa.
+        client = flist_api._default_client()
+        try:
+            async with flist_api.pull_lock():
+                try:
+                    await flist_api.ensure_fresh_ticket(client=client)
+                except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:
+                    yield _sse_event(
+                        "error",
+                        {"stage": "ticket", "message": str(exc)},
+                    )
+                    return
+
+                import time as _t
+
+                for entry in roster:
+                    name = entry.name
+                    yield _sse_event(
+                        "character",
+                        {"name": name, "status": "fetching"},
+                    )
+                    try:
+                        payload = await flist_api.fetch_character_data(
+                            name, client=client
+                        )
+                    except flist_api.FlistApiError as exc:
+                        failed += 1
+                        yield _sse_event(
+                            "character",
+                            {
+                                "name": name,
+                                "status": "error",
+                                "message": str(exc),
+                            },
+                        )
+                        continue
+                    try:
+                        cid = _character_id_from_payload(payload)
+                    except HTTPException as exc:
+                        failed += 1
+                        yield _sse_event(
+                            "character",
+                            {
+                                "name": name,
+                                "status": "error",
+                                "message": str(exc.detail),
+                            },
+                        )
+                        continue
+                    live_payload = dict(payload)
+                    live_payload["fetched_at"] = int(_t.time())
+                    try:
+                        character_archive.write_live(cid, live_payload)
+                        result = character_archive.save_backup_if_changed(cid)
+                    except OSError as exc:
+                        failed += 1
+                        yield _sse_event(
+                            "character",
+                            {
+                                "name": name,
+                                "character_id": cid,
+                                "status": "error",
+                                "message": f"disk: {exc}",
+                            },
+                        )
+                        continue
+                    if result.get("saved"):
+                        saved += 1
+                        yield _sse_event(
+                            "character",
+                            {
+                                "name": name,
+                                "character_id": cid,
+                                "status": "saved",
+                                "filename": result.get("filename"),
+                            },
+                        )
+                    else:
+                        unchanged += 1
+                        yield _sse_event(
+                            "character",
+                            {
+                                "name": name,
+                                "character_id": cid,
+                                "status": "unchanged",
+                            },
+                        )
+        finally:
+            await client.aclose()
+
+        yield _sse_event(
+            "done",
+            {
+                "total": len(roster),
+                "saved": saved,
+                "unchanged": unchanged,
+                "failed": failed,
+            },
+        )
+
+    return StreamingResponse(
+        producer(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/flist/character/{character_id}/live")
