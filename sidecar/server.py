@@ -780,6 +780,7 @@ async def flist_backup_all() -> StreamingResponse:
         # pool. pull_lock makes individual per-character pulls
         # serialise behind this loop and vice versa.
         client = flist_api._default_client()
+        unexpected: BaseException | None = None
         try:
             async with flist_api.pull_lock():
                 try:
@@ -794,7 +795,13 @@ async def flist_backup_all() -> StreamingResponse:
                 import time as _t
 
                 for entry in roster:
-                    name = entry.name
+                    # `characters()` returns plain dicts with name/id
+                    # keys (the F-list account-characters wire shape),
+                    # not dataclasses — attribute access here would
+                    # raise AttributeError and silently end the stream.
+                    name = entry.get("name") if isinstance(entry, dict) else None
+                    if not isinstance(name, str) or not name:
+                        continue
                     yield _sse_event(
                         "character",
                         {"name": name, "status": "fetching"},
@@ -885,8 +892,21 @@ async def flist_backup_all() -> StreamingResponse:
                                 "status": "unchanged",
                             },
                         )
+        except Exception as exc:  # noqa: BLE001 — last-resort
+            # Defensive: an unhandled error inside the producer would
+            # otherwise let the SSE stream end without a terminal
+            # event, leaving the renderer's banner stuck on phase=
+            # 'running' forever. Surface anything we missed.
+            unexpected = exc
         finally:
             await client.aclose()
+
+        if unexpected is not None:
+            yield _sse_event(
+                "error",
+                {"stage": "unknown", "message": repr(unexpected)},
+            )
+            return
 
         yield _sse_event(
             "done",
