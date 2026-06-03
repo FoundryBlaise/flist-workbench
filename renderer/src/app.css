@@ -5189,9 +5189,13 @@ body {
    Working sets v2 — area 2 (FlistCharacterZone) restyling
    ============================================================ */
 
-.flist-zone-newset {
-  width: calc(100% - 16px);
+.flist-zone-setactions {
+  display: flex;
+  gap: 6px;
   margin: 0 8px 6px;
+}
+.flist-zone-newset {
+  flex: 1;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -5209,6 +5213,41 @@ body {
 .flist-zone-newset:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.flist-zone-import {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: var(--font-meta);
+  cursor: pointer;
+}
+.flist-zone-import:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.flist-zone-import:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.flist-zone-import-msg {
+  margin: 0 8px 6px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: var(--font-meta);
+  line-height: 1.35;
+}
+.flist-zone-import-msg-success {
+  background: rgba(80, 160, 90, 0.12);
+  color: #6fcc7a;
+  border: 1px solid rgba(80, 160, 90, 0.35);
+}
+.flist-zone-import-msg-error {
+  background: rgba(204, 80, 80, 0.12);
+  color: #e58484;
+  border: 1px solid rgba(204, 80, 80, 0.35);
 }
 
 .flist-zone-sep {

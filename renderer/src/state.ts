@@ -29,6 +29,7 @@ import {
   seedWorkingFromLive,
   selectWorkingSlot as flistSelectWorkingSlot,
   WORKING_SCHEMA_VERSION,
+  type FlistImportOutcome,
   type FlistSaveStatus,
   type FlistWorkingSlot,
   type SetMeta,
@@ -36,6 +37,7 @@ import {
 } from './state/flist'
 
 export type {
+  FlistImportOutcome,
   FlistSaveStatus,
   FlistWorkingSlot,
   SetMeta,
@@ -429,6 +431,31 @@ type State = {
   flistDeleteSet: (characterId: string, setId: string) => Promise<void>
   flistActivateSet: (characterId: string, setId: string) => Promise<void>
   flistActivateFromFlist: (characterId: string) => Promise<void>
+  /** Export a working set as a Workbench-native bundle ZIP. Opens the
+   *  native save dialog. Returns the bytes written and the chosen path
+   *  on success; null when the user cancels or the IPC plumbing is
+   *  unavailable (e.g. unit tests without an Electron host). */
+  flistExportSet: (
+    characterId: string,
+    setId: string
+  ) => Promise<{ path: string; bytes: number } | null>
+  /** Pick a bundle ZIP from disk and create a new working set from it.
+   *  Returns metadata about the imported set, or a discriminated result
+   *  signalling cross-character-confirmation-needed so the caller can
+   *  show the warning modal and call `flistConfirmCrossCharacterImport`
+   *  to finish the import. */
+  flistImportSet: (targetCharacterId: string) => Promise<FlistImportOutcome>
+  /** Second leg of the cross-character handshake. Sends the same bytes
+   *  back with `confirmCrossCharacter: true`. The bytes + auto-name are
+   *  remembered in module-local state between the two calls so the
+   *  modal doesn't need to thread them through. */
+  flistConfirmCrossCharacterImport: () => Promise<FlistImportOutcome>
+  /** Drop the cross-character handshake's pending bytes. Called when
+   *  the user dismisses the warning modal — without it the bytes
+   *  linger in module scope until the next import overwrites them,
+   *  which is safe today but a footgun if any code path could fire
+   *  `flistConfirmCrossCharacterImport` after the modal is closed. */
+  flistCancelPendingImport: () => void
   flistSetWorkingMaterialise: (
     characterId: string,
     setId: string
@@ -628,6 +655,25 @@ let _mappingInflight: Promise<void> | null = null
 // Mapping-list responses that arrive after a session change are
 // discarded so a prior account's data can't be reinstated.
 let _flistSessionEpoch = 0
+
+// Cross-character import handshake state. The first POST sees the
+// 422-with-source response and stashes the bytes + name + target here;
+// the second leg (`flistConfirmCrossCharacterImport`) sends the same
+// payload back with `confirmCrossCharacter: true`. Kept in module
+// scope so the renderer's modal can fire the confirm action without
+// re-prompting the file dialog. Cleared on success/cancel/error.
+let _pendingCrossCharImport: {
+  targetCharacterId: string
+  zipBytes: Uint8Array
+  name: string
+} | null = null
+
+function _defaultImportedSetName(existing: SetMeta[]): string {
+  const used = new Set(existing.map((s) => s.name))
+  let n = 1
+  while (used.has(`Imported set ${n}`)) n++
+  return `Imported set ${n}`
+}
 
 /** Apply N tombstones in a single reducer pass — keeps the bulk action
  *  cheap even for large selections and ensures one slot mutation lands
@@ -2256,6 +2302,140 @@ export const useStore = create<State>((set, get) => ({
       }
       return patch
     })
+  },
+
+  async flistExportSet(characterId, setId) {
+    const dialog = window.workbench?.saveFileDialog
+    const write = window.workbench?.writeFile
+    if (!dialog || !write) return null
+    let bundle: { bytes: Uint8Array; suggestedFilename: string }
+    try {
+      bundle = await api.flistSetExport(characterId, setId)
+    } catch (err) {
+      console.error('[flist] export bundle fetch failed:', err)
+      return null
+    }
+    const path = await dialog({
+      title: 'Export working set',
+      defaultPath: bundle.suggestedFilename,
+      filters: [
+        { name: 'Workbench set bundle', extensions: ['zip'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (!path) return null
+    const ok = await write(path, bundle.bytes)
+    if (!ok) return null
+    return { path, bytes: bundle.bytes.length }
+  },
+
+  flistCancelPendingImport() {
+    _pendingCrossCharImport = null
+  },
+
+  async flistImportSet(targetCharacterId) {
+    // Belt-and-braces: drop any leftover handshake state from a prior
+    // import the user abandoned without dismissing the modal.
+    _pendingCrossCharImport = null
+    const openDialog = window.workbench?.openFileDialog
+    const read = window.workbench?.readFile
+    if (!openDialog || !read) return { status: 'unavailable' }
+    const path = await openDialog({
+      title: 'Import working set',
+      filters: [
+        { name: 'Workbench set bundle', extensions: ['zip'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (!path) return { status: 'cancelled' }
+    const bytes = await read(path)
+    if (!bytes) return { status: 'error', message: 'could not read file' }
+    const existing = get().flistSets[targetCharacterId] ?? []
+    const name = _defaultImportedSetName(existing)
+    try {
+      const result = await api.flistSetImport(targetCharacterId, bytes, {
+        name,
+        confirmCrossCharacter: false
+      })
+      const newMeta = _setMetaFromWire(result.set)
+      set((s) => {
+        const list = s.flistSets[targetCharacterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [targetCharacterId]: [newMeta, ...list.filter((m) => m.id !== newMeta.id)]
+          }
+        }
+      })
+      await get().flistActivateSet(targetCharacterId, newMeta.id)
+      return {
+        status: 'imported',
+        set: _setMetaFromWire(result.set),
+        imageStats: {
+          added: result.image_stats.added,
+          skipped: result.image_stats.skipped
+        },
+        crossCharacter: result.cross_character
+      }
+    } catch (err) {
+      const e = err as Error & {
+        code?: string
+        source?: { characterId: string; characterName: string; setName: string }
+      }
+      if (
+        e.code === 'requires_cross_character_confirmation' &&
+        e.source
+      ) {
+        _pendingCrossCharImport = {
+          targetCharacterId,
+          zipBytes: bytes,
+          name
+        }
+        return { status: 'requires_confirmation', source: e.source }
+      }
+      _pendingCrossCharImport = null
+      return { status: 'error', message: e.message || 'import failed' }
+    }
+  },
+
+  async flistConfirmCrossCharacterImport() {
+    const pending = _pendingCrossCharImport
+    if (!pending) {
+      return { status: 'error', message: 'no pending import' }
+    }
+    try {
+      const result = await api.flistSetImport(
+        pending.targetCharacterId,
+        pending.zipBytes,
+        { name: pending.name, confirmCrossCharacter: true }
+      )
+      const newMeta = _setMetaFromWire(result.set)
+      const targetId = pending.targetCharacterId
+      set((s) => {
+        const list = s.flistSets[targetId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [targetId]: [newMeta, ...list.filter((m) => m.id !== newMeta.id)]
+          }
+        }
+      })
+      await get().flistActivateSet(targetId, newMeta.id)
+      return {
+        status: 'imported',
+        set: _setMetaFromWire(result.set),
+        imageStats: {
+          added: result.image_stats.added,
+          skipped: result.image_stats.skipped
+        },
+        crossCharacter: result.cross_character
+      }
+    } catch (err) {
+      const message = (err as Error).message || 'import failed'
+      return { status: 'error', message }
+    } finally {
+      _pendingCrossCharImport = null
+    }
   },
 
   async flistSetWorkingMaterialise(characterId, setId) {

@@ -77,6 +77,18 @@ export type SetMetaWire = {
   updated_at: number
 }
 
+export type FlistSetImportResult = {
+  set: SetMetaWire
+  source: {
+    character_id: string
+    character_name: string
+    set_id: string
+    set_name: string
+  }
+  image_stats: { added: number; skipped: number }
+  cross_character: boolean
+}
+
 export type SetsListResponseWire = {
   sets: SetMetaWire[]
   active_set_id: string | null
@@ -945,6 +957,103 @@ export const api = {
     get<{ payload: Record<string, unknown>; etag: string | null }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`
     ),
+  /** Download the Workbench-native bundle for a working set. Returns
+   *  the raw bytes + the suggested filename pulled out of the
+   *  `Content-Disposition` header so the caller can hand a clean
+   *  default-name to the save dialog. */
+  flistSetExport: async (
+    characterId: string | number,
+    setId: string
+  ): Promise<{ bytes: Uint8Array; suggestedFilename: string }> => {
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/export`
+    )
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    const buf = new Uint8Array(await res.arrayBuffer())
+    // Parse `filename="…"` out of Content-Disposition. Falls back to a
+    // generic name; the renderer will overlay the character + set name
+    // on top of that anyway.
+    const cd = res.headers.get('content-disposition') ?? ''
+    const m = /filename="([^"]+)"/.exec(cd)
+    return {
+      bytes: buf,
+      suggestedFilename: m ? m[1] : 'workbench-set.zip'
+    }
+  },
+  /** Upload a bundle and create a new working set under
+   *  `characterId`. The cross-character handshake is a 422 with
+   *  `detail.code === 'requires_cross_character_confirmation'`; the
+   *  caller catches that, shows a confirm modal, and retries with
+   *  `confirmCrossCharacter: true`. */
+  flistSetImport: async (
+    characterId: string | number,
+    zipBytes: Uint8Array,
+    body: { name: string; confirmCrossCharacter?: boolean }
+  ): Promise<FlistSetImportResult> => {
+    const form = new FormData()
+    form.append(
+      'zip',
+      new Blob([new Uint8Array(zipBytes)], { type: 'application/zip' }),
+      'bundle.zip'
+    )
+    form.append('name', body.name)
+    form.append(
+      'confirm_cross_character',
+      body.confirmCrossCharacter ? 'true' : 'false'
+    )
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/import`,
+      { method: 'POST', body: form }
+    )
+    if (res.status === 422) {
+      const errBody = (await res.json().catch(() => null)) as
+        | {
+            detail?:
+              | string
+              | {
+                  code?: string
+                  source?: {
+                    character_id?: string
+                    character_name?: string
+                    set_name?: string
+                  }
+                }
+          }
+        | null
+      const detail = errBody?.detail
+      if (
+        detail &&
+        typeof detail === 'object' &&
+        detail.code === 'requires_cross_character_confirmation'
+      ) {
+        const err = new Error(
+          'requires_cross_character_confirmation'
+        ) as Error & {
+          code: 'requires_cross_character_confirmation'
+          source: {
+            characterId: string
+            characterName: string
+            setName: string
+          }
+        }
+        err.code = 'requires_cross_character_confirmation'
+        err.source = {
+          characterId: String(detail.source?.character_id ?? ''),
+          characterName: String(detail.source?.character_name ?? ''),
+          setName: String(detail.source?.set_name ?? '')
+        }
+        throw err
+      }
+      const msg = typeof detail === 'string' ? detail : 'invalid bundle'
+      throw new Error(msg)
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    return (await res.json()) as FlistSetImportResult
+  },
   flistSetPayloadPut: async (
     characterId: string | number,
     setId: string,

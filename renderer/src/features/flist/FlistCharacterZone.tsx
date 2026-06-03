@@ -3,6 +3,7 @@ import { selectWorkingSlot, useStore } from '../../state'
 import type { SetMeta } from '../../state/flist'
 import { ContextMenu } from './working-sets/ContextMenu'
 import { ConfirmModal } from './working-sets/ConfirmModal'
+import { CrossCharacterImportModal } from './working-sets/CrossCharacterImportModal'
 import { NameDialog } from './working-sets/NameDialog'
 
 function relativeTime(epoch: number | null | undefined): string {
@@ -75,6 +76,12 @@ export function FlistCharacterZone() {
   const deleteSet = useStore((s) => s.flistDeleteSet)
   const activateSet = useStore((s) => s.flistActivateSet)
   const activateFromFlist = useStore((s) => s.flistActivateFromFlist)
+  const exportSet = useStore((s) => s.flistExportSet)
+  const importSet = useStore((s) => s.flistImportSet)
+  const confirmCrossCharacterImport = useStore(
+    (s) => s.flistConfirmCrossCharacterImport
+  )
+  const cancelPendingImport = useStore((s) => s.flistCancelPendingImport)
 
   // TODO(working-sets v2): the four actions below were the inline-button
   // surfaces removed from area 2 (Export for restore, Copy as new draft,
@@ -94,6 +101,29 @@ export function FlistCharacterZone() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [ctx, setCtx] = useState<CtxAnchor | null>(null)
+  const [crossCharImport, setCrossCharImport] = useState<{
+    characterName: string
+    setName: string
+  } | null>(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importMessage, setImportMessage] = useState<{
+    kind: 'success' | 'error'
+    text: string
+  } | null>(null)
+  // Drop any in-flight import state when the active character switches
+  // — the modal and the module-scope handshake state are both keyed to
+  // the previous character and would materialise under the wrong one.
+  useEffect(() => {
+    setCrossCharImport(null)
+    setImportMessage(null)
+    cancelPendingImport()
+  }, [activeId, cancelPendingImport])
+  // Auto-clear import banners after 6s so they don't accumulate.
+  useEffect(() => {
+    if (!importMessage) return
+    const t = setTimeout(() => setImportMessage(null), 6000)
+    return () => clearTimeout(t)
+  }, [importMessage])
 
   const defaultName = useMemo(() => defaultNewSetName(sets), [sets])
 
@@ -132,6 +162,12 @@ export function FlistCharacterZone() {
           void duplicateSet(activeId, s.id, copyNameOf(s.name, sets))
         }
       },
+      {
+        label: 'Export as ZIP…',
+        onSelect: () => {
+          void exportSet(activeId, s.id)
+        }
+      },
       { label: '', onSelect: () => {}, divider: true },
       {
         label: 'Delete…',
@@ -139,6 +175,59 @@ export function FlistCharacterZone() {
         onSelect: () => setDeleteTarget({ id: s.id, name: s.name })
       }
     ]
+  }
+
+  const handleImport = async (): Promise<void> => {
+    if (importBusy) return
+    setImportBusy(true)
+    setImportMessage(null)
+    try {
+      const outcome = await importSet(activeId)
+      if (outcome.status === 'requires_confirmation') {
+        setCrossCharImport({
+          characterName: outcome.source.characterName,
+          setName: outcome.source.setName
+        })
+      } else if (outcome.status === 'imported') {
+        const { added, skipped } = outcome.imageStats
+        setImportMessage({
+          kind: 'success',
+          text:
+            added === 0 && skipped === 0
+              ? `Imported "${outcome.set.name}".`
+              : `Imported "${outcome.set.name}" — ${added} new image${added === 1 ? '' : 's'}, ${skipped} already on disk.`
+        })
+      } else if (outcome.status === 'error') {
+        setImportMessage({ kind: 'error', text: outcome.message })
+      } else if (outcome.status === 'unavailable') {
+        setImportMessage({
+          kind: 'error',
+          text: 'Import is unavailable — file dialogs require the desktop build.'
+        })
+      }
+      // 'cancelled' is the OS dialog dismiss; deliberately silent.
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  const handleCrossCharConfirm = async (): Promise<void> => {
+    setCrossCharImport(null)
+    setImportBusy(true)
+    try {
+      const outcome = await confirmCrossCharacterImport()
+      if (outcome.status === 'imported') {
+        const { added, skipped } = outcome.imageStats
+        setImportMessage({
+          kind: 'success',
+          text: `Imported "${outcome.set.name}" — ${added} new image${added === 1 ? '' : 's'}, ${skipped} already on disk.`
+        })
+      } else if (outcome.status === 'error') {
+        setImportMessage({ kind: 'error', text: outcome.message })
+      }
+    } finally {
+      setImportBusy(false)
+    }
   }
 
   return (
@@ -189,16 +278,43 @@ export function FlistCharacterZone() {
         </div>
       )}
 
-      <button
-        type="button"
-        className="flist-zone-newset"
-        onClick={() => setCreateOpen(true)}
-        disabled={!hasLive}
-        title={hasLive ? undefined : 'Pull this character first'}
-        data-testid="flist-zone-newset"
-      >
-        + New working set
-      </button>
+      <div className="flist-zone-setactions">
+        <button
+          type="button"
+          className="flist-zone-newset"
+          onClick={() => setCreateOpen(true)}
+          disabled={!hasLive}
+          title={hasLive ? undefined : 'Pull this character first'}
+          data-testid="flist-zone-newset"
+        >
+          + New working set
+        </button>
+        <button
+          type="button"
+          className="flist-zone-import"
+          onClick={() => {
+            void handleImport()
+          }}
+          disabled={importBusy}
+          title="Import a Workbench-native working set bundle (.zip)"
+          data-testid="flist-zone-import"
+        >
+          {importBusy ? 'Importing…' : 'Import…'}
+        </button>
+      </div>
+      {importMessage && (
+        <div
+          className={
+            importMessage.kind === 'success'
+              ? 'flist-zone-import-msg flist-zone-import-msg-success'
+              : 'flist-zone-import-msg flist-zone-import-msg-error'
+          }
+          role={importMessage.kind === 'error' ? 'alert' : 'status'}
+          data-testid="flist-zone-import-msg"
+        >
+          {importMessage.text}
+        </div>
+      )}
 
       <ul className="flist-zone-sets" data-testid="flist-zone-sets">
         <li
@@ -307,6 +423,19 @@ export function FlistCharacterZone() {
           y={ctx.y}
           items={ctxItems(ctx.setId)}
           onClose={() => setCtx(null)}
+        />
+      )}
+      {crossCharImport && (
+        <CrossCharacterImportModal
+          source={crossCharImport}
+          targetCharacterName={name}
+          onCancel={() => {
+            setCrossCharImport(null)
+            cancelPendingImport()
+          }}
+          onConfirm={() => {
+            void handleCrossCharConfirm()
+          }}
         />
       )}
     </div>
