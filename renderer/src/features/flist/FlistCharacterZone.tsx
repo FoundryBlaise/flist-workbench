@@ -147,6 +147,17 @@ export function FlistCharacterZone() {
     && integrity.missing > 0
   const hasLive = Boolean(live)
   const viewingFlist = activeSetId === null
+  // F-list's character-data.php response carries `updated_at` (unix
+  // epoch of the last profile edit). We round-trip it inside live.json,
+  // so the renderer can surface "F-list edited Xd ago" without a
+  // dedicated state field. `updatedAt` is a defensive fallback in case
+  // a future F-list API version switches casing.
+  const flistUpdatedAt =
+    live && typeof live === 'object'
+      ? (((live as Record<string, unknown>).updated_at as number | undefined)
+        ?? ((live as Record<string, unknown>).updatedAt as number | undefined)
+        ?? null)
+      : null
 
   const ctxItems = (setId: string) => {
     const s = sets.find((x) => x.id === setId)
@@ -334,6 +345,14 @@ export function FlistCharacterZone() {
             <span className="flist-zone-setrow-name">From F-list</span>
             <span className="flist-zone-setrow-meta">
               {hasLive ? `pulled ${relativeTime(lastPulledAt)}` : 'never pulled'}
+              {hasLive && flistUpdatedAt ? (
+                <>
+                  {' · '}
+                  <span title="F-list profile last edited (from the API)">
+                    F-list edited {relativeTime(flistUpdatedAt)}
+                  </span>
+                </>
+              ) : null}
             </span>
           </div>
         </li>

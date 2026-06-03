@@ -20,6 +20,7 @@ export type MenuAction =
   | 'ai-setup'
   | 'flist-activity'
   | 'restore-userscript-help'
+  | 'backup-all'
 
 // Lives in the main process because it touches shell.openPath; we
 // resolve the path from the sidecar so user_data_dir() stays the one
@@ -196,6 +197,12 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           click: () => send(getWindow(), 'chat-toggle')
         },
         { type: 'separator' },
+        {
+          id: 'backup-all',
+          label: 'Back up all characters',
+          enabled: false,
+          click: () => send(getWindow(), 'backup-all')
+        },
         {
           id: 'open-classify-log',
           label: 'Open Classify Failure Log…',

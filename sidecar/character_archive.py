@@ -188,11 +188,77 @@ def save_backup(character_id: int | str) -> dict[str, Any]:
     return {"path": str(target), "created_at": now, "filename": target.name}
 
 
-_BACKUP_FILE_RE = re.compile(r"^(\d+)(?:-\d+)?\.json$")
+# Fields that don't represent F-list-side state — excluding them from
+# the content hash means "pulled twice in a row with no F-list change"
+# doesn't bloat the backup directory with identical snapshots. The
+# pull stamps `fetched_at` every time, so without this it would never
+# dedup.
+_BACKUP_DEDUP_EXCLUDE = {"fetched_at"}
+
+
+def _live_content_hash(live: dict[str, Any]) -> str:
+    """Canonical-JSON sha256 of `live`, ignoring fields that aren't
+    really part of the F-list profile state (currently just
+    `fetched_at`). Used by `save_backup_if_changed` to skip identical
+    snapshots after a no-op pull."""
+    import hashlib
+
+    filtered = {k: v for k, v in live.items() if k not in _BACKUP_DEDUP_EXCLUDE}
+    canonical = json.dumps(filtered, sort_keys=True, ensure_ascii=False).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def latest_backup_content_hash(character_id: int | str) -> str | None:
+    """Content-hash of the most recent backup, or None when no backups
+    exist (or the latest is unreadable). Hashes the same shape as
+    `_live_content_hash` so callers can compare in either direction."""
+    backups = list_backups(character_id)
+    if not backups:
+        return None
+    latest = read_backup(character_id, backups[0]["filename"])
+    if latest is None:
+        return None
+    return _live_content_hash(latest)
+
+
+def save_backup_if_changed(character_id: int | str) -> dict[str, Any]:
+    """Save a backup *only* when the current Live differs in content
+    from the latest existing backup. Returns one of:
+
+      `{saved: True, ...save_backup payload}` — wrote a new snapshot.
+      `{saved: False, reason: 'unchanged'}`   — Live matches latest.
+      `{saved: False, reason: 'no_live'}`     — Live missing.
+
+    Callers (the pull SSE handler, `/backup-all`) use this to keep a
+    forever-history of JSON deltas without thrashing the disk on every
+    pull. Backups are never pruned — JSON snapshots are a few KB and
+    the user explicitly wants every change archived.
+    """
+    live = read_live(character_id)
+    if live is None:
+        return {"saved": False, "reason": "no_live"}
+    current_hash = _live_content_hash(live)
+    prior_hash = latest_backup_content_hash(character_id)
+    if prior_hash == current_hash:
+        return {"saved": False, "reason": "unchanged"}
+    snapshot = save_backup(character_id)
+    return {"saved": True, **snapshot}
+
+
+_BACKUP_FILE_RE = re.compile(r"^(\d+)(?:-(\d+))?\.json$")
 
 
 def list_backups(character_id: int | str) -> list[dict[str, Any]]:
-    """List backups newest first. Each entry: `{filename, created_at, size}`."""
+    """List backups newest first. Each entry: `{filename, created_at, size}`.
+
+    When two backups share the same epoch (same-second collision, broken
+    by the `-N` suffix counter in `save_backup`), the higher-N file is
+    the more recent write — sort key includes the suffix so the
+    forever-history dedup check always compares against the *truly*
+    latest snapshot.
+    """
     out: list[dict[str, Any]] = []
     p = backups_dir(character_id)
     for entry in p.iterdir():
@@ -205,14 +271,18 @@ def list_backups(character_id: int | str) -> list[dict[str, Any]]:
             stat = entry.stat()
         except OSError:
             continue
+        suffix = int(m.group(2)) if m.group(2) else 0
         out.append(
             {
                 "filename": entry.name,
                 "created_at": int(m.group(1)),
+                "_suffix": suffix,
                 "size": stat.st_size,
             }
         )
-    out.sort(key=lambda r: r["created_at"], reverse=True)
+    out.sort(key=lambda r: (r["created_at"], r["_suffix"]), reverse=True)
+    for row in out:
+        row.pop("_suffix", None)
     return out
 
 

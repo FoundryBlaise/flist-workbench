@@ -245,6 +245,19 @@ type State = {
     etag: string | null
     error: string | null
   }
+  /** Tools → "Back up all characters" progress. `running` while the SSE
+   *  stream is open; the banner reads currentName + (done/total) live,
+   *  then summary `phase = 'done'` for 6s before auto-clearing. */
+  flistBackupAllStatus: {
+    phase: 'idle' | 'running' | 'done' | 'error'
+    total: number
+    done: number
+    saved: number
+    unchanged: number
+    failed: number
+    currentName: string | null
+    errorMessage: string | null
+  }
   /** "F-list-side change in N fields since you started editing — review."
    *  Set after a Live re-pull when the new Live differs from what the
    *  working copy is showing on a path the user has NOT edited. Keyed
@@ -456,6 +469,10 @@ type State = {
    *  which is safe today but a footgun if any code path could fire
    *  `flistConfirmCrossCharacterImport` after the modal is closed. */
   flistCancelPendingImport: () => void
+  /** Tools → "Back up all characters". Walks the signed-in account
+   *  roster, pulls each character's JSON, snapshots when changed.
+   *  Single-flight: a second call while one is running is a no-op. */
+  flistBackupAll: () => Promise<void>
   flistSetWorkingMaterialise: (
     characterId: string,
     setId: string
@@ -916,6 +933,16 @@ export const useStore = create<State>((set, get) => ({
     fetchedAt: null,
     etag: null,
     error: null
+  },
+  flistBackupAllStatus: {
+    phase: 'idle',
+    total: 0,
+    done: 0,
+    saved: 0,
+    unchanged: 0,
+    failed: 0,
+    currentName: null,
+    errorMessage: null
   },
   flistDriftBanners: {},
   flistResetUndo: null,
@@ -2331,6 +2358,122 @@ export const useStore = create<State>((set, get) => ({
 
   flistCancelPendingImport() {
     _pendingCrossCharImport = null
+  },
+
+  async flistBackupAll() {
+    if (get().flistBackupAllStatus.phase === 'running') return
+    set({
+      flistBackupAllStatus: {
+        phase: 'running',
+        total: 0,
+        done: 0,
+        saved: 0,
+        unchanged: 0,
+        failed: 0,
+        currentName: null,
+        errorMessage: null
+      }
+    })
+    try {
+      await api.flistBackupAll({
+        onStart: ({ total }) => {
+          set((s) => ({
+            flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
+          }))
+        },
+        onCharacter: (info) => {
+          set((s) => {
+            const cur = s.flistBackupAllStatus
+            if (info.status === 'fetching') {
+              return {
+                flistBackupAllStatus: { ...cur, currentName: info.name }
+              }
+            }
+            // Per-character terminal status: bump counters + done.
+            const next = {
+              ...cur,
+              done: cur.done + 1,
+              saved: cur.saved + (info.status === 'saved' ? 1 : 0),
+              unchanged:
+                cur.unchanged + (info.status === 'unchanged' ? 1 : 0),
+              failed: cur.failed + (info.status === 'error' ? 1 : 0)
+            }
+            return { flistBackupAllStatus: next }
+          })
+          // Mirror saved snapshots into the local archive's backup list
+          // so the renderer's per-character backup picker shows them
+          // without a page reload. Cheap re-fetch.
+          if (info.status === 'saved' && info.character_id) {
+            void api
+              .flistBackups(info.character_id)
+              .then(({ backups }) => {
+                set((s) => {
+                  const slot = s.flistArchive[info.character_id!]
+                  if (!slot) return {}
+                  return {
+                    flistArchive: {
+                      ...s.flistArchive,
+                      [info.character_id!]: { ...slot, backups }
+                    }
+                  }
+                })
+              })
+              .catch(() => {
+                // Non-fatal; the next time the user opens the backup
+                // picker for this character, the fresh list lands.
+              })
+          }
+        },
+        onDone: () => {
+          set((s) => ({
+            flistBackupAllStatus: {
+              ...s.flistBackupAllStatus,
+              phase: 'done',
+              currentName: null
+            }
+          }))
+          // Auto-clear the summary banner after 6s so it doesn't
+          // linger past usefulness.
+          setTimeout(() => {
+            const cur = get().flistBackupAllStatus
+            if (cur.phase === 'done') {
+              set({
+                flistBackupAllStatus: {
+                  phase: 'idle',
+                  total: 0,
+                  done: 0,
+                  saved: 0,
+                  unchanged: 0,
+                  failed: 0,
+                  currentName: null,
+                  errorMessage: null
+                }
+              })
+            }
+          }, 6000)
+        },
+        onError: ({ message }) => {
+          set((s) => ({
+            flistBackupAllStatus: {
+              ...s.flistBackupAllStatus,
+              phase: 'error',
+              errorMessage: message,
+              currentName: null
+            }
+          }))
+        }
+      })
+    } catch (err) {
+      const message = (err as Error).message ?? 'backup-all failed'
+      set((s) => ({
+        flistBackupAllStatus: {
+          ...s.flistBackupAllStatus,
+          phase: 'error',
+          errorMessage: message,
+          currentName: null
+        }
+      }))
+    }
   },
 
   async flistImportSet(targetCharacterId) {

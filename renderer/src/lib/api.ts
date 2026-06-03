@@ -124,6 +124,26 @@ export type FlistPullHandlers = {
   onError?: (info: { stage: string; message: string }) => void
 }
 
+export type FlistBackupAllCharacterEvent = {
+  name: string
+  character_id?: string
+  status: 'fetching' | 'saved' | 'unchanged' | 'error'
+  filename?: string
+  message?: string
+}
+
+export type FlistBackupAllHandlers = {
+  onStart?: (info: { total: number }) => void
+  onCharacter?: (info: FlistBackupAllCharacterEvent) => void
+  onDone?: (info: {
+    total: number
+    saved: number
+    unchanged: number
+    failed: number
+  }) => void
+  onError?: (info: { stage: string; message: string }) => void
+}
+
 export type Profile = {
   name: string
   avatar_url: string | null
@@ -1131,6 +1151,49 @@ export const api = {
     ),
   flistExportZipUrl: (characterId: string | number) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
+  /** Streams the Backup-all SSE protocol. Tools → "Back up all
+   *  characters" walks the signed-in account roster, pulls each
+   *  character (JSON only — no images), and snapshots a backup when
+   *  the F-list content has actually changed. Per-character status is
+   *  surfaced as `character` events the renderer's progress banner
+   *  renders. */
+  flistBackupAll: async (
+    handlers: FlistBackupAllHandlers,
+    opts?: ApiOptions
+  ): Promise<void> => {
+    const res = await fetch(`${base()}/flist/backup-all`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream' },
+      signal: opts?.signal
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          dispatchBackupAllStream(block, handlers)
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) dispatchBackupAllStream(buffer, handlers)
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // best-effort
+      }
+    }
+  },
   flistPull: async (
     name: string,
     handlers: FlistPullHandlers,
@@ -1331,6 +1394,42 @@ function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
       break
     case 'done':
       handlers.onDone?.(parsed as Parameters<NonNullable<FlistPullHandlers['onDone']>>[0])
+      break
+    case 'error':
+      handlers.onError?.(parsed as { stage: string; message: string })
+      break
+  }
+}
+
+function dispatchBackupAllStream(
+  block: string,
+  handlers: FlistBackupAllHandlers
+): void {
+  let event: string | null = null
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
+    else if (line.startsWith('data:'))
+      dataLines.push(line.slice('data:'.length).trim())
+  }
+  if (!event) return
+  let parsed: unknown = {}
+  try {
+    parsed = JSON.parse(dataLines.join('\n'))
+  } catch {
+    parsed = {}
+  }
+  switch (event) {
+    case 'start':
+      handlers.onStart?.(parsed as { total: number })
+      break
+    case 'character':
+      handlers.onCharacter?.(parsed as FlistBackupAllCharacterEvent)
+      break
+    case 'done':
+      handlers.onDone?.(
+        parsed as Parameters<NonNullable<FlistBackupAllHandlers['onDone']>>[0]
+      )
       break
     case 'error':
       handlers.onError?.(parsed as { stage: string; message: string })

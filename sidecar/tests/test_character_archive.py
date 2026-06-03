@@ -90,6 +90,55 @@ def test_read_backup_rejects_invalid_filename():
     assert character_archive.read_backup("123", "foo.txt") is None
 
 
+def test_save_backup_if_changed_skips_when_only_fetched_at_changed():
+    cid = "8888"
+    character_archive.write_live(cid, {"description": "v1", "fetched_at": 100})
+    first = character_archive.save_backup_if_changed(cid)
+    assert first["saved"] is True
+    character_archive.write_live(cid, {"description": "v1", "fetched_at": 200})
+    second = character_archive.save_backup_if_changed(cid)
+    assert second == {"saved": False, "reason": "unchanged"}
+    assert len(character_archive.list_backups(cid)) == 1
+
+
+def test_save_backup_if_changed_writes_when_content_differs():
+    cid = "8889"
+    character_archive.write_live(cid, {"description": "v1", "fetched_at": 100})
+    character_archive.save_backup_if_changed(cid)
+    character_archive.write_live(cid, {"description": "v2", "fetched_at": 200})
+    second = character_archive.save_backup_if_changed(cid)
+    assert second["saved"] is True
+    third = character_archive.save_backup_if_changed(cid)
+    assert third == {"saved": False, "reason": "unchanged"}
+    assert len(character_archive.list_backups(cid)) == 2
+
+
+def test_save_backup_if_changed_no_live():
+    assert character_archive.save_backup_if_changed("nope") == {
+        "saved": False,
+        "reason": "no_live",
+    }
+
+
+def test_list_backups_orders_same_second_writes_newest_first():
+    """Same-epoch collisions are broken by the `-N` suffix counter. The
+    dedup check in `save_backup_if_changed` depends on `list_backups`
+    surfacing the most-recently-written row first even when several
+    backups share an epoch."""
+    cid = "7777"
+    character_archive.write_live(cid, {"description": "a", "fetched_at": 100})
+    character_archive.save_backup(cid)
+    character_archive.write_live(cid, {"description": "b", "fetched_at": 100})
+    character_archive.save_backup(cid)
+    character_archive.write_live(cid, {"description": "c", "fetched_at": 100})
+    character_archive.save_backup(cid)
+    rows = character_archive.list_backups(cid)
+    assert rows[0]["filename"].endswith("-2.json")
+    assert rows[1]["filename"].endswith("-1.json")
+    # The third row is the no-suffix one written first.
+    assert "-" not in rows[2]["filename"].rsplit(".json", 1)[0]
+
+
 def test_merge_roster_keeps_case_only_distinct_ids():
     # F-list permits two characters whose names differ only in case.
     # Old lowercased-name keying silently collapsed them into one row
