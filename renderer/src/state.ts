@@ -1050,6 +1050,12 @@ export const useStore = create<State>((set, get) => ({
       // lands the user on their default rather than the picker's
       // empty state. Only fires when nothing is currently selected
       // and the saved id still resolves against the fresh roster.
+      // Route through selectCharacter(name) — going through the lower
+      // flistSelectCharacter would only set flistActiveCharacterId and
+      // leave activeCharacter (the picker chip's source) untouched,
+      // so the chip and the working-sets zone end up on different
+      // characters when loadCharacters() races in and defaults
+      // activeCharacter to characters[0].
       if (get().flistActiveCharacterId === null) {
         let savedId: string | null = null
         try {
@@ -1058,9 +1064,9 @@ export const useStore = create<State>((set, get) => ({
           savedId = null
         }
         if (savedId) {
-          const known = characters.some((c) => String(c.id ?? '') === savedId)
-          if (known) {
-            await get().flistSelectCharacter(savedId)
+          const entry = characters.find((c) => String(c.id ?? '') === savedId)
+          if (entry) {
+            get().selectCharacter(entry.name)
           }
         }
       }
