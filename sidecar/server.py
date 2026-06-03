@@ -392,10 +392,21 @@ async def flist_mapping_list(force: bool = False) -> dict:
 
 
 def _character_id_from_payload(payload: dict) -> str:
+    """Extract + validate the character id from a `character-data.php`
+    response. Defense-in-depth: the id is about to become a directory
+    name under `<userdata>/characters/`, so we whitelist the shape even
+    though F-list always returns an integer in practice. Without this,
+    a hostile or buggy upstream value could escape the archive root."""
     cid = payload.get("id")
     if cid is None:
         raise HTTPException(status_code=502, detail="API response missing character id")
-    return str(cid)
+    cid_str = str(cid)
+    if not _CHARACTER_ID_RE.match(cid_str):
+        raise HTTPException(
+            status_code=502,
+            detail=f"API response carries unsafe character id: {cid_str!r}",
+        )
+    return cid_str
 
 
 @app.post("/flist/character/{name}/pull")
@@ -759,6 +770,12 @@ async def flist_backup_all() -> StreamingResponse:
         unchanged = 0
         failed = 0
 
+        # `queued` mirrors the per-character pull protocol — if a
+        # second window's backup-all (or a long ↻ Refresh) is already
+        # holding pull_lock, the renderer's banner should reflect the
+        # wait instead of looking frozen on `(0/N)`.
+        yield _sse_event("queued", {})
+
         # One client for the entire sweep so we reuse the connection
         # pool. pull_lock makes individual per-character pulls
         # serialise behind this loop and vice versa.
@@ -786,6 +803,26 @@ async def flist_backup_all() -> StreamingResponse:
                         payload = await flist_api.fetch_character_data(
                             name, client=client
                         )
+                    except (
+                        flist_api.TicketRequired,
+                        flist_api.AuthFailure,
+                        flist_api.RateLimited,
+                    ) as exc:
+                        # Session-wide failure mid-sweep — pointless to
+                        # keep iterating because every remaining char
+                        # would hit the same wall. Emit a fatal error
+                        # and abort. Renderer's onError flips the banner
+                        # to phase='error' with this message.
+                        stage = (
+                            "rate-limited"
+                            if isinstance(exc, flist_api.RateLimited)
+                            else "ticket"
+                        )
+                        yield _sse_event(
+                            "error",
+                            {"stage": stage, "message": str(exc)},
+                        )
+                        return
                     except flist_api.FlistApiError as exc:
                         failed += 1
                         yield _sse_event(

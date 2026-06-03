@@ -134,6 +134,7 @@ export type FlistBackupAllCharacterEvent = {
 
 export type FlistBackupAllHandlers = {
   onStart?: (info: { total: number }) => void
+  onQueued?: () => void
   onCharacter?: (info: FlistBackupAllCharacterEvent) => void
   onDone?: (info: {
     total: number
@@ -1422,6 +1423,9 @@ function dispatchBackupAllStream(
   switch (event) {
     case 'start':
       handlers.onStart?.(parsed as { total: number })
+      break
+    case 'queued':
+      handlers.onQueued?.()
       break
     case 'character':
       handlers.onCharacter?.(parsed as FlistBackupAllCharacterEvent)

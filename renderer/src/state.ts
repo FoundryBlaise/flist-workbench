@@ -2381,6 +2381,14 @@ export const useStore = create<State>((set, get) => ({
             flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
           }))
         },
+        onQueued: () => {
+          set((s) => ({
+            flistBackupAllStatus: {
+              ...s.flistBackupAllStatus,
+              currentName: 'waiting for another pull to finish…'
+            }
+          }))
+        },
         onCharacter: (info) => {
           set((s) => {
             const cur = s.flistBackupAllStatus
