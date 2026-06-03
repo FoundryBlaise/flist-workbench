@@ -1857,7 +1857,7 @@ export const useStore = create<State>((set, get) => ({
           }
           // Mirror into the per-set cache so any consumer reading
           // flistSetWorking[setId] sees the freshest payload, and bump
-          // the set's updatedAt so the "saved Xm ago" suffix refreshes.
+          // the set's updatedAt so the "last changed Xm ago" suffix refreshes.
           const setsList = s.flistSets[characterId] ?? []
           return {
             flistWorking: { ...s.flistWorking, [characterId]: nextSlot },

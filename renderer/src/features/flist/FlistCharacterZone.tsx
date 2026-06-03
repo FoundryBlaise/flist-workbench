@@ -229,7 +229,7 @@ export function FlistCharacterZone() {
           const showDirty = isActive && workingSlot?.unsavedDirty
           const meta = showDirty
             ? 'unsaved'
-            : `saved ${relativeTime(s.updatedAt)}`
+            : `last changed ${relativeTime(s.updatedAt)}`
           return (
             <li
               key={s.id}
