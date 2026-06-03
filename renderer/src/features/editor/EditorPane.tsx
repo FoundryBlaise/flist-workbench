@@ -140,7 +140,7 @@ export function EditorPane() {
         >
           {content.length} chars (source)
         </span>
-        {!readOnly && (
+        {!readOnly && activeDocId !== null && (
           <div className="editor-doc-actions">
             <button
               type="button"
