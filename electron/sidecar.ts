@@ -1,8 +1,37 @@
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, ChildProcess } from 'node:child_process'
 import { app } from 'electron'
 import { join } from 'node:path'
 
 let proc: ChildProcess | null = null
+let exitHandlersInstalled = false
+
+// Catch every termination path Electron's `before-quit` doesn't:
+// terminal Ctrl+C against `npm run dev` (electron-vite kills Electron
+// abruptly), main-process uncaught exceptions, parent SIGHUP from a
+// closed terminal, etc. process.on('exit') is sync-only — which is
+// fine because stopSidecar is now sync (spawnSync on Windows, signal
+// on POSIX).
+function installExitHandlers() {
+  if (exitHandlersInstalled) return
+  exitHandlersInstalled = true
+  process.on('exit', () => {
+    try {
+      stopSidecar()
+    } catch {
+      /* nothing useful to do during exit */
+    }
+  })
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => {
+      try {
+        stopSidecar()
+      } catch {
+        /* nothing useful to do during shutdown */
+      }
+      process.exit(signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 129)
+    })
+  }
+}
 
 // Packaged builds default to 8770 so they don't collide with the dev
 // container's :8765 forward on the maintainer's machine.
@@ -15,6 +44,7 @@ process.env['SIDECAR_PORT'] = String(PORT)
 export const sidecarUrl = `http://127.0.0.1:${PORT}`
 
 export async function startSidecar(): Promise<void> {
+  installExitHandlers()
   if (app.isPackaged) {
     const exe = join(process.resourcesPath, 'sidecar.exe')
     proc = spawn(exe, [], {
@@ -28,17 +58,29 @@ export async function startSidecar(): Promise<void> {
     // adds a Python dep doesn't crash the next run with a confusing
     // ModuleNotFoundError. Cost is negligible when nothing's stale.
     await runUvSync(sidecarDir)
-    // detached: true puts the sidecar into its own process group on
-    // POSIX. `uv run` shells out to uvicorn → python; killing only
-    // `uv` leaves the python grandchild bound to the port. With its
-    // own pgid we can kill the entire tree at quit time. No effect
-    // on Windows (no pgid), which uses a different stop path below.
-    proc = spawn('uv', ['run', 'uvicorn', 'server:app', '--port', String(PORT)], {
-      cwd: sidecarDir,
-      env: { ...process.env, SIDECAR_PORT: String(PORT) },
-      stdio: ['ignore', 'inherit', 'inherit'],
-      detached: process.platform !== 'win32'
-    })
+    // Skip the `uv run` indirection and invoke the venv's python
+    // directly. Going through `uv run` builds a multi-layer chain
+    // (uv.exe → venv launcher → uv-managed cpython on Windows) that
+    // taskkill /T won't always walk to completion — multiple python
+    // processes can survive shutdown. Direct spawn makes Electron the
+    // immediate parent of the single python process running uvicorn.
+    //
+    // detached: true on POSIX puts the python in its own process
+    // group so we can SIGTERM the whole group from stopSidecar.
+    const pythonExe =
+      process.platform === 'win32'
+        ? join(sidecarDir, '.venv', 'Scripts', 'python.exe')
+        : join(sidecarDir, '.venv', 'bin', 'python')
+    proc = spawn(
+      pythonExe,
+      ['-m', 'uvicorn', 'server:app', '--port', String(PORT)],
+      {
+        cwd: sidecarDir,
+        env: { ...process.env, SIDECAR_PORT: String(PORT) },
+        stdio: ['ignore', 'inherit', 'inherit'],
+        detached: process.platform !== 'win32'
+      }
+    )
   }
 
   proc.on('exit', (code) => {
@@ -55,15 +97,19 @@ export function stopSidecar(): void {
     return
   }
   if (process.platform === 'win32') {
-    // taskkill /T kills the whole tree, including the uv-spawned
-    // python grandchild that survives a plain proc.kill().
-    spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
-      stdio: 'ignore'
+    // taskkill /T walks parent-PID descendants. With direct python
+    // spawn the chain is just Electron → python.exe, so /T is mostly
+    // defensive — but uvicorn may spawn workers, and we want every
+    // descendant gone. spawnSync so app.quit() / process.exit() can't
+    // race ahead of the kill.
+    spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true
     })
   } else {
-    // Negative pid → SIGTERM to the whole process group, which
-    // includes the python grandchild that `uv run` would otherwise
-    // orphan when we kill only the `uv` parent.
+    // Negative pid → SIGTERM to the whole process group. With direct
+    // python spawn the group only contains the uvicorn process and any
+    // worker children it forks, all of which we want gone.
     try {
       process.kill(-proc.pid, 'SIGTERM')
     } catch {
