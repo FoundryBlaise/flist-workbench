@@ -916,14 +916,25 @@ export const useStore = create<State>((set, get) => ({
       // a prior account is discarded on arrival (QA P2-4).
       _flistSessionEpoch++
       _mappingInflight = null
-      set({
-        flistSignInStatus: 'idle',
-        flistSignInOpen: false,
-        flistAccountCharacters: res.characters,
-        flistSession: {
-          active: true,
-          account: res.account,
-          expires_in_sec: res.expires_in_sec
+      set((s) => {
+        // Wipe stale "not signed in" pullErrors left by auto-pull
+        // attempts that fired before the session was active — sign-in
+        // just made them obsolete. Other pullError causes (network,
+        // ticket-expired) will re-surface on the next pull attempt.
+        const archive: typeof s.flistArchive = {}
+        for (const [id, slot] of Object.entries(s.flistArchive)) {
+          archive[id] = slot.pullError ? { ...slot, pullError: null } : slot
+        }
+        return {
+          flistSignInStatus: 'idle',
+          flistSignInOpen: false,
+          flistAccountCharacters: res.characters,
+          flistSession: {
+            active: true,
+            account: res.account,
+            expires_in_sec: res.expires_in_sec
+          },
+          flistArchive: archive
         }
       })
       await get().flistLoadRoster()
@@ -3058,7 +3069,12 @@ export const useStore = create<State>((set, get) => ({
         : Number.POSITIVE_INFINITY
       const pullInFlight =
         slot?.pullStatus === 'queued' || slot?.pullStatus === 'running'
-      if (ageSec >= STALE_AGE_SEC && !pullInFlight) {
+      // Only auto-pull when a session is active — otherwise the pull
+      // immediately fails with "not signed in to F-list" and leaves a
+      // stale red banner that survives sign-in (the sign-in handler
+      // clears these, but better not to set them in the first place).
+      const sessionActive = get().flistSession.active
+      if (sessionActive && ageSec >= STALE_AGE_SEC && !pullInFlight) {
         void get().flistPullCharacter(match.name, id)
       }
     } else if (get().flistActiveCharacterId !== null) {
