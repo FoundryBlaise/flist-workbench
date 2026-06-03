@@ -25,6 +25,25 @@ export interface SetMeta {
   updatedAt: number
 }
 
+/** Outcome of `flistImportSet`. The cross-character case is the only
+ *  branch the renderer has to surface UI for — `requires_confirmation`
+ *  is what the cross-char modal listens on, then it calls the second-
+ *  leg action to actually create the set. */
+export type FlistImportOutcome =
+  | { status: 'cancelled' }
+  | { status: 'unavailable' }
+  | {
+      status: 'requires_confirmation'
+      source: { characterId: string; characterName: string; setName: string }
+    }
+  | {
+      status: 'imported'
+      set: SetMeta
+      imageStats: { added: number; skipped: number }
+      crossCharacter: boolean
+    }
+  | { status: 'error'; message: string }
+
 export type WorkingPayload = Record<string, unknown> & {
   _schema_version?: number
   _overlay?: string[]

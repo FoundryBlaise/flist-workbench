@@ -3,7 +3,17 @@ import os
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -771,6 +781,25 @@ def _require_valid_set_id(set_id: str) -> None:
         raise HTTPException(status_code=404, detail="set not found")
 
 
+_CHARACTER_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _require_valid_character_id(character_id: str) -> None:
+    """Block path-traversal payloads in `{character_id}` segments.
+
+    Most legacy F-list-character routes accept the segment unchecked
+    (predates this guard); the new working-set bundle endpoints
+    deliberately validate because they accept arbitrary bytes and a
+    bogus id could write a multipart payload anywhere under
+    `<userdata>/characters/`. Real F-list ids are digits but archived
+    characters can also be keyed by name slug — the regex permits both.
+    """
+    if not isinstance(character_id, str) or not _CHARACTER_ID_RE.match(
+        character_id
+    ):
+        raise HTTPException(status_code=400, detail="invalid character_id")
+
+
 @app.get("/flist/character/{character_id}/sets")
 async def flist_character_sets_list(character_id: str) -> dict:
     sets = character_archive.list_sets(character_id)
@@ -904,6 +933,94 @@ async def flist_character_set_payload_put(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"etag": new_etag}
+
+
+@app.get("/flist/character/{character_id}/sets/{set_id}/export")
+async def flist_character_set_export(
+    character_id: str, set_id: str
+) -> Response:
+    """Bundle the named working set into a Workbench-native ZIP.
+
+    Distinct from `/export.zip` (the userscript restore ZIP) — this one
+    round-trips between Workbench installs and carries the v6 payload
+    verbatim plus every referenced image's bytes. Renderer triggers a
+    save dialog with the suggested filename derived from character + set.
+    """
+    _require_valid_character_id(character_id)
+    _require_valid_set_id(set_id)
+    import set_bundle as _set_bundle
+
+    try:
+        data, manifest = _set_bundle.build_set_bundle(character_id, set_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    source = manifest.get("source") or {}
+    char_part = _safe_filename_part(str(source.get("character_name") or "character"))
+    set_part = _safe_filename_part(str(source.get("set_name") or "set"))
+    import time as _t
+
+    download_name = (
+        f"workbench-set-{char_part}-{set_part}-{int(_t.time())}.zip"
+    )
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"'
+        },
+    )
+
+
+@app.post("/flist/character/{character_id}/sets/import", status_code=201)
+async def flist_character_set_import(
+    character_id: str,
+    zip: UploadFile = File(...),
+    name: str = Form(...),
+    confirm_cross_character: str = Form(default="false"),
+) -> dict:
+    """Materialise a Workbench-native bundle into a new working set.
+
+    Cross-character handshake: the first POST omits / sets
+    `confirm_cross_character` to false. If the bundle's source character
+    doesn't match `character_id`, the sidecar returns 422 with the
+    source manifest so the renderer can show the warning modal. The
+    second POST (after user clicks confirm) sends the same multipart
+    payload with `confirm_cross_character=true` and the import proceeds.
+
+    The renderer chooses `name` (auto-`Imported set N` or user-supplied);
+    duplicate names are permitted per the working-sets v2 design — the
+    set_id is the unique identity.
+    """
+    _require_valid_character_id(character_id)
+    import set_bundle as _set_bundle
+
+    try:
+        zip_bytes = await zip.read()
+    finally:
+        await zip.close()
+
+    confirmed = confirm_cross_character.lower() in ("true", "1", "yes")
+    try:
+        result = _set_bundle.import_set_bundle(
+            character_id,
+            zip_bytes,
+            name=name,
+            confirm_cross_character=confirmed,
+        )
+    except _set_bundle.CrossCharacterConfirmationRequired as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "requires_cross_character_confirmation",
+                "source": exc.source,
+            },
+        ) from exc
+    except _set_bundle.BundleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result
 
 
 @app.get("/flist/character/{character_id}/backups")

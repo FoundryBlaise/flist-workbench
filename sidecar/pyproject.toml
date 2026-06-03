@@ -6,6 +6,10 @@ requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
+  # python-multipart powers UploadFile/Form handling on the working-set
+  # import endpoint. FastAPI doesn't pull it in automatically; without
+  # it the route registration fails at import time.
+  "python-multipart>=0.0.20",
   "httpx>=0.28",
   # qdrant-client in embedded mode persists vectors to a folder on
   # disk — no docker, no port 6333. Pin major because the local-mode

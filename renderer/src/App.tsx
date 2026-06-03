@@ -25,6 +25,18 @@ declare global {
         title?: string
         defaultPath?: string
       }) => Promise<string | null>
+      saveFileDialog?: (opts?: {
+        title?: string
+        defaultPath?: string
+        filters?: { name: string; extensions: string[] }[]
+      }) => Promise<string | null>
+      openFileDialog?: (opts?: {
+        title?: string
+        defaultPath?: string
+        filters?: { name: string; extensions: string[] }[]
+      }) => Promise<string | null>
+      readFile?: (filePath: string) => Promise<Uint8Array | null>
+      writeFile?: (filePath: string, bytes: Uint8Array) => Promise<boolean>
       onMenuAction?: (listener: (action: MenuAction) => void) => () => void
       setMenuState?: (flags: { classifyCurrent: boolean; classifyCharacter: boolean }) => void
       openExternal?: (url: string) => void

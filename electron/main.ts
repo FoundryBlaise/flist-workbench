@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn } from 'node:child_process'
-import { join } from 'node:path'
+import { readFile, writeFile } from 'node:fs/promises'
+import { isAbsolute, join } from 'node:path'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
 import { attachContextMenu } from './contextMenu'
@@ -29,6 +30,100 @@ ipcMain.handle('workbench:select-directory', async (event, opts: { title?: strin
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
 })
+
+// Working-set bundle export/import file-dialog plumbing. The renderer
+// asks for a path, gets bytes back (for import) or writes bytes out
+// (for export). Both handlers verify the sender is the main window's
+// WebContents so a stray context can't read or write arbitrary files
+// from the user's disk.
+type SaveDialogOpts = {
+  title?: string
+  defaultPath?: string
+  filters?: { name: string; extensions: string[] }[]
+}
+type OpenDialogOpts = SaveDialogOpts
+
+ipcMain.handle(
+  'workbench:save-file-dialog',
+  async (event, opts: SaveDialogOpts = {}) => {
+    if (event.sender !== mainWindow?.webContents) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = win
+      ? await dialog.showSaveDialog(win, {
+          title: opts.title ?? 'Save file',
+          defaultPath: opts.defaultPath,
+          filters: opts.filters
+        })
+      : await dialog.showSaveDialog({
+          title: opts.title ?? 'Save file',
+          defaultPath: opts.defaultPath,
+          filters: opts.filters
+        })
+    if (result.canceled || !result.filePath) return null
+    return result.filePath
+  }
+)
+
+ipcMain.handle(
+  'workbench:open-file-dialog',
+  async (event, opts: OpenDialogOpts = {}) => {
+    if (event.sender !== mainWindow?.webContents) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: opts.title ?? 'Open file',
+          defaultPath: opts.defaultPath,
+          filters: opts.filters,
+          properties: ['openFile']
+        })
+      : await dialog.showOpenDialog({
+          title: opts.title ?? 'Open file',
+          defaultPath: opts.defaultPath,
+          filters: opts.filters,
+          properties: ['openFile']
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  }
+)
+
+// Read/write bytes for paths the user already picked via the dialogs
+// above. We only accept absolute paths so a compromised renderer can't
+// trick us with a CWD-relative escape. The path itself isn't validated
+// against the dialog's prior return — the user owns the disk; the goal
+// here is to keep accidents (e.g. an empty/relative path bug in the
+// renderer) from misbehaving, not to sandbox a user who deliberately
+// types an absolute path.
+ipcMain.handle(
+  'workbench:read-file',
+  async (event, filePath: string): Promise<Uint8Array | null> => {
+    if (event.sender !== mainWindow?.webContents) return null
+    if (typeof filePath !== 'string' || !isAbsolute(filePath)) return null
+    try {
+      const buf = await readFile(filePath)
+      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+    } catch (err) {
+      console.error('[main] read-file failed:', err)
+      return null
+    }
+  }
+)
+
+ipcMain.handle(
+  'workbench:write-file',
+  async (event, filePath: string, bytes: Uint8Array): Promise<boolean> => {
+    if (event.sender !== mainWindow?.webContents) return false
+    if (typeof filePath !== 'string' || !isAbsolute(filePath)) return false
+    if (!(bytes instanceof Uint8Array)) return false
+    try {
+      await writeFile(filePath, bytes)
+      return true
+    } catch (err) {
+      console.error('[main] write-file failed:', err)
+      return false
+    }
+  }
+)
 
 // Renderer reports which classify scopes are reachable so the native
 // menu can grey out items that would otherwise no-op silently. The

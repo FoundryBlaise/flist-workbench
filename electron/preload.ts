@@ -20,6 +20,33 @@ contextBridge.exposeInMainWorld('workbench', {
   sidecarUrl: `http://127.0.0.1:${sidecarPort}`,
   selectDirectory: (opts?: { title?: string; defaultPath?: string }) =>
     ipcRenderer.invoke('workbench:select-directory', opts ?? {}) as Promise<string | null>,
+  // Working-set bundle export/import — pick a file path, then the
+  // renderer streams bytes through main. The renderer never sees a
+  // Node fs handle directly.
+  saveFileDialog: (opts?: {
+    title?: string
+    defaultPath?: string
+    filters?: { name: string; extensions: string[] }[]
+  }) =>
+    ipcRenderer.invoke('workbench:save-file-dialog', opts ?? {}) as Promise<
+      string | null
+    >,
+  openFileDialog: (opts?: {
+    title?: string
+    defaultPath?: string
+    filters?: { name: string; extensions: string[] }[]
+  }) =>
+    ipcRenderer.invoke('workbench:open-file-dialog', opts ?? {}) as Promise<
+      string | null
+    >,
+  readFile: (filePath: string) =>
+    ipcRenderer.invoke('workbench:read-file', filePath) as Promise<
+      Uint8Array | null
+    >,
+  writeFile: (filePath: string, bytes: Uint8Array) =>
+    ipcRenderer.invoke('workbench:write-file', filePath, bytes) as Promise<
+      boolean
+    >,
   onMenuAction: (listener: MenuActionListener) => {
     const wrapped = (_event: unknown, action: string): void => listener(action)
     ipcRenderer.on('menu:action', wrapped)
