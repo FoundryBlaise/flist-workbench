@@ -196,6 +196,35 @@ def auth_token_valid(token: str | None) -> bool:
 # ---- snapshot listing + serving ---------------------------------------
 
 
+def list_archived_characters() -> list[dict[str, Any]]:
+    """Names of every character with an archive on disk. Lets the
+    extension show a cross-character source picker — "edit Spielwiesending
+    but load MainChar's working set."""
+    root = character_archive.root()
+    if not root.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        live_path = entry / "live.json"
+        if not live_path.exists():
+            continue
+        try:
+            live = json.loads(live_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        name = live.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        out.append({
+            "name": name,
+            "character_id": entry.name,
+        })
+    out.sort(key=lambda r: r["name"].lower())
+    return out
+
+
 def _character_id_for_name(name: str) -> str | None:
     """Resolve F-list character name → local archive character_id by
     scanning live.json files. Returns None if no archive matches.
