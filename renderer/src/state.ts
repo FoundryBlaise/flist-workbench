@@ -46,6 +46,8 @@ export type {
 
 export { selectWorkingSlot } from './state/flist'
 
+import { readAutoRefreshThresholdMin } from './features/settings/SettingsModal'
+
 export type Mode = 'editor' | 'logs'
 
 const LAST_SEEN_KEY = 'flist-workbench:char-last-seen'
@@ -659,6 +661,58 @@ function _cancelSetFlush(setId: string): void {
   }
 }
 
+// Tracks whether a sign-in's auto-refresh sweep is in flight so a fast
+// second sign-in (rare — usually only happens on re-auth flows) doesn't
+// stack two sweeps onto pull_lock at once.
+let _flistAutoRefreshInFlight = false
+
+async function _flistAutoRefreshOnLogin(
+  get: () => State
+): Promise<void> {
+  if (_flistAutoRefreshInFlight) return
+  _flistAutoRefreshInFlight = true
+  try {
+    const thresholdMin = readAutoRefreshThresholdMin()
+    const thresholdSec = thresholdMin * 60
+    const now = Date.now() / 1000
+    const session = get().flistSession
+    if (!session.active) return
+    const roster = get().flistRoster
+    // Snapshot the IDs we want to refresh up front — the loop below
+    // awaits each pull, so by the time we get to character N the
+    // roster could have changed (sign-out + sign-in).
+    const targets = roster
+      .filter((r) => r.on_account && r.id !== null)
+      .map((r) => ({
+        name: r.name,
+        id: String(r.id),
+        lastPulledAt: r.last_pulled_at
+      }))
+    for (const t of targets) {
+      // Bail if the user signed out mid-sweep so we don't keep firing
+      // pulls against a session that no longer exists.
+      if (!get().flistSession.active) break
+      const age =
+        t.lastPulledAt === null
+          ? Number.POSITIVE_INFINITY
+          : now - t.lastPulledAt
+      if (thresholdSec > 0 && age < thresholdSec) continue
+      // selectCharacter would change the active character; we want
+      // a silent background refresh, so go straight to the pull.
+      // The pull endpoint's pull_lock serialises us behind any
+      // manual ↻ Refresh the user kicked off.
+      try {
+        await get().flistPullCharacter(t.name, t.id)
+      } catch {
+        // Per-character failures are surfaced via the picker badge
+        // (slot.pullError). Don't abort the rest of the sweep.
+      }
+    }
+  } finally {
+    _flistAutoRefreshInFlight = false
+  }
+}
+
 /** Convert a wire-format SetMeta to in-memory camelCase. Single converter
  *  so the wire-vs-memory boundary lives in one place. */
 function _setMetaFromWire(wire: SetMetaWire): SetMeta {
@@ -1018,6 +1072,13 @@ export const useStore = create<State>((set, get) => ({
         }
       })
       await get().flistLoadRoster()
+      // Auto-refresh: walk the roster and queue a background pull for
+      // every account character whose local copy is older than the
+      // user's configured threshold (Settings → F-list). 0 minutes =
+      // always re-pull. The picker's per-row badges show progress;
+      // pull_lock serialises so a manual ↻ Refresh interleaves cleanly.
+      // Fire-and-forget — sign-in returns immediately.
+      void _flistAutoRefreshOnLogin(get)
     } catch (err) {
       // F-list returns the human-readable error in `detail`; the
       // request() helper folds it into `HTTP 401: <detail>`. Strip the
