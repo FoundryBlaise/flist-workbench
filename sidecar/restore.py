@@ -395,8 +395,17 @@ def write_pre_restore_snapshot(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Store the form-state payload sent by the extension as a labelled
-    ZIP backup. Image bytes are not included in v1 — this is a form-
-    only safety net before a destructive restore."""
+    full ZIP backup. Bundles the form fields the extension extracted
+    PLUS the character's local image gallery + avatar (last-pulled
+    state from live.json), so the backup is a complete rollback
+    point. Storage is cheap; the user's stated preference is "if
+    we're going to take a snapshot we may as well make it full."
+
+    The image list comes from live.json (last pulled state) — that's
+    what's actually on F-list right now since gallery edits can't
+    happen without saving the form. The form fields come from the
+    extension (current page state, possibly unsaved edits).
+    """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
         return {"ok": False, "error": "unknown_character"}
@@ -405,28 +414,56 @@ def write_pre_restore_snapshot(
     filename = f"pre-restore-{ts}.zip"
     target = character_archive.backups_dir(character_id) / filename
 
-    # Wrap the payload in the userscript-compatible character.json
-    # shape via zip_serialise — this keeps the legacy ZIP format
-    # readable by both the userscript and this extension.
-    character_json = zip_serialise.to_zip_character_json(payload)
-    character_json["meta"]["source"] = "pre-restore-extension"
-    character_json["meta"]["note"] = (
-        "Form-only snapshot captured by browser extension before a "
-        "restore. Image bytes are not included."
-    )
+    # Merge the form-state payload with the last-pulled image gallery so
+    # zip_serialise.build_zip emits a complete character.json + images.
+    working_shape = {
+        "character": payload.get("character") or {},
+        "settings": payload.get("settings") or {},
+        "infotags": payload.get("infotags") or {},
+        "kinks": payload.get("kinks") or {},
+        "custom_kinks": payload.get("customKinks") or payload.get("custom_kinks") or [],
+        "images": [],
+        "inlines": [],
+    }
+    live = character_archive.read_live(character_id)
+    if isinstance(live, dict):
+        live_images = live.get("images")
+        if isinstance(live_images, list):
+            working_shape["images"] = live_images
+        live_inlines = live.get("inlines")
+        if live_inlines is not None:
+            working_shape["inlines"] = live_inlines
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(
-            "character.json",
-            json.dumps(character_json, indent=2, ensure_ascii=False),
+    try:
+        zip_bytes = zip_serialise.build_zip(
+            character_id,
+            working_shape,
+            images_dir=character_archive.images_dir(character_id),
+            avatar_path=_avatar_path_for_name(character_name),
         )
+    except Exception as exc:  # pylint: disable=broad-except
+        # Fall back to form-only if the merged build fails — better to
+        # have a partial backup than none at all when the user is about
+        # to apply a destructive restore.
+        character_json = zip_serialise.to_zip_character_json(payload)
+        character_json["meta"]["source"] = "pre-restore-extension"
+        character_json["meta"]["note"] = (
+            f"Full backup failed ({exc}); form fields only."
+        )
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "character.json",
+                json.dumps(character_json, indent=2, ensure_ascii=False),
+            )
+        zip_bytes = buf.getvalue()
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(buf.getvalue())
+    target.write_bytes(zip_bytes)
 
     return {
         "ok": True,
         "snapshot_id": filename,
         "path": str(target),
+        "bytes": len(zip_bytes),
     }
