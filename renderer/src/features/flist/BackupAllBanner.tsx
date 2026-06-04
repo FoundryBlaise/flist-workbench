@@ -43,7 +43,7 @@ export function BackupAllBanner() {
     )
   }
   // phase === 'done'
-  const noun = status.saved === 1 ? 'character' : 'characters'
+  const noun = status.saved === 1 ? 'backup' : 'backups'
   return (
     <div
       className="backup-all-banner backup-all-banner-done"
@@ -52,7 +52,7 @@ export function BackupAllBanner() {
     >
       <span>
         <strong>Back up all complete.</strong>{' '}
-        Saved {status.saved} {noun}, {status.unchanged} unchanged
+        Wrote {status.saved} {noun}, {status.unchanged} unchanged
         {status.failed > 0 ? `, ${status.failed} failed` : ''}.
       </span>
     </div>

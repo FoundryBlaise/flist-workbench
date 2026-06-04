@@ -89,7 +89,7 @@ export function FlistCharacterZone() {
   // decide whether to bring them back in a later round.
   void useStore.getState().flistOpenExportRestore
   void useStore.getState().flistCopyLiveToNewDoc
-  void useStore.getState().flistSaveBackup
+  void useStore.getState().flistSaveSnapshot
   void useStore.getState().flistOpenBackup
 
   useEffect(() => {

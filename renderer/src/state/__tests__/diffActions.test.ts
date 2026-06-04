@@ -1,5 +1,5 @@
 // Tier 4 — flistResetWorkingToBackup integration. Covers:
-// - lazy backup load via api.flistBackupRead when cache miss
+// - lazy backup load via api.flistSnapshotRead when cache miss
 // - DELETE working then PUT seeded-from-backup, with undo snapshot
 // - drain in-flight save so a mid-flight PUT can't resurrect the
 //   pre-reset payload (parity with reset-to-Live).
@@ -73,7 +73,7 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
       ...s.flistArchive,
       [characterId]: {
         live: { character: { description: 'live' } },
-        backups: [{ filename: '111.json', created_at: 111, size: 200 }],
+        snapshots: [{ filename: '111.json', created_at: 111, size: 200 }],
         pullStatus: 'idle'
       }
     },
