@@ -288,6 +288,21 @@ def test_merge_roster_same_id_dedupes_across_sources():
     assert rows[0]["has_archive"] is True
 
 
+def test_merge_roster_dedupes_int_account_id_vs_str_archive_id():
+    # F-list's /flist/characters returns id as int (new_character_list);
+    # the archive's registry stores id as str. Without normalisation the
+    # same character renders twice — once under "On your F-list account"
+    # and once under "Logs only".
+    character_archive.write_live("99", {"name": "Quux", "fetched_at": 0})
+    rows = character_archive.merge_roster(
+        [{"name": "Quux", "id": 99}],
+        [],
+    )
+    assert len(rows) == 1
+    assert rows[0]["on_account"] is True
+    assert rows[0]["has_archive"] is True
+
+
 def test_compute_pull_status_never_pulled():
     s = character_archive.compute_pull_status("404")
     assert s["status"] == "never_pulled"

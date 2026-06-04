@@ -2021,11 +2021,16 @@ def merge_roster(
         }
 
     def _upsert_by_id(name: str, cid: Any) -> dict[str, Any]:
-        row = by_id.get(cid)
+        # Key by str(cid): F-list's /flist/characters returns id as int,
+        # archive's load_registry returns id as str. Without coercion
+        # `by_id[42]` and `by_id["42"]` are separate buckets and the same
+        # character ends up as two rows (one on_account, one logs-only).
+        key = str(cid)
+        row = by_id.get(key)
         if row is None:
             row = _new(name)
             row["id"] = cid
-            by_id[cid] = row
+            by_id[key] = row
         return row
 
     def _upsert_by_name(name: str) -> dict[str, Any]:
