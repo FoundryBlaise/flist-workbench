@@ -378,13 +378,16 @@ export function UnifiedCharacterPicker() {
             }}
             aria-label="Filter characters"
           />
-          {rosterStatus === 'loading' && (
+          {rosterStatus === 'loading' && roster.length === 0 && (
             <div className="char-picker-empty-result">Loading…</div>
           )}
-          {visible.length === 0 && rosterStatus !== 'loading' && (
+          {visible.length === 0 && roster.length > 0 && (
             <div className="char-picker-empty-result">
-              {query ? `No match for "${query}"` : 'No characters yet.'}
+              No match for "{query}"
             </div>
+          )}
+          {roster.length === 0 && rosterStatus !== 'loading' && (
+            <div className="char-picker-empty-result">No characters yet.</div>
           )}
           <div className="char-picker-scroll">
           {accountEntries.length > 0 && (
