@@ -52,14 +52,36 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 const NOMIC_QUERY_PREFIX = 'search_query: '
 const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
-type SectionId = 'general' | 'labels' | 'chat' | 'embedding'
+type SectionId = 'general' | 'flist' | 'labels' | 'chat' | 'embedding'
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
+  { id: 'flist', label: 'F-list', subtitle: 'Sign-in refresh + snapshot behaviour' },
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
   { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' }
 ]
+
+/** localStorage key for the auto-refresh-on-login threshold. Stored as
+ *  a stringified integer count of minutes. 0 = always re-pull. */
+export const FLIST_AUTO_REFRESH_KEY = 'workbench.flistAutoRefreshMin'
+
+/** Default threshold for auto-refresh-on-login: pull every roster
+ *  character regardless of last-pull age. The user can raise this in
+ *  Settings → F-list to dial it back to e.g. 30 min or 24 h. */
+export const FLIST_AUTO_REFRESH_DEFAULT_MIN = 0
+
+export function readAutoRefreshThresholdMin(): number {
+  try {
+    const raw = localStorage.getItem(FLIST_AUTO_REFRESH_KEY)
+    if (raw === null) return FLIST_AUTO_REFRESH_DEFAULT_MIN
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n < 0) return FLIST_AUTO_REFRESH_DEFAULT_MIN
+    return Math.floor(n)
+  } catch {
+    return FLIST_AUTO_REFRESH_DEFAULT_MIN
+  }
+}
 
 // Local working copy of every editable field, kept alongside the
 // loaded snapshot so we can compute per-section dirty state in O(fields).
@@ -567,6 +589,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onMirrorEndpointsChange={setMirrorEndpoints}
                   />
                 )}
+                {activeSection === 'flist' && <FlistPane />}
                 {activeSection === 'labels' && (
                   <LabelsPane
                     labels={state.labels}
@@ -1061,6 +1084,61 @@ function GeneralPane({
             vector index.
           </p>
         )}
+      </div>
+    </>
+  )
+}
+
+function FlistPane() {
+  // Stored in localStorage rather than the sidecar `/settings` blob
+  // because this preference only affects renderer-side timing — the
+  // sidecar is stateless about login-triggered work. Persisted-on-
+  // change, no Save button needed for this surface (matches the
+  // mirrorEndpoints toggle pattern).
+  const [thresholdRaw, setThresholdRaw] = useState<string>(() =>
+    String(readAutoRefreshThresholdMin())
+  )
+
+  const persist = (raw: string) => {
+    setThresholdRaw(raw)
+    const n = Number(raw)
+    if (!raw.trim() || !Number.isFinite(n) || n < 0) return
+    try {
+      localStorage.setItem(FLIST_AUTO_REFRESH_KEY, String(Math.floor(n)))
+    } catch {
+      // localStorage unavailable — setting just won't survive a reload.
+    }
+  }
+
+  return (
+    <>
+      <h3 className="settings-section-h">Auto-refresh on sign-in</h3>
+      <div className="settings-row settings-row-grid">
+        <label className="settings-label" htmlFor="flist-auto-refresh">
+          Re-pull every character older than
+        </label>
+        <div className="settings-inline-input">
+          <input
+            id="flist-auto-refresh"
+            type="number"
+            min={0}
+            step={1}
+            className="settings-input settings-input-narrow"
+            value={thresholdRaw}
+            onChange={(e) => persist(e.target.value)}
+            data-testid="settings-flist-auto-refresh"
+          />
+          <span className="settings-inline-suffix">minutes</span>
+        </div>
+        <p className="settings-help">
+          When you sign in, Workbench queues a background pull for every
+          character on your account whose local copy is older than this.
+          {' '}
+          <strong>0</strong> means re-pull everyone every time. Pulls
+          serialise at 1 character / second to respect F-list's API
+          limits; you can keep working — manual ↻ Refresh interleaves
+          cleanly.
+        </p>
       </div>
     </>
   )
