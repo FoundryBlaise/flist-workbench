@@ -3789,6 +3789,13 @@ def restore_token_revoke() -> dict[str, bool]:
     return {"ok": True}
 
 
+@app.get("/restore/characters")
+def restore_characters(
+    _auth: str = Depends(_require_restore_auth),
+) -> list[dict[str, Any]]:
+    return restore_svc.list_archived_characters()
+
+
 @app.get("/restore/snapshots")
 def restore_snapshots(
     character: str,
