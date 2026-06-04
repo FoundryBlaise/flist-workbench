@@ -3488,11 +3488,7 @@ body {
 }
 .char-picker-scroll {
   flex: 1 1 auto;
-  /* Reserve a stable height so "Loading…" → roster arrival doesn't
-     resize the dropdown under the cursor mid-click. Cap stays on
-     .char-picker-menu-unified's max-height; rows above the cap
-     scroll internally. */
-  min-height: 240px;
+  min-height: 0;
   overflow-y: auto;
 }
 .char-picker-row {
@@ -3626,15 +3622,6 @@ body {
   color: var(--text-dim, #8a8a8a);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  /* Fixed width so the label cycling through "…queued" →
-     "metadata 12/24" → "images 8/24" → "just now" during a bulk
-     post-login pull doesn't reflow the row and shift names under
-     the cursor mid-click. Right-aligned so short labels sit flush
-     with the row edge instead of leaving a gap. */
-  min-width: 110px;
-  text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .char-picker-row-age.is-running {
   color: var(--accent, #569cd6);
