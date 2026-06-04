@@ -41,6 +41,11 @@ export type FlistRosterEntry = {
   has_archive: boolean
   has_logs: boolean
   last_pulled_at: number | null
+  /** Count of JSON snapshots in `snapshots/` — the auto-on-pull
+   *  history. Cheap; one per F-list-side change. */
+  snapshot_count: number
+  /** Count of ZIP backups in `backups/` — the explicit "Back up"
+   *  artefacts that include images + avatar. */
   backup_count: number
   // Only present for rows where has_archive is true. Surfaces whether
   // a prior pull was interrupted or had image failures so the renderer
@@ -48,7 +53,20 @@ export type FlistRosterEntry = {
   pull_status?: FlistPullStatus
 }
 
-export type FlistBackupEntry = {
+/** A single JSON-snapshot entry as listed by /flist/character/<id>/snapshots.
+ *  Each snapshot is the full Live JSON captured at the time the
+ *  corresponding pull noticed an F-list-side change. */
+export type FlistSnapshotEntry = {
+  filename: string
+  created_at: number
+  size: number
+}
+
+/** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
+ *  Each backup is a userscript-restoreable archive (JSON + images +
+ *  avatar) written by the Tools → Back up all sweep or the per-
+ *  character right-click → Back up now action. */
+export type FlistZipBackupEntry = {
   filename: string
   created_at: number
   size: number
@@ -867,18 +885,42 @@ export const api = {
     get<Record<string, unknown>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/live`
     ),
-  flistBackups: (characterId: string | number) =>
-    get<{ character_id: string; backups: FlistBackupEntry[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/backups`
+  /** List the per-character JSON snapshots (the auto-on-pull
+   *  forever-history). Distinct from `flistZipBackups`, which lists
+   *  the userscript-restoreable ZIP artefacts. */
+  flistSnapshots: (characterId: string | number) =>
+    get<{ character_id: string; snapshots: FlistSnapshotEntry[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/snapshots`
     ),
-  flistBackupRead: (characterId: string | number, filename: string) =>
+  flistSnapshotRead: (characterId: string | number, filename: string) =>
     get<Record<string, unknown>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/backups/${encodeURIComponent(filename)}`
+      `/flist/character/${encodeURIComponent(String(characterId))}/snapshots/${encodeURIComponent(filename)}`
     ),
-  flistSaveBackup: (characterId: string | number) =>
+  /** Capture the current Live JSON into a new snapshot. POST'd by the
+   *  diff/history flow when the user wants an explicit checkpoint
+   *  beyond what the auto-on-pull dedup gives them. */
+  flistSaveSnapshot: (characterId: string | number) =>
     request<{ path: string; created_at: number; filename: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/backup`,
+      `/flist/character/${encodeURIComponent(String(characterId))}/snapshot`,
       { method: 'POST' }
+    ),
+  /** Right-click → 'Back up now': pulls (assumed already done by the
+   *  caller) and writes a fresh ZIP regardless of dedup. */
+  flistZipBackup: (characterId: string | number) =>
+    request<{
+      saved: boolean
+      path?: string
+      filename?: string
+      created_at?: number
+      size?: number
+      reason?: string
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backup`,
+      { method: 'POST' }
+    ),
+  flistZipBackups: (characterId: string | number) =>
+    get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
   flistMappingList: (opts?: { force?: boolean }) =>

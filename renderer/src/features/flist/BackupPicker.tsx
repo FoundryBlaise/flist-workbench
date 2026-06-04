@@ -1,5 +1,5 @@
 import { useStore } from '../../state'
-import type { FlistBackupEntry } from '../../lib/api'
+import type { FlistSnapshotEntry } from '../../lib/api'
 
 // Stable fallback — see DiffPane for the same identity guard.
 const DEFAULT_RIGHT_SOURCE = { kind: 'live' } as const
@@ -34,7 +34,7 @@ export function BackupPicker({ characterId }: { characterId: string }) {
   const archive = useStore((s) => s.flistArchive[characterId])
   const lastPullAt = archive?.lastPullAt
   // Backup picker sort: newest first; Live always pinned at top.
-  const backups: FlistBackupEntry[] = archive?.backups ?? []
+  const backups: FlistSnapshotEntry[] = archive?.snapshots ?? []
   const value = source.kind === 'live' ? '__live__' : `b:${source.filename}`
   return (
     <label className="diff-backup-picker">

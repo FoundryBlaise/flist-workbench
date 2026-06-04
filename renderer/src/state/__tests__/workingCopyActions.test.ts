@@ -185,7 +185,7 @@ describe('flistResetWorkingToLive cancels armed follow-up flush', () => {
       flistArchive: {
         '99': {
           live: { character: { description: 'live' } },
-          backups: [],
+          snapshots: [],
           pullStatus: 'idle'
         }
       }
@@ -226,7 +226,7 @@ describe('flistResetWorkingToLive + undo round-trip', () => {
       flistArchive: {
         '99': {
           live: { character: { description: 'live' } },
-          backups: [],
+          snapshots: [],
           pullStatus: 'idle'
         }
       }

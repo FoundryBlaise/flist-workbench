@@ -33,12 +33,27 @@ function loadCreds(): { account: string; password: string } | null {
   return null
 }
 
-function countBackupFiles(userData: string): number {
+function countBackupZips(userData: string): number {
+  // ZIP backups land in characters/<id>/backups/<ISO>.zip (the new
+  // userscript-restoreable artefacts). Distinct from snapshots/, which
+  // holds the cheap auto-on-pull JSON checkpoints.
   const charsRoot = join(userData, 'characters')
   if (!existsSync(charsRoot)) return 0
   let total = 0
   for (const id of readdirSync(charsRoot)) {
     const dir = join(charsRoot, id, 'backups')
+    if (!existsSync(dir)) continue
+    total += readdirSync(dir).filter((n) => n.endsWith('.zip')).length
+  }
+  return total
+}
+
+function countSnapshotFiles(userData: string): number {
+  const charsRoot = join(userData, 'characters')
+  if (!existsSync(charsRoot)) return 0
+  let total = 0
+  for (const id of readdirSync(charsRoot)) {
+    const dir = join(charsRoot, id, 'snapshots')
     if (!existsSync(dir)) continue
     total += readdirSync(dir).filter((n) => n.endsWith('.json')).length
   }
@@ -127,40 +142,42 @@ test('Backup all — fresh sweep saves every character, second sweep dedups', as
   await window.waitForTimeout(400)
 
   // ---- First sweep — every character is new → all should be saved -
-  // `countBackupFiles` measures *delta*, not absolute: a previous test
+  // `countBackupZips` measures *delta*, not absolute: a previous test
   // run's localStorage may have a last-character pointer that triggered
-  // an auto-pull on sign-in, planting one stale backup. Tracking the
-  // delta makes this assertion robust to that.
-  const backupsBeforeFirst = countBackupFiles(userData)
+  // an auto-pull on sign-in, planting one stale snapshot (no effect on
+  // ZIP count, but the snapshot count grows).
+  const backupsBeforeFirst = countBackupZips(userData)
   await triggerBackupAll()
 
   const banner = window.getByTestId('backup-all-banner')
   await expect(banner).toBeVisible({ timeout: 10_000 })
   await shot('bka-02-banner-running')
 
-  // Sweep duration: ≤ ~5s per character thanks to the rate limiter +
-  // F-list response time. 60s is a generous ceiling.
+  // Full pulls (JSON + every gallery image + avatar) at ~1 req/s.
+  // Two characters with ~20 images each fits comfortably in 3 min;
+  // worst case is rate-limit-bound, so allow generous headroom.
   await expect(banner).toContainText(/Back up all complete/, {
-    timeout: 120_000
+    timeout: 300_000
   })
   await shot('bka-03-banner-done')
 
   const doneText = (await banner.textContent()) ?? ''
-  // First sweep: every roster character should be saved. Permit
-  // 0 unchanged + 0 failed strictly. Roster might also be slightly
-  // larger than the visible account rows (archived characters from
-  // other sessions are filtered out by the picker but not the sweep);
-  // sanity-check by counting backup files on disk vs the saved count
-  // the banner reports.
-  expect(doneText).toMatch(/Saved (\d+) character/)
-  const savedMatch = doneText.match(/Saved (\d+) character/)
+  // First sweep: every roster character should produce a fresh ZIP.
+  // The banner wording is now "Wrote N backups".
+  expect(doneText).toMatch(/Wrote (\d+) backup/)
+  const savedMatch = doneText.match(/Wrote (\d+) backup/)
   const savedFirst = savedMatch ? Number(savedMatch[1]) : 0
   expect(savedFirst).toBeGreaterThan(0)
   expect(doneText).not.toMatch(/, [1-9]\d* failed/)
 
-  // Backup files actually landed on disk — one .json per saved char.
-  const backupCountAfterFirst = countBackupFiles(userData)
+  // ZIP files actually landed on disk — one per saved character.
+  const backupCountAfterFirst = countBackupZips(userData)
   expect(backupCountAfterFirst - backupsBeforeFirst).toBe(savedFirst)
+
+  // And the cheap JSON snapshot history grew alongside (the per-
+  // character pull auto-fires a snapshot on content change). For a
+  // fresh archive this means one snapshot per character.
+  expect(countSnapshotFiles(userData)).toBeGreaterThanOrEqual(savedFirst)
 
   // The banner auto-clears after 6s. Wait for it to disappear so the
   // second sweep starts from a clean state.
@@ -184,21 +201,40 @@ test('Backup all — fresh sweep saves every character, second sweep dedups', as
   await triggerBackupAll()
   await expect(banner).toBeVisible({ timeout: 10_000 })
   await expect(banner).toContainText(/Back up all complete/, {
-    timeout: 120_000
+    timeout: 300_000
   })
   await shot('bka-06-banner-second-done')
 
   const secondText = (await banner.textContent()) ?? ''
-  // The second sweep: zero new content => zero new saves; every
-  // character counted as unchanged. Failed must stay at zero. (We
-  // don't assert the exact unchanged count because a stale auto-pull
-  // before the first sweep can shift it by one.)
-  expect(secondText).toMatch(/Saved 0 character/)
+  // Zero new content => zero new ZIPs; every character counted as
+  // unchanged. Failed stays at zero.
+  expect(secondText).toMatch(/Wrote 0 backup/)
   expect(secondText).toMatch(/\d+ unchanged/)
   expect(secondText).not.toMatch(/, [1-9]\d* failed/)
+  // And the on-disk ZIP count didn't grow.
+  expect(countBackupZips(userData)).toBe(backupCountAfterFirst)
+  await expect(banner).toBeHidden({ timeout: 10_000 })
 
-  // And the on-disk count didn't grow.
-  expect(countBackupFiles(userData)).toBe(backupCountAfterFirst)
+  // ---- Right-click → 'Back up now' on a single character row -------
+  // Forces a fresh ZIP even when the content is unchanged (the right-
+  // click action defaults to force=true; user clicked deliberately).
+  await window.getByTestId('char-picker').locator('button').first().click()
+  await window.waitForTimeout(400)
+  const targetRow = window.locator('.char-picker-row-pick').first()
+  await targetRow.click({ button: 'right' })
+  await window.waitForTimeout(400)
+  const backupBefore = countBackupZips(userData)
+  await window.getByRole('menuitem', { name: 'Back up now' }).click()
+  await shot('bka-07-rightclick-running')
+  await expect(banner).toContainText(/Back up all complete/, {
+    timeout: 240_000
+  })
+  await shot('bka-08-rightclick-done')
+  // One more ZIP than before — even though nothing changed, the force
+  // bypass means a deliberate per-character click always writes.
+  expect(countBackupZips(userData) - backupBefore).toBe(1)
+  const rightClickText = (await banner.textContent()) ?? ''
+  expect(rightClickText).toMatch(/Wrote 1 backup/)
 
   await app.close()
 })

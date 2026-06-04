@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { api } from '../../lib/api'
 import { displayCharacter as displayName } from '../../lib/partnerName'
+import { ContextMenu } from '../flist/working-sets/ContextMenu'
 
 function initialFor(name: string): string {
   const trimmed = name.trim()
@@ -133,6 +134,17 @@ export function UnifiedCharacterPicker() {
   const [query, setQuery] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const backupCharacter = useStore((s) => s.flistBackupCharacter)
+  // Right-click context menu state for account-character rows. Keyed
+  // to a single character at a time — opening on another row replaces
+  // the anchor. Lives at the picker level so the menu portal-style
+  // renders above the row list without clipping.
+  const [ctx, setCtx] = useState<{
+    name: string
+    id: string
+    x: number
+    y: number
+  } | null>(null)
 
   // Surface pull progress + completion + failure for the active
   // character regardless of which view is showing — the F-list zone
@@ -395,6 +407,11 @@ export function UnifiedCharacterPicker() {
                           void select(entry.name)
                           setOpen(false)
                         }}
+                        onContextMenu={(e) => {
+                          if (!id) return
+                          e.preventDefault()
+                          setCtx({ name: entry.name, id, x: e.clientX, y: e.clientY })
+                        }}
                         title={
                           lastPullAt
                             ? `Last pulled: ${new Date(lastPullAt * 1000).toLocaleString()}`
@@ -474,6 +491,21 @@ export function UnifiedCharacterPicker() {
                 Sign out
               </button>
             </div>
+          )}
+          {ctx && (
+            <ContextMenu
+              x={ctx.x}
+              y={ctx.y}
+              items={[
+                {
+                  label: 'Back up now',
+                  onSelect: () => {
+                    void backupCharacter(ctx.name)
+                  }
+                }
+              ]}
+              onClose={() => setCtx(null)}
+            />
           )}
         </div>
       )}

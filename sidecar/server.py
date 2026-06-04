@@ -473,22 +473,24 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                 character_archive.write_live(cid, live_payload)
 
                 # Forever-history: auto-snapshot the Live JSON if the
-                # F-list content actually changed since the last backup.
-                # `fetched_at` is excluded from the dedup hash so a
-                # no-op pull doesn't bloat the backup folder. JSON
-                # snapshots are a few KB each and never pruned —
-                # explicit owner decision: every change archived.
+                # F-list content actually changed since the last
+                # snapshot. `fetched_at` is excluded from the dedup
+                # hash so a no-op pull doesn't bloat the snapshot
+                # folder. Snapshots are a few KB each and never pruned
+                # — explicit owner decision: every change archived.
+                # (Distinct from the ZIP "backup" written by Tools →
+                # Back up all, which includes images.)
                 try:
-                    backup_result = character_archive.save_backup_if_changed(cid)
+                    snapshot_result = character_archive.save_snapshot_if_changed(cid)
                 except OSError as exc:
-                    backup_result = {"saved": False, "reason": f"oserror: {exc}"}
-                if backup_result.get("saved"):
+                    snapshot_result = {"saved": False, "reason": f"oserror: {exc}"}
+                if snapshot_result.get("saved"):
                     yield _sse_event(
-                        "backup",
+                        "snapshot",
                         {
                             "saved": True,
-                            "filename": backup_result.get("filename"),
-                            "created_at": backup_result.get("created_at"),
+                            "filename": snapshot_result.get("filename"),
+                            "created_at": snapshot_result.get("created_at"),
                         },
                     )
 
@@ -723,33 +725,166 @@ async def flist_character_pull(name: str) -> StreamingResponse:
     )
 
 
-@app.post("/flist/character/{character_id}/backup")
-async def flist_character_backup(character_id: str) -> dict:
-    """Snapshot the current Live into `backups/<unix>.json`. 409 if no
-    Live exists yet."""
+@app.post("/flist/character/{character_id}/snapshot")
+async def flist_character_snapshot(character_id: str) -> dict:
+    """Capture the current Live JSON into `snapshots/<unix>.json`. 409
+    if no Live exists yet. Cheap (a few KB); does not include images."""
     try:
-        return character_archive.save_backup(character_id)
+        return character_archive.save_snapshot(character_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/flist/character/{character_id}/zip-backup")
+async def flist_character_zip_backup(character_id: str, force: bool = True) -> dict:
+    """Pack the current Live into a userscript-restoreable ZIP at
+    `backups/<ISO>.zip`. The explicit right-click → "Back up now"
+    action defaults to `force=True` — the user clicked because they
+    want a new artefact in hand, dedup would be surprising. The bulk
+    `/backup-all` flow calls `save_zip_backup` directly with
+    `force=False`."""
+    try:
+        return character_archive.save_zip_backup(character_id, force=force)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/flist/character/{character_id}/zip-backups")
+async def flist_character_zip_backups(character_id: str) -> dict:
+    return {
+        "character_id": character_id,
+        "backups": character_archive.list_zip_backups(character_id),
+    }
+
+
+async def _pull_one_character_for_backup_all(
+    name: str,
+    *,
+    client: Any,
+) -> dict[str, Any]:
+    """Single-character full pull (JSON + avatar + all gallery images)
+    used by `/flist/backup-all`. Returns the resolved character id +
+    a summary so the caller can log image stats; raises the underlying
+    F-list errors so the bulk loop can decide whether to abort.
+
+    Distinct from the per-character `/pull` endpoint's producer in
+    that it doesn't emit SSE events — the bulk sweep streams a single
+    coarse `character` event per character instead of per-image
+    progress. (The full pull is still needed so the ZIP that follows
+    can include every image the user has on F-list.)
+    """
+    payload = await flist_api.fetch_character_data(name, client=client)
+    cid = _character_id_from_payload(payload)
+    import time as _t
+
+    live_payload = dict(payload)
+    live_payload["fetched_at"] = int(_t.time())
+    character_archive.write_live(cid, live_payload)
+    # Auto-snapshot the JSON (cheap, separate from the ZIP).
+    try:
+        character_archive.save_snapshot_if_changed(cid)
+    except OSError:
+        pass
+
+    # Avatar — non-fatal.
+    try:
+        await flist_api.download_to(
+            flist_api.avatar_url(name),
+            character_archive.avatar_path_for(name),
+            client=client,
+        )
+    except (flist_api.FlistApiError, ValueError):
+        pass
+
+    images = payload.get("images")
+    image_list: list[dict[str, str]] = []
+    if isinstance(images, list):
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            image_id = img.get("image_id") or img.get("id")
+            ext = img.get("extension")
+            if image_id is None or not ext:
+                continue
+            image_list.append(
+                {"image_id": str(image_id), "extension": str(ext)}
+            )
+
+    pull_started_at = int(_t.time())
+    character_archive.write_pull_state(
+        cid, image_list, started_at=pull_started_at, finished_at=None
+    )
+
+    images_dir_path = character_archive.images_dir(cid)
+    downloaded = 0
+    cached = 0
+    failed_images = 0
+    for img in image_list:
+        image_id = img["image_id"]
+        raw_ext = img["extension"]
+        try:
+            ext = character_archive.normalise_image_ext(raw_ext)
+        except ValueError:
+            ext = raw_ext.lower().lstrip(".")
+        target = images_dir_path / f"{image_id}.{ext}"
+        # Stale-ext cleanup mirrors the per-character pull endpoint.
+        for sibling in images_dir_path.glob(f"{image_id}.*"):
+            if sibling.name == target.name:
+                continue
+            if sibling.suffix.lstrip(".").lower() not in {"png", "jpg", "jpeg", "gif"}:
+                continue
+            try:
+                sibling.unlink()
+            except OSError:
+                pass
+        if target.exists():
+            cached += 1
+            continue
+        url = (
+            f"{flist_api.STATIC_BASE}/images/charimage/"
+            f"{image_id}.{ext}"
+        )
+        try:
+            data = await flist_api.fetch_bytes(url, client=client)
+            character_archive.write_character_image(cid, image_id, ext, data)
+            downloaded += 1
+        except (ValueError, flist_api.FlistApiError):
+            failed_images += 1
+
+    character_archive.write_pull_state(
+        cid,
+        image_list,
+        started_at=pull_started_at,
+        finished_at=int(_t.time()),
+    )
+    return {
+        "character_id": cid,
+        "total_images": len(image_list),
+        "downloaded": downloaded,
+        "cached": cached,
+        "failed_images": failed_images,
+    }
+
+
 @app.post("/flist/backup-all")
 async def flist_backup_all() -> StreamingResponse:
-    """Walk the signed-in account's character roster and snapshot a
-    fresh JSON backup for every character whose F-list content has
-    changed since the last backup.
+    """Walk the signed-in account's roster and write a userscript-
+    restoreable ZIP backup for every character whose F-list content
+    changed since the previous backup.
 
-    Distinct from the per-character ↻ Refresh: this endpoint does
-    JSON-only pulls (no image downloads, no avatar). The user's intent
-    is a forever change-log of profile state, not a full archive sync;
-    image bytes already on disk from prior refreshes stay put.
+    Each character is fully pulled first (JSON + images + avatar) so
+    the ZIP includes every byte the userscript would need to re-upload
+    the profile. The pull also fires the cheap JSON snapshot side-
+    effect (see `/flist/character/{cid}/pull`).
 
     SSE events:
       start     → {total}
+      queued    → {}                — emitted before pull_lock
       character → {name, character_id?, status: 'fetching'|'saved'|
-                   'unchanged'|'error', filename?, message?}
+                   'unchanged'|'error', filename?, message?,
+                   image_stats?}
       done      → {total, saved, unchanged, failed}
-      error     → fatal (no session, etc.)
+      error     → fatal (no session, expired ticket, etc.)
     """
 
     async def producer():
@@ -792,13 +927,11 @@ async def flist_backup_all() -> StreamingResponse:
                     )
                     return
 
-                import time as _t
-
                 for entry in roster:
                     # `characters()` returns plain dicts with name/id
                     # keys (the F-list account-characters wire shape),
-                    # not dataclasses — attribute access here would
-                    # raise AttributeError and silently end the stream.
+                    # not dataclasses — attribute access would raise
+                    # AttributeError and silently end the stream.
                     name = entry.get("name") if isinstance(entry, dict) else None
                     if not isinstance(name, str) or not name:
                         continue
@@ -807,7 +940,7 @@ async def flist_backup_all() -> StreamingResponse:
                         {"name": name, "status": "fetching"},
                     )
                     try:
-                        payload = await flist_api.fetch_character_data(
+                        pull_result = await _pull_one_character_for_backup_all(
                             name, client=client
                         )
                     except (
@@ -818,8 +951,7 @@ async def flist_backup_all() -> StreamingResponse:
                         # Session-wide failure mid-sweep — pointless to
                         # keep iterating because every remaining char
                         # would hit the same wall. Emit a fatal error
-                        # and abort. Renderer's onError flips the banner
-                        # to phase='error' with this message.
+                        # and abort.
                         stage = (
                             "rate-limited"
                             if isinstance(exc, flist_api.RateLimited)
@@ -841,9 +973,9 @@ async def flist_backup_all() -> StreamingResponse:
                             },
                         )
                         continue
-                    try:
-                        cid = _character_id_from_payload(payload)
                     except HTTPException as exc:
+                        # _character_id_from_payload raises this on a
+                        # bad upstream id; per-character recoverable.
                         failed += 1
                         yield _sse_event(
                             "character",
@@ -854,11 +986,27 @@ async def flist_backup_all() -> StreamingResponse:
                             },
                         )
                         continue
-                    live_payload = dict(payload)
-                    live_payload["fetched_at"] = int(_t.time())
+                    except OSError as exc:
+                        failed += 1
+                        yield _sse_event(
+                            "character",
+                            {
+                                "name": name,
+                                "status": "error",
+                                "message": f"disk: {exc}",
+                            },
+                        )
+                        continue
+
+                    cid = pull_result["character_id"]
+                    image_stats = {
+                        "total": pull_result["total_images"],
+                        "downloaded": pull_result["downloaded"],
+                        "cached": pull_result["cached"],
+                        "failed": pull_result["failed_images"],
+                    }
                     try:
-                        character_archive.write_live(cid, live_payload)
-                        result = character_archive.save_backup_if_changed(cid)
+                        result = character_archive.save_zip_backup(cid, force=False)
                     except OSError as exc:
                         failed += 1
                         yield _sse_event(
@@ -867,10 +1015,12 @@ async def flist_backup_all() -> StreamingResponse:
                                 "name": name,
                                 "character_id": cid,
                                 "status": "error",
-                                "message": f"disk: {exc}",
+                                "message": f"zip: {exc}",
+                                "image_stats": image_stats,
                             },
                         )
                         continue
+
                     if result.get("saved"):
                         saved += 1
                         yield _sse_event(
@@ -880,6 +1030,8 @@ async def flist_backup_all() -> StreamingResponse:
                                 "character_id": cid,
                                 "status": "saved",
                                 "filename": result.get("filename"),
+                                "size": result.get("size"),
+                                "image_stats": image_stats,
                             },
                         )
                     else:
@@ -890,6 +1042,7 @@ async def flist_backup_all() -> StreamingResponse:
                                 "name": name,
                                 "character_id": cid,
                                 "status": "unchanged",
+                                "image_stats": image_stats,
                             },
                         )
         except Exception as exc:  # noqa: BLE001 — last-resort
@@ -1249,19 +1402,19 @@ async def flist_character_set_import(
     return result
 
 
-@app.get("/flist/character/{character_id}/backups")
-async def flist_character_backups(character_id: str) -> dict:
+@app.get("/flist/character/{character_id}/snapshots")
+async def flist_character_snapshots(character_id: str) -> dict:
     return {
         "character_id": character_id,
-        "backups": character_archive.list_backups(character_id),
+        "snapshots": character_archive.list_snapshots(character_id),
     }
 
 
-@app.get("/flist/character/{character_id}/backups/{filename}")
-async def flist_character_backup_read(character_id: str, filename: str) -> dict:
-    payload = character_archive.read_backup(character_id, filename)
+@app.get("/flist/character/{character_id}/snapshots/{filename}")
+async def flist_character_snapshot_read(character_id: str, filename: str) -> dict:
+    payload = character_archive.read_snapshot(character_id, filename)
     if payload is None:
-        raise HTTPException(status_code=404, detail="backup not found")
+        raise HTTPException(status_code=404, detail="snapshot not found")
     return payload
 
 

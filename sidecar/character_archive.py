@@ -110,13 +110,51 @@ def inlines_dir(character_id: int | str) -> Path:
     return p
 
 
+def snapshots_dir(character_id: int | str) -> Path:
+    """Per-character `snapshots/` dir — JSON checkpoints of `live.json`.
+
+    Terminology: a *snapshot* is the cheap JSON-only checkpoint that
+    fires automatically on every pull. A *backup* (see `backups_dir`)
+    is a full userscript-restoreable ZIP. They're different artefacts
+    in different directories; we keep them strictly separated so the
+    user-facing "Back up" never confuses with the auto-save history.
+
+    One-shot migration: pre-rename archives had JSON files under
+    `backups/`. If we see that legacy directory and the new
+    `snapshots/` doesn't exist yet, move the JSON files over. ZIP
+    files in the legacy `backups/` (if any — there shouldn't be) are
+    left alone for the user to inspect.
+    """
+    p = character_dir(character_id) / "snapshots"
+    if not p.exists():
+        legacy = character_dir(character_id) / "backups"
+        if legacy.exists() and legacy.is_dir():
+            json_files = [
+                e for e in legacy.iterdir()
+                if e.is_file() and e.suffix.lower() == ".json"
+            ]
+            if json_files:
+                p.mkdir(parents=True, exist_ok=True)
+                for entry in json_files:
+                    try:
+                        entry.replace(p / entry.name)
+                    except OSError:
+                        # If a JSON file can't move (locked, perms),
+                        # skip it — the legacy backups/ stays around.
+                        pass
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def backups_dir(character_id: int | str) -> Path:
+    """Per-character `backups/` dir — full ZIP backups, restorable via
+    the userscript. Created lazily by `save_zip_backup`."""
     p = character_dir(character_id) / "backups"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
-# ---- live + backup read/write -----------------------------------------
+# ---- live + snapshot read/write ---------------------------------------
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -167,22 +205,22 @@ def read_live(character_id: int | str) -> dict[str, Any] | None:
         return None
 
 
-def save_backup(character_id: int | str) -> dict[str, Any]:
-    """Snapshot the current Live into `backups/<unix>.json`.
+def save_snapshot(character_id: int | str) -> dict[str, Any]:
+    """Snapshot the current Live into `snapshots/<unix>.json`.
 
-    Returns `{path, created_at}` so the renderer can show the new entry
-    without re-listing. Raises FileNotFoundError if there's no Live to
-    snapshot.
+    Returns `{path, created_at, filename}` so the renderer can show
+    the new entry without re-listing. Raises FileNotFoundError if
+    there's no Live to snapshot.
     """
     live = read_live(character_id)
     if live is None:
-        raise FileNotFoundError("no Live snapshot to back up")
+        raise FileNotFoundError("no Live snapshot to capture")
     now = int(time.time())
-    target = backups_dir(character_id) / f"{now}.json"
+    target = snapshots_dir(character_id) / f"{now}.json"
     # On the very-unlikely same-second collision, suffix with a counter.
     i = 1
     while target.exists():
-        target = backups_dir(character_id) / f"{now}-{i}.json"
+        target = snapshots_dir(character_id) / f"{now}-{i}.json"
         i += 1
     _atomic_write_json(target, live)
     return {"path": str(target), "created_at": now, "filename": target.name}
@@ -190,81 +228,81 @@ def save_backup(character_id: int | str) -> dict[str, Any]:
 
 # Fields that don't represent F-list-side state — excluding them from
 # the content hash means "pulled twice in a row with no F-list change"
-# doesn't bloat the backup directory with identical snapshots. The
-# pull stamps `fetched_at` every time, so without this it would never
-# dedup.
-_BACKUP_DEDUP_EXCLUDE = {"fetched_at"}
+# doesn't bloat the snapshot directory with identical entries. The pull
+# stamps `fetched_at` every time, so without this it would never dedup.
+_SNAPSHOT_DEDUP_EXCLUDE = {"fetched_at"}
 
 
 def _live_content_hash(live: dict[str, Any]) -> str:
     """Canonical-JSON sha256 of `live`, ignoring fields that aren't
     really part of the F-list profile state (currently just
-    `fetched_at`). Used by `save_backup_if_changed` to skip identical
-    snapshots after a no-op pull."""
+    `fetched_at`). Used by `save_snapshot_if_changed` to skip identical
+    snapshots after a no-op pull, and by the ZIP backup dedup."""
     import hashlib
 
-    filtered = {k: v for k, v in live.items() if k not in _BACKUP_DEDUP_EXCLUDE}
+    filtered = {k: v for k, v in live.items() if k not in _SNAPSHOT_DEDUP_EXCLUDE}
     canonical = json.dumps(filtered, sort_keys=True, ensure_ascii=False).encode(
         "utf-8"
     )
     return hashlib.sha256(canonical).hexdigest()
 
 
-def latest_backup_content_hash(character_id: int | str) -> str | None:
-    """Content-hash of the most recent backup, or None when no backups
-    exist (or the latest is unreadable). Hashes the same shape as
-    `_live_content_hash` so callers can compare in either direction."""
-    backups = list_backups(character_id)
-    if not backups:
+def latest_snapshot_content_hash(character_id: int | str) -> str | None:
+    """Content-hash of the most recent snapshot, or None when no
+    snapshots exist (or the latest is unreadable). Hashes the same
+    shape as `_live_content_hash` so callers can compare in either
+    direction."""
+    snapshots = list_snapshots(character_id)
+    if not snapshots:
         return None
-    latest = read_backup(character_id, backups[0]["filename"])
+    latest = read_snapshot(character_id, snapshots[0]["filename"])
     if latest is None:
         return None
     return _live_content_hash(latest)
 
 
-def save_backup_if_changed(character_id: int | str) -> dict[str, Any]:
-    """Save a backup *only* when the current Live differs in content
-    from the latest existing backup. Returns one of:
+def save_snapshot_if_changed(character_id: int | str) -> dict[str, Any]:
+    """Save a snapshot *only* when the current Live differs in content
+    from the latest existing snapshot. Returns one of:
 
-      `{saved: True, ...save_backup payload}` — wrote a new snapshot.
-      `{saved: False, reason: 'unchanged'}`   — Live matches latest.
-      `{saved: False, reason: 'no_live'}`     — Live missing.
+      `{saved: True, ...save_snapshot payload}` — wrote a new snapshot.
+      `{saved: False, reason: 'unchanged'}`     — Live matches latest.
+      `{saved: False, reason: 'no_live'}`       — Live missing.
 
-    Callers (the pull SSE handler, `/backup-all`) use this to keep a
-    forever-history of JSON deltas without thrashing the disk on every
-    pull. Backups are never pruned — JSON snapshots are a few KB and
-    the user explicitly wants every change archived.
+    Callers (the pull SSE handler) use this to keep a forever-history
+    of JSON deltas without thrashing the disk on every pull. Snapshots
+    are never pruned — they're a few KB each and the owner explicitly
+    wants every change archived.
     """
     live = read_live(character_id)
     if live is None:
         return {"saved": False, "reason": "no_live"}
     current_hash = _live_content_hash(live)
-    prior_hash = latest_backup_content_hash(character_id)
+    prior_hash = latest_snapshot_content_hash(character_id)
     if prior_hash == current_hash:
         return {"saved": False, "reason": "unchanged"}
-    snapshot = save_backup(character_id)
+    snapshot = save_snapshot(character_id)
     return {"saved": True, **snapshot}
 
 
-_BACKUP_FILE_RE = re.compile(r"^(\d+)(?:-(\d+))?\.json$")
+_SNAPSHOT_FILE_RE = re.compile(r"^(\d+)(?:-(\d+))?\.json$")
 
 
-def list_backups(character_id: int | str) -> list[dict[str, Any]]:
-    """List backups newest first. Each entry: `{filename, created_at, size}`.
+def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
+    """List snapshots newest first. Each entry: `{filename, created_at, size}`.
 
-    When two backups share the same epoch (same-second collision, broken
-    by the `-N` suffix counter in `save_backup`), the higher-N file is
-    the more recent write — sort key includes the suffix so the
-    forever-history dedup check always compares against the *truly*
-    latest snapshot.
+    When two snapshots share the same epoch (same-second collision,
+    broken by the `-N` suffix counter in `save_snapshot`), the higher-N
+    file is the more recent write — sort key includes the suffix so
+    the forever-history dedup check always compares against the
+    *truly* latest snapshot.
     """
     out: list[dict[str, Any]] = []
-    p = backups_dir(character_id)
+    p = snapshots_dir(character_id)
     for entry in p.iterdir():
         if not entry.is_file():
             continue
-        m = _BACKUP_FILE_RE.match(entry.name)
+        m = _SNAPSHOT_FILE_RE.match(entry.name)
         if not m:
             continue
         try:
@@ -286,12 +324,264 @@ def list_backups(character_id: int | str) -> list[dict[str, Any]]:
     return out
 
 
-def read_backup(character_id: int | str, filename: str) -> dict[str, Any] | None:
-    if not _BACKUP_FILE_RE.match(filename):
-        # Reject anything that doesn't match the on-disk filename shape
-        # so a caller can't path-traverse out of backups/.
+_ZIP_BACKUP_FILE_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-(\d+))?\.zip$"
+)
+
+
+def _zip_backup_filename(now: float | None = None) -> str:
+    """`YYYY-MM-DDTHHMMSSZ.zip` — filesystem-safe ISO basic form. The
+    explicit `Z` makes it clear the timestamp is UTC so a user copying
+    the file off-machine isn't confused by their local-time mtime."""
+    import datetime as _dt
+
+    ts = _dt.datetime.fromtimestamp(
+        time.time() if now is None else now, tz=_dt.timezone.utc
+    )
+    return ts.strftime("%Y-%m-%dT%H%M%SZ") + ".zip"
+
+
+def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
+    """Reshape Live JSON into the working-copy payload `zip_serialise.
+    build_zip` expects. Mirrors the renderer's `seedWorkingFromLive` —
+    we keep the helper here (instead of pulling from server.py) so the
+    character-archive module can build a ZIP without an HTTP round-trip
+    from `/backup-all`."""
+    out: dict[str, Any] = {
+        "_schema_version": WORKING_SCHEMA_VERSION,
+        "_overlay": [],
+    }
+    if isinstance(live.get("character"), dict):
+        out["character"] = dict(live["character"])
+    else:
+        out["character"] = {
+            "id": live.get("id"),
+            "name": live.get("name"),
+            "description": live.get("description", ""),
+            "custom_title": live.get("custom_title"),
+        }
+    for key in ("settings", "infotags", "custom_kinks", "inlines"):
+        if key in live:
+            out[key] = live[key]
+    kinks = live.get("kinks")
+    out["kinks"] = {} if isinstance(kinks, list) else (kinks or {})
+    gallery: list[dict[str, Any]] = []
+    raw_images = live.get("images")
+    if isinstance(raw_images, list):
+        for index, entry in enumerate(raw_images):
+            if not isinstance(entry, dict):
+                continue
+            iid = entry.get("image_id") or entry.get("id")
+            if iid is None:
+                continue
+            row = dict(entry)
+            row.setdefault("image_id", str(iid))
+            row.setdefault("position", index)
+            gallery.append(row)
+    out["images"] = gallery
+    return out
+
+
+def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
+    """List ZIP backups newest first. Each entry: `{filename, created_at, size}`.
+    Filenames are the ISO-basic-form written by `save_zip_backup`.
+
+    Tiebreaker: same-second writes are disambiguated by the `-N`
+    suffix counter on the filename; higher N = more recent. The sort
+    key must reflect that so the dedup check always compares against
+    the *truly* latest ZIP — relying on lex order alone would put the
+    no-suffix (oldest) file at the top because `.` > `-` in ASCII.
+    """
+    import datetime as _dt
+
+    out: list[dict[str, Any]] = []
+    p = character_dir(character_id) / "backups"
+    if not p.exists():
+        return out
+    for entry in p.iterdir():
+        if not entry.is_file():
+            continue
+        m = _ZIP_BACKUP_FILE_RE.match(entry.name)
+        if not m:
+            continue
+        try:
+            stat = entry.stat()
+        except OSError:
+            continue
+        ts = _dt.datetime(
+            int(m.group(1)),
+            int(m.group(2)),
+            int(m.group(3)),
+            int(m.group(4)),
+            int(m.group(5)),
+            int(m.group(6)),
+            tzinfo=_dt.timezone.utc,
+        )
+        suffix = int(m.group(7)) if m.group(7) else 0
+        out.append(
+            {
+                "filename": entry.name,
+                "created_at": int(ts.timestamp()),
+                "_suffix": suffix,
+                "size": stat.st_size,
+            }
+        )
+    out.sort(key=lambda r: (r["created_at"], r["_suffix"]), reverse=True)
+    for row in out:
+        row.pop("_suffix", None)
+    return out
+
+
+def latest_zip_backup_content_hash(character_id: int | str) -> str | None:
+    """Hash of the most recent ZIP backup's `character.json`, in the same
+    canonical-JSON shape used by `_live_content_hash`. Used by
+    `save_zip_backup` to dedup against an unchanged Live so two
+    Back-up-all clicks in a row don't write two identical ZIPs."""
+    import hashlib
+    import zipfile
+
+    rows = list_zip_backups(character_id)
+    if not rows:
         return None
-    p = backups_dir(character_id) / filename
+    target = backups_dir(character_id) / rows[0]["filename"]
+    try:
+        with zipfile.ZipFile(target, "r") as zf:
+            raw = zf.read("character.json").decode("utf-8")
+        manifest = json.loads(raw)
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
+    # `meta.exportedAt` is the only field that changes when nothing
+    # else did — strip it before hashing so dedup works the way the
+    # snapshot path does.
+    if isinstance(manifest, dict):
+        meta = manifest.get("meta")
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta.pop("exportedAt", None)
+            manifest = {**manifest, "meta": meta}
+    canonical = json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _zip_payload_content_hash(payload: dict[str, Any]) -> str:
+    """Hash of the post-`to_zip_character_json` shape with `meta.
+    exportedAt` zeroed — so a fresh Live that round-trips to the same
+    ZIP shape hashes to the same value as the latest existing ZIP."""
+    import hashlib
+
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        meta = dict(meta)
+        meta.pop("exportedAt", None)
+        payload = {**payload, "meta": meta}
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def save_zip_backup(
+    character_id: int | str,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Pack the current Live into `<character>/backups/<ISO>.zip` —
+    userscript-restoreable, includes every gallery image still on disk
+    plus the avatar.
+
+    Distinct from `save_snapshot` (JSON-only, cheap, auto-fires on
+    every pull) — *backup* is the explicit "user clicked Back up"
+    artefact that bundles bytes.
+
+    Dedup: if the latest existing ZIP's `character.json` matches what
+    we'd serialise now, returns `{saved: False, reason: 'unchanged'}`
+    so a no-op Back-up-all doesn't bloat the directory. Pass
+    `force=True` to bypass (used by the explicit per-character action;
+    the bulk sweep dedups by default).
+
+    Returns one of:
+      `{saved: True, path, filename, created_at, size}`
+      `{saved: False, reason: 'unchanged'}`
+      `{saved: False, reason: 'no_live'}`
+    """
+    import zip_serialise
+
+    live = read_live(character_id)
+    if live is None:
+        return {"saved": False, "reason": "no_live"}
+
+    working = _live_to_zip_payload(live)
+    image_extensions: dict[str, str] = {}
+    img_dir = images_dir(character_id)
+    if img_dir.exists():
+        for entry in img_dir.iterdir():
+            if not entry.is_file():
+                continue
+            stem = entry.stem
+            ext = entry.suffix.lstrip(".").lower()
+            if stem and ext:
+                image_extensions[stem] = ext
+    candidate_payload = zip_serialise.to_zip_character_json(
+        working, image_extensions=image_extensions
+    )
+
+    if not force:
+        candidate_hash = _zip_payload_content_hash(candidate_payload)
+        prior_hash = latest_zip_backup_content_hash(character_id)
+        if prior_hash == candidate_hash:
+            return {"saved": False, "reason": "unchanged"}
+
+    # Resolve avatar path from the character name carried in the Live
+    # payload. F-list allows Unicode names; `avatar_path_for` already
+    # handles that.
+    avatar_path: Path | None = None
+    char = working.get("character")
+    if isinstance(char, dict):
+        nm = char.get("name")
+        if isinstance(nm, str) and nm:
+            candidate_avatar = avatar_path_for(nm)
+            if candidate_avatar.exists():
+                avatar_path = candidate_avatar
+
+    data = zip_serialise.build_zip(
+        character_id,
+        working,
+        images_dir=img_dir,
+        avatar_path=avatar_path,
+    )
+
+    target = backups_dir(character_id) / _zip_backup_filename()
+    # Collision suffix in case a same-second second click occurs.
+    if target.exists():
+        i = 1
+        while True:
+            stem = target.stem  # e.g. "2026-06-04T233015Z"
+            candidate = backups_dir(character_id) / f"{stem}-{i}.zip"
+            if not candidate.exists():
+                target = candidate
+                break
+            i += 1
+
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+    return {
+        "saved": True,
+        "path": str(target),
+        "filename": target.name,
+        "created_at": int(time.time()),
+        "size": len(data),
+    }
+
+
+def read_snapshot(character_id: int | str, filename: str) -> dict[str, Any] | None:
+    if not _SNAPSHOT_FILE_RE.match(filename):
+        # Reject anything that doesn't match the on-disk filename shape
+        # so a caller can't path-traverse out of snapshots/.
+        return None
+    p = snapshots_dir(character_id) / filename
     if not p.exists():
         return None
     try:
@@ -1356,9 +1646,9 @@ def avatar_path_for(name: str) -> Path:
 def list_archived_characters() -> list[dict[str, Any]]:
     """Walk `<userdata>/characters/` and surface every directory that
     looks like a character archive. Each entry: `{id, name, last_pulled_at,
-    backup_count}`. Name comes from the last Live snapshot if present —
-    we never had a name without a Live, so missing-name is impossible in
-    normal use.
+    snapshot_count, backup_count}`. Name comes from the last Live
+    snapshot if present — we never had a name without a Live, so
+    missing-name is impossible in normal use.
     """
     out: list[dict[str, Any]] = []
     root_p = root()
@@ -1378,13 +1668,26 @@ def list_archived_characters() -> list[dict[str, Any]]:
         name = (
             char.get("name") if isinstance(char, dict) else None
         ) or live.get("name")
-        backups = list_backups(cid)
+        snapshots = list_snapshots(cid)
+        # ZIP backups land in a separate `backups/` dir, populated by
+        # `save_zip_backup` (the explicit "Back up" action). Count them
+        # without forcing the dir to exist.
+        zip_dir = character_dir(cid) / "backups"
+        if zip_dir.exists():
+            backup_count = sum(
+                1
+                for child in zip_dir.iterdir()
+                if child.is_file() and child.suffix.lower() == ".zip"
+            )
+        else:
+            backup_count = 0
         out.append(
             {
                 "id": cid,
                 "name": name,
                 "last_pulled_at": live.get("fetched_at"),
-                "backup_count": len(backups),
+                "snapshot_count": len(snapshots),
+                "backup_count": backup_count,
             }
         )
     out.sort(key=lambda r: (r["name"] or "").lower())

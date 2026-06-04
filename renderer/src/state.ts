@@ -4,7 +4,7 @@ import {
   type CharacterEntry,
   type Document,
   type FlistAccountCharacter,
-  type FlistBackupEntry,
+  type FlistSnapshotEntry,
   type FlistCharacterImage,
   type FlistRosterEntry,
   type FlistSessionStatus,
@@ -171,7 +171,8 @@ type State = {
     string,
     {
       live: Record<string, unknown> | null
-      backups: FlistBackupEntry[]
+      /** JSON-snapshot history (the auto-on-pull forever-history). */
+      snapshots: FlistSnapshotEntry[]
       pullStatus: 'idle' | 'queued' | 'running' | 'done' | 'error'
       pullStage?: string
       pullProgress?: { done: number; total: number }
@@ -376,7 +377,7 @@ type State = {
   flistSelectCharacter: (characterId: string | null) => Promise<void>
   flistLoadArchive: (characterId: string) => Promise<void>
   flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
-  flistSaveBackup: (characterId: string) => Promise<void>
+  flistSaveSnapshot: (characterId: string) => Promise<void>
   // ---- Tier 6 export-restore preview ----
   flistOpenExportRestore: (characterId: string) => void
   flistCloseExportRestore: () => void
@@ -470,9 +471,15 @@ type State = {
    *  `flistConfirmCrossCharacterImport` after the modal is closed. */
   flistCancelPendingImport: () => void
   /** Tools → "Back up all characters". Walks the signed-in account
-   *  roster, pulls each character's JSON, snapshots when changed.
-   *  Single-flight: a second call while one is running is a no-op. */
+   *  roster, pulls each character (JSON + images + avatar), and
+   *  writes a userscript-restoreable ZIP per character. Single-flight:
+   *  a second call while one is running is a no-op. */
   flistBackupAll: () => Promise<void>
+  /** Right-click → "Back up now" on a single character row. Pulls
+   *  the character (full, with images), then forces a ZIP backup write
+   *  to `characters/<id>/backups/<ISO>.zip`. Uses the same Backup-all
+   *  banner UI so the user sees progress, with `total: 1`. */
+  flistBackupCharacter: (name: string) => Promise<void>
   flistSetWorkingMaterialise: (
     characterId: string,
     setId: string
@@ -1113,7 +1120,7 @@ export const useStore = create<State>((set, get) => ({
           const key = String(entry.id)
           const prev = archive[key] ?? {
             live: null,
-            backups: [],
+            snapshots: [],
             pullStatus: 'idle' as const,
           }
           archive[key] = {
@@ -1195,16 +1202,16 @@ export const useStore = create<State>((set, get) => ({
         ...s.flistArchive,
         [characterId]: s.flistArchive[characterId] ?? {
           live: null,
-          backups: [],
+          snapshots: [],
           pullStatus: 'idle'
         }
       }
     }))
-    const [live, backups] = await Promise.all([
+    const [live, snapshots] = await Promise.all([
       api.flistLive(characterId).catch(() => null),
       api
-        .flistBackups(characterId)
-        .then((r) => r.backups)
+        .flistSnapshots(characterId)
+        .then((r) => r.snapshots)
         .catch(() => [])
     ])
     set((s) => ({
@@ -1213,7 +1220,7 @@ export const useStore = create<State>((set, get) => ({
         [characterId]: {
           ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
           live,
-          backups,
+          snapshots,
           lastPullAt:
             (live && typeof live.fetched_at === 'number'
               ? (live.fetched_at as number)
@@ -1240,7 +1247,7 @@ export const useStore = create<State>((set, get) => ({
           [targetId]: {
             ...(s.flistArchive[targetId] ?? {
               live: null,
-              backups: [],
+              snapshots: [],
               pullStatus: 'idle'
             }),
             ...patch
@@ -1285,7 +1292,7 @@ export const useStore = create<State>((set, get) => ({
               [info.character_id]: {
                 ...(s.flistArchive[info.character_id] ?? {
                   live: null,
-                  backups: [],
+                  snapshots: [],
                   pullStatus: 'idle'
                 }),
                 pullStatus: 'done',
@@ -1368,9 +1375,9 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async flistSaveBackup(characterId) {
+  async flistSaveSnapshot(characterId) {
     try {
-      await api.flistSaveBackup(characterId)
+      await api.flistSaveSnapshot(characterId)
       await get().flistLoadArchive(characterId)
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err)
@@ -1380,7 +1387,7 @@ export const useStore = create<State>((set, get) => ({
           [characterId]: {
             ...(s.flistArchive[characterId] ?? {
               live: null,
-              backups: [],
+              snapshots: [],
               pullStatus: 'idle'
             }),
             pullError: raw
@@ -1614,7 +1621,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistOpenBackup(characterId, filename) {
-    const payload = await api.flistBackupRead(characterId, filename).catch(() => null)
+    const payload = await api.flistSnapshotRead(characterId, filename).catch(() => null)
     if (!payload) return
     const character = (payload.character ?? payload) as Record<string, unknown>
     const name =
@@ -1651,7 +1658,7 @@ export const useStore = create<State>((set, get) => ({
             [characterId]: {
               ...(s.flistArchive[characterId] ?? {
                 live: null,
-                backups: [],
+                snapshots: [],
                 pullStatus: 'idle'
               }),
               live: fetched as Record<string, unknown>
@@ -2408,26 +2415,28 @@ export const useStore = create<State>((set, get) => ({
             }
             return { flistBackupAllStatus: next }
           })
-          // Mirror saved snapshots into the local archive's backup list
-          // so the renderer's per-character backup picker shows them
-          // without a page reload. Cheap re-fetch.
+          // Mirror the JSON snapshot history into the local archive
+          // slot when a ZIP backup was written — the per-character
+          // pull that preceded the ZIP also auto-fired a snapshot if
+          // the content changed, and the diff picker reads from
+          // `slot.snapshots`. Cheap re-fetch.
           if (info.status === 'saved' && info.character_id) {
             void api
-              .flistBackups(info.character_id)
-              .then(({ backups }) => {
+              .flistSnapshots(info.character_id)
+              .then(({ snapshots }) => {
                 set((s) => {
                   const slot = s.flistArchive[info.character_id!]
                   if (!slot) return {}
                   return {
                     flistArchive: {
                       ...s.flistArchive,
-                      [info.character_id!]: { ...slot, backups }
+                      [info.character_id!]: { ...slot, snapshots }
                     }
                   }
                 })
               })
               .catch(() => {
-                // Non-fatal; the next time the user opens the backup
+                // Non-fatal; the next time the user opens the diff
                 // picker for this character, the fresh list lands.
               })
           }
@@ -2481,6 +2490,118 @@ export const useStore = create<State>((set, get) => ({
           currentName: null
         }
       }))
+    }
+  },
+
+  async flistBackupCharacter(name) {
+    if (get().flistBackupAllStatus.phase === 'running') return
+    set({
+      flistBackupAllStatus: {
+        phase: 'running',
+        total: 1,
+        done: 0,
+        saved: 0,
+        unchanged: 0,
+        failed: 0,
+        currentName: name,
+        errorMessage: null
+      }
+    })
+
+    const finalise = (
+      patch: Partial<State['flistBackupAllStatus']>,
+      autoClear: boolean
+    ) => {
+      set((s) => ({
+        flistBackupAllStatus: {
+          ...s.flistBackupAllStatus,
+          ...patch,
+          currentName: null
+        }
+      }))
+      if (autoClear) {
+        setTimeout(() => {
+          const cur = get().flistBackupAllStatus
+          if (cur.phase === 'done') {
+            set({
+              flistBackupAllStatus: {
+                phase: 'idle',
+                total: 0,
+                done: 0,
+                saved: 0,
+                unchanged: 0,
+                failed: 0,
+                currentName: null,
+                errorMessage: null
+              }
+            })
+          }
+        }, 6000)
+      }
+    }
+
+    try {
+      // Full pull (JSON + images + avatar) so the ZIP that follows
+      // can include every byte the userscript would need to restore
+      // the profile. Reuses the existing per-character pull endpoint
+      // — that flow already handles ticket refresh, dedup of cached
+      // images, and snapshot side-effect.
+      await get().flistPullCharacter(name)
+    } catch (err) {
+      finalise(
+        {
+          phase: 'error',
+          done: 1,
+          failed: 1,
+          errorMessage:
+            err instanceof Error ? err.message : 'pull failed'
+        },
+        false
+      )
+      return
+    }
+
+    // Resolve the character id post-pull — `flistRoster` is keyed by
+    // name, and `flistArchive` by id; the pull writes the id into the
+    // roster (live.fetched_at) so this lookup is safe right after it.
+    const roster = get().flistRoster
+    const match = roster.find(
+      (r) => r.name.toLowerCase() === name.toLowerCase()
+    )
+    const cid = match?.id ? String(match.id) : null
+    if (!cid) {
+      finalise(
+        {
+          phase: 'error',
+          done: 1,
+          failed: 1,
+          errorMessage: `Could not resolve ID for ${name}`
+        },
+        false
+      )
+      return
+    }
+
+    try {
+      const res = await api.flistZipBackup(cid)
+      if (res.saved) {
+        finalise({ phase: 'done', done: 1, saved: 1 }, true)
+      } else {
+        // The endpoint defaults to `force=true`, so dedup shouldn't
+        // fire from here — but be defensive.
+        finalise({ phase: 'done', done: 1, unchanged: 1 }, true)
+      }
+    } catch (err) {
+      finalise(
+        {
+          phase: 'error',
+          done: 1,
+          failed: 1,
+          errorMessage:
+            err instanceof Error ? err.message : 'ZIP write failed'
+        },
+        false
+      )
     }
   },
 
@@ -2743,7 +2864,7 @@ export const useStore = create<State>((set, get) => ({
       }
     }))
     try {
-      const payload = await api.flistBackupRead(characterId, filename)
+      const payload = await api.flistSnapshotRead(characterId, filename)
       set((s) => ({
         flistDiffBackupCache: {
           ...s.flistDiffBackupCache,
@@ -2781,7 +2902,7 @@ export const useStore = create<State>((set, get) => ({
     backupPayload = get().flistDiffBackupCache[cacheKey] ?? null
     if (!backupPayload) {
       try {
-        backupPayload = await api.flistBackupRead(characterId, backupFilename)
+        backupPayload = await api.flistSnapshotRead(characterId, backupFilename)
       } catch {
         // Bail without mutating — surface the failure via saveError on
         // the next flush attempt.

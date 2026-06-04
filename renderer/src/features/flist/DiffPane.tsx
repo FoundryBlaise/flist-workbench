@@ -166,7 +166,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const rightLabel =
     source.kind === 'live'
       ? 'Live'
-      : `Backup · ${formatBackupDate(archive?.backups ?? [], source.filename)}`
+      : `Snapshot · ${formatBackupDate(archive?.snapshots ?? [], source.filename)}`
 
   const descriptionRow = model.rows.find(
     (r) => r.path === 'character.description'
