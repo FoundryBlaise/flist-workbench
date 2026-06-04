@@ -625,3 +625,128 @@ def test_read_working_refuses_future_schema_version():
     assert target.exists()
 
 
+
+
+# ---- name-keyed folder registry ----------------------------------------
+
+
+def _make_id_folder(cid: str, name: str):
+    """Helper: create a legacy <id>/ character folder with live.json."""
+    import json as _json
+    d = character_archive.root() / cid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "live.json").write_text(_json.dumps({"id": int(cid), "name": name}), encoding="utf-8")
+    (d / "images").mkdir(parents=True, exist_ok=True)
+    (d / "images" / "demo.png").write_bytes(b"png")
+    return d
+
+
+def _reset_registry_state():
+    """Force the next load_registry() to re-run migration."""
+    character_archive._REGISTRY_MIGRATED = False
+    character_archive._invalidate_registry_cache()
+
+
+def test_slug_for_filesystem_safe_name_passthrough():
+    assert character_archive._slug_for("Spielwiesending") == "Spielwiesending"
+    assert character_archive._slug_for("Cleo Thouvenin") == "Cleo Thouvenin"
+    assert character_archive._slug_for("a.b-c_d") == "a.b-c_d"
+
+
+def test_slug_for_unicode_or_illegal_falls_back_to_hash():
+    s1 = character_archive._slug_for("Café Noir")
+    s2 = character_archive._slug_for("a/b<c>d")
+    s3 = character_archive._slug_for("CON")
+    for s in (s1, s2, s3):
+        assert s.startswith("c_")
+        assert len(s) == 18  # "c_" + 16 hex
+
+
+def test_slug_strips_leading_trailing_whitespace():
+    # " leading-space " → "leading-space" after strip, which is fs-safe.
+    assert character_archive._slug_for(" leading-space ") == "leading-space"
+
+
+def test_slug_is_stable_for_same_lowercased_name():
+    # Lowercase normalization keeps "Café Noir" and "café noir" colliding —
+    # F-list character names are case-insensitive unique anyway.
+    assert character_archive._slug_for("Café Noir") == character_archive._slug_for("café noir")
+
+
+def test_migration_renames_numeric_folders_to_name_slugs(tmp_path):
+    _reset_registry_state()
+    _make_id_folder("5070222", "Spielwiesending")
+    _make_id_folder("4076218", "Cleo Thouvenin")
+    _make_id_folder("999", "Café Noir")
+
+    reg = character_archive.load_registry()
+    assert reg["5070222"] == {"name": "Spielwiesending", "folder": "Spielwiesending"}
+    assert reg["4076218"] == {"name": "Cleo Thouvenin", "folder": "Cleo Thouvenin"}
+    assert reg["999"]["folder"].startswith("c_")
+
+    root = character_archive.root()
+    folders = sorted(p.name for p in root.iterdir() if p.is_dir())
+    assert "5070222" not in folders
+    assert "Spielwiesending" in folders
+    assert "Cleo Thouvenin" in folders
+
+
+def test_character_dir_resolves_via_registry(tmp_path):
+    _reset_registry_state()
+    _make_id_folder("5070222", "Spielwiesending")
+    character_archive.load_registry()  # trigger migration
+
+    p = character_archive.character_dir("5070222")
+    assert p.name == "Spielwiesending"
+    # Image bytes survived the rename.
+    assert (p / "images" / "demo.png").exists()
+
+
+def test_character_dir_falls_back_to_id_when_not_in_registry(tmp_path):
+    _reset_registry_state()
+    p = character_archive.character_dir("999999")
+    assert p.name == "999999"
+
+
+def test_migration_is_idempotent(tmp_path):
+    _reset_registry_state()
+    _make_id_folder("5070222", "Spielwiesending")
+    reg1 = character_archive.load_registry()
+    _reset_registry_state()
+    reg2 = character_archive.load_registry()
+    assert reg1 == reg2
+
+
+def test_migration_handles_collision(tmp_path):
+    _reset_registry_state()
+    # Pre-create a folder that would collide with the migration target.
+    blocker = character_archive.root() / "Spielwiesending"
+    blocker.mkdir(parents=True, exist_ok=True)
+    (blocker / "marker").write_text("untouched", encoding="utf-8")
+    _make_id_folder("5070222", "Spielwiesending")
+
+    reg = character_archive.load_registry()
+    # Registry should record the legacy id-named folder, not clobber.
+    assert reg["5070222"]["folder"] == "5070222"
+    assert (blocker / "marker").read_text(encoding="utf-8") == "untouched"
+
+
+def test_write_live_renames_folder_on_name_change(tmp_path):
+    _reset_registry_state()
+    _make_id_folder("5070222", "OldName")
+    character_archive.load_registry()
+    assert (character_archive.root() / "OldName").exists()
+
+    character_archive.write_live("5070222", {"id": 5070222, "name": "NewName"})
+
+    assert not (character_archive.root() / "OldName").exists()
+    assert (character_archive.root() / "NewName" / "live.json").exists()
+    assert character_archive.load_registry()["5070222"]["folder"] == "NewName"
+
+
+def test_write_live_first_pull_creates_name_folder(tmp_path):
+    _reset_registry_state()
+    character_archive.write_live("9999999", {"id": 9999999, "name": "Brand New"})
+    assert (character_archive.root() / "Brand New" / "live.json").exists()
+    assert character_archive.load_registry()["9999999"]["folder"] == "Brand New"
+

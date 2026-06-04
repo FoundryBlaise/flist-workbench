@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,7 @@ CACHE_DIRNAME = "cache"
 LIVE_FILENAME = "live.json"
 PULL_STATE_FILENAME = "pull_state.json"
 WORKING_FILENAME = "working.json"
+REGISTRY_FILENAME = "_registry.json"
 
 # v1 → v2 (Tier 3): added local: ids, _custom_kinks_order, tombstones.
 # v2 → v3 (Tier 6 attempt 1): sha256-keyed gallery refs. Reverted in v4.
@@ -92,8 +94,263 @@ def cache_root() -> Path:
     return p
 
 
+# ---- name-keyed folder registry --------------------------------------
+#
+# Storage was originally keyed by F-list character_id (numeric). That's
+# stable across renames but opaque if the user opens the folder in a
+# file browser. We now key folders by character name:
+#   <userdata>/characters/Spielwiesending/...
+# with a sidecar `_registry.json` at characters/ root mapping
+# character_id → {name, folder}. character_id stays the API key
+# because IDs are stable; folder is just the on-disk slug.
+#
+# Slug rules (mirror avatar_path_for): if the name matches a
+# whitelist of filesystem-safe characters AND isn't a Windows
+# reserved name AND has no leading/trailing space-or-dot, use it
+# verbatim. Otherwise sha1-hash the lowercased name.
+
+_FOLDER_SAFE_RE = re.compile(r"^[A-Za-z0-9 ._-]+$")
+_WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _is_folder_safe(name: str) -> bool:
+    if not isinstance(name, str) or not name:
+        return False
+    if not _FOLDER_SAFE_RE.match(name):
+        return False
+    # Leading/trailing space or dot trips Windows.
+    if name[0] in " ." or name[-1] in " .":
+        return False
+    if name.split(".")[0].upper() in _WIN_RESERVED:
+        return False
+    # Length cap — most FSes top out at 255 bytes; leave headroom for
+    # downstream filenames added inside the folder.
+    if len(name.encode("utf-8")) > 120:
+        return False
+    return True
+
+
+def _slug_for(name: str) -> str:
+    """Return the on-disk folder slug for `name`. Either the name
+    itself (if filesystem-safe) or a sha1 prefix fallback. The
+    fallback prefix is `c_` so a directory listing makes clear these
+    are character archives even when the name itself is unprintable.
+    """
+    n = (name or "").strip()
+    if _is_folder_safe(n):
+        return n
+    import hashlib
+    digest = hashlib.sha1(n.lower().encode("utf-8")).hexdigest()[:16]
+    return f"c_{digest}"
+
+
+def _registry_path() -> Path:
+    return root() / REGISTRY_FILENAME
+
+
+_REGISTRY_CACHE: dict[str, dict[str, str]] | None = None
+_REGISTRY_MIGRATED = False
+_REGISTRY_LOCK = threading.Lock()
+
+
+def load_registry() -> dict[str, dict[str, str]]:
+    """Return the {character_id: {name, folder}} map. Cached on
+    first read; mutators call _invalidate_registry_cache to force
+    reload. Triggers the one-shot id→name folder migration on the
+    very first call after startup.
+    """
+    global _REGISTRY_CACHE
+    with _REGISTRY_LOCK:
+        if _REGISTRY_CACHE is not None:
+            return _REGISTRY_CACHE
+        _maybe_migrate_id_folders()
+        p = _registry_path()
+        reg: dict[str, dict[str, str]] = {}
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if (
+                            isinstance(k, str)
+                            and isinstance(v, dict)
+                            and isinstance(v.get("folder"), str)
+                        ):
+                            reg[k] = {
+                                "name": str(v.get("name") or ""),
+                                "folder": v["folder"],
+                            }
+            except (OSError, ValueError):
+                pass
+        _REGISTRY_CACHE = reg
+        return reg
+
+
+def save_registry(reg: dict[str, dict[str, str]]) -> None:
+    global _REGISTRY_CACHE
+    with _REGISTRY_LOCK:
+        _atomic_write_json(_registry_path(), reg)
+        _REGISTRY_CACHE = dict(reg)
+
+
+def _invalidate_registry_cache() -> None:
+    global _REGISTRY_CACHE
+    with _REGISTRY_LOCK:
+        _REGISTRY_CACHE = None
+
+
+def register_character(character_id: int | str, name: str) -> str:
+    """Upsert character_id → name in the registry. If the on-disk
+    folder name doesn't match the current slug, rename it. Returns
+    the resolved folder slug.
+
+    Three cases:
+      1. Already registered, name unchanged → no-op rename.
+      2. Already registered, name changed → rename old_slug → new_slug.
+      3. Not registered: check for a legacy id-named folder (created by
+         earlier character_dir(id) fallbacks) and rename it into place.
+
+    Rename failures (e.g. file lock on Windows) leave the registry
+    pointing at the prior slug — the next pull will retry.
+    """
+    cid = str(character_id)
+    new_slug = _slug_for(name)
+    reg = dict(load_registry())
+    entry = reg.get(cid) or {}
+    # Source folder for a rename: either the registered slug (cases
+    # 1+2) or the legacy id-folder if it exists on disk (case 3).
+    old_slug = entry.get("folder")
+    if not old_slug:
+        legacy = root() / cid
+        if legacy.exists() and legacy.is_dir():
+            old_slug = cid
+    if old_slug and old_slug != new_slug:
+        old_path = root() / old_slug
+        new_path = root() / new_slug
+        if old_path.exists() and old_path != new_path:
+            if new_path.exists():
+                # Collision: leave both alone. Keep the old slug so
+                # reads of existing content still work.
+                entry = {"name": name, "folder": old_slug}
+            else:
+                try:
+                    old_path.rename(new_path)
+                    entry = {"name": name, "folder": new_slug}
+                except OSError:
+                    entry = {"name": name, "folder": old_slug}
+        else:
+            entry = {"name": name, "folder": new_slug}
+    elif old_slug:
+        entry = {"name": name, "folder": old_slug}
+    else:
+        # Brand-new character with no legacy folder. Lazy-create on
+        # first character_dir() call.
+        entry = {"name": name, "folder": new_slug}
+    reg[cid] = entry
+    save_registry(reg)
+    return entry["folder"]
+
+
+def _maybe_migrate_id_folders() -> None:
+    """Scan characters/ for purely-numeric folder names; for each, read
+    its live.json, compute the name slug, rename the folder, populate
+    the registry. Runs once per process. Idempotent: a second run
+    no-ops because there are no numeric folders left.
+    """
+    global _REGISTRY_MIGRATED
+    if _REGISTRY_MIGRATED:
+        return
+    _REGISTRY_MIGRATED = True
+
+    chars_root = root()
+    if not chars_root.exists():
+        return
+
+    p = _registry_path()
+    reg: dict[str, dict[str, str]] = {}
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                reg = {k: dict(v) for k, v in data.items() if isinstance(v, dict)}
+        except (OSError, ValueError):
+            pass
+
+    changed = False
+    for entry in sorted(chars_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith("_"):
+            # Reserved (registry file lives here, future-proofing).
+            continue
+        live_path = entry / LIVE_FILENAME
+        if not live_path.exists():
+            continue
+        try:
+            live = json.loads(live_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        cid_raw = live.get("id")
+        cname = live.get("name")
+        if not isinstance(cname, str) or not cname.strip():
+            continue
+        cid = str(cid_raw) if cid_raw is not None else None
+        slug = _slug_for(cname)
+        # Skip folders that are already the correct slug.
+        if entry.name == slug:
+            if cid and cid not in reg:
+                reg[cid] = {"name": cname, "folder": slug}
+                changed = True
+            continue
+        # Only auto-migrate numeric-named folders (the legacy id-keyed
+        # ones). Anything else is user-named or already-migrated; don't
+        # touch it.
+        if not entry.name.isdigit():
+            if cid and cid not in reg:
+                reg[cid] = {"name": cname, "folder": entry.name}
+                changed = True
+            continue
+        if cid is None:
+            cid = entry.name  # numeric folder name == the id
+        new_path = chars_root / slug
+        if new_path.exists():
+            # Slug collision (two characters with the same name?).
+            # Leave the legacy folder in place and just record the
+            # mapping under its current numeric name.
+            reg[cid] = {"name": cname, "folder": entry.name}
+            changed = True
+            continue
+        try:
+            entry.rename(new_path)
+        except OSError:
+            reg[cid] = {"name": cname, "folder": entry.name}
+            changed = True
+            continue
+        reg[cid] = {"name": cname, "folder": slug}
+        changed = True
+
+    if changed:
+        try:
+            _atomic_write_json(p, reg)
+        except OSError:
+            pass
+
+
 def character_dir(character_id: int | str) -> Path:
-    p = root() / str(character_id)
+    cid = str(character_id)
+    reg = load_registry()
+    entry = reg.get(cid)
+    if entry and entry.get("folder"):
+        p = root() / entry["folder"]
+    else:
+        # Unregistered id (no pull yet, or registry corruption) — fall
+        # back to the legacy id-named folder so existing data keeps
+        # working.
+        p = root() / cid
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -191,7 +448,17 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     """Overwrite the Live snapshot. Caller is responsible for stamping
-    `fetched_at` into the payload before calling."""
+    `fetched_at` into the payload before calling.
+
+    Also registers the character_id ↔ name in the folder registry and
+    renames the on-disk folder if the name changed since the last
+    write (e.g. F-list renames are detected the next time we pull
+    that character). The registry write happens BEFORE the live.json
+    write so the live.json lands in the new folder, not the stale one.
+    """
+    name = payload.get("name")
+    if isinstance(name, str) and name.strip():
+        register_character(character_id, name)
     _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
 
 
@@ -1649,29 +1916,53 @@ def list_archived_characters() -> list[dict[str, Any]]:
     snapshot_count, backup_count}`. Name comes from the last Live
     snapshot if present — we never had a name without a Live, so
     missing-name is impossible in normal use.
+
+    Since the rename to name-keyed folders, the directory name is no
+    longer the character_id. We pull `id` out of live.json, and fall
+    back to the folder name (which would be the legacy id-folder case
+    for archives that haven't been migrated yet).
     """
     out: list[dict[str, Any]] = []
     root_p = root()
+    # Reverse-map folder → id from the registry so we can resolve a
+    # folder name back to its canonical id without re-reading live.json
+    # twice. Folder→id is unambiguous; an unmapped folder is the
+    # legacy id-named case where folder name == id.
+    folder_to_id: dict[str, str] = {}
+    for cid, entry in load_registry().items():
+        folder = entry.get("folder")
+        if isinstance(folder, str):
+            folder_to_id[folder] = cid
+
     for entry in root_p.iterdir():
         if not entry.is_dir():
             continue
-        cid = entry.name
-        live = read_live(cid)
-        if live is None:
-            # No Live yet — directory created but pull never finished.
-            # Skip so the picker doesn't surface broken rows.
+        if entry.name.startswith("_"):
             continue
+        # Identify the character_id for this folder. Prefer the
+        # registry (authoritative); fall back to live.json's id; final
+        # fallback is the folder name itself (legacy unmigrated case).
+        live_path = entry / LIVE_FILENAME
+        if not live_path.exists():
+            continue
+        try:
+            live = json.loads(live_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        cid = folder_to_id.get(entry.name)
+        if cid is None:
+            live_id = live.get("id") if isinstance(live, dict) else None
+            if live_id is not None:
+                cid = str(live_id)
+            else:
+                cid = entry.name
         char = live.get("character") if isinstance(live, dict) else None
         if not isinstance(char, dict):
-            # Could be the raw character-data shape too.
             char = live
         name = (
             char.get("name") if isinstance(char, dict) else None
         ) or live.get("name")
         snapshots = list_snapshots(cid)
-        # ZIP backups land in a separate `backups/` dir, populated by
-        # `save_zip_backup` (the explicit "Back up" action). Count them
-        # without forcing the dir to exist.
         zip_dir = character_dir(cid) / "backups"
         if zip_dir.exists():
             backup_count = sum(
