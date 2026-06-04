@@ -4,6 +4,8 @@ import { api } from '../../lib/api'
 import { displayCharacter as displayName } from '../../lib/partnerName'
 import { ContextMenu } from '../flist/working-sets/ContextMenu'
 
+const HIDE_LOGS_ONLY_KEY = 'flist-workbench:picker-hide-logs-only'
+
 function initialFor(name: string): string {
   const trimmed = name.trim()
   if (!trimmed) return '?'
@@ -145,6 +147,27 @@ export function UnifiedCharacterPicker() {
     x: number
     y: number
   } | null>(null)
+  // Per-machine preference. Only meaningful when signed in (we don't
+  // know which characters are on the account until then) — the toggle
+  // is hidden and the section always renders pre-login.
+  const [hideLogsOnly, setHideLogsOnly] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(HIDE_LOGS_ONLY_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggleHideLogsOnly = () => {
+    setHideLogsOnly((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(HIDE_LOGS_ONLY_KEY, next ? '1' : '0')
+      } catch {
+        // localStorage unavailable — preference just won't persist
+      }
+      return next
+    })
+  }
 
   // Surface pull progress + completion + failure for the active
   // character regardless of which view is showing — the F-list zone
@@ -434,7 +457,7 @@ export function UnifiedCharacterPicker() {
               </ul>
             </>
           )}
-          {logsOnlyEntries.length > 0 && (
+          {logsOnlyEntries.length > 0 && !(session.active && hideLogsOnly) && (
             <>
               <div
                 className="char-picker-section-h"
@@ -480,6 +503,18 @@ export function UnifiedCharacterPicker() {
               <span className="char-picker-foot-account">
                 Signed in as <strong>{session.account}</strong>
               </span>
+              <label
+                className="char-picker-foot-toggle"
+                title="Hide the 'Logs only' section — characters that aren't on your F-list account anymore."
+              >
+                <input
+                  type="checkbox"
+                  checked={hideLogsOnly}
+                  onChange={toggleHideLogsOnly}
+                  data-testid="char-picker-hide-logs-only"
+                />
+                <span>Hide logs-only</span>
+              </label>
               <button
                 type="button"
                 className="char-picker-signout"
