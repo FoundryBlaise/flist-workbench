@@ -26,6 +26,7 @@ import flist_api
 import labels as labels_store
 import labels_jobs
 import labels_llm
+import restore as restore_svc
 import system as system_probe
 import rag as rag_settings
 import rag_chat
@@ -3725,6 +3726,103 @@ def drafts_save(doc_id: int, body: RevisionWrite, conn=Depends(_db)) -> None:
 @app.delete("/documents/{doc_id}/draft", status_code=204)
 def drafts_discard(doc_id: int, conn=Depends(_db)) -> None:
     documents.discard_draft(conn, doc_id)
+
+
+# ---- Restore (browser-extension pairing + snapshot serving) ----------
+#
+# Endpoints below back the F-list Workbench browser extension. Pairing
+# is OBS-style: extension POSTs /restore/handshake; renderer surfaces
+# an Accept-this-extension modal; on accept the token becomes valid
+# and the extension can list / fetch snapshots and post pre-restore
+# form-state snapshots. See repo/sidecar/restore.py for state model.
+
+
+class _PairAcceptBody(BaseModel):
+    handshake_id: str
+
+
+class _PreRestoreSnapshotBody(BaseModel):
+    character: str
+    payload: dict[str, Any]
+
+
+class _RestoreDoneBody(BaseModel):
+    character: str | None = None
+
+
+def _require_restore_auth(
+    x_workbench_auth: str | None = Header(default=None),
+) -> str:
+    if not restore_svc.auth_token_valid(x_workbench_auth):
+        raise HTTPException(status_code=401, detail="not_paired")
+    return x_workbench_auth  # type: ignore[return-value]
+
+
+@app.post("/restore/handshake")
+def restore_handshake_begin() -> dict[str, str]:
+    return restore_svc.begin_handshake()
+
+
+@app.get("/restore/handshake-status")
+def restore_handshake_status(handshake_id: str) -> dict[str, str]:
+    return restore_svc.handshake_status(handshake_id)
+
+
+@app.get("/restore/handshake/pending")
+def restore_handshake_pending() -> dict[str, Any]:
+    return {"pending": restore_svc.list_pending_handshakes()}
+
+
+@app.post("/restore/handshake/accept")
+def restore_handshake_accept(body: _PairAcceptBody) -> dict[str, Any]:
+    return restore_svc.accept_handshake(body.handshake_id)
+
+
+@app.post("/restore/handshake/reject")
+def restore_handshake_reject(body: _PairAcceptBody) -> dict[str, Any]:
+    return restore_svc.reject_handshake(body.handshake_id)
+
+
+@app.delete("/restore/token")
+def restore_token_revoke() -> dict[str, bool]:
+    restore_svc.revoke_token()
+    return {"ok": True}
+
+
+@app.get("/restore/snapshots")
+def restore_snapshots(
+    character: str,
+    _auth: str = Depends(_require_restore_auth),
+) -> list[dict[str, Any]]:
+    return restore_svc.list_snapshots(character)
+
+
+@app.get("/restore/snapshot/{snapshot_id}")
+def restore_snapshot(
+    snapshot_id: str,
+    character: str,
+    _auth: str = Depends(_require_restore_auth),
+) -> Response:
+    data = restore_svc.fetch_snapshot_zip(character, snapshot_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="snapshot_not_found")
+    return Response(content=data, media_type="application/zip")
+
+
+@app.post("/restore/snapshot/fresh")
+def restore_snapshot_fresh(
+    body: _PreRestoreSnapshotBody,
+    _auth: str = Depends(_require_restore_auth),
+) -> dict[str, Any]:
+    return restore_svc.write_pre_restore_snapshot(body.character, body.payload)
+
+
+@app.post("/restore/done")
+def restore_done(
+    body: _RestoreDoneBody,
+    _auth: str = Depends(_require_restore_auth),
+) -> dict[str, bool]:
+    return {"ok": True}
 
 
 # Entry point for the PyInstaller-frozen build. In dev we run via

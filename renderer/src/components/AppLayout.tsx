@@ -7,6 +7,7 @@ import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
 import { SignInModal } from '../features/flist/SignInModal'
 import { ActivityLogModal } from '../features/flist/ActivityLogModal'
+import { ExtensionPairWatcher } from '../features/flist/ExtensionPairModal'
 import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
@@ -382,6 +383,7 @@ export function AppLayout() {
         </div>
       )}
       <BackupAllBanner />
+      <ExtensionPairWatcher />
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
