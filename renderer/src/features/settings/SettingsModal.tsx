@@ -52,14 +52,15 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 const NOMIC_QUERY_PREFIX = 'search_query: '
 const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
-type SectionId = 'general' | 'flist' | 'labels' | 'chat' | 'embedding'
+type SectionId = 'general' | 'flist' | 'labels' | 'chat' | 'embedding' | 'security'
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
   { id: 'flist', label: 'F-list', subtitle: 'Sign-in refresh + snapshot behaviour' },
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
   { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
-  { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' }
+  { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
+  { id: 'security', label: 'Security', subtitle: 'Browser-extension pairing' }
 ]
 
 /** localStorage key for the auto-refresh-on-login threshold. Stored as
@@ -206,9 +207,11 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
   return {
     general: generalDirty,
+    flist: false,
     labels: labelsDirty,
     chat: chatDirty,
-    embedding: embeddingDirty
+    embedding: embeddingDirty,
+    security: false
   }
 }
 
@@ -611,6 +614,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onChange={updateRag}
                   />
                 )}
+                {activeSection === 'security' && <SecurityPane />}
               </>
             )}
           </div>
@@ -1139,6 +1143,97 @@ function FlistPane() {
           limits; you can keep working — manual ↻ Refresh interleaves
           cleanly.
         </p>
+      </div>
+    </>
+  )
+}
+
+function SecurityPane() {
+  // Tracks whether a token has been issued + accepted. We can't read
+  // the token itself (sidecar never returns it after pairing) so this
+  // is a coarse "is anything stored?" signal derived from whether a
+  // /restore/* auth call succeeds. The simplest probe is to call any
+  // authed endpoint; we use snapshots with an empty character — it
+  // returns 200 + [] when paired, 401 when not.
+  const [paired, setPaired] = useState<'unknown' | 'yes' | 'no'>('unknown')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const refresh = async () => {
+    try {
+      const res = await fetch(`${api.base()}/restore/snapshots?character=__probe__`, {
+        // No X-Workbench-Auth header — if the sidecar replies 401, we
+        // know there's no accepted token. We can't actively test "is
+        // MY token valid" from the renderer because the renderer
+        // doesn't hold the token (only the extension does).
+      })
+      setPaired(res.status === 401 ? 'no' : res.status === 200 ? 'yes' : 'unknown')
+    } catch {
+      setPaired('unknown')
+    }
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  const rotate = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await api.restoreRevokeToken()
+      setMsg('Token revoked. The extension will need to re-pair on its next request.')
+      await refresh()
+    } catch (e) {
+      setMsg(`Could not revoke: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <h3 className="settings-section-h">Browser-extension pairing</h3>
+      <div className="settings-row settings-row-grid">
+        <span className="settings-label">Status</span>
+        <div className="settings-inline-input">
+          <strong>
+            {paired === 'yes' && '● Paired'}
+            {paired === 'no' && '○ Not paired'}
+            {paired === 'unknown' && '… Checking'}
+          </strong>
+        </div>
+        <p className="settings-help">
+          The F-list Workbench browser extension talks to this app over
+          <code> 127.0.0.1:8765 </code>
+          using a per-install token. Pairing happens via an
+          accept-this-extension prompt the first time the extension
+          asks. The extension never sees your F-list session and this
+          app never sees your F-list cookies — the extension just
+          fetches snapshots you've already stored locally.
+        </p>
+      </div>
+      <h3 className="settings-section-h">Rotate pairing token</h3>
+      <div className="settings-row settings-row-grid">
+        <span className="settings-label">Reset trust</span>
+        <div className="settings-inline-input">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={rotate}
+            disabled={busy || paired !== 'yes'}
+            data-testid="settings-security-rotate"
+          >
+            {busy ? 'Revoking…' : 'Rotate token'}
+          </button>
+        </div>
+        <p className="settings-help">
+          Revokes the current pairing token. The extension will be
+          locked out until you accept a fresh pairing prompt. Use this
+          if you suspect the token leaked, or after uninstalling /
+          reinstalling the extension.
+        </p>
+        {msg && <p className="settings-help"><strong>{msg}</strong></p>}
       </div>
     </>
   )

@@ -1395,7 +1395,25 @@ export const api = {
         // best-effort
       }
     }
-  }
+  },
+
+  // ---- Browser-extension pairing (restore flow) -------------------------
+  restorePendingHandshakes: () =>
+    get<{ pending: { handshake_id: string; fingerprint: string; created_at: number }[] }>(
+      '/restore/handshake/pending'
+    ),
+  restoreAcceptHandshake: (handshakeId: string) =>
+    request<{ ok: boolean; error?: string }>('/restore/handshake/accept', {
+      method: 'POST',
+      body: JSON.stringify({ handshake_id: handshakeId })
+    }),
+  restoreRejectHandshake: (handshakeId: string) =>
+    request<{ ok: boolean; error?: string }>('/restore/handshake/reject', {
+      method: 'POST',
+      body: JSON.stringify({ handshake_id: handshakeId })
+    }),
+  restoreRevokeToken: () =>
+    request<{ ok: boolean }>('/restore/token', { method: 'DELETE' })
 }
 
 export type OllamaPullProgress = {
