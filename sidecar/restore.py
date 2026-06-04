@@ -226,27 +226,49 @@ def _character_id_for_name(name: str) -> str | None:
 
 
 def list_snapshots(character_name: str) -> list[dict[str, Any]]:
+    """Expose every importable source for `character_name`:
+
+    1. **Live** — `live.json`, the canonical "From F-list" state.
+    2. **Working sets** — each named set under `sets/`. Working sets are
+       the user's saved drafts; the active one is reflected in
+       `working.json` but the persisted entity is the set itself.
+    3. **Backups** — full ZIP archives under `backups/`. Includes the
+       auto pre-restore snapshots written by `/restore/snapshot/fresh`.
+
+    Order: Live first (highest semantic priority — reverts edits),
+    then sets newest-first, then backups newest-first.
+    """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
         return []
 
     out: list[dict[str, Any]] = []
 
-    working = character_archive.read_working(character_id)
-    if working is not None:
-        images_dir = character_archive.images_dir(character_id)
-        image_count = 0
-        try:
-            image_count = sum(1 for e in images_dir.iterdir() if e.is_file())
-        except OSError:
-            pass
+    live = character_archive.read_live(character_id)
+    if live is not None:
+        live_images = live.get("images") if isinstance(live.get("images"), list) else []
         out.append({
-            "id": "working",
-            "kind": "working",
-            "label": "Working copy (your unsaved edits)",
+            "id": "live",
+            "kind": "live",
+            "label": "From F-list (current live state)",
             "created_at": _iso_from_path(
-                character_archive.working_path(character_id)
+                character_archive.character_dir(character_id) / "live.json"
             ),
+            "image_count": len(live_images),
+        })
+
+    for meta in character_archive.list_sets(character_id):
+        payload = character_archive.read_set_payload(character_id, meta.id)
+        image_count = 0
+        if isinstance(payload, dict):
+            images = payload.get("images")
+            if isinstance(images, list):
+                image_count = len(images)
+        out.append({
+            "id": f"set:{meta.id}",
+            "kind": "set",
+            "label": meta.name,
+            "created_at": _iso_from_unix(meta.updated_at),
             "image_count": image_count,
         })
 
@@ -276,20 +298,42 @@ def _iso_from_path(p: Path) -> str | None:
     return _dt.datetime.fromtimestamp(mtime, tz=_dt.timezone.utc).isoformat()
 
 
+def _iso_from_unix(ts: float | int | None) -> str | None:
+    if ts is None:
+        return None
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(ts), tz=_dt.timezone.utc).isoformat()
+
+
 def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     character_id = _character_id_for_name(character_name)
     if character_id is None:
         return None
 
-    if snapshot_id == "working":
-        working = character_archive.read_working(character_id)
-        if working is None:
+    images_dir = character_archive.images_dir(character_id)
+    avatar = _avatar_path_for(character_id)
+
+    if snapshot_id == "live":
+        live = character_archive.read_live(character_id)
+        if live is None:
             return None
-        avatar = _avatar_path_for(character_id)
+        working_shape = character_archive._seed_payload_from_live(live)
         return zip_serialise.build_zip(
             character_id,
-            working,
-            images_dir=character_archive.images_dir(character_id),
+            working_shape,
+            images_dir=images_dir,
+            avatar_path=avatar,
+        )
+
+    if snapshot_id.startswith("set:"):
+        set_id = snapshot_id[len("set:"):]
+        payload = character_archive.read_set_payload(character_id, set_id)
+        if payload is None:
+            return None
+        return zip_serialise.build_zip(
+            character_id,
+            payload,
+            images_dir=images_dir,
             avatar_path=avatar,
         )
 
