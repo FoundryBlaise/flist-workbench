@@ -340,7 +340,7 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
         return None
 
     images_dir = character_archive.images_dir(character_id)
-    avatar = _avatar_path_for(character_id)
+    avatar = _avatar_path_for_name(character_name)
 
     if snapshot_id == "live":
         live = character_archive.read_live(character_id)
@@ -376,12 +376,14 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     return candidate.read_bytes()
 
 
-def _avatar_path_for(character_id: str) -> Path | None:
-    avatars = character_archive.avatars_root()
-    for ext in ("png", "jpg", "jpeg", "gif"):
-        p = avatars / f"{character_id}.{ext}"
-        if p.exists():
-            return p
+def _avatar_path_for_name(character_name: str) -> Path | None:
+    """Workbench stores avatars at `<userdata>/avatars/<lowercase_name>.png`
+    (keyed by character name, not character id). Earlier this function
+    looked under `avatars/<id>.<ext>` which always missed, so the
+    extension's apply path never received an avatar and was a no-op."""
+    p = character_archive.avatar_path_for(character_name)
+    if p.exists():
+        return p
     return None
 
 
