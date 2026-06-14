@@ -1,6 +1,28 @@
 import { spawn, spawnSync, ChildProcess } from 'node:child_process'
 import { app } from 'electron'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+
+// Mirror main.ts's appendDiagLog so sidecar startup paints into the
+// same log file. We can't import from main.ts (circular) and we want
+// sidecar diagnostics regardless of who called startSidecar.
+function sidecarDiag(prefix: string, payload: unknown): void {
+  const line = `[${new Date().toISOString()}] sidecar:${prefix}: ${
+    payload instanceof Error
+      ? `${payload.message}\n${payload.stack ?? ''}`
+      : typeof payload === 'string'
+        ? payload
+        : JSON.stringify(payload)
+  }\n`
+  process.stderr.write(line)
+  try {
+    void writeFile(join(app.getPath('userData'), 'main-diag.log'), line, {
+      flag: 'a'
+    })
+  } catch {
+    /* no-op */
+  }
+}
 
 let proc: ChildProcess | null = null
 let exitHandlersInstalled = false
@@ -45,14 +67,32 @@ export const sidecarUrl = `http://127.0.0.1:${PORT}`
 
 export async function startSidecar(): Promise<void> {
   installExitHandlers()
+  sidecarDiag('start', {
+    isPackaged: app.isPackaged,
+    port: PORT,
+    platform: process.platform,
+    resourcesPath: app.isPackaged ? process.resourcesPath : null
+  })
   if (app.isPackaged) {
     const exe = join(process.resourcesPath, 'sidecar.exe')
+    sidecarDiag('spawn-packaged', { exe })
+    // Pipe stdout/stderr so we can tee them into the diag log — a
+    // PyInstaller bundle that crashes on startup prints the traceback
+    // to stderr, and we want that traceback in a place a user can
+    // grep without attaching a debugger.
     proc = spawn(exe, [], {
       env: { ...process.env, SIDECAR_PORT: String(PORT) },
-      stdio: ['ignore', 'inherit', 'inherit']
+      stdio: ['ignore', 'pipe', 'pipe']
     })
+    proc.stdout?.on('data', (chunk: Buffer) =>
+      sidecarDiag('stdout', chunk.toString('utf8').trimEnd())
+    )
+    proc.stderr?.on('data', (chunk: Buffer) =>
+      sidecarDiag('stderr', chunk.toString('utf8').trimEnd())
+    )
   } else {
     const sidecarDir = join(__dirname, '../../sidecar')
+    sidecarDiag('spawn-dev', { sidecarDir })
     // `uv sync` is idempotent and ~100 ms when the lockfile is clean,
     // so we run it on every dev launch — that way a `git pull` that
     // adds a Python dep doesn't crash the next run with a confusing
@@ -83,12 +123,23 @@ export async function startSidecar(): Promise<void> {
     )
   }
 
-  proc.on('exit', (code) => {
-    console.log(`[sidecar] exited with code ${code}`)
+  sidecarDiag('spawned', { pid: proc.pid ?? null })
+
+  proc.on('exit', (code, signal) => {
+    sidecarDiag('exited', { code, signal })
     proc = null
   })
+  proc.on('error', (err) => {
+    sidecarDiag('spawn-error', err)
+  })
 
-  await waitForHealth(PORT)
+  try {
+    await waitForHealth(PORT)
+    sidecarDiag('healthy', { port: PORT })
+  } catch (err) {
+    sidecarDiag('health-failed', err)
+    throw err
+  }
 }
 
 export function stopSidecar(): void {
