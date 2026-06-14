@@ -458,6 +458,60 @@ def test_add_uploaded_image_is_idempotent_on_identical_bytes():
     assert len(files) == 1
 
 
+def test_add_uploaded_image_reuses_existing_real_id_file():
+    """If a byte-identical file is already on disk under a real F-list
+    id (e.g. from an earlier pull), uploading the same bytes must NOT
+    mint a parallel `local-<sha8>` copy. Otherwise the Pool ends up
+    showing the same image twice once the real-id slot is dragged off
+    profile — the bug seen 2026-06-14."""
+    cid = "509b"
+    character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
+    row = character_archive.add_uploaded_image(cid, _PNG_HEADER)
+    assert row is not None
+    assert row["image_id"] == "45755545"
+    files = list(character_archive.images_dir(cid).iterdir())
+    assert len(files) == 1
+
+
+def test_list_collapses_existing_local_duplicate_of_real_id():
+    """Cure pass for archives that already have a `local-<sha8>` next to
+    a byte-identical real-id file (state created by older builds). The
+    first list_character_images must drop the local and rewrite any
+    working.json gallery slot that pointed at it."""
+    import json as _json
+    cid = "509c"
+    # Pre-existing dupe state on disk: same bytes under two ids.
+    character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
+    character_archive.write_character_image(
+        cid, "local-deadbeef", "png", _PNG_HEADER
+    )
+    # working.json gallery still points at the local id (the slot the
+    # user was looking at before the dupe was created).
+    wpath = character_archive.working_path(cid)
+    wpath.parent.mkdir(parents=True, exist_ok=True)
+    wpath.write_text(
+        _json.dumps(
+            {
+                "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+                "_overlay": [],
+                "character": {"id": cid, "name": "X"},
+                "images": [
+                    {"image_id": "local-deadbeef", "description": "mine"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = character_archive.list_character_images(cid)
+    ids = sorted(r["image_id"] for r in rows)
+    assert ids == ["45755545"]
+    payload = character_archive.read_working(cid)
+    assert payload is not None
+    assert payload["images"] == [
+        {"image_id": "45755545", "description": "mine"}
+    ]
+
+
 def test_add_uploaded_image_rejects_non_image_bytes():
     cid = "511"
     row = character_archive.add_uploaded_image(cid, b"not an image")
