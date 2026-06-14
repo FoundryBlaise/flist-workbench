@@ -2,14 +2,71 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import * as keytar from 'keytar'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
 import { attachContextMenu } from './contextMenu'
 
+// Lazy keytar handle. We deliberately do NOT `import keytar` at the top
+// of the module: keytar is a native binding, and a load failure (ABI
+// mismatch, missing .node binary, sandboxing) at module-evaluation
+// time would crash the entire main process before app.whenReady() ever
+// fires — i.e. silent "window never opens" with the user seeing only
+// "start electron app..." in the terminal. Loading it lazily means a
+// broken keychain degrades gracefully: saved-creds features fail, the
+// rest of the app keeps working, and the error surfaces in console.
+type Keytar = typeof import('keytar')
+let _keytar: Keytar | null = null
+let _keytarLoadError: string | null = null
+function loadKeytar(): Keytar | null {
+  if (_keytar) return _keytar
+  if (_keytarLoadError) return null
+  try {
+    _keytar = require('keytar') as Keytar
+    return _keytar
+  } catch (err) {
+    _keytarLoadError = err instanceof Error ? err.message : String(err)
+    console.error('[main] keytar load failed:', _keytarLoadError)
+    return null
+  }
+}
+
 const isDev = !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
+
+// Make main-process crashes diagnosable instead of vanishing into a
+// silent "window never opened" state. Three knobs:
+//   1. process-level error handlers print stack + write to a log file
+//      under userData so post-mortem is possible from a packaged build.
+//   2. in dev, DevTools auto-opens so the renderer console is visible
+//      without having to remember Ctrl+Shift+I.
+//   3. renderer crash/unresponsive events also log, so a white window
+//      isn't mysterious.
+function appendDiagLog(prefix: string, payload: unknown): void {
+  const line = `[${new Date().toISOString()}] ${prefix}: ${
+    payload instanceof Error
+      ? `${payload.message}\n${payload.stack ?? ''}`
+      : typeof payload === 'string'
+        ? payload
+        : JSON.stringify(payload)
+  }\n`
+  // stderr first so dev terminals see it; file write is best-effort so
+  // a logging failure can't itself crash main.
+  process.stderr.write(line)
+  try {
+    const userData = app.getPath('userData')
+    void writeFile(join(userData, 'main-diag.log'), line, { flag: 'a' })
+  } catch {
+    // No-op
+  }
+}
+
+process.on('uncaughtException', (err) => {
+  appendDiagLog('uncaughtException', err)
+})
+process.on('unhandledRejection', (reason) => {
+  appendDiagLog('unhandledRejection', reason)
+})
 
 // Renderer asks for a folder via this channel — we open the OS-native
 // directory picker in the main process and return the absolute path
@@ -233,8 +290,10 @@ const META_ACCOUNT = '__meta__'
 type SavedMeta = { account: string; autoLogin: boolean }
 
 async function readMeta(): Promise<SavedMeta | null> {
+  const kt = loadKeytar()
+  if (!kt) return null
   try {
-    const raw = await keytar.getPassword(KEYTAR_SERVICE, META_ACCOUNT)
+    const raw = await kt.getPassword(KEYTAR_SERVICE, META_ACCOUNT)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<SavedMeta>
     if (typeof parsed.account !== 'string') return null
@@ -245,15 +304,19 @@ async function readMeta(): Promise<SavedMeta | null> {
 }
 
 async function writeMeta(meta: SavedMeta): Promise<void> {
-  await keytar.setPassword(KEYTAR_SERVICE, META_ACCOUNT, JSON.stringify(meta))
+  const kt = loadKeytar()
+  if (!kt) throw new Error('keytar unavailable')
+  await kt.setPassword(KEYTAR_SERVICE, META_ACCOUNT, JSON.stringify(meta))
 }
 
 async function clearAllKeychainEntries(): Promise<void> {
+  const kt = loadKeytar()
+  if (!kt) return
   try {
-    const creds = await keytar.findCredentials(KEYTAR_SERVICE)
+    const creds = await kt.findCredentials(KEYTAR_SERVICE)
     for (const c of creds) {
       try {
-        await keytar.deletePassword(KEYTAR_SERVICE, c.account)
+        await kt.deletePassword(KEYTAR_SERVICE, c.account)
       } catch {
         // Best-effort — keep going on individual failures so we don't
         // leave half-cleared state.
@@ -270,11 +333,15 @@ ipcMain.handle(
     if (event.sender !== mainWindow?.webContents) {
       return { account: null, autoLogin: false, encryptionAvailable: false, hasPassword: false }
     }
+    const kt = loadKeytar()
+    if (!kt) {
+      return { account: null, autoLogin: false, encryptionAvailable: false, hasPassword: false }
+    }
     const meta = await readMeta()
     let hasPassword = false
     if (meta) {
       try {
-        const pw = await keytar.getPassword(KEYTAR_SERVICE, meta.account)
+        const pw = await kt.getPassword(KEYTAR_SERVICE, meta.account)
         hasPassword = pw !== null
       } catch {
         hasPassword = false
@@ -286,8 +353,7 @@ ipcMain.handle(
     // than a static value catches Linux systems missing libsecret.
     let encryptionAvailable = true
     try {
-      // Cheap probe — listing credentials never throws on success.
-      await keytar.findCredentials(KEYTAR_SERVICE)
+      await kt.findCredentials(KEYTAR_SERVICE)
     } catch {
       encryptionAvailable = false
     }
@@ -304,10 +370,12 @@ ipcMain.handle(
   'workbench:creds:get-password',
   async (event): Promise<string | null> => {
     if (event.sender !== mainWindow?.webContents) return null
+    const kt = loadKeytar()
+    if (!kt) return null
     const meta = await readMeta()
     if (!meta) return null
     try {
-      return await keytar.getPassword(KEYTAR_SERVICE, meta.account)
+      return await kt.getPassword(KEYTAR_SERVICE, meta.account)
     } catch {
       return null
     }
@@ -326,6 +394,8 @@ ipcMain.handle(
     }
     if (typeof account !== 'string' || account.length === 0) return false
     if (typeof password !== 'string' || password.length === 0) return false
+    const kt = loadKeytar()
+    if (!kt) return false
     try {
       // If the saved username is changing, drop the old per-user
       // entry so we don't leave stale passwords sitting in the
@@ -333,12 +403,12 @@ ipcMain.handle(
       const existing = await readMeta()
       if (existing && existing.account !== account) {
         try {
-          await keytar.deletePassword(KEYTAR_SERVICE, existing.account)
+          await kt.deletePassword(KEYTAR_SERVICE, existing.account)
         } catch {
           // Best-effort
         }
       }
-      await keytar.setPassword(KEYTAR_SERVICE, account, password)
+      await kt.setPassword(KEYTAR_SERVICE, account, password)
       await writeMeta({ account, autoLogin: !!autoLogin })
       return true
     } catch (err) {
@@ -410,30 +480,71 @@ async function createWindow(): Promise<void> {
     mainWindow = null
   })
 
+  // Renderer-side breakage is easy to miss when the only symptom is a
+  // blank window. Surface render-process-gone + unresponsive events so
+  // dev mode actually tells us when React crashed or the preload bridge
+  // failed to install.
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    appendDiagLog('render-process-gone', details)
+  })
+  mainWindow.on('unresponsive', () => {
+    appendDiagLog('unresponsive', 'main window unresponsive')
+  })
+  mainWindow.webContents.on('preload-error', (_e, preloadPath, error) => {
+    appendDiagLog('preload-error', { preloadPath, error: error.message, stack: error.stack })
+  })
+  // Auto-open DevTools in dev so the renderer console + network panel
+  // are one click away. Packaged builds stay clean — F12 still works
+  // if a user wants to peek under the hood.
+  if (isDev) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
+  }
+
   attachContextMenu(mainWindow)
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
-  if (isDev && devUrl) {
-    await mainWindow.loadURL(devUrl)
-  } else {
-    await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  appendDiagLog('createWindow', { isDev, devUrl: devUrl ?? null })
+  try {
+    if (isDev && devUrl) {
+      await mainWindow.loadURL(devUrl)
+    } else {
+      await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    }
+    appendDiagLog('createWindow', 'load complete')
+  } catch (err) {
+    appendDiagLog('createWindow-load-failed', err)
+    throw err
   }
 }
 
 app.whenReady().then(async () => {
+  appendDiagLog('whenReady', 'app ready, starting sidecar')
   try {
     await startSidecar()
+    appendDiagLog('whenReady', 'sidecar started')
   } catch (err) {
-    console.error('[main] sidecar failed to start:', err)
+    appendDiagLog('sidecar-failed', err)
   }
   // Menu has to be set after app is ready (uses app.name etc) but
   // before window creation so the new window picks it up.
-  Menu.setApplicationMenu(buildMenu(() => mainWindow))
-  await createWindow()
+  try {
+    Menu.setApplicationMenu(buildMenu(() => mainWindow))
+    appendDiagLog('whenReady', 'menu built')
+  } catch (err) {
+    appendDiagLog('menu-build-failed', err)
+  }
+  try {
+    await createWindow()
+    appendDiagLog('whenReady', 'window created')
+  } catch (err) {
+    appendDiagLog('createWindow-threw', err)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+}).catch((err) => {
+  appendDiagLog('whenReady-rejected', err)
 })
 
 app.on('window-all-closed', () => {
