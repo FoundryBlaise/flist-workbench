@@ -448,9 +448,8 @@ body {
   color: #78c624;
 }
 .pane.preview[data-flist-theme='default'] .pane-body {
-  /* page bg #08192d; profile card sits noticeably lighter on the real
-     site — a brighter, more saturated navy. */
-  background: #1b3658;
+  /* Exact profile-card bg from F-list's Default theme (DevTools probe). */
+  background: #1b446f;
   color: #bbc;
 }
 .pane.preview[data-flist-theme='default'] .pane-body a,
