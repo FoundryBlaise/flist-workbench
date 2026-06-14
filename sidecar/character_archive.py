@@ -1658,8 +1658,11 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     decide which are on the profile vs. in the pool view.
 
     Side-effect: triggers the v4 → v5 pool migration if a legacy pool/
-    directory is present. Idempotent — no-op once collapsed."""
+    directory is present, then collapses any `local-<sha8>` files whose
+    bytes match an existing real-id file. Both are idempotent — no-ops
+    once the disk is clean."""
     migrate_v4_pool_to_images(character_id)
+    collapse_local_duplicates(character_id)
     out: list[dict[str, Any]] = []
     d = images_dir(character_id)
     if not d.exists():
@@ -1703,6 +1706,140 @@ def write_character_image(
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_bytes(data)
     tmp.replace(target)
+
+
+def _find_image_with_sha(
+    character_id: int | str, sha: str
+) -> Path | None:
+    """Return the first file in `images/` whose bytes hash to `sha`, or
+    None. Cheap pre-filter on the sha-prefix in the filename (real
+    F-list ids won't match by accident, but `local-<sha8>` files will);
+    falls back to a full directory scan with byte-comparison for real-id
+    files since their basenames don't carry the sha. Best-effort — any
+    OSError on a single entry is skipped, not raised."""
+    d = images_dir(character_id)
+    if not d.exists():
+        return None
+    for entry in d.iterdir():
+        if not entry.is_file():
+            continue
+        if not _IMAGE_FILE_RE.match(entry.name):
+            continue
+        try:
+            if entry.stat().st_size == 0:
+                continue
+            if _hash_bytes(entry.read_bytes()) == sha:
+                return entry
+        except OSError:
+            continue
+    return None
+
+
+def collapse_local_duplicates(character_id: int | str) -> int:
+    """Walk `images/` and remove any `local-<sha8>.<ext>` whose bytes
+    are byte-identical to a real-id (digits-only) file in the same
+    directory. Patches working.json so any gallery slot that referenced
+    the doomed local id now points at the real id, then unlinks the
+    local file. Returns the number of locals collapsed.
+
+    This is the cure for stuck archives where the user has the same
+    image visible twice in the Pool — once as `id <digits>` (the file
+    they originally pulled) and once as `Local · <sha8>` (a re-upload
+    of the same bytes that pre-dates the `add_uploaded_image` dedup
+    fix). Idempotent — re-runs are no-ops once all locals are unique.
+    Best-effort — any OSError on a single entry is skipped, not raised."""
+    d = images_dir(character_id)
+    if not d.exists():
+        return 0
+    locals_: list[Path] = []
+    reals: list[Path] = []
+    for entry in d.iterdir():
+        if not entry.is_file():
+            continue
+        m = _IMAGE_FILE_RE.match(entry.name)
+        if not m:
+            continue
+        iid = m.group(1)
+        if iid.startswith("local-"):
+            locals_.append(entry)
+        elif iid.isdigit():
+            reals.append(entry)
+    if not locals_ or not reals:
+        return 0
+    real_shas: dict[str, str] = {}
+    for r in reals:
+        try:
+            real_shas[r.name] = _hash_bytes(r.read_bytes())
+        except OSError:
+            continue
+    collapsed = 0
+    for lp in locals_:
+        try:
+            l_sha = _hash_bytes(lp.read_bytes())
+        except OSError:
+            continue
+        match: str | None = None
+        for rname, rsha in real_shas.items():
+            if rsha == l_sha:
+                rm = _IMAGE_FILE_RE.match(rname)
+                if rm:
+                    match = rm.group(1)
+                    break
+        if match is None:
+            continue
+        lm = _IMAGE_FILE_RE.match(lp.name)
+        if lm is None:
+            continue
+        local_id = lm.group(1)
+        for _ in range(3):
+            payload = read_working(character_id)
+            if payload is None:
+                break
+            images = payload.get("images")
+            if not isinstance(images, list):
+                break
+            changed = False
+            kept: list[Any] = []
+            seen_real = False
+            for entry in images:
+                if not isinstance(entry, dict):
+                    kept.append(entry)
+                    continue
+                eid = entry.get("image_id")
+                if eid == local_id:
+                    if seen_real:
+                        changed = True
+                        continue
+                    entry["image_id"] = match
+                    seen_real = True
+                    changed = True
+                    kept.append(entry)
+                elif eid == match:
+                    if seen_real:
+                        changed = True
+                        continue
+                    seen_real = True
+                    kept.append(entry)
+                else:
+                    kept.append(entry)
+            if changed:
+                payload["images"] = kept
+                try:
+                    etag = _file_sha256(working_path(character_id))
+                    write_working(character_id, payload, expected_etag=etag)
+                    break
+                except EtagMismatch:
+                    continue
+                except (ValueError, OSError):
+                    break
+            else:
+                break
+        try:
+            lp.unlink()
+            collapsed += 1
+        except OSError:
+            continue
+    return collapsed
 
 
 def dedupe_local_after_pull(
@@ -1783,11 +1920,30 @@ def add_uploaded_image(
     trusted. Returns the metadata row (`{image_id, extension, size,
     added_at}`) or None when the bytes don't match a supported format.
     Idempotent — identical bytes always produce the same `local-<sha8>`
-    and the file is written only when missing."""
+    and the file is written only when missing.
+
+    If a byte-identical file already exists in `images/` (regardless of
+    whether it's keyed by a real F-list id or a prior `local-<sha8>`),
+    return that file's row instead of minting a parallel copy. Prevents
+    the "same image shows twice in pool" symptom when a user re-uploads
+    bytes that came from an earlier F-list pull."""
     ext = _detect_image_ext_from_bytes(data)
     if ext is None:
         return None
     sha = _hash_bytes(data)
+    existing = _find_image_with_sha(character_id, sha)
+    if existing is not None:
+        try:
+            stat = existing.stat()
+            m = _IMAGE_FILE_RE.match(existing.name)
+            return {
+                "image_id": m.group(1) if m else existing.stem,
+                "extension": (m.group(2).lower() if m else ext),
+                "size": stat.st_size,
+                "added_at": int(stat.st_mtime),
+            }
+        except OSError:
+            pass
     image_id = f"local-{sha[:8]}"
     target = images_dir(character_id) / f"{image_id}.{ext}"
     if not target.exists():
