@@ -113,7 +113,7 @@ test('polish batch 2 — RAG empty, activity log, copy-as-draft', async () => {
       // window.workbench is declared in App.tsx but the test config
       // doesn't see the renderer's global augmentation — cast to any.
       const w = window as unknown as { workbench?: { sidecarUrl: string } }
-      const url = w.workbench?.sidecarUrl ?? 'http://127.0.0.1:8765'
+      const url = w.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
       try {
         await fetch(`${url}/flist/session`, {
           method: 'POST',
