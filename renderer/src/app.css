@@ -3005,6 +3005,20 @@ body {
   font-size: var(--font-meta);
   line-height: 1.4;
 }
+.settings-saved-login {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--hover-soft);
+  border-radius: 4px;
+}
+.settings-saved-login code {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+}
 
 /* ---- F-list character archive (Phase 7 Tier 1) ---- */
 
@@ -3215,6 +3229,33 @@ body {
   line-height: 1.45;
 }
 .flist-signin-trust li + li { margin-top: 2px; }
+.flist-signin-savelogin {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-input, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 3px;
+}
+.flist-signin-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.flist-signin-checkbox input { margin: 0; }
+.flist-signin-savelogin-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.flist-signin-savelogin-warn {
+  font-size: 11px;
+  color: #f0a37a;
+  line-height: 1.45;
+}
 .flist-signin-error {
   padding: 10px 12px;
   background: rgba(220, 80, 80, 0.12);
@@ -3611,6 +3652,33 @@ body {
   border-top: 1px solid var(--border-soft, rgba(255,255,255,0.04));
 }
 .char-picker-section-h:first-of-type { border-top: none; }
+.char-picker-section-h-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.char-picker-section-refresh-all {
+  background: transparent;
+  border: 1px solid var(--border-soft, rgba(255,255,255,0.08));
+  border-radius: 4px;
+  color: var(--text-dim, #8a8a8a);
+  padding: 2px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.char-picker-section-refresh-all:hover:not(:disabled) {
+  color: var(--text, #e6e6e6);
+  border-color: var(--border, rgba(255,255,255,0.16));
+}
+.char-picker-section-refresh-all:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .char-picker-unified-list-archive .char-picker-row-pick {
   opacity: 0.85;
 }

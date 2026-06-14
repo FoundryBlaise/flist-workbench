@@ -46,7 +46,10 @@ export type {
 
 export { selectWorkingSlot } from './state/flist'
 
-import { readAutoRefreshThresholdMin } from './features/settings/SettingsModal'
+import {
+  readAutoRefreshEnabled,
+  readAutoRefreshHours
+} from './features/settings/SettingsModal'
 
 export type Mode = 'editor' | 'logs'
 
@@ -164,6 +167,9 @@ type State = {
   /** Unified roster (account + archived + log-only) from /flist/characters. */
   flistRoster: FlistRosterEntry[]
   flistRosterStatus: 'idle' | 'loading' | 'ready' | 'error'
+  /** Account-wide pull sweep status. Set while the sign-in
+   *  auto-refresh or the manual "Refresh all" is walking the roster. */
+  flistAccountSweepStatus: 'idle' | 'running'
   /** ID of the F-list character whose Live/Backup docs the user is
    *  currently viewing. Distinct from `activeCharacter` (the F-Chat-log
    *  filter) because the two rosters don't always overlap. */
@@ -322,6 +328,23 @@ type State = {
    *  the Tier 1 decision. */
   flistSignInError: string | null
   flistSignInStatus: 'idle' | 'submitting' | 'error'
+  /** Saved-credential metadata, read from the OS keychain via the
+   *  Electron preload. `account` is the saved username (or null if
+   *  nothing is saved). `autoLogin` indicates whether the next launch
+   *  should silently attempt sign-in. `hasPassword` mirrors whether
+   *  the encrypted blob exists on disk. `encryptionAvailable` reflects
+   *  Electron's safeStorage availability — false means we can't save
+   *  even if the user asks. */
+  flistSavedCreds: {
+    account: string | null
+    autoLogin: boolean
+    encryptionAvailable: boolean
+    hasPassword: boolean
+  }
+  /** True while the renderer is in the middle of the startup
+   *  auto-login attempt. Used to suppress the sign-in modal so it
+   *  doesn't flash open before the silent sign-in completes. */
+  flistAutoLoginInFlight: boolean
 
   loadCharacters: () => Promise<void>
   selectCharacter: (name: string | null) => void
@@ -372,13 +395,38 @@ type State = {
   // ---- F-list actions ----
   flistOpenSignIn: () => void
   flistCloseSignIn: () => void
-  flistSignIn: (account: string, password: string) => Promise<void>
+  flistSignIn: (
+    account: string,
+    password: string,
+    opts?: { rememberPassword?: boolean; autoLogin?: boolean }
+  ) => Promise<void>
   flistSignOut: () => Promise<void>
+  /** Read saved-cred metadata from the Electron main process so the
+   *  startup flow can decide between auto-login and showing the modal.
+   *  Safe to call before sign-in; no-op outside Electron. */
+  flistLoadSavedCreds: () => Promise<void>
+  /** Try to silently sign in using saved credentials. If auto-login is
+   *  on and the keychain has a password, this fires the same sign-in
+   *  request the modal would. On failure, the sign-in modal opens with
+   *  the error visible — saved creds are left intact. Returns `true`
+   *  when an attempt was made (regardless of outcome). */
+  flistAttemptAutoLogin: () => Promise<boolean>
+  /** Remove the saved password + metadata from disk. Used by Settings'
+   *  "Remove saved login" and triggered by Sign Out (no — Sign Out
+   *  keeps the saved creds so the user can sign back in next launch). */
+  flistClearSavedCreds: () => Promise<void>
+  /** Toggle the auto-login flag without re-entering the password.
+   *  No-op when no credentials are saved. */
+  flistSetSavedAutoLogin: (next: boolean) => Promise<void>
   flistRefreshSession: () => Promise<void>
   flistLoadRoster: () => Promise<void>
   flistSelectCharacter: (characterId: string | null) => Promise<void>
   flistLoadArchive: (characterId: string) => Promise<void>
   flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
+  /** Manual "Refresh all" — unconditionally pulls every account
+   *  character on the current roster. Single-flight: triggering while
+   *  a sweep is running (either this or the sign-in sweep) is a no-op. */
+  flistRefreshAllAccount: () => Promise<void>
   flistSaveSnapshot: (characterId: string) => Promise<void>
   // ---- Tier 6 export-restore preview ----
   flistOpenExportRestore: (characterId: string) => void
@@ -661,22 +709,26 @@ function _cancelSetFlush(setId: string): void {
   }
 }
 
-// Tracks whether a sign-in's auto-refresh sweep is in flight so a fast
-// second sign-in (rare — usually only happens on re-auth flows) doesn't
-// stack two sweeps onto pull_lock at once.
-let _flistAutoRefreshInFlight = false
+// Tracks whether an account-wide sweep is in flight. Shared between
+// the sign-in auto-refresh and the picker's manual "↻ Refresh all",
+// so a second trigger while one is running is a no-op rather than
+// stacking two passes onto pull_lock.
+let _flistAccountSweepInFlight = false
 
-async function _flistAutoRefreshOnLogin(
-  get: () => State
+/** Pull every account character on the current roster.
+ *  - `thresholdSec === null` → unconditional (manual Refresh all).
+ *  - `thresholdSec >= 0`     → skip characters fresher than threshold.
+ *  Single-flight: a second call while a sweep is running is a no-op. */
+async function _flistAccountSweep(
+  get: () => State,
+  thresholdSec: number | null
 ): Promise<void> {
-  if (_flistAutoRefreshInFlight) return
-  _flistAutoRefreshInFlight = true
+  if (_flistAccountSweepInFlight) return
+  _flistAccountSweepInFlight = true
+  useStore.setState({ flistAccountSweepStatus: 'running' })
   try {
-    const thresholdMin = readAutoRefreshThresholdMin()
-    const thresholdSec = thresholdMin * 60
     const now = Date.now() / 1000
-    const session = get().flistSession
-    if (!session.active) return
+    if (!get().flistSession.active) return
     const roster = get().flistRoster
     // Snapshot the IDs we want to refresh up front — the loop below
     // awaits each pull, so by the time we get to character N the
@@ -692,15 +744,17 @@ async function _flistAutoRefreshOnLogin(
       // Bail if the user signed out mid-sweep so we don't keep firing
       // pulls against a session that no longer exists.
       if (!get().flistSession.active) break
-      const age =
-        t.lastPulledAt === null
-          ? Number.POSITIVE_INFINITY
-          : now - t.lastPulledAt
-      if (thresholdSec > 0 && age < thresholdSec) continue
+      if (thresholdSec !== null) {
+        const age =
+          t.lastPulledAt === null
+            ? Number.POSITIVE_INFINITY
+            : now - t.lastPulledAt
+        if (age < thresholdSec) continue
+      }
       // selectCharacter would change the active character; we want
       // a silent background refresh, so go straight to the pull.
       // The pull endpoint's pull_lock serialises us behind any
-      // manual ↻ Refresh the user kicked off.
+      // manual single-character ↻ Refresh the user kicked off.
       try {
         await get().flistPullCharacter(t.name, t.id)
       } catch {
@@ -709,8 +763,20 @@ async function _flistAutoRefreshOnLogin(
       }
     }
   } finally {
-    _flistAutoRefreshInFlight = false
+    _flistAccountSweepInFlight = false
+    useStore.setState({ flistAccountSweepStatus: 'idle' })
   }
+}
+
+async function _flistAutoRefreshOnLogin(
+  get: () => State
+): Promise<void> {
+  // User opt-in. Default off — see Settings → F-list. The 30-min
+  // lazy-pull-on-select keeps the active character fresh without
+  // hammering the API for every character on the account.
+  if (!readAutoRefreshEnabled()) return
+  const thresholdSec = readAutoRefreshHours() * 3600
+  await _flistAccountSweep(get, thresholdSec)
 }
 
 /** Convert a wire-format SetMeta to in-memory camelCase. Single converter
@@ -977,6 +1043,7 @@ export const useStore = create<State>((set, get) => ({
   flistAccountCharacters: [],
   flistRoster: [],
   flistRosterStatus: 'idle',
+  flistAccountSweepStatus: 'idle',
   flistActiveCharacterId: null,
   flistArchive: {},
   flistCharacterImages: {},
@@ -1017,10 +1084,22 @@ export const useStore = create<State>((set, get) => ({
   flistSignInOpen: false,
   flistSignInError: null,
   flistSignInStatus: 'idle',
+  flistSavedCreds: {
+    account: null,
+    autoLogin: false,
+    encryptionAvailable: false,
+    hasPassword: false
+  },
+  flistAutoLoginInFlight: false,
 
   // ---- F-list actions ----------------------------------------------------
 
   flistGetLastAccount() {
+    // Saved-creds account wins when present so the sign-in modal
+    // pre-fills the username the user explicitly chose to remember.
+    // Falls back to the localStorage last-used account otherwise.
+    const saved = useStore.getState().flistSavedCreds.account
+    if (saved) return saved
     if (typeof localStorage === 'undefined') return ''
     try {
       return localStorage.getItem(FLIST_ACCOUNT_KEY) ?? ''
@@ -1033,11 +1112,72 @@ export const useStore = create<State>((set, get) => ({
     set({ flistSignInOpen: true, flistSignInError: null, flistSignInStatus: 'idle' })
   },
 
+  async flistLoadSavedCreds() {
+    const credsApi = window.workbench?.creds
+    if (!credsApi) return
+    try {
+      const meta = await credsApi.getMeta()
+      set({ flistSavedCreds: meta })
+    } catch (err) {
+      console.warn('[creds] load meta failed:', err)
+    }
+  },
+
+  async flistAttemptAutoLogin() {
+    const credsApi = window.workbench?.creds
+    if (!credsApi) return false
+    const { flistSavedCreds, flistSession } = get()
+    if (flistSession.active) return false
+    if (!flistSavedCreds.autoLogin || !flistSavedCreds.account) return false
+    set({ flistAutoLoginInFlight: true })
+    try {
+      const password = await credsApi.getPassword()
+      if (!password) return false
+      // We do NOT pass rememberPassword/autoLogin here — saved
+      // creds already exist, and re-saving on every auto-login
+      // would also force-rewrite the meta blob for no reason. A
+      // failed auto-login surfaces via flistSignInError; the
+      // saved creds stay put so the user can correct from the
+      // modal without losing the username they remembered.
+      await get().flistSignIn(flistSavedCreds.account, password)
+      return true
+    } catch (err) {
+      console.warn('[creds] auto-login failed:', err)
+      return false
+    } finally {
+      set({ flistAutoLoginInFlight: false })
+    }
+  },
+
+  async flistClearSavedCreds() {
+    const credsApi = window.workbench?.creds
+    if (!credsApi) return
+    try {
+      await credsApi.clear()
+      const meta = await credsApi.getMeta()
+      set({ flistSavedCreds: meta })
+    } catch (err) {
+      console.warn('[creds] clear failed:', err)
+    }
+  },
+
+  async flistSetSavedAutoLogin(next) {
+    const credsApi = window.workbench?.creds
+    if (!credsApi) return
+    try {
+      await credsApi.setAutoLogin(next)
+      const meta = await credsApi.getMeta()
+      set({ flistSavedCreds: meta })
+    } catch (err) {
+      console.warn('[creds] set auto-login failed:', err)
+    }
+  },
+
   flistCloseSignIn() {
     set({ flistSignInOpen: false })
   },
 
-  async flistSignIn(account, password) {
+  async flistSignIn(account, password, opts) {
     set({ flistSignInStatus: 'submitting', flistSignInError: null })
     try {
       const res = await api.flistSignIn({ account, password })
@@ -1045,6 +1185,31 @@ export const useStore = create<State>((set, get) => ({
         localStorage.setItem(FLIST_ACCOUNT_KEY, account)
       } catch {
         // localStorage unavailable — account just won't pre-fill next session
+      }
+      // Persist (or clear) saved credentials based on the modal's
+      // checkbox state. Auto-login implies remember-password — the
+      // modal enforces that, but we also enforce it here so a
+      // programmatic call can't end up with autoLogin=true + no
+      // saved password. Failures here don't block sign-in (the
+      // user has already authenticated); a save failure surfaces
+      // via flistSavedCreds.encryptionAvailable on the next reload.
+      const remember = !!opts?.rememberPassword || !!opts?.autoLogin
+      const autoLogin = !!opts?.autoLogin
+      const credsApi = window.workbench?.creds
+      if (credsApi) {
+        try {
+          if (remember) {
+            await credsApi.save({ account, password, autoLogin })
+          } else {
+            await credsApi.clear()
+          }
+          // Refresh in-memory mirror so Settings reflects reality
+          // without a page reload.
+          const meta = await credsApi.getMeta()
+          set({ flistSavedCreds: meta })
+        } catch (err) {
+          console.warn('[creds] save failed:', err)
+        }
       }
       // Bump the session epoch so any in-flight mapping-list fetch from
       // a prior account is discarded on arrival (QA P2-4).
@@ -1289,6 +1454,10 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     }))
+  },
+
+  async flistRefreshAllAccount() {
+    await _flistAccountSweep(get, null)
   },
 
   async flistPullCharacter(name, characterId) {

@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
+import * as keytar from 'keytar'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
 import { attachContextMenu } from './contextMenu'
@@ -201,6 +202,173 @@ ipcMain.on('workbench:open-settings', (event) => {
   if (event.sender !== mainWindow?.webContents) return
   const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
   win?.webContents.send('menu:action', 'settings')
+})
+
+// F-list saved-login plumbing. Password lives in the operating
+// system's credential store via keytar — Credential Manager on
+// Windows, Keychain on macOS, libsecret on Linux. We deliberately
+// do NOT write the password to disk in any form, encrypted or
+// otherwise: the user explicitly required OS-keychain storage.
+//
+// Two small non-secret bits — the saved username and the auto-login
+// preference — also live in keytar's "account name" metadata so the
+// app's userData folder stays free of any login-related state.
+// We use a sentinel account row (META_ACCOUNT) to store these.
+type SavedCredsResponse = {
+  account: string | null
+  autoLogin: boolean
+  encryptionAvailable: boolean
+  hasPassword: boolean
+}
+
+const KEYTAR_SERVICE = 'flist-workbench'
+// Sentinel "account" key under which we stash the saved-login
+// metadata (the real username + auto-login flag) as a JSON blob.
+// Real per-user credentials use the username as the keytar account
+// so an `awsccredmgr` listing reads naturally as one row per saved
+// login. Two underscores make collision with a real username
+// vanishingly unlikely.
+const META_ACCOUNT = '__meta__'
+
+type SavedMeta = { account: string; autoLogin: boolean }
+
+async function readMeta(): Promise<SavedMeta | null> {
+  try {
+    const raw = await keytar.getPassword(KEYTAR_SERVICE, META_ACCOUNT)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<SavedMeta>
+    if (typeof parsed.account !== 'string') return null
+    return { account: parsed.account, autoLogin: !!parsed.autoLogin }
+  } catch {
+    return null
+  }
+}
+
+async function writeMeta(meta: SavedMeta): Promise<void> {
+  await keytar.setPassword(KEYTAR_SERVICE, META_ACCOUNT, JSON.stringify(meta))
+}
+
+async function clearAllKeychainEntries(): Promise<void> {
+  try {
+    const creds = await keytar.findCredentials(KEYTAR_SERVICE)
+    for (const c of creds) {
+      try {
+        await keytar.deletePassword(KEYTAR_SERVICE, c.account)
+      } catch {
+        // Best-effort — keep going on individual failures so we don't
+        // leave half-cleared state.
+      }
+    }
+  } catch (err) {
+    console.error('[main] keychain clear failed:', err)
+  }
+}
+
+ipcMain.handle(
+  'workbench:creds:get-meta',
+  async (event): Promise<SavedCredsResponse> => {
+    if (event.sender !== mainWindow?.webContents) {
+      return { account: null, autoLogin: false, encryptionAvailable: false, hasPassword: false }
+    }
+    const meta = await readMeta()
+    let hasPassword = false
+    if (meta) {
+      try {
+        const pw = await keytar.getPassword(KEYTAR_SERVICE, meta.account)
+        hasPassword = pw !== null
+      } catch {
+        hasPassword = false
+      }
+    }
+    // keytar lazily initialises the platform backend on first call;
+    // we treat any successful read above as proof the OS credential
+    // store is reachable. Setting the flag from a probe call rather
+    // than a static value catches Linux systems missing libsecret.
+    let encryptionAvailable = true
+    try {
+      // Cheap probe — listing credentials never throws on success.
+      await keytar.findCredentials(KEYTAR_SERVICE)
+    } catch {
+      encryptionAvailable = false
+    }
+    return {
+      account: meta?.account ?? null,
+      autoLogin: meta?.autoLogin ?? false,
+      encryptionAvailable,
+      hasPassword
+    }
+  }
+)
+
+ipcMain.handle(
+  'workbench:creds:get-password',
+  async (event): Promise<string | null> => {
+    if (event.sender !== mainWindow?.webContents) return null
+    const meta = await readMeta()
+    if (!meta) return null
+    try {
+      return await keytar.getPassword(KEYTAR_SERVICE, meta.account)
+    } catch {
+      return null
+    }
+  }
+)
+
+ipcMain.handle(
+  'workbench:creds:save',
+  async (event, payload: unknown): Promise<boolean> => {
+    if (event.sender !== mainWindow?.webContents) return false
+    if (!payload || typeof payload !== 'object') return false
+    const { account, password, autoLogin } = payload as {
+      account?: unknown
+      password?: unknown
+      autoLogin?: unknown
+    }
+    if (typeof account !== 'string' || account.length === 0) return false
+    if (typeof password !== 'string' || password.length === 0) return false
+    try {
+      // If the saved username is changing, drop the old per-user
+      // entry so we don't leave stale passwords sitting in the
+      // keychain for accounts the user no longer cares about.
+      const existing = await readMeta()
+      if (existing && existing.account !== account) {
+        try {
+          await keytar.deletePassword(KEYTAR_SERVICE, existing.account)
+        } catch {
+          // Best-effort
+        }
+      }
+      await keytar.setPassword(KEYTAR_SERVICE, account, password)
+      await writeMeta({ account, autoLogin: !!autoLogin })
+      return true
+    } catch (err) {
+      console.error('[main] creds save failed:', err)
+      return false
+    }
+  }
+)
+
+ipcMain.handle(
+  'workbench:creds:set-auto-login',
+  async (event, next: unknown): Promise<boolean> => {
+    if (event.sender !== mainWindow?.webContents) return false
+    if (typeof next !== 'boolean') return false
+    const meta = await readMeta()
+    if (!meta) return false
+    try {
+      await writeMeta({ account: meta.account, autoLogin: next })
+      return true
+    } catch (err) {
+      console.error('[main] creds set-auto-login failed:', err)
+      return false
+    }
+  }
+)
+
+ipcMain.handle('workbench:creds:clear', async (event): Promise<boolean> => {
+  if (event.sender !== mainWindow?.webContents) return false
+  await clearAllKeychainEntries()
+  return true
 })
 
 ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {

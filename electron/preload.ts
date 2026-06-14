@@ -77,5 +77,28 @@ contextBridge.exposeInMainWorld('workbench', {
   // path settings already use, so the modal opens consistently.
   openSettings: () => {
     ipcRenderer.send('workbench:open-settings')
+  },
+  // F-list saved credentials. Password is encrypted with the OS
+  // keychain (safeStorage / DPAPI / Keychain / libsecret) in main;
+  // the renderer only ever sees plaintext briefly to feed back into
+  // the sign-in form. Meta (username, auto-login flag) is separate
+  // so we can read the username for pre-fill without touching the
+  // encrypted blob.
+  creds: {
+    getMeta: () =>
+      ipcRenderer.invoke('workbench:creds:get-meta') as Promise<{
+        account: string | null
+        autoLogin: boolean
+        encryptionAvailable: boolean
+        hasPassword: boolean
+      }>,
+    getPassword: () =>
+      ipcRenderer.invoke('workbench:creds:get-password') as Promise<string | null>,
+    save: (payload: { account: string; password: string; autoLogin: boolean }) =>
+      ipcRenderer.invoke('workbench:creds:save', payload) as Promise<boolean>,
+    setAutoLogin: (next: boolean) =>
+      ipcRenderer.invoke('workbench:creds:set-auto-login', next) as Promise<boolean>,
+    clear: () =>
+      ipcRenderer.invoke('workbench:creds:clear') as Promise<boolean>
   }
 })

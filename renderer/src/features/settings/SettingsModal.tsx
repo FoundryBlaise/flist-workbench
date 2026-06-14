@@ -63,24 +63,38 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
   { id: 'security', label: 'Security', subtitle: 'Browser-extension pairing' }
 ]
 
-/** localStorage key for the auto-refresh-on-login threshold. Stored as
- *  a stringified integer count of minutes. 0 = always re-pull. */
-export const FLIST_AUTO_REFRESH_KEY = 'workbench.flistAutoRefreshMin'
+/** Whether the sign-in auto-refresh sweep runs at all. Default off — the
+ *  sweep hammers the F-list API once per account character, which is
+ *  rude when the user only wanted to open the app to edit one. Off by
+ *  default means sign-in just loads roster metadata; characters get
+ *  pulled lazily on selection (30-min cache) or via the picker's
+ *  "↻ Refresh all" button. */
+export const FLIST_AUTO_REFRESH_ENABLED_KEY = 'workbench.flistAutoRefreshEnabled'
 
-/** Default threshold for auto-refresh-on-login: pull every roster
- *  character regardless of last-pull age. The user can raise this in
- *  Settings → F-list to dial it back to e.g. 30 min or 24 h. */
-export const FLIST_AUTO_REFRESH_DEFAULT_MIN = 0
+/** Threshold for the sign-in sweep, in hours. Floored to 24 to be kind
+ *  to the F-list API — anything faster is what the manual button is for. */
+export const FLIST_AUTO_REFRESH_HOURS_KEY = 'workbench.flistAutoRefreshHours'
 
-export function readAutoRefreshThresholdMin(): number {
+export const FLIST_AUTO_REFRESH_MIN_HOURS = 24
+export const FLIST_AUTO_REFRESH_DEFAULT_HOURS = 24
+
+export function readAutoRefreshEnabled(): boolean {
   try {
-    const raw = localStorage.getItem(FLIST_AUTO_REFRESH_KEY)
-    if (raw === null) return FLIST_AUTO_REFRESH_DEFAULT_MIN
-    const n = Number(raw)
-    if (!Number.isFinite(n) || n < 0) return FLIST_AUTO_REFRESH_DEFAULT_MIN
-    return Math.floor(n)
+    return localStorage.getItem(FLIST_AUTO_REFRESH_ENABLED_KEY) === 'true'
   } catch {
-    return FLIST_AUTO_REFRESH_DEFAULT_MIN
+    return false
+  }
+}
+
+export function readAutoRefreshHours(): number {
+  try {
+    const raw = localStorage.getItem(FLIST_AUTO_REFRESH_HOURS_KEY)
+    if (raw === null) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
+    const n = Number(raw)
+    if (!Number.isFinite(n)) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
+    return Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
+  } catch {
+    return FLIST_AUTO_REFRESH_DEFAULT_HOURS
   }
 }
 
@@ -1099,49 +1113,150 @@ function FlistPane() {
   // sidecar is stateless about login-triggered work. Persisted-on-
   // change, no Save button needed for this surface (matches the
   // mirrorEndpoints toggle pattern).
-  const [thresholdRaw, setThresholdRaw] = useState<string>(() =>
-    String(readAutoRefreshThresholdMin())
+  const [enabled, setEnabled] = useState<boolean>(() => readAutoRefreshEnabled())
+  const [hoursRaw, setHoursRaw] = useState<string>(() =>
+    String(readAutoRefreshHours())
   )
 
-  const persist = (raw: string) => {
-    setThresholdRaw(raw)
-    const n = Number(raw)
-    if (!raw.trim() || !Number.isFinite(n) || n < 0) return
+  const persistEnabled = (next: boolean) => {
+    setEnabled(next)
     try {
-      localStorage.setItem(FLIST_AUTO_REFRESH_KEY, String(Math.floor(n)))
+      localStorage.setItem(FLIST_AUTO_REFRESH_ENABLED_KEY, next ? 'true' : 'false')
     } catch {
       // localStorage unavailable — setting just won't survive a reload.
     }
   }
 
+  const persistHours = (raw: string) => {
+    setHoursRaw(raw)
+    const n = Number(raw)
+    if (!raw.trim() || !Number.isFinite(n)) return
+    const floored = Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
+    try {
+      localStorage.setItem(FLIST_AUTO_REFRESH_HOURS_KEY, String(floored))
+    } catch {
+      // localStorage unavailable — setting just won't survive a reload.
+    }
+  }
+
+  // Snap the displayed value up to the floor when the user leaves the
+  // field, so typing e.g. "6" doesn't sit there looking accepted while
+  // the stored value is 24.
+  const onHoursBlur = () => {
+    const n = Number(hoursRaw)
+    if (!hoursRaw.trim() || !Number.isFinite(n)) {
+      setHoursRaw(String(FLIST_AUTO_REFRESH_DEFAULT_HOURS))
+      return
+    }
+    setHoursRaw(String(Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))))
+  }
+
+  const savedCreds = useStore((s) => s.flistSavedCreds)
+  const clearSavedCreds = useStore((s) => s.flistClearSavedCreds)
+  const setSavedAutoLogin = useStore((s) => s.flistSetSavedAutoLogin)
+  const loadSavedCreds = useStore((s) => s.flistLoadSavedCreds)
+  // Re-read on pane mount so opening Settings after a sign-out (or
+  // after the user toggled save-login from the modal) shows the live
+  // state, not a stale in-memory mirror.
+  useEffect(() => {
+    void loadSavedCreds()
+  }, [loadSavedCreds])
+
   return (
     <>
+      <h3 className="settings-section-h">Saved login</h3>
+      <div className="settings-row settings-row-grid">
+        {savedCreds.hasPassword && savedCreds.account ? (
+          <>
+            <div className="settings-saved-login">
+              <div>
+                <strong>Account:</strong>{' '}
+                <code data-testid="settings-flist-saved-account">
+                  {savedCreds.account}
+                </code>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => void clearSavedCreds()}
+                data-testid="settings-flist-remove-saved"
+              >
+                Remove saved login
+              </button>
+            </div>
+            <label className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={savedCreds.autoLogin}
+                onChange={(e) => void setSavedAutoLogin(e.target.checked)}
+                data-testid="settings-flist-auto-login"
+              />
+              <span>
+                <strong>Auto login on next launch</strong>
+              </span>
+            </label>
+            <p className="settings-help">
+              Your password is stored in your operating system's
+              credential manager (Windows Credential Manager / macOS
+              Keychain / libsecret) — Workbench never writes it to a
+              file. <strong>Remove saved login</strong> wipes the
+              keychain entry.
+            </p>
+          </>
+        ) : (
+          <p className="settings-help" data-testid="settings-flist-no-saved">
+            No saved login yet. The next time you sign in, tick{' '}
+            <em>Remember password</em> on the sign-in dialog to store
+            your password in the OS credential manager.
+          </p>
+        )}
+      </div>
+
       <h3 className="settings-section-h">Auto-refresh on sign-in</h3>
       <div className="settings-row settings-row-grid">
-        <label className="settings-label" htmlFor="flist-auto-refresh">
+        <label className="settings-checkbox-row">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => persistEnabled(e.target.checked)}
+            data-testid="settings-flist-auto-refresh-enabled"
+          />
+          <span>
+            <strong>Automatically refresh characters when signing in</strong>
+          </span>
+        </label>
+        <p className="settings-help">
+          Off by default. When enabled, Workbench queues a background
+          pull at sign-in for every character on your account whose
+          local copy is older than the threshold below. Either way you
+          can hit <strong>↻ Refresh all</strong> in the character picker
+          to pull everyone on demand.
+        </p>
+      </div>
+      <div className="settings-row settings-row-grid">
+        <label className="settings-label" htmlFor="flist-auto-refresh-hours">
           Re-pull every character older than
         </label>
         <div className="settings-inline-input">
           <input
-            id="flist-auto-refresh"
+            id="flist-auto-refresh-hours"
             type="number"
-            min={0}
+            min={FLIST_AUTO_REFRESH_MIN_HOURS}
             step={1}
             className="settings-input settings-input-narrow"
-            value={thresholdRaw}
-            onChange={(e) => persist(e.target.value)}
-            data-testid="settings-flist-auto-refresh"
+            value={hoursRaw}
+            disabled={!enabled}
+            onChange={(e) => persistHours(e.target.value)}
+            onBlur={onHoursBlur}
+            data-testid="settings-flist-auto-refresh-hours"
           />
-          <span className="settings-inline-suffix">minutes</span>
+          <span className="settings-inline-suffix">hours</span>
         </div>
         <p className="settings-help">
-          When you sign in, Workbench queues a background pull for every
-          character on your account whose local copy is older than this.
-          {' '}
-          <strong>0</strong> means re-pull everyone every time. Pulls
-          serialise at 1 character / second to respect F-list's API
-          limits; you can keep working — manual ↻ Refresh interleaves
-          cleanly.
+          <strong>?</strong> To avoid straining the F-list API,
+          automatic refresh can't be set faster than{' '}
+          {FLIST_AUTO_REFRESH_MIN_HOURS} hours. You can always manually
+          refresh from the character picker.
         </p>
       </div>
     </>

@@ -116,6 +116,46 @@ export function AppLayout() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [])
 
+  // Sign-in at app start. The flow on every launch is:
+  //   1. Read saved-cred metadata from the OS keychain.
+  //   2. If auto-login is on AND a password is saved, attempt a silent
+  //      sign-in. On success the modal never appears.
+  //   3. Otherwise (or if auto-login fails), open the sign-in modal so
+  //      the user can finish manually — pre-filled username + password
+  //      when "Remember password" was set on the last sign-in.
+  // Runs exactly once per session. We guard on flistSession.active so a
+  // hot-reload doesn't re-prompt mid-session.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const store = useStore.getState()
+      if (store.flistSession.active) return
+      await store.flistLoadSavedCreds()
+      if (cancelled) return
+      const refreshed = useStore.getState()
+      if (refreshed.flistSavedCreds.autoLogin && refreshed.flistSavedCreds.hasPassword) {
+        const ok = await refreshed.flistAttemptAutoLogin()
+        if (cancelled) return
+        // Auto-login failure surfaces in flistSignInError; flip the
+        // modal open so the user can correct or cancel rather than
+        // staring at a silent failure.
+        if (!ok || useStore.getState().flistSignInStatus === 'error') {
+          useStore.getState().flistOpenSignIn()
+        }
+      } else {
+        // No silent path available: show the modal pre-filled with
+        // whatever the user remembered. Skipping the prompt entirely
+        // when nothing is saved would leave a brand-new user staring
+        // at an unauthenticated app with no obvious next step.
+        useStore.getState().flistOpenSignIn()
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // First-run detection: surface a non-blocking toast pointing at AI
   // Setup when there's nothing indexed and no labels endpoint override.
   // Less hostile than auto-opening the wizard; the user can dismiss
