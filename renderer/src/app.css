@@ -4508,17 +4508,18 @@ body {
 .diff-pane-order-summary {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 8px;
-  background: var(--panel-bg, rgba(255, 255, 255, 0.02));
-  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: rgba(212, 160, 74, 0.08);
+  border: 1px solid rgba(212, 160, 74, 0.35);
   border-radius: 4px;
 }
 .diff-pane-order-summary-toggle {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   background: none;
   border: none;
   color: inherit;
@@ -4526,6 +4527,7 @@ body {
   font-size: var(--font-body);
   padding: 0;
   text-align: left;
+  width: 100%;
 }
 .diff-pane-order-summary-toggle:hover { text-decoration: underline; }
 .diff-pane-order-summary-caret {
@@ -4533,6 +4535,7 @@ body {
   width: 12px;
   opacity: 0.7;
 }
+.diff-pane-order-summary-meta { opacity: 0.85; }
 .diff-pane-section-h {
   font-size: var(--font-heading);
   margin: 12px 0 0;
