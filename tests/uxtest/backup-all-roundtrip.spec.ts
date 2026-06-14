@@ -91,14 +91,13 @@ test('Backup all — fresh sweep saves every character, second sweep dedups', as
   // `flist-last-character` key triggers an auto-pull on sign-in that
   // holds `pull_lock` while we try to start the sweep — banner sits at
   // (0/N) waiting for ~60s of image downloads to finish.
-  // Also pin the auto-refresh-on-login threshold to a value that
-  // suppresses it for this spec — the sweep this test validates is
-  // Backup-all on its own. (A dedicated auto-refresh spec covers the
-  // sign-in-pulls path.)
+  // Auto-refresh on sign-in is off by default — clear localStorage so
+  // a stale opt-in from another test doesn't trigger the sweep here.
+  // The sweep this test validates is Backup-all on its own; a dedicated
+  // auto-refresh spec covers the sign-in-pulls path.
   await window.evaluate(() => {
     try {
       window.localStorage.clear()
-      window.localStorage.setItem('workbench.flistAutoRefreshMin', '99999')
     } catch {
       /* best-effort */
     }
