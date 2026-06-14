@@ -1234,10 +1234,14 @@ export const useStore = create<State>((set, get) => ({
         }
       }
       // Bump the session epoch so any in-flight mapping-list fetch from
-      // a prior account is discarded on arrival (QA P2-4).
+      // a prior account is discarded on arrival (QA P2-4). Also reset
+      // flistMapping to idle so KinksPane re-fires loadMapping — a
+      // prior 401 (e.g. KinksPane mounting before sign-in completed)
+      // would otherwise leave the picker permanently empty.
       _flistSessionEpoch++
       _mappingInflight = null
       set((s) => {
+        const mappingNeedsReset = s.flistMapping.status === 'error'
         // Wipe stale "not signed in" pullErrors left by auto-pull
         // attempts that fired before the session was active — sign-in
         // just made them obsolete. Other pullError causes (network,
@@ -1255,7 +1259,18 @@ export const useStore = create<State>((set, get) => ({
             account: res.account,
             expires_in_sec: res.expires_in_sec
           },
-          flistArchive: archive
+          flistArchive: archive,
+          ...(mappingNeedsReset
+            ? {
+                flistMapping: {
+                  status: 'idle' as const,
+                  payload: null,
+                  etag: null,
+                  fetchedAt: null,
+                  error: null
+                }
+              }
+            : {})
         }
       })
       await get().flistLoadRoster()

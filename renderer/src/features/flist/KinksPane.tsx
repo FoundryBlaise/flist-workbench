@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { selectWorkingSlot, useStore } from '../../state'
 import { CHOICE_LABELS, type KinkChoice } from './ChoiceButtons'
 import {
@@ -34,8 +34,19 @@ export function KinksPane({ characterId }: { characterId: string }) {
   const [filter, setFilter] = useState('')
   const selection = useKinkSelection()
 
+  // Retry once per mount when a prior attempt errored. Without this the
+  // store gets stuck — a single 401 (e.g. KinksPane mounted before
+  // sign-in completed) used to leave the picker permanently empty even
+  // after the session went active. The ref guards against a tight
+  // idle → loading → error retry loop.
+  const mappingRetriedRef = useRef(false)
   useEffect(() => {
-    if (mappingStatus === 'idle') void loadMapping()
+    if (mappingStatus === 'idle') {
+      void loadMapping()
+    } else if (mappingStatus === 'error' && !mappingRetriedRef.current) {
+      mappingRetriedRef.current = true
+      void loadMapping({ force: true })
+    }
   }, [mappingStatus, loadMapping])
 
   // In read-only views (From F-list / Backup) drive the bucket
