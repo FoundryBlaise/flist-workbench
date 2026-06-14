@@ -117,9 +117,13 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
     }
   }
 
+  const mappingRetriedRef = useRef(false)
   useEffect(() => {
     if (mappingStatus === 'idle') {
       void loadMapping()
+    } else if (mappingStatus === 'error' && !mappingRetriedRef.current) {
+      mappingRetriedRef.current = true
+      void loadMapping({ force: true })
     }
   }, [mappingStatus, loadMapping])
 
