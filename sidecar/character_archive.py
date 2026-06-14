@@ -1705,6 +1705,75 @@ def write_character_image(
     tmp.replace(target)
 
 
+def dedupe_local_after_pull(
+    character_id: int | str,
+    pulled_image_id: str,
+    pulled_bytes: bytes,
+) -> str | None:
+    """If a freshly-downloaded image's bytes match a `local-<sha8>` file
+    on disk (the same bytes the user uploaded locally, now coming back
+    from F-list under a real id), remove the local copy and rewrite any
+    working.json gallery slot that pointed at it so the user doesn't end
+    up with the image visible twice (once in the pool, once on profile).
+
+    Best-effort — failures here never block the pull. Returns the
+    local-id that was removed, or None.
+    """
+    if pulled_image_id.startswith("local-"):
+        return None
+    full = _hash_bytes(pulled_bytes)
+    sha8 = full[:8]
+    d = images_dir(character_id)
+    candidates = sorted(d.glob(f"local-{sha8}.*"))
+    if not candidates:
+        return None
+    matched: Path | None = None
+    for c in candidates:
+        if not c.is_file():
+            continue
+        try:
+            if _hash_bytes(c.read_bytes()) == full:
+                matched = c
+                break
+        except OSError:
+            continue
+    if matched is None:
+        return None
+    local_id = f"local-{sha8}"
+    # Patch working.json so any gallery slot that referenced the local
+    # id now points at the real F-list id — preserves slot order and
+    # whatever description the user already typed. Stale ref left in
+    # place if the swap fails; the file removal below still cures the
+    # visible "image shows in both panes" bug.
+    for _ in range(3):
+        payload = read_working(character_id)
+        if payload is None:
+            break
+        images = payload.get("images")
+        if not isinstance(images, list):
+            break
+        changed = False
+        for entry in images:
+            if isinstance(entry, dict) and entry.get("image_id") == local_id:
+                entry["image_id"] = pulled_image_id
+                changed = True
+        if not changed:
+            break
+        try:
+            etag = _file_sha256(working_path(character_id))
+            write_working(character_id, payload, expected_etag=etag)
+            break
+        except EtagMismatch:
+            continue
+        except (ValueError, OSError):
+            break
+    try:
+        matched.unlink()
+    except OSError:
+        return None
+    return local_id
+
+
 def add_uploaded_image(
     character_id: int | str,
     data: bytes,

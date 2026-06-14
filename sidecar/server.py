@@ -612,6 +612,16 @@ async def flist_character_pull(name: str) -> StreamingResponse:
                         character_archive.write_character_image(
                             cid, image_id, ext, data
                         )
+                        # If the user uploaded these exact bytes locally
+                        # before pushing them to F-list, the local-<sha8>
+                        # file is still on disk and would show up as a
+                        # phantom pool entry. Collapse the duplicate.
+                        try:
+                            character_archive.dedupe_local_after_pull(
+                                cid, image_id, data
+                            )
+                        except Exception:  # noqa: BLE001 — best-effort
+                            pass
                         downloaded += 1
                         yield _sse_event(
                             "image",
