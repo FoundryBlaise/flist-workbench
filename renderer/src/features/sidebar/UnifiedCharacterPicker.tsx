@@ -56,6 +56,14 @@ function Avatar({
   variant?: 'avatar' | 'archive'
 }) {
   const [errored, setErrored] = useState(false)
+  // Reset on name change so the active-character chip rebinds to a
+  // fresh <img> when the user switches characters (or when activeName
+  // populates after an initial empty render). Without this the chip
+  // permanently shows the initial-circle fallback once any earlier
+  // load errored — observed when activeCharacter was null at mount.
+  useEffect(() => {
+    setErrored(false)
+  }, [name])
   // Logs-only characters don't have a live F-list avatar to fetch
   // (and even the deterministic CDN URL would 404 or return a stale
   // image for a deleted character). Render a uniform archive glyph
