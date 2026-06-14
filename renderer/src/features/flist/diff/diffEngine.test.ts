@@ -166,6 +166,23 @@ describe('computeDiff — empty/missing payload shapes', () => {
     expect(row.kind).toBe('removed')
   })
 
+  it('treats undecided-on-both-sides as unchanged even when overlay tracks the kink', () => {
+    // Regression: user toggled a kink, then cleared it back to undecided.
+    // Overlay still references kinks.X but both Live and Working now
+    // resolve to undecided — the diff used to show this as +added because
+    // classify('undecided', undefined) short-circuited before equality.
+    const w = working({
+      _overlay: ['kinks.fetish_42'],
+      kinks: { fetish_42: 'undecided' }
+    })
+    const r = { kinks: {} }
+    const out = computeDiff(w, r, model(), [{ id: 'fetish_42', name: 'K42' }])
+    const row = out.rows.find((r) => r.path === 'kinks.fetish_42')!
+    expect(row.kind).toBe('unchanged')
+    expect(row.workingValue).toBe('undecided')
+    expect(row.rightValue).toBe('undecided')
+  })
+
   it('surfaces overlay-only infotag deletions even when both sides are missing the key', () => {
     const w = working({
       _overlay: ['infotags.5'],

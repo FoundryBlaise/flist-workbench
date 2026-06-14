@@ -303,13 +303,27 @@ export function computeDiff(
   const kinkLookup = new Map(kinkCatalogue.map((k) => [k.id, k.name]))
   for (const id of Array.from(kinkIds).sort()) {
     const path = `kinks.${id}`
+    // F-list semantics: a missing entry and an explicit "undecided"
+    // are the same thing — neither side has a choice. Treat both as
+    // "no value" when classifying so an overlay-tracked row that's
+    // been cleared back to undecided doesn't show as +added vs a
+    // Live snapshot that simply omits the kink. Display still falls
+    // back to the literal "undecided" so the table reads sensibly.
+    const wReal =
+      workingK[id] !== undefined && workingK[id] !== 'undecided'
+        ? workingK[id]
+        : undefined
+    const rReal =
+      rightK[id] !== undefined && rightK[id] !== 'undecided'
+        ? rightK[id]
+        : undefined
     rows.push({
       path,
       category: 'standard_kink',
       label: kinkLookup.get(id) ?? id,
-      workingValue: workingK[id] ?? 'undecided',
-      rightValue: rightK[id] ?? 'undecided',
-      kind: classify(workingK[id], rightK[id]),
+      workingValue: wReal ?? 'undecided',
+      rightValue: rReal ?? 'undecided',
+      kind: classify(wReal, rReal),
       inOverlay: overlay.has(path),
       order: order++
     })
