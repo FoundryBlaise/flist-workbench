@@ -60,8 +60,14 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const [resetAllConfirm, setResetAllConfirm] = useState(false)
   const confirmCancelRef = useRef<HTMLButtonElement | null>(null)
 
+  const mappingRetriedRef = useRef(false)
   useEffect(() => {
-    if (mappingStatus === 'idle') void loadMapping()
+    if (mappingStatus === 'idle') {
+      void loadMapping()
+    } else if (mappingStatus === 'error' && !mappingRetriedRef.current) {
+      mappingRetriedRef.current = true
+      void loadMapping({ force: true })
+    }
   }, [mappingStatus, loadMapping])
 
   // Reset-all confirm modal — Esc handler + autofocus Cancel (parity

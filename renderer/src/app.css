@@ -448,8 +448,9 @@ body {
   color: #78c624;
 }
 .pane.preview[data-flist-theme='default'] .pane-body {
-  /* page bg #08192d; card a touch lighter so text doesn't disappear */
-  background: #14274a;
+  /* page bg #08192d; profile card sits noticeably lighter on the real
+     site — a brighter, more saturated navy. */
+  background: #1b3658;
   color: #bbc;
 }
 .pane.preview[data-flist-theme='default'] .pane-body a,
