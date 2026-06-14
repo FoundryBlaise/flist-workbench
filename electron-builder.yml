@@ -13,6 +13,14 @@ extraResources:
   - from: resources/sidecar.exe
     to: sidecar.exe
 asar: true
+# Native modules can't be dlopen()ed from inside an asar archive — the
+# OS loader has no way to mmap a `.node` file out of a zip. Unpack
+# keytar so its prebuilt binary lives on disk where Node can require()
+# it. The pattern is glob-on-asar, not a filesystem glob — keytar
+# itself is small, so unpacking the whole package is simpler than
+# trying to surgically include just the .node file.
+asarUnpack:
+  - node_modules/keytar/**
 win:
   target:
     - target: portable
