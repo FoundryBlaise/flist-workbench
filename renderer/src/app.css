@@ -432,22 +432,24 @@ body {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* F-list theme mimics — palettes lifted from getComputedStyle on a
-   live profile page (body background-color + color + anchor color)
-   for each of the three themes in Settings → Display. Only the page
-   chrome is preserved here; profile-card / quote-box selectors don't
-   exist as a single canonical class on F-list so they're approximated
-   by tinting toward the page background. */
+/* F-list theme mimics. The DevTools probe captured the outer <body>
+   colour, but F-list renders the profile description inside a card
+   that's a few shades up from the page bg — `body` alone gives a
+   too-stark palette (Dark especially turns into pure black). Each
+   theme's `background` here is the profile-card equivalent; page bg
+   stays in the comment as a reference. */
 .pane.preview[data-flist-theme='dark'] .pane-body {
-  background: #000;
-  color: #777;
+  /* page bg #000; profile card sits on a warm dark grey panel */
+  background: #2e2828;
+  color: #ddd;
 }
 .pane.preview[data-flist-theme='dark'] .pane-body a,
 .pane.preview[data-flist-theme='dark'] .pane-body .bb-url {
   color: #78c624;
 }
 .pane.preview[data-flist-theme='default'] .pane-body {
-  background: #08192d;
+  /* page bg #08192d; card a touch lighter so text doesn't disappear */
+  background: #14274a;
   color: #bbc;
 }
 .pane.preview[data-flist-theme='default'] .pane-body a,
@@ -455,7 +457,8 @@ body {
   color: #9bb7b8;
 }
 .pane.preview[data-flist-theme='light'] .pane-body {
-  background: #ddd;
+  /* page bg #ddd; card slightly brighter, like F-list's content panel */
+  background: #efefef;
   color: #333;
 }
 .pane.preview[data-flist-theme='light'] .pane-body a,
