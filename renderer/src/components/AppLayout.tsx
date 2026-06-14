@@ -168,6 +168,25 @@ export function AppLayout() {
     return () => window.removeEventListener('flist-session-recovered', onRecovered)
   }, [])
 
+  // Mid-session 401 with no available auto-recovery (autoLogin off or
+  // no saved password). The api helper dispatches this event so the
+  // user gets the sign-in modal instead of silently empty kinks/diffs.
+  // Throttled to once per 30s so a burst of failing requests doesn't
+  // re-open the modal repeatedly.
+  useEffect(() => {
+    let lastOpenedAt = 0
+    const onExpired = () => {
+      const now = Date.now()
+      if (now - lastOpenedAt < 30_000) return
+      const state = useStore.getState()
+      if (state.flistSignInOpen) return
+      lastOpenedAt = now
+      state.flistOpenSignIn()
+    }
+    window.addEventListener('flist-session-expired', onExpired)
+    return () => window.removeEventListener('flist-session-expired', onExpired)
+  }, [])
+
   // First-run detection: surface a non-blocking toast pointing at AI
   // Setup when there's nothing indexed and no labels endpoint override.
   // Less hostile than auto-opening the wizard; the user can dismiss

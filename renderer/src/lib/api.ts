@@ -511,8 +511,13 @@ async function tryFlistRecovery(): Promise<boolean> {
         window.dispatchEvent(new CustomEvent('flist-session-recovered'))
         return true
       }
+      // Surface the failure so debugging "autologin not reliable" has
+      // something to read in DevTools — the alternative is a silent
+      // false that leaves the user wondering why the modal popped.
+      console.warn('[flist] auto-recovery POST /flist/session failed:', res.status)
       return false
-    } catch {
+    } catch (e) {
+      console.warn('[flist] auto-recovery threw:', e)
       return false
     } finally {
       // Cleared in microtask so concurrent callers that joined this
@@ -560,6 +565,12 @@ async function request<T>(
     if (await tryFlistRecovery()) {
       return request<T>(path, init, opts, true)
     }
+    // Recovery didn't fire (no autoLogin, no stored password) or it
+    // tried and failed. Either way the user needs to re-authenticate
+    // mid-session — surface this as an event so AppLayout can open the
+    // sign-in modal. Without this, /flist/mapping-list 401-stuck leaves
+    // the kink picker and diff silently empty.
+    window.dispatchEvent(new CustomEvent('flist-session-expired'))
   }
   if (!res.ok) {
     let detail: string | undefined
