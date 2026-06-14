@@ -447,25 +447,49 @@ async def fetch_mapping_list(
     """Cached mapping-list. Refresh every week — F-list rarely changes
     these but we still want occasional drift to land. `force=True` skips
     the TTL check; renderer uses it from the staleness chip ↻ and the
-    Unknown-field "Refresh mapping list" CTA."""
+    Unknown-field "Refresh mapping list" CTA.
+
+    Stale-cache fallback: F-list mapping data drifts very slowly (new
+    kinks/infotags ship a few times a year at most), so once we've
+    fetched a cache file the renderer should never have to wait on a
+    fresh ticket to render the kink picker / diff. When a refresh would
+    have run (force or TTL exceeded) and we can't get a ticket OR the
+    F-list API errors out, fall back to whatever's on disk if anything
+    is there — the picker stays usable, the staleness chip still shows
+    `_fetched_at` so the user knows it's old. Force-refresh requested
+    by the user only raises if there's no cached file to fall back on,
+    so even an explicit refresh degrades gracefully into "stayed on the
+    last known good copy"."""
     import json
+
+    def _read_cache() -> dict[str, Any] | None:
+        if not cache_path.exists():
+            return None
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
     if not force and cache_path.exists():
         age = now - cache_path.stat().st_mtime
         if age < ttl_sec:
-            try:
-                return json.loads(cache_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                # Corrupt cache — refetch.
-                pass
-    ticket = await ensure_fresh_ticket(client=client)
-    payload = await _post_json(
-        MAPPING_LIST_URL,
-        {"account": ticket.account, "ticket": ticket.value},
-        client=client,
-    )
+            cached = _read_cache()
+            if cached is not None:
+                return cached
+    try:
+        ticket = await ensure_fresh_ticket(client=client)
+        payload = await _post_json(
+            MAPPING_LIST_URL,
+            {"account": ticket.account, "ticket": ticket.value},
+            client=client,
+        )
+    except (TicketRequired, FlistApiError):
+        cached = _read_cache()
+        if cached is not None:
+            return cached
+        raise
     tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     tmp.replace(cache_path)
