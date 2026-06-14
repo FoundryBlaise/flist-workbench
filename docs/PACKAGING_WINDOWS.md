@@ -23,9 +23,11 @@
 > `PATH`, and a one-time `uv sync` inside `sidecar/` to create the venv
 > that `pack:sidecar` invokes PyInstaller from.
 >
-> **Default ports:** packaged builds bind sidecar on **8770** (not the
-> dev default 8765) to dodge the maintainer's dev-container forward.
-> Override with `SIDECAR_PORT` env var if needed.
+> **Default port:** sidecar binds **27384** in both dev and packaged
+> builds. Picked in the upper-20k range so it doesn't fight with the
+> cluster of common dev-tool ports around :8xxx. The browser extension
+> hardcodes the same number — keep them aligned if you ever move it.
+> `SIDECAR_PORT` env var still overrides at runtime.
 >
 > The rest of this doc is the original implementation spec, kept for
 > reference. The "Things that will probably bite you" section near the
@@ -44,7 +46,7 @@ This is an Electron desktop app with a Python sidecar. Architecture:
 │  └─ creates the BrowserWindow              │
 │                                            │
 │ Renderer (React + Vite, renderer/src/)     │
-│  └─ talks to sidecar over HTTP at :8765    │
+│  └─ talks to sidecar over HTTP at :27384    │
 │                                            │
 │ Sidecar (FastAPI, sidecar/)                │
 │  ├─ /health, /profile/{name}               │
@@ -169,7 +171,7 @@ cd dist
 sidecar.exe
 ```
 
-Hit `http://127.0.0.1:8765/health` in a browser — should return
+Hit `http://127.0.0.1:27384/health` in a browser — should return
 `{"status":"ok","version":"0.0.0"}`. Stop it with Ctrl+C.
 
 **Common PyInstaller gotchas you'll hit:**
@@ -241,7 +243,7 @@ Pseudo-code for `server.py`'s bottom:
 ```python
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("SIDECAR_PORT", "8765"))
+    port = int(os.environ.get("SIDECAR_PORT", "27384"))
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
 ```
 
@@ -404,7 +406,7 @@ Checklist (in order — each step depends on the previous one working):
       most likely failure: TLS cert handling, the bundled `httpx`
       / `certifi` may be missing CA bundles. If it fails, run
       `sidecar.exe` standalone from `resources/` and `curl
-      http://127.0.0.1:8765/profile/Azure%20Viper` to see the error
+      http://127.0.0.1:27384/profile/Azure%20Viper` to see the error
 - [ ] **Settings… opens** (title-bar button)
 - [ ] **Settings → Browse…** opens the OS folder picker
 - [ ] Set Settings to a folder containing a few F-Chat character

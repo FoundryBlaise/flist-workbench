@@ -7,7 +7,7 @@ function resolvePort(): number {
   if (arg) return Number(arg.split('=')[1])
   const env = process.env['SIDECAR_PORT']
   if (env) return Number(env)
-  return 8770
+  return 27384
 }
 
 const sidecarPort = resolvePort()

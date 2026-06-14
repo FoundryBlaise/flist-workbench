@@ -1320,7 +1320,7 @@ function SecurityPane() {
         </div>
         <p className="settings-help">
           The F-list Workbench browser extension talks to this app over
-          <code> 127.0.0.1:8765 </code>
+          <code> 127.0.0.1:27384 </code>
           using a per-install token. Pairing happens via an
           accept-this-extension prompt the first time the extension
           asks. The extension never sees your F-list session and this

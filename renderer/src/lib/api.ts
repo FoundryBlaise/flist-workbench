@@ -446,7 +446,7 @@ export type RagStatus = {
 }
 
 function base(): string {
-  return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:8765'
+  return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
 }
 
 function dispatchSseBlock(block: string, handlers: RagQueryHandlers): void {

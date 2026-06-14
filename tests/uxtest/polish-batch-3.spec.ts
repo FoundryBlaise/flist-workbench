@@ -135,7 +135,7 @@ test('polish batch 3 — activity log restart-survival + shared empty-state', as
     // Trigger one new event and confirm the file grows.
     await window.evaluate(async () => {
       const w = window as unknown as { workbench?: { sidecarUrl: string } }
-      const url = w.workbench?.sidecarUrl ?? 'http://127.0.0.1:8765'
+      const url = w.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
       try {
         await fetch(`${url}/flist/session`, {
           method: 'POST',

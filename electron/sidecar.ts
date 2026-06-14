@@ -55,9 +55,11 @@ function installExitHandlers() {
   }
 }
 
-// Packaged builds default to 8770 so they don't collide with the dev
-// container's :8765 forward on the maintainer's machine.
-const DEFAULT_PORT = app.isPackaged ? 8770 : 8765
+// One port for dev AND packaged. Picked in the upper-20k range so it
+// doesn't collide with the cluster of common ports around :8xxx that
+// dev tools fight over (vite, mongo, code-server forwards, etc). The
+// browser extension also hardcodes this — keep them aligned.
+const DEFAULT_PORT = 27384
 const PORT = Number(process.env['SIDECAR_PORT'] ?? DEFAULT_PORT)
 process.env['SIDECAR_PORT'] = String(PORT)
 
