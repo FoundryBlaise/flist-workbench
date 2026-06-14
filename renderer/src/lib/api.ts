@@ -478,10 +478,70 @@ function dispatchSseBlock(block: string, handlers: RagQueryHandlers): void {
   }
 }
 
+// Mid-session ticket recovery. The sidecar holds the F-list password
+// in RAM only and drops it after an idle window (P0-C safety), so a
+// long-running session eventually loses the ability to auto-refresh
+// its ticket and the next /flist/* call returns 401. If the user saved
+// their password to the OS keychain we can transparently re-sign in
+// and retry, so they don't see "invalid ticket" pop up.
+let recoveryInFlight: Promise<boolean> | null = null
+async function tryFlistRecovery(): Promise<boolean> {
+  if (recoveryInFlight) return recoveryInFlight
+  recoveryInFlight = (async () => {
+    const creds = (globalThis as { workbench?: { creds?: WindowCreds } })
+      .workbench?.creds
+    if (!creds) return false
+    try {
+      const meta = await creds.getMeta()
+      // Only recover transparently when the user opted into auto-login.
+      // hasPassword without autoLogin means "pre-fill the modal" — they
+      // expect a confirmation step, so surface the 401 normally and let
+      // the sign-in modal handle it.
+      if (!meta.autoLogin || !meta.hasPassword || !meta.account) return false
+      const password = await creds.getPassword()
+      if (!password) return false
+      const res = await fetch(`${base()}/flist/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account: meta.account, password })
+      })
+      if (res.ok) {
+        // Let the renderer refresh its FlistSessionStatus so the sidebar
+        // chip stops showing "expired" after we just resurrected it.
+        window.dispatchEvent(new CustomEvent('flist-session-recovered'))
+        return true
+      }
+      return false
+    } catch {
+      return false
+    } finally {
+      // Cleared in microtask so concurrent callers that joined this
+      // promise still see the resolved value before a fresh attempt.
+      queueMicrotask(() => {
+        recoveryInFlight = null
+      })
+    }
+  })()
+  return recoveryInFlight
+}
+
+type WindowCreds = {
+  getMeta: () => Promise<{
+    account: string | null
+    autoLogin: boolean
+    encryptionAvailable: boolean
+    hasPassword: boolean
+  }>
+  getPassword: () => Promise<string | null>
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  opts?: ApiOptions
+  opts?: ApiOptions,
+  // Internal — set on the retry leg after a successful recovery so a
+  // second 401 surfaces normally instead of looping.
+  _retried = false
 ): Promise<T> {
   const res = await fetch(`${base()}${path}`, {
     ...init,
@@ -491,6 +551,16 @@ async function request<T>(
       ...(init.headers ?? {})
     }
   })
+  if (
+    res.status === 401 &&
+    !_retried &&
+    path.startsWith('/flist/') &&
+    path !== '/flist/session'
+  ) {
+    if (await tryFlistRecovery()) {
+      return request<T>(path, init, opts, true)
+    }
+  }
   if (!res.ok) {
     let detail: string | undefined
     try {
