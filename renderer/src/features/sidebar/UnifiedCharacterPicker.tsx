@@ -137,6 +137,8 @@ export function UnifiedCharacterPicker() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const backupCharacter = useStore((s) => s.flistBackupCharacter)
+  const refreshAllAccount = useStore((s) => s.flistRefreshAllAccount)
+  const sweepStatus = useStore((s) => s.flistAccountSweepStatus)
   // Right-click context menu state for account-character rows. Keyed
   // to a single character at a time — opening on another row replaces
   // the anchor. Lives at the picker level so the menu portal-style
@@ -392,7 +394,26 @@ export function UnifiedCharacterPicker() {
           <div className="char-picker-scroll">
           {accountEntries.length > 0 && (
             <>
-              <div className="char-picker-section-h">On your F-list account</div>
+              <div className="char-picker-section-h char-picker-section-h-row">
+                <span>On your F-list account</span>
+                <button
+                  type="button"
+                  className="char-picker-section-refresh-all"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void refreshAllAccount()
+                  }}
+                  disabled={!session.active || sweepStatus === 'running'}
+                  title={
+                    sweepStatus === 'running'
+                      ? 'Refreshing every character on your account — one per second to respect the F-list API'
+                      : 'Pull every character on your account from F-list right now'
+                  }
+                  data-testid="char-picker-refresh-all"
+                >
+                  {sweepStatus === 'running' ? '… refreshing' : '↻ Refresh all'}
+                </button>
+              </div>
               <ul className="char-picker-unified-list">
                 {accountEntries.map((entry) => {
                   const isActive =

@@ -69,12 +69,14 @@ test('Auto-refresh on sign-in pulls every roster character in the background', a
   })
   window.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await window.waitForLoadState('domcontentloaded')
-  // Set the threshold to 0 (default) so a stale value from another test
-  // doesn't suppress the sweep we're trying to test.
+  // Auto-refresh is off by default; opt in so the sweep we're testing
+  // actually runs. With a fresh userData every character's last-pull
+  // time is null → infinitely-old → 24h threshold is satisfied for all.
   await window.evaluate(() => {
     try {
       window.localStorage.clear()
-      window.localStorage.setItem('workbench.flistAutoRefreshMin', '0')
+      window.localStorage.setItem('workbench.flistAutoRefreshEnabled', 'true')
+      window.localStorage.setItem('workbench.flistAutoRefreshHours', '24')
     } catch {
       /* best-effort */
     }
