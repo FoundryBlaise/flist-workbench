@@ -156,6 +156,18 @@ export function AppLayout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Silent ticket recovery fires from inside the api request helper
+  // when a /flist/* call hits 401 and the OS keychain still has the
+  // password. Listen for the recovery event so the sidebar chip + any
+  // gated UI sync to the freshly-resurrected session immediately.
+  useEffect(() => {
+    const onRecovered = () => {
+      void useStore.getState().flistRefreshSession()
+    }
+    window.addEventListener('flist-session-recovered', onRecovered)
+    return () => window.removeEventListener('flist-session-recovered', onRecovered)
+  }, [])
+
   // First-run detection: surface a non-blocking toast pointing at AI
   // Setup when there's nothing indexed and no labels endpoint override.
   // Less hostile than auto-opening the wizard; the user can dismiss
