@@ -369,9 +369,13 @@ export function DiffPane({ characterId }: { characterId: string }) {
                         {orderOnlyExpanded ? '▾' : '▸'}
                       </span>
                       <span className="diff-badge diff-badge-modified">●</span>
-                      Image order: {orderOnlyRows.length}{' '}
-                      {orderOnlyRows.length === 1 ? 'image' : 'images'} moved to
-                      a different slot
+                      <strong>Order of images differs</strong>
+                      <span className="diff-pane-order-summary-meta">
+                        — {orderOnlyRows.length}{' '}
+                        {orderOnlyRows.length === 1 ? 'image' : 'images'} in a
+                        different slot.{' '}
+                        {orderOnlyExpanded ? 'Hide details' : 'Click to see which'}
+                      </span>
                     </button>
                     {orderOnlyExpanded && (
                       <table className="diff-pane-table">
