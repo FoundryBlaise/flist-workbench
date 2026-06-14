@@ -21,6 +21,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
   const getLastAccount = useStore((s) => s.flistGetLastAccount)
   const status = useStore((s) => s.flistSignInStatus)
   const error = useStore((s) => s.flistSignInError)
+  const savedCreds = useStore((s) => s.flistSavedCreds)
   // Lazy initializer reads the saved account BEFORE first paint so the
   // focus useEffect below sees the right `value` and routes initial
   // focus to the password field when an account is pre-filled. Without
@@ -28,8 +29,52 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
   // the (now-pre-filled) account field.
   const [account, setAccount] = useState(() => getLastAccount())
   const [password, setPassword] = useState('')
+  // Default both checkboxes from the saved-creds state: if the user
+  // already has saved creds, the toggles should reflect that on
+  // re-open. Auto login implies remember, so the truth is just two
+  // flags surfaced from the keychain.
+  const [rememberPassword, setRememberPassword] = useState(
+    () => savedCreds.hasPassword || savedCreds.autoLogin
+  )
+  const [autoLogin, setAutoLogin] = useState(() => savedCreds.autoLogin)
   const accountRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
+
+  // When saved creds exist, pre-fill the password input on mount so
+  // the user can simply hit Enter rather than re-typing. We fetch it
+  // through the same keychain bridge the auto-login path uses — no
+  // password ever lands in localStorage or any other on-disk store.
+  useEffect(() => {
+    let cancelled = false
+    if (!savedCreds.hasPassword) return
+    const credsApi = window.workbench?.creds
+    if (!credsApi) return
+    credsApi
+      .getPassword()
+      .then((pw) => {
+        if (cancelled || !pw) return
+        setPassword(pw)
+      })
+      .catch(() => {
+        // Pre-fill is a convenience — failing here just means the
+        // user types it again; never block the modal on this.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [savedCreds.hasPassword])
+
+  // Force-uncheck "Remember password" when the user disables it, and
+  // auto-set it on when they enable auto-login (the keychain entry
+  // is the prerequisite).
+  const onAutoLoginChange = (next: boolean) => {
+    setAutoLogin(next)
+    if (next) setRememberPassword(true)
+  }
+  const onRememberChange = (next: boolean) => {
+    setRememberPassword(next)
+    if (!next) setAutoLogin(false)
+  }
 
   // Focus the first empty field on mount. requestAnimationFrame lets
   // the modal mount before we steal focus from whatever opened it.
@@ -54,7 +99,10 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
     e.preventDefault()
     if (status === 'submitting') return
     if (!account.trim() || !password) return
-    await signIn(account.trim(), password)
+    await signIn(account.trim(), password, {
+      rememberPassword,
+      autoLogin
+    })
     // The store closes the modal on success; on failure status flips to
     // 'error' with the message in `flistSignInError`. Either way we
     // clear the password from local state — never echo a wrong password
@@ -125,6 +173,40 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
               data-testid="flist-signin-password"
             />
           </label>
+          <div className="flist-signin-savelogin">
+            <label className="flist-signin-checkbox">
+              <input
+                type="checkbox"
+                checked={rememberPassword}
+                onChange={(e) => onRememberChange(e.target.checked)}
+                disabled={!savedCreds.encryptionAvailable && !savedCreds.hasPassword}
+                data-testid="flist-signin-remember"
+              />
+              <span>Remember password</span>
+            </label>
+            <label className="flist-signin-checkbox">
+              <input
+                type="checkbox"
+                checked={autoLogin}
+                onChange={(e) => onAutoLoginChange(e.target.checked)}
+                disabled={!savedCreds.encryptionAvailable && !savedCreds.hasPassword}
+                data-testid="flist-signin-auto-login"
+              />
+              <span>Auto login next time</span>
+            </label>
+            <small className="flist-signin-savelogin-note">
+              Your password goes into your operating system's credential
+              store (Windows Credential Manager / macOS Keychain /
+              libsecret) — never into a file. You can remove the saved
+              login any time under <strong>Settings → F-list</strong>.
+            </small>
+            {!savedCreds.encryptionAvailable && (
+              <small className="flist-signin-savelogin-warn">
+                Your OS credential store isn't reachable — saving the
+                password isn't available on this system.
+              </small>
+            )}
+          </div>
           {error && (
             <div className="flist-signin-error" role="alert" data-testid="flist-signin-error">
               {friendly && <div className="flist-signin-error-hint">{friendly}</div>}

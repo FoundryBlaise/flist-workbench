@@ -46,6 +46,22 @@ declare global {
       openExternal?: (url: string) => void
       spawnPowerShell?: (command: string) => void
       openSettings?: () => void
+      creds?: {
+        getMeta: () => Promise<{
+          account: string | null
+          autoLogin: boolean
+          encryptionAvailable: boolean
+          hasPassword: boolean
+        }>
+        getPassword: () => Promise<string | null>
+        save: (payload: {
+          account: string
+          password: string
+          autoLogin: boolean
+        }) => Promise<boolean>
+        setAutoLogin: (next: boolean) => Promise<boolean>
+        clear: () => Promise<boolean>
+      }
     }
   }
 }

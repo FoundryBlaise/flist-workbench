@@ -16,9 +16,12 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "pack:sidecar": "cd sidecar && .venv/Scripts/pyinstaller.exe --onefile --windowed --name sidecar --noconfirm --collect-data certifi --hidden-import uvicorn.logging --hidden-import uvicorn.loops --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols --hidden-import uvicorn.protocols.http --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan --hidden-import uvicorn.lifespan.on server.py && node -e \"require('node:fs').mkdirSync('resources',{recursive:true});require('node:fs').copyFileSync('sidecar/dist/sidecar.exe','resources/sidecar.exe')\"",
-    "pack:win": "npm run build && npm run pack:sidecar && electron-builder --win"
+    "rebuild:native": "electron-rebuild -f -w keytar",
+    "postinstall": "electron-rebuild -f -w keytar",
+    "pack:win": "npm run rebuild:native && npm run build && npm run pack:sidecar && electron-builder --win"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "@playwright/test": "^1.49.0",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.10.0",
@@ -43,6 +46,7 @@
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
     "@uiw/react-codemirror": "^4.25.10",
+    "keytar": "^7.9.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-virtuoso": "^4.18.7",
