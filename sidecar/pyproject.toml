@@ -30,6 +30,13 @@ dev = [
   "pytest-asyncio>=0.24",
   "pytest-httpx>=0.32",
   "httpx>=0.28",
+  # PyInstaller is what `npm run pack:sidecar` invokes to produce
+  # sidecar.exe for the Windows portable build. It only runs on the
+  # build host, never inside the shipped binary, so dev-group is the
+  # right home. Pinned major to avoid surprise PyInstaller-5→6 style
+  # CLI breakage; bump the floor when the build script needs a newer
+  # one.
+  "pyinstaller>=6,<7",
 ]
 
 [tool.uv]
