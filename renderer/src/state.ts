@@ -322,6 +322,11 @@ type State = {
    *  mode. Set whenever the user opens a Live or historical Backup
    *  document. */
   editorReadOnly: boolean
+  /** Which F-list theme palette the preview pane mimics. Values match
+   *  F-list's own theme picker (Settings → Display). Persisted in
+   *  localStorage so it sticks across launches. */
+  previewTheme: 'dark' | 'default' | 'light'
+  setPreviewTheme: (next: 'dark' | 'default' | 'light') => void
   /** Modal visibility for the sign-in dialog. */
   flistSignInOpen: boolean
   /** Last error from a sign-in attempt; passed verbatim from F-list per
@@ -1081,6 +1086,23 @@ export const useStore = create<State>((set, get) => ({
   flistCustomKinksUI: {},
   flistPullAbortController: null,
   editorReadOnly: false,
+  previewTheme: ((): 'dark' | 'default' | 'light' => {
+    try {
+      const raw = localStorage.getItem('workbench.previewTheme')
+      if (raw === 'dark' || raw === 'default' || raw === 'light') return raw
+    } catch {
+      /* localStorage unavailable — fall through */
+    }
+    return 'default'
+  })(),
+  setPreviewTheme: (next) => {
+    try {
+      localStorage.setItem('workbench.previewTheme', next)
+    } catch {
+      /* best-effort persistence */
+    }
+    set({ previewTheme: next })
+  },
   flistSignInOpen: false,
   flistSignInError: null,
   flistSignInStatus: 'idle',

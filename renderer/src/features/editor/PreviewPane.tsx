@@ -51,6 +51,8 @@ export function PreviewPane() {
   const inlines = useStore((s) => s.editorInlines)
   const setContent = useStore((s) => s.setEditorContent)
   const readOnly = useStore((s) => s.editorReadOnly)
+  const previewTheme = useStore((s) => s.previewTheme)
+  const setPreviewTheme = useStore((s) => s.setPreviewTheme)
   const editorActiveTab = useStore((s) => s.editorActiveTab)
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   // Per-tab right pane:
@@ -179,7 +181,11 @@ export function PreviewPane() {
   }, [])
 
   return (
-    <section className="pane preview" data-testid="preview-pane">
+    <section
+      className="pane preview"
+      data-testid="preview-pane"
+      data-flist-theme={showAlternatePreview ? undefined : previewTheme}
+    >
       <header className="pane-head">
         {showProfileFieldsPreview
           ? 'Info Preview'
@@ -194,6 +200,27 @@ export function PreviewPane() {
           </span>
         ) : (
           <span className="preview-edit-hint">· editable</span>
+        )}
+        {showAlternatePreview ? null : (
+          <div
+            className="preview-theme-switch"
+            role="group"
+            aria-label="F-list theme"
+            data-testid="preview-theme-switch"
+          >
+            {(['dark', 'default', 'light'] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`preview-theme-btn${previewTheme === t ? ' on' : ''}`}
+                aria-pressed={previewTheme === t}
+                title={`Preview as F-list ${t[0].toUpperCase() + t.slice(1)} theme`}
+                onClick={() => setPreviewTheme(t)}
+              >
+                {t[0].toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
         )}
       </header>
       {showEditHint && !readOnly && !showAlternatePreview && (
