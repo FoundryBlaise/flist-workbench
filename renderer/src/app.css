@@ -4505,6 +4505,34 @@ body {
 .diff-pane-cat-pill-changed::after { content: ' ●'; color: #d4a04a; }
 
 .diff-pane-section { display: flex; flex-direction: column; gap: 6px; }
+.diff-pane-order-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px;
+  background: var(--panel-bg, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
+  border-radius: 4px;
+}
+.diff-pane-order-summary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--font-body);
+  padding: 0;
+  text-align: left;
+}
+.diff-pane-order-summary-toggle:hover { text-decoration: underline; }
+.diff-pane-order-summary-caret {
+  display: inline-block;
+  width: 12px;
+  opacity: 0.7;
+}
 .diff-pane-section-h {
   font-size: var(--font-heading);
   margin: 12px 0 0;

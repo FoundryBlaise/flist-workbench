@@ -5,7 +5,8 @@ import {
   computeDiff,
   type DiffCategory,
   type DiffKinkCatalogueEntry,
-  type DiffRow as DiffRowModel
+  type DiffRow as DiffRowModel,
+  type ImageDiffSide
 } from './diff/diffEngine'
 import { DiffRow } from './DiffRow'
 import { DescriptionDiffView } from './DescriptionDiffView'
@@ -58,6 +59,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
     () => new Set(CATEGORY_ORDER)
   )
   const [resetAllConfirm, setResetAllConfirm] = useState(false)
+  const [orderOnlyExpanded, setOrderOnlyExpanded] = useState(false)
   const confirmCancelRef = useRef<HTMLButtonElement | null>(null)
 
   const mappingRetriedRef = useRef(false)
@@ -186,8 +188,25 @@ export function DiffPane({ characterId }: { characterId: string }) {
       (showUnchanged || r.kind !== 'unchanged')
   )
 
+  // Split image rows: position-only changes get collapsed under a
+  // single "Image order: N moved" summary so the diff doesn't drown
+  // in 22 rows of shuffle noise. A row is "order-only" when both
+  // sides are present, descriptions match, and only `position`
+  // differs — i.e. the image stays on profile, just in a different
+  // gallery slot. (Added/removed rows and caption diffs stay inline
+  // as real changes.)
+  const isOrderOnly = (r: DiffRowModel) => {
+    if (r.category !== 'image' || r.kind !== 'modified') return false
+    const w = r.workingValue as ImageDiffSide | undefined
+    const rv = r.rightValue as ImageDiffSide | undefined
+    if (!w || !rv || !w.present || !rv.present) return false
+    return w.description === rv.description && w.position !== rv.position
+  }
+  const orderOnlyRows = visibleRows.filter(isOrderOnly)
+  const inlineRows = visibleRows.filter((r) => !isOrderOnly(r))
+
   const rowsByCategory = new Map<DiffCategory, DiffRowModel[]>()
-  for (const r of visibleRows) {
+  for (const r of inlineRows) {
     const arr = rowsByCategory.get(r.category) ?? []
     arr.push(r)
     rowsByCategory.set(r.category, arr)
@@ -302,35 +321,87 @@ export function DiffPane({ characterId }: { characterId: string }) {
         <div className="diff-pane-table-wrap">
           {CATEGORY_ORDER.map((cat) => {
             const rows = rowsByCategory.get(cat)
-            if (!rows || rows.length === 0) return null
+            const showOrderSummary =
+              cat === 'image' &&
+              activeCategories.has('image') &&
+              orderOnlyRows.length > 0
+            if ((!rows || rows.length === 0) && !showOrderSummary) return null
             return (
               <section key={cat} className="diff-pane-section">
                 <h3 className="diff-pane-section-h">
-                  {CATEGORY_LABEL[cat]} ({rows.length})
+                  {CATEGORY_LABEL[cat]} ({(rows?.length ?? 0) +
+                    (showOrderSummary ? orderOnlyRows.length : 0)})
                 </h3>
-                <table className="diff-pane-table">
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th>Field</th>
-                      <th>Working</th>
-                      <th>{rightLabel}</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <DiffRow
-                        key={row.path}
-                        row={row}
-                        characterId={characterId}
-                        rightLabel={rightLabel}
-                        onReset={source.kind === 'live' ? onRowReset(row) : null}
-                        backupResetDisabled={source.kind === 'backup'}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+                {rows && rows.length > 0 && (
+                  <table className="diff-pane-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Field</th>
+                        <th>Working</th>
+                        <th>{rightLabel}</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => (
+                        <DiffRow
+                          key={row.path}
+                          row={row}
+                          characterId={characterId}
+                          rightLabel={rightLabel}
+                          onReset={source.kind === 'live' ? onRowReset(row) : null}
+                          backupResetDisabled={source.kind === 'backup'}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {showOrderSummary && (
+                  <div className="diff-pane-order-summary">
+                    <button
+                      type="button"
+                      className="diff-pane-order-summary-toggle"
+                      onClick={() => setOrderOnlyExpanded((v) => !v)}
+                      aria-expanded={orderOnlyExpanded}
+                    >
+                      <span className="diff-pane-order-summary-caret">
+                        {orderOnlyExpanded ? '▾' : '▸'}
+                      </span>
+                      <span className="diff-badge diff-badge-modified">●</span>
+                      Image order: {orderOnlyRows.length}{' '}
+                      {orderOnlyRows.length === 1 ? 'image' : 'images'} moved to
+                      a different slot
+                    </button>
+                    {orderOnlyExpanded && (
+                      <table className="diff-pane-table">
+                        <thead>
+                          <tr>
+                            <th></th>
+                            <th>Field</th>
+                            <th>Working</th>
+                            <th>{rightLabel}</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {orderOnlyRows.map((row) => (
+                            <DiffRow
+                              key={row.path}
+                              row={row}
+                              characterId={characterId}
+                              rightLabel={rightLabel}
+                              onReset={
+                                source.kind === 'live' ? onRowReset(row) : null
+                              }
+                              backupResetDisabled={source.kind === 'backup'}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
               </section>
             )
           })}
