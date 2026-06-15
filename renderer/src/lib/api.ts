@@ -592,6 +592,14 @@ async function get<T>(path: string, opts?: ApiOptions): Promise<T> {
 export const api = {
   base,
   health: () => get<{ status: string; version: string }>('/health'),
+  eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
+    get<{
+      eicons: string[]
+      total: number
+      as_of: number
+      status: 'loading' | 'ready' | 'error'
+      error: string | null
+    }>(`/eicons/search?q=${encodeURIComponent(q)}&limit=${limit}`, opts),
   characters: () => get<{ characters: CharacterEntry[] }>('/logs/characters'),
   partners: (char: string) =>
     get<{ character: string; partners: PartnerEntry[] }>(

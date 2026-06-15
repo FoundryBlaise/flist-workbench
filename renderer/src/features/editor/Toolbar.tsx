@@ -1,5 +1,7 @@
 import { EditorView } from '@codemirror/view'
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { api } from '../../lib/api'
+import { useStore } from '../../state'
 
 export type ToolbarAction = {
   label: string
@@ -13,7 +15,7 @@ export type ToolbarAction = {
    * inserting verbatim. Lets the user pick a colour swatch / fill in a
    * URL rather than editing a placeholder string after the fact.
    */
-  popover?: 'color' | 'url'
+  popover?: 'color' | 'url' | 'eicon'
 }
 
 // F-list's twelve named colours, in the order F-Chat shows them in its
@@ -49,7 +51,7 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'S', title: 'Strikethrough', wrap: { open: '[s]', close: '[/s]' } },
   { label: 'color', title: 'Colour — pick a named swatch', popover: 'color' },
   { label: 'icon', title: 'Character icon', wrap: { open: '[icon]', close: '[/icon]' } },
-  { label: 'eicon', title: 'Emote icon', wrap: { open: '[eicon]', close: '[/eicon]' } },
+  { label: 'eicon', title: 'Emote icon — pick from catalog', popover: 'eicon' },
   { label: 'url', title: 'URL — pick a target', shortcut: 'Mod-k', popover: 'url' },
   { label: 'spoiler', title: 'Spoiler', wrap: { open: '[spoiler]', close: '[/spoiler]' } },
   {
@@ -194,6 +196,22 @@ function ToolButton({
           onClose={() => setPopoverOpen(false)}
         />
       )}
+      {action.popover === 'eicon' && popoverOpen && (
+        <EiconPopover
+          onPick={(name) => {
+            const view = viewRef.current
+            if (view) {
+              applyAction(view, {
+                label: 'eicon',
+                title: 'Emote icon',
+                insert: `[eicon]${name}[/eicon]`
+              })
+            }
+            setPopoverOpen(false)
+          }}
+          onClose={() => setPopoverOpen(false)}
+        />
+      )}
     </span>
   )
 }
@@ -308,6 +326,97 @@ function UrlPopover({
   )
 }
 
+function EiconPopover({
+  onPick,
+  onClose
+}: {
+  onPick: (name: string) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<string[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [total, setTotal] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const t = setTimeout(() => {
+      api
+        .eiconsSearch(query, 200, { signal: controller.signal })
+        .then((data) => {
+          setResults(data.eicons)
+          setStatus(data.status)
+          setTotal(data.total)
+        })
+        .catch((e) => {
+          if (controller.signal.aborted) return
+          // eslint-disable-next-line no-console
+          console.warn('eicon search failed', e)
+          setStatus('error')
+        })
+    }, 120)
+    return () => {
+      controller.abort()
+      clearTimeout(t)
+    }
+  }, [query])
+
+  return (
+    <div
+      className="tool-popover tool-eicon-popover"
+      role="dialog"
+      aria-label="Select an eicon"
+      data-testid="toolbar-eicon-popover"
+    >
+      <div className="tool-eicon-header">
+        <input
+          ref={inputRef}
+          type="search"
+          className="tool-eicon-search"
+          placeholder="Search eicons…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') onClose()
+          }}
+          data-testid="toolbar-eicon-search"
+        />
+        <span className="tool-eicon-status">
+          {status === 'loading' && 'Loading catalog…'}
+          {status === 'ready' && `${total.toLocaleString()} eicons`}
+          {status === 'error' && 'Catalog unavailable'}
+        </span>
+      </div>
+      <div className="tool-eicon-grid" data-testid="toolbar-eicon-grid">
+        {results.length === 0 && status === 'ready' && query.trim() && (
+          <div className="tool-eicon-empty">No matches.</div>
+        )}
+        {results.map((name) => (
+          <button
+            key={name}
+            type="button"
+            className="tool-eicon-tile"
+            title={name}
+            onClick={() => onPick(name)}
+            data-testid={`toolbar-eicon-tile-${name}`}
+          >
+            <img
+              src={`https://static.f-list.net/images/eicon/${encodeURIComponent(name)}.gif`}
+              alt={name}
+              loading="lazy"
+            />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function Toolbar({ viewRef }: { viewRef: RefObject<EditorView | null> }) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreWrapRef = useRef<HTMLDivElement>(null)
@@ -376,6 +485,52 @@ export function Toolbar({ viewRef }: { viewRef: RefObject<EditorView | null> }) 
           )}
         </span>
       )}
+      <ViewModeToggle />
     </div>
+  )
+}
+
+function ViewModeToggle() {
+  const mode = useStore((s) => s.editorViewMode)
+  const setMode = useStore((s) => s.setEditorViewMode)
+  return (
+    <span
+      className="tool-group tool-view-mode"
+      role="group"
+      aria-label="View mode"
+      data-testid="editor-view-mode"
+    >
+      <span className="tool-divider" aria-hidden />
+      <button
+        type="button"
+        className={`tool tool-view-mode-btn${mode === 'code' ? ' on' : ''}`}
+        aria-pressed={mode === 'code'}
+        title="Full code — hide live preview"
+        onClick={() => setMode('code')}
+        data-testid="view-mode-code"
+      >
+        Code
+      </button>
+      <button
+        type="button"
+        className={`tool tool-view-mode-btn${mode === 'split' ? ' on' : ''}`}
+        aria-pressed={mode === 'split'}
+        title="Split — code editor + live preview"
+        onClick={() => setMode('split')}
+        data-testid="view-mode-split"
+      >
+        Split
+      </button>
+      <button
+        type="button"
+        className={`tool tool-view-mode-btn${mode === 'preview' ? ' on' : ''}`}
+        aria-pressed={mode === 'preview'}
+        title="Full preview — hide the code editor"
+        onClick={() => setMode('preview')}
+        data-testid="view-mode-preview"
+      >
+        Preview
+      </button>
+    </span>
   )
 }

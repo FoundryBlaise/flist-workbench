@@ -28,12 +28,17 @@ export function Tabs({
   activeId,
   onChange,
   hideStripOnSingle = false,
+  stripOnly = false,
   testId
 }: {
   tabs: TabsTab[]
   activeId: string
   onChange: (id: string) => void
   hideStripOnSingle?: boolean
+  /** Render only the tablist strip — used when the tab content is
+   *  hosted elsewhere (e.g. the editor where the strip sits above
+   *  both editor and preview panes). */
+  stripOnly?: boolean
   testId?: string
 }) {
   const generatedId = useId()
@@ -88,7 +93,10 @@ export function Tabs({
   const showStrip = !(hideStripOnSingle && tabs.length === 1)
 
   return (
-    <div className="tabs" data-testid={testId}>
+    <div
+      className={`tabs${stripOnly ? ' tabs-strip-only' : ''}`}
+      data-testid={testId}
+    >
       {showStrip && (
         <div
           ref={listRef}
@@ -127,7 +135,7 @@ export function Tabs({
           })}
         </div>
       )}
-      {active && (
+      {active && !stripOnly && (
         <div
           role="tabpanel"
           id={`${idPrefix}-panel-${active.id}`}
