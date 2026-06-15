@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field
 import aliases as aliases_store
 import character_archive
 import documents
-import eicons as eicons_catalog
 import flist_activity
 import flist_api
 import labels as labels_store
@@ -108,23 +107,6 @@ async def _flist_touch_middleware(request, call_next):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}
-
-
-@app.get("/eicons/search")
-def eicons_search(q: str = "", limit: int = 200) -> dict:
-    """Search the cached eicon catalog (sourced from xariah.net).
-
-    The renderer uses this to populate the toolbar's eicon picker. The
-    catalog is loaded into memory at sidecar startup with delta refreshes
-    every hour. While the first fetch is in flight `status` will be
-    'loading'; the renderer should poll or show a spinner.
-    """
-    return eicons_catalog.search(q, limit)
-
-
-@app.on_event("startup")
-async def _eicons_warm_up() -> None:
-    await eicons_catalog.start()
 
 
 @app.get("/profile/{name}")

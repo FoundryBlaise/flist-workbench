@@ -28,21 +28,12 @@ export function Tabs({
   activeId,
   onChange,
   hideStripOnSingle = false,
-  stripOnly = false,
-  stripActions,
   testId
 }: {
   tabs: TabsTab[]
   activeId: string
   onChange: (id: string) => void
   hideStripOnSingle?: boolean
-  /** Render only the tablist strip (no tabpanel). Used when the tab
-   *  content is hosted elsewhere — e.g. the editor where the strip sits
-   *  above both editor + preview panes. */
-  stripOnly?: boolean
-  /** Trailing content rendered to the right of the strip (e.g. a
-   *  view-mode toggle for the currently active tab). */
-  stripActions?: ReactNode
   testId?: string
 }) {
   const generatedId = useId()
@@ -96,57 +87,46 @@ export function Tabs({
 
   const showStrip = !(hideStripOnSingle && tabs.length === 1)
 
-  const strip = showStrip ? (
-    <div
-      ref={listRef}
-      role="tablist"
-      aria-orientation="horizontal"
-      className="tabs-strip"
-      onKeyDown={onKeyDown}
-    >
-      {tabs.map((tab) => {
-        const isActive = tab.id === active?.id
-        const tabId = `${idPrefix}-tab-${tab.id}`
-        const panelId = `${idPrefix}-panel-${tab.id}`
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            id={tabId}
-            aria-selected={isActive}
-            aria-controls={panelId}
-            aria-disabled={tab.disabled || undefined}
-            tabIndex={isActive ? 0 : -1}
-            disabled={tab.disabled}
-            data-tab-id={tab.id}
-            className={`tabs-tab${isActive ? ' tabs-tab-active' : ''}`}
-            onClick={() => {
-              if (!tab.disabled && tab.id !== activeId) onChange(tab.id)
-            }}
-          >
-            <span className="tabs-tab-label">{tab.label}</span>
-            {tab.badge != null && (
-              <span className="tabs-tab-badge">{tab.badge}</span>
-            )}
-          </button>
-        )
-      })}
-      {stripActions && <div className="tabs-strip-actions">{stripActions}</div>}
-    </div>
-  ) : null
-
-  if (stripOnly) {
-    return (
-      <div className="tabs tabs-strip-only" data-testid={testId}>
-        {strip}
-      </div>
-    )
-  }
-
   return (
     <div className="tabs" data-testid={testId}>
-      {strip}
+      {showStrip && (
+        <div
+          ref={listRef}
+          role="tablist"
+          aria-orientation="horizontal"
+          className="tabs-strip"
+          onKeyDown={onKeyDown}
+        >
+          {tabs.map((tab) => {
+            const isActive = tab.id === active?.id
+            const tabId = `${idPrefix}-tab-${tab.id}`
+            const panelId = `${idPrefix}-panel-${tab.id}`
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={tabId}
+                aria-selected={isActive}
+                aria-controls={panelId}
+                aria-disabled={tab.disabled || undefined}
+                tabIndex={isActive ? 0 : -1}
+                disabled={tab.disabled}
+                data-tab-id={tab.id}
+                className={`tabs-tab${isActive ? ' tabs-tab-active' : ''}`}
+                onClick={() => {
+                  if (!tab.disabled && tab.id !== activeId) onChange(tab.id)
+                }}
+              >
+                <span className="tabs-tab-label">{tab.label}</span>
+                {tab.badge != null && (
+                  <span className="tabs-tab-badge">{tab.badge}</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
       {active && (
         <div
           role="tabpanel"
