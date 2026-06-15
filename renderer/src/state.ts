@@ -151,6 +151,10 @@ type State = {
    *  preview pane can swap content per tab (e.g. show a website-style
    *  Info-pane view when the user is on Profile fields). */
   editorActiveTab: string
+  /** Description-tab view mode: split (default), full preview, full
+   *  code. Applies only to the Description tab — other tabs ignore it.
+   *  Persisted in localStorage. */
+  editorViewMode: 'split' | 'preview' | 'code'
 
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
   saveError: string | null
@@ -394,6 +398,7 @@ type State = {
   ) => void
   setEditorContent: (value: string) => void
   setEditorActiveTab: (tab: string) => void
+  setEditorViewMode: (mode: 'split' | 'preview' | 'code') => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
 
@@ -1039,6 +1044,17 @@ export const useStore = create<State>((set, get) => ({
   editorFetchError: null,
   editorDirty: false,
   editorActiveTab: 'description',
+  editorViewMode: ((): 'split' | 'preview' | 'code' => {
+    try {
+      const stored = localStorage.getItem('flist-workbench:editor-view-mode')
+      if (stored === 'split' || stored === 'preview' || stored === 'code') {
+        return stored
+      }
+    } catch {
+      // ignore
+    }
+    return 'split'
+  })(),
 
   saveStatus: 'idle',
   saveError: null,
@@ -3985,6 +4001,16 @@ export const useStore = create<State>((set, get) => ({
   setEditorActiveTab(tab) {
     if (get().editorActiveTab === tab) return
     set({ editorActiveTab: tab })
+  },
+
+  setEditorViewMode(mode) {
+    if (get().editorViewMode === mode) return
+    set({ editorViewMode: mode })
+    try {
+      localStorage.setItem('flist-workbench:editor-view-mode', mode)
+    } catch {
+      // ignore
+    }
   },
 
   async fetchProfile(name) {
