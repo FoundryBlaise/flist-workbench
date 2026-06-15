@@ -4,14 +4,15 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { selectWorkingSlot, useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
+import { Tabs, type TabsTab } from '../../components/Tabs'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { KinksPane } from '../flist/KinksPane'
+import { countKinksWithChoice } from '../flist/kinksUnified'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
-import { DiffPane } from '../flist/DiffPane'
+import { DiffPane, countDiffChanges } from '../flist/DiffPane'
 import { ImagesTab } from '../flist/ImagesTab'
 import { Toolbar } from './Toolbar'
 import { RevisionsPanel } from './RevisionsPanel'
-import { useEditorTabs } from './useEditorTabs'
 
 // Idle window before a draft autosave flushes. Crash-safety only —
 // drafts overwrite themselves, so 30 s is the sweet spot between "fresh
@@ -221,7 +222,7 @@ export function EditorPane() {
           </span>
         </div>
       )}
-      <EditorActiveTab
+      <EditorTabsHost
         readOnly={readOnly}
         content={content}
         setContent={setContent}
@@ -240,11 +241,12 @@ export function EditorPane() {
   )
 }
 
-/** Renders the active editor tab's left-pane content. The tabs strip
- *  itself lives in AppLayout via <EditorTabsBar /> so it can span the
- *  full width above both editor + preview. Persistence + visibility
- *  rules are shared with the strip through useEditorTabs(). */
-function EditorActiveTab(props: {
+/** Wraps the BBCode editing surface in a Tabs primitive. Tier 2 Prep
+ *  registers the strip as a single-tab no-op via `hideStripOnSingle`;
+ *  Main PR B adds the Profile fields tab when a working copy is active.
+ *  Read-only views (Live / Backup) stay on the Description tab only.
+ */
+function EditorTabsHost(props: {
   readOnly: boolean
   content: string
   setContent: (next: string) => void
@@ -259,71 +261,181 @@ function EditorActiveTab(props: {
   saveStatus: string
   saveError: string | null | undefined
 }) {
-  const { activeTab, flistTabsVisible } = useEditorTabs()
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
-
-  if (flistTabsVisible && flistActiveId) {
-    if (activeTab === 'profile-fields') {
-      return props.readOnly ? (
-        <ProfileFieldsPreview />
-      ) : (
-        <ProfileFieldsTab characterId={flistActiveId} />
+  // Per-character active tab — switching characters shouldn't pin the
+  // user on a working-copy-only tab inherited from a different
+  // character (UX P3-11). Description (BBCode) is the safe default
+  // when nothing has been persisted yet.
+  const tabKey = flistActiveId
+    ? `flist-workbench:active-editor-tab:${flistActiveId}`
+    : 'flist-workbench:active-editor-tab'
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem(tabKey) ?? 'description'
+    } catch {
+      return 'description'
+    }
+  })
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(tabKey)
+      if (stored && stored !== activeTab) setActiveTab(stored)
+      else if (!stored) setActiveTab('description')
+    } catch {
+      // ignore
+    }
+    // intentionally watch only tabKey — changing the key (character switch)
+    // re-reads the persisted choice for the new character.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabKey])
+  useEffect(() => {
+    try {
+      localStorage.setItem(tabKey, activeTab)
+    } catch {
+      // ignore
+    }
+  }, [activeTab, tabKey])
+  const setEditorActiveTab = useStore((s) => s.setEditorActiveTab)
+  useEffect(() => {
+    setEditorActiveTab(activeTab)
+  }, [activeTab, setEditorActiveTab])
+  const activeDocIdRaw = useStore((s) => s.activeDocId)
+  // The 4 F-list tabs (Description, Profile fields, Kinks, Diff) are
+  // visible whenever a character is active and no doc is open — both
+  // editing the working copy ("My edits") and viewing the live or a
+  // backup snapshot. readOnly is no longer a visibility gate; each
+  // tab handles read-only mode internally.
+  const flistTabsVisible = flistActiveId !== null && activeDocIdRaw === null
+  const workingCopyMode =
+    flistTabsVisible && !props.readOnly
+  const workingSlot = useStore((s) =>
+    flistActiveId ? selectWorkingSlot(s, flistActiveId) : undefined
+  )
+  const kinksCount = countKinksWithChoice(workingSlot)
+  const diffChangeCount = countDiffChanges(workingSlot)
+  const tabs: TabsTab[] = useMemo(() => {
+    const descriptionTab: TabsTab = {
+      id: 'description',
+      label: 'Description (BBCode)',
+      content: (
+        <>
+          {!props.readOnly && <Toolbar viewRef={props.viewRef} />}
+          {props.fetchStatus === 'fetching' && (
+            <div className="editor-progress" data-testid="editor-progress">
+              <div className="editor-progress-bar" />
+              <span>Fetching profile from F-list…</span>
+            </div>
+          )}
+          {props.fetchStatus === 'error' && (
+            <div className="editor-error">Couldn't fetch: {props.fetchError}</div>
+          )}
+          {props.saveStatus === 'error' && (
+            <div className="editor-error">Couldn't save: {props.saveError}</div>
+          )}
+          <div className="editor-cm-row">
+            <div className="editor-cm" data-testid="editor-cm">
+              <CodeMirror
+                ref={props.cmRef}
+                value={props.content}
+                theme="dark"
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                extensions={props.extensions as any}
+                basicSetup={{
+                  lineNumbers: false,
+                  foldGutter: false,
+                  highlightActiveLine: false,
+                  highlightActiveLineGutter: false,
+                  indentOnInput: false
+                }}
+                onChange={(value) => props.setContent(value)}
+                onCreateEditor={(view) => {
+                  props.viewRef.current = view
+                }}
+              />
+            </div>
+            {props.showRevisions && props.activeDocId !== null && (
+              <RevisionsPanel
+                docId={props.activeDocId as number}
+                onClose={props.onCloseRevisions}
+              />
+            )}
+          </div>
+        </>
       )
     }
-    if (activeTab === 'kinks') {
-      return <KinksPane characterId={flistActiveId} />
+    const out: TabsTab[] = [descriptionTab]
+    if (flistTabsVisible && flistActiveId) {
+      out.push({
+        id: 'profile-fields',
+        label: 'Profile fields',
+        // In read-only views (Live / Backup) the editing rail/forms
+        // don't apply — substitute the website-style preview, which
+        // already renders a clean read-only Info pane.
+        content: props.readOnly ? (
+          <ProfileFieldsPreview />
+        ) : (
+          <ProfileFieldsTab characterId={flistActiveId} />
+        )
+      })
+      out.push({
+        id: 'kinks',
+        label: 'Kinks',
+        badge: kinksCount > 0 ? kinksCount : undefined,
+        content: <KinksPane characterId={flistActiveId} />
+      })
+      out.push({
+        id: 'images',
+        label: 'Images',
+        content: (
+          <ImagesTab
+            characterId={flistActiveId}
+            readOnly={props.readOnly}
+          />
+        )
+      })
+      out.push({
+        id: 'diff',
+        label: 'Diff',
+        badge: diffChangeCount > 0 ? diffChangeCount : undefined,
+        content: <DiffPane characterId={flistActiveId} />
+      })
     }
-    if (activeTab === 'images') {
-      return <ImagesTab characterId={flistActiveId} readOnly={props.readOnly} />
+    return out
+  }, [
+    props.readOnly,
+    props.fetchStatus,
+    props.fetchError,
+    props.saveStatus,
+    props.saveError,
+    props.content,
+    props.extensions,
+    props.showRevisions,
+    props.activeDocId,
+    props.cmRef,
+    props.viewRef,
+    props.setContent,
+    props.onCloseRevisions,
+    flistTabsVisible,
+    flistActiveId,
+    kinksCount,
+    diffChangeCount
+  ])
+  // Snap back to description only when the F-list-tab surface itself
+  // is gone (no character, or a document is open). Switching between
+  // My edits / From F-list / Backup should keep the user on whichever
+  // tab they were on — that's the whole point of read-only tabs.
+  useEffect(() => {
+    if (!flistTabsVisible && activeTab !== 'description') {
+      setActiveTab('description')
     }
-    if (activeTab === 'diff') {
-      return <DiffPane characterId={flistActiveId} />
-    }
-  }
-
+  }, [flistTabsVisible, activeTab])
   return (
-    <div className="editor-tab-description" data-testid="editor-tab-description">
-      {!props.readOnly && <Toolbar viewRef={props.viewRef} />}
-      {props.fetchStatus === 'fetching' && (
-        <div className="editor-progress" data-testid="editor-progress">
-          <div className="editor-progress-bar" />
-          <span>Fetching profile from F-list…</span>
-        </div>
-      )}
-      {props.fetchStatus === 'error' && (
-        <div className="editor-error">Couldn't fetch: {props.fetchError}</div>
-      )}
-      {props.saveStatus === 'error' && (
-        <div className="editor-error">Couldn't save: {props.saveError}</div>
-      )}
-      <div className="editor-cm-row">
-        <div className="editor-cm" data-testid="editor-cm">
-          <CodeMirror
-            ref={props.cmRef}
-            value={props.content}
-            theme="dark"
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            extensions={props.extensions as any}
-            basicSetup={{
-              lineNumbers: false,
-              foldGutter: false,
-              highlightActiveLine: false,
-              highlightActiveLineGutter: false,
-              indentOnInput: false
-            }}
-            onChange={(value) => props.setContent(value)}
-            onCreateEditor={(view) => {
-              props.viewRef.current = view
-            }}
-          />
-        </div>
-        {props.showRevisions && props.activeDocId !== null && (
-          <RevisionsPanel
-            docId={props.activeDocId as number}
-            onClose={props.onCloseRevisions}
-          />
-        )}
-      </div>
-    </div>
+    <Tabs
+      tabs={tabs}
+      activeId={activeTab}
+      onChange={setActiveTab}
+      hideStripOnSingle
+      testId="editor-tabs"
+    />
   )
 }

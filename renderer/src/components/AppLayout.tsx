@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Sidebar } from '../features/sidebar/Sidebar'
 import { EditorPane } from '../features/editor/EditorPane'
 import { PreviewPane } from '../features/editor/PreviewPane'
-import { EditorTabsBar } from '../features/editor/EditorTabsBar'
 import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
@@ -498,7 +497,10 @@ export function AppLayout() {
       >
         <Sidebar />
         {mode === 'editor' ? (
-          <EditorWorkspace />
+          <>
+            <EditorPane />
+            <PreviewPane />
+          </>
         ) : crossSearchOpen ? (
           <CrossSearch onClose={() => setCrossSearchOpen(false)} />
         ) : (
@@ -508,29 +510,6 @@ export function AppLayout() {
           </>
         )}
       </main>
-    </div>
-  )
-}
-
-function EditorWorkspace() {
-  const activeTab = useStore((s) => s.editorActiveTab)
-  const viewMode = useStore((s) => s.editorViewMode)
-  // The Split / Full preview / Full code switch only applies to the
-  // Description tab — the other tabs already use the right pane for
-  // tab-specific content (Info preview, Undecided pool, Gallery
-  // preview, etc.), so always render them side-by-side.
-  const effectiveMode = activeTab === 'description' ? viewMode : 'split'
-  return (
-    <div className="editor-workspace" data-testid="editor-workspace">
-      <EditorTabsBar />
-      <div
-        className="editor-workspace-row"
-        data-view-mode={effectiveMode}
-        data-testid="editor-workspace-row"
-      >
-        <EditorPane />
-        <PreviewPane />
-      </div>
     </div>
   )
 }
