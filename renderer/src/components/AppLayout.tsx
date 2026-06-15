@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { EditorView } from '@codemirror/view'
 import { Sidebar } from '../features/sidebar/Sidebar'
 import { EditorPane } from '../features/editor/EditorPane'
 import { PreviewPane } from '../features/editor/PreviewPane'
+import { Toolbar } from '../features/editor/Toolbar'
+import { Tabs, type TabsTab } from './Tabs'
+import { countKinksWithChoice } from '../features/flist/kinksUnified'
+import { countDiffChanges } from '../features/flist/DiffPane'
+import { selectWorkingSlot } from '../state'
 import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
@@ -497,10 +503,7 @@ export function AppLayout() {
       >
         <Sidebar />
         {mode === 'editor' ? (
-          <>
-            <EditorPane />
-            <PreviewPane />
-          </>
+          <EditorWorkspace />
         ) : crossSearchOpen ? (
           <CrossSearch onClose={() => setCrossSearchOpen(false)} />
         ) : (
@@ -510,6 +513,123 @@ export function AppLayout() {
           </>
         )}
       </main>
+    </div>
+  )
+}
+
+/** Editor mode body: two full-width bars on top (tabs strip + BBCode
+ *  toolbar) and an editor + preview row beneath that the view-mode
+ *  toggle in the toolbar reshapes. Owns the shared CodeMirror viewRef
+ *  so the toolbar (above) and the CodeMirror instance inside EditorPane
+ *  (below) talk to the same editor view. */
+function EditorWorkspace() {
+  const viewRef = useRef<EditorView | null>(null)
+  const readOnly = useStore((s) => s.editorReadOnly)
+  const viewMode = useStore((s) => s.editorViewMode)
+  const flistActiveId = useStore((s) => s.flistActiveCharacterId)
+  const activeDocIdRaw = useStore((s) => s.activeDocId)
+  const flistTabsVisible = flistActiveId !== null && activeDocIdRaw === null
+
+  // Per-character active-tab persistence. Switching characters reads
+  // the last-used tab for the new character so a Kinks-tab pin
+  // doesn't follow you between profiles (UX P3-11).
+  const tabKey = flistActiveId
+    ? `flist-workbench:active-editor-tab:${flistActiveId}`
+    : 'flist-workbench:active-editor-tab'
+  const editorActiveTab = useStore((s) => s.editorActiveTab)
+  const setEditorActiveTab = useStore((s) => s.setEditorActiveTab)
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(tabKey)
+      if (stored) {
+        setEditorActiveTab(stored)
+      } else {
+        setEditorActiveTab('description')
+      }
+    } catch {
+      // ignore
+    }
+    setHydrated(true)
+    // re-run on character switch (tabKey change) only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabKey])
+
+  useEffect(() => {
+    if (!hydrated) return
+    try {
+      localStorage.setItem(tabKey, editorActiveTab)
+    } catch {
+      // ignore
+    }
+  }, [editorActiveTab, tabKey, hydrated])
+
+  // Snap back to description when the F-list tab surface vanishes
+  // (no active character, or a stand-alone document is open).
+  useEffect(() => {
+    if (!flistTabsVisible && editorActiveTab !== 'description') {
+      setEditorActiveTab('description')
+    }
+  }, [flistTabsVisible, editorActiveTab, setEditorActiveTab])
+
+  const workingSlot = useStore((s) =>
+    flistActiveId ? selectWorkingSlot(s, flistActiveId) : undefined
+  )
+  const kinksCount = countKinksWithChoice(workingSlot)
+  const diffChangeCount = countDiffChanges(workingSlot)
+
+  const tabItems: TabsTab[] = useMemo(() => {
+    const out: TabsTab[] = [
+      { id: 'description', label: 'Description (BBCode)', content: null }
+    ]
+    if (flistTabsVisible && flistActiveId) {
+      out.push({ id: 'profile-fields', label: 'Profile fields', content: null })
+      out.push({
+        id: 'kinks',
+        label: 'Kinks',
+        badge: kinksCount > 0 ? kinksCount : undefined,
+        content: null
+      })
+      out.push({ id: 'images', label: 'Images', content: null })
+      out.push({
+        id: 'diff',
+        label: 'Diff',
+        badge: diffChangeCount > 0 ? diffChangeCount : undefined,
+        content: null
+      })
+    }
+    return out
+  }, [flistTabsVisible, flistActiveId, kinksCount, diffChangeCount])
+
+  // The view-mode toggle (Split / Code / Preview) only applies to the
+  // Description tab — other tabs already use the right pane for tab-
+  // specific content (Info preview, Undecided pool, Gallery preview,
+  // Diff). Force split for those so a leftover 'preview' mode from
+  // Description doesn't hide their editor side.
+  const effectiveMode = editorActiveTab === 'description' ? viewMode : 'split'
+  const showToolbar = editorActiveTab === 'description' && !readOnly
+
+  return (
+    <div className="editor-workspace" data-testid="editor-workspace">
+      {tabItems.length > 1 && (
+        <Tabs
+          tabs={tabItems}
+          activeId={editorActiveTab}
+          onChange={setEditorActiveTab}
+          stripOnly
+          testId="editor-tabs-bar"
+        />
+      )}
+      {showToolbar && <Toolbar viewRef={viewRef} />}
+      <div
+        className="editor-workspace-row"
+        data-view-mode={effectiveMode}
+        data-testid="editor-workspace-row"
+      >
+        <EditorPane viewRef={viewRef} />
+        <PreviewPane />
+      </div>
     </div>
   )
 }
