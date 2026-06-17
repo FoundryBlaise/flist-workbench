@@ -407,7 +407,9 @@ def db_path(root: Path | None = None) -> Path:
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path(root))
+    # check_same_thread=False — same FastAPI threadpool reason as
+    # documents.connect(). See the comment there for the full story.
+    conn = sqlite3.connect(db_path(root), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     return conn

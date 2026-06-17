@@ -141,7 +141,20 @@ def db_path(root: Path | None = None) -> Path:
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path(root))
+    # check_same_thread=False is load-bearing under FastAPI + anyio.
+    # FastAPI runs generator dependencies (e.g. server.py _db / _settings_db)
+    # in the anyio threadpool, and anyio is free to schedule the
+    # generator's setup, the endpoint body, and the generator's teardown
+    # on three different worker threads. SQLite's default same-thread
+    # guard then throws "SQLite objects created in a thread can only be
+    # used in that same thread." We get away with one connection per
+    # request (opened in the dep, closed in finally), so concurrent use
+    # of a single connection isn't a real risk — but the threadpool
+    # crossing the connection across threads within one request is. The
+    # dev sidecar happened to land on the same thread most of the time;
+    # the PyInstaller-packaged build spreads requests across the pool
+    # more aggressively and surfaces the bug every call.
+    conn = sqlite3.connect(db_path(root), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _migrate(conn)

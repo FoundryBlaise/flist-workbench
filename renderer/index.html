@@ -13,10 +13,14 @@
     BBCode payload can't beacon to a plaintext attacker server. ws:
     covers Vite HMR in dev. style-src needs 'unsafe-inline' because
     CodeMirror + portals + BBCode preview rely on style="" attrs.
-    img-src allows static.f-list.net for eicon / avatar / charinline
-    rendering. See docs/INSTALL_WINDOWS.md for the paired install UX.
+    img-src allows static.f-list.net for direct CDN inline images
+    (BBCode toolbar eicon picker) AND 127.0.0.1/localhost for
+    sidecar-served avatars (/flist/avatar/<name>) + cached gallery
+    images (/flist/image/...). The sidecar fetches CDN bytes itself
+    and re-serves them so the renderer never CORS-hits f-list. See
+    docs/INSTALL_WINDOWS.md for the paired install UX.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://static.f-list.net; font-src 'self' data:; connect-src 'self' ws: http://127.0.0.1:* http://localhost:* http://host.docker.internal:* https:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://static.f-list.net; font-src 'self' data:; connect-src 'self' ws: http://127.0.0.1:* http://localhost:* http://host.docker.internal:* https:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none';">
   <title>F-list Workbench</title>
 </head>
 <body>
