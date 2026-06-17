@@ -3,6 +3,7 @@ import type { EditorView } from '@codemirror/view'
 import { Sidebar } from '../features/sidebar/Sidebar'
 import { EditorPane } from '../features/editor/EditorPane'
 import { PreviewPane } from '../features/editor/PreviewPane'
+import { BrowseBackupPane } from '../features/flist/BrowseBackupPane'
 import { Toolbar } from '../features/editor/Toolbar'
 import { Tabs, type TabsTab } from './Tabs'
 import { countKinksWithChoice } from '../features/flist/kinksUnified'
@@ -527,7 +528,8 @@ function EditorWorkspace() {
   const readOnly = useStore((s) => s.editorReadOnly)
   const viewMode = useStore((s) => s.editorViewMode)
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
-  const flistTabsVisible = flistActiveId !== null
+  const browseBackupActive = useStore((s) => s.flistBrowseBackup !== null)
+  const flistTabsVisible = flistActiveId !== null && !browseBackupActive
 
   // Per-character active-tab persistence. Switching characters reads
   // the last-used tab for the new character so a Kinks-tab pin
@@ -607,7 +609,8 @@ function EditorWorkspace() {
   // Diff). Force split for those so a leftover 'preview' mode from
   // Description doesn't hide their editor side.
   const effectiveMode = editorActiveTab === 'description' ? viewMode : 'split'
-  const showToolbar = editorActiveTab === 'description' && !readOnly
+  const showToolbar =
+    editorActiveTab === 'description' && !readOnly && !browseBackupActive
 
   return (
     <div className="editor-workspace" data-testid="editor-workspace">
@@ -626,8 +629,14 @@ function EditorWorkspace() {
         data-view-mode={effectiveMode}
         data-testid="editor-workspace-row"
       >
-        <EditorPane viewRef={viewRef} />
-        <PreviewPane />
+        {browseBackupActive ? (
+          <BrowseBackupPane />
+        ) : (
+          <>
+            <EditorPane viewRef={viewRef} />
+            <PreviewPane />
+          </>
+        )}
       </div>
     </div>
   )
