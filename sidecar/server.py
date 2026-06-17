@@ -780,15 +780,29 @@ async def flist_character_snapshot(character_id: str) -> dict:
 
 
 @app.post("/flist/character/{character_id}/zip-backup")
-async def flist_character_zip_backup(character_id: str, force: bool = True) -> dict:
+async def flist_character_zip_backup(
+    character_id: str,
+    force: bool = True,
+    kind: str = "manual_single",
+) -> dict:
     """Pack the current Live into a userscript-restoreable ZIP at
     `backups/<ISO>.zip`. The explicit right-click → "Back up now"
     action defaults to `force=True` — the user clicked because they
     want a new artefact in hand, dedup would be surprising. The bulk
     `/backup-all` flow calls `save_zip_backup` directly with
-    `force=False`."""
+    `force=False`.
+
+    `kind` lets a caller mark the provenance: `manual_single` (the
+    default — right-click Back-up-now), `import` (set when an
+    import flow triggers a follow-up backup), `scheduled` (timer).
+    The bulk path passes `manual_bulk` directly to `save_zip_backup`.
+    """
+    if kind not in ("manual_single", "manual_bulk", "import", "scheduled"):
+        kind = "manual_single"
     try:
-        return character_archive.save_zip_backup(character_id, force=force)
+        return character_archive.save_zip_backup(
+            character_id, force=force, kind=kind
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -799,6 +813,30 @@ async def flist_character_zip_backups(character_id: str) -> dict:
         "character_id": character_id,
         "backups": character_archive.list_zip_backups(character_id),
     }
+
+
+@app.get(
+    "/flist/character/{character_id}/zip-backups/{filename}/download"
+)
+async def flist_character_zip_backup_download(
+    character_id: str, filename: str
+) -> FileResponse:
+    """Stream the raw ZIP bytes for a saved backup. Used by Sidebar
+    → Backups → right-click → Download ZIP… so the user can lift a
+    backup off the machine without digging into %APPDATA%. Filename
+    parsing must match the ISO-basic backup filename format; we
+    reject anything else so this endpoint can't be turned into an
+    arbitrary-file-read by crafting a `../` path."""
+    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
+        raise HTTPException(status_code=400, detail="invalid backup filename")
+    p = character_archive.backups_dir(character_id) / filename
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="backup not found")
+    return FileResponse(
+        path=p,
+        media_type="application/zip",
+        filename=filename,
+    )
 
 
 @app.get(
@@ -828,6 +866,7 @@ async def flist_character_zip_backup_payload(
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
+    meta: dict | None = None
     try:
         with zipfile.ZipFile(p, "r") as zf:
             try:
@@ -841,6 +880,16 @@ async def flist_character_zip_backup_payload(
                         "backup will be browsable."
                     ),
                 ) from exc
+            # Optional backup-meta.json — embedded since 2026-06-17.
+            # Older backups don't have it; the Browse-backup viewer
+            # falls back to "unknown" provenance.
+            try:
+                meta_raw = zf.read("backup-meta.json").decode("utf-8")
+                parsed = json.loads(meta_raw)
+                if isinstance(parsed, dict):
+                    meta = parsed
+            except (KeyError, ValueError):
+                meta = None
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=500, detail="corrupt backup file") from exc
     try:
@@ -849,7 +898,7 @@ async def flist_character_zip_backup_payload(
         raise HTTPException(
             status_code=500, detail="backup working.json is not valid JSON"
         ) from exc
-    return {"payload": payload, "filename": filename}
+    return {"payload": payload, "filename": filename, "meta": meta}
 
 
 async def _pull_one_character_for_backup_all(
@@ -1101,7 +1150,9 @@ async def flist_backup_all() -> StreamingResponse:
                         "failed": pull_result["failed_images"],
                     }
                     try:
-                        result = character_archive.save_zip_backup(cid, force=False)
+                        result = character_archive.save_zip_backup(
+                            cid, force=False, kind="manual_bulk"
+                        )
                     except OSError as exc:
                         failed += 1
                         yield _sse_event(

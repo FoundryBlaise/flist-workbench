@@ -426,13 +426,48 @@ body {
 }
 
 /* Sidebar Backups list (per-active-character ZIP archive) */
+.sb-backups-folders {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.sb-backup-folder {
+  border-bottom: 1px solid var(--border);
+}
+.sb-backup-folder:last-child {
+  border-bottom: none;
+}
+.sb-backup-folder-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 16px 4px;
+  font-size: var(--font-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+.sb-backup-folder-title {
+  font-weight: 600;
+}
+.sb-backup-folder-count {
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+.sb-backup-folder-empty {
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 0 16px 6px;
+}
 .sb-backups {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 280px;
-  overflow-y: auto;
-  border-top: 1px solid var(--border);
 }
 .sb-backup-row {
   display: flex;
@@ -464,193 +499,6 @@ body {
   color: var(--text-dim);
   font-size: 0.85em;
   flex-shrink: 0;
-}
-
-/* Read-only Browse Backup viewer (right-click backup → Browse) */
-.browse-backup-pane {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.browse-backup-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 16px;
-  background: var(--bg-elevated, #2a2a2a);
-  border-bottom: 1px solid var(--border);
-  /* .pane-head inherits text-transform: uppercase — override here so
-     the sentence-case pill renders as designed. */
-  text-transform: none;
-  letter-spacing: normal;
-  color: var(--text);
-}
-.browse-backup-pill {
-  font-size: var(--font-body);
-  background: rgba(120, 170, 255, 0.18);
-  color: var(--text);
-  padding: 4px 10px;
-  border-radius: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: none;
-  letter-spacing: normal;
-}
-.browse-backup-pill-error {
-  background: rgba(220, 100, 100, 0.22);
-}
-.browse-backup-close {
-  background: var(--bg, #1e1e1e);
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 4px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  font: inherit;
-}
-.browse-backup-close:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-}
-.browse-backup-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg, #1e1e1e);
-}
-.browse-backup-tab {
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  padding: 8px 16px;
-  cursor: pointer;
-  font: inherit;
-  border-bottom: 2px solid transparent;
-}
-.browse-backup-tab:hover {
-  color: var(--text);
-}
-.browse-backup-tab-active {
-  color: var(--text);
-  border-bottom-color: var(--accent, #78aaff);
-}
-.browse-backup-body {
-  flex: 1;
-  overflow: auto;
-  padding: 16px;
-}
-.browse-backup-empty {
-  color: var(--text-dim);
-  padding: 12px 0;
-}
-.browse-backup-empty-inline {
-  padding: 4px 0;
-}
-.browse-backup-error {
-  padding: 16px;
-  color: var(--text-error, #ff8888);
-}
-.browse-backup-description {
-  max-width: 80ch;
-}
-.browse-backup-profile {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-}
-.browse-backup-profile-group h4 {
-  margin: 0 0 6px;
-  font-size: var(--font-body);
-  color: var(--text);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
-}
-.browse-backup-profile dl {
-  margin: 0;
-}
-.browse-backup-profile-row {
-  display: flex;
-  gap: 8px;
-  padding: 2px 0;
-}
-.browse-backup-profile-row dt {
-  color: var(--text-dim);
-  flex: 0 0 40%;
-  margin: 0;
-}
-.browse-backup-profile-row dd {
-  flex: 1;
-  margin: 0;
-  word-break: break-word;
-}
-.browse-backup-kinks-buckets {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-.browse-backup-kinks-bucket h4 {
-  margin: 0 0 6px;
-  font-size: var(--font-body);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
-}
-.browse-backup-kinks-bucket .dim {
-  color: var(--text-dim);
-  font-weight: normal;
-}
-.browse-backup-kinks-bucket ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.browse-backup-kinks-bucket li {
-  padding: 2px 0;
-  font-size: 0.95em;
-}
-.browse-backup-customs {
-  margin-top: 24px;
-}
-.browse-backup-customs h4 {
-  margin: 0 0 8px;
-  font-size: var(--font-body);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
-}
-.browse-backup-custom {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-faint, rgba(255, 255, 255, 0.04));
-}
-.browse-backup-custom-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.browse-backup-custom-choice {
-  font-size: 0.85em;
-  color: var(--text-dim);
-}
-.browse-backup-custom-desc {
-  max-width: 80ch;
-  color: var(--text-dim);
-}
-.browse-backup-images {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
-}
-.browse-backup-image img {
-  width: 100%;
-  height: auto;
-  display: block;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-.browse-backup-image-desc {
-  font-size: 0.85em;
-  color: var(--text-dim);
-  margin-top: 4px;
 }
 
 /* Generic context menu (used by Backups right-click; reusable) */
@@ -3765,6 +3613,38 @@ body {
   color: #ffcb83;
 }
 .editor-working-banner-icon { font-size: 14px; flex-shrink: 0; }
+
+/* Browse-backup banner. Top of the editor pane when the user has
+   opened a backup via Sidebar → Backups → right-click → Browse.
+   Backup contents take over the same render path as the From-F-list
+   read-only view, so this banner is the user's only cue they're not
+   on their actual Live data. */
+.editor-browse-backup-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 8px 0 8px;
+  padding: 8px 12px;
+  background: rgba(120, 170, 255, 0.10);
+  border: 1px solid rgba(120, 170, 255, 0.40);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+.editor-browse-backup-icon { font-size: 14px; flex-shrink: 0; }
+.editor-browse-backup-text { flex: 1; }
+.editor-browse-backup-close {
+  background: var(--bg, #1e1e1e);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+.editor-browse-backup-close:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
 
 /* Logs-only character hint. Shown when the active character has logs
    on this machine but is no longer on the user's F-list account, so

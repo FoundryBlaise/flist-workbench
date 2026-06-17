@@ -650,8 +650,11 @@ def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
-    """List ZIP backups newest first. Each entry: `{filename, created_at, size}`.
-    Filenames are the ISO-basic-form written by `save_zip_backup`.
+    """List ZIP backups newest first. Each entry:
+    `{filename, created_at, size, kind}`. Filenames are the ISO-basic
+    form written by `save_zip_backup`. `kind` comes from the embedded
+    `backup-meta.json` (added 2026-06-17); older backups without that
+    file get `"unknown"` so the UI can still bucket them.
 
     Tiebreaker: same-second writes are disambiguated by the `-N`
     suffix counter on the filename; higher N = more recent. The sort
@@ -660,6 +663,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     no-suffix (oldest) file at the top because `.` > `-` in ASCII.
     """
     import datetime as _dt
+    import zipfile
 
     out: list[dict[str, Any]] = []
     p = character_dir(character_id) / "backups"
@@ -685,12 +689,26 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
             tzinfo=_dt.timezone.utc,
         )
         suffix = int(m.group(7)) if m.group(7) else 0
+        # Cheap peek: open the ZIP just to read backup-meta.json.
+        # Falls through to "unknown" on legacy files, corrupt ZIPs, or
+        # missing meta — listing every backup must be fast even when
+        # there are hundreds, so we don't load other ZIP entries here.
+        kind = "unknown"
+        try:
+            with zipfile.ZipFile(entry, "r") as zf:
+                raw = zf.read("backup-meta.json").decode("utf-8")
+            meta = json.loads(raw)
+            if isinstance(meta, dict) and isinstance(meta.get("kind"), str):
+                kind = meta["kind"]
+        except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+            pass
         out.append(
             {
                 "filename": entry.name,
                 "created_at": int(ts.timestamp()),
                 "_suffix": suffix,
                 "size": stat.st_size,
+                "kind": kind,
             }
         )
     out.sort(key=lambda r: (r["created_at"], r["_suffix"]), reverse=True)
@@ -753,6 +771,8 @@ def save_zip_backup(
     character_id: int | str,
     *,
     force: bool = False,
+    kind: str = "manual_single",
+    note: str | None = None,
 ) -> dict[str, Any]:
     """Pack the current Live into `<character>/backups/<ISO>.zip` —
     userscript-restoreable, includes every gallery image still on disk
@@ -768,8 +788,16 @@ def save_zip_backup(
     `force=True` to bypass (used by the explicit per-character action;
     the bulk sweep dedups by default).
 
+    `kind` is the backup provenance and ends up in the ZIP's
+    `backup-meta.json`. Valid values:
+      - `manual_single` — right-click → Back up now on a character
+      - `manual_bulk`   — Tools → Back up all
+      - `import`        — auto-fires when a character import completes
+      - `scheduled`     — timer-driven (every-7-days style, future)
+    `note` is reserved for a future free-text annotation surface.
+
     Returns one of:
-      `{saved: True, path, filename, created_at, size}`
+      `{saved: True, path, filename, created_at, size, kind}`
       `{saved: False, reason: 'unchanged'}`
       `{saved: False, reason: 'no_live'}`
     """
@@ -817,6 +845,8 @@ def save_zip_backup(
         working,
         images_dir=img_dir,
         avatar_path=avatar_path,
+        backup_kind=kind,
+        backup_note=note,
     )
 
     target = backups_dir(character_id) / _zip_backup_filename()
@@ -840,6 +870,7 @@ def save_zip_backup(
         "filename": target.name,
         "created_at": int(time.time()),
         "size": len(data),
+        "kind": kind,
     }
 
 

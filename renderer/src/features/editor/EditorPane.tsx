@@ -10,6 +10,21 @@ import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane } from '../flist/DiffPane'
 import { ImagesTab } from '../flist/ImagesTab'
 
+function formatKindLabel(kind: string): string {
+  switch (kind) {
+    case 'manual_single':
+      return 'Manual'
+    case 'manual_bulk':
+      return 'Manual (bulk)'
+    case 'import':
+      return 'Import'
+    case 'scheduled':
+      return 'Scheduled'
+    default:
+      return 'Unknown'
+  }
+}
+
 export function EditorPane({
   viewRef
 }: {
@@ -66,6 +81,14 @@ export function EditorPane({
     flistActiveRosterEntry !== null &&
     !flistActiveRosterEntry.on_account
 
+  // Browse-backup banner: when set, the editor + preview pane are
+  // rendering this backup (hijacking the Live-view path so the
+  // F-list profile-card chrome + inline-image resolution + theme
+  // come along for free). The banner is the user's only cue that
+  // they're not on their real Live data.
+  const browseBackup = useStore((s) => s.flistBrowseBackup)
+  const closeBrowseBackup = useStore((s) => s.flistCloseBrowseBackup)
+
   const cmRef = useRef<ReactCodeMirrorRef>(null)
 
   const extensions = useMemo(
@@ -90,6 +113,33 @@ export function EditorPane({
           {content.length} chars (source)
         </span>
       </header>
+      {browseBackup && (
+        <div
+          className="editor-browse-backup-banner"
+          role="status"
+          data-testid="editor-browse-backup-banner"
+        >
+          <span className="editor-browse-backup-icon" aria-hidden>
+            📦
+          </span>
+          <span className="editor-browse-backup-text">
+            <b>Viewing backup</b>
+            {browseBackup.dateLabel ? ` · ${browseBackup.dateLabel}` : ''}
+            {browseBackup.kind && browseBackup.kind !== 'unknown'
+              ? ` · ${formatKindLabel(browseBackup.kind)}`
+              : ''}
+            {' — read-only'}
+          </span>
+          <button
+            type="button"
+            className="editor-browse-backup-close"
+            onClick={() => closeBrowseBackup()}
+            title="Return to your live working copy"
+          >
+            Back to working copy
+          </button>
+        </div>
+      )}
       {workingCopyMode && (workingSaveStatus !== 'idle' || workingDirty) && (
         <div
           className={`editor-working-banner editor-working-banner-${workingSaveStatus}`}

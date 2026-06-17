@@ -92,6 +92,8 @@ def build_zip(
     *,
     images_dir: Path,
     avatar_path: Path | None = None,
+    backup_kind: str | None = None,
+    backup_note: str | None = None,
 ) -> bytes:
     """Pack `character.json` + the gallery images + the avatar into a
     ZIP, returning the bytes. Skips entries whose `<image_id>.<ext>`
@@ -100,6 +102,13 @@ def build_zip(
 
     `character_id` is currently ignored; reserved for future per-set
     routing so the signature doesn't churn then.
+
+    `backup_kind` (one of `manual_single`, `manual_bulk`, `scheduled`,
+    `import`, or `None`) is embedded in a `backup-meta.json` file
+    alongside `character.json` so the Browse-backup viewer can show
+    *why* this backup was created. `None` skips the file entirely —
+    useful for round-trip tests that compare ZIP bytes against a
+    known fixture and don't want a clock-dependent timestamp in there.
     """
     del character_id  # not yet used; signature reserved for later
 
@@ -158,6 +167,24 @@ def build_zip(
             "working.json",
             json.dumps(working_payload, indent=2, ensure_ascii=False),
         )
+        # Record creation provenance — `kind` lets the Browse-backup
+        # viewer + the sidebar list show why this backup exists
+        # (manual right-click, bulk Tools→Back up all, import-driven,
+        # scheduled). `created_at` is the same UTC ISO basic form the
+        # filename uses (with seconds + Z) so a user reading the file
+        # without opening it sees a consistent time. `note` is reserved
+        # for future free-text annotations from the UI.
+        if backup_kind is not None:
+            meta = {
+                "kind": backup_kind,
+                "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            }
+            if backup_note:
+                meta["note"] = backup_note
+            zf.writestr(
+                "backup-meta.json",
+                json.dumps(meta, indent=2, ensure_ascii=False),
+            )
         written: set[str] = set()
         for entry in present:
             filename = entry["filename"]
