@@ -32,7 +32,7 @@ from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import documents
+import paths
 import labels as labels_store
 from labels import LabelsSettings, msg_hash
 
@@ -45,7 +45,7 @@ FAILURE_LOG_FILENAME = "classify-failures.log"
 
 
 def failure_log_path(root: Path | None = None) -> Path:
-    base = root or documents.user_data_dir()
+    base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
     return base / FAILURE_LOG_FILENAME
 

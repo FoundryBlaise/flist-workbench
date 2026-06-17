@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "sidecar"))
 
 import character_archive  # noqa: E402  (sys.path tweak required first)
-import documents  # noqa: E402
+import paths  # noqa: E402
 
 
 CHARACTER_ID = "9001"
@@ -71,7 +71,7 @@ WORKING_KINKS = {
 def main() -> None:
     data_dir = Path(os.environ["FLIST_WORKBENCH_DATA_DIR"])
     # Force character_archive to resolve userdata to the test dir.
-    documents.user_data_dir = lambda: data_dir  # type: ignore[assignment]
+    paths.user_data_dir = lambda: data_dir  # type: ignore[assignment]
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Mapping cache. fetch_mapping_list checks file mtime against a

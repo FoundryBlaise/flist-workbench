@@ -2,17 +2,14 @@ import { create } from 'zustand'
 import {
   api,
   type CharacterEntry,
-  type Document,
   type FlistAccountCharacter,
   type FlistSnapshotEntry,
   type FlistCharacterImage,
   type FlistRosterEntry,
   type FlistSessionStatus,
-  type Folder,
   type InlineImage,
   type LogMessage,
   type PartnerEntry,
-  type RevisionSummary,
   type SetMetaWire
 } from './lib/api'
 import {
@@ -127,19 +124,6 @@ type State = {
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
-
-  // Snippets — persistent BBCode-snippet store with a single-level
-  // folder tree. Internal type/var names stay as `document` / `doc` /
-  // `folder_id` (see api.ts comment); only user-facing UI uses the
-  // "Snippet" terminology.
-  documents: Document[]
-  documentsStatus: 'idle' | 'loading' | 'ready' | 'error'
-  documentsError: string | null
-  folders: Folder[]
-  activeDocId: number | null
-  /** Revision summaries per doc (lazy). */
-  revisionsByDoc: Record<number, RevisionSummary[]>
-  revisionsStatus: Record<number, 'loading' | 'ready' | 'error'>
 
   editorContent: string
   editorTitle: string
@@ -477,11 +461,6 @@ type State = {
   ) => void
   flistOpenLive: (characterId: string) => Promise<void>
   flistOpenBackup: (characterId: string, filename: string) => Promise<void>
-  /** One-click "I want to fix that typo" affordance on the F-list zone.
-   *  Reads the live description BBCode, creates a new Document seeded
-   *  with it, and opens it as a normal editable document. Bridges the
-   *  gap until the Tier-2 working-copy persistence lands. */
-  flistCopyLiveToNewDoc: (characterId: string) => Promise<Document | null>
   /** Load the editor with this character's working copy.
    *  Falls back to the Live description when no working copy exists
    *  yet (materialise-on-first-edit, §1.6). The previous character's
@@ -622,23 +601,6 @@ type State = {
     backupFilename: string
   ) => Promise<void>
 
-  // Snippets (internal name still `document`)
-  loadDocuments: () => Promise<void>
-  openDocument: (id: number) => Promise<void>
-  createDocument: (name: string, folderId?: number | null) => Promise<Document>
-  duplicateActiveDocument: (name: string) => Promise<Document | null>
-  renameDocument: (id: number, name: string) => Promise<void>
-  deleteDocument: (id: number) => Promise<void>
-  moveDocument: (id: number, folderId: number | null) => Promise<void>
-  saveActiveDocument: () => Promise<void>
-  saveActiveDraft: () => Promise<void>
-  loadRevisions: (id: number) => Promise<void>
-  restoreRevision: (revId: number) => Promise<void>
-  // Folders (single-level)
-  loadFolders: () => Promise<void>
-  createFolder: (name: string) => Promise<Folder | null>
-  renameFolder: (id: number, name: string) => Promise<void>
-  deleteFolder: (id: number) => Promise<void>
 }
 
 function partnerKey(char: string, partner: string): string {
@@ -972,8 +934,7 @@ function extractInlines(payload: unknown): Record<string, InlineImage> {
   return out
 }
 
-// Pulled out so fetchProfile and openDocument can both reset shared
-// editor state cleanly.
+// Pulled out so fetchProfile can reset shared editor state cleanly.
 function editorReplaceState(profile: {
   bbcode: string
   title: string
@@ -989,20 +950,6 @@ function editorReplaceState(profile: {
     draftStatus: 'idle' as const
   }
 }
-
-const SAMPLE_BBCODE = `[heading]F-list Workbench[/heading]
-[i]Type BBCode here, watch it render on the right.[/i]
-
-[hr]
-
-[b]Try:[/b]
-[indent][b]Bold[/b], [i]italic[/i], [u]underline[/u], [s]strike[/s].[/indent]
-[indent]Coloured text in [color=red]red[/color], [color=blue]blue[/color], [color=green]green[/color].[/indent]
-[indent]Inline character icons: [icon]CharacterName[/icon] — replace with any public F-list character name.[/indent]
-[indent]Emote icons: [eicon]smirk[/eicon] [eicon]wink[/eicon][/indent]
-[indent]A link: [url=https://www.f-list.net]F-list[/url][/indent]
-
-[collapse=Click to expand][center]Hidden content.[/center][/collapse]`
 
 export const useStore = create<State>((set, get) => ({
   characters: [],
@@ -1029,16 +976,8 @@ export const useStore = create<State>((set, get) => ({
   messagesStatus: {},
   messagesError: {},
 
-  documents: [],
-  documentsStatus: 'idle',
-  documentsError: null,
-  folders: [],
-  activeDocId: null,
-  revisionsByDoc: {},
-  revisionsStatus: {},
-
-  editorContent: SAMPLE_BBCODE,
-  editorTitle: 'Scratch.bbcode',
+  editorContent: '',
+  editorTitle: '',
   editorInlines: {},
   editorFetchStatus: 'idle',
   editorFetchError: null,
@@ -1594,7 +1533,6 @@ export const useStore = create<State>((set, get) => ({
           // arrived between the dirty=false snapshot we took and now.
           const isActive =
             get().flistActiveCharacterId === info.character_id &&
-            get().activeDocId === null &&
             !get().editorReadOnly
           const working = get().flistWorking[info.character_id]
           // After a Live re-pull, only stream the new description into
@@ -1845,7 +1783,6 @@ export const useStore = create<State>((set, get) => ({
       (typeof live.description === 'string' && (live.description as string)) ||
       ''
     set({
-      activeDocId: null,
       editorContent: normaliseNewlines(rawBbcode),
       editorTitle: `${name} — Live.bbcode`,
       editorInlines: extractInlines(live),
@@ -1855,52 +1792,6 @@ export const useStore = create<State>((set, get) => ({
       saveError: null,
       draftStatus: 'idle'
     })
-  },
-
-  async flistCopyLiveToNewDoc(characterId) {
-    const archive = get().flistArchive[characterId]
-    const live = archive?.live ?? (await api.flistLive(characterId).catch(() => null))
-    if (!live) return null
-    const character = (live.character ?? live) as Record<string, unknown>
-    const charName =
-      (typeof character.name === 'string' && character.name) ||
-      (typeof live.name === 'string' && (live.name as string)) ||
-      'Character'
-    const rawBbcode =
-      (typeof character.description === 'string' && (character.description as string)) ||
-      (typeof live.description === 'string' && (live.description as string)) ||
-      ''
-    // The current pulled description is the most useful seed — empty
-    // descriptions still get a doc so the user has somewhere to start.
-    const docName = `${charName} description (draft)`
-    // If a draft for this character already exists (user clicked Copy
-    // a second time, or returned after closing it), focus it instead
-    // of stacking up identical-name siblings. QA verification pass
-    // 2026-05-30 explicitly flagged this duplicate-click case.
-    await get().loadDocuments()
-    const existing = get().documents.find((d) => !d.scratch && d.name === docName)
-    if (existing) {
-      await get().openDocument(existing.id)
-      return existing
-    }
-    const doc = await api.documentCreate(docName)
-    await get().loadDocuments()
-    // Bypass openDocument's content-load by setting everything ourselves
-    // — we want the BBCode from F-list in the editor, not the doc's
-    // empty body. saveActiveDraft will flush the seeded content.
-    set({
-      activeDocId: doc.id,
-      editorContent: normaliseNewlines(rawBbcode),
-      editorTitle: `${docName}.bbcode`,
-      editorInlines: extractInlines(live),
-      editorReadOnly: false,
-      editorDirty: true,
-      saveStatus: 'idle',
-      saveError: null,
-      draftStatus: 'idle'
-    })
-    void get().saveActiveDraft()
-    return doc
   },
 
   async flistOpenBackup(characterId, filename) {
@@ -1913,7 +1804,6 @@ export const useStore = create<State>((set, get) => ({
       (typeof character.description === 'string' && (character.description as string)) ||
       ''
     set({
-      activeDocId: null,
       editorContent: normaliseNewlines(rawBbcode),
       editorTitle: `${name} — ${filename}`,
       editorInlines: extractInlines(payload),
@@ -1963,7 +1853,6 @@ export const useStore = create<State>((set, get) => ({
     const name = entry?.name ?? 'My edits'
     const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
     set({
-      activeDocId: null,
       editorContent: content,
       editorTitle: `${name} — My edits${titleSuffix}`,
       editorInlines: inlines,
@@ -2149,7 +2038,6 @@ export const useStore = create<State>((set, get) => ({
       }
       const workingCopyMode =
         s.flistActiveCharacterId === characterId &&
-        s.activeDocId === null &&
         !s.editorReadOnly
       if (path === DESCRIPTION_PATH && workingCopyMode) {
         patch.editorContent = descriptionOf(next.payload)
@@ -2338,7 +2226,6 @@ export const useStore = create<State>((set, get) => ({
     if (
       reloaded &&
       get().flistActiveCharacterId === characterId &&
-      get().activeDocId === null &&
       !get().editorReadOnly
     ) {
       set({
@@ -2560,10 +2447,7 @@ export const useStore = create<State>((set, get) => ({
       }
       // Mirror the new set's description into the editor so the panel
       // immediately reflects the switch.
-      if (
-        s.flistActiveCharacterId === characterId &&
-        s.activeDocId === null
-      ) {
+      if (s.flistActiveCharacterId === characterId) {
         patch.editorContent = descriptionOf(payload)
         patch.editorDirty = false
       }
@@ -2610,10 +2494,7 @@ export const useStore = create<State>((set, get) => ({
         editorReadOnly: true,
         flistWorking: { ...s.flistWorking, [characterId]: slot }
       }
-      if (
-        s.flistActiveCharacterId === characterId &&
-        s.activeDocId === null
-      ) {
+      if (s.flistActiveCharacterId === characterId) {
         patch.editorContent = descriptionOf(payload)
         patch.editorDirty = false
       }
@@ -3238,7 +3119,6 @@ export const useStore = create<State>((set, get) => ({
     if (
       reloaded &&
       get().flistActiveCharacterId === characterId &&
-      get().activeDocId === null &&
       !get().editorReadOnly
     ) {
       set({
@@ -3326,7 +3206,6 @@ export const useStore = create<State>((set, get) => ({
     if (
       slot &&
       get().flistActiveCharacterId === characterId &&
-      get().activeDocId === null &&
       !get().editorReadOnly
     ) {
       set({
@@ -3986,9 +3865,7 @@ export const useStore = create<State>((set, get) => ({
     // uniformly with the other infotag / kink edits.
     const s = get()
     const isWorkingCopyMode =
-      s.flistActiveCharacterId !== null &&
-      s.activeDocId === null &&
-      !s.editorReadOnly
+      s.flistActiveCharacterId !== null && !s.editorReadOnly
     if (isWorkingCopyMode && value !== before) {
       get().flistSetWorkingField(s.flistActiveCharacterId!, DESCRIPTION_PATH, value)
     }
@@ -4031,10 +3908,7 @@ export const useStore = create<State>((set, get) => ({
         }),
         editorFetchStatus: 'ok',
         editorFetchError: null,
-        // Mark dirty only when the fetched content actually differs
-        // from what was on screen — re-fetching the same profile into
-        // the same doc shouldn't surprise the user with a forced save.
-        editorDirty: get().activeDocId !== null && previousContent !== profile.bbcode
+        editorDirty: previousContent !== profile.bbcode
       })
     } catch (err) {
       set({
@@ -4044,188 +3918,6 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  // ---- documents ------------------------------------------------------
-
-  async loadDocuments() {
-    set({ documentsStatus: 'loading', documentsError: null })
-    try {
-      const { documents } = await api.documents()
-      set({ documents, documentsStatus: 'ready' })
-      // Open whichever doc we were on, or Scratch on first launch.
-      const wanted = get().activeDocId
-      if (wanted !== null && documents.some((d) => d.id === wanted)) {
-        await get().openDocument(wanted)
-      } else {
-        const scratch = documents.find((d) => d.scratch) ?? documents[0]
-        if (scratch) await get().openDocument(scratch.id)
-      }
-    } catch (err) {
-      set({
-        documentsStatus: 'error',
-        documentsError: err instanceof Error ? err.message : String(err)
-      })
-    }
-  },
-
-  async openDocument(id) {
-    try {
-      const { document, current } = await api.documentGet(id)
-      set({
-        activeDocId: document.id,
-        // Switching to a local document always exits read-only mode —
-        // local docs are always editable.
-        editorReadOnly: false,
-        ...editorReplaceState({
-          bbcode: current.bbcode,
-          title: document.scratch ? 'Scratch.bbcode' : `${document.name}.bbcode`,
-          inlines: current.inlines
-        })
-      })
-    } catch (err) {
-      set({
-        documentsError: err instanceof Error ? err.message : String(err)
-      })
-    }
-  },
-
-  async createDocument(name, folderId = null) {
-    const doc = await api.documentCreate(name, '', {}, folderId ?? null)
-    // Refresh the list so the new entry shows in the sidebar.
-    await get().loadDocuments()
-    await get().openDocument(doc.id)
-    return doc
-  },
-
-  async moveDocument(id, folderId) {
-    await api.documentMove(id, folderId)
-    await get().loadDocuments()
-  },
-
-  // ---- folders --------------------------------------------------------
-
-  async loadFolders() {
-    try {
-      const { folders } = await api.folders()
-      set({ folders })
-    } catch (err) {
-      // Folders are non-critical; failure leaves the list empty.
-      console.error('[state] loadFolders failed:', err)
-    }
-  },
-
-  async createFolder(name) {
-    try {
-      const folder = await api.folderCreate(name)
-      await get().loadFolders()
-      return folder
-    } catch (err) {
-      console.error('[state] createFolder failed:', err)
-      return null
-    }
-  },
-
-  async renameFolder(id, name) {
-    await api.folderRename(id, name)
-    await get().loadFolders()
-  },
-
-  async deleteFolder(id) {
-    await api.folderDelete(id)
-    // Snippets inside the folder return to the root via ON DELETE SET
-    // NULL — refresh both lists so the tree re-renders correctly.
-    await get().loadFolders()
-    await get().loadDocuments()
-  },
-
-  async duplicateActiveDocument(name) {
-    const active = get().activeDocId
-    if (active === null) return null
-    const doc = await api.documentDuplicate(active, name)
-    await get().loadDocuments()
-    await get().openDocument(doc.id)
-    return doc
-  },
-
-  async renameDocument(id, name) {
-    await api.documentRename(id, name)
-    await get().loadDocuments()
-    if (get().activeDocId === id) {
-      const doc = get().documents.find((d) => d.id === id)
-      if (doc && !doc.scratch) set({ editorTitle: `${doc.name}.bbcode` })
-    }
-  },
-
-  async deleteDocument(id) {
-    await api.documentDelete(id)
-    const wasActive = get().activeDocId === id
-    await get().loadDocuments()
-    if (wasActive) {
-      const scratch = get().documents.find((d) => d.scratch)
-      if (scratch) await get().openDocument(scratch.id)
-    }
-  },
-
-  async saveActiveDocument() {
-    const id = get().activeDocId
-    if (id === null) return
-    set({ saveStatus: 'saving', saveError: null })
-    try {
-      await api.revisionSave(id, get().editorContent, get().editorInlines)
-      set({ saveStatus: 'saved', editorDirty: false, draftStatus: 'idle' })
-      // Refresh list (updated_at + latest_revision_id) and any open
-      // revision panel.
-      await get().loadDocuments()
-      const revs = get().revisionsByDoc[id]
-      if (revs) await get().loadRevisions(id)
-    } catch (err) {
-      set({
-        saveStatus: 'error',
-        saveError: err instanceof Error ? err.message : String(err)
-      })
-    }
-  },
-
-  async saveActiveDraft() {
-    const id = get().activeDocId
-    if (id === null) return
-    if (!get().editorDirty) return
-    set({ draftStatus: 'saving' })
-    try {
-      await api.draftSave(id, get().editorContent, get().editorInlines)
-      set({ draftStatus: 'saved' })
-    } catch {
-      // Drafts are crash-safety only — a single failed flush is
-      // acceptable. Surface a quiet error state without blocking the
-      // user.
-      set({ draftStatus: 'error' })
-    }
-  },
-
-  async loadRevisions(id) {
-    set((s) => ({ revisionsStatus: { ...s.revisionsStatus, [id]: 'loading' } }))
-    try {
-      const { revisions } = await api.revisionsList(id)
-      set((s) => ({
-        revisionsByDoc: { ...s.revisionsByDoc, [id]: revisions },
-        revisionsStatus: { ...s.revisionsStatus, [id]: 'ready' }
-      }))
-    } catch {
-      set((s) => ({ revisionsStatus: { ...s.revisionsStatus, [id]: 'error' } }))
-    }
-  },
-
-  async restoreRevision(revId) {
-    const id = get().activeDocId
-    if (id === null) return
-    const rev = await api.revisionGet(id, revId)
-    // "Restore" writes a NEW revision at HEAD with the old content —
-    // history is never destroyed. The current pane mirrors what was
-    // just saved.
-    await api.revisionSave(id, rev.bbcode, rev.inlines)
-    await get().openDocument(id)
-    await get().loadRevisions(id)
-    await get().loadDocuments()
-  }
 }))
 
 function humanizeFetchError(err: unknown, name: string): string {

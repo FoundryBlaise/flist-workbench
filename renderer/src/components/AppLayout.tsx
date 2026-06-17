@@ -527,8 +527,7 @@ function EditorWorkspace() {
   const readOnly = useStore((s) => s.editorReadOnly)
   const viewMode = useStore((s) => s.editorViewMode)
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
-  const activeDocIdRaw = useStore((s) => s.activeDocId)
-  const flistTabsVisible = flistActiveId !== null && activeDocIdRaw === null
+  const flistTabsVisible = flistActiveId !== null
 
   // Per-character active-tab persistence. Switching characters reads
   // the last-used tab for the new character so a Kinks-tab pin

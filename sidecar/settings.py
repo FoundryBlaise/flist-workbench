@@ -1,9 +1,15 @@
-"""Persisted user settings, sharing the documents.db file.
+"""Persisted user settings — one tiny SQLite file on its own.
 
 A simple key/value table — used today for the FCHAT data-dir override
 (picked from the UI's Settings modal) and a natural home for future
 single-user prefs. The env var `FCHAT_DATA_DIR` still wins when set so
 the devcontainer + tests don't depend on UI state.
+
+History: prior to the Snippets removal (2026-06-17) this module shared
+the documents.db file. When documents.py died, settings moved into its
+own settings.db. The first-launch migration in `connect()` copies any
+pre-existing rows out of documents.db and then drops that file —
+existing installs lose nothing.
 """
 
 from __future__ import annotations
@@ -11,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import documents
+import paths
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -92,12 +98,71 @@ KEY_RAG_CHUNK_SOFT_SPLIT_CHARS = "rag.chunk_soft_split_chars"
 KEY_RAG_CHUNK_OVERLAP_MSGS = "rag.chunk_overlap_msgs"
 
 
+def db_path(root: Path | None = None) -> Path:
+    base = root or paths.user_data_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "settings.db"
+
+
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    # Reuse documents.connect so we share the same DB file. It already
-    # creates the documents/revisions/drafts schema; we add ours on top.
-    conn = documents.connect(root)
+    # check_same_thread=False — FastAPI runs generator dependencies in
+    # the anyio threadpool and may schedule dep setup, endpoint body,
+    # and teardown on different worker threads. SQLite's same-thread
+    # guard would then 500 every /settings call. Per-request open +
+    # close means concurrent use of a single connection isn't a risk.
+    base = root or paths.user_data_dir()
+    target = db_path(base)
+    _migrate_from_documents_db(base, target)
+    conn = sqlite3.connect(target, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     return conn
+
+
+def _migrate_from_documents_db(base: Path, target: Path) -> None:
+    """One-shot import of the `settings` table out of the old shared
+    `documents.db` into the new dedicated `settings.db`, then delete
+    `documents.db` so the snippets feature leaves no trace on disk.
+
+    Idempotent: once settings.db exists this is a no-op. Errors are
+    swallowed because a corrupt or locked documents.db must not block
+    the sidecar from starting up — worst case the user loses their
+    FCHAT data-dir preference and re-picks it from Settings.
+    """
+    if target.exists():
+        return
+    legacy = base / "documents.db"
+    if not legacy.exists():
+        return
+    try:
+        src = sqlite3.connect(legacy)
+        src.row_factory = sqlite3.Row
+        try:
+            rows = src.execute("SELECT key, value FROM settings").fetchall()
+        except sqlite3.DatabaseError:
+            rows = []
+        src.close()
+        if rows:
+            dst = sqlite3.connect(target)
+            dst.executescript(SCHEMA)
+            dst.executemany(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                [(r["key"], r["value"]) for r in rows],
+            )
+            dst.commit()
+            dst.close()
+    except Exception:
+        return
+    finally:
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+        for sidecar_file in ("documents.db-wal", "documents.db-shm"):
+            try:
+                (base / sidecar_file).unlink()
+            except OSError:
+                pass
 
 
 def get(conn: sqlite3.Connection, key: str) -> str | None:

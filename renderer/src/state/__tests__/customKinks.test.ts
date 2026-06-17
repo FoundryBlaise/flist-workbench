@@ -53,7 +53,6 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
       }
     },
     flistActiveCharacterId: characterId,
-    activeDocId: null,
     editorReadOnly: false
   })
 }

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import character_archive
-import documents
+import paths
 import zip_serialise
 
 
@@ -60,7 +60,7 @@ _LOADED = False
 
 
 def _state_path() -> Path:
-    return documents.user_data_dir() / _STATE_FILENAME
+    return paths.user_data_dir() / _STATE_FILENAME
 
 
 def _load_if_needed() -> None:

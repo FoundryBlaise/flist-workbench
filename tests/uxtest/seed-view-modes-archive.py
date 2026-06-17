@@ -32,9 +32,9 @@ SAMPLE_DESCRIPTION = (
 
 def main() -> None:
     data_dir = Path(os.environ["FLIST_WORKBENCH_DATA_DIR"])
-    import documents as _docs
+    import paths as _paths
 
-    _docs.user_data_dir = lambda: data_dir  # type: ignore[assignment]
+    _paths.user_data_dir = lambda: data_dir  # type: ignore[assignment]
     data_dir.mkdir(parents=True, exist_ok=True)
 
     live = {

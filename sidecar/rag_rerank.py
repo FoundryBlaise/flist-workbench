@@ -32,7 +32,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-import documents
+import paths
 
 DEFAULT_RERANK_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
 DEFAULT_RERANK_CANDIDATES = 30
@@ -48,7 +48,7 @@ RERANK_DISABLED = "disabled"
 
 
 def models_dir(root: Path | None = None) -> Path:
-    base = root or documents.user_data_dir()
+    base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
     target = base / "models"
     target.mkdir(parents=True, exist_ok=True)

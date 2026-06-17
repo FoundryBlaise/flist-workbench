@@ -28,7 +28,7 @@ from pathlib import Path
 
 import httpx
 
-import documents
+import paths
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ DEFAULT_LIMIT = 200
 
 
 def _store_path() -> Path:
-    base = documents.user_data_dir()
+    base = paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
     return base / "eicons.json"
 
