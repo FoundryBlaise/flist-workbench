@@ -78,6 +78,7 @@ export function FlistCharacterZone() {
   const activateFromFlist = useStore((s) => s.flistActivateFromFlist)
   const exportSet = useStore((s) => s.flistExportSet)
   const importSet = useStore((s) => s.flistImportSet)
+  const backupCharacter = useStore((s) => s.flistBackupCharacter)
   const confirmCrossCharacterImport = useStore(
     (s) => s.flistConfirmCrossCharacterImport
   )
@@ -176,6 +177,19 @@ export function FlistCharacterZone() {
         label: 'Export as ZIP…',
         onSelect: () => {
           void exportSet(activeId, s.id)
+        }
+      },
+      {
+        // Backups are per-character (one ZIP per character covers
+        // every set's source-of-truth Live + images), so this fires
+        // the same flistBackupCharacter that the character-row
+        // right-click does. Surfacing it on the set row is just a
+        // closer-to-hand affordance — the user said they often think
+        // about "this set" when they want to snapshot, not "this
+        // character" (2026-06-17 brief).
+        label: 'Back up now',
+        onSelect: () => {
+          void backupCharacter(name)
         }
       },
       { label: '', onSelect: () => {}, divider: true },
