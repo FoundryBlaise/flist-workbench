@@ -12,7 +12,7 @@ Resolver precedence:
     4. body starts with "((" (LRP convention) -> OOC (rule:parens)
     5. otherwise                            -> Unlabeled
 
-Storage path: <user_data_dir>/labels.db — separate from documents.db
+Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
 so users can wipe it without losing their drafts and the LLM ingest
 job can safely WAL the file under load.
 """
@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import documents
+import paths
 import settings as settings_store
 
 # Four-state result the resolver returns. The labels table only ever
@@ -401,14 +401,18 @@ CREATE INDEX IF NOT EXISTS idx_label_failures_partner
 
 
 def db_path(root: Path | None = None) -> Path:
-    base = root or documents.user_data_dir()
+    base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
     return base / "labels.db"
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    # check_same_thread=False — same FastAPI threadpool reason as
-    # documents.connect(). See the comment there for the full story.
+    # check_same_thread=False — FastAPI runs generator dependencies in
+    # the anyio threadpool and may schedule the dep setup, the endpoint
+    # body, and the teardown on three different worker threads. SQLite's
+    # default same-thread guard then throws cross-thread errors. Per-
+    # request open + close means concurrent use of a single connection
+    # isn't a risk.
     conn = sqlite3.connect(db_path(root), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)

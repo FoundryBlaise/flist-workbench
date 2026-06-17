@@ -42,7 +42,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-import documents
+import paths
 import labels as labels_store
 
 # Must match Chat_RAG/embed.py so a future re-host preserves point IDs.
@@ -92,7 +92,7 @@ def cid_to_uuid(chunk_id: str) -> str:
 
 
 def qdrant_dir(root: Path | None = None) -> Path:
-    base = root or documents.user_data_dir()
+    base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
     target = base / "qdrant"
     target.mkdir(parents=True, exist_ok=True)

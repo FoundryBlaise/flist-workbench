@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-import documents
+import paths
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -77,19 +77,19 @@ class EtagMismatch(ValueError):
 
 
 def root() -> Path:
-    p = documents.user_data_dir() / CHARACTERS_DIRNAME
+    p = paths.user_data_dir() / CHARACTERS_DIRNAME
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def avatars_root() -> Path:
-    p = documents.user_data_dir() / AVATARS_DIRNAME
+    p = paths.user_data_dir() / AVATARS_DIRNAME
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def cache_root() -> Path:
-    p = documents.user_data_dir() / CACHE_DIRNAME
+    p = paths.user_data_dir() / CACHE_DIRNAME
     p.mkdir(parents=True, exist_ok=True)
     return p
 

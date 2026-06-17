@@ -83,12 +83,11 @@ export function FlistCharacterZone() {
   )
   const cancelPendingImport = useStore((s) => s.flistCancelPendingImport)
 
-  // TODO(working-sets v2): the four actions below were the inline-button
-  // surfaces removed from area 2 (Export for restore, Copy as new draft,
-  // Save snapshot, Open backup). The store actions are kept while we
-  // decide whether to bring them back in a later round.
+  // TODO(working-sets v2): the three actions below were the inline-button
+  // surfaces removed from area 2 (Export for restore, Save snapshot, Open
+  // backup). The store actions are kept while we decide whether to bring
+  // them back in a later round.
   void useStore.getState().flistOpenExportRestore
-  void useStore.getState().flistCopyLiveToNewDoc
   void useStore.getState().flistSaveSnapshot
   void useStore.getState().flistOpenBackup
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
@@ -9,12 +9,6 @@ import { KinksPane } from '../flist/KinksPane'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane } from '../flist/DiffPane'
 import { ImagesTab } from '../flist/ImagesTab'
-import { RevisionsPanel } from './RevisionsPanel'
-
-// Idle window before a draft autosave flushes. Crash-safety only —
-// drafts overwrite themselves, so 30 s is the sweet spot between "fresh
-// enough to recover the last sentence" and "not hammering the sidecar".
-const DRAFT_IDLE_MS = 30_000
 
 export function EditorPane({
   viewRef
@@ -42,10 +36,6 @@ export function EditorPane({
   const fetchError = useStore((s) => s.editorFetchError)
   const saveStatus = useStore((s) => s.saveStatus)
   const saveError = useStore((s) => s.saveError)
-  const draftStatus = useStore((s) => s.draftStatus)
-  const activeDocId = useStore((s) => s.activeDocId)
-  const saveActiveDocument = useStore((s) => s.saveActiveDocument)
-  const saveActiveDraft = useStore((s) => s.saveActiveDraft)
   const activeCharacter = useStore((s) => s.activeCharacter)
   const readOnly = useStore((s) => s.editorReadOnly)
   // F-list working-copy + logs-only signals for the editor banners.
@@ -62,8 +52,7 @@ export function EditorPane({
         ) ?? null
       : null
   )
-  const workingCopyMode =
-    flistActiveId !== null && activeDocId === null && !readOnly
+  const workingCopyMode = flistActiveId !== null && !readOnly
   const workingSaveStatus = workingCopyMode
     ? flistWorkingForActive?.saveStatus ?? 'idle'
     : 'idle'
@@ -73,40 +62,11 @@ export function EditorPane({
   const workingDirty = workingCopyMode && !!flistWorkingForActive?.unsavedDirty
   const isLogsOnly =
     flistActiveId === null &&
-    activeDocId === null &&
     !readOnly &&
     flistActiveRosterEntry !== null &&
     !flistActiveRosterEntry.on_account
-  const [showRevisions, setShowRevisions] = useState(false)
 
   const cmRef = useRef<ReactCodeMirrorRef>(null)
-
-  // Autosave to draft slot after the user has been idle for a moment.
-  // Drafts are crash-safety, not history — they overwrite the same row
-  // each time. An explicit Save (Ctrl+S below) promotes a draft into a
-  // real revision.
-  useEffect(() => {
-    if (!dirty || activeDocId === null) return
-    const t = setTimeout(() => {
-      void saveActiveDraft()
-    }, DRAFT_IDLE_MS)
-    return () => clearTimeout(t)
-  }, [dirty, content, activeDocId, saveActiveDraft])
-
-  // Ctrl+S anywhere in the pane → save a real revision. Keep it on the
-  // window level (not the CodeMirror keymap) so it also fires while the
-  // user has focus in the fetch input or the toolbar.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey
-      if (mod && e.key.toLowerCase() === 's') {
-        e.preventDefault()
-        if (activeDocId !== null && dirty) void saveActiveDocument()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [activeDocId, dirty, saveActiveDocument])
 
   const extensions = useMemo(
     () =>
@@ -115,17 +75,6 @@ export function EditorPane({
         : bbcodeExtensions,
     [readOnly]
   )
-
-  const saveLabel =
-    saveStatus === 'saving'
-      ? 'Saving…'
-      : saveStatus === 'saved'
-        ? 'Saved'
-        : dirty
-          ? 'Save'
-          : 'Saved'
-  const saveDisabled =
-    saveStatus === 'saving' || activeDocId === null || (!dirty && saveStatus !== 'error')
 
   return (
     <section className="pane editor-pane" data-testid="editor-pane">
@@ -140,54 +89,6 @@ export function EditorPane({
         >
           {content.length} chars (source)
         </span>
-        {!readOnly && activeDocId !== null && (
-          <div className="editor-doc-actions">
-            <button
-              type="button"
-              className="doc-save"
-              data-testid="doc-save"
-              onClick={() => {
-                if (activeDocId !== null) void saveActiveDocument()
-              }}
-              disabled={saveDisabled}
-              title="Save a new revision (Ctrl+S)"
-            >
-              {saveLabel}
-            </button>
-            <button
-              type="button"
-              className="doc-copy"
-              onClick={() => {
-                void navigator.clipboard
-                  ?.writeText(content)
-                  .catch(() => {
-                    // Clipboard may be denied in some sandboxes; surface
-                    // nothing — the user can always select-all + ctrl-c.
-                  })
-              }}
-              title="Copy this snippet's BBCode to the clipboard"
-              data-testid="doc-copy"
-              disabled={!content}
-            >
-              Copy BBCode
-            </button>
-            <button
-              type="button"
-              className="doc-revisions-toggle"
-              onClick={() => setShowRevisions((v) => !v)}
-              aria-pressed={showRevisions}
-              title="Show revision history"
-              data-testid="doc-revisions-toggle"
-            >
-              History
-            </button>
-            {draftStatus === 'saved' && dirty && (
-              <span className="draft-indicator" title="Crash-recovery draft saved">
-                draft saved
-              </span>
-            )}
-          </div>
-        )}
       </header>
       {workingCopyMode && (workingSaveStatus !== 'idle' || workingDirty) && (
         <div
@@ -229,13 +130,11 @@ export function EditorPane({
         cmRef={cmRef}
         viewRef={viewRef}
         extensions={extensions}
-        showRevisions={showRevisions}
-        activeDocId={activeDocId}
-        onCloseRevisions={() => setShowRevisions(false)}
         fetchStatus={fetchStatus}
         fetchError={fetchError}
         saveStatus={saveStatus}
         saveError={saveError}
+        flistActiveId={flistActiveId}
       />
     </section>
   )
@@ -253,20 +152,16 @@ function EditorActiveTabBody(props: {
   cmRef: React.RefObject<ReactCodeMirrorRef>
   viewRef: React.MutableRefObject<EditorView | null>
   extensions: unknown[]
-  showRevisions: boolean
-  activeDocId: string | number | null
-  onCloseRevisions: () => void
   fetchStatus: string
   fetchError: string | null | undefined
   saveStatus: string
   saveError: string | null | undefined
+  flistActiveId: string | null
 }) {
   const activeTab = useStore((s) => s.editorActiveTab)
-  const flistActiveId = useStore((s) => s.flistActiveCharacterId)
-  const activeDocIdRaw = useStore((s) => s.activeDocId)
-  const flistTabsVisible = flistActiveId !== null && activeDocIdRaw === null
+  const flistActiveId = props.flistActiveId
 
-  if (flistTabsVisible && flistActiveId) {
+  if (flistActiveId) {
     if (activeTab === 'profile-fields') {
       return props.readOnly ? (
         <ProfileFieldsPreview />
@@ -285,6 +180,19 @@ function EditorActiveTabBody(props: {
     if (activeTab === 'diff') {
       return <DiffPane characterId={flistActiveId} />
     }
+  }
+
+  if (!flistActiveId) {
+    return (
+      <div
+        className="editor-tab-description"
+        data-testid="editor-tab-description"
+      >
+        <div className="editor-empty" data-testid="editor-empty">
+          No character selected — pick one from the sidebar.
+        </div>
+      </div>
+    )
   }
 
   // Default → Description body: progress/error banners + CodeMirror.
@@ -325,12 +233,6 @@ function EditorActiveTabBody(props: {
             }}
           />
         </div>
-        {props.showRevisions && props.activeDocId !== null && (
-          <RevisionsPanel
-            docId={props.activeDocId as number}
-            onClose={props.onCloseRevisions}
-          />
-        )}
       </div>
     </div>
   )

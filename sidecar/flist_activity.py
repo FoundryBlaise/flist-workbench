@@ -28,7 +28,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-import documents
+import paths
 
 # 500 events covers a heavy "pull all characters" burst (≈5 events ×
 # 30 characters = 150) plus background sign-in/refresh churn without
@@ -75,7 +75,7 @@ _disk_enabled = True
 
 
 def log_path(root: Path | None = None) -> Path:
-    base = root or documents.user_data_dir()
+    base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
     return base / LOG_FILENAME
 

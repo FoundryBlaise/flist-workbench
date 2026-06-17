@@ -66,7 +66,6 @@ beforeEach(() => {
     flistResetUndo: null,
     flistTombstoneUndo: null,
     flistActiveCharacterId: null,
-    activeDocId: null,
     editorReadOnly: false,
     editorContent: '',
     editorDirty: false,

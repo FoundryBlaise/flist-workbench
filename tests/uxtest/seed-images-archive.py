@@ -70,9 +70,9 @@ IMAGES: list[tuple[str, tuple[int, int], tuple[int, int, int]]] = [
 def main() -> None:
     data_dir = Path(__import__("os").environ["FLIST_WORKBENCH_DATA_DIR"])
     # Force character_archive to use the requested data dir.
-    import documents as _docs
+    import paths as _paths
 
-    _docs.user_data_dir = lambda: data_dir  # type: ignore[assignment]
+    _paths.user_data_dir = lambda: data_dir  # type: ignore[assignment]
     data_dir.mkdir(parents=True, exist_ok=True)
 
     live_images: list[dict] = []

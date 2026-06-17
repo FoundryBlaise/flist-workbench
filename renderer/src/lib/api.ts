@@ -182,40 +182,6 @@ export type PartnerEntry = {
 
 export type AliasGroups = Record<string, string[]>
 
-export type Document = {
-  id: number
-  name: string
-  folder_id: number | null
-  scratch: boolean
-  created_at: number
-  updated_at: number
-  latest_revision_id: number | null
-  latest_char_count: number | null
-  latest_created_at: number | null
-  has_draft: boolean
-}
-
-export type Folder = {
-  id: number
-  name: string
-  created_at: number
-}
-
-export type Revision = {
-  id: number
-  doc_id: number
-  bbcode: string
-  inlines: Record<string, InlineImage>
-  char_count: number
-  created_at: number
-}
-
-export type RevisionSummary = {
-  id: number
-  char_count: number
-  created_at: number
-}
-
 export type Label = 'IC' | 'OOC' | 'Unlabeled' | 'Failed'
 // 'failed' is a synthetic source the sidecar attaches when a
 // label_failures row exists but no labels row does — there's nothing
@@ -1364,69 +1330,6 @@ export const api = {
       }
     }
   },
-
-  // Snippets (UI label) — internal naming is still "documents" to bound
-  // the rename churn. Endpoints, types, and store fields keep `document`
-  // / `doc` terminology; only user-facing labels switched.
-  documents: () => get<{ documents: Document[] }>('/documents'),
-  documentCreate: (
-    name: string,
-    bbcode = '',
-    inlines: Record<string, InlineImage> = {},
-    folderId: number | null = null
-  ) =>
-    request<Document>('/documents', {
-      method: 'POST',
-      body: JSON.stringify({ name, bbcode, inlines, folder_id: folderId })
-    }),
-  documentGet: (id: number) =>
-    get<{ document: Document; current: Revision }>(`/documents/${id}`),
-  documentRename: (id: number, name: string) =>
-    request<Document>(`/documents/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ name })
-    }),
-  documentDelete: (id: number) =>
-    request<void>(`/documents/${id}`, { method: 'DELETE' }),
-  documentDuplicate: (id: number, name: string) =>
-    request<Document>(`/documents/${id}/duplicate`, {
-      method: 'POST',
-      body: JSON.stringify({ name })
-    }),
-  documentMove: (id: number, folderId: number | null) =>
-    request<Document>(`/documents/${id}/move`, {
-      method: 'POST',
-      body: JSON.stringify({ folder_id: folderId })
-    }),
-  folders: () => get<{ folders: Folder[] }>('/folders'),
-  folderCreate: (name: string) =>
-    request<Folder>('/folders', {
-      method: 'POST',
-      body: JSON.stringify({ name })
-    }),
-  folderRename: (id: number, name: string) =>
-    request<Folder>(`/folders/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ name })
-    }),
-  folderDelete: (id: number) =>
-    request<void>(`/folders/${id}`, { method: 'DELETE' }),
-  revisionsList: (id: number) =>
-    get<{ doc_id: number; revisions: RevisionSummary[] }>(`/documents/${id}/revisions`),
-  revisionGet: (id: number, revId: number) =>
-    get<Revision>(`/documents/${id}/revisions/${revId}`),
-  revisionSave: (id: number, bbcode: string, inlines: Record<string, InlineImage> = {}) =>
-    request<Revision>(`/documents/${id}/revisions`, {
-      method: 'POST',
-      body: JSON.stringify({ bbcode, inlines })
-    }),
-  draftSave: (id: number, bbcode: string, inlines: Record<string, InlineImage> = {}) =>
-    request<void>(`/documents/${id}/draft`, {
-      method: 'PUT',
-      body: JSON.stringify({ bbcode, inlines })
-    }),
-  draftDiscard: (id: number) =>
-    request<void>(`/documents/${id}/draft`, { method: 'DELETE' }),
 
   // ---- AI Setup wizard surface ------------------------------------------
   systemOllamaStatus: () =>
