@@ -3812,6 +3812,13 @@ export const useStore = create<State>((set, get) => ({
 
   selectCharacter(name) {
     set({ activeCharacter: name, activePartner: null })
+    // Close any open Browse-Backup view on a character pick — the
+    // sidebar Backups list is now showing a different character's
+    // archive, and the viewer body would otherwise still be on the
+    // old character's backup (QA-S2 from the 2026-06-17 review).
+    if (get().flistBrowseBackup) {
+      set({ flistBrowseBackup: null })
+    }
     if (!name) {
       set({ flistActiveCharacterId: null, editorReadOnly: false })
       return

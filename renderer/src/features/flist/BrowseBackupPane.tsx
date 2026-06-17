@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../state'
 import { api } from '../../lib/api'
 import { bbcodeToHtml } from '../../lib/bbcode'
@@ -28,6 +28,17 @@ export function BrowseBackupPane() {
   const [section, setSection] = useState<
     'description' | 'profile' | 'kinks' | 'images'
   >('description')
+
+  // Esc returns to the working copy — mirrors the close button and
+  // matches the convention modals + the right-click context menu use.
+  useEffect(() => {
+    if (!browse) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [browse, close])
 
   if (!browse) return null
 
