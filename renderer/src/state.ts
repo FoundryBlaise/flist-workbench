@@ -1449,6 +1449,12 @@ export const useStore = create<State>((set, get) => ({
         // signal; don't block the switch on it.
       }
     }
+    // Close any open Browse-Backup view — it's scoped to whoever
+    // opened it, and carrying it across a character switch would
+    // surprise the user.
+    if (get().flistBrowseBackup) {
+      set({ flistBrowseBackup: null })
+    }
     set({ flistActiveCharacterId: characterId })
     if (characterId === null) {
       set({ editorReadOnly: false })
