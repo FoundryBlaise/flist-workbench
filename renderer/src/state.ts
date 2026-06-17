@@ -223,6 +223,25 @@ type State = {
      *  status === 'ready'; null otherwise. */
     payload: Record<string, unknown> | null
     error?: string | null
+    /** Why this backup was created. Read from the ZIP's
+     *  `backup-meta.json` (added 2026-06-17). Older backups without
+     *  that file fall back to `'unknown'`. Surfaced in the header
+     *  banner: "Viewing backup · <date> · Manual" and in the
+     *  sidebar Backups list. */
+    kind?: 'manual_single' | 'manual_bulk' | 'import' | 'scheduled' | 'unknown'
+    /** Human-readable backup creation timestamp for the header banner
+     *  (already-formatted, so the renderer doesn't keep reformatting
+     *  on every keystroke during browse). */
+    dateLabel?: string
+    /** Stashed state restored on close. Browse mode hijacks
+     *  `flistArchive[id].live` so the existing From-F-list rendering
+     *  pipeline (ProfileFieldsPreview / KinksPane / ImagesTab /
+     *  PreviewPane with inlines + F-list theme) renders the backup
+     *  byte-for-byte identically to the live view — we revert the
+     *  hijack here on close so the user's actual data isn't damaged. */
+    previousLive: Record<string, unknown> | null
+    previousActiveSetId: string | null
+    previousReadOnly: boolean
   } | null
   /** Per-character snapshot of files in `<char>/images/` (the v5
    *  unified store — there's no separate sha-keyed pool). Keyed by
@@ -649,6 +668,14 @@ type State = {
    *  Clears `flistBrowseBackup` so the editor tabs render against
    *  the live working copy again. */
   flistCloseBrowseBackup: () => void
+  /** Right-click → Download ZIP… on a Backups row. OS save dialog
+   *  defaults the filename to the backup's on-disk name; we don't
+   *  invent a friendlier one because the timestamp+UTC marker is
+   *  exactly what a user copying the file off-machine wants. */
+  flistDownloadZipBackup: (
+    characterId: string,
+    backupFilename: string
+  ) => Promise<{ path: string; bytes: number } | null>
 
 }
 
@@ -981,6 +1008,96 @@ function extractInlines(payload: unknown): Record<string, InlineImage> {
     }
   }
   return out
+}
+
+/** Normalise the `kind` field from a backup's `backup-meta.json`.
+ *  Backups predating the meta write (or hand-crafted via the file
+ *  system) get `'unknown'` so the UI can show "Backup · unknown
+ *  reason" rather than a missing badge. */
+function normaliseBackupKind(
+  raw: unknown
+): 'manual_single' | 'manual_bulk' | 'import' | 'scheduled' | 'unknown' {
+  if (
+    raw === 'manual_single' ||
+    raw === 'manual_bulk' ||
+    raw === 'import' ||
+    raw === 'scheduled'
+  ) {
+    return raw
+  }
+  return 'unknown'
+}
+
+/** Format a backup's filename (`YYYY-MM-DDTHHMMSSZ.zip`) into the
+ *  local-time label shown in the Browse-backup header banner.
+ *  Returns the raw filename as a fallback so a malformed name doesn't
+ *  hide the affordance entirely. */
+function formatBackupDateForBanner(filename: string): string {
+  const m = filename.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z/
+  )
+  if (!m) return filename
+  const [, y, mo, d, h, mi] = m
+  const date = new Date(
+    Date.UTC(
+      Number(y),
+      Number(mo) - 1,
+      Number(d),
+      Number(h),
+      Number(mi),
+      0
+    )
+  )
+  if (isNaN(date.getTime())) return filename
+  const pad = (n: number) => (n < 10 ? `0${n}` : String(n))
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** Restore the editor state stashed when the user entered Browse mode.
+ *  Three exit paths depending on what they were doing before:
+ *    - had a working set active     → re-activate it
+ *    - was viewing From-F-list      → re-activate From-F-list
+ *    - was editing (no set, !RO)    → put working-copy mode back
+ *
+ *  Always restores `flistArchive[id].live` to its true value FIRST so
+ *  whichever activation we call next reads the right source. Pulled
+ *  out so flistCloseBrowseBackup AND flistOpenBrowseBackup (when
+ *  switching from one backup to another) can both use it.
+ */
+function _restoreFromBrowse(
+  getter: () => State,
+  setter: (
+    patch:
+      | Partial<State>
+      | ((s: State) => Partial<State> | State)
+  ) => void,
+  browse: NonNullable<State['flistBrowseBackup']>
+): void {
+  const { characterId, previousLive, previousActiveSetId, previousReadOnly } = browse
+  setter((s) => ({
+    flistArchive: {
+      ...s.flistArchive,
+      [characterId]: {
+        ...(s.flistArchive[characterId] ?? {
+          snapshots: [],
+          pullStatus: 'idle'
+        }),
+        live: previousLive
+      }
+    },
+    flistBrowseBackup: null
+  }))
+  // Re-activate the user's previous mode. These three actions all
+  // overwrite editorReadOnly + editorContent + editorInlines + the
+  // working slot, so we don't need to undo any of that ourselves.
+  if (previousActiveSetId !== null) {
+    void getter().flistActivateSet(characterId, previousActiveSetId)
+  } else if (previousReadOnly) {
+    void getter().flistActivateFromFlist(characterId)
+  } else {
+    setter({ editorReadOnly: false })
+    void getter().flistOpenWorking(characterId)
+  }
 }
 
 // Pulled out so fetchProfile can reset shared editor state cleanly.
@@ -3262,42 +3379,58 @@ export const useStore = create<State>((set, get) => ({
     ) {
       return
     }
+    // If a previous browse session is open, restore its state first so
+    // the snapshot we stash below is "the user's real editor", not
+    // "the previous backup we hijacked".
+    if (current) {
+      _restoreFromBrowse(get, set, current)
+    }
+
+    // Snapshot the user's current editor state so close-browse can put
+    // it back exactly. Hijacking flistArchive[id].live is what lets us
+    // route every existing Live-view tab + the preview pane through the
+    // identical render path with zero per-tab refactors.
+    const previousLive = get().flistArchive[characterId]?.live ?? null
+    const previousActiveSetId = get().flistActiveSetId[characterId] ?? null
+    const previousReadOnly = get().editorReadOnly
+
     set({
       flistBrowseBackup: {
         characterId,
         filename: backupFilename,
         status: 'loading',
         payload: null,
-        error: null
+        error: null,
+        previousLive,
+        previousActiveSetId,
+        previousReadOnly
       }
     })
+
+    let payload: Record<string, unknown>
+    let kind: 'manual_single' | 'manual_bulk' | 'import' | 'scheduled' | 'unknown'
+    let dateLabel: string
     try {
       const res = await api.flistZipBackupPayload(characterId, backupFilename)
       // The user may have switched away while we were loading. Don't
       // overwrite a different target.
-      const after = get().flistBrowseBackup
+      const inflight = get().flistBrowseBackup
       if (
-        !after ||
-        after.characterId !== characterId ||
-        after.filename !== backupFilename
+        !inflight ||
+        inflight.characterId !== characterId ||
+        inflight.filename !== backupFilename
       ) {
         return
       }
-      set({
-        flistBrowseBackup: {
-          characterId,
-          filename: backupFilename,
-          status: 'ready',
-          payload: res.payload,
-          error: null
-        }
-      })
+      payload = res.payload
+      kind = normaliseBackupKind(res.meta?.kind)
+      dateLabel = formatBackupDateForBanner(backupFilename)
     } catch (err) {
-      const after = get().flistBrowseBackup
+      const inflight = get().flistBrowseBackup
       if (
-        !after ||
-        after.characterId !== characterId ||
-        after.filename !== backupFilename
+        !inflight ||
+        inflight.characterId !== characterId ||
+        inflight.filename !== backupFilename
       ) {
         return
       }
@@ -3307,14 +3440,102 @@ export const useStore = create<State>((set, get) => ({
           filename: backupFilename,
           status: 'error',
           payload: null,
-          error: err instanceof Error ? err.message : String(err)
+          error: err instanceof Error ? err.message : String(err),
+          previousLive,
+          previousActiveSetId,
+          previousReadOnly
         }
       })
+      return
     }
+
+    // The backup's working.json mostly matches live shape — both carry
+    // the same {character, settings, infotags, kinks, custom_kinks,
+    // images, inlines} container. seedWorkingFromLive() is defensive
+    // about either shape, so reusing it on the backup payload Just
+    // Works for the working-slot side. For the "fake live" entry in
+    // the archive we feed the payload through verbatim so downstream
+    // readers (ProfileFieldsPreview, KinksPane, PreviewPane inlines
+    // resolution) see the same shape they always do.
+    const slot: FlistWorkingSlot = {
+      payload: seedWorkingFromLive(payload),
+      overlay: [],
+      etag: null,
+      unsavedDirty: false,
+      saveStatus: 'idle',
+      saveError: null,
+      lastSavedAt: null,
+      materialised: true
+    }
+
+    set((s) => {
+      const patch: Partial<State> = {
+        flistArchive: {
+          ...s.flistArchive,
+          [characterId]: {
+            ...(s.flistArchive[characterId] ?? {
+              snapshots: [],
+              pullStatus: 'idle'
+            }),
+            live: payload
+          }
+        },
+        flistActiveSetId: { ...s.flistActiveSetId, [characterId]: null },
+        editorReadOnly: true,
+        flistWorking: { ...s.flistWorking, [characterId]: slot },
+        flistBrowseBackup: {
+          characterId,
+          filename: backupFilename,
+          status: 'ready',
+          payload,
+          error: null,
+          kind,
+          dateLabel,
+          previousLive,
+          previousActiveSetId,
+          previousReadOnly
+        }
+      }
+      if (s.flistActiveCharacterId === characterId) {
+        patch.editorContent = descriptionOf(slot.payload)
+        patch.editorInlines = extractInlines(payload)
+        patch.editorDirty = false
+        patch.saveStatus = 'idle'
+        patch.saveError = null
+      }
+      return patch
+    })
   },
 
   flistCloseBrowseBackup() {
-    set({ flistBrowseBackup: null })
+    const browse = get().flistBrowseBackup
+    if (!browse) return
+    _restoreFromBrowse(get, set, browse)
+  },
+
+  async flistDownloadZipBackup(characterId, backupFilename) {
+    const dialog = window.workbench?.saveFileDialog
+    const write = window.workbench?.writeFile
+    if (!dialog || !write) return null
+    let bytes: Uint8Array
+    try {
+      bytes = await api.flistZipBackupDownload(characterId, backupFilename)
+    } catch (err) {
+      console.error('[flist] backup download fetch failed:', err)
+      return null
+    }
+    const path = await dialog({
+      title: 'Download backup ZIP',
+      defaultPath: backupFilename,
+      filters: [
+        { name: 'F-list backup', extensions: ['zip'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (!path) return null
+    const ok = await write(path, bytes)
+    if (!ok) return null
+    return { path, bytes: bytes.length }
   },
 
   async flistUndoResetWorking() {

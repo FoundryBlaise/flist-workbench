@@ -65,11 +65,21 @@ export type FlistSnapshotEntry = {
 /** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
  *  Each backup is a userscript-restoreable archive (JSON + images +
  *  avatar) written by the Tools → Back up all sweep or the per-
- *  character right-click → Back up now action. */
+ *  character right-click → Back up now action. `kind` is read from
+ *  the embedded `backup-meta.json` (added 2026-06-17); older backups
+ *  predating that write come back as `"unknown"`. */
+export type FlistZipBackupKind =
+  | 'manual_single'
+  | 'manual_bulk'
+  | 'import'
+  | 'scheduled'
+  | 'unknown'
+
 export type FlistZipBackupEntry = {
   filename: string
   created_at: number
   size: number
+  kind: FlistZipBackupKind
 }
 
 export type FlistCharacterImage = {
@@ -977,15 +987,34 @@ export const api = {
     get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
-  /** Read the embedded `working.json` out of a ZIP backup for
-   *  read-only Browse Backup mode. 410 Gone when the backup
-   *  predates the working.json write — the renderer surfaces
-   *  that as a header pill message. */
+  /** Raw ZIP bytes for Sidebar → Backups → right-click → Download.
+   *  The renderer pipes these through `window.workbench.writeFile`
+   *  to whatever path the user picks in the OS save dialog. */
+  flistZipBackupDownload: async (
+    characterId: string | number,
+    filename: string
+  ): Promise<Uint8Array> => {
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/download`
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    return new Uint8Array(await res.arrayBuffer())
+  },
+  /** Read the embedded `working.json` (+ `backup-meta.json` if
+   *  present) out of a ZIP backup for read-only Browse Backup mode.
+   *  410 Gone when the backup predates the working.json write — the
+   *  renderer surfaces that as a header pill message. `meta` is
+   *  `null` for backups created before the metadata write shipped
+   *  (2026-06-17). */
   flistZipBackupPayload: (
     characterId: string | number,
     filename: string
   ) =>
-    get<{ payload: Record<string, unknown>; filename: string }>(
+    get<{
+      payload: Record<string, unknown>
+      filename: string
+      meta: { kind?: string; created_at?: string; note?: string } | null
+    }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/payload`
     ),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
