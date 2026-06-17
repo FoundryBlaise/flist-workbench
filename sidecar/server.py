@@ -801,6 +801,57 @@ async def flist_character_zip_backups(character_id: str) -> dict:
     }
 
 
+@app.get(
+    "/flist/character/{character_id}/zip-backups/{filename}/payload"
+)
+async def flist_character_zip_backup_payload(
+    character_id: str, filename: str
+) -> dict:
+    """Read the embedded working.json out of a ZIP backup for the
+    read-only Browse Backup mode.
+
+    Backups created since 2026-06-17 (the day this endpoint shipped)
+    bundle a `working.json` file alongside the userscript-targeted
+    `character.json`. We read the former so the renderer's editor
+    tabs can render the rich internal shape (descriptions, kink
+    overlay, custom-kink dict, etc.) without inverting the export
+    reshape passes.
+
+    Older backups predate the `working.json` write and return 410
+    Gone with an explanation — the user retries Back-up-now and the
+    next browse works. We deliberately don't try to invert
+    character.json on the fly; it's a multi-stage lossy reshape and
+    not worth the complexity for the v1 ship.
+    """
+    import zipfile
+
+    p = character_archive.backups_dir(character_id) / filename
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="backup not found")
+    try:
+        with zipfile.ZipFile(p, "r") as zf:
+            try:
+                raw = zf.read("working.json").decode("utf-8")
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=410,
+                    detail=(
+                        "This backup predates Browse support. Click "
+                        "Back up now on the character and the new "
+                        "backup will be browsable."
+                    ),
+                ) from exc
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=500, detail="corrupt backup file") from exc
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500, detail="backup working.json is not valid JSON"
+        ) from exc
+    return {"payload": payload, "filename": filename}
+
+
 async def _pull_one_character_for_backup_all(
     name: str,
     *,

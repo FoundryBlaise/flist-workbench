@@ -145,6 +145,19 @@ def build_zip(
             "character.json",
             json.dumps(character_json, indent=2, ensure_ascii=False),
         )
+        # ALSO write the source `working.json` so a read-only Browse
+        # Backup mode can render the rich internal payload without
+        # inverting all the export-side reshape passes. The userscript
+        # ignores extra files, so this is forward-compatible with every
+        # existing flistcharexporter install. Costs a few KB per ZIP
+        # (description BBCode + kink choices + custom-kink overlay) —
+        # trivial next to the image bytes. Backups created before this
+        # write was added gracefully degrade: the Browse Backup reader
+        # surfaces a "this backup predates browse support" message.
+        zf.writestr(
+            "working.json",
+            json.dumps(working_payload, indent=2, ensure_ascii=False),
+        )
         written: set[str] = set()
         for entry in present:
             filename = entry["filename"]

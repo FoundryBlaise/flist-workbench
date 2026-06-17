@@ -4,6 +4,7 @@ import {
   type CharacterEntry,
   type FlistAccountCharacter,
   type FlistSnapshotEntry,
+  type FlistZipBackupEntry,
   type FlistCharacterImage,
   type FlistRosterEntry,
   type FlistSessionStatus,
@@ -169,6 +170,16 @@ type State = {
       live: Record<string, unknown> | null
       /** JSON-snapshot history (the auto-on-pull forever-history). */
       snapshots: FlistSnapshotEntry[]
+      /** ZIP-backup files in `characters/<id>/backups/`, newest first.
+       *  Distinct from snapshots: backups are explicit user-driven
+       *  archives (Tools → Back up all sweep + per-character right-
+       *  click → Back up now); snapshots are auto-on-pull JSON. The
+       *  Backups sidebar list reads from this slot. `undefined` means
+       *  "not yet loaded for this character"; an empty array means
+       *  "loaded, none exist". */
+      zipBackups?: FlistZipBackupEntry[]
+      zipBackupsStatus?: 'idle' | 'loading' | 'ready' | 'error'
+      zipBackupsError?: string | null
       pullStatus: 'idle' | 'queued' | 'running' | 'done' | 'error'
       pullStage?: string
       pullProgress?: { done: number; total: number }
@@ -190,6 +201,29 @@ type State = {
    *  the modal navigates to the export.zip route. Lives in the store so
    *  the menu / sidebar / Images tab can all open it from anywhere. */
   flistExportRestoreCharacterId: string | null
+  /** Currently-open read-only backup browse target, or null when
+   *  the user is editing their live working copy. When set, the
+   *  editor pane renders the backup's contents via the
+   *  `flistDiffBackupCache` (Tier 4's existing backup-loader) with
+   *  every tab in readOnly mode. Right-click → Browse backup in the
+   *  Backups sidebar list sets this; switching character or closing
+   *  via the header pill clears it. See features/flist/BrowseBackup
+   *  for the rendering path. */
+  flistBrowseBackup: {
+    characterId: string
+    filename: string
+    /** 'loading' → backup ZIP being fetched and parsed.
+     *  'ready'   → payload available, tabs can render.
+     *  'error'   → fetch failed, header pill shows reason. The most
+     *              common error is HTTP 410 — backup predates the
+     *              Browse-support write that bundles working.json
+     *              into the ZIP. */
+    status: 'loading' | 'ready' | 'error'
+    /** The decoded working.json payload from the ZIP. Set when
+     *  status === 'ready'; null otherwise. */
+    payload: Record<string, unknown> | null
+    error?: string | null
+  } | null
   /** Per-character snapshot of files in `<char>/images/` (the v5
    *  unified store — there's no separate sha-keyed pool). Keyed by
    *  image_id with the file extension + mtime cached so the renderer
@@ -601,6 +635,21 @@ type State = {
     backupFilename: string
   ) => Promise<void>
 
+  /** Right-click → Browse backup on a row in the Backups sidebar
+   *  list. Loads the ZIP into the existing diff backup cache,
+   *  flips `flistBrowseBackup` so the editor renders read-only
+   *  against that backup's payload. No-op when the same target is
+   *  already open. Safe to call without a dirty-working guard —
+   *  browse mode never mutates working.json. */
+  flistOpenBrowseBackup: (
+    characterId: string,
+    backupFilename: string
+  ) => Promise<void>
+  /** Header-pill "Back to working copy" / character switch / Escape.
+   *  Clears `flistBrowseBackup` so the editor tabs render against
+   *  the live working copy again. */
+  flistCloseBrowseBackup: () => void
+
 }
 
 function partnerKey(char: string, partner: string): string {
@@ -1008,6 +1057,7 @@ export const useStore = create<State>((set, get) => ({
   flistArchive: {},
   flistCharacterImages: {},
   flistExportRestoreCharacterId: null,
+  flistBrowseBackup: null,
   flistWorking: {},
   flistWorkingLoadStatus: {},
   flistSets: {},
@@ -1425,12 +1475,35 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     }))
-    const [live, snapshots] = await Promise.all([
+    // Flip zip-backups to loading so the sidebar shows a spinner
+    // instead of an empty list while we fetch.
+    set((s) => ({
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: {
+          ...(s.flistArchive[characterId] ?? {
+            live: null,
+            snapshots: [],
+            pullStatus: 'idle'
+          }),
+          zipBackupsStatus: 'loading',
+          zipBackupsError: null
+        }
+      }
+    }))
+    const [live, snapshots, zipBackupsResult] = await Promise.all([
       api.flistLive(characterId).catch(() => null),
       api
         .flistSnapshots(characterId)
         .then((r) => r.snapshots)
-        .catch(() => [])
+        .catch(() => []),
+      api
+        .flistZipBackups(characterId)
+        .then((r) => ({ ok: true as const, backups: r.backups }))
+        .catch((err: unknown) => ({
+          ok: false as const,
+          error: err instanceof Error ? err.message : String(err)
+        }))
     ])
     set((s) => ({
       flistArchive: {
@@ -1439,6 +1512,9 @@ export const useStore = create<State>((set, get) => ({
           ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
           live,
           snapshots,
+          zipBackups: zipBackupsResult.ok ? zipBackupsResult.backups : [],
+          zipBackupsStatus: zipBackupsResult.ok ? 'ready' : 'error',
+          zipBackupsError: zipBackupsResult.ok ? null : zipBackupsResult.error,
           lastPullAt:
             (live && typeof live.fetched_at === 'number'
               ? (live.fetched_at as number)
@@ -2755,6 +2831,29 @@ export const useStore = create<State>((set, get) => ({
         // fire from here — but be defensive.
         finalise({ phase: 'done', done: 1, unchanged: 1 }, true)
       }
+      // Refresh the sidebar Backups list so the new ZIP appears
+      // immediately instead of waiting for the next character switch.
+      // Fire-and-forget; failure is harmless (list stays stale).
+      void api
+        .flistZipBackups(cid)
+        .then((r) => {
+          set((s) => ({
+            flistArchive: {
+              ...s.flistArchive,
+              [cid]: {
+                ...(s.flistArchive[cid] ?? {
+                  live: null,
+                  snapshots: [],
+                  pullStatus: 'idle'
+                }),
+                zipBackups: r.backups,
+                zipBackupsStatus: 'ready',
+                zipBackupsError: null
+              }
+            }
+          }))
+        })
+        .catch(() => {})
     } catch (err) {
       finalise(
         {
@@ -3145,6 +3244,71 @@ export const useStore = create<State>((set, get) => ({
     _scheduleFlush(characterId, () => {
       void get().flistFlushWorking(characterId)
     })
+  },
+
+  async flistOpenBrowseBackup(characterId, backupFilename) {
+    const current = get().flistBrowseBackup
+    if (
+      current &&
+      current.characterId === characterId &&
+      current.filename === backupFilename &&
+      current.status === 'ready'
+    ) {
+      return
+    }
+    set({
+      flistBrowseBackup: {
+        characterId,
+        filename: backupFilename,
+        status: 'loading',
+        payload: null,
+        error: null
+      }
+    })
+    try {
+      const res = await api.flistZipBackupPayload(characterId, backupFilename)
+      // The user may have switched away while we were loading. Don't
+      // overwrite a different target.
+      const after = get().flistBrowseBackup
+      if (
+        !after ||
+        after.characterId !== characterId ||
+        after.filename !== backupFilename
+      ) {
+        return
+      }
+      set({
+        flistBrowseBackup: {
+          characterId,
+          filename: backupFilename,
+          status: 'ready',
+          payload: res.payload,
+          error: null
+        }
+      })
+    } catch (err) {
+      const after = get().flistBrowseBackup
+      if (
+        !after ||
+        after.characterId !== characterId ||
+        after.filename !== backupFilename
+      ) {
+        return
+      }
+      set({
+        flistBrowseBackup: {
+          characterId,
+          filename: backupFilename,
+          status: 'error',
+          payload: null,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      })
+    }
+  },
+
+  flistCloseBrowseBackup() {
+    set({ flistBrowseBackup: null })
   },
 
   async flistUndoResetWorking() {
