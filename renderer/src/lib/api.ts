@@ -977,6 +977,17 @@ export const api = {
     get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
+  /** Read the embedded `working.json` out of a ZIP backup for
+   *  read-only Browse Backup mode. 410 Gone when the backup
+   *  predates the working.json write — the renderer surfaces
+   *  that as a header pill message. */
+  flistZipBackupPayload: (
+    characterId: string | number,
+    filename: string
+  ) =>
+    get<{ payload: Record<string, unknown>; filename: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/payload`
+    ),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
   flistMappingList: (opts?: { force?: boolean }) =>
     get<

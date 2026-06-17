@@ -4,6 +4,7 @@ import { UnifiedCharacterPicker } from './UnifiedCharacterPicker'
 import { ModeToggle } from './ModeToggle'
 import { PartnerList } from './PartnerList'
 import { FlistCharacterZone } from '../flist/FlistCharacterZone'
+import { BackupsList } from './BackupsList'
 
 export function Sidebar() {
   const status = useStore((s) => s.charactersStatus)
@@ -28,7 +29,10 @@ export function Sidebar() {
       <UnifiedCharacterPicker />
       <ModeToggle />
       {mode === 'editor' ? (
-        <FlistCharacterZone />
+        <>
+          <FlistCharacterZone />
+          <BackupsList />
+        </>
       ) : (
         <>
           <div className="sb-section-h">Partners</div>
