@@ -37,6 +37,7 @@ export function AppLayout() {
   const activePartner = useStore((s) => s.activePartner)
   const editorTitle = useStore((s) => s.editorTitle)
   const dirty = useStore((s) => s.editorDirty)
+  const browseBackup = useStore((s) => s.flistBrowseBackup)
   const crossSearchOpen = useStore((s) => s.crossSearchOpen)
   const setCrossSearchOpen = useStore((s) => s.setCrossSearchOpen)
   const classifyTarget = useStore((s) => s.classifyTarget)
@@ -370,7 +371,9 @@ export function AppLayout() {
   // editing "Lady Amber Blaise.bbcode").
   const titleDoc =
     mode === 'editor'
-      ? `${dirty ? '● ' : ''}${editorTitle}`
+      ? browseBackup
+        ? `${activeChar ? displayName(activeChar) + ' — ' : ''}Viewing backup`
+        : `${dirty ? '● ' : ''}${editorTitle}`
       : activePartner && activeChar
         ? `${displayPartner(activePartner)} — ${displayName(activeChar)}`
         : activeChar

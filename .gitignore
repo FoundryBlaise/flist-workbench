@@ -45,3 +45,5 @@ desktop.ini
 # Lockfiles — package-lock.json IS tracked (npm convention). uv.lock
 # for the sidecar IS tracked. Anything pip generates ad-hoc isn't.
 pip-wheel-metadata/
+tests/screenshots/*.txt
+tests/uxtest/artifacts/

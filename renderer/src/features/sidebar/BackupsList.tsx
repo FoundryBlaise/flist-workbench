@@ -76,7 +76,7 @@ export function BackupsList() {
         </div>
       ) : backups.length === 0 ? (
         <div className="sb-empty">
-          No backups yet. Right-click the character → Back up now.
+          No backups yet. Right-click your character above → Back up now.
         </div>
       ) : (
         <ul className="sb-backups">

@@ -449,8 +449,10 @@ body {
   background: var(--bg-hover, rgba(255, 255, 255, 0.04));
 }
 .sb-backup-row-active {
-  background: var(--bg-active, rgba(120, 170, 255, 0.16));
+  background: rgba(120, 170, 255, 0.32);
   color: var(--text);
+  border-left: 2px solid var(--accent, #78aaff);
+  padding-left: 14px;
 }
 .sb-backup-date {
   flex: 1;
@@ -479,6 +481,11 @@ body {
   padding: 8px 16px;
   background: var(--bg-elevated, #2a2a2a);
   border-bottom: 1px solid var(--border);
+  /* .pane-head inherits text-transform: uppercase — override here so
+     the sentence-case pill renders as designed. */
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
 }
 .browse-backup-pill {
   font-size: var(--font-body);
@@ -489,6 +496,8 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: normal;
 }
 .browse-backup-pill-error {
   background: rgba(220, 100, 100, 0.22);
