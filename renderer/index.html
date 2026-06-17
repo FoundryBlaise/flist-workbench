@@ -3,6 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    Renderer CSP. Defence-in-depth on top of contextIsolation+sandbox
+    in electron/main.ts. Notes on the load-bearing connect-src
+    sources: 127.0.0.1 / localhost / host.docker.internal cover the
+    sidecar and devcontainer LLM hosts (LM Studio :1234, Ollama
+    :11434). https: covers user-configured remote LLM endpoints (e.g.
+    OpenAI). Plain http: to non-loopback stays blocked so an injected
+    BBCode payload can't beacon to a plaintext attacker server. ws:
+    covers Vite HMR in dev. style-src needs 'unsafe-inline' because
+    CodeMirror + portals + BBCode preview rely on style="" attrs.
+    img-src allows static.f-list.net for eicon / avatar / charinline
+    rendering. See docs/INSTALL_WINDOWS.md for the paired install UX.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://static.f-list.net; font-src 'self' data:; connect-src 'self' ws: http://127.0.0.1:* http://localhost:* http://host.docker.internal:* https:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none';">
   <title>F-list Workbench</title>
 </head>
 <body>

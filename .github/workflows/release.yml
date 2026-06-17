@@ -1,0 +1,129 @@
+# Builds the Windows portable .exe on every tag matching v*, attaches
+# it to a GitHub Release along with a SHA256SUMS file. Mirrors what
+# build-win.ps1 does locally; the only thing CI does that local doesn't
+# is generate hashes + publish the release.
+#
+# Unsigned builds. See docs/INSTALL_WINDOWS.md for the SmartScreen
+# click-through users will see; code-signing is a separate decision.
+#
+# Trigger:
+#   git tag v0.0.1 && git push origin v0.0.1
+#
+# Manual run (no tag):
+#   gh workflow run release.yml
+# Manual runs upload the artifact to the workflow run but do NOT
+# publish a release — handy for sanity-checking changes to the build
+# pipeline without burning a tag.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      # Sync the sidecar's uv-managed venv. PyInstaller lives in the
+      # dev group; without --all-extras it'd be missing on the runner.
+      - name: uv sync (sidecar)
+        run: uv sync --project sidecar
+
+      # npm ci wipes node_modules and rebuilds native deps (keytar)
+      # against the Electron ABI. build-win.ps1 does the same.
+      - name: npm ci
+        run: npm ci
+
+      - name: Pack Windows portable
+        run: npm run pack:win
+
+      # Capture the artifact path + filename so subsequent steps don't
+      # have to repeat the pattern. electron-builder writes to
+      # dist-electron/F-list Workbench-<version>-x64-portable.exe.
+      - name: Locate artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $name = "F-list Workbench-$version-x64-portable.exe"
+          $path = "dist-electron/$name"
+          if (-not (Test-Path $path)) {
+            Write-Error "Expected artifact not found at $path"
+            Get-ChildItem dist-electron -Recurse | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          "name=$name"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "path=$path"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Generate SHA256SUMS
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "${{ steps.artifact.outputs.path }}" -Algorithm SHA256).Hash.ToLower()
+          $line = "$hash  ${{ steps.artifact.outputs.name }}"
+          Set-Content -Path dist-electron/SHA256SUMS.txt -Value $line -Encoding ascii
+          Write-Host $line
+
+      # Manual runs (workflow_dispatch) upload to the run for download
+      # so we can smoke-test changes to the build pipeline without
+      # publishing.
+      - name: Upload artifacts to run
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flist-workbench-windows-portable
+          path: |
+            ${{ steps.artifact.outputs.path }}
+            dist-electron/SHA256SUMS.txt
+          if-no-files-found: error
+
+      # Tag pushes publish a real release. The body points at the
+      # install guide so users who land here from a fresh download see
+      # the SmartScreen click-through instructions immediately.
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: F-list Workbench ${{ steps.artifact.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            **Portable Windows build.** Drop the .exe anywhere and
+            double-click — no installer.
+
+            **First launch:** Windows SmartScreen will warn that the
+            app is unrecognised (it's unsigned). Click **More info →
+            Run anyway**. Full walkthrough + hash verification in
+            [`docs/INSTALL_WINDOWS.md`](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/INSTALL_WINDOWS.md).
+
+            `SHA256SUMS.txt` contains the sha256 of the .exe for
+            verification.
+          files: |
+            ${{ steps.artifact.outputs.path }}
+            dist-electron/SHA256SUMS.txt

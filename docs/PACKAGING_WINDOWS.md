@@ -1,7 +1,12 @@
 # Packaging F-list Workbench for Windows
 
-> **Status:** Implemented 2026-05-24. The repo now contains a working
-> Windows pack pipeline. To rebuild the portable .exe:
+> **Status:** Implemented 2026-05-24. Phase 8 tail (SmartScreen
+> click-through guide → `docs/INSTALL_WINDOWS.md`, renderer CSP →
+> `renderer/index.html`, tag-triggered release workflow →
+> `.github/workflows/release.yml`) shipped 2026-06-17.
+>
+> The repo now contains a working Windows pack pipeline. To rebuild
+> the portable .exe:
 >
 > ```cmd
 > npm run pack:win
