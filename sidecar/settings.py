@@ -97,6 +97,16 @@ KEY_RAG_CHUNK_MAX_CHARS = "rag.chunk_max_chars"
 KEY_RAG_CHUNK_SOFT_SPLIT_CHARS = "rag.chunk_soft_split_chars"
 KEY_RAG_CHUNK_OVERLAP_MSGS = "rag.chunk_overlap_msgs"
 
+# Scheduled backups (on-start check). Default 7 day interval, keep
+# 10 newest scheduled backups per character. Both surfaced in the
+# Settings panel under "Backups". Setting interval to 0 disables the
+# auto-backup entirely without ripping out the wiring — handy for
+# users who'd rather drive every backup themselves.
+KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS = "backups.scheduled_interval_days"
+KEY_BACKUPS_SCHEDULED_KEEP_LAST_N = "backups.scheduled_keep_last_n"
+BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT = 7
+BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT = 10
+
 
 def db_path(root: Path | None = None) -> Path:
     base = root or paths.user_data_dir()

@@ -819,3 +819,160 @@ def test_write_live_first_pull_creates_name_folder(tmp_path):
     assert (character_archive.root() / "Brand New" / "live.json").exists()
     assert character_archive.load_registry()["9999999"]["folder"] == "Brand New"
 
+
+
+def test_maybe_run_scheduled_backup_writes_when_no_scheduled_exists(tmp_path):
+    cid = "8001"
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Sched", "description": "v1"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    result = character_archive.maybe_run_scheduled_backup(
+        cid, interval_seconds=86400 * 7, keep_last_n=10
+    )
+    assert result["action"] == "saved"
+    rows = character_archive.list_zip_backups(cid)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "scheduled"
+
+
+def test_maybe_run_scheduled_backup_skips_when_recent(tmp_path):
+    cid = "8002"
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Sched", "description": "v1"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    # Plant a fresh scheduled backup.
+    character_archive.save_zip_backup(cid, force=True, kind="scheduled")
+    # Mutate the live so dedup won't be what skips the second call.
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Sched", "description": "v2"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 200,
+        },
+    )
+    # Interval of 7 days; the existing scheduled backup was just made,
+    # so the next call should skip.
+    result = character_archive.maybe_run_scheduled_backup(
+        cid, interval_seconds=86400 * 7, keep_last_n=10
+    )
+    assert result["action"] == "skipped"
+    assert result["reason"] == "recent"
+    rows = [
+        r for r in character_archive.list_zip_backups(cid) if r["kind"] == "scheduled"
+    ]
+    assert len(rows) == 1
+
+
+def test_maybe_run_scheduled_backup_prunes_old_scheduled(tmp_path):
+    cid = "8003"
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Sched", "description": "v0"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    # Plant five scheduled backups by force, so dedup doesn't block. Each
+    # mutate-then-backup pair produces a fresh ZIP with distinct content.
+    for i in range(5):
+        character_archive.write_live(
+            cid,
+            {
+                "character": {
+                    "id": int(cid),
+                    "name": "Sched",
+                    "description": f"v{i}",
+                },
+                "images": [],
+                "kinks": {},
+                "fetched_at": 100 + i,
+            },
+        )
+        character_archive.save_zip_backup(cid, force=True, kind="scheduled")
+    assert (
+        len([r for r in character_archive.list_zip_backups(cid) if r["kind"] == "scheduled"])
+        == 5
+    )
+    # Mutate again so the next save isn't a dedup. Then run the
+    # scheduler with interval=0 (force-run path) + keep_last_n=3.
+    # The scheduler's interval check looks at the newest backup's
+    # creation time vs now; the planted backups all happened in this
+    # second, so we sidestep the recency skip by using a 0-second
+    # interval.
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Sched", "description": "fresh"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 999,
+        },
+    )
+    result = character_archive.maybe_run_scheduled_backup(
+        cid, interval_seconds=0, keep_last_n=3
+    )
+    assert result["action"] == "saved"
+    # After write: 6 scheduled total → prune down to 3.
+    remaining = [
+        r for r in character_archive.list_zip_backups(cid) if r["kind"] == "scheduled"
+    ]
+    assert len(remaining) == 3
+    assert result["pruned"] == 3
+
+
+def test_rename_zip_backup_persists_in_names_json(tmp_path):
+    cid = "8010"
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Renamy", "description": "v1"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    fname = res["filename"]
+    character_archive.rename_zip_backup(cid, fname, "Pre-overhaul")
+    rows = character_archive.list_zip_backups(cid)
+    assert rows[0]["name"] == "Pre-overhaul"
+    # Empty string clears.
+    character_archive.rename_zip_backup(cid, fname, "")
+    rows = character_archive.list_zip_backups(cid)
+    assert rows[0]["name"] is None
+
+
+def test_forget_backup_name_drops_entry(tmp_path):
+    cid = "8011"
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Renamy", "description": "v1"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    fname = res["filename"]
+    character_archive.rename_zip_backup(cid, fname, "label")
+    character_archive.forget_backup_name(cid, fname)
+    # After forget, list shows no name on that row.
+    rows = character_archive.list_zip_backups(cid)
+    assert rows[0]["name"] is None
