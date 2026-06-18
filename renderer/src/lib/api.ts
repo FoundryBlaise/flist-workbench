@@ -282,6 +282,24 @@ export type BackupsSettings = {
     scheduled_interval_days: number
     scheduled_keep_last_n: number
   }
+  /** Telemetry from the last sweep run. `null` epochs mean the sweep
+   *  has never executed in this install — the UI shows "Never run"
+   *  instead of a stale relative time. */
+  last_sweep: {
+    started_at: number | null
+    finished_at: number | null
+    written: number
+    skipped: number
+    failed: number
+    /** 'on_start' (sidecar boot) or 'manual' (user pressed the
+     *  Trigger button in Settings). `null` only when no run has
+     *  happened yet. */
+    source: 'on_start' | 'manual' | null
+  }
+  /** Computed `last_sweep.started_at + interval_days × 86400`. `null`
+   *  when no sweep has run yet, or when interval=0 (sweep disabled).
+   *  UI renders the countdown ("in 3 days" / "due now"). */
+  next_due_at: number | null
 }
 
 export type RagSettings = {
@@ -1127,6 +1145,21 @@ export const api = {
     get<SetsListResponseWire>(
       `/flist/character/${encodeURIComponent(String(characterId))}/sets`
     ),
+  /** Manual trigger for the scheduled-backup sweep. Runs the same
+   *  code path the sidecar boot hook fires, ignoring the
+   *  interval-disabled flag (the button is the user explicitly
+   *  asking for a sweep). Synchronous from the caller's side —
+   *  returns the summary so the UI can update without polling. */
+  backupsRunScheduledSweep: () =>
+    request<{
+      started_at: number
+      finished_at: number
+      written: number
+      skipped: number
+      failed: number
+      disabled: boolean
+      source: 'on_start' | 'manual'
+    }>('/backups/scheduled-sweep', { method: 'POST' }),
   flistSetCreate: (characterId: string | number, body: { name: string }) =>
     request<{ set: SetMetaWire }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/sets`,

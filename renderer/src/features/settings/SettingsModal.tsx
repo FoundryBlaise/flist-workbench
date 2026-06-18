@@ -652,6 +652,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     state={state}
                     draft={draft}
                     onChange={updateBackups}
+                    onStateRefresh={(next) => {
+                      setState(next)
+                      // Rebuild the form's baseline from the refreshed
+                      // state — last_sweep / next_due_at aren't editable
+                      // fields, so this won't clobber unsaved knob edits.
+                      setDraft((d) =>
+                        d
+                          ? { ...d, backups: buildDraft(next).backups }
+                          : buildDraft(next)
+                      )
+                    }}
                   />
                 )}
                 {activeSection === 'labels' && (
@@ -1157,15 +1168,49 @@ function GeneralPane({
 function BackupsPane({
   state,
   draft,
-  onChange
+  onChange,
+  onStateRefresh
 }: {
   state: SettingsState
   draft: Draft
   onChange: (patch: Partial<Draft['backups']>) => void
+  onStateRefresh: (next: SettingsState) => void
 }) {
   const defaults = state.backups.defaults
   const intervalNum = Number(draft.backups.scheduled_interval_days)
   const disabled = Number.isFinite(intervalNum) && intervalNum === 0
+  const lastSweep = state.backups.last_sweep
+  const nextDueAt = state.backups.next_due_at
+  const [running, setRunning] = useState(false)
+  const [runError, setRunError] = useState<string | null>(null)
+  const [recentRun, setRecentRun] = useState<{
+    written: number
+    skipped: number
+    failed: number
+    finished_at: number
+  } | null>(null)
+
+  const runNow = async () => {
+    setRunning(true)
+    setRunError(null)
+    try {
+      const result = await api.backupsRunScheduledSweep()
+      setRecentRun({
+        written: result.written,
+        skipped: result.skipped,
+        failed: result.failed,
+        finished_at: result.finished_at
+      })
+      // Refresh the settings snapshot so last_sweep / next_due_at
+      // pick up the just-completed run.
+      const fresh = await api.settingsGet()
+      onStateRefresh(fresh)
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRunning(false)
+    }
+  }
   return (
     <>
       <PaneHeader
@@ -1173,6 +1218,71 @@ function BackupsPane({
         subtitle="On-start sweep that auto-snapshots each character every N days."
       />
       <div className="settings-section">
+        <div className="settings-field">
+          <label className="settings-label">Scheduled sweep status</label>
+          <p className="settings-help">
+            Workbench checks for due backups every time the app starts
+            (not while it's open — it's not a background daemon). Use
+            the button below to run the sweep without restarting. A
+            manual run resets the clock — the next backup will then be
+            due {Number.isFinite(intervalNum) && intervalNum > 0 ? `${intervalNum} day${intervalNum === 1 ? '' : 's'}` : 'N days'}{' '}
+            from when you press it.
+          </p>
+          <dl className="settings-sweep-status">
+            <div>
+              <dt>Last ran</dt>
+              <dd data-testid="settings-backups-last-ran">
+                {lastSweep.started_at
+                  ? `${formatAbsoluteDate(lastSweep.started_at)} · ${
+                      lastSweep.source === 'manual'
+                        ? 'manual trigger'
+                        : 'on app launch'
+                    }`
+                  : 'Never run'}
+              </dd>
+            </div>
+            <div>
+              <dt>Last result</dt>
+              <dd>
+                {lastSweep.started_at
+                  ? `${lastSweep.written} written, ${lastSweep.skipped} skipped${lastSweep.failed > 0 ? `, ${lastSweep.failed} failed` : ''}`
+                  : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>Next due</dt>
+              <dd data-testid="settings-backups-next-due">
+                {disabled
+                  ? 'Sweep disabled (set interval ≥ 1)'
+                  : nextDueAt
+                    ? `${formatAbsoluteDate(nextDueAt)} · ${formatRelativeDueIn(nextDueAt)}`
+                    : 'On next app launch'}
+              </dd>
+            </div>
+          </dl>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="settings-secondary-btn"
+              onClick={() => void runNow()}
+              disabled={running}
+              data-testid="settings-backups-trigger"
+            >
+              {running ? 'Running sweep…' : 'Trigger scheduled backup now'}
+            </button>
+            {recentRun && (
+              <span className="settings-sweep-result">
+                ✓ {recentRun.written} written, {recentRun.skipped} skipped
+                {recentRun.failed > 0 ? `, ${recentRun.failed} failed` : ''}
+              </span>
+            )}
+          </div>
+          {runError && (
+            <p className="settings-help" data-testid="settings-backups-error">
+              <strong>Sweep failed:</strong> {runError}
+            </p>
+          )}
+        </div>
         <div className="settings-field">
           <label
             className="settings-label"
@@ -2753,6 +2863,26 @@ function EmbeddingPane({
       </div>
     </>
   )
+}
+
+function formatAbsoluteDate(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000)
+  if (isNaN(d.getTime())) return '—'
+  const pad = (n: number) => (n < 10 ? `0${n}` : String(n))
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function formatRelativeDueIn(unixSeconds: number): string {
+  const now = Date.now() / 1000
+  const delta = unixSeconds - now
+  if (delta <= 0) return 'due now'
+  const days = Math.round(delta / 86400)
+  if (days < 1) {
+    const hours = Math.round(delta / 3600)
+    if (hours < 1) return 'in under an hour'
+    return `in ${hours} hour${hours === 1 ? '' : 's'}`
+  }
+  return `in ${days} day${days === 1 ? '' : 's'}`
 }
 
 function PaneHeader({ title, subtitle }: { title: string; subtitle: string }) {

@@ -107,6 +107,21 @@ KEY_BACKUPS_SCHEDULED_KEEP_LAST_N = "backups.scheduled_keep_last_n"
 BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT = 7
 BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT = 10
 
+# Last-sweep telemetry persisted across launches. The Settings →
+# Backups pane reads these to show "last ran at" + "next due" + the
+# saved/skipped/failed counts. Manual trigger and the on-start hook
+# both write these — manual trigger naturally resets the "next due"
+# clock forward by 7 days because it updates last_started_at.
+KEY_BACKUPS_LAST_SWEEP_STARTED_AT = "backups.last_sweep_started_at"
+KEY_BACKUPS_LAST_SWEEP_FINISHED_AT = "backups.last_sweep_finished_at"
+KEY_BACKUPS_LAST_SWEEP_WRITTEN = "backups.last_sweep_written"
+KEY_BACKUPS_LAST_SWEEP_SKIPPED = "backups.last_sweep_skipped"
+KEY_BACKUPS_LAST_SWEEP_FAILED = "backups.last_sweep_failed"
+# Provenance of the last sweep: 'on_start' (sidecar boot) or 'manual'
+# (user pressed Trigger scheduled backup now). Lets the UI clarify
+# "ran on app launch" vs "you ran it from Settings".
+KEY_BACKUPS_LAST_SWEEP_SOURCE = "backups.last_sweep_source"
+
 
 def db_path(root: Path | None = None) -> Path:
     base = root or paths.user_data_dir()
