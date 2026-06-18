@@ -1488,6 +1488,49 @@ def create_set_from_live(character_id: int | str, name: str) -> SetMeta:
     return _materialise_set(character_id, clean, payload)
 
 
+def create_set_from_zip_backup(
+    character_id: int | str,
+    backup_filename: str,
+    name: str,
+) -> SetMeta:
+    """Seed a new working set from a backup ZIP — reads the embedded
+    `working.json` and materialises it as the new set's payload. The
+    set bundle format (the userscript-import path) has a different
+    shape (`manifest.json` + `payload.json` + image dir), so trying
+    to import a backup ZIP via the import-set endpoint fails with
+    "bundle is missing manifest.json". This path skips that wrapper
+    entirely.
+
+    Raises:
+      ValueError on a malformed backup filename or invalid set name.
+      FileNotFoundError when the backup file is missing.
+      KeyError when the backup predates the `working.json` write
+        (older than 2026-06-17) — caller surfaces 410-like error
+        copy in that case.
+    """
+    import zipfile
+
+    _migrate_working_v2(character_id)
+    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
+        raise ValueError("invalid backup filename")
+    clean = validate_set_name(name)
+    target = backups_dir(character_id) / backup_filename
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(str(target))
+    try:
+        with zipfile.ZipFile(target, "r") as zf:
+            raw = zf.read("working.json").decode("utf-8")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"corrupt backup file: {exc}") from exc
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"backup working.json is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("backup working.json is not an object")
+    return _materialise_set(character_id, clean, payload)
+
+
 def duplicate_set(
     character_id: int | str,
     source_set_id: str,

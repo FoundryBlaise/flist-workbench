@@ -3655,23 +3655,18 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistCreateSetFromBackup(characterId, backupFilename) {
-    // Fetch the raw ZIP bytes from the sidecar — this is the same ZIP
-    // the userscript-restore + Download-ZIP paths use. Piping it
-    // through flistSetImport is byte-for-byte the same as the user
-    // saving the ZIP locally and re-importing it via the existing
-    // "Import working set" file picker, just without the round-trip
-    // through disk.
-    let bytes: Uint8Array
-    try {
-      bytes = await api.flistZipBackupDownload(characterId, backupFilename)
-    } catch (err) {
-      console.error('[flist] backup fetch for create-set failed:', err)
-      return null
-    }
-    // Derive a sensible default name from the backup's filename.
-    // YYYY-MM-DDTHHMMSSZ.zip → "Backup 2026-06-17 22:51".
+    // Backup ZIPs carry character.json + working.json + backup-meta
+    // — *not* the manifest.json shape the userscript-import path
+    // expects (that's the working-set-bundle format). Going through
+    // flistSetImport would 422 with "bundle is missing manifest.json".
+    // We hit a dedicated sidecar endpoint that reads working.json
+    // directly out of the backup ZIP and materialises a new set
+    // from it, no on-disk round-trip needed.
     const existingNames = (get().flistSets[characterId] ?? []).map((s) => s.name)
     const baseName = (() => {
+      // Default name: "Backup YYYY-MM-DD HH:MM" from the filename's
+      // UTC timestamp. Older entries get "(2)" / "(3)" suffixes if
+      // a same-named set already exists.
       const m = backupFilename.match(
         /^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z/
       )
@@ -3686,12 +3681,11 @@ export const useStore = create<State>((set, get) => ({
       i += 1
     }
     try {
-      const result = await api.flistSetImport(characterId, bytes, {
-        name: candidate,
-        // Same-character backup; skip the cross-character handshake.
-        confirmCrossCharacter: true
-      })
-      if (result.status !== 'imported') return null
+      const result = await api.flistSetCreateFromBackup(
+        characterId,
+        backupFilename,
+        { name: candidate }
+      )
       const meta = _setMetaFromWire(result.set)
       set((s) => {
         const list = s.flistSets[characterId] ?? []
@@ -3708,7 +3702,7 @@ export const useStore = create<State>((set, get) => ({
       await get().flistActivateSet(characterId, meta.id)
       return { setId: meta.id, setName: meta.name }
     } catch (err) {
-      console.error('[flist] set import from backup failed:', err)
+      console.error('[flist] create set from backup failed:', err)
       return null
     }
   },
