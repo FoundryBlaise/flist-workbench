@@ -306,13 +306,31 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
         if not filename:
             continue
         kind = "pre-restore" if filename.startswith("pre-restore-") else "backup"
-        label = entry.get("label") or filename
+        # Surface the user-set name (from _names.json) and the backup
+        # provenance sub-kind (manual_single / manual_bulk / scheduled /
+        # import / unknown) so the extension's tab UI can bucket
+        # backups the same way the in-app sidebar does.
+        backup_kind = entry.get("kind") if isinstance(entry, dict) else None
+        backup_name = entry.get("name") if isinstance(entry, dict) else None
+        label = (
+            entry.get("label")
+            or backup_name
+            or filename
+        )
+        created_at_raw = entry.get("created_at") or entry.get("mtime")
+        created_at_iso = (
+            _iso_from_unix(created_at_raw)
+            if isinstance(created_at_raw, (int, float))
+            else created_at_raw
+        )
         out.append({
             "id": filename,
             "kind": kind,
             "label": label,
-            "created_at": entry.get("created_at") or entry.get("mtime"),
+            "created_at": created_at_iso,
             "image_count": entry.get("image_count", 0),
+            "backup_kind": backup_kind,
+            "name": backup_name,
         })
 
     return out
