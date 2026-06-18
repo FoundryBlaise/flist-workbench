@@ -815,6 +815,30 @@ async def flist_character_zip_backups(character_id: str) -> dict:
     }
 
 
+@app.delete(
+    "/flist/character/{character_id}/zip-backups/{filename}",
+    status_code=204,
+)
+async def flist_character_zip_backup_delete(
+    character_id: str, filename: str
+) -> None:
+    """Delete a single backup ZIP. Filename validated against the
+    ISO-basic format so this can't be turned into an arbitrary-file
+    delete by crafting a `../` path. 404 if the backup isn't there
+    (idempotent-ish — UI should refresh anyway)."""
+    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
+        raise HTTPException(status_code=400, detail="invalid backup filename")
+    p = character_archive.backups_dir(character_id) / filename
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="backup not found")
+    try:
+        p.unlink()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"could not delete backup: {exc}"
+        ) from exc
+
+
 @app.get(
     "/flist/character/{character_id}/zip-backups/{filename}/download"
 )

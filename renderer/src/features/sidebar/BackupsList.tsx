@@ -31,6 +31,9 @@ export function BackupsList() {
     y: number
     backup: FlistZipBackupEntry
   } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<FlistZipBackupEntry | null>(
+    null
+  )
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -121,14 +124,99 @@ export function BackupsList() {
               const cid = activeId
               const fname = menu.backup.filename
               setMenu(null)
+              void useStore.getState().flistCreateSetFromBackup(cid, fname)
+            }}
+          >
+            Create working set from backup
+          </button>
+          <button
+            className="ctx-menu-item"
+            role="menuitem"
+            onClick={() => {
+              const cid = activeId
+              const fname = menu.backup.filename
+              setMenu(null)
               void useStore.getState().flistDownloadZipBackup(cid, fname)
             }}
           >
             Download ZIP…
           </button>
+          <div className="ctx-menu-divider" role="separator" />
+          <button
+            className="ctx-menu-item ctx-menu-item-danger"
+            role="menuitem"
+            onClick={() => {
+              const b = menu.backup
+              setMenu(null)
+              setDeleteTarget(b)
+            }}
+          >
+            Delete backup…
+          </button>
         </div>
       )}
+      {deleteTarget && (
+        <DeleteBackupConfirm
+          backup={deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const target = deleteTarget
+            setDeleteTarget(null)
+            void useStore
+              .getState()
+              .flistDeleteZipBackup(activeId, target.filename)
+          }}
+        />
+      )}
     </>
+  )
+}
+
+function DeleteBackupConfirm({
+  backup,
+  onCancel,
+  onConfirm
+}: {
+  backup: FlistZipBackupEntry
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  // Backdrop-click dismiss is deliberately not wired — per
+  // feedback_no_backdrop_dismiss the Workbench convention is to
+  // require an explicit Cancel / Delete / Esc.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  return (
+    <div className="modal-backdrop" data-testid="delete-backup-confirm">
+      <div className="modal modal-confirm" role="dialog" aria-modal="true">
+        <h3 className="modal-title">Delete this backup?</h3>
+        <p>
+          <strong>{backup.filename}</strong>
+        </p>
+        <p>
+          The ZIP and every byte it carries will be removed from disk.
+          This can't be undone.
+        </p>
+        <div className="modal-actions">
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={onConfirm}
+            autoFocus
+          >
+            Delete backup
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
