@@ -987,6 +987,21 @@ export const api = {
     get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
+  /** Delete a single backup ZIP. Idempotent enough that the renderer
+   *  refreshes the list either way; surfaces error status to a toast.
+   */
+  flistZipBackupDelete: async (
+    characterId: string | number,
+    filename: string
+  ): Promise<void> => {
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
+      { method: 'DELETE' }
+    )
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+  },
   /** Raw ZIP bytes for Sidebar → Backups → right-click → Download.
    *  The renderer pipes these through `window.workbench.writeFile`
    *  to whatever path the user picks in the OS save dialog. */

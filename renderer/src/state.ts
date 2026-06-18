@@ -676,6 +676,27 @@ type State = {
     characterId: string,
     backupFilename: string
   ) => Promise<{ path: string; bytes: number } | null>
+  /** Right-click → Delete backup on a Backups row. Callers should
+   *  funnel through a confirm modal — there's no undo in the sidecar
+   *  (the bytes are gone). Refreshes the sidebar list on success.
+   *  If the deleted backup is currently being browsed, also closes
+   *  browse mode so the editor doesn't display data that no longer
+   *  exists on disk. */
+  flistDeleteZipBackup: (
+    characterId: string,
+    backupFilename: string
+  ) => Promise<boolean>
+  /** Right-click → Create working set from backup. Pulls the
+   *  backup ZIP from the sidecar, then pipes the bytes through the
+   *  same import path the user-facing "Import working set" flow
+   *  uses. Result: a new working set named after the backup's
+   *  timestamp, ready to edit. Cross-character handshake is bypassed
+   *  by design — the backup belongs to the same character whose
+   *  archive we're listing. */
+  flistCreateSetFromBackup: (
+    characterId: string,
+    backupFilename: string
+  ) => Promise<{ setId: string; setName: string } | null>
 
 }
 
@@ -3536,6 +3557,105 @@ export const useStore = create<State>((set, get) => ({
     const ok = await write(path, bytes)
     if (!ok) return null
     return { path, bytes: bytes.length }
+  },
+
+  async flistDeleteZipBackup(characterId, backupFilename) {
+    try {
+      await api.flistZipBackupDelete(characterId, backupFilename)
+    } catch (err) {
+      console.error('[flist] backup delete failed:', err)
+      return false
+    }
+    // If we were browsing the now-deleted backup, exit browse mode
+    // before the list refresh so the editor doesn't keep rendering
+    // bytes that no longer exist on disk.
+    const browse = get().flistBrowseBackup
+    if (
+      browse &&
+      browse.characterId === characterId &&
+      browse.filename === backupFilename
+    ) {
+      get().flistCloseBrowseBackup()
+    }
+    // Optimistic local update: drop the row immediately so the
+    // sidebar feels snappy. Then reload archive to reconcile (handles
+    // the rare race where another window restored the file).
+    set((s) => {
+      const slot = s.flistArchive[characterId]
+      if (!slot?.zipBackups) return {}
+      return {
+        flistArchive: {
+          ...s.flistArchive,
+          [characterId]: {
+            ...slot,
+            zipBackups: slot.zipBackups.filter(
+              (b) => b.filename !== backupFilename
+            )
+          }
+        }
+      }
+    })
+    void get().flistLoadArchive(characterId)
+    return true
+  },
+
+  async flistCreateSetFromBackup(characterId, backupFilename) {
+    // Fetch the raw ZIP bytes from the sidecar — this is the same ZIP
+    // the userscript-restore + Download-ZIP paths use. Piping it
+    // through flistSetImport is byte-for-byte the same as the user
+    // saving the ZIP locally and re-importing it via the existing
+    // "Import working set" file picker, just without the round-trip
+    // through disk.
+    let bytes: Uint8Array
+    try {
+      bytes = await api.flistZipBackupDownload(characterId, backupFilename)
+    } catch (err) {
+      console.error('[flist] backup fetch for create-set failed:', err)
+      return null
+    }
+    // Derive a sensible default name from the backup's filename.
+    // YYYY-MM-DDTHHMMSSZ.zip → "Backup 2026-06-17 22:51".
+    const existingNames = (get().flistSets[characterId] ?? []).map((s) => s.name)
+    const baseName = (() => {
+      const m = backupFilename.match(
+        /^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z/
+      )
+      if (!m) return `From backup ${backupFilename.replace(/\.zip$/, '')}`
+      const [, y, mo, d, h, mi] = m
+      return `Backup ${y}-${mo}-${d} ${h}:${mi}`
+    })()
+    let candidate = baseName
+    let i = 2
+    while (existingNames.includes(candidate)) {
+      candidate = `${baseName} (${i})`
+      i += 1
+    }
+    try {
+      const result = await api.flistSetImport(characterId, bytes, {
+        name: candidate,
+        // Same-character backup; skip the cross-character handshake.
+        confirmCrossCharacter: true
+      })
+      if (result.status !== 'imported') return null
+      const meta = _setMetaFromWire(result.set)
+      set((s) => {
+        const list = s.flistSets[characterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [characterId]: [
+              meta,
+              ...list.filter((m) => m.id !== meta.id)
+            ]
+          }
+        }
+      })
+      await get().flistActivateSet(characterId, meta.id)
+      return { setId: meta.id, setName: meta.name }
+    } catch (err) {
+      console.error('[flist] set import from backup failed:', err)
+      return null
+    }
   },
 
   async flistUndoResetWorking() {

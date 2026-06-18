@@ -527,6 +527,17 @@ body {
 .ctx-menu-item:hover {
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }
+.ctx-menu-item-danger {
+  color: var(--accent-2, #ff8080);
+}
+.ctx-menu-item-danger:hover {
+  background: rgba(201, 112, 112, 0.18);
+}
+.ctx-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
 
 /* Panes */
 .pane {

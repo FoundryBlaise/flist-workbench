@@ -101,6 +101,10 @@ export function FlistCharacterZone() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [ctx, setCtx] = useState<CtxAnchor | null>(null)
+  const [fromFlistCtx, setFromFlistCtx] = useState<{
+    x: number
+    y: number
+  } | null>(null)
   const [crossCharImport, setCrossCharImport] = useState<{
     characterName: string
     setName: string
@@ -349,6 +353,15 @@ export function FlistCharacterZone() {
             if (!hasLive) return
             void activateFromFlist(activeId)
           }}
+          onContextMenu={(e) => {
+            // Same right-click affordance the working-set rows have,
+            // restricted to actions that make sense for the live view
+            // (Back up now). Rename / Delete / Create copy are
+            // working-set-only — the live row isn't a stored set.
+            if (!hasLive) return
+            e.preventDefault()
+            setFromFlistCtx({ x: e.clientX, y: e.clientY })
+          }}
           data-testid="flist-zone-from-flist"
         >
           <span className="flist-zone-setrow-marker" aria-hidden="true">
@@ -455,6 +468,21 @@ export function FlistCharacterZone() {
           y={ctx.y}
           items={ctxItems(ctx.setId)}
           onClose={() => setCtx(null)}
+        />
+      )}
+      {fromFlistCtx && (
+        <ContextMenu
+          x={fromFlistCtx.x}
+          y={fromFlistCtx.y}
+          items={[
+            {
+              label: 'Back up now',
+              onSelect: () => {
+                void backupCharacter(name)
+              }
+            }
+          ]}
+          onClose={() => setFromFlistCtx(null)}
         />
       )}
       {crossCharImport && (
