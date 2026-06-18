@@ -479,13 +479,18 @@ async def fetch_mapping_list(
             if cached is not None:
                 return cached
     try:
-        ticket = await ensure_fresh_ticket(client=client)
-        payload = await _post_json(
-            MAPPING_LIST_URL,
-            {"account": ticket.account, "ticket": ticket.value},
-            client=client,
-        )
-    except (TicketRequired, FlistApiError):
+        # mapping-list.php is a PUBLIC F-list endpoint (per the F-list
+        # API wiki and the fact that it's just a static map of
+        # infotag categories + kink ids → names). Passing
+        # account/ticket here was a leftover from copying the
+        # character-data.php call shape, but it was actively harmful:
+        # KinksPane mounts before sign-in completes, fires
+        # loadMapping, sidecar called ensure_fresh_ticket which
+        # raised TicketRequired (no session yet) → mapping fetch
+        # 401'd → empty kink picker. Calling without auth lets the
+        # mapping load on first launch and stays in cache for a week.
+        payload = await _post_json(MAPPING_LIST_URL, {}, client=client)
+    except FlistApiError:
         cached = _read_cache()
         if cached is not None:
             return cached
