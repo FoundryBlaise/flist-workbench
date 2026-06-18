@@ -42,6 +42,13 @@ export function KinksPane({ characterId }: { characterId: string }) {
   const mappingRetriedRef = useRef(false)
   useEffect(() => {
     if (mappingStatus === 'idle') {
+      // Fresh idle (typically because flistSignIn reset the slot on a
+      // successful sign-in) — reset the retry budget so the one-shot
+      // escape hatch is available again. Otherwise a user who hit a
+      // 401 pre-sign-in, then signed in, then hits another transient
+      // network blip on the post-sign-in load would burn the retry
+      // budget twice and stick on error.
+      mappingRetriedRef.current = false
       void loadMapping()
     } else if (mappingStatus === 'error' && !mappingRetriedRef.current) {
       mappingRetriedRef.current = true
