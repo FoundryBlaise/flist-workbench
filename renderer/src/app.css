@@ -2143,7 +2143,25 @@ body {
   margin: 20px 0 16px;
 }
 .settings-field + .settings-field { margin-top: 16px; }
-.settings-input-narrow { flex: 0 0 120px; }
+.settings-input-narrow {
+  flex: 0 0 120px;
+  width: 120px;
+  max-width: 120px;
+}
+/* Secondary action button used by the Backups pane's "Reset to defaults"
+   affordance. Lighter weight than the primary Save in the footer. */
+.settings-secondary-btn {
+  background: var(--tag-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--btn-radius);
+  padding: var(--btn-pad-y-sm) var(--btn-pad-x);
+  font: inherit;
+  cursor: pointer;
+}
+.settings-secondary-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
 .settings-preset {
   background: var(--tag-bg);
   border: 1px solid var(--border);

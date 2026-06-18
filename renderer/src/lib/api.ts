@@ -272,6 +272,18 @@ export type LabelsSettings = {
   prompt_presets: PromptPreset[]
 }
 
+export type BackupsSettings = {
+  /** Day interval for the scheduled-on-start sweep. 0 disables. */
+  scheduled_interval_days: number
+  /** Maximum scheduled backups kept per character. Older entries are
+   *  pruned after each successful scheduled write. */
+  scheduled_keep_last_n: number
+  defaults: {
+    scheduled_interval_days: number
+    scheduled_keep_last_n: number
+  }
+}
+
 export type RagSettings = {
   embed_endpoint: string
   embed_model: string
@@ -632,11 +644,13 @@ export const api = {
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
       rag: RagSettings
+      backups: BackupsSettings
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
     rag?: Partial<Omit<RagSettings, 'defaults'>>
+    backups?: Partial<Omit<BackupsSettings, 'defaults'>>
   }) =>
     request<{
       fchat_data_dir: string | null
@@ -644,6 +658,7 @@ export const api = {
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
       rag: RagSettings
+      backups: BackupsSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)
