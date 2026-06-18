@@ -581,7 +581,7 @@ type State = {
    *  snapshot — the user wants backups to reflect *current* data,
    *  not whatever stale cache was on disk. Idempotent: safe to call
    *  on every sign-in; if not due, returns without doing anything. */
-  flistMaybeRunScheduledSweep: () => Promise<void>
+  flistMaybeRunScheduledSweep: () => Promise<boolean>
   /** Right-click → "Back up now" on a single character row. Pulls
    *  the character (full, with images), then forces a ZIP backup write
    *  to `characters/<id>/backups/<ISO>.zip`. Uses the same Backup-all
@@ -1442,19 +1442,22 @@ export const useStore = create<State>((set, get) => ({
         }
       })
       await get().flistLoadRoster()
-      // Auto-refresh: walk the roster and queue a background pull for
-      // every account character whose local copy is older than the
-      // user's configured threshold (Settings → F-list). 0 minutes =
-      // always re-pull. The picker's per-row badges show progress;
-      // pull_lock serialises so a manual ↻ Refresh interleaves cleanly.
-      // Fire-and-forget — sign-in returns immediately.
-      void _flistAutoRefreshOnLogin(get)
-      // Post-login scheduled-backup sweep. Snapshots reflect *current*
-      // F-list data — the sweep goes through /flist/backup-all which
-      // pulls every character before writing. Idempotent: only fires
-      // when the configured interval has elapsed since the last sweep
-      // (last_sweep.started_at + interval × 86400 < now).
-      void get().flistMaybeRunScheduledSweep()
+      // Post-login scheduled-backup sweep first — its backup-all
+      // pulls every character (with images) and is a superset of
+      // what _flistAutoRefreshOnLogin does, so when the sweep is
+      // going to fire there's no point queueing a separate
+      // partial-refresh pass. Snapshots reflect *current* F-list
+      // data because backup-all does the pull before snapshotting.
+      const sweepStarted = await get().flistMaybeRunScheduledSweep()
+      if (!sweepStarted) {
+        // Auto-refresh: walk the roster and queue a background pull
+        // for every account character whose local copy is older than
+        // the user's configured threshold (Settings → F-list). 0
+        // minutes = always re-pull. The picker's per-row badges show
+        // progress; pull_lock serialises so a manual ↻ Refresh
+        // interleaves cleanly. Fire-and-forget.
+        void _flistAutoRefreshOnLogin(get)
+      }
     } catch (err) {
       // F-list returns the human-readable error in `detail`; the
       // request() helper folds it into `HTTP 401: <detail>`. Strip the
@@ -2788,26 +2791,29 @@ export const useStore = create<State>((set, get) => ({
     //   2. A backup-all isn't already in flight.
     //   3. settings.backups.next_due_at is in the past (or null —
     //      "never run" should kick off the first sweep).
-    // The /settings endpoint is cheap enough to call on every
-    // sign-in; we don't gate it on its own throttle.
-    if (!get().flistSession.active) return
-    if (get().flistBackupAllStatus.phase === 'running') return
+    // Returns true if the sweep was kicked off so the caller (the
+    // sign-in flow) can skip the redundant _flistAutoRefreshOnLogin —
+    // backup-all pulls every character including images, which is a
+    // superset of what auto-refresh does.
+    if (!get().flistSession.active) return false
+    if (get().flistBackupAllStatus.phase === 'running') return false
     let settings:
       | Awaited<ReturnType<typeof api.settingsGet>>
       | null = null
     try {
       settings = await api.settingsGet()
     } catch {
-      return
+      return false
     }
-    if (!settings) return
+    if (!settings) return false
     const intervalDays = settings.backups.scheduled_interval_days
-    if (intervalDays <= 0) return // Auto-sweep disabled.
+    if (intervalDays <= 0) return false // Auto-sweep disabled.
     const nextDueAt = settings.backups.next_due_at
     const now = Math.floor(Date.now() / 1000)
     // null next_due_at means "never run" — kick off the first sweep.
-    if (nextDueAt !== null && nextDueAt > now) return
+    if (nextDueAt !== null && nextDueAt > now) return false
     void get().flistBackupAll({ kind: 'scheduled', source: 'post_login' })
+    return true
   },
 
   async flistBackupAll(opts) {
@@ -2861,30 +2867,23 @@ export const useStore = create<State>((set, get) => ({
             }
             return { flistBackupAllStatus: next }
           })
-          // Mirror the JSON snapshot history into the local archive
-          // slot when a ZIP backup was written — the per-character
-          // pull that preceded the ZIP also auto-fired a snapshot if
-          // the content changed, and the diff picker reads from
-          // `slot.snapshots`. Cheap re-fetch.
-          if (info.status === 'saved' && info.character_id) {
-            void api
-              .flistSnapshots(info.character_id)
-              .then(({ snapshots }) => {
-                set((s) => {
-                  const slot = s.flistArchive[info.character_id!]
-                  if (!slot) return {}
-                  return {
-                    flistArchive: {
-                      ...s.flistArchive,
-                      [info.character_id!]: { ...slot, snapshots }
-                    }
-                  }
-                })
-              })
-              .catch(() => {
-                // Non-fatal; the next time the user opens the diff
-                // picker for this character, the fresh list lands.
-              })
+          // Refresh the archive slot from disk after each successful
+          // per-character pull. Both 'saved' (ZIP written, content
+          // changed) and 'unchanged' (ZIP dedup'd, content matched
+          // last backup) imply the per-character pull preceded the
+          // ZIP step and put fresh live.json + images on disk. Without
+          // this, the picker would keep showing 'pulled 16h ago' for
+          // every character even though the scheduled sweep just
+          // updated all of them — wasted disk + network on subsequent
+          // manual REFRESH ALL clicks. flistLoadArchive reads from
+          // local /flist/character/{id}/live (no F-list network),
+          // updates the live payload + snapshots + zipBackups +
+          // lastPullAt in one pass.
+          const refreshable =
+            (info.status === 'saved' || info.status === 'unchanged') &&
+            info.character_id
+          if (refreshable) {
+            void get().flistLoadArchive(info.character_id!)
           }
         },
         onDone: () => {
