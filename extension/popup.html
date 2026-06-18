@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>F-list Workbench</title>
+  <style>
+    body {
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #1f2435;
+      color: #e3e7f0;
+      font-size: 13px;
+    }
+    h1 {
+      font-size: 14px;
+      margin: 0 0 12px 0;
+      color: #9aa7c4;
+      letter-spacing: 0.3px;
+    }
+    .status {
+      padding: 10px 12px;
+      border-radius: 4px;
+      background: #2a3145;
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+    .status.paired { border-left: 3px solid #7ab06f; }
+    .status.unpaired { border-left: 3px solid #d8a050; }
+    .status.error { border-left: 3px solid #d05a51; }
+    button {
+      width: 100%;
+      padding: 10px 14px;
+      border: none;
+      border-radius: 4px;
+      background: #4a6fa5;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    button:hover { background: #5a82c0; }
+    button:disabled { background: #555; cursor: not-allowed; opacity: 0.6; }
+    button.secondary { background: #555a6b; }
+    button.secondary:hover { background: #686e83; }
+    button.danger { background: #b8453c; }
+    button.danger:hover { background: #d05a51; }
+    .hint {
+      font-size: 11px;
+      color: #8a93a8;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
+    code {
+      background: #2a3145;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <h1>F-list Workbench</h1>
+  <div id="status" class="status">Checking…</div>
+  <div id="actions"></div>
+  <div class="hint" id="hint"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
