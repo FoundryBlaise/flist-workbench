@@ -1409,7 +1409,17 @@ export const useStore = create<State>((set, get) => ({
       _flistSessionEpoch++
       _mappingInflight = null
       set((s) => {
-        const mappingNeedsReset = s.flistMapping.status === 'error'
+        // Reset flistMapping on ANY status except 'ready'. A picker
+        // that already has a usable payload stays put; everything
+        // else — 'idle' (never tried), 'loading' (in-flight against
+        // the pre-sign-in epoch, which loadMapping's epoch guard
+        // will silently drop), 'error' (a 401 from a pre-sign-in
+        // mount) — gets blown back to idle so KinksPane's
+        // useEffect fires a fresh load against the newly-active
+        // session. Previously only 'error' was reset; a 'loading'
+        // status that pre-dated sign-in would stay stuck forever
+        // because the epoch-bumped in-flight call returns silently.
+        const mappingNeedsReset = s.flistMapping.status !== 'ready'
         // Wipe stale "not signed in" pullErrors left by auto-pull
         // attempts that fired before the session was active — sign-in
         // just made them obsolete. Other pullError causes (network,
