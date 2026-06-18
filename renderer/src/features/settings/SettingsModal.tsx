@@ -52,11 +52,19 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 const NOMIC_QUERY_PREFIX = 'search_query: '
 const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
-type SectionId = 'general' | 'flist' | 'labels' | 'chat' | 'embedding' | 'security'
+type SectionId =
+  | 'general'
+  | 'flist'
+  | 'backups'
+  | 'labels'
+  | 'chat'
+  | 'embedding'
+  | 'security'
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
   { id: 'flist', label: 'F-list', subtitle: 'Sign-in refresh + snapshot behaviour' },
+  { id: 'backups', label: 'Backups', subtitle: 'Scheduled-on-start sweep + retention' },
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
   { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
@@ -139,6 +147,10 @@ type Draft = {
     chunk_soft_split_chars: string
     chunk_overlap_msgs: string
   }
+  backups: {
+    scheduled_interval_days: string
+    scheduled_keep_last_n: string
+  }
 }
 
 function buildDraft(state: SettingsState): Draft {
@@ -177,6 +189,10 @@ function buildDraft(state: SettingsState): Draft {
       chunk_max_chars: String(state.rag.chunk_max_chars),
       chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
       chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
+    },
+    backups: {
+      scheduled_interval_days: String(state.backups.scheduled_interval_days),
+      scheduled_keep_last_n: String(state.backups.scheduled_keep_last_n)
     }
   }
 }
@@ -219,9 +235,15 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.rag.chunk_max_chars !== baseline.rag.chunk_max_chars ||
     draft.rag.chunk_soft_split_chars !== baseline.rag.chunk_soft_split_chars ||
     draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
+  const backupsDirty =
+    draft.backups.scheduled_interval_days !==
+      baseline.backups.scheduled_interval_days ||
+    draft.backups.scheduled_keep_last_n !==
+      baseline.backups.scheduled_keep_last_n
   return {
     general: generalDirty,
     flist: false,
+    backups: backupsDirty,
     labels: labelsDirty,
     chat: chatDirty,
     embedding: embeddingDirty,
@@ -230,7 +252,7 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
 }
 
 function anyDirty(d: Record<SectionId, boolean>): boolean {
-  return d.general || d.labels || d.chat || d.embedding
+  return d.general || d.labels || d.chat || d.embedding || d.backups
 }
 
 const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
@@ -387,6 +409,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     })
   const updateGeneral = (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d))
+  const updateBackups = (patch: Partial<Draft['backups']>) =>
+    setDraft((d) => (d ? { ...d, backups: { ...d.backups, ...patch } } : d))
 
   const saveAll = async () => {
     if (!state || !draft || !dirtyByDraft) return
@@ -529,6 +553,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           )
         }
       }
+      if (dirtyByDraft.backups) {
+        payload.backups = {
+          scheduled_interval_days: clampInt(
+            draft.backups.scheduled_interval_days,
+            0,
+            365,
+            state.backups.scheduled_interval_days
+          ),
+          scheduled_keep_last_n: clampInt(
+            draft.backups.scheduled_keep_last_n,
+            1,
+            200,
+            state.backups.scheduled_keep_last_n
+          )
+        }
+      }
       const updated = await api.settingsUpdate(payload)
       setState(updated)
       setDraft(buildDraft(updated))
@@ -607,6 +647,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 )}
                 {activeSection === 'flist' && <FlistPane />}
+                {activeSection === 'backups' && (
+                  <BackupsPane
+                    state={state}
+                    draft={draft}
+                    onChange={updateBackups}
+                  />
+                )}
                 {activeSection === 'labels' && (
                   <LabelsPane
                     labels={state.labels}
@@ -1102,6 +1149,120 @@ function GeneralPane({
             vector index.
           </p>
         )}
+      </div>
+    </>
+  )
+}
+
+function BackupsPane({
+  state,
+  draft,
+  onChange
+}: {
+  state: SettingsState
+  draft: Draft
+  onChange: (patch: Partial<Draft['backups']>) => void
+}) {
+  const defaults = state.backups.defaults
+  const intervalNum = Number(draft.backups.scheduled_interval_days)
+  const disabled = Number.isFinite(intervalNum) && intervalNum === 0
+  return (
+    <>
+      <PaneHeader
+        title="Backups"
+        subtitle="On-start sweep that auto-snapshots each character every N days."
+      />
+      <div className="settings-section">
+        <div className="settings-field">
+          <label
+            className="settings-label"
+            htmlFor="settings-backups-interval-input"
+          >
+            Interval (days)
+          </label>
+          <p className="settings-help">
+            On startup, Workbench checks each character's newest{' '}
+            <em>scheduled</em> backup. If it's older than this many days
+            — or doesn't exist yet — a fresh scheduled backup is
+            written. Manual and import backups are left alone. Set to{' '}
+            <code>0</code> to disable the auto-sweep entirely.
+          </p>
+          <input
+            id="settings-backups-interval-input"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={365}
+            step={1}
+            className="settings-input settings-input-narrow"
+            value={draft.backups.scheduled_interval_days}
+            onChange={(e) =>
+              onChange({ scheduled_interval_days: e.target.value })
+            }
+            data-testid="settings-backups-interval"
+          />
+          <p className="settings-help">
+            Default <code>{defaults.scheduled_interval_days}</code>.
+            {disabled && (
+              <>
+                {' '}
+                <strong>Sweep currently disabled</strong> — set to 1 or
+                more days to re-enable.
+              </>
+            )}
+          </p>
+        </div>
+        <div className="settings-field">
+          <label
+            className="settings-label"
+            htmlFor="settings-backups-keep-input"
+          >
+            Keep last N
+          </label>
+          <p className="settings-help">
+            After each successful scheduled write, older scheduled
+            backups for that character are pruned down to this many.
+            Only scheduled backups are counted — manual, import, and
+            unknown-kind backups are never pruned by this number.
+          </p>
+          <input
+            id="settings-backups-keep-input"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={200}
+            step={1}
+            className="settings-input settings-input-narrow"
+            value={draft.backups.scheduled_keep_last_n}
+            onChange={(e) =>
+              onChange({ scheduled_keep_last_n: e.target.value })
+            }
+            data-testid="settings-backups-keep"
+          />
+          <p className="settings-help">
+            Default <code>{defaults.scheduled_keep_last_n}</code>. A
+            character whose Live hasn't changed since the last
+            scheduled backup is a no-op write (dedup'd by content hash),
+            so an idle character won't spawn a fresh ZIP every week.
+          </p>
+        </div>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-secondary-btn"
+            onClick={() =>
+              onChange({
+                scheduled_interval_days: String(
+                  defaults.scheduled_interval_days
+                ),
+                scheduled_keep_last_n: String(defaults.scheduled_keep_last_n)
+              })
+            }
+            data-testid="settings-backups-reset"
+          >
+            Reset to defaults
+          </button>
+        </div>
       </div>
     </>
   )
