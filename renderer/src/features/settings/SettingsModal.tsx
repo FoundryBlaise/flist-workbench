@@ -1181,34 +1181,41 @@ function BackupsPane({
   const disabled = Number.isFinite(intervalNum) && intervalNum === 0
   const lastSweep = state.backups.last_sweep
   const nextDueAt = state.backups.next_due_at
-  const [running, setRunning] = useState(false)
+  // Re-use the existing BackupAllBanner state so the manual Trigger
+  // button shares the same in-flight indicator as the post-login auto
+  // path. Disabled while any backup-all is running.
+  const backupAllStatus = useStore((s) => s.flistBackupAllStatus)
+  const flistSession = useStore((s) => s.flistSession)
+  const fireBackupAll = useStore((s) => s.flistBackupAll)
+  const running = backupAllStatus.phase === 'running'
+  const signedIn = flistSession.active
   const [runError, setRunError] = useState<string | null>(null)
-  const [recentRun, setRecentRun] = useState<{
-    written: number
-    skipped: number
-    failed: number
-    finished_at: number
-  } | null>(null)
+
+  // When the user-triggered backup-all finishes, re-fetch /settings so
+  // the Last-ran / Next-due rows reflect the new telemetry. We only
+  // care about transitions from running → done|error, not initial
+  // mount state.
+  const lastPhase = useRef(backupAllStatus.phase)
+  useEffect(() => {
+    if (
+      lastPhase.current === 'running' &&
+      (backupAllStatus.phase === 'done' || backupAllStatus.phase === 'error')
+    ) {
+      void api.settingsGet().then(onStateRefresh).catch(() => {})
+    }
+    lastPhase.current = backupAllStatus.phase
+  }, [backupAllStatus.phase, onStateRefresh])
 
   const runNow = async () => {
-    setRunning(true)
     setRunError(null)
+    if (!signedIn) {
+      setRunError('Sign in to F-list first — scheduled backups pull fresh data per character.')
+      return
+    }
     try {
-      const result = await api.backupsRunScheduledSweep()
-      setRecentRun({
-        written: result.written,
-        skipped: result.skipped,
-        failed: result.failed,
-        finished_at: result.finished_at
-      })
-      // Refresh the settings snapshot so last_sweep / next_due_at
-      // pick up the just-completed run.
-      const fresh = await api.settingsGet()
-      onStateRefresh(fresh)
+      await fireBackupAll({ kind: 'scheduled', source: 'manual' })
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setRunning(false)
     }
   }
   return (
@@ -1265,21 +1272,27 @@ function BackupsPane({
               type="button"
               className="settings-secondary-btn"
               onClick={() => void runNow()}
-              disabled={running}
+              disabled={running || !signedIn}
+              title={
+                !signedIn
+                  ? 'Sign in to F-list first — scheduled backups pull fresh data'
+                  : undefined
+              }
               data-testid="settings-backups-trigger"
             >
-              {running ? 'Running sweep…' : 'Trigger scheduled backup now'}
+              {running
+                ? 'Sweep running — see banner above…'
+                : 'Trigger scheduled backup now'}
             </button>
-            {recentRun && (
-              <span className="settings-sweep-result">
-                ✓ {recentRun.written} written, {recentRun.skipped} skipped
-                {recentRun.failed > 0 ? `, ${recentRun.failed} failed` : ''}
+            {!signedIn && (
+              <span className="settings-sweep-warn">
+                Sign in to F-list to enable this button.
               </span>
             )}
           </div>
           {runError && (
             <p className="settings-help" data-testid="settings-backups-error">
-              <strong>Sweep failed:</strong> {runError}
+              <strong>{runError}</strong>
             </p>
           )}
         </div>

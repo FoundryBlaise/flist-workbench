@@ -1145,21 +1145,6 @@ export const api = {
     get<SetsListResponseWire>(
       `/flist/character/${encodeURIComponent(String(characterId))}/sets`
     ),
-  /** Manual trigger for the scheduled-backup sweep. Runs the same
-   *  code path the sidecar boot hook fires, ignoring the
-   *  interval-disabled flag (the button is the user explicitly
-   *  asking for a sweep). Synchronous from the caller's side —
-   *  returns the summary so the UI can update without polling. */
-  backupsRunScheduledSweep: () =>
-    request<{
-      started_at: number
-      finished_at: number
-      written: number
-      skipped: number
-      failed: number
-      disabled: boolean
-      source: 'on_start' | 'manual'
-    }>('/backups/scheduled-sweep', { method: 'POST' }),
   flistSetCreate: (characterId: string | number, body: { name: string }) =>
     request<{ set: SetMetaWire }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/sets`,
@@ -1399,13 +1384,17 @@ export const api = {
    *  renders. */
   flistBackupAll: async (
     handlers: FlistBackupAllHandlers,
-    opts?: ApiOptions
+    opts?: ApiOptions & { kind?: 'manual_bulk' | 'scheduled' }
   ): Promise<void> => {
-    const res = await fetch(`${base()}/flist/backup-all`, {
-      method: 'POST',
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
+    const kind = opts?.kind ?? 'manual_bulk'
+    const res = await fetch(
+      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}`,
+      {
+        method: 'POST',
+        headers: { Accept: 'text/event-stream' },
+        signal: opts?.signal
+      }
+    )
     if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`)
     }

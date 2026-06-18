@@ -307,6 +307,10 @@ type State = {
     failed: number
     currentName: string | null
     errorMessage: string | null
+    /** Drives the banner's copy: 'manual_bulk' → "Backing up all
+     *  characters…"; 'scheduled' → "Scheduled backup running…" so the
+     *  user knows the post-sign-in nudge isn't a manual action. */
+    kind: 'manual_bulk' | 'scheduled'
   }
   /** "F-list-side change in N fields since you started editing — review."
    *  Set after a Live re-pull when the new Live differs from what the
@@ -566,7 +570,18 @@ type State = {
    *  roster, pulls each character (JSON + images + avatar), and
    *  writes a userscript-restoreable ZIP per character. Single-flight:
    *  a second call while one is running is a no-op. */
-  flistBackupAll: () => Promise<void>
+  flistBackupAll: (opts?: {
+    kind?: 'manual_bulk' | 'scheduled'
+    source?: 'manual' | 'post_login'
+  }) => Promise<void>
+  /** After a successful F-list sign-in, check whether the
+   *  scheduled-sweep clock has expired and (if so) kick off the
+   *  pull-then-backup pipeline as a kind='scheduled' run. Pre-sign-in
+   *  there's no F-list session to pull with, so we can't responsibly
+   *  snapshot — the user wants backups to reflect *current* data,
+   *  not whatever stale cache was on disk. Idempotent: safe to call
+   *  on every sign-in; if not due, returns without doing anything. */
+  flistMaybeRunScheduledSweep: () => Promise<void>
   /** Right-click → "Back up now" on a single character row. Pulls
    *  the character (full, with images), then forces a ZIP backup write
    *  to `characters/<id>/backups/<ISO>.zip`. Uses the same Backup-all
@@ -1227,7 +1242,8 @@ export const useStore = create<State>((set, get) => ({
     unchanged: 0,
     failed: 0,
     currentName: null,
-    errorMessage: null
+    errorMessage: null,
+    kind: 'manual_bulk'
   },
   flistDriftBanners: {},
   flistResetUndo: null,
@@ -1433,6 +1449,12 @@ export const useStore = create<State>((set, get) => ({
       // pull_lock serialises so a manual ↻ Refresh interleaves cleanly.
       // Fire-and-forget — sign-in returns immediately.
       void _flistAutoRefreshOnLogin(get)
+      // Post-login scheduled-backup sweep. Snapshots reflect *current*
+      // F-list data — the sweep goes through /flist/backup-all which
+      // pulls every character before writing. Idempotent: only fires
+      // when the configured interval has elapsed since the last sweep
+      // (last_sweep.started_at + interval × 86400 < now).
+      void get().flistMaybeRunScheduledSweep()
     } catch (err) {
       // F-list returns the human-readable error in `detail`; the
       // request() helper folds it into `HTTP 401: <detail>`. Strip the
@@ -2760,8 +2782,38 @@ export const useStore = create<State>((set, get) => ({
     _pendingCrossCharImport = null
   },
 
-  async flistBackupAll() {
+  async flistMaybeRunScheduledSweep() {
+    // Three preconditions must hold before we run the sweep:
+    //   1. F-list session is active (we need a ticket to pull).
+    //   2. A backup-all isn't already in flight.
+    //   3. settings.backups.next_due_at is in the past (or null —
+    //      "never run" should kick off the first sweep).
+    // The /settings endpoint is cheap enough to call on every
+    // sign-in; we don't gate it on its own throttle.
+    if (!get().flistSession.active) return
     if (get().flistBackupAllStatus.phase === 'running') return
+    let settings:
+      | Awaited<ReturnType<typeof api.settingsGet>>
+      | null = null
+    try {
+      settings = await api.settingsGet()
+    } catch {
+      return
+    }
+    if (!settings) return
+    const intervalDays = settings.backups.scheduled_interval_days
+    if (intervalDays <= 0) return // Auto-sweep disabled.
+    const nextDueAt = settings.backups.next_due_at
+    const now = Math.floor(Date.now() / 1000)
+    // null next_due_at means "never run" — kick off the first sweep.
+    if (nextDueAt !== null && nextDueAt > now) return
+    void get().flistBackupAll({ kind: 'scheduled', source: 'post_login' })
+  },
+
+  async flistBackupAll(opts) {
+    if (get().flistBackupAllStatus.phase === 'running') return
+    const kind = opts?.kind ?? 'manual_bulk'
+    const source = opts?.source ?? 'manual'
     set({
       flistBackupAllStatus: {
         phase: 'running',
@@ -2771,7 +2823,8 @@ export const useStore = create<State>((set, get) => ({
         unchanged: 0,
         failed: 0,
         currentName: null,
-        errorMessage: null
+        errorMessage: null,
+        kind
       }
     })
     try {
@@ -2856,7 +2909,8 @@ export const useStore = create<State>((set, get) => ({
                   unchanged: 0,
                   failed: 0,
                   currentName: null,
-                  errorMessage: null
+                  errorMessage: null,
+                  kind: 'manual_bulk'
                 }
               })
             }
@@ -2872,7 +2926,7 @@ export const useStore = create<State>((set, get) => ({
             }
           }))
         }
-      })
+      }, { kind, source })
     } catch (err) {
       const message = (err as Error).message ?? 'backup-all failed'
       set((s) => ({
@@ -2897,7 +2951,8 @@ export const useStore = create<State>((set, get) => ({
         unchanged: 0,
         failed: 0,
         currentName: name,
-        errorMessage: null
+        errorMessage: null,
+        kind: 'manual_bulk'
       }
     })
 
@@ -2925,7 +2980,8 @@ export const useStore = create<State>((set, get) => ({
                 unchanged: 0,
                 failed: 0,
                 currentName: null,
-                errorMessage: null
+                errorMessage: null,
+                kind: 'manual_bulk'
               }
             })
           }
