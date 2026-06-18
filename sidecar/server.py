@@ -1894,6 +1894,92 @@ async def _avatar_cleanup_on_startup() -> None:
 
 
 @app.on_event("startup")
+async def _scheduled_backups_on_start() -> None:
+    """Fire-and-forget kind='scheduled' backups for any character whose
+    newest scheduled backup is older than the configured interval
+    (default 7 days; user-configurable via settings). After each
+    successful write the older scheduled backups for that character
+    are pruned down to keep_last_n (default 10). Interval=0 disables
+    the sweep entirely.
+
+    Runs in the background so a slow disk on a large archive can't
+    delay sidecar boot. Errors per character are swallowed and logged
+    so one corrupt archive can't kill the sweep for the rest.
+    """
+    import asyncio as _asyncio
+
+    async def _sweep() -> None:
+        try:
+            conn = settings_store.connect()
+            try:
+                interval_raw = settings_store.get(
+                    conn, settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS
+                )
+                keep_raw = settings_store.get(
+                    conn, settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N
+                )
+            finally:
+                conn.close()
+            try:
+                interval_days = (
+                    int(interval_raw)
+                    if interval_raw is not None
+                    else settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
+                )
+            except (TypeError, ValueError):
+                interval_days = settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
+            try:
+                keep_n = (
+                    int(keep_raw)
+                    if keep_raw is not None
+                    else settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+                )
+            except (TypeError, ValueError):
+                keep_n = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+            if interval_days <= 0:
+                print(
+                    "[backups] scheduled-on-start disabled "
+                    "(backups.scheduled_interval_days <= 0)",
+                    flush=True,
+                )
+                return
+            interval_seconds = interval_days * 86400
+            chars = character_archive.list_archived_characters()
+            saved = 0
+            skipped = 0
+            for entry in chars:
+                cid = entry.get("id")
+                if not cid:
+                    continue
+                try:
+                    result = character_archive.maybe_run_scheduled_backup(
+                        cid,
+                        interval_seconds=interval_seconds,
+                        keep_last_n=keep_n,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"[backups] scheduled sweep failed for {cid}: {exc!r}",
+                        flush=True,
+                    )
+                    continue
+                if result.get("action") == "saved":
+                    saved += 1
+                else:
+                    skipped += 1
+            print(
+                f"[backups] scheduled-on-start sweep: "
+                f"{saved} written, {skipped} skipped, "
+                f"interval={interval_days}d keep={keep_n}",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[backups] scheduled sweep aborted: {exc!r}", flush=True)
+
+    _asyncio.create_task(_sweep())
+
+
+@app.on_event("startup")
 async def _password_idle_watchdog() -> None:
     """Periodically drop the cached F-list password after idle. Disabled
     when IDLE_PASSWORD_TIMEOUT_SEC is 0 (the default) — the password is
@@ -3271,6 +3357,14 @@ class RagSettingsUpdate(BaseModel):
     chunk_overlap_msgs: int | None = None
 
 
+class BackupsSettingsUpdate(BaseModel):
+    # 0 disables the scheduled-on-start sweep entirely. Both are
+    # clamped server-side so a bad UI write can't disable scheduling
+    # via a negative interval or store nonsense.
+    scheduled_interval_days: int | None = None
+    scheduled_keep_last_n: int | None = None
+
+
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
@@ -3278,6 +3372,7 @@ class SettingsUpdate(BaseModel):
     fchat_data_dir: str | None = None
     labels: LabelsSettingsUpdate | None = None
     rag: RagSettingsUpdate | None = None
+    backups: BackupsSettingsUpdate | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -3378,6 +3473,40 @@ def _settings_dict(conn) -> dict:
                 "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
             },
+        },
+        "backups": _backups_settings_dict(conn),
+    }
+
+
+def _backups_settings_dict(conn) -> dict:
+    interval_raw = settings_store.get(
+        conn, settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS
+    )
+    keep_raw = settings_store.get(
+        conn, settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N
+    )
+    try:
+        interval = (
+            int(interval_raw)
+            if interval_raw is not None
+            else settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
+        )
+    except (TypeError, ValueError):
+        interval = settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
+    try:
+        keep = (
+            int(keep_raw)
+            if keep_raw is not None
+            else settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+        )
+    except (TypeError, ValueError):
+        keep = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+    return {
+        "scheduled_interval_days": interval,
+        "scheduled_keep_last_n": keep,
+        "defaults": {
+            "scheduled_interval_days": settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT,
+            "scheduled_keep_last_n": settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT,
         },
     }
 
@@ -3527,6 +3656,22 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
 
     if body.rag is not None:
         _apply_rag_update(conn, body.rag)
+
+    if body.backups is not None:
+        if body.backups.scheduled_interval_days is not None:
+            n = max(0, min(365, int(body.backups.scheduled_interval_days)))
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS,
+                str(n),
+            )
+        if body.backups.scheduled_keep_last_n is not None:
+            n = max(1, min(200, int(body.backups.scheduled_keep_last_n)))
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N,
+                str(n),
+            )
 
     return _settings_dict(conn)
 

@@ -484,6 +484,71 @@ def forget_backup_name(character_id: int | str, filename: str) -> None:
         _write_backup_names(character_id, names)
 
 
+def maybe_run_scheduled_backup(
+    character_id: int | str,
+    *,
+    interval_seconds: int,
+    keep_last_n: int,
+) -> dict[str, Any]:
+    """Run a kind='scheduled' backup for one character if their
+    newest scheduled backup is older than `interval_seconds` (or if
+    they have none). After a successful write, prune older scheduled
+    backups for the same character down to `keep_last_n`.
+
+    Manual / import backups are deliberately NOT counted toward the
+    age check or the keep-N — they belong to a separate bucket the
+    user maintains by hand. The scheduler only ever creates and
+    deletes scheduled backups.
+
+    Returns a small status dict for the on-start sweep summary:
+      `{character_id, action, reason?, saved?, pruned?}`
+    where `action` ∈ {'skipped', 'saved', 'no_live', 'unchanged'}.
+    """
+    import time as _time
+
+    rows = list_zip_backups(character_id)
+    scheduled = [r for r in rows if r.get("kind") == "scheduled"]
+    if scheduled:
+        # list_zip_backups returns newest-first; index 0 is newest.
+        age = _time.time() - int(scheduled[0]["created_at"])
+        if age < interval_seconds:
+            return {
+                "character_id": str(character_id),
+                "action": "skipped",
+                "reason": "recent",
+            }
+    # save_zip_backup dedups against the latest existing ZIP across
+    # all kinds via content hash, so a no-op character (live unchanged
+    # since the last manual backup) won't bloat the directory.
+    result = save_zip_backup(character_id, force=False, kind="scheduled")
+    if not result.get("saved"):
+        return {
+            "character_id": str(character_id),
+            "action": result.get("reason", "skipped"),
+        }
+    # Re-list to pick up the just-written file + prune older
+    # scheduled entries beyond keep_last_n.
+    fresh = [
+        r for r in list_zip_backups(character_id) if r.get("kind") == "scheduled"
+    ]
+    to_delete = fresh[max(keep_last_n, 1) :]
+    pruned = 0
+    for row in to_delete:
+        fname = row["filename"]
+        try:
+            (backups_dir(character_id) / fname).unlink()
+        except OSError:
+            continue
+        forget_backup_name(character_id, fname)
+        pruned += 1
+    return {
+        "character_id": str(character_id),
+        "action": "saved",
+        "saved": result.get("filename"),
+        "pruned": pruned,
+    }
+
+
 # ---- live + snapshot read/write ---------------------------------------
 
 
