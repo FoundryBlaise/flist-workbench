@@ -88,6 +88,18 @@ export function EditorPane({
   // they're not on their real Live data.
   const browseBackup = useStore((s) => s.flistBrowseBackup)
   const closeBrowseBackup = useStore((s) => s.flistCloseBrowseBackup)
+  // Pull the user-set name (or null) from the archive's zipBackups
+  // list — rename mutates that list, so the banner re-renders
+  // automatically when the user picks a new name.
+  const browseBackupName = useStore((s) => {
+    if (!s.flistBrowseBackup) return null
+    const arch = s.flistArchive[s.flistBrowseBackup.characterId]
+    if (!arch?.zipBackups) return null
+    const row = arch.zipBackups.find(
+      (b) => b.filename === s.flistBrowseBackup!.filename
+    )
+    return row?.name ?? null
+  })
 
   const cmRef = useRef<ReactCodeMirrorRef>(null)
 
@@ -124,6 +136,7 @@ export function EditorPane({
           </span>
           <span className="editor-browse-backup-text">
             <b>Viewing backup</b>
+            {browseBackupName ? ` · ${browseBackupName}` : ''}
             {browseBackup.dateLabel ? ` · ${browseBackup.dateLabel}` : ''}
             {browseBackup.kind && browseBackup.kind !== 'unknown'
               ? ` · ${formatKindLabel(browseBackup.kind)}`

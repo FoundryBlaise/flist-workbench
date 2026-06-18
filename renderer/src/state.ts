@@ -686,6 +686,15 @@ type State = {
     characterId: string,
     backupFilename: string
   ) => Promise<boolean>
+  /** Right-click → Rename… on a Backups row. The ZIP file itself
+   *  isn't modified; the rename is a sidecar-stored label persisted
+   *  in `_names.json`. Empty string clears the rename. Patches the
+   *  in-memory row + the open Browse-backup banner if applicable. */
+  flistRenameZipBackup: (
+    characterId: string,
+    backupFilename: string,
+    name: string
+  ) => Promise<boolean>
   /** Right-click → Create working set from backup. Pulls the
    *  backup ZIP from the sidecar, then pipes the bytes through the
    *  same import path the user-facing "Import working set" flow
@@ -3557,6 +3566,52 @@ export const useStore = create<State>((set, get) => ({
     const ok = await write(path, bytes)
     if (!ok) return null
     return { path, bytes: bytes.length }
+  },
+
+  async flistRenameZipBackup(characterId, backupFilename, name) {
+    let updated: FlistZipBackupEntry
+    try {
+      updated = await api.flistZipBackupRename(
+        characterId,
+        backupFilename,
+        name
+      )
+    } catch (err) {
+      console.error('[flist] backup rename failed:', err)
+      return false
+    }
+    set((s) => {
+      const slot = s.flistArchive[characterId]
+      const list = slot?.zipBackups
+      if (!list) return {}
+      const nextList = list.map((b) =>
+        b.filename === backupFilename ? updated : b
+      )
+      const patch: Partial<State> = {
+        flistArchive: {
+          ...s.flistArchive,
+          [characterId]: { ...slot, zipBackups: nextList }
+        }
+      }
+      // If the renamed backup is being browsed right now, refresh
+      // the header banner copy in the same set call so the UI
+      // doesn't flash through a stale label.
+      if (
+        s.flistBrowseBackup &&
+        s.flistBrowseBackup.characterId === characterId &&
+        s.flistBrowseBackup.filename === backupFilename
+      ) {
+        patch.flistBrowseBackup = {
+          ...s.flistBrowseBackup,
+          // dateLabel stays the same — only the user-facing name
+          // changed. We don't store the name in flistBrowseBackup
+          // (the banner pulls it lazily from the archive list via a
+          // selector) so no further update is needed here.
+        }
+      }
+      return patch
+    })
+    return true
   },
 
   async flistDeleteZipBackup(characterId, backupFilename) {

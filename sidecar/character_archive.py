@@ -411,6 +411,79 @@ def backups_dir(character_id: int | str) -> Path:
     return p
 
 
+_BACKUP_NAMES_FILENAME = "_names.json"
+
+
+def _names_file(character_id: int | str) -> Path:
+    return backups_dir(character_id) / _BACKUP_NAMES_FILENAME
+
+
+def _read_backup_names(character_id: int | str) -> dict[str, str]:
+    """Map of backup-filename → user-set name, persisted alongside
+    the ZIPs. Keeping names in a sidecar JSON file (instead of inside
+    each ZIP's `backup-meta.json`) means renames don't have to
+    re-pack the ZIP. Missing file or corrupt JSON returns an empty
+    dict — the UI just shows the timestamp-derived default name."""
+    p = _names_file(character_id)
+    if not p.exists():
+        return {}
+    try:
+        raw = p.read_text(encoding="utf-8")
+        parsed = json.loads(raw)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in parsed.items():
+        if isinstance(k, str) and isinstance(v, str):
+            out[k] = v
+    return out
+
+
+def _write_backup_names(
+    character_id: int | str, names: dict[str, str]
+) -> None:
+    p = _names_file(character_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(names, indent=2, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    tmp.replace(p)
+
+
+def rename_zip_backup(
+    character_id: int | str, filename: str, name: str
+) -> None:
+    """Persist a user-set name for one backup. The ZIP file itself is
+    untouched (renames don't need to rewrite the archive bytes); the
+    name only lives in the sidecar `_names.json` map. Empty string
+    clears the entry so the UI falls back to the timestamp default."""
+    if not _ZIP_BACKUP_FILE_RE.match(filename):
+        raise ValueError("invalid backup filename")
+    target = backups_dir(character_id) / filename
+    if not target.exists():
+        raise FileNotFoundError(str(target))
+    names = _read_backup_names(character_id)
+    if name.strip():
+        names[filename] = name.strip()
+    else:
+        names.pop(filename, None)
+    _write_backup_names(character_id, names)
+
+
+def forget_backup_name(character_id: int | str, filename: str) -> None:
+    """Drop the user-set name for a backup that's about to be deleted.
+    Called by the DELETE endpoint so `_names.json` doesn't carry
+    references to bytes that no longer exist."""
+    names = _read_backup_names(character_id)
+    if filename in names:
+        names.pop(filename, None)
+        _write_backup_names(character_id, names)
+
+
 # ---- live + snapshot read/write ---------------------------------------
 
 
@@ -651,10 +724,13 @@ def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
 
 def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     """List ZIP backups newest first. Each entry:
-    `{filename, created_at, size, kind}`. Filenames are the ISO-basic
-    form written by `save_zip_backup`. `kind` comes from the embedded
-    `backup-meta.json` (added 2026-06-17); older backups without that
-    file get `"unknown"` so the UI can still bucket them.
+    `{filename, created_at, size, kind, name}`. Filenames are the
+    ISO-basic form written by `save_zip_backup`. `kind` comes from
+    the embedded `backup-meta.json` (added 2026-06-17); older backups
+    without that file get `"unknown"` so the UI can still bucket
+    them. `name` is the user-set rename from `_names.json` or `null`
+    when the user hasn't renamed it yet (UI then falls back to a
+    timestamp-derived label).
 
     Tiebreaker: same-second writes are disambiguated by the `-N`
     suffix counter on the filename; higher N = more recent. The sort
@@ -665,12 +741,17 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     import datetime as _dt
     import zipfile
 
+    names = _read_backup_names(character_id)
     out: list[dict[str, Any]] = []
     p = character_dir(character_id) / "backups"
     if not p.exists():
         return out
     for entry in p.iterdir():
         if not entry.is_file():
+            continue
+        # Skip the names sidecar file — it lives in this dir but
+        # isn't a backup of its own.
+        if entry.name == _BACKUP_NAMES_FILENAME:
             continue
         m = _ZIP_BACKUP_FILE_RE.match(entry.name)
         if not m:
@@ -709,6 +790,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
                 "_suffix": suffix,
                 "size": stat.st_size,
                 "kind": kind,
+                "name": names.get(entry.name),
             }
         )
     out.sort(key=lambda r: (r["created_at"], r["_suffix"]), reverse=True)

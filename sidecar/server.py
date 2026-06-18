@@ -825,7 +825,9 @@ async def flist_character_zip_backup_delete(
     """Delete a single backup ZIP. Filename validated against the
     ISO-basic format so this can't be turned into an arbitrary-file
     delete by crafting a `../` path. 404 if the backup isn't there
-    (idempotent-ish — UI should refresh anyway)."""
+    (idempotent-ish — UI should refresh anyway). Also drops any
+    user-set name from `_names.json` so the sidecar map doesn't
+    accumulate references to bytes that no longer exist."""
     if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
         raise HTTPException(status_code=400, detail="invalid backup filename")
     p = character_archive.backups_dir(character_id) / filename
@@ -837,6 +839,34 @@ async def flist_character_zip_backup_delete(
         raise HTTPException(
             status_code=500, detail=f"could not delete backup: {exc}"
         ) from exc
+    character_archive.forget_backup_name(character_id, filename)
+
+
+class _ZipBackupRename(BaseModel):
+    name: str
+
+
+@app.patch("/flist/character/{character_id}/zip-backups/{filename}")
+async def flist_character_zip_backup_rename(
+    character_id: str, filename: str, body: _ZipBackupRename
+) -> dict:
+    """Rename a single backup. The ZIP file itself isn't modified;
+    the user-set name lives in a sidecar `_names.json` map next to
+    the ZIPs. Empty-string name clears the entry (so the UI falls
+    back to the timestamp-derived default). Returns the canonical
+    entry for the renamed backup so the renderer can update its
+    in-memory list without a separate /zip-backups re-fetch."""
+    try:
+        character_archive.rename_zip_backup(character_id, filename, body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="backup not found") from exc
+    # Return the freshly-read entry so the client can patch its row.
+    for row in character_archive.list_zip_backups(character_id):
+        if row["filename"] == filename:
+            return row
+    raise HTTPException(status_code=404, detail="backup not found")
 
 
 @app.get(

@@ -34,6 +34,9 @@ export function BackupsList() {
   const [deleteTarget, setDeleteTarget] = useState<FlistZipBackupEntry | null>(
     null
   )
+  const [renameTarget, setRenameTarget] = useState<FlistZipBackupEntry | null>(
+    null
+  )
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -133,6 +136,17 @@ export function BackupsList() {
             className="ctx-menu-item"
             role="menuitem"
             onClick={() => {
+              const b = menu.backup
+              setMenu(null)
+              setRenameTarget(b)
+            }}
+          >
+            Rename…
+          </button>
+          <button
+            className="ctx-menu-item"
+            role="menuitem"
+            onClick={() => {
               const cid = activeId
               const fname = menu.backup.filename
               setMenu(null)
@@ -168,7 +182,71 @@ export function BackupsList() {
           }}
         />
       )}
+      {renameTarget && (
+        <RenameBackupDialog
+          backup={renameTarget}
+          onCancel={() => setRenameTarget(null)}
+          onConfirm={(picked) => {
+            const target = renameTarget
+            setRenameTarget(null)
+            void useStore
+              .getState()
+              .flistRenameZipBackup(activeId, target.filename, picked)
+          }}
+        />
+      )}
     </>
+  )
+}
+
+function RenameBackupDialog({
+  backup,
+  onCancel,
+  onConfirm
+}: {
+  backup: FlistZipBackupEntry
+  onCancel: () => void
+  onConfirm: (name: string) => void
+}) {
+  const [value, setValue] = useState(backup.name ?? '')
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  return (
+    <div className="modal-backdrop" data-testid="rename-backup-dialog">
+      <div className="modal" role="dialog" aria-modal="true">
+        <h3 className="modal-title">Rename backup</h3>
+        <p>
+          <small>{backup.filename}</small>
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            onConfirm(value)
+          }}
+        >
+          <input
+            className="rename-backup-input"
+            type="text"
+            placeholder="(leave empty to use the timestamp)"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoFocus
+            maxLength={120}
+          />
+          <div className="modal-actions">
+            <button type="button" onClick={onCancel}>
+              Cancel
+            </button>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
   )
 }
 
@@ -307,9 +385,20 @@ function BackupsFolder({
                 }}
                 title={`Right-click for options · ${b.filename}`}
               >
-                <span className="sb-backup-date">
-                  {formatBackupDate(b.created_at)}
-                </span>
+                <div className="sb-backup-row-text">
+                  {b.name ? (
+                    <>
+                      <span className="sb-backup-name">{b.name}</span>
+                      <span className="sb-backup-date sb-backup-date-sub">
+                        {formatBackupDate(b.created_at)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="sb-backup-date">
+                      {formatBackupDate(b.created_at)}
+                    </span>
+                  )}
+                </div>
                 <span className="sb-backup-size">{formatSize(b.size)}</span>
               </li>
             )

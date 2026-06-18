@@ -80,6 +80,10 @@ export type FlistZipBackupEntry = {
   created_at: number
   size: number
   kind: FlistZipBackupKind
+  /** User-set name from `_names.json`. `null` when the user hasn't
+   *  renamed this backup yet — the UI then derives a default label
+   *  from the timestamp. */
+  name: string | null
 }
 
 export type FlistCharacterImage = {
@@ -987,6 +991,26 @@ export const api = {
     get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
+  /** Rename a single backup (user-set label persisted in a sidecar
+   *  `_names.json` map; the ZIP file is untouched). Empty name
+   *  clears the rename. Returns the canonical updated entry so the
+   *  renderer can patch its row without a full list re-fetch. */
+  flistZipBackupRename: async (
+    characterId: string | number,
+    filename: string,
+    name: string
+  ) => {
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      }
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    return (await res.json()) as FlistZipBackupEntry
+  },
   /** Delete a single backup ZIP. Idempotent enough that the renderer
    *  refreshes the list either way; surfaces error status to a toast.
    */
