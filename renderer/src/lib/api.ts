@@ -1132,6 +1132,21 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/sets`,
       { method: 'POST', body: JSON.stringify(body) }
     ),
+  /** Create a new working set seeded from an existing backup ZIP's
+   *  embedded working.json. Distinct from flistSetImport (which
+   *  expects the userscript-bundle manifest.json shape); this hits
+   *  a dedicated sidecar endpoint that reads working.json directly
+   *  out of the backup. 410 Gone when the backup predates the
+   *  working.json write (older than 2026-06-17). */
+  flistSetCreateFromBackup: (
+    characterId: string | number,
+    backupFilename: string,
+    body: { name: string }
+  ) =>
+    request<{ set: SetMetaWire }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(backupFilename)}/create-set`,
+      { method: 'POST', body: JSON.stringify(body) }
+    ),
   flistSetRename: (
     characterId: string | number,
     setId: string,

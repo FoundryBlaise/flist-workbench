@@ -815,6 +815,44 @@ async def flist_character_zip_backups(character_id: str) -> dict:
     }
 
 
+class _CreateSetFromBackupBody(BaseModel):
+    name: str
+
+
+@app.post(
+    "/flist/character/{character_id}/zip-backups/{filename}/create-set",
+    status_code=201,
+)
+async def flist_character_zip_backup_create_set(
+    character_id: str,
+    filename: str,
+    body: _CreateSetFromBackupBody,
+) -> dict:
+    """Create a new working set seeded from the backup's embedded
+    `working.json`. Used by Sidebar → Backups → right-click → Create
+    working set from backup. Distinct from the userscript-import path
+    (POST /sets/import) — that one expects a manifest.json-style
+    bundle and rejects backups for missing it. This path goes
+    straight from the backup's payload to a new set."""
+    try:
+        meta = character_archive.create_set_from_zip_backup(
+            character_id, filename, body.name
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "This backup predates working.json support. "
+                "Click Back up now and the new backup will be importable."
+            ),
+        ) from exc
+    return {"set": _set_meta_to_json(meta)}
+
+
 @app.delete(
     "/flist/character/{character_id}/zip-backups/{filename}",
     status_code=204,

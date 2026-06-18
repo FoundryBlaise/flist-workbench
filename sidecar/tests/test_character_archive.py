@@ -976,3 +976,46 @@ def test_forget_backup_name_drops_entry(tmp_path):
     # After forget, list shows no name on that row.
     rows = character_archive.list_zip_backups(cid)
     assert rows[0]["name"] is None
+
+
+def test_create_set_from_zip_backup_seeds_payload(tmp_path):
+    cid = "8020"
+    character_archive.write_live(
+        cid,
+        {
+            "character": {
+                "id": int(cid),
+                "name": "Setty",
+                "description": "v1 desc",
+            },
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    fname = res["filename"]
+    meta = character_archive.create_set_from_zip_backup(
+        cid, fname, "From the backup"
+    )
+    assert meta.name == "From the backup"
+    payload = character_archive.read_set_payload(cid, meta.id)
+    assert payload is not None
+    # The character description from the backup should be on the new set.
+    assert payload.get("character", {}).get("description") == "v1 desc"
+
+
+def test_create_set_from_zip_backup_rejects_bad_filename(tmp_path):
+    import pytest
+
+    with pytest.raises(ValueError):
+        character_archive.create_set_from_zip_backup("8021", "../etc/passwd", "x")
+
+
+def test_create_set_from_zip_backup_404_when_missing(tmp_path):
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        character_archive.create_set_from_zip_backup(
+            "8022", "2026-06-17T120000Z.zip", "x"
+        )
