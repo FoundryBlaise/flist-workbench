@@ -1931,90 +1931,184 @@ async def _avatar_cleanup_on_startup() -> None:
         )
 
 
-@app.on_event("startup")
-async def _scheduled_backups_on_start() -> None:
-    """Fire-and-forget kind='scheduled' backups for any character whose
-    newest scheduled backup is older than the configured interval
-    (default 7 days; user-configurable via settings). After each
-    successful write the older scheduled backups for that character
-    are pruned down to keep_last_n (default 10). Interval=0 disables
-    the sweep entirely.
+async def _scheduled_backup_sweep_impl(source: str) -> dict:
+    """Walk every archived character, fire kind='scheduled' backups
+    for those whose newest scheduled backup is older than the
+    configured interval, prune scheduled backups down to keep_last_n
+    on success. Records the sweep's started_at / finished_at /
+    counts in settings.db so Settings → Backups can show the user
+    when it last ran and when the next one is due.
 
-    Runs in the background so a slow disk on a large archive can't
-    delay sidecar boot. Errors per character are swallowed and logged
-    so one corrupt archive can't kill the sweep for the rest.
+    `source` is `'on_start'` for the sidecar-boot trigger or `'manual'`
+    when the user pressed the button in Settings. Manual writes shift
+    the "next due" clock forward to source + interval, exactly the
+    way the user wanted: trigger on Wednesday → next due is Wednesday
+    + 7 days.
+
+    Returns a small summary dict for the manual-trigger endpoint to
+    return to the caller. On-start callers ignore it.
     """
-    import asyncio as _asyncio
+    import time as _time
 
-    async def _sweep() -> None:
+    started_at = int(_time.time())
+    saved = 0
+    skipped = 0
+    failed = 0
+    try:
+        conn = settings_store.connect()
         try:
-            conn = settings_store.connect()
-            try:
-                interval_raw = settings_store.get(
-                    conn, settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS
-                )
-                keep_raw = settings_store.get(
-                    conn, settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N
-                )
-            finally:
-                conn.close()
-            try:
-                interval_days = (
-                    int(interval_raw)
-                    if interval_raw is not None
-                    else settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
-                )
-            except (TypeError, ValueError):
-                interval_days = settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
-            try:
-                keep_n = (
-                    int(keep_raw)
-                    if keep_raw is not None
-                    else settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
-                )
-            except (TypeError, ValueError):
-                keep_n = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
-            if interval_days <= 0:
-                print(
-                    "[backups] scheduled-on-start disabled "
-                    "(backups.scheduled_interval_days <= 0)",
-                    flush=True,
-                )
-                return
-            interval_seconds = interval_days * 86400
-            chars = character_archive.list_archived_characters()
-            saved = 0
-            skipped = 0
-            for entry in chars:
-                cid = entry.get("id")
-                if not cid:
-                    continue
-                try:
-                    result = character_archive.maybe_run_scheduled_backup(
-                        cid,
-                        interval_seconds=interval_seconds,
-                        keep_last_n=keep_n,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    print(
-                        f"[backups] scheduled sweep failed for {cid}: {exc!r}",
-                        flush=True,
-                    )
-                    continue
-                if result.get("action") == "saved":
-                    saved += 1
-                else:
-                    skipped += 1
+            interval_raw = settings_store.get(
+                conn, settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS
+            )
+            keep_raw = settings_store.get(
+                conn, settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N
+            )
+        finally:
+            conn.close()
+        try:
+            interval_days = (
+                int(interval_raw)
+                if interval_raw is not None
+                else settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
+            )
+        except (TypeError, ValueError):
+            interval_days = settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
+        try:
+            keep_n = (
+                int(keep_raw)
+                if keep_raw is not None
+                else settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+            )
+        except (TypeError, ValueError):
+            keep_n = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+        # Interval 0 = disabled, but the MANUAL trigger should still
+        # run — that's what the button is for. Only the auto path
+        # respects the disable flag.
+        if interval_days <= 0 and source != "manual":
             print(
-                f"[backups] scheduled-on-start sweep: "
-                f"{saved} written, {skipped} skipped, "
-                f"interval={interval_days}d keep={keep_n}",
+                "[backups] scheduled-on-start disabled "
+                "(backups.scheduled_interval_days <= 0)",
                 flush=True,
             )
-        except Exception as exc:  # noqa: BLE001
-            print(f"[backups] scheduled sweep aborted: {exc!r}", flush=True)
+            return {
+                "started_at": started_at,
+                "finished_at": started_at,
+                "written": 0,
+                "skipped": 0,
+                "failed": 0,
+                "disabled": True,
+                "source": source,
+            }
+        # Manual trigger with interval 0 → treat as "force a backup
+        # on every character right now" by using interval_seconds=0
+        # so the recency-skip never fires.
+        interval_seconds = (
+            interval_days * 86400 if interval_days > 0 else 0
+        )
+        chars = character_archive.list_archived_characters()
+        for entry in chars:
+            cid = entry.get("id")
+            if not cid:
+                continue
+            try:
+                result = character_archive.maybe_run_scheduled_backup(
+                    cid,
+                    interval_seconds=interval_seconds,
+                    keep_last_n=keep_n,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[backups] scheduled sweep failed for {cid}: {exc!r}",
+                    flush=True,
+                )
+                failed += 1
+                continue
+            if result.get("action") == "saved":
+                saved += 1
+            else:
+                skipped += 1
+        print(
+            f"[backups] scheduled sweep ({source}): "
+            f"{saved} written, {skipped} skipped, {failed} failed, "
+            f"interval={interval_days}d keep={keep_n}",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[backups] scheduled sweep aborted: {exc!r}", flush=True)
+        failed += 1
+    finished_at = int(_time.time())
+    # Persist the telemetry so Settings can show last/next + counts
+    # even across sidecar restarts. Idempotent — every sweep
+    # overwrites the previous run's record.
+    try:
+        conn = settings_store.connect()
+        try:
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_LAST_SWEEP_STARTED_AT,
+                str(started_at),
+            )
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_LAST_SWEEP_FINISHED_AT,
+                str(finished_at),
+            )
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_LAST_SWEEP_WRITTEN,
+                str(saved),
+            )
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_LAST_SWEEP_SKIPPED,
+                str(skipped),
+            )
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_LAST_SWEEP_FAILED,
+                str(failed),
+            )
+            settings_store.set_value(
+                conn,
+                settings_store.KEY_BACKUPS_LAST_SWEEP_SOURCE,
+                source,
+            )
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[backups] failed to record sweep telemetry: {exc!r}", flush=True
+        )
+    return {
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "written": saved,
+        "skipped": skipped,
+        "failed": failed,
+        "disabled": False,
+        "source": source,
+    }
 
-    _asyncio.create_task(_sweep())
+
+@app.on_event("startup")
+async def _scheduled_backups_on_start() -> None:
+    """Fire-and-forget the sweep on sidecar boot. Background task so
+    a slow disk on a large archive can't delay startup."""
+    import asyncio as _asyncio
+
+    _asyncio.create_task(_scheduled_backup_sweep_impl("on_start"))
+
+
+@app.post("/backups/scheduled-sweep")
+async def manual_scheduled_sweep() -> dict:
+    """Run the same scheduled sweep the on-start hook fires, in
+    response to the user pressing 'Trigger scheduled backup now' in
+    Settings → Backups. Synchronous from the caller's point of view —
+    returns the summary when done so the UI can update without a
+    polling round-trip. Manual trigger ignores the interval-disabled
+    flag (that's what the button is for) but still respects keep-N
+    retention."""
+    return await _scheduled_backup_sweep_impl("manual")
 
 
 @app.on_event("startup")
@@ -3539,6 +3633,34 @@ def _backups_settings_dict(conn) -> dict:
         )
     except (TypeError, ValueError):
         keep = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
+
+    def _opt_int(key: str) -> int | None:
+        raw = settings_store.get(conn, key)
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    started_at = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_STARTED_AT)
+    finished_at = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_FINISHED_AT)
+    written = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_WRITTEN) or 0
+    skipped = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_SKIPPED) or 0
+    failed = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_FAILED) or 0
+    source = (
+        settings_store.get(conn, settings_store.KEY_BACKUPS_LAST_SWEEP_SOURCE)
+        or None
+    )
+
+    # "Next due" is just last-started + interval_days. The UI computes
+    # the human-readable countdown ("in 3 days") on its side.
+    next_due_at = (
+        started_at + interval * 86400
+        if started_at is not None and interval > 0
+        else None
+    )
+
     return {
         "scheduled_interval_days": interval,
         "scheduled_keep_last_n": keep,
@@ -3546,6 +3668,15 @@ def _backups_settings_dict(conn) -> dict:
             "scheduled_interval_days": settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT,
             "scheduled_keep_last_n": settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT,
         },
+        "last_sweep": {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "written": written,
+            "skipped": skipped,
+            "failed": failed,
+            "source": source,
+        },
+        "next_due_at": next_due_at,
     }
 
 
