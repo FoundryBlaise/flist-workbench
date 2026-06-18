@@ -231,35 +231,63 @@ async def test_ensure_fresh_ticket_no_password_returns_existing_until_expiry():
 
 
 @pytest.mark.asyncio
-async def test_mapping_list_serves_stale_cache_when_ticket_required(tmp_path):
-    """The user's intuition: mapping data drifts very slowly, so an
-    expired session should not break the kink picker. When the cache
-    exists and the session can't fetch a fresh copy, fall back to the
-    stale cache rather than 401-ing the renderer."""
+async def test_mapping_list_fetches_without_session(httpx_mock, tmp_path):
+    """mapping-list.php is a PUBLIC F-list endpoint — the renderer's
+    KinksPane can mount before sign-in and still get a working
+    mapping load. No ticket required. (Pre-2026-06-18 the sidecar
+    was passing ticket+account here, which caused KinksPane to 401
+    before the user had signed in — fixed by calling unauthenticated.)
+    """
+    cache_path = tmp_path / "mapping-list.json"
+    fresh = {"kinks": [{"id": "42", "name": "Fresh"}], "kink_groups": []}
+    httpx_mock.add_response(
+        url=flist_api.MAPPING_LIST_URL,
+        json={"error": "", **fresh},
+    )
+    flist_api.ticket_store().clear()  # no session
+    result = await flist_api.fetch_mapping_list(cache_path)
+    assert result["kinks"][0]["name"] == "Fresh"
+    assert cache_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_mapping_list_serves_stale_cache_when_network_fails(
+    httpx_mock, tmp_path
+):
+    """Cache exists but is past TTL; F-list errors. Fall back to the
+    stale cache rather than failing the picker. Mapping data drifts
+    very slowly (a few times a year) so the stale copy is safer than
+    nothing."""
+    import os
+
     cache_path = tmp_path / "mapping-list.json"
     cache_path.write_text(
         json.dumps({"kinks": [{"id": "1", "name": "Stale"}], "kink_groups": []}),
         encoding="utf-8",
     )
-    # Fast-forward the cache mtime to past the TTL so the function would
-    # try to refresh — but no ticket means it falls back to stale.
-    import os
     very_old = time.time() - (8 * 24 * 3600)
     os.utime(cache_path, (very_old, very_old))
-
-    flist_api.ticket_store().clear()  # no session
+    httpx_mock.add_response(
+        url=flist_api.MAPPING_LIST_URL, status_code=500
+    )
+    flist_api.ticket_store().clear()
     result = await flist_api.fetch_mapping_list(cache_path)
     assert result["kinks"][0]["name"] == "Stale"
 
 
 @pytest.mark.asyncio
-async def test_mapping_list_raises_when_no_cache_and_no_session(tmp_path):
-    """If there's no cache file at all and no session, the call must
-    raise so the renderer can prompt sign-in. Don't silently 200 with
-    an empty payload."""
+async def test_mapping_list_raises_when_no_cache_and_network_fails(
+    httpx_mock, tmp_path
+):
+    """No cache + network fails → raise so the renderer can surface
+    a 'mapping unavailable' state. Don't silently 200 with an empty
+    payload."""
     cache_path = tmp_path / "mapping-list.json"
+    httpx_mock.add_response(
+        url=flist_api.MAPPING_LIST_URL, status_code=500
+    )
     flist_api.ticket_store().clear()
-    with pytest.raises(flist_api.TicketRequired):
+    with pytest.raises(flist_api.FlistApiError):
         await flist_api.fetch_mapping_list(cache_path)
 
 
