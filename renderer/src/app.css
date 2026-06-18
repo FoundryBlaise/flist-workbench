@@ -1478,6 +1478,19 @@ body {
   font-size: calc(var(--font-meta) - 1px);
   opacity: 0.85;
 }
+.backup-all-banner-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: calc(var(--font-meta) - 1px);
+  opacity: 0.78;
+  font-weight: normal;
+}
+.settings-sweep-warn {
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  align-self: center;
+  margin-left: 12px;
+}
 .first-run-toast-open {
   background: var(--accent);
   color: #0d1117;
