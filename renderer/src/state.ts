@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import {
   api,
+  type AiDraft,
+  type AiDraftEdit,
+  type AssistantChatMessage,
   type CharacterEntry,
   type FlistAccountCharacter,
   type FlistSnapshotEntry,
@@ -116,6 +119,34 @@ type State = {
   /** Bumped any time something wants the chat input focused — e.g. the
    *  "Chat with this log" context-menu action. ChatPanel watches it. */
   chatFocusNonce: number
+
+  // ---- AI Assistant (Phase 9) -----------------------------------
+  /** Mirror of sidecar `settings.ai_assistant.enabled`. Default false
+   *  so the feature is opt-in and the Tools menu hides the entry
+   *  until the user flips the master toggle in Settings. Loaded from
+   *  /settings on app start and after every PUT. */
+  aiAssistantEnabled: boolean
+  /** Session toggle for the bottom-dock chat row. Gated on
+   *  `aiAssistantEnabled` — flipping the master toggle off closes
+   *  the pane in the same reducer step. */
+  aiAssistantPaneOpen: boolean
+  /** Local-only transcript driving the chat history sent to /assistant/chat.
+   *  Sidecar is stateless on history — the renderer sends the whole
+   *  list each turn. Cleared on character switch + on pane close. */
+  aiAssistantTranscript: AssistantChatMessage[]
+  /** Per-character pending draft. Loaded lazily when the pane opens
+   *  or when the chat endpoint emits a draft_update event. */
+  aiAssistantDrafts: Record<string, AiDraft | null>
+  /** True while a /assistant/chat stream is in flight. UI uses it to
+   *  show a typing indicator + disable the send button. */
+  aiAssistantStreaming: boolean
+  /** Last error string surfaced from the chat stream (transport or
+   *  loop-cap). Cleared on next successful turn. */
+  aiAssistantLastError: string | null
+  /** Abort handle on the currently-streaming /assistant/chat turn.
+   *  A new send or pane-close aborts the prior request so its late
+   *  draft_update events can't mutate state under the next turn. */
+  aiAssistantInflight: AbortController | null
   /** Pending "scroll the log viewer to this timestamp range" intent
    *  raised by a clicked citation. LogViewer consumes & clears it. */
   logJump:
@@ -421,6 +452,27 @@ type State = {
   closeIngest: () => void
   toggleChatPanel: (force?: boolean) => void
   requestChatFocus: () => void
+
+  // ---- AI Assistant (Phase 9) -----------------------------------
+  setAiAssistantEnabled: (enabled: boolean) => void
+  toggleAiAssistantPane: (force?: boolean) => void
+  resetAiAssistantTranscript: () => void
+  /** Drives one user turn through /assistant/chat.
+   *  Appends the user message + assistant reply to the transcript;
+   *  updates the draft slot as tool calls land. */
+  sendAiAssistantTurn: (userMessage: string) => Promise<void>
+  /** Pull the on-disk draft for `characterId` into state. Called on
+   *  pane open + after every accept/reject round-trip. */
+  loadAiAssistantDraft: (characterId: string) => Promise<void>
+  acceptAiAssistantEdits: (
+    characterId: string,
+    editIds: string[]
+  ) => Promise<void>
+  rejectAiAssistantEdits: (
+    characterId: string,
+    editIds: string[]
+  ) => Promise<void>
+  discardAiAssistantDraft: (characterId: string) => Promise<void>
   requestLogJump: (
     character: string,
     partner: string,
@@ -1181,6 +1233,15 @@ export const useStore = create<State>((set, get) => ({
   ingestTarget: null,
   chatPanelOpen: false,
   chatFocusNonce: 0,
+
+  aiAssistantEnabled: false,
+  aiAssistantPaneOpen: false,
+  aiAssistantTranscript: [],
+  aiAssistantDrafts: {},
+  aiAssistantStreaming: false,
+  aiAssistantLastError: null,
+  aiAssistantInflight: null,
+
   logJump: null,
 
   messagesByPartner: {},
@@ -4437,6 +4498,219 @@ export const useStore = create<State>((set, get) => ({
 
   requestChatFocus() {
     set((s) => ({ chatFocusNonce: s.chatFocusNonce + 1 }))
+  },
+
+  // ---- AI Assistant (Phase 9) -----------------------------------
+
+  setAiAssistantEnabled(enabled) {
+    set((s) => ({
+      aiAssistantEnabled: enabled,
+      // Disabling the feature also closes the pane — keeps the
+      // master toggle and the session toggle in sync.
+      aiAssistantPaneOpen: enabled ? s.aiAssistantPaneOpen : false
+    }))
+  },
+
+  toggleAiAssistantPane(force) {
+    const s = get()
+    if (!s.aiAssistantEnabled) {
+      set({ aiAssistantPaneOpen: false })
+      return
+    }
+    const next = typeof force === 'boolean' ? force : !s.aiAssistantPaneOpen
+    if (!next && s.aiAssistantInflight) {
+      // Closing the pane cancels any in-flight stream so we don't
+      // continue downloading tokens the user can't see.
+      s.aiAssistantInflight.abort()
+    }
+    set({ aiAssistantPaneOpen: next })
+  },
+
+  resetAiAssistantTranscript() {
+    set({ aiAssistantTranscript: [], aiAssistantLastError: null })
+  },
+
+  async sendAiAssistantTurn(userMessage) {
+    const s = get()
+    if (!s.aiAssistantEnabled) return
+    const activeId = s.flistActiveCharacterId
+    if (!activeId) {
+      set({
+        aiAssistantLastError:
+          'Select an active character before sending a message.'
+      })
+      return
+    }
+    const trimmed = userMessage.trim()
+    if (!trimmed) return
+
+    // Cancel any in-flight stream so a stale onDraftUpdate from the
+    // previous turn can't land after we've moved on. Without this, a
+    // late-arriving tool_result mutates aiAssistantDrafts under the
+    // new turn and the user sees draft cards appear belonging to the
+    // prior conversation.
+    s.aiAssistantInflight?.abort()
+
+    const controller = new AbortController()
+    const transcript: AssistantChatMessage[] = [
+      ...s.aiAssistantTranscript,
+      { role: 'user', content: trimmed }
+    ]
+    set({
+      aiAssistantTranscript: transcript,
+      aiAssistantStreaming: true,
+      aiAssistantLastError: null,
+      aiAssistantInflight: controller
+    })
+
+    // Accumulate text chunks across rounds — model can emit multiple
+    // text events between tool calls; we coalesce into one assistant
+    // turn so the transcript stays clean.
+    let assistantText = ''
+
+    try {
+      await api.assistantChat(
+        { messages: transcript, active_character_id: activeId },
+        {
+          onText: (data) => {
+            assistantText += (assistantText ? '\n\n' : '') + data.content
+          },
+          onDraftUpdate: (data) => {
+            if (controller.signal.aborted) return
+            set((curr) => ({
+              aiAssistantDrafts: {
+                ...curr.aiAssistantDrafts,
+                [activeId]: data.draft
+              }
+            }))
+          },
+          onError: (data) => {
+            set({ aiAssistantLastError: data.message })
+          }
+        },
+        { signal: controller.signal }
+      )
+    } catch (err) {
+      // Aborts surface as DOMException("AbortError"); treat as a
+      // clean cancellation rather than an error to surface.
+      if (
+        err instanceof DOMException &&
+        err.name === 'AbortError'
+      ) {
+        // no-op
+      } else {
+        const msg = err instanceof Error ? err.message : String(err)
+        set({ aiAssistantLastError: msg })
+      }
+    } finally {
+      // Always land an assistant row when the stream completes
+      // cleanly, even if the model only emitted tool calls and no
+      // text. The transcript stub at AssistantPane.tsx renders
+      // "Proposed edits — see the review column" for empty content
+      // so the user doesn't watch a dead transcript while diff
+      // cards fill in on the right.
+      if (!controller.signal.aborted) {
+        set((curr) => ({
+          aiAssistantTranscript: [
+            ...curr.aiAssistantTranscript,
+            { role: 'assistant', content: assistantText }
+          ]
+        }))
+      }
+      // Only clear streaming/inflight if WE are still the active
+      // turn — a follow-up sendAiAssistantTurn would have already
+      // swapped to a fresh controller and we shouldn't clobber it.
+      const curr = get()
+      if (curr.aiAssistantInflight === controller) {
+        set({ aiAssistantStreaming: false, aiAssistantInflight: null })
+      }
+      // Always re-sync the draft from disk — a tool_call may have
+      // landed an edit even if the stream errored mid-flight.
+      try {
+        await get().loadAiAssistantDraft(activeId)
+      } catch {
+        // Best-effort; failures here aren't user-actionable.
+      }
+    }
+  },
+
+  async loadAiAssistantDraft(characterId) {
+    try {
+      const { draft } = await api.aiDraftGet(characterId)
+      set((s) => ({
+        aiAssistantDrafts: { ...s.aiAssistantDrafts, [characterId]: draft }
+      }))
+    } catch (err) {
+      // 404 means no draft — that's the common case, not an error.
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('HTTP 404')) {
+        set((s) => ({
+          aiAssistantDrafts: { ...s.aiAssistantDrafts, [characterId]: null }
+        }))
+        return
+      }
+      set({ aiAssistantLastError: msg })
+    }
+  },
+
+  async acceptAiAssistantEdits(characterId, editIds) {
+    if (editIds.length === 0) return
+    const slot = flistSelectWorkingSlot(get(), characterId)
+    const etag = slot?.etag ?? null
+    try {
+      const res = await api.aiDraftAccept(characterId, { edit_ids: editIds }, etag)
+      set((s) => ({
+        aiAssistantDrafts: {
+          ...s.aiAssistantDrafts,
+          [characterId]: res.draft
+        }
+      }))
+      // Tell the user when some of the cards they tried to Accept
+      // were skipped because they'd been marked stale (working copy
+      // moved under the draft). Without this they'd silently sit in
+      // the draft and the user would wonder why Accept-all "didn't
+      // work" on them. Treat this as informational, not an error.
+      const skipped = res.skipped_stale ?? []
+      if (skipped.length > 0) {
+        set({
+          aiAssistantLastError:
+            `${skipped.length} edit${skipped.length === 1 ? '' : 's'} ` +
+            `skipped — working copy changed since the draft was built. ` +
+            `Discard the draft and re-prompt, or ask the assistant to retry.`
+        })
+      }
+      // The accepted edits already mutated working.json; reload the
+      // working copy so the editor surfaces them without a manual
+      // refresh.
+      await get().flistLoadWorking(characterId)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      set({ aiAssistantLastError: msg })
+    }
+  },
+
+  async rejectAiAssistantEdits(characterId, editIds) {
+    if (editIds.length === 0) return
+    try {
+      const res = await api.aiDraftReject(characterId, { edit_ids: editIds })
+      set((s) => ({
+        aiAssistantDrafts: { ...s.aiAssistantDrafts, [characterId]: res.draft }
+      }))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      set({ aiAssistantLastError: msg })
+    }
+  },
+
+  async discardAiAssistantDraft(characterId) {
+    try {
+      await api.aiDraftDelete(characterId)
+    } catch {
+      // Idempotent server-side; ignore failures.
+    }
+    set((s) => ({
+      aiAssistantDrafts: { ...s.aiAssistantDrafts, [characterId]: null }
+    }))
   },
 
   requestLogJump(character, partner, ts_start, ts_end) {

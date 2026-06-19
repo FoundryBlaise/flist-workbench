@@ -1,0 +1,438 @@
+/* Top-of-editor "AI draft pending" banner. Tier-2-style affordance
+   that sits between the toolbar and the editor row so it's hard to
+   miss but doesn't reflow the editor. */
+.ai-draft-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgba(180, 130, 240, 0.1);
+  border-bottom: 1px solid rgba(180, 130, 240, 0.3);
+  font-size: var(--font-meta);
+}
+.ai-draft-banner-icon {
+  font-size: 14px;
+}
+.ai-draft-banner-text {
+  flex: 1 1 auto;
+}
+.ai-draft-banner-actions {
+  display: flex;
+  gap: 6px;
+}
+.ai-draft-banner-button {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 10px;
+}
+.ai-draft-banner-button:hover {
+  border-color: rgba(180, 130, 240, 0.6);
+}
+.ai-draft-banner-button-secondary {
+  color: var(--text-muted);
+}
+
+/* Bottom-dock AI assistant pane. Wide+short layout: transcript fills
+   the left ~62%, draft sidebar the right ~38%. Input bar pinned at the
+   bottom; error strip sits above input when set. */
+
+.assistant-pane {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  min-height: 0;
+  flex: 0 0 auto;
+  height: var(--assistant-pane-height, 320px);
+}
+
+.assistant-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-meta);
+}
+.assistant-pane-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.assistant-pane-meta {
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.assistant-pane-close {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 8px;
+}
+.assistant-pane-close:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.assistant-pane-body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Transcript column */
+.assistant-transcript {
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.assistant-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.5;
+  max-width: 60ch;
+}
+.assistant-empty-examples {
+  margin-top: 8px;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.assistant-empty-examples em {
+  font-style: italic;
+  color: var(--text);
+}
+.assistant-msg-tool-only {
+  font-style: italic;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.assistant-typing {
+  color: var(--text-muted);
+  font-size: var(--font-meta);
+  align-self: flex-start;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.assistant-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+.assistant-msg-role {
+  font-size: var(--font-meta);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+.assistant-msg-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  line-height: 1.45;
+}
+.assistant-msg-user .assistant-msg-body {
+  color: var(--text);
+}
+.assistant-msg-assistant .assistant-msg-body {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+/* Draft sidebar */
+.assistant-draft {
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.assistant-draft-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.assistant-draft-count {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 18px;
+}
+.assistant-draft-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 12px;
+}
+.assistant-draft-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.assistant-draft-row {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.assistant-draft-bulk {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Proposal cards */
+.proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+.proposal-card-stale {
+  border-color: rgba(255, 200, 80, 0.5);
+  background: rgba(255, 200, 80, 0.06);
+}
+.proposal-card-composite {
+  border-color: rgba(120, 180, 255, 0.4);
+  background: rgba(120, 180, 255, 0.04);
+}
+.proposal-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.proposal-card-tool {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.proposal-card-path {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+.proposal-card-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.proposal-card-stale-tag {
+  font-size: 10px;
+  background: rgba(255, 200, 80, 0.25);
+  color: #ffd47a;
+  border-radius: 3px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+}
+.proposal-card-expand {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 3px;
+}
+.proposal-card-expand:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+.proposal-card-summary {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.proposal-card-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.proposal-card-diff-inline {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.proposal-card-old,
+.proposal-card-new {
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  line-height: 1.4;
+  font-size: 12px;
+}
+.proposal-card-old {
+  background: rgba(255, 80, 80, 0.08);
+}
+.proposal-card-new {
+  background: rgba(80, 200, 120, 0.08);
+}
+.proposal-card-arrow {
+  color: var(--text-muted);
+  font-size: 11px;
+  align-self: center;
+}
+.proposal-card-hint {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.proposal-card-rationale {
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0;
+  line-height: 1.4;
+}
+.proposal-card-actions {
+  display: flex;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  padding-top: 6px;
+}
+.proposal-card-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+}
+.proposal-card-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.proposal-card-child[data-status='stale'] {
+  opacity: 0.7;
+}
+
+/* Accept / Reject buttons */
+.proposal-accept,
+.proposal-reject {
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+.proposal-accept {
+  background: var(--accent);
+  color: #fff;
+}
+.proposal-accept:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.proposal-reject {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+.proposal-reject:hover {
+  background: rgba(255, 80, 80, 0.12);
+  color: var(--accent-2);
+}
+.proposal-reject-small {
+  font-size: 10px;
+  padding: 2px 6px;
+  margin-left: auto;
+}
+
+/* Error strip */
+.assistant-pane-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 80, 80, 0.12);
+  color: var(--accent-2);
+  padding: 6px 12px;
+  font-size: var(--font-meta);
+  border-top: 1px solid rgba(255, 80, 80, 0.3);
+}
+.assistant-pane-error-text {
+  flex: 1 1 auto;
+}
+.assistant-pane-error-action {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.assistant-pane-error-action:hover {
+  border-color: rgba(255, 80, 80, 0.6);
+  color: var(--accent-2);
+}
+
+/* Input bar */
+.assistant-input {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.assistant-input-textarea {
+  resize: none;
+  background: var(--input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  min-height: 38px;
+}
+.assistant-input-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.assistant-input-send {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 4px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.assistant-input-send:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
