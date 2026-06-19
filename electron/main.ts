@@ -197,6 +197,10 @@ type MenuFlags = {
   classifyCurrent: boolean
   classifyCharacter: boolean
   flistSessionActive: boolean
+  /** AI Assistant master opt-in. When false (default), the menu entry
+   *  is hidden and the Ctrl+Shift+J accelerator is unregistered;
+   *  flipping in Settings live-rebuilds without a relaunch. */
+  aiAssistantEnabled: boolean
 }
 // Wizard-side conveniences. All three accept fixed shapes and have
 // strict filtering so a compromised renderer can't smuggle arbitrary
@@ -454,6 +458,12 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   }
   const backupAll = menu.getMenuItemById('backup-all')
   if (backupAll) backupAll.enabled = !!flags.flistSessionActive
+  const assistantItem = menu.getMenuItemById('character-assistant')
+  if (assistantItem) {
+    assistantItem.visible = !!flags.aiAssistantEnabled
+    // Disable as well so the accelerator unregisters when hidden.
+    assistantItem.enabled = !!flags.aiAssistantEnabled
+  }
 })
 
 async function createWindow(): Promise<void> {
