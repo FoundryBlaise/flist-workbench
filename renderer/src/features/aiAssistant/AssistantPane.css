@@ -136,8 +136,7 @@
 }
 
 .assistant-pane-body {
-  display: grid;
-  grid-template-columns: 1fr 260px;
+  display: flex;
   min-height: 0;
   overflow: hidden;
 }
@@ -160,89 +159,51 @@
   margin-right: auto;
 }
 
-/* "Done" history pane — replaces the old per-turn pending list on the
-   right. Compact stack of accepted/rejected cards, newest first. */
-.assistant-done {
-  border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-.assistant-done-header {
+/* Resolved-edit row — inline replacement for a ProposalCard once
+   the user has accepted or rejected it. Stays in place at the same
+   transcript position so the user can scroll back to confirm what
+   they acted on, with a green/red stamp + the rationale. */
+.assistant-resolved-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--font-meta);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-.assistant-done-count {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  border-radius: 10px;
-  padding: 0 6px;
-  font-size: 10px;
-  line-height: 16px;
-}
-.assistant-done-empty {
-  color: var(--text-muted);
-  font-style: italic;
-  padding: 12px;
+  gap: 8px;
+  padding: 4px 10px;
   font-size: 12px;
-  line-height: 1.4;
+  border-radius: 3px;
+  border-left: 3px solid transparent;
 }
-.assistant-done-list {
-  list-style: none;
-  margin: 0;
-  padding: 6px 8px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.assistant-resolved-row-accepted {
+  background: rgba(80, 200, 120, 0.05);
+  border-left-color: rgba(80, 200, 120, 0.6);
 }
-.assistant-done-card {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.assistant-resolved-row-rejected {
+  background: rgba(255, 120, 120, 0.04);
+  border-left-color: rgba(255, 120, 120, 0.6);
+  opacity: 0.72;
 }
-.assistant-done-card-accepted {
-  border-left: 3px solid rgb(80, 200, 120);
+.assistant-resolved-stamp {
+  font-weight: bold;
 }
-.assistant-done-card-rejected {
-  border-left: 3px solid rgb(255, 120, 120);
-  opacity: 0.75;
-}
-.assistant-done-card-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.assistant-done-stamp {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.assistant-done-stamp-accepted {
+.assistant-resolved-stamp-accepted {
   color: rgb(120, 220, 150);
 }
-.assistant-done-stamp-rejected {
+.assistant-resolved-stamp-rejected {
   color: rgb(255, 140, 140);
 }
-.assistant-done-rationale {
-  margin: 0;
+.assistant-resolved-summary {
+  color: var(--text-muted);
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.assistant-resolved-rationale {
   color: var(--text-muted);
   font-style: italic;
-  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
 }
 
 /* Inline proposals inside assistant messages — Claude-Code-style
@@ -253,6 +214,19 @@
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
+}
+
+/* Orphan-edits section — pending edits the user reloaded into without
+   a current-session transcript turn to anchor them. Visually
+   distinguished with a dashed left rail so the user knows these
+   came from a previous session, not the current chat. */
+.assistant-msg-orphan {
+  border-left: 2px dashed rgba(180, 130, 240, 0.5);
+  padding-left: 10px;
+  margin-top: 4px;
+}
+.assistant-msg-orphan .assistant-msg-role {
+  color: rgba(180, 130, 240, 0.85);
 }
 
 /* Transcript column */
