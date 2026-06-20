@@ -169,6 +169,7 @@ type Draft = {
     timeout_sec: string
     warn_non_loopback: boolean
     log_requests: boolean
+    append_no_think: boolean
   }
 }
 
@@ -223,7 +224,8 @@ function buildDraft(state: SettingsState): Draft {
       token_budget: String(state.ai_assistant.token_budget),
       timeout_sec: String(state.ai_assistant.timeout_sec),
       warn_non_loopback: state.ai_assistant.warn_non_loopback,
-      log_requests: state.ai_assistant.log_requests
+      log_requests: state.ai_assistant.log_requests,
+      append_no_think: state.ai_assistant.append_no_think
     }
   }
 }
@@ -282,7 +284,9 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.ai_assistant.timeout_sec !== baseline.ai_assistant.timeout_sec ||
     draft.ai_assistant.warn_non_loopback !==
       baseline.ai_assistant.warn_non_loopback ||
-    draft.ai_assistant.log_requests !== baseline.ai_assistant.log_requests
+    draft.ai_assistant.log_requests !== baseline.ai_assistant.log_requests ||
+    draft.ai_assistant.append_no_think !==
+      baseline.ai_assistant.append_no_think
   return {
     general: generalDirty,
     flist: false,
@@ -651,7 +655,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             state.ai_assistant.timeout_sec
           ),
           warn_non_loopback: draft.ai_assistant.warn_non_loopback,
-          log_requests: draft.ai_assistant.log_requests
+          log_requests: draft.ai_assistant.log_requests,
+          append_no_think: draft.ai_assistant.append_no_think
         }
       }
       const updated = await api.settingsUpdate(payload)
@@ -1470,6 +1475,28 @@ function AiAssistantPane({
           />
           <span>Log requests to disk for debugging</span>
         </label>
+
+        <label className="settings-checkbox-row">
+          <input
+            type="checkbox"
+            checked={draft.append_no_think}
+            onChange={(e) => onChange({ append_no_think: e.target.checked })}
+            data-testid="ai-assistant-append-no-think"
+          />
+          <span>
+            <strong>Append <code>/no_think</code> to every message</strong>
+            <span className="settings-meta" style={{ display: 'block', marginTop: 4 }}>
+              ⚠ Qwen 3.x family workaround only. Forces the model to skip
+              its chain-of-thought phase so it writes the actual reply
+              directly into <code>content</code> instead of burning the
+              completion budget on reasoning. Harmless on non-Qwen models
+              (they treat it as literal text), but unnecessary. Leave OFF
+              unless you've seen "Model exhausted its token budget
+              thinking" with this model.
+            </span>
+          </span>
+        </label>
+
         <p className="settings-help">
           Disabling the assistant from below also deletes every pending
           ai-draft.json file under the archive — use this when you want

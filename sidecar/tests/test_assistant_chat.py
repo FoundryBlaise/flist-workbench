@@ -403,6 +403,48 @@ def test_resolve_assistant_config_uses_saved_prompt_verbatim(env):
     assert config.system_prompt == "my custom thing"
 
 
+def test_build_initial_messages_appends_no_think_when_enabled(env):
+    """When the user has opted into the Qwen-family escape hatch,
+    `/no_think` is appended to the resolved system prompt so the
+    model skips its chain-of-thought phase. Other model families
+    treat it as literal text — no harm, just clutter."""
+    import assistant_chat
+
+    history = [{"role": "user", "content": "hi"}]
+
+    plain = assistant_chat.build_initial_messages("BE TERSE.", history)
+    assert plain[0]["content"] == "BE TERSE."
+
+    augmented = assistant_chat.build_initial_messages(
+        "BE TERSE.", history, append_no_think=True
+    )
+    assert augmented[0]["content"].endswith("/no_think")
+    assert augmented[0]["content"].startswith("BE TERSE.")
+
+
+def test_resolve_config_threads_append_no_think_flag(env):
+    """The flag survives the settings → config round-trip so the chat
+    loop actually sees the user's pick."""
+    import assistant_chat
+    import settings as settings_store
+
+    conn = settings_store.connect()
+    try:
+        settings_store.set_value(
+            conn,
+            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK,
+            "true",
+        )
+    finally:
+        conn.close()
+    conn = settings_store.connect()
+    try:
+        config = assistant_chat.resolve_assistant_config(conn)
+    finally:
+        conn.close()
+    assert config.append_no_think is True
+
+
 def test_assistant_prompt_presets_carry_all_four_languages(env):
     """The picker dropdown must contain NSFW + SFW for both English
     and German so the UI can offer the language toggle the user asked

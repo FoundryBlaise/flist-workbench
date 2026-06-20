@@ -149,6 +149,13 @@ KEY_AI_ASSISTANT_TOKEN_BUDGET = "ai_assistant.token_budget"
 KEY_AI_ASSISTANT_TIMEOUT_SEC = "ai_assistant.timeout_sec"
 KEY_AI_ASSISTANT_WARN_NON_LOOPBACK = "ai_assistant.warn_non_loopback"
 KEY_AI_ASSISTANT_LOG_REQUESTS = "ai_assistant.log_requests"
+# When true, append "/no_think" to the system prompt every turn so
+# Qwen 3 family models skip the chain-of-thought phase and write the
+# real reply straight into `content`. Non-thinking models treat it
+# as harmless literal text. Default OFF — most setups don't need it
+# and Qwen-specific syntax shouldn't bleed into other models by
+# default.
+KEY_AI_ASSISTANT_APPEND_NO_THINK = "ai_assistant.append_no_think"
 
 
 def ai_assistant_enabled(conn) -> bool:

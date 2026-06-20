@@ -393,6 +393,11 @@ export type AiAssistantSettings = {
   timeout_sec: number
   warn_non_loopback: boolean
   log_requests: boolean
+  /** Workaround for Qwen 3.x family thinking-loop failures. When on,
+   *  the sidecar appends `/no_think` to the resolved system prompt
+   *  every turn so the model skips its chain-of-thought phase. Other
+   *  model families ignore it as literal text. Default OFF. */
+  append_no_think: boolean
   defaults: {
     temperature: number
     token_budget: number

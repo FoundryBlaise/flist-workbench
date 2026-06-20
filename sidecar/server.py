@@ -3708,6 +3708,7 @@ class AiAssistantSettingsUpdate(BaseModel):
     timeout_sec: int | None = None
     warn_non_loopback: bool | None = None
     log_requests: bool | None = None
+    append_no_think: bool | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -3905,6 +3906,9 @@ def _ai_assistant_settings_dict(conn) -> dict:
         "log_requests": _bool(
             settings_store.KEY_AI_ASSISTANT_LOG_REQUESTS, False
         ),
+        "append_no_think": _bool(
+            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK, False
+        ),
         # The defaults block lets the renderer offer a one-click
         # "Reset to default" affordance. system_prompt default is the
         # first preset's body — matches labels' convention.
@@ -3975,6 +3979,12 @@ def _apply_ai_assistant_update(conn, update: AiAssistantSettingsUpdate) -> None:
             conn,
             settings_store.KEY_AI_ASSISTANT_LOG_REQUESTS,
             "true" if update.log_requests else "false",
+        )
+    if update.append_no_think is not None:
+        settings_store.set_value(
+            conn,
+            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK,
+            "true" if update.append_no_think else "false",
         )
 
 
