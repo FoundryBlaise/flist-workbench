@@ -189,7 +189,6 @@ export function AssistantPane() {
           toolEventsByIndex={toolEventsByIndex}
           draft={draft}
         />
-        <DoneHistory characterId={activeId} />
       </div>
       <PromptSwitcher />
       {lastError && (
@@ -279,82 +278,50 @@ function DraftActionBar({
   )
 }
 
-/** Right-side "Done" history. Replaces the old per-turn pending list —
- *  shows every edit the user has already accepted or rejected as a
- *  compact card with an outcome stamp, newest first. Stays empty
- *  until the user has resolved at least one proposal. */
-function DoneHistory({ characterId }: { characterId: string | null }) {
-  // Stable empty reference: Zustand re-runs the selector on every
-  // store update, and returning a fresh `[]` each call makes React
-  // see a new snapshot every render → infinite-loop crash. Picking
-  // a singleton outside the component fixes that.
-  const history = useStore((s) =>
-    characterId ? s.aiAssistantEditHistory[characterId] ?? EMPTY_HISTORY : EMPTY_HISTORY
-  )
-  if (!characterId) {
-    return (
-      <aside className="assistant-done" aria-label="Resolved edits">
-        <header className="assistant-done-header">Done</header>
-        <div className="assistant-done-empty">
-          Select an active character to start.
-        </div>
-      </aside>
-    )
-  }
-  if (history.length === 0) {
-    return (
-      <aside className="assistant-done" aria-label="Resolved edits">
-        <header className="assistant-done-header">Done</header>
-        <div className="assistant-done-empty">
-          Edits you accept or reject will appear here.
-        </div>
-      </aside>
-    )
-  }
-  // Newest first.
-  const ordered = [...history].reverse()
-  return (
-    <aside className="assistant-done" aria-label="Resolved edits">
-      <header className="assistant-done-header">
-        Done <span className="assistant-done-count">{history.length}</span>
-      </header>
-      <div className="assistant-done-list">
-        {ordered.map((entry, idx) => (
-          <DoneCard key={`${entry.edit.id}-${idx}`} entry={entry} />
-        ))}
-      </div>
-    </aside>
-  )
-}
-
-function DoneCard({
-  entry
+/** Compact one-line row that replaces a ProposalCard once the user
+ *  has acted on it. Stays inline in the chat at the same position so
+ *  the user can scroll back to see what they accepted or rejected,
+ *  with a green/red stamp + the rationale.  Claude-Code-style:
+ *  resolution doesn't move the card to a side panel; it just
+ *  collapses in place. */
+function ResolvedRow({
+  edit,
+  outcome
 }: {
-  entry: {
-    edit: import('../../lib/api').AiDraftEdit
-    outcome: 'accepted' | 'rejected'
-    timestamp: number
-  }
+  edit: import('../../lib/api').AiDraftEdit
+  outcome: 'accepted' | 'rejected'
 }) {
-  const { edit, outcome } = entry
   return (
     <div
-      className={`assistant-done-card assistant-done-card-${outcome}`}
-      data-testid={`done-card-${edit.id}`}
+      className={`assistant-resolved-row assistant-resolved-row-${outcome}`}
+      data-testid={`resolved-row-${edit.id}`}
     >
-      <header className="assistant-done-card-head">
-        <code className="proposal-card-tool">{edit.tool}</code>
-        <span
-          className={`assistant-done-stamp assistant-done-stamp-${outcome}`}
-        >
-          {outcome === 'accepted' ? '✓ Accepted' : '✗ Rejected'}
-        </span>
-      </header>
+      <span className={`assistant-resolved-stamp assistant-resolved-stamp-${outcome}`}>
+        {outcome === 'accepted' ? '✓' : '✗'}
+      </span>
+      <code className="proposal-card-tool">{edit.tool}</code>
+      <span className="assistant-resolved-summary">
+        {summariseEdit(edit)}
+      </span>
       {edit.rationale && (
-        <p className="assistant-done-rationale">{edit.rationale}</p>
+        <span className="assistant-resolved-rationale">{edit.rationale}</span>
       )}
     </div>
   )
+}
+
+function summariseEdit(edit: import('../../lib/api').AiDraftEdit): string {
+  if (edit.tool === 'patch_description') {
+    const txt =
+      typeof edit.old_excerpt === 'string'
+        ? edit.old_excerpt
+        : typeof edit.old_value === 'string'
+          ? edit.old_value
+          : ''
+    return txt.length > 60 ? `"${txt.slice(0, 57)}…"` : `"${txt}"`
+  }
+  if (edit.field_path) return edit.field_path
+  return ''
 }
 
 function Transcript({
@@ -418,6 +385,17 @@ function Transcript({
           draft={draft}
         />
       ))}
+      {/* Orphan-edit fallback: when the user reloads the app, the
+          transcript starts empty but pending edits from previous
+          sessions persist in ai-draft.json. Render those below the
+          transcript so they're still reviewable — otherwise the
+          right-column "40 pending" badge has nothing visible to
+          act on. */}
+      <OrphanPendingProposals
+        characterId={characterId}
+        draft={draft}
+        toolEventsByIndex={toolEventsByIndex}
+      />
       {streaming && (
         <div className="assistant-typing" aria-live="polite">
           …thinking
@@ -453,21 +431,54 @@ function TranscriptRow({
   if (role === 'tool' || role === 'system') return null
   const events = toolEvents ?? []
 
-  // Gather the edits this turn created, in tool-call order. We look
-  // them up by the acceptedEditIds the sidecar handed back per tool
-  // call. Edits that have since been resolved (accepted or rejected)
-  // disappear from the draft and so don't render again here — they
-  // moved to the Done panel.
+  // Gather everything this turn produced — both pending (still in
+  // the draft, awaiting Accept/Reject) and resolved (already in the
+  // local history). Single column means resolved cards stay in
+  // place as compact "✓ Accepted" / "✗ Rejected" rows instead of
+  // moving to a side panel.
+  const history = useStore((s) =>
+    characterId ? s.aiAssistantEditHistory[characterId] ?? EMPTY_HISTORY : EMPTY_HISTORY
+  )
+  const historyById = new Map(history.map((h) => [h.edit.id, h]))
   const draftEditsById = new Map(draft?.edits.map((e) => [e.id, e]) ?? [])
-  const turnEdits = events
-    .flatMap((e) => e.acceptedEditIds ?? [])
-    .map((id) => draftEditsById.get(id))
-    .filter((e): e is import('../../lib/api').AiDraftEdit => Boolean(e))
 
-  // Group consecutive edits sharing the same composite_id so a
-  // copy_standard_kinks_from(...) call renders as one card instead of
-  // 38 individual rows.
-  const grouped = groupConsecutiveByComposite(turnEdits)
+  const turnEntries: Array<
+    | {
+        kind: 'pending'
+        edit: import('../../lib/api').AiDraftEdit
+      }
+    | {
+        kind: 'resolved'
+        edit: import('../../lib/api').AiDraftEdit
+        outcome: 'accepted' | 'rejected'
+      }
+  > = []
+  const editIds = events.flatMap((e) => e.acceptedEditIds ?? [])
+  for (const id of editIds) {
+    const resolved = historyById.get(id)
+    if (resolved) {
+      turnEntries.push({
+        kind: 'resolved',
+        edit: resolved.edit,
+        outcome: resolved.outcome
+      })
+      continue
+    }
+    const pending = draftEditsById.get(id)
+    if (pending) {
+      turnEntries.push({ kind: 'pending', edit: pending })
+    }
+  }
+
+  // Pending entries group by composite_id; resolved rows are always
+  // shown individually as compact rows (composite group can fan out).
+  const pendingGroups = groupConsecutiveByComposite(
+    turnEntries.filter((e) => e.kind === 'pending').map((e) => e.edit)
+  )
+  const resolvedRows = turnEntries.filter(
+    (e): e is { kind: 'resolved'; edit: import('../../lib/api').AiDraftEdit; outcome: 'accepted' | 'rejected' } =>
+      e.kind === 'resolved'
+  )
 
   // An assistant turn that only emitted tool calls (no surrounding
   // text) lands here with empty content. Show a small chip below
@@ -506,9 +517,9 @@ function TranscriptRow({
           {content}
         </pre>
       )}
-      {characterId && grouped.length > 0 && (
+      {characterId && (pendingGroups.length > 0 || resolvedRows.length > 0) && (
         <div className="assistant-msg-proposals">
-          {grouped.map((edits, gIdx) => (
+          {pendingGroups.map((edits, gIdx) => (
             <ProposalCard
               key={edits[0]?.id ?? gIdx}
               edits={edits}
@@ -521,8 +532,59 @@ function TranscriptRow({
               }
             />
           ))}
+          {resolvedRows.map((row) => (
+            <ResolvedRow key={row.edit.id} edit={row.edit} outcome={row.outcome} />
+          ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/** Render any pending draft edits that aren't accounted for by a
+ *  current-session assistant turn (orphans from prior sessions). On
+ *  app reload the transcript starts empty but ai-draft.json persists
+ *  — without this section the user would see "40 pending edits" in
+ *  the action bar and nothing to actually accept or reject. */
+function OrphanPendingProposals({
+  characterId,
+  draft,
+  toolEventsByIndex
+}: {
+  characterId: string | null
+  draft: import('../../lib/api').AiDraft | null
+  toolEventsByIndex: Record<number, Array<{ acceptedEditIds?: string[] }>>
+}) {
+  if (!characterId || !draft || draft.edits.length === 0) return null
+  const claimed = new Set<string>()
+  for (const events of Object.values(toolEventsByIndex)) {
+    for (const ev of events) {
+      for (const id of ev.acceptedEditIds ?? []) {
+        claimed.add(id)
+      }
+    }
+  }
+  const orphans = draft.edits.filter((e) => !claimed.has(e.id))
+  if (orphans.length === 0) return null
+  const groups = groupConsecutiveByComposite(orphans)
+  return (
+    <div className="assistant-msg assistant-msg-assistant assistant-msg-orphan">
+      <span className="assistant-msg-role">Pending from earlier session</span>
+      <div className="assistant-msg-proposals">
+        {groups.map((edits, idx) => (
+          <ProposalCard
+            key={edits[0]?.id ?? idx}
+            edits={edits}
+            characterId={characterId}
+            onAccept={(ids) =>
+              void useStore.getState().acceptAiAssistantEdits(characterId, ids)
+            }
+            onReject={(ids) =>
+              void useStore.getState().rejectAiAssistantEdits(characterId, ids)
+            }
+          />
+        ))}
+      </div>
     </div>
   )
 }
