@@ -223,6 +223,18 @@ function EditorActiveTabBody(props: {
 }) {
   const activeTab = useStore((s) => s.editorActiveTab)
   const flistActiveId = props.flistActiveId
+  // Reset CodeMirror's history (via a remounting `key`) on any
+  // boundary that changes which document is in the buffer — character,
+  // working set, Live ↔ working-set toggle. Without this, CM's undo
+  // stack carries across those boundaries, so spamming Ctrl+Z
+  // eventually rewinds into the *previous* character's content while
+  // the sidebar still shows the new one as active.
+  const activeSetIdForKey = useStore((s) =>
+    flistActiveId ? (s.flistActiveSetId[flistActiveId] ?? '') : ''
+  )
+  const cmKey = `${flistActiveId ?? 'doc'}|${activeSetIdForKey}|${
+    props.readOnly ? 'ro' : 'rw'
+  }`
 
   if (flistActiveId) {
     if (activeTab === 'profile-fields') {
@@ -278,6 +290,7 @@ function EditorActiveTabBody(props: {
       <div className="editor-cm-row">
         <div className="editor-cm" data-testid="editor-cm">
           <CodeMirror
+            key={cmKey}
             ref={props.cmRef}
             value={props.content}
             theme="dark"
