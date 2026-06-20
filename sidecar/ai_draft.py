@@ -55,6 +55,50 @@ import ai_draft_validate
 
 DRAFT_FILENAME = "ai-draft.json"
 DRAFT_SCHEMA_VERSION = 1
+
+
+def _resolve_editable_slot(
+    character_id: int | str,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Return `(payload, etag, set_id)` for the slot the assistant
+    should read + write against.
+
+    Honors working-sets v2: when an active set id is registered for
+    this character, that set's payload is the editable slot. Falls
+    back to the legacy `working.json` slot for characters that
+    haven't been migrated to v2 yet.
+
+    `set_id` is None when the fallback slot is in use; callers use
+    that as the routing signal for write_back.
+    """
+    set_id = character_archive.read_active_set_id(character_id)
+    if set_id:
+        payload = character_archive.read_set_payload(character_id, set_id)
+        etag = character_archive.set_payload_etag(character_id, set_id)
+        return payload, etag, set_id
+    payload = character_archive.read_working(character_id)
+    etag = character_archive.working_etag(character_id)
+    return payload, etag, None
+
+
+def _write_editable_slot(
+    character_id: int | str,
+    set_id: str | None,
+    payload: dict[str, Any],
+    *,
+    expected_etag: str | None,
+) -> str:
+    """Persist to the right backing store for the current editable slot.
+    Raises `character_archive.EtagMismatch` on a stale `expected_etag`
+    in both paths — the assistant chat layer maps that to the same
+    409 the working-copy PUT uses."""
+    if set_id:
+        return character_archive.write_set_payload(
+            character_id, set_id, payload, expected_etag=expected_etag
+        )
+    return character_archive.write_working(
+        character_id, payload, expected_etag=expected_etag
+    )
 # Hard ceiling on total edits a single draft may carry. A runaway tool
 # loop (model keeps emitting tool calls until MAX_TOOL_ROUNDS) combined
 # with composite tools (bulk_set_standard_kinks across 559 entries) can
@@ -154,11 +198,15 @@ def _now_iso() -> str:
 
 
 def _empty_draft(
-    character_id: int | str, *, model_endpoint: str = "", model_id: str = ""
+    character_id: int | str,
+    *,
+    model_endpoint: str = "",
+    model_id: str = "",
+    base_etag: str | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": DRAFT_SCHEMA_VERSION,
-        "base_etag": character_archive.working_etag(character_id),
+        "base_etag": base_etag,
         "base_working_schema_version": character_archive.WORKING_SCHEMA_VERSION,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
@@ -215,7 +263,7 @@ def append_edits(
     persist — the chat UI will surface the staleness so the user can
     re-prompt or discard.
     """
-    working = character_archive.read_working(character_id)
+    working, current_etag, _set_id = _resolve_editable_slot(character_id)
     if working is None:
         return {
             "draft": None,
@@ -231,10 +279,12 @@ def append_edits(
     draft = read_draft(character_id)
     if draft is None:
         draft = _empty_draft(
-            character_id, model_endpoint=model_endpoint, model_id=model_id
+            character_id,
+            model_endpoint=model_endpoint,
+            model_id=model_id,
+            base_etag=current_etag,
         )
 
-    current_etag = character_archive.working_etag(character_id)
     is_stale_base = (
         draft.get("base_etag") is not None
         and current_etag is not None
@@ -356,7 +406,7 @@ def accept_edits(
     draft = read_draft(character_id)
     if draft is None:
         return {"applied_edit_ids": [], "new_etag": None, "draft": None}
-    working = character_archive.read_working(character_id)
+    working, current_etag, set_id = _resolve_editable_slot(character_id)
     if working is None:
         raise ValueError("no working copy to apply edits onto")
 
@@ -373,7 +423,7 @@ def accept_edits(
     if not pending:
         return {
             "applied_edit_ids": [],
-            "new_etag": character_archive.working_etag(character_id),
+            "new_etag": current_etag,
             "draft": draft,
             "skipped_stale": skipped_stale,
         }
@@ -389,8 +439,8 @@ def accept_edits(
         _apply_edit(new_payload, edit, overlay)
     new_payload["_overlay"] = sorted(overlay)
 
-    new_etag = character_archive.write_working(
-        character_id, new_payload, expected_etag=if_match
+    new_etag = _write_editable_slot(
+        character_id, set_id, new_payload, expected_etag=if_match
     )
 
     # Prune accepted edits from the draft. Skipped-stale entries
