@@ -459,12 +459,22 @@ def _validate_patch_description(
     # surfaced as concrete bounds.
     bounds = _locate_anchor(old_excerpt, current)
     if bounds is None:
-        return ValidationResult(
-            False,
-            "anchor_mismatch",
-            "old_excerpt not found in current description (even after "
-            "whitespace normalisation)",
+        # Give the model a hint about what's actually near where it
+        # was looking so it can re-quote. Without this, the model
+        # just retries variants of the same wrong quote until the
+        # tool-round cap fires.
+        suggestion = _nearest_substring_hint(old_excerpt, current)
+        msg = (
+            "old_excerpt not found in current description "
+            "(even after whitespace normalisation)."
         )
+        if suggestion:
+            msg += (
+                f" Closest stretch of the description by overlap: "
+                f"…{suggestion}…  Re-quote from the actual description "
+                f"or use replace_description for whole-paragraph rewrites."
+            )
+        return ValidationResult(False, "anchor_mismatch", msg)
     anchor_start, anchor_end = bounds
     canonical.update(
         kind="text_patch",
@@ -474,6 +484,48 @@ def _validate_patch_description(
         anchor_end=anchor_end,
     )
     return ValidationResult(True, edit=canonical)
+
+
+def _nearest_substring_hint(needle: str, haystack: str, *, window: int = 80) -> str:
+    """Pick the longest contiguous substring of `needle` (≥ 8 chars)
+    that DOES appear in `haystack`, then return a window around its
+    location. Used to coach the model when its `patch_description`
+    quote mismatches the live text — without a hint the model just
+    retries variants of the same wrong quote.
+
+    Returns "" when no meaningful overlap exists (rare for any
+    real grammar-fix attempt; common for a wholly invented quote).
+    """
+    if not needle or not haystack:
+        return ""
+    best_len = 0
+    best_in_haystack = -1
+    # Sliding-substring scan from longest → shortest. Most local-model
+    # mistakes are off-by-a-few-chars, so we usually find a hit on the
+    # first or second pass. Cap the scan at the smallest of (needle
+    # len, 120) so very long needles don't explode the cost.
+    max_try = min(len(needle), 120)
+    for L in range(max_try, 7, -1):
+        for i in range(0, len(needle) - L + 1):
+            sub = needle[i : i + L]
+            pos = haystack.find(sub)
+            if pos != -1:
+                best_len = L
+                best_in_haystack = pos
+                break
+        if best_len > 0:
+            break
+    if best_in_haystack < 0:
+        return ""
+    start = max(0, best_in_haystack - window // 2)
+    end = min(len(haystack), best_in_haystack + best_len + window // 2)
+    snippet = haystack[start:end]
+    # Truncate runaway whitespace in the snippet so the hint stays
+    # readable; preserve everything else verbatim.
+    snippet = re.sub(r"\s+", " ", snippet).strip()
+    if len(snippet) > 200:
+        snippet = snippet[:200] + "…"
+    return snippet
 
 
 def _locate_anchor(needle: str, haystack: str) -> tuple[int, int] | None:
