@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
 import { findEnclosingTag } from '../lib/bbcode/findEnclosingTag'
+import { applyAction, TOOLBAR_ACTIONS, type ToolbarAction } from '../features/editor/Toolbar'
 
 /**
  * Global right-click menu, replacing the previous main-process native
@@ -18,8 +19,10 @@ import { findEnclosingTag } from '../lib/bbcode/findEnclosingTag'
  */
 type Item = {
   label: string
-  onClick: () => void
+  onClick?: () => void
   enabled?: boolean
+  submenu?: Item[]
+  separator?: boolean
 }
 
 type Anchor = { x: number; y: number; items: Item[] }
@@ -62,12 +65,108 @@ export function AppContextMenu() {
   if (!anchor) return null
 
   return (
+    <MenuList
+      items={anchor.items}
+      x={anchor.x}
+      y={anchor.y}
+      close={() => setAnchor(null)}
+    />
+  )
+}
+
+function MenuList({
+  items,
+  x,
+  y,
+  close
+}: {
+  items: Item[]
+  x: number
+  y: number
+  close: () => void
+}) {
+  const [openSub, setOpenSub] = useState<number | null>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  return (
     <div
       className="app-ctx-menu"
-      style={{ left: anchor.x, top: anchor.y }}
+      style={{ left: x, top: y }}
       role="menu"
     >
-      {anchor.items.map((item, i) => (
+      {items.map((item, i) => {
+        if (item.separator) {
+          return <div key={i} className="app-ctx-menu-sep" role="separator" />
+        }
+        const isParent = !!item.submenu?.length
+        const isOpen = openSub === i
+        return (
+          <div
+            key={i}
+            className="app-ctx-menu-row"
+            onMouseEnter={() => setOpenSub(isParent ? i : null)}
+          >
+            <button
+              ref={(el) => {
+                itemRefs.current[i] = el
+              }}
+              type="button"
+              role="menuitem"
+              className="app-ctx-menu-item"
+              disabled={item.enabled === false}
+              onClick={() => {
+                if (item.enabled === false) return
+                if (isParent) {
+                  setOpenSub(isOpen ? null : i)
+                  return
+                }
+                try {
+                  item.onClick?.()
+                } finally {
+                  close()
+                }
+              }}
+            >
+              <span>{item.label}</span>
+              {isParent ? <span className="app-ctx-menu-chev">▸</span> : null}
+            </button>
+            {isParent && isOpen ? (
+              <SubmenuPanel
+                items={item.submenu!}
+                anchorEl={itemRefs.current[i]}
+                close={close}
+              />
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function SubmenuPanel({
+  items,
+  anchorEl,
+  close
+}: {
+  items: Item[]
+  anchorEl: HTMLButtonElement | null
+  close: () => void
+}) {
+  if (!anchorEl) return null
+  const rect = anchorEl.getBoundingClientRect()
+  // Open to the right by default; if that would overflow, mirror to
+  // the left of the parent item.
+  const estW = 200
+  const spillsRight = rect.right + estW > window.innerWidth - MENU_MIN_PADDING
+  const left = spillsRight ? rect.left - estW : rect.right
+  const top = rect.top
+  return (
+    <div
+      className="app-ctx-menu app-ctx-submenu"
+      style={{ left, top }}
+      role="menu"
+    >
+      {items.map((item, i) => (
         <button
           key={i}
           type="button"
@@ -77,9 +176,9 @@ export function AppContextMenu() {
           onClick={() => {
             if (item.enabled === false) return
             try {
-              item.onClick()
+              item.onClick?.()
             } finally {
-              setAnchor(null)
+              close()
             }
           }}
         >
@@ -160,6 +259,12 @@ function buildEditorItems(
         })
         view.focus()
       }
+    },
+    { label: '', separator: true },
+    {
+      label: 'Add tag',
+      enabled: isEditable,
+      submenu: buildAddTagSubmenu(view)
     }
   ]
 
@@ -178,6 +283,29 @@ function buildEditorItems(
     })
   }
   return items
+}
+
+function buildAddTagSubmenu(view: EditorView): Item[] {
+  // Popover-bearing actions (color, url, eicon) need their toolbar UI
+  // to pick a value; they don't translate to a context-menu single
+  // click, so we omit them. Everything else (wrap-style + the [hr]
+  // void insert) maps cleanly.
+  return TOOLBAR_ACTIONS.filter((a) => !a.popover).map((action) => ({
+    label: actionMenuLabel(action),
+    onClick: () => applyAction(view, action)
+  }))
+}
+
+function actionMenuLabel(action: ToolbarAction): string {
+  // Toolbar labels are visual ("B" for bold). For the context menu
+  // we want something human-readable: the title for wraps/inserts,
+  // with the tag form in brackets so power users can spot the
+  // bracket name at a glance.
+  if (action.wrap) {
+    const inner = action.wrap.open.replace(/^\[|\]$/g, '')
+    return `${action.title}  [${inner}]`
+  }
+  return action.title
 }
 
 function runCmCommand(view: EditorView, cmd: 'cut' | 'copy' | 'paste'): void {
