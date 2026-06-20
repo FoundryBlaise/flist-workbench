@@ -159,10 +159,10 @@ type Draft = {
     endpoint: string
     model: string
     api_key: string
-    /** 'nsfw' | 'sfw' | 'custom'. Custom loads the verbatim
-     *  system_prompt; the two shipped presets render from the
-     *  defaults block and don't roundtrip through this field. */
-    prompt_preset: string
+    /** The verbatim system prompt body sent to the model. Edits via
+     *  the textarea land here directly; the preset picker is just
+     *  syntactic sugar that copies a chosen preset's body into the
+     *  same field — same model labels uses. */
     system_prompt: string
     temperature: string
     token_budget: string
@@ -218,7 +218,6 @@ function buildDraft(state: SettingsState): Draft {
       endpoint: state.ai_assistant.endpoint,
       model: state.ai_assistant.model,
       api_key: state.ai_assistant.api_key,
-      prompt_preset: state.ai_assistant.prompt_preset || 'nsfw',
       system_prompt: state.ai_assistant.system_prompt,
       temperature: String(state.ai_assistant.temperature),
       token_budget: String(state.ai_assistant.token_budget),
@@ -277,7 +276,6 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.ai_assistant.endpoint !== baseline.ai_assistant.endpoint ||
     draft.ai_assistant.model !== baseline.ai_assistant.model ||
     draft.ai_assistant.api_key !== baseline.ai_assistant.api_key ||
-    draft.ai_assistant.prompt_preset !== baseline.ai_assistant.prompt_preset ||
     draft.ai_assistant.system_prompt !== baseline.ai_assistant.system_prompt ||
     draft.ai_assistant.temperature !== baseline.ai_assistant.temperature ||
     draft.ai_assistant.token_budget !== baseline.ai_assistant.token_budget ||
@@ -633,11 +631,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           endpoint: draft.ai_assistant.endpoint.trim(),
           model: draft.ai_assistant.model.trim(),
           api_key: draft.ai_assistant.api_key,
-          prompt_preset: draft.ai_assistant.prompt_preset,
-          system_prompt:
-            draft.ai_assistant.prompt_preset === 'custom'
-              ? draft.ai_assistant.system_prompt
-              : '',
+          system_prompt: draft.ai_assistant.system_prompt,
           temperature: clampFloat(
             draft.ai_assistant.temperature,
             0,
@@ -1272,25 +1266,12 @@ function AiAssistantPane({
   draft: Draft['ai_assistant']
   onChange: (patch: Partial<Draft['ai_assistant']>) => void
 }) {
-  // Settings → AI Assistant. The master toggle sits at the top so a
-  // new user sees it first. Everything below is greyed out until the
-  // toggle is on — keeps the feature inert by default per the Phase 9
-  // opt-in invariant.
+  // Settings → AI Assistant. Mirrors the visual rhythm of ChatPane /
+  // LabelsPane: PaneHeader at the top, then sections built from the
+  // shared EndpointField / ModelField / ApiKeyField components, then
+  // a PromptPresetPicker that drives the same textarea labels uses.
   const setEnabledInStore = useStore((s) => s.setAiAssistantEnabled)
   const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
-
-  const isCustomPrompt = draft.prompt_preset === 'custom'
-  // The textarea always displays the *active* prompt: the user's
-  // saved custom string for custom mode; the shipped preset for
-  // nsfw/sfw. Editing only fires onChange when isCustomPrompt is
-  // true, so flipping between presets doesn't round-trip the
-  // preview through `system_prompt` and clobber the user's saved
-  // custom string (UX-B2 fix 2026-06-19).
-  const previewPrompt = isCustomPrompt
-    ? draft.system_prompt
-    : draft.prompt_preset === 'sfw'
-      ? state.defaults.system_prompt_sfw
-      : state.defaults.system_prompt_nsfw
 
   const endpointCategory = categoriseEndpoint(draft.endpoint)
   const showNonLoopbackWarning =
@@ -1299,15 +1280,21 @@ function AiAssistantPane({
     endpointCategory === 'remote' &&
     draft.endpoint.trim().length > 0
 
+  const isPromptDefault = draft.system_prompt === state.defaults.system_prompt
+
   return (
     <>
+      <PaneHeader
+        title="AI Assistant"
+        subtitle="Per-character editing helper. OFF by default; flip the master toggle to expose the Tools menu entry and the bottom-dock pane."
+      />
+
       <div className="settings-section">
         <h3 className="settings-section-title">Feature toggle</h3>
         <p className="settings-help">
-          AI Assistant is OFF by default. Until you enable it here, the
-          Tools menu hides the Character Assistant entry, the bottom
-          chat dock never mounts, and the sidecar refuses every
-          assistant + draft endpoint.
+          Until you enable it here, the Tools menu hides the Character
+          Assistant entry, the bottom dock never mounts, and the
+          sidecar refuses every assistant + draft endpoint.
         </p>
         <label className="settings-checkbox-row">
           <input
@@ -1317,9 +1304,7 @@ function AiAssistantPane({
               const next = e.target.checked
               onChange({ enabled: next })
               // Live-update the store so the native menu rebuilds
-              // without waiting for the Save round-trip — gives the
-              // user immediate visible feedback that the toggle did
-              // something.
+              // without waiting for the Save round-trip.
               setEnabledInStore(next)
             }}
             data-testid="ai-assistant-enable-toggle"
@@ -1335,40 +1320,39 @@ function AiAssistantPane({
         disabled={!draft.enabled}
         data-disabled={!draft.enabled}
       >
-        <h3 className="settings-section-title">Endpoint</h3>
-        <p className="settings-help">
-          Where the assistant sends chat completions. Leave blank to
-          fall back to your RAG · Chat endpoint.
-        </p>
-        <label className="settings-field">
-          <span className="settings-field-label">Endpoint URL</span>
-          <input
-            type="text"
-            value={draft.endpoint}
-            placeholder="http://host.docker.internal:1234"
-            onChange={(e) => onChange({ endpoint: e.target.value })}
-          />
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">Model</span>
-          <input
-            type="text"
-            value={draft.model}
-            placeholder="mistral-small-24b-abliterated"
-            onChange={(e) => onChange({ model: e.target.value })}
-          />
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">API key (optional)</span>
-          <input
-            type="password"
-            value={draft.api_key}
-            onChange={(e) => onChange({ api_key: e.target.value })}
-          />
-        </label>
+        <h3 className="settings-section-title">Inference</h3>
+        <EndpointField
+          id="ai-assistant-endpoint"
+          value={draft.endpoint}
+          defaultUrl=""
+          onChange={(v) => onChange({ endpoint: v })}
+          help="Where the assistant sends chat completions. Empty falls back to your RAG · Chat endpoint."
+          testId="ai-assistant-endpoint-input"
+        />
+        <ModelField
+          id="ai-assistant-model"
+          value={draft.model}
+          defaultValue=""
+          endpoint={draft.endpoint}
+          onChange={(v) => onChange({ model: v })}
+          help={
+            <>
+              Tool-call-capable model (Hermes 3, Qwen 2.5+, Llama 3.1+,
+              Mistral Nemo/Small). <strong>Discover</strong> lists loaded
+              models from the endpoint above.
+            </>
+          }
+          testId="ai-assistant-model-input"
+        />
+        <ApiKeyField
+          id="ai-assistant-api-key"
+          value={draft.api_key}
+          onChange={(v) => onChange({ api_key: v })}
+          testId="ai-assistant-api-key-input"
+        />
         {showNonLoopbackWarning && (
           <p
-            className="settings-help settings-help-warn"
+            className="settings-help"
             data-testid="ai-assistant-non-loopback"
             style={{ color: 'var(--accent-2)' }}
           >
@@ -1383,69 +1367,79 @@ function AiAssistantPane({
         disabled={!draft.enabled}
         data-disabled={!draft.enabled}
       >
-        <h3 className="settings-section-title">Behaviour</h3>
-        <label className="settings-field">
-          <span className="settings-field-label">System prompt preset</span>
-          <select
-            value={draft.prompt_preset}
-            onChange={(e) => onChange({ prompt_preset: e.target.value })}
-            data-testid="ai-assistant-prompt-preset"
+        <h3 className="settings-section-title">System prompt</h3>
+        <p className="settings-help">
+          Sent as the system message before each chat turn. Pick a
+          preset to populate the textarea, then edit freely — your
+          changes are saved verbatim.
+        </p>
+        <PromptPresetPicker
+          presets={state.prompt_presets}
+          currentBody={draft.system_prompt}
+          onPick={(body) => onChange({ system_prompt: body })}
+          idPrefix="ai-assistant"
+        />
+        <textarea
+          id="ai-assistant-prompt"
+          className="settings-textarea"
+          rows={14}
+          value={draft.system_prompt}
+          onChange={(e) => onChange({ system_prompt: e.target.value })}
+          data-testid="ai-assistant-system-prompt"
+        />
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() =>
+              onChange({ system_prompt: state.defaults.system_prompt })
+            }
+            disabled={isPromptDefault}
           >
-            <option value="nsfw">NSFW-aware (default)</option>
-            <option value="sfw">SFW-only</option>
-            <option value="custom">Custom</option>
-          </select>
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">System prompt</span>
-          <textarea
-            value={previewPrompt}
-            readOnly={!isCustomPrompt}
-            rows={8}
-            onChange={(e) => {
-              // Guard: ignore onChange entirely when in preview mode
-              // so the preset preview can't overwrite the saved
-              // custom prompt.
-              if (!isCustomPrompt) return
-              onChange({ system_prompt: e.target.value })
-            }}
-            data-testid="ai-assistant-system-prompt"
-          />
-        </label>
-        <div className="settings-row">
-          <label className="settings-field">
-            <span className="settings-field-label">Temperature</span>
-            <input
-              type="number"
-              step="0.1"
-              min={0}
-              max={2}
-              value={draft.temperature}
-              onChange={(e) => onChange({ temperature: e.target.value })}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">Token budget</span>
-            <input
-              type="number"
-              step={1024}
-              min={1024}
-              max={200000}
-              value={draft.token_budget}
-              onChange={(e) => onChange({ token_budget: e.target.value })}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-label">Timeout (s)</span>
-            <input
-              type="number"
-              min={5}
-              max={600}
-              value={draft.timeout_sec}
-              onChange={(e) => onChange({ timeout_sec: e.target.value })}
-            />
-          </label>
+            Reset to default prompt
+          </button>
+          <span className="settings-meta">
+            {draft.system_prompt.length.toLocaleString()} chars
+          </span>
         </div>
+      </fieldset>
+
+      <fieldset
+        className="settings-section"
+        disabled={!draft.enabled}
+        data-disabled={!draft.enabled}
+      >
+        <h3 className="settings-section-title">Tuning</h3>
+        <NumericRow
+          label="Temperature"
+          help="0 = deterministic, 1 = balanced, 2 = creative. 0.3 default."
+          value={Number(draft.temperature)}
+          onChange={(v) => onChange({ temperature: String(v) })}
+          min={0}
+          max={2}
+          step={0.1}
+          testId="ai-assistant-temperature-input"
+        />
+        <NumericRow
+          label="Token budget"
+          help="Approx. ceiling on prompt size; the sidecar refuses if the rendered messages exceed it."
+          value={Number(draft.token_budget)}
+          onChange={(v) => onChange({ token_budget: String(v) })}
+          min={1024}
+          max={200000}
+          step={1024}
+          testId="ai-assistant-token-budget-input"
+        />
+        <NumericRow
+          label="Timeout (s)"
+          help="Per-LLM-round-trip timeout. Bigger if your model is slow to warm."
+          value={Number(draft.timeout_sec)}
+          onChange={(v) => onChange({ timeout_sec: String(v) })}
+          min={5}
+          max={600}
+          step={1}
+          testId="ai-assistant-timeout-input"
+        />
       </fieldset>
 
       <fieldset
@@ -1498,8 +1492,7 @@ function AiAssistantPane({
             try {
               await api.aiDraftDeleteAll()
             } catch {
-              // Best-effort — server may already be inert if the
-              // master flag flipped first.
+              // Best-effort — server may already be inert.
             }
           }}
           onCancel={() => setDisableConfirmOpen(false)}
@@ -2382,11 +2375,15 @@ function formatJobScope(scope: { character?: string; partner?: string }): string
 function PromptPresetPicker({
   presets,
   currentBody,
-  onPick
+  onPick,
+  idPrefix = 'labels'
 }: {
   presets: PromptPreset[]
   currentBody: string
   onPick: (body: string) => void
+  /** Per-pane suffix so id + testid stay unique when the picker shows
+   *  up in Labels, RAG · Chat, and AI Assistant simultaneously. */
+  idPrefix?: string
 }) {
   if (presets.length === 0) return null
   const matched = presets.find((p) => p.body === currentBody)
@@ -2395,13 +2392,13 @@ function PromptPresetPicker({
   return (
     <div className="settings-row" style={{ marginBottom: 8 }}>
       <label
-        htmlFor="labels-prompt-preset"
+        htmlFor={`${idPrefix}-prompt-preset`}
         className="settings-row-label settings-row-label-wide"
       >
         Preset
       </label>
       <select
-        id="labels-prompt-preset"
+        id={`${idPrefix}-prompt-preset`}
         className="settings-input"
         value={selectedId}
         onChange={(e) => {
@@ -2409,7 +2406,7 @@ function PromptPresetPicker({
           const next = presets.find((p) => p.id === id)
           if (next) onPick(next.body)
         }}
-        data-testid="labels-prompt-preset"
+        data-testid={`${idPrefix}-prompt-preset`}
       >
         {!matched && (
           <option value="" disabled>
@@ -2546,10 +2543,16 @@ function ChatPane({
       <div className="settings-section">
         <h3 className="settings-section-title">System prompt</h3>
         <p className="settings-help">
-          Prepended as the system message before each retrieval call. Empty
-          resets to the bundled English default that asks the model to ground
-          answers in the cited chunks.
+          Prepended as the system message before each retrieval call.
+          Pick a preset to populate the textarea, then edit freely —
+          your changes are saved verbatim.
         </p>
+        <PromptPresetPicker
+          presets={rag.prompt_presets}
+          currentBody={draft.chat_system_prompt}
+          onPick={(body) => onChange({ chat_system_prompt: body })}
+          idPrefix="rag-chat"
+        />
         <textarea
           id="rag-chat-prompt"
           className="settings-textarea"

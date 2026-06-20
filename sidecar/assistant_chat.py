@@ -59,10 +59,69 @@ import settings as settings_store
 LOG = logging.getLogger("assistant_chat")
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-DEFAULT_PROMPT_NSFW = (PROMPTS_DIR / "assistant_v1_nsfw_aware.txt").read_text(
-    encoding="utf-8"
+
+
+def _load_prompt(name: str) -> str:
+    return (PROMPTS_DIR / name).read_text(encoding="utf-8")
+
+
+# Shipped prompts. Pattern matches labels.PROMPT_PRESETS exactly so the
+# renderer's PromptPresetPicker can drive the AI Assistant pane with
+# the same component as the Labels pane.
+@dataclass(frozen=True)
+class PromptPreset:
+    id: str
+    label: str
+    language: str
+    description: str
+    body: str
+
+
+PROMPT_PRESETS: tuple[PromptPreset, ...] = (
+    PromptPreset(
+        id="nsfw-en",
+        label="NSFW-aware (English)",
+        language="English",
+        description=(
+            "Default. Treats explicit content as appropriate for F-list profiles; "
+            "responds in English."
+        ),
+        body=_load_prompt("assistant_v1_nsfw_en.txt"),
+    ),
+    PromptPreset(
+        id="nsfw-de",
+        label="NSFW-bewusst (Deutsch)",
+        language="German",
+        description=(
+            "NSFW-aware default, but the assistant answers in German and writes "
+            "edit rationales in German."
+        ),
+        body=_load_prompt("assistant_v1_nsfw_de.txt"),
+    ),
+    PromptPreset(
+        id="sfw-en",
+        label="SFW-only (English)",
+        language="English",
+        description=(
+            "Refuses explicit content and suggests switching prompts. English."
+        ),
+        body=_load_prompt("assistant_v1_sfw_en.txt"),
+    ),
+    PromptPreset(
+        id="sfw-de",
+        label="Nur SFW (Deutsch)",
+        language="German",
+        description=(
+            "Refuses explicit content and suggests switching prompts. German."
+        ),
+        body=_load_prompt("assistant_v1_sfw_de.txt"),
+    ),
 )
-DEFAULT_PROMPT_SFW = (PROMPTS_DIR / "assistant_v1_sfw.txt").read_text(encoding="utf-8")
+
+# Default body (first preset) used when no custom system prompt is
+# stored and the preset key resolves to nothing.
+DEFAULT_PROMPT_NSFW = PROMPT_PRESETS[0].body
+DEFAULT_PROMPT_SFW = PROMPT_PRESETS[2].body
 
 MAX_TOOL_ROUNDS = 5  # safety: never loop on a model that won't stop calling tools
 
@@ -120,23 +179,18 @@ def resolve_assistant_config(conn) -> AssistantConfig:
             settings_store.get(conn, settings_store.KEY_RAG_CHAT_API_KEY) or ""
         ).strip()
 
-    preset = (
-        settings_store.get(conn, settings_store.KEY_AI_ASSISTANT_PROMPT_PRESET)
-        or "nsfw"
-    ).strip().lower()
-    # Only the explicit 'custom' preset reads the user-authored prompt;
-    # otherwise the preset wins. Previously a once-saved custom prompt
-    # silently overrode every preset switch in Settings, which was
-    # confusing — the dropdown looked broken.
-    if preset == "custom":
-        custom = settings_store.get(
-            conn, settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT
-        )
-        system_prompt = (
-            custom if isinstance(custom, str) and custom.strip() else DEFAULT_PROMPT_NSFW
-        )
-    elif preset == "sfw":
-        system_prompt = DEFAULT_PROMPT_SFW
+    # Saved system prompt is the source of truth (mirrors labels +
+    # rag patterns): if it's set, use it verbatim; if not, fall back
+    # to the first preset (NSFW English). Preset selection in the UI
+    # is purely a "copy this preset's body into the textarea" action
+    # — same pattern as labels' PromptPresetPicker. This deliberately
+    # drops the older preset-string-as-mode behavior in favour of
+    # the always-editable model.
+    custom = settings_store.get(
+        conn, settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT
+    )
+    if isinstance(custom, str) and custom.strip():
+        system_prompt = custom
     else:
         system_prompt = DEFAULT_PROMPT_NSFW
 

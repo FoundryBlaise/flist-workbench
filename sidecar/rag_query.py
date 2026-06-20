@@ -130,7 +130,7 @@ def expand_with_neighbors(
     )
 
 
-DEFAULT_SYSTEM_PROMPT = (
+DEFAULT_SYSTEM_PROMPT_EN = (
     "You are an assistant answering questions about the user's saved "
     "roleplay logs. You receive numbered source chunks retrieved from "
     "those logs; each chunk has a date, partner character, speakers, "
@@ -153,6 +153,86 @@ DEFAULT_SYSTEM_PROMPT = (
     "- Quote the date when relevant "
     '(e.g. "On 2025-03-15, Tauriel said: ...").\n'
     "- Stay concrete and close to the source — do not invent details."
+)
+
+DEFAULT_SYSTEM_PROMPT_DE = (
+    "Du bist ein Assistent, der Fragen zu den gespeicherten Roleplay-Logs "
+    "des Nutzers beantwortet. Du erhältst nummerierte Quellen-Chunks, die "
+    "aus diesen Logs abgerufen wurden; jeder Chunk hat ein Datum, einen "
+    "Partner-Character, Sprecher und eine Chunk-ID.\n\n"
+    "Regeln — strikt befolgen:\n"
+    "- Antworte in der Sprache der Frage.\n"
+    "- Antworte AUSSCHLIESSLICH aus den bereitgestellten Quellen. Verwende "
+    "kein allgemeines Trainingswissen und rate nicht.\n"
+    "- Zitiere die Source-ID [Source N] nach jeder Tatsachenaussage.\n"
+    "- Wenn die Antwort nicht in den Quellen steht, antworte mit genau: "
+    '"Diese Information ist nicht in den Logs enthalten." (or in English: '
+    '"I can\'t find that in the logs.")\n'
+    "- Wiederhole niemals einen Eigennamen aus der Frage (Name, Ort, "
+    "Gegenstand) als Antwort, es sei denn, dieser exakte Name kommt in "
+    "einer Quelle vor. Wenn die Frage etwas nennt, das nicht in den "
+    "Quellen steht, behandle es als fehlend und sag das.\n"
+    "- Zitiere das Datum wenn relevant "
+    '(z. B. "Am 15.03.2025 sagte Tauriel: ...").\n'
+    "- Bleib konkret und nah an der Quelle — erfinde keine Details."
+)
+
+DEFAULT_SYSTEM_PROMPT_MINIMAL = (
+    "Answer questions about the user's roleplay logs using ONLY the "
+    "provided source chunks. Cite [Source N] after every factual claim. "
+    "If the answer isn't in the sources, say so in the question's "
+    "language. Respond in the language of the question."
+)
+
+# Back-compat alias — many existing call sites still import the
+# unsuffixed name; keep it pointing at the English default so prior
+# behavior is preserved.
+DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_EN
+
+
+@dataclass(frozen=True)
+class PromptPreset:
+    id: str
+    label: str
+    language: str
+    description: str
+    body: str
+
+
+# Same shape labels.PROMPT_PRESETS uses. Renderer drives the picker
+# off this list verbatim. First entry's body is the "Reset to default"
+# target.
+PROMPT_PRESETS: tuple[PromptPreset, ...] = (
+    PromptPreset(
+        id="en-default",
+        label="English (default)",
+        language="English",
+        description=(
+            "Cited, source-grounded answers in English. Best when your "
+            "logs are mostly English."
+        ),
+        body=DEFAULT_SYSTEM_PROMPT_EN,
+    ),
+    PromptPreset(
+        id="de-default",
+        label="Deutsch (Standard)",
+        language="German",
+        description=(
+            "Same heuristics, German wording. Use this when your logs "
+            "are mostly German and you want German answers."
+        ),
+        body=DEFAULT_SYSTEM_PROMPT_DE,
+    ),
+    PromptPreset(
+        id="minimal",
+        label="Language-agnostic (minimal)",
+        language="Any",
+        description=(
+            "Short prompt. Works across languages but less strict on "
+            "edge cases than the language-specific variants."
+        ),
+        body=DEFAULT_SYSTEM_PROMPT_MINIMAL,
+    ),
 )
 
 

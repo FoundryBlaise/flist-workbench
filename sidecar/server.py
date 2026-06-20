@@ -3693,13 +3693,16 @@ class AiAssistantSettingsUpdate(BaseModel):
     """Per-field updates for the AI Assistant. `enabled` is the master
     opt-in gate. All transport-level fields use the empty-string-clears
     convention so a Settings reset returns to RAG-endpoint fallback.
+
+    `system_prompt` is the authoritative editable copy — preset picker
+    in the UI just copies the chosen preset's body into this field,
+    matching how the labels pane works.
     """
     enabled: bool | None = None
     endpoint: str | None = None
     model: str | None = None
     api_key: str | None = None
     system_prompt: str | None = None
-    prompt_preset: str | None = None  # 'nsfw' | 'sfw' | 'custom'
     temperature: float | None = None
     token_budget: int | None = None
     timeout_sec: int | None = None
@@ -3816,10 +3819,35 @@ def _settings_dict(conn) -> dict:
                 "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
             },
+            "prompt_presets": _prompt_presets_for("rag"),
         },
         "backups": _backups_settings_dict(conn),
         "ai_assistant": _ai_assistant_settings_dict(conn),
     }
+
+
+def _prompt_presets_for(section: str) -> list[dict]:
+    """Renderer-shaped preset list for a Settings section. Mirrors the
+    labels `prompt_presets` payload so the same `PromptPresetPicker`
+    component drives every pane."""
+    if section == "rag":
+        from rag_query import PROMPT_PRESETS as RAG_PRESETS
+
+        presets = RAG_PRESETS
+    elif section == "assistant":
+        presets = assistant_chat.PROMPT_PRESETS
+    else:
+        return []
+    return [
+        {
+            "id": p.id,
+            "label": p.label,
+            "language": p.language,
+            "description": p.description,
+            "body": p.body,
+        }
+        for p in presets
+    ]
 
 
 def _ai_assistant_settings_dict(conn) -> dict:
@@ -3855,15 +3883,19 @@ def _ai_assistant_settings_dict(conn) -> dict:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+    # If the user has never edited, return the first preset body as
+    # the live prompt so the textarea isn't empty. Same convention
+    # labels uses.
+    saved_prompt = _str(settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT)
+    if not saved_prompt:
+        saved_prompt = assistant_chat.DEFAULT_PROMPT_NSFW
+
     return {
         "enabled": settings_store.ai_assistant_enabled(conn),
         "endpoint": _str(settings_store.KEY_AI_ASSISTANT_ENDPOINT),
         "model": _str(settings_store.KEY_AI_ASSISTANT_MODEL),
         "api_key": _str(settings_store.KEY_AI_ASSISTANT_API_KEY),
-        "system_prompt": _str(settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT),
-        "prompt_preset": _str(
-            settings_store.KEY_AI_ASSISTANT_PROMPT_PRESET, "nsfw"
-        ),
+        "system_prompt": saved_prompt,
         "temperature": _float(settings_store.KEY_AI_ASSISTANT_TEMPERATURE, 0.3),
         "token_budget": _int(settings_store.KEY_AI_ASSISTANT_TOKEN_BUDGET, 12000),
         "timeout_sec": _int(settings_store.KEY_AI_ASSISTANT_TIMEOUT_SEC, 120),
@@ -3874,17 +3906,17 @@ def _ai_assistant_settings_dict(conn) -> dict:
             settings_store.KEY_AI_ASSISTANT_LOG_REQUESTS, False
         ),
         # The defaults block lets the renderer offer a one-click
-        # "Reset to default" affordance.
+        # "Reset to default" affordance. system_prompt default is the
+        # first preset's body — matches labels' convention.
         "defaults": {
-            "prompt_preset": "nsfw",
+            "system_prompt": assistant_chat.DEFAULT_PROMPT_NSFW,
             "temperature": 0.3,
             "token_budget": 12000,
             "timeout_sec": 120,
             "warn_non_loopback": True,
             "log_requests": False,
-            "system_prompt_nsfw": assistant_chat.DEFAULT_PROMPT_NSFW,
-            "system_prompt_sfw": assistant_chat.DEFAULT_PROMPT_SFW,
         },
+        "prompt_presets": _prompt_presets_for("assistant"),
     }
 
 
@@ -3911,17 +3943,6 @@ def _apply_ai_assistant_update(conn, update: AiAssistantSettingsUpdate) -> None:
     _set_str(settings_store.KEY_AI_ASSISTANT_MODEL, update.model)
     _set_str(settings_store.KEY_AI_ASSISTANT_API_KEY, update.api_key)
     _set_str(settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT, update.system_prompt)
-    if update.prompt_preset is not None:
-        if update.prompt_preset not in {"nsfw", "sfw", "custom"}:
-            raise HTTPException(
-                status_code=400,
-                detail="prompt_preset must be 'nsfw' | 'sfw' | 'custom'",
-            )
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_PROMPT_PRESET,
-            update.prompt_preset,
-        )
     if update.temperature is not None:
         clamped = max(0.0, min(2.0, float(update.temperature)))
         settings_store.set_value(
