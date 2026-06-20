@@ -48,6 +48,9 @@ declare global {
         flistSessionActive: boolean
       }) => void
       openExternal?: (url: string) => void
+      fetchImageBytes?: (
+        url: string
+      ) => Promise<{ bytes: Uint8Array; mime: string } | null>
       spawnPowerShell?: (command: string) => void
       openSettings?: () => void
       creds?: {

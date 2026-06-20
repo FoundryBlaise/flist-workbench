@@ -207,7 +207,19 @@ type MenuFlags = {
 // Hostnames we'll open in the user's browser. Locked to the two we
 // actually need so a compromised renderer can't redirect the user to
 // a phishing page that looks like Ollama.
-const EXTERNAL_HOSTS = new Set(['ollama.com', 'www.ollama.com', 'github.com'])
+const EXTERNAL_HOSTS = new Set([
+  'ollama.com',
+  'www.ollama.com',
+  'github.com',
+  // F-list main site and the static CDN that serves character
+  // avatars (/images/avatar), eicons (/images/eicon), and inline
+  // images (/images/charinline). The right-click menu's "Open
+  // image in browser" hands URLs from these hosts straight to the
+  // shell so the user's default browser opens them.
+  'f-list.net',
+  'www.f-list.net',
+  'static.f-list.net'
+])
 
 ipcMain.on('workbench:open-external', (event, url: unknown) => {
   if (event.sender !== mainWindow?.webContents) return
@@ -222,6 +234,47 @@ ipcMain.on('workbench:open-external', (event, url: unknown) => {
   if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
   void shell.openExternal(parsed.toString())
 })
+
+// Fetch arbitrary image bytes for the right-click "Copy image"
+// action. The renderer can't fetch f-list.net's CDN directly —
+// it doesn't return CORS headers, so cross-origin reads fail and
+// a canvas drawImage()+toBlob() round-trip taints the canvas.
+// Main-process fetch has no such restriction. Same allowlist
+// posture as openExternal: only known image hosts, https only.
+const IMAGE_FETCH_HOSTS = new Set([
+  'static.f-list.net',
+  'f-list.net',
+  'www.f-list.net'
+])
+
+ipcMain.handle(
+  'workbench:fetch-image-bytes',
+  async (
+    event,
+    url: unknown
+  ): Promise<{ bytes: Uint8Array; mime: string } | null> => {
+    if (event.sender !== mainWindow?.webContents) return null
+    if (typeof url !== 'string') return null
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return null
+    }
+    if (parsed.protocol !== 'https:') return null
+    if (!IMAGE_FETCH_HOSTS.has(parsed.hostname.toLowerCase())) return null
+    try {
+      const res = await fetch(parsed.toString())
+      if (!res.ok) return null
+      const mime = res.headers.get('content-type') ?? 'application/octet-stream'
+      const buf = await res.arrayBuffer()
+      return { bytes: new Uint8Array(buf), mime }
+    } catch (err) {
+      console.error('[main] fetch-image-bytes failed:', err)
+      return null
+    }
+  }
+)
 
 // Strict allowlist for the PowerShell convenience button — only the
 // two OLLAMA_* env-var commands the wizard sets, in either

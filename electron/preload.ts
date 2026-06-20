@@ -76,6 +76,13 @@ contextBridge.exposeInMainWorld('workbench', {
   openExternal: (url: string) => {
     ipcRenderer.send('workbench:open-external', url)
   },
+  // Fetch raw image bytes for the right-click "Copy image" action.
+  // Main has a host allowlist + https-only filter; nulls back on
+  // anything else.
+  fetchImageBytes: (url: string) =>
+    ipcRenderer.invoke('workbench:fetch-image-bytes', url) as Promise<
+      { bytes: Uint8Array; mime: string } | null
+    >,
   // Convenience for the env-var page: spawns a PowerShell window with
   // the supplied commands ready to run. Windows-only; main checks the
   // platform and no-ops elsewhere.

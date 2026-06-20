@@ -211,6 +211,13 @@ function buildItems(e: MouseEvent): Item[] {
   const target = e.target as Element | null
   if (!target) return []
 
+  // Images take priority over CM/input menus when right-clicked: the
+  // user clicked an image to act on the image, not the surrounding
+  // text. Works for preview-pane <img class="bb-icon|bb-eicon|bb-img">
+  // and gallery thumbnails alike.
+  const img = target.closest('img') as HTMLImageElement | null
+  if (img && img.src) return buildImageItems(img)
+
   const cmEditor = target.closest('.cm-editor') as HTMLElement | null
   if (cmEditor) return buildEditorItems(cmEditor, e.clientX, e.clientY)
 
@@ -225,6 +232,92 @@ function buildItems(e: MouseEvent): Item[] {
   }
 
   return []
+}
+
+function buildImageItems(img: HTMLImageElement): Item[] {
+  const url = img.src
+  const canOpen = !!window.workbench?.openExternal && url.startsWith('https://')
+  return [
+    {
+      label: 'Copy image',
+      onClick: () => {
+        void copyImageToClipboard(img, url)
+      }
+    },
+    {
+      label: 'Copy image URL',
+      onClick: () => {
+        void navigator.clipboard.writeText(url).catch(() => {})
+      }
+    },
+    {
+      label: 'Open image in browser',
+      enabled: canOpen,
+      onClick: () => {
+        window.workbench?.openExternal?.(url)
+      }
+    }
+  ]
+}
+
+async function copyImageToClipboard(
+  img: HTMLImageElement,
+  url: string
+): Promise<void> {
+  // First try the renderer-only path: if the canvas isn't tainted
+  // (same-origin or `crossOrigin="anonymous"` plus CORS headers),
+  // we can read the bytes back as a PNG without an IPC round-trip.
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.drawImage(img, 0, 0)
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/png')
+      )
+      if (blob) {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob })
+        ])
+        return
+      }
+    }
+  } catch {
+    // Fall through to the main-process fetch.
+  }
+
+  // Cross-origin path: main fetches the bytes, we wrap them in a Blob
+  // and put them on the clipboard. Fall back to copying the URL as
+  // text if even that fails.
+  try {
+    const fetched = await window.workbench?.fetchImageBytes?.(url)
+    if (fetched && fetched.bytes.byteLength > 0) {
+      const mime = pickClipboardMime(fetched.mime)
+      const blob = new Blob([fetched.bytes], { type: mime })
+      await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })])
+      return
+    }
+  } catch {
+    // Final fallback below
+  }
+  try {
+    await navigator.clipboard.writeText(url)
+  } catch {
+    // Nothing more we can do — clipboard API unavailable in this env.
+  }
+}
+
+function pickClipboardMime(serverMime: string): string {
+  // ClipboardItem supports only a handful of types reliably; PNG is
+  // the safest universal choice. JPEG is also widely accepted now.
+  // GIFs lose animation when normalized to PNG by the browser, but
+  // pasting still works in most surfaces.
+  const m = serverMime.toLowerCase()
+  if (m === 'image/jpeg' || m === 'image/jpg') return 'image/jpeg'
+  if (m === 'image/webp') return 'image/png'
+  return 'image/png'
 }
 
 function buildEditorItems(
