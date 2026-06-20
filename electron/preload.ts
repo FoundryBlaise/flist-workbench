@@ -12,12 +12,21 @@ function resolvePort(): number {
 
 const sidecarPort = resolvePort()
 
+function resolveAppVersion(): string {
+  const arg = process.argv.find((a) => a.startsWith('--app-version='))
+  if (arg) return arg.split('=')[1] ?? ''
+  return ''
+}
+
+const appVersion = resolveAppVersion()
+
 // Menu items in main send `menu:action` with a string id; renderer subscribes
 // here. Returns an unsubscriber so React effects can clean up on unmount.
 type MenuActionListener = (action: string) => void
 
 contextBridge.exposeInMainWorld('workbench', {
   sidecarUrl: `http://127.0.0.1:${sidecarPort}`,
+  appVersion,
   selectDirectory: (opts?: { title?: string; defaultPath?: string }) =>
     ipcRenderer.invoke('workbench:select-directory', opts ?? {}) as Promise<string | null>,
   // Working-set bundle export/import — pick a file path, then the

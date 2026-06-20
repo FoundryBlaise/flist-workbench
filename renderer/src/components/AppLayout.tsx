@@ -429,6 +429,24 @@ export function AppLayout() {
           sidecar: {health}
         </span>
       </header>
+      {!updaterDismissed
+        && !aiSetupOpen
+        && (updaterStatus.kind === 'available'
+          || updaterStatus.kind === 'downloading'
+          || updaterStatus.kind === 'downloaded'
+          || (updaterManualCheck
+            && (updaterStatus.kind === 'checking'
+              || updaterStatus.kind === 'not-available'
+              || updaterStatus.kind === 'error'))) && (
+          <UpdateAvailableModal
+            status={updaterStatus}
+            manualCheck={updaterManualCheck}
+            onDismiss={() => {
+              setUpdaterDismissed(true)
+              setUpdaterManualCheck(false)
+            }}
+          />
+        )}
       {firstRunToast && !aiSetupOpen && (
         <div
           className="first-run-toast"
@@ -500,25 +518,6 @@ export function AppLayout() {
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-      {!updaterDismissed
-        && !aiSetupOpen
-        && !flistSignInOpen
-        && (updaterStatus.kind === 'available'
-          || updaterStatus.kind === 'downloading'
-          || updaterStatus.kind === 'downloaded'
-          || (updaterManualCheck
-            && (updaterStatus.kind === 'checking'
-              || updaterStatus.kind === 'not-available'
-              || updaterStatus.kind === 'error'))) && (
-          <UpdateAvailableModal
-            status={updaterStatus}
-            manualCheck={updaterManualCheck}
-            onDismiss={() => {
-              setUpdaterDismissed(true)
-              setUpdaterManualCheck(false)
-            }}
-          />
-        )}
       {aiSetupOpen && <AISetupWizard onClose={closeAiSetup} />}
       {activityOpen && <ActivityLogModal onClose={() => setActivityOpen(false)} />}
       {userscriptHelpOpen && (
