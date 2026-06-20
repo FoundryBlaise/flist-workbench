@@ -152,8 +152,18 @@ def test_write_rejects_empty_payload(archive_module) -> None:
 # ---- HTTP endpoints --------------------------------------------------
 
 
-def test_get_working_404_when_missing(client: TestClient) -> None:
-    assert client.get("/flist/character/999/working").status_code == 404
+def test_get_working_returns_null_payload_when_missing(client: TestClient) -> None:
+    """Endpoint now returns 200 + payload=null instead of 404 when
+    no working.json exists. Chrome's network panel logged every 404
+    unconditionally, scaring users (especially on working-sets v2
+    characters where the legacy slot is never written). The renderer
+    treats payload=null identically to the prior 404 path —
+    materialise-on-first-edit, seed from Live (Tier 2 §1.6)."""
+    res = client.get("/flist/character/999/working")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["payload"] is None
+    assert body["etag"] is None
 
 
 def test_put_then_get_round_trips_with_etag(client: TestClient) -> None:
