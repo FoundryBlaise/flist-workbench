@@ -1738,49 +1738,55 @@ body {
 .modal-close:hover { color: var(--text); }
 .modal-body { padding: 14px 20px; }
 
-/* Auto-updater banner — pinned at the top of the app shell, one
-   line, slim. Replaces the earlier modal which used CSS variables
-   that don't exist in this theme. */
-.updater-banner {
-  position: relative;
+/* Auto-updater toast — floating card pinned to the bottom-left of
+   the viewport. Out of document flow so it doesn't push or shrink
+   anything; small enough to be glanced at and ignored. */
+.updater-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 100;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  max-width: min(420px, calc(100vw - 32px));
   background: var(--panel-2);
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 5px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   color: var(--text);
   font-size: 13px;
   line-height: 1.4;
-  z-index: 50;
+  overflow: hidden;
 }
-.updater-banner-info { border-bottom-color: var(--accent); }
-.updater-banner-ready { border-bottom-color: var(--green); }
-.updater-banner-error { border-bottom-color: var(--accent-2); }
-.updater-banner-error .updater-banner-line { color: var(--accent-2); }
-.updater-banner-progress {
+.updater-toast-ready { border-left-color: var(--green); }
+.updater-toast-error { border-left-color: var(--accent-2); }
+.updater-toast-error .updater-toast-line { color: var(--accent-2); }
+.updater-toast-progress {
   position: absolute;
   left: 0;
-  bottom: -1px;
+  bottom: 0;
   height: 2px;
   background: var(--accent);
   transition: width 120ms linear;
 }
-.updater-banner-line {
+.updater-toast-line {
   flex: 1;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.updater-banner-line strong { color: var(--text); font-weight: 600; }
-.updater-banner-actions {
+.updater-toast-line strong { color: var(--text); font-weight: 600; }
+.updater-toast-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
 }
-.updater-banner-primary {
+.updater-toast-primary {
   padding: 3px 10px;
   border-radius: 3px;
   border: 1px solid var(--accent);
@@ -1790,8 +1796,8 @@ body {
   font-size: 12px;
   font-weight: 500;
 }
-.updater-banner-primary:hover { filter: brightness(1.1); }
-.updater-banner-close {
+.updater-toast-primary:hover { filter: brightness(1.1); }
+.updater-toast-close {
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -1801,7 +1807,7 @@ body {
   line-height: 1;
   border-radius: 3px;
 }
-.updater-banner-close:hover { background: var(--panel); color: var(--text); }
+.updater-toast-close:hover { background: var(--panel); color: var(--text); }
 /* The settings modal body can outgrow the 80vh max-height. Let it
    scroll inside the modal so the per-section Save buttons stay
    reachable without resizing the dialog. */
