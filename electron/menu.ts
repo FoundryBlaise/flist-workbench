@@ -21,6 +21,7 @@ export type MenuAction =
   | 'flist-activity'
   | 'restore-userscript-help'
   | 'backup-all'
+  | 'check-updates'
 
 // Lives in the main process because it touches shell.openPath; we
 // resolve the path from the sidecar so user_data_dir() stays the one
@@ -236,6 +237,12 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           id: 'restore-userscript-help',
           label: 'Install Restore Userscript…',
           click: () => send(getWindow(), 'restore-userscript-help')
+        },
+        { type: 'separator' },
+        {
+          id: 'check-updates',
+          label: 'Check for Updates…',
+          click: () => send(getWindow(), 'check-updates')
         },
         { type: 'separator' },
         {

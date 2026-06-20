@@ -16,6 +16,7 @@ export type MenuAction =
   | 'ai-setup'
   | 'flist-activity'
   | 'restore-userscript-help'
+  | 'check-updates'
 
 declare global {
   interface Window {

@@ -29,9 +29,11 @@ function formatBytes(n: number): string {
 
 export function UpdateAvailableModal({
   status,
+  manualCheck = false,
   onDismiss
 }: {
   status: UpdaterStatus
+  manualCheck?: boolean
   onDismiss: () => void
 }) {
   // Don't block dismiss while downloading — the download continues in
@@ -64,9 +66,26 @@ export function UpdateAvailableModal({
   let version: string | null = null
   let body: React.ReactNode = null
   let primary: { label: string; onClick: () => void; disabled?: boolean } | null = null
-  const secondary = { label: 'Later', onClick: onDismiss }
+  let secondaryLabel = 'Later'
 
-  if (status.kind === 'available') {
+  if (status.kind === 'checking') {
+    title = 'Checking for updates…'
+    body = (
+      <p>Asking GitHub if a newer version of F-list Workbench is available.</p>
+    )
+    primary = null
+    secondaryLabel = 'Close'
+  } else if (status.kind === 'not-available' && manualCheck) {
+    title = "You're up to date"
+    body = (
+      <p>
+        No newer version is available right now. Workbench checks again at
+        each launch.
+      </p>
+    )
+    primary = null
+    secondaryLabel = 'Close'
+  } else if (status.kind === 'available') {
     version = status.version
     body = (
       <>
@@ -125,6 +144,7 @@ export function UpdateAvailableModal({
       </p>
     )
     primary = null
+    secondaryLabel = 'Close'
   }
 
   return (
@@ -151,9 +171,9 @@ export function UpdateAvailableModal({
           <button
             type="button"
             className="updater-modal-secondary"
-            onClick={secondary.onClick}
+            onClick={onDismiss}
           >
-            {secondary.label}
+            {secondaryLabel}
           </button>
           {primary ? (
             <button
