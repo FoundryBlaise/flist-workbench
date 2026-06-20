@@ -726,8 +726,14 @@ body {
      bottom-dock is open: without them the pane refuses to shrink
      below its content height, the CodeMirror scroller never gets a
      bounded box to scroll inside, and the editor text just gets
-     clipped at the dock's top edge with no scrollbar. */
+     clipped at the dock's top edge with no scrollbar.
+     min-width: 0 is the horizontal twin — without it CM6 reports
+     the longest unwrapped line's intrinsic width up the flex chain
+     and the pane expands past the column, shoving the preview off
+     the right edge. lineWrapping inside CM can't do its job until
+     the container actually shrinks first. */
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
