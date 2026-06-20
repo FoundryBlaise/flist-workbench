@@ -5,6 +5,8 @@ import {
   EDITOR_SELECTION_EVENT,
   type EditorSelectionDetail
 } from '../../lib/bbcode/codemirror'
+import { EditorView } from '@codemirror/view'
+import { undo, redo } from '@codemirror/commands'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
 import { GalleryPreviewPane } from '../flist/GalleryPreviewPane'
@@ -106,6 +108,43 @@ export function PreviewPane() {
     applyOpenCollapses(el, opens)
     renderedFromRef.current = content
   }, [content, inlines, showAlternatePreview])
+
+  // Browser contentEditable owns its own undo stack, but blurring +
+  // refocusing the preview (or any innerHTML rewrite, which our blur
+  // handler does) silently clears it. Cmd/Ctrl+Z then becomes a no-op
+  // until the user clicks back into the code editor — confusing, and
+  // inconsistent with CodeMirror's own undo behaviour.
+  //
+  // Route the shortcut to CodeMirror's history extension instead: it
+  // tracks every change going through the editor view, including the
+  // ones our preview→source writeback sends via setContent. We sync
+  // the preview DOM manually after the dispatch because focusedRef
+  // would otherwise suppress the auto-render effect.
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey
+    if (!mod) return
+    const isUndo = !e.shiftKey && e.key.toLowerCase() === 'z'
+    const isRedo =
+      e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')
+    if (!isUndo && !isRedo) return
+    const cmEl = document.querySelector('.cm-editor') as HTMLElement | null
+    if (!cmEl) return
+    const view = EditorView.findFromDOM(cmEl)
+    if (!view) return
+    e.preventDefault()
+    if (isUndo) undo(view)
+    else redo(view)
+    const el = ref.current
+    if (!el) return
+    const next = view.state.doc.toString()
+    const opens = captureOpenCollapses(el)
+    el.innerHTML = bbcodeToHtml(next, {
+      withSourceMap: true,
+      inlines: useStore.getState().editorInlines
+    })
+    applyOpenCollapses(el, opens)
+    renderedFromRef.current = next
+  }
 
   const handleInput = () => {
     // When the surrounding editor is in read-only mode (Live / Backup
@@ -278,6 +317,7 @@ export function PreviewPane() {
           suppressContentEditableWarning
           spellCheck={false}
           onInput={handleInput}
+          onKeyDown={handleKeyDown}
           onClick={handleClick}
           onFocus={() => {
             focusedRef.current = true
