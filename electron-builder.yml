@@ -34,7 +34,12 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
-  artifactName: ${productName}-${version}-${arch}-${ext}
+  # No space in the filename — GitHub's release-asset upload turns
+  # spaces into "." while electron-builder writes them as "-" in
+  # latest.yml. The mismatch makes electron-updater 404 on download.
+  # Killing the space at the source keeps all three names identical:
+  # local artifact, latest.yml entry, uploaded asset.
+  artifactName: F-list-Workbench-${version}-${arch}.${ext}
 nsis:
   oneClick: false
   perMachine: false
@@ -43,6 +48,6 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: F-list Workbench
-  artifactName: ${productName}-${version}-${arch}-Setup.${ext}
+  artifactName: F-list-Workbench-${version}-${arch}-Setup.${ext}
 portable:
-  artifactName: ${productName}-${version}-${arch}-portable.${ext}
+  artifactName: F-list-Workbench-${version}-${arch}-portable.${ext}
