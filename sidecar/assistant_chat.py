@@ -445,6 +445,12 @@ def _call_openai_compat(
         # don't recognise the field ignore it harmlessly.
         "reasoning_effort": "low",
     }
+    if config.append_no_think:
+        # LM Studio + Qwen 3.5: the cleanest disable-thinking lever is
+        # the chat-template kwarg, not a prompt suffix. Unknown servers
+        # (vanilla OpenAI, llama.cpp without LM Studio) ignore this
+        # field; LM Studio honours it for thinking-aware chat templates.
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -602,14 +608,28 @@ def build_initial_messages(
     multi-turn conversations and confuse drift checks.
 
     When `append_no_think` is set, the literal token `/no_think` is
-    appended to the system prompt. Qwen 3.x family treats this as
-    "skip the chain-of-thought phase for this turn"; other model
-    families see it as text and ignore it harmlessly.
+    appended to BOTH the system prompt AND the most recent user
+    message. Per the Qwen 3 team's documentation the chat template
+    checks the user side first, so placing it there is the canonical
+    fix; keeping a system-side copy is belt-and-suspenders for chat
+    templates that look there instead.
     """
     cleaned = [m for m in history if m.get("role") != "system"]
     effective_prompt = (
         f"{system_prompt}\n\n/no_think" if append_no_think else system_prompt
     )
+    if append_no_think:
+        # Append to the LAST user message — Qwen 3.x chat template
+        # respects the directive only when it lives there. Walk
+        # backwards so we don't decorate every prior user turn (which
+        # would just inflate the prompt).
+        for i in range(len(cleaned) - 1, -1, -1):
+            m = cleaned[i]
+            if m.get("role") == "user":
+                content = m.get("content") or ""
+                if isinstance(content, str) and "/no_think" not in content:
+                    cleaned[i] = {**m, "content": f"{content}\n\n/no_think"}
+                break
     return [{"role": "system", "content": effective_prompt}, *cleaned]
 
 

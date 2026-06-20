@@ -403,23 +403,48 @@ def test_resolve_assistant_config_uses_saved_prompt_verbatim(env):
     assert config.system_prompt == "my custom thing"
 
 
-def test_build_initial_messages_appends_no_think_when_enabled(env):
-    """When the user has opted into the Qwen-family escape hatch,
-    `/no_think` is appended to the resolved system prompt so the
-    model skips its chain-of-thought phase. Other model families
-    treat it as literal text — no harm, just clutter."""
+def test_build_initial_messages_appends_no_think_to_system_and_user(env):
+    """Qwen 3.x's chat template respects `/no_think` only when it's in
+    the most recent USER message; we append it to the system prompt
+    too as belt-and-suspenders for templates that look there instead.
+    Other model families treat the token as literal text."""
     import assistant_chat
 
-    history = [{"role": "user", "content": "hi"}]
+    history = [
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": "OK"},
+        {"role": "user", "content": "second turn"},
+    ]
 
     plain = assistant_chat.build_initial_messages("BE TERSE.", history)
     assert plain[0]["content"] == "BE TERSE."
+    assert plain[-1]["content"] == "second turn"
 
     augmented = assistant_chat.build_initial_messages(
         "BE TERSE.", history, append_no_think=True
     )
+    # System prompt carries it.
     assert augmented[0]["content"].endswith("/no_think")
     assert augmented[0]["content"].startswith("BE TERSE.")
+    # Last user message carries it; earlier user turns left untouched
+    # so we don't inflate the multi-turn prompt with N copies.
+    user_msgs = [m for m in augmented if m.get("role") == "user"]
+    assert user_msgs[0]["content"] == "first turn"
+    assert user_msgs[-1]["content"].endswith("/no_think")
+    assert user_msgs[-1]["content"].startswith("second turn")
+
+
+def test_build_initial_messages_no_think_idempotent_on_user(env):
+    """If the renderer (or a previous turn) already stuck /no_think on
+    the user message we don't double-append."""
+    import assistant_chat
+
+    history = [{"role": "user", "content": "first turn\n\n/no_think"}]
+    augmented = assistant_chat.build_initial_messages(
+        "BE TERSE.", history, append_no_think=True
+    )
+    user_content = next(m for m in augmented if m["role"] == "user")["content"]
+    assert user_content.count("/no_think") == 1
 
 
 def test_resolve_config_append_no_think_defaults_on(env):
