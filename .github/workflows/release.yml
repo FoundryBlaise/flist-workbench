@@ -64,16 +64,16 @@ jobs:
 
       # Capture both artifact paths so later steps don't repeat the
       # pattern. electron-builder emits:
-      #   F-list Workbench-<version>-x64-Setup.exe        (NSIS)
-      #   F-list Workbench-<version>-x64-portable.exe     (portable)
+      #   F-list-Workbench-<version>-x64-Setup.exe        (NSIS)
+      #   F-list-Workbench-<version>-x64-portable.exe     (portable)
       #   latest.yml                                      (updater feed)
       - name: Locate artifacts
         id: artifact
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $setupName = "F-list Workbench-$version-x64-Setup.exe"
-          $portableName = "F-list Workbench-$version-x64-portable.exe"
+          $setupName = "F-list-Workbench-$version-x64-Setup.exe"
+          $portableName = "F-list-Workbench-$version-x64-portable.exe"
           $setupPath = "dist-electron/$setupName"
           $portablePath = "dist-electron/$portableName"
           $latestPath = "dist-electron/latest.yml"
