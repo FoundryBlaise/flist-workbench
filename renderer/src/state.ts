@@ -4861,10 +4861,18 @@ export const useStore = create<State>((set, get) => ({
             `Discard the draft and re-prompt, or ask the assistant to retry.`
         })
       }
-      // The accepted edits already mutated working.json; reload the
-      // working copy so the editor surfaces them without a manual
-      // refresh.
-      await get().flistLoadWorking(characterId)
+      // The accepted edits already mutated whichever slot is
+      // editable for this character — refresh the matching renderer
+      // cache. With working-sets v2 the active set's payload is the
+      // authority; only fall back to the legacy working.json loader
+      // when there's no active set. (Calling the legacy loader for
+      // a v2 character 404s and spams the console.)
+      const activeSetId = get().flistActiveSetId[characterId] ?? null
+      if (activeSetId) {
+        await get().flistSetWorkingMaterialise(characterId, activeSetId)
+      } else {
+        await get().flistLoadWorking(characterId)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       set({ aiAssistantLastError: msg })
