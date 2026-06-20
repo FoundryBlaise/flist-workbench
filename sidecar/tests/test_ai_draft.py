@@ -366,6 +366,91 @@ def test_apply_add_image_to_gallery(env: Path) -> None:
     assert "images" in working["_overlay"]
 
 
+def test_patch_description_lands_after_normalised_match(env: Path) -> None:
+    """Reproduces the German typo case: model quotes with collapsed
+    whitespace, description has CRLF + double spacing. Edit applies as
+    a precise splice, not a whole-body replace."""
+    import ai_draft
+    import character_archive
+
+    _seed_character("42")
+    working = character_archive.read_working("42")
+    working["character"]["description"] = (
+        "Erster Absatz.\r\n\r\nZweiter Absatz mit    einem typo: wen Friede.\r\n"
+    )
+    character_archive.write_working("42", working)
+    etag = character_archive.working_etag("42")
+
+    result = ai_draft.append_edits(
+        "42",
+        [
+            {
+                "tool": "patch_description",
+                "field_path": "character.description",
+                "old_excerpt": "wen Friede",
+                "new_value": "wenn Friede",
+                "rationale": "typo fix",
+            }
+        ],
+        MAPPING_LIST,
+    )
+    edit_id = result["accepted_edit_ids"][0]
+    ai_draft.accept_edits("42", [edit_id], etag)
+
+    updated = character_archive.read_working("42")
+    assert "wenn Friede" in updated["character"]["description"]
+    # Surrounding text — including the CRLF preserved as-is — survives.
+    assert "Erster Absatz." in updated["character"]["description"]
+    assert "Zweiter Absatz" in updated["character"]["description"]
+
+
+def test_two_patch_description_edits_dont_clobber_each_other(env: Path) -> None:
+    """The whole-body fallback clobber bug, re-tested. Two patches in
+    one draft must both land cleanly without one nuking the other."""
+    import ai_draft
+    import character_archive
+
+    _seed_character("42")
+    working = character_archive.read_working("42")
+    working["character"]["description"] = (
+        "Erster Satz mit wen. Zweiter Satz mit genausogut."
+    )
+    character_archive.write_working("42", working)
+    etag = character_archive.working_etag("42")
+
+    result = ai_draft.append_edits(
+        "42",
+        [
+            {
+                "tool": "patch_description",
+                "field_path": "character.description",
+                "old_excerpt": "wen",
+                "new_value": "wenn",
+                "rationale": "fix 1",
+            },
+            {
+                "tool": "patch_description",
+                "field_path": "character.description",
+                "old_excerpt": "genausogut",
+                "new_value": "genauso gut",
+                "rationale": "fix 2",
+            },
+        ],
+        MAPPING_LIST,
+    )
+    ids = result["accepted_edit_ids"]
+    assert len(ids) == 2
+    ai_draft.accept_edits("42", ids, etag)
+
+    updated = character_archive.read_working("42")
+    desc = updated["character"]["description"]
+    assert "wenn" in desc
+    assert "genauso gut" in desc
+    # Neither fix wiped the other's context.
+    assert "Erster Satz" in desc
+    assert "Zweiter Satz" in desc
+
+
 def test_edit_ids_stay_monotonic_after_reject(env: Path) -> None:
     """The next_edit_seq counter must NOT roll back when an earlier edit
     is rejected — otherwise the next append re-uses the rejected id and

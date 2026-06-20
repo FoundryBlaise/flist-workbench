@@ -446,24 +446,90 @@ def _validate_patch_description(
     current = _read_path(working, canonical["field_path"]) or ""
     if not isinstance(current, str):
         return ValidationResult(False, "no_anchor", "description is not a string")
-    # Anchor must match the current description as a literal substring.
-    # An earlier version accepted whitespace-normalised matches, but the
-    # apply path can't safely splice through the normalisation map and
-    # falls back to whole-body replace — which silently clobbers any
-    # prior text_patch edits in the same draft. Refuse non-literal
-    # matches and force the model to re-quote.
-    if old_excerpt not in current:
+    # Anchor escalation:
+    # 1. Raw literal match — cheapest, exact, the common case.
+    # 2. Whitespace-normalised match — handles the typical local-model
+    #    failures (multiple spaces collapsed, CR vs LF, leading/trailing
+    #    whitespace differences).
+    # In both cases we resolve to precise (start, end) raw indices so
+    # the apply path can splice exactly that range. Earlier versions
+    # fell back to whole-body replace on a normalised match, which
+    # silently clobbered any prior text_patch edits in the same draft.
+    # That fallback is gone; only literal+normalised matching, both
+    # surfaced as concrete bounds.
+    bounds = _locate_anchor(old_excerpt, current)
+    if bounds is None:
         return ValidationResult(
-            False, "anchor_mismatch", "old_excerpt not found in current description"
+            False,
+            "anchor_mismatch",
+            "old_excerpt not found in current description (even after "
+            "whitespace normalisation)",
         )
-    anchor_start = current.find(old_excerpt)
+    anchor_start, anchor_end = bounds
     canonical.update(
         kind="text_patch",
         old_excerpt=old_excerpt,
         new_value=new_value,
         anchor_start=anchor_start,
+        anchor_end=anchor_end,
     )
     return ValidationResult(True, edit=canonical)
+
+
+def _locate_anchor(needle: str, haystack: str) -> tuple[int, int] | None:
+    """Return `(start, end)` raw indices in `haystack` that splicing
+    over with the new value reproduces the intent of replacing
+    `needle`. Two escalating strategies:
+
+    1. Literal substring: `needle in haystack` → exact `find` bounds.
+    2. Whitespace-normalised: collapse runs of `\\s+` to single space
+       in both sides, find the normalised needle in the normalised
+       haystack, then map the start/end back to raw indices via a
+       per-char raw-index list.
+
+    Returns None when neither finds a match. NFC normalisation is NOT
+    applied here — German `ü` is the only common case and is almost
+    always stored composed; if a real decomposed case bites we can
+    add NFC as a third escalation step.
+    """
+    if not isinstance(needle, str) or not needle:
+        return None
+    if needle in haystack:
+        start = haystack.find(needle)
+        return start, start + len(needle)
+
+    # Whitespace-normalised pass. Build a parallel list of raw indices
+    # for every char of the normalised haystack so we can splice
+    # precisely. Collapse runs of `\s+` to a single space, drop leading
+    # / trailing whitespace.
+    normalised_chars: list[str] = []
+    raw_index: list[int] = []
+    pending_ws = False
+    for i, ch in enumerate(haystack):
+        if ch.isspace():
+            pending_ws = True
+            continue
+        if pending_ws and normalised_chars:
+            normalised_chars.append(" ")
+            raw_index.append(i)
+        normalised_chars.append(ch)
+        raw_index.append(i)
+        pending_ws = False
+    norm_haystack = "".join(normalised_chars)
+
+    norm_needle = " ".join(needle.split())
+    if not norm_needle or norm_needle not in norm_haystack:
+        return None
+
+    n_start = norm_haystack.find(norm_needle)
+    n_end = n_start + len(norm_needle) - 1
+    if n_start >= len(raw_index) or n_end >= len(raw_index):
+        return None
+    raw_start = raw_index[n_start]
+    raw_end = raw_index[n_end] + 1  # exclusive end
+    if raw_start >= raw_end or raw_end > len(haystack):
+        return None
+    return raw_start, raw_end
 
 
 def _validate_set_custom_kink(
