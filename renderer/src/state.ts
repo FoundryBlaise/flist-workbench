@@ -164,6 +164,19 @@ type State = {
    *  from /settings). Used by the in-chat preset switcher to highlight
    *  which preset is active. */
   aiAssistantSystemPrompt: string
+  /** Per-character history of edits that have already been resolved
+   *  (Accept or Reject). Each entry keeps the full original proposal
+   *  so the "Done" panel can render the same diff card the user saw
+   *  inline, with a green/red outcome stamp instead of action
+   *  buttons. Cleared when the transcript is reset. */
+  aiAssistantEditHistory: Record<
+    string,
+    Array<{
+      edit: AiDraftEdit
+      outcome: 'accepted' | 'rejected'
+      timestamp: number
+    }>
+  >
   /** Pending "scroll the log viewer to this timestamp range" intent
    *  raised by a clicked citation. LogViewer consumes & clears it. */
   logJump:
@@ -1272,6 +1285,7 @@ export const useStore = create<State>((set, get) => ({
   aiAssistantToolEvents: {},
   aiAssistantPromptPresets: [],
   aiAssistantSystemPrompt: '',
+  aiAssistantEditHistory: {},
 
   logJump: null,
 
@@ -4587,7 +4601,8 @@ export const useStore = create<State>((set, get) => ({
     set({
       aiAssistantTranscript: [],
       aiAssistantLastError: null,
-      aiAssistantToolEvents: {}
+      aiAssistantToolEvents: {},
+      aiAssistantEditHistory: {}
     })
   },
 
@@ -4680,8 +4695,9 @@ export const useStore = create<State>((set, get) => ({
                   }>
                 }
               | undefined
+            const acceptedEditIds = r?.accepted_edit_ids ?? []
             if (data.ok && r) {
-              const accepted = r.accepted_edit_ids?.length ?? 0
+              const accepted = acceptedEditIds.length
               const rejectedList = r.rejected ?? []
               const rejected = rejectedList.length
               if (accepted > 0 || rejected > 0) {
@@ -4703,7 +4719,8 @@ export const useStore = create<State>((set, get) => ({
               args,
               ok: chipOk,
               error: chipError,
-              resultSummary
+              resultSummary,
+              acceptedEditIds
             })
           },
           onDraftUpdate: (data) => {
@@ -4802,14 +4819,32 @@ export const useStore = create<State>((set, get) => ({
 
   async acceptAiAssistantEdits(characterId, editIds) {
     if (editIds.length === 0) return
+    // Snapshot the edits we're about to apply so the "Done" panel
+    // can replay them with a green "accepted" stamp after the draft
+    // mutation removes them.
+    const draftBefore = get().aiAssistantDrafts[characterId]
+    const ids = new Set(editIds)
+    const accepted = (draftBefore?.edits ?? []).filter((e) => ids.has(e.id))
     const slot = flistSelectWorkingSlot(get(), characterId)
     const etag = slot?.etag ?? null
     try {
       const res = await api.aiDraftAccept(characterId, { edit_ids: editIds }, etag)
+      const now = Date.now()
       set((s) => ({
         aiAssistantDrafts: {
           ...s.aiAssistantDrafts,
           [characterId]: res.draft
+        },
+        aiAssistantEditHistory: {
+          ...s.aiAssistantEditHistory,
+          [characterId]: [
+            ...(s.aiAssistantEditHistory[characterId] ?? []),
+            ...accepted.map((edit) => ({
+              edit,
+              outcome: 'accepted' as const,
+              timestamp: now
+            }))
+          ]
         }
       }))
       // Tell the user when some of the cards they tried to Accept
@@ -4838,10 +4873,25 @@ export const useStore = create<State>((set, get) => ({
 
   async rejectAiAssistantEdits(characterId, editIds) {
     if (editIds.length === 0) return
+    const draftBefore = get().aiAssistantDrafts[characterId]
+    const ids = new Set(editIds)
+    const rejected = (draftBefore?.edits ?? []).filter((e) => ids.has(e.id))
     try {
       const res = await api.aiDraftReject(characterId, { edit_ids: editIds })
+      const now = Date.now()
       set((s) => ({
-        aiAssistantDrafts: { ...s.aiAssistantDrafts, [characterId]: res.draft }
+        aiAssistantDrafts: { ...s.aiAssistantDrafts, [characterId]: res.draft },
+        aiAssistantEditHistory: {
+          ...s.aiAssistantEditHistory,
+          [characterId]: [
+            ...(s.aiAssistantEditHistory[characterId] ?? []),
+            ...rejected.map((edit) => ({
+              edit,
+              outcome: 'rejected' as const,
+              timestamp: now
+            }))
+          ]
+        }
       }))
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

@@ -7,7 +7,7 @@ import {
   type KeyboardEvent
 } from 'react'
 import { useStore } from '../../state'
-import { DraftReview } from './DraftReview'
+import { ProposalCard } from './ProposalCard'
 import './AssistantPane.css'
 
 const ASSISTANT_PANE_HEIGHT_KEY = 'workbench.aiAssistantPaneHeight'
@@ -168,30 +168,18 @@ export function AssistantPane() {
           ✕
         </button>
       </header>
+      {activeId && draft && draft.edits.length > 0 && (
+        <DraftActionBar characterId={activeId} draft={draft} onDiscard={() => discardDraft(activeId)} />
+      )}
       <div className="assistant-pane-body">
         <Transcript
+          characterId={activeId}
           transcript={transcript}
           streaming={streaming}
           toolEventsByIndex={toolEventsByIndex}
+          draft={draft}
         />
-        {activeId ? (
-          <DraftReview
-            characterId={activeId}
-            draft={draft}
-            onDiscard={async () => {
-              await discardDraft(activeId)
-            }}
-          />
-        ) : (
-          <aside className="assistant-draft" aria-label="Pending edits">
-            <header className="assistant-draft-header">
-              <span>Pending edits</span>
-            </header>
-            <div className="assistant-draft-empty">
-              Select an active character to start a conversation.
-            </div>
-          </aside>
-        )}
+        <DoneHistory characterId={activeId} />
       </div>
       <PromptSwitcher />
       {lastError && (
@@ -241,11 +229,128 @@ export function AssistantPane() {
   )
 }
 
+/** Bulk-action bar at the top of the pane when a draft has pending
+ *  edits. Shows the count + Accept-all + Discard-draft buttons so the
+ *  user can bulk-resolve without scrolling to each card. */
+function DraftActionBar({
+  characterId,
+  draft,
+  onDiscard
+}: {
+  characterId: string
+  draft: import('../../lib/api').AiDraft
+  onDiscard: () => void | Promise<void>
+}) {
+  const accept = useStore((s) => s.acceptAiAssistantEdits)
+  const pendingIds = draft.edits
+    .filter((e) => e.status === 'pending')
+    .map((e) => e.id)
+  return (
+    <div className="assistant-draft-actionbar">
+      <span className="assistant-draft-actionbar-count">
+        {draft.edits.length} pending edit{draft.edits.length === 1 ? '' : 's'}
+      </span>
+      <button
+        type="button"
+        className="proposal-accept"
+        onClick={() => void accept(characterId, pendingIds)}
+        disabled={pendingIds.length === 0}
+      >
+        Accept all
+      </button>
+      <button
+        type="button"
+        className="proposal-reject"
+        onClick={() => void onDiscard()}
+      >
+        Discard draft
+      </button>
+    </div>
+  )
+}
+
+/** Right-side "Done" history. Replaces the old per-turn pending list —
+ *  shows every edit the user has already accepted or rejected as a
+ *  compact card with an outcome stamp, newest first. Stays empty
+ *  until the user has resolved at least one proposal. */
+function DoneHistory({ characterId }: { characterId: string | null }) {
+  const history = useStore((s) =>
+    characterId ? s.aiAssistantEditHistory[characterId] ?? [] : []
+  )
+  if (!characterId) {
+    return (
+      <aside className="assistant-done" aria-label="Resolved edits">
+        <header className="assistant-done-header">Done</header>
+        <div className="assistant-done-empty">
+          Select an active character to start.
+        </div>
+      </aside>
+    )
+  }
+  if (history.length === 0) {
+    return (
+      <aside className="assistant-done" aria-label="Resolved edits">
+        <header className="assistant-done-header">Done</header>
+        <div className="assistant-done-empty">
+          Edits you accept or reject will appear here.
+        </div>
+      </aside>
+    )
+  }
+  // Newest first.
+  const ordered = [...history].reverse()
+  return (
+    <aside className="assistant-done" aria-label="Resolved edits">
+      <header className="assistant-done-header">
+        Done <span className="assistant-done-count">{history.length}</span>
+      </header>
+      <div className="assistant-done-list">
+        {ordered.map((entry, idx) => (
+          <DoneCard key={`${entry.edit.id}-${idx}`} entry={entry} />
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+function DoneCard({
+  entry
+}: {
+  entry: {
+    edit: import('../../lib/api').AiDraftEdit
+    outcome: 'accepted' | 'rejected'
+    timestamp: number
+  }
+}) {
+  const { edit, outcome } = entry
+  return (
+    <div
+      className={`assistant-done-card assistant-done-card-${outcome}`}
+      data-testid={`done-card-${edit.id}`}
+    >
+      <header className="assistant-done-card-head">
+        <code className="proposal-card-tool">{edit.tool}</code>
+        <span
+          className={`assistant-done-stamp assistant-done-stamp-${outcome}`}
+        >
+          {outcome === 'accepted' ? '✓ Accepted' : '✗ Rejected'}
+        </span>
+      </header>
+      {edit.rationale && (
+        <p className="assistant-done-rationale">{edit.rationale}</p>
+      )}
+    </div>
+  )
+}
+
 function Transcript({
+  characterId,
   transcript,
   streaming,
-  toolEventsByIndex
+  toolEventsByIndex,
+  draft
 }: {
+  characterId: string | null
   transcript: Array<{
     role: string
     content?: string | null
@@ -260,7 +365,9 @@ function Transcript({
     ok: boolean
     error?: string
     resultSummary?: string
+    acceptedEditIds?: string[]
   }>>
+  draft: import('../../lib/api').AiDraft | null
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Auto-scroll to the latest message; debounced via the rAF tick so
@@ -289,10 +396,12 @@ function Transcript({
       {transcript.map((msg, idx) => (
         <TranscriptRow
           key={idx}
+          characterId={characterId}
           role={msg.role}
           content={msg.content ?? ''}
           fromReasoning={msg._from_reasoning}
           toolEvents={toolEventsByIndex[idx]}
+          draft={draft}
         />
       ))}
       {streaming && (
@@ -305,11 +414,14 @@ function Transcript({
 }
 
 function TranscriptRow({
+  characterId,
   role,
   content,
   fromReasoning,
-  toolEvents
+  toolEvents,
+  draft
 }: {
+  characterId: string | null
   role: string
   content: string
   fromReasoning?: boolean
@@ -320,33 +432,50 @@ function TranscriptRow({
     ok: boolean
     error?: string
     resultSummary?: string
+    acceptedEditIds?: string[]
   }>
+  draft: import('../../lib/api').AiDraft | null
 }) {
   if (role === 'tool' || role === 'system') return null
   const events = toolEvents ?? []
+
+  // Gather the edits this turn created, in tool-call order. We look
+  // them up by the acceptedEditIds the sidecar handed back per tool
+  // call. Edits that have since been resolved (accepted or rejected)
+  // disappear from the draft and so don't render again here — they
+  // moved to the Done panel.
+  const draftEditsById = new Map(draft?.edits.map((e) => [e.id, e]) ?? [])
+  const turnEdits = events
+    .flatMap((e) => e.acceptedEditIds ?? [])
+    .map((id) => draftEditsById.get(id))
+    .filter((e): e is import('../../lib/api').AiDraftEdit => Boolean(e))
+
+  // Group consecutive edits sharing the same composite_id so a
+  // copy_standard_kinks_from(...) call renders as one card instead of
+  // 38 individual rows.
+  const grouped = groupConsecutiveByComposite(turnEdits)
+
   // An assistant turn that only emitted tool calls (no surrounding
-  // text) lands here with empty content. Show a small chip so the
-  // transcript doesn't go dead between the user's prompt and the
-  // draft cards appearing in the right column.
-  if (role === 'assistant' && !content && events.length === 0) {
-    return (
-      <div className="assistant-msg assistant-msg-assistant">
-        <span className="assistant-msg-role">Assistant</span>
-        <span className="assistant-msg-tool-only">
-          Proposed edits — see the review column on the right.
-        </span>
-      </div>
-    )
-  }
+  // text) lands here with empty content. Show a small chip below
+  // the role so the transcript doesn't go dead.
+  const showToolOnlyStub =
+    role === 'assistant' && !content && events.length === 0
   return (
     <div className={`assistant-msg assistant-msg-${role}`}>
-      <span className="assistant-msg-role">{role === 'user' ? 'You' : 'Assistant'}</span>
+      <span className="assistant-msg-role">
+        {role === 'user' ? 'You' : 'Assistant'}
+      </span>
       {events.length > 0 && (
         <div className="assistant-tool-events" aria-label="Tool activity">
           {events.map((event) => (
             <ToolEventChip key={event.callId} event={event} />
           ))}
         </div>
+      )}
+      {showToolOnlyStub && (
+        <span className="assistant-msg-tool-only">
+          Proposed edits below — review and accept or reject each.
+        </span>
       )}
       {content && fromReasoning && (
         <div className="assistant-msg-reasoning-warning">
@@ -363,8 +492,42 @@ function TranscriptRow({
           {content}
         </pre>
       )}
+      {characterId && grouped.length > 0 && (
+        <div className="assistant-msg-proposals">
+          {grouped.map((edits, gIdx) => (
+            <ProposalCard
+              key={edits[0]?.id ?? gIdx}
+              edits={edits}
+              characterId={characterId}
+              onAccept={(ids) =>
+                void useStore.getState().acceptAiAssistantEdits(characterId, ids)
+              }
+              onReject={(ids) =>
+                void useStore.getState().rejectAiAssistantEdits(characterId, ids)
+              }
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
+}
+
+function groupConsecutiveByComposite(
+  edits: Array<import('../../lib/api').AiDraftEdit>
+): Array<Array<import('../../lib/api').AiDraftEdit>> {
+  const groups: Array<Array<import('../../lib/api').AiDraftEdit>> = []
+  for (const edit of edits) {
+    const last = groups[groups.length - 1]
+    const lastKey = last && last[0].composite_id
+    const key = edit.composite_id
+    if (last && key !== null && key === lastKey) {
+      last.push(edit)
+    } else {
+      groups.push([edit])
+    }
+  }
+  return groups
 }
 
 function ToolEventChip({
