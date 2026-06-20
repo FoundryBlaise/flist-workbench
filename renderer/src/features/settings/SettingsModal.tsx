@@ -1484,15 +1484,21 @@ function AiAssistantPane({
             data-testid="ai-assistant-append-no-think"
           />
           <span>
-            <strong>Append <code>/no_think</code> to every message</strong>
+            <strong>
+              Append <code>/no_think</code> to every message
+            </strong>{' '}
+            <span className="settings-meta">(default ON)</span>
             <span className="settings-meta" style={{ display: 'block', marginTop: 4 }}>
-              ⚠ Qwen 3.x family workaround only. Forces the model to skip
-              its chain-of-thought phase so it writes the actual reply
-              directly into <code>content</code> instead of burning the
-              completion budget on reasoning. Harmless on non-Qwen models
-              (they treat it as literal text), but unnecessary. Leave OFF
-              unless you've seen "Model exhausted its token budget
-              thinking" with this model.
+              Tells thinking-capable models (Qwen 3.x family, some Gemma
+              variants) to skip their chain-of-thought phase so the
+              actual reply lands in <code>content</code> directly. The
+              default ON because most local-model setups burn their
+              completion budget on reasoning and produce empty replies
+              otherwise. Non-thinking models (Llama, Mistral, Hermes)
+              treat it as literal text and ignore it.{' '}
+              <strong>Turn OFF</strong> if you specifically want a
+              thinking model's reasoning trace visible, or if your model
+              is misinterpreting the token.
             </span>
           </span>
         </label>

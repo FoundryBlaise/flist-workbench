@@ -213,11 +213,22 @@ def resolve_assistant_config(conn) -> AssistantConfig:
         )
     )
 
-    append_no_think_raw = (
-        settings_store.get(conn, settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK)
-        or ""
-    ).strip().lower()
-    append_no_think = append_no_think_raw in {"1", "true", "yes", "on"}
+    # Default ON when the setting is absent — see server.py's
+    # `_ai_assistant_settings_dict` rationale. Stored "false" still
+    # disables it; only a totally-unset key falls through to the
+    # default.
+    append_no_think_raw = settings_store.get(
+        conn, settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK
+    )
+    if append_no_think_raw is None:
+        append_no_think = True
+    else:
+        append_no_think = append_no_think_raw.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     return AssistantConfig(
         endpoint=endpoint,
