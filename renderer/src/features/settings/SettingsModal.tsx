@@ -658,6 +658,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       setState(updated)
       setDraft(buildDraft(updated))
       setStatus('idle')
+      // Mirror assistant prompt config into the store so the in-chat
+      // preset switcher updates without a manual reload.
+      useStore.getState().setAiAssistantPromptConfig(
+        updated.ai_assistant.prompt_presets,
+        updated.ai_assistant.system_prompt
+      )
       if (dirtyByDraft.general) {
         // Refresh the sidebar so the new directory's characters appear.
         await loadCharacters()

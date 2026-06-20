@@ -193,6 +193,7 @@ export function AssistantPane() {
           </aside>
         )}
       </div>
+      <PromptSwitcher />
       {lastError && (
         <div className="assistant-pane-error" role="alert" data-testid="assistant-pane-error">
           <span className="assistant-pane-error-text">{lastError}</span>
@@ -245,7 +246,12 @@ function Transcript({
   streaming,
   toolEventsByIndex
 }: {
-  transcript: Array<{ role: string; content?: string | null; tool_calls?: unknown[] }>
+  transcript: Array<{
+    role: string
+    content?: string | null
+    tool_calls?: unknown[]
+    _from_reasoning?: boolean
+  }>
   streaming: boolean
   toolEventsByIndex: Record<number, Array<{
     callId: string
@@ -285,6 +291,7 @@ function Transcript({
           key={idx}
           role={msg.role}
           content={msg.content ?? ''}
+          fromReasoning={msg._from_reasoning}
           toolEvents={toolEventsByIndex[idx]}
         />
       ))}
@@ -300,10 +307,12 @@ function Transcript({
 function TranscriptRow({
   role,
   content,
+  fromReasoning,
   toolEvents
 }: {
   role: string
   content: string
+  fromReasoning?: boolean
   toolEvents?: Array<{
     callId: string
     tool: string
@@ -339,7 +348,21 @@ function TranscriptRow({
           ))}
         </div>
       )}
-      {content && <pre className="assistant-msg-body">{content}</pre>}
+      {content && fromReasoning && (
+        <div className="assistant-msg-reasoning-warning">
+          ⚠ Model exhausted its token budget thinking and never wrote a
+          final answer. Showing the reasoning trace below. Try a model
+          with reasoning disabled (LM Studio per-model toggle), or
+          raise <code>max_tokens</code> if your endpoint supports it.
+        </div>
+      )}
+      {content && (
+        <pre
+          className={`assistant-msg-body${fromReasoning ? ' assistant-msg-body-reasoning' : ''}`}
+        >
+          {content}
+        </pre>
+      )}
     </div>
   )
 }
@@ -432,6 +455,53 @@ function describeToolArgs(tool: string, args: Record<string, unknown>): string {
     default:
       return Object.keys(args).slice(0, 3).join(', ')
   }
+}
+
+function PromptSwitcher() {
+  const presets = useStore((s) => s.aiAssistantPromptPresets)
+  const currentBody = useStore((s) => s.aiAssistantSystemPrompt)
+  const setPromptBody = useStore((s) => s.setAiAssistantPromptBody)
+  const streaming = useStore((s) => s.aiAssistantStreaming)
+
+  if (presets.length === 0) return null
+
+  // Match by exact body so "(custom — edited)" appears whenever the
+  // user has typed into the Settings textarea.
+  const matched = presets.find((p) => p.body === currentBody)
+  const selectedId = matched?.id ?? ''
+
+  return (
+    <div className="assistant-prompt-switcher" data-testid="assistant-prompt-switcher">
+      <label htmlFor="assistant-prompt-quick" className="assistant-prompt-switcher-label">
+        Prompt
+      </label>
+      <select
+        id="assistant-prompt-quick"
+        className="assistant-prompt-switcher-select"
+        value={selectedId}
+        disabled={streaming}
+        onChange={(e) => {
+          const id = e.target.value
+          const next = presets.find((p) => p.id === id)
+          if (next) void setPromptBody(next.body)
+        }}
+      >
+        {!matched && (
+          <option value="" disabled>
+            (custom — edited in Settings)
+          </option>
+        )}
+        {presets.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label} · {p.language}
+          </option>
+        ))}
+      </select>
+      <span className="assistant-prompt-switcher-help" title={matched?.description ?? ''}>
+        Changes apply to the next message you send.
+      </span>
+    </div>
+  )
 }
 
 function useLastUserMessage(

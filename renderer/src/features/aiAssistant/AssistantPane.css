@@ -43,8 +43,8 @@
 .assistant-pane {
   position: relative;
   display: grid;
-  /* resize-handle, header, body, error-strip, input-bar */
-  grid-template-rows: auto auto 1fr auto auto;
+  /* resize-handle, header, body, prompt-switcher, error-strip, input-bar */
+  grid-template-rows: auto auto 1fr auto auto auto;
   background: var(--panel);
   border-top: 1px solid var(--border);
   overflow: hidden;
@@ -171,6 +171,26 @@
   font-style: italic;
   color: var(--text-muted);
   font-size: 12px;
+}
+.assistant-msg-reasoning-warning {
+  font-size: 11px;
+  color: rgb(255, 180, 80);
+  background: rgba(255, 180, 80, 0.08);
+  border-left: 3px solid rgba(255, 180, 80, 0.6);
+  padding: 6px 8px;
+  border-radius: 0 4px 4px 0;
+  margin: 4px 0;
+  line-height: 1.4;
+}
+.assistant-msg-reasoning-warning code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 10px;
+}
+.assistant-msg-body-reasoning {
+  opacity: 0.6;
+  font-style: italic;
 }
 
 /* Tool-event chips inside an assistant turn */
@@ -502,6 +522,41 @@
 .assistant-pane-error-action:hover {
   border-color: rgba(255, 80, 80, 0.6);
   color: var(--accent-2);
+}
+
+/* In-chat preset switcher — lives just above the input bar so the
+   user can switch language/tone (en/de × nsfw/sfw) without leaving
+   the conversation. */
+.assistant-prompt-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.assistant-prompt-switcher-label {
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.assistant-prompt-switcher-select {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.assistant-prompt-switcher-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.assistant-prompt-switcher-help {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 /* Input bar */

@@ -217,6 +217,10 @@ export function AppLayout() {
         const s = await api.settingsGet()
         if (cancelled) return
         useStore.getState().setAiAssistantEnabled(s.ai_assistant.enabled)
+        useStore.getState().setAiAssistantPromptConfig(
+          s.ai_assistant.prompt_presets,
+          s.ai_assistant.system_prompt
+        )
         if (firstRunDismissed) return
         const rag = await api.ragStatus()
         if (cancelled) return

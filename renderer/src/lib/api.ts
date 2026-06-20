@@ -326,6 +326,11 @@ export type AssistantChatMessage = {
   }>
   tool_call_id?: string
   name?: string
+  /** Set on assistant turns whose content was coerced from
+   *  `reasoning_content` (thinking model ran out of budget). Renderer
+   *  dims + labels these so the user knows it's reasoning, not a
+   *  final answer. Local-only annotation, not sent to the sidecar. */
+  _from_reasoning?: boolean
 }
 
 /** Captured tool-call → tool-result pair surfaced to the transcript
@@ -345,7 +350,16 @@ export type AssistantToolEvent = {
 
 export type AssistantChatHandlers = {
   onStart?: (data: { model_id: string; model_endpoint: string }) => void
-  onText?: (data: { content: string; round: number }) => void
+  onText?: (data: {
+    content: string
+    round: number
+    /** True when the sidecar coerced the model's reasoning_content
+     *  into the visible content because the regular `content` field
+     *  was empty — the model ran out of token budget reasoning.
+     *  Renderer dims this and labels it "Model thinking (no final
+     *  answer)" so users don't mistake reasoning for a reply. */
+    from_reasoning?: boolean
+  }) => void
   onToolCall?: (data: {
     round: number
     tool: string
@@ -389,7 +403,9 @@ export type AiAssistantSettings = {
   }
   /** Same shape as labels.prompt_presets — drives the shared
    *  PromptPresetPicker. First entry is the "Reset to default"
-   *  target. Currently ships four: NSFW/SFW × English/German. */
+   *  target. Currently ships four: NSFW/SFW × English/German.
+   *  Also re-exposed in the assistant chat dock so the user can
+   *  switch language/tone without leaving the conversation. */
   prompt_presets: PromptPreset[]
 }
 
