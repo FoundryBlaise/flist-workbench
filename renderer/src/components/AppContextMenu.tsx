@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
+import { undo, redo } from '@codemirror/commands'
 import { findEnclosingTag } from '../lib/bbcode/findEnclosingTag'
 import { applyAction, TOOLBAR_ACTIONS, type ToolbarAction } from '../features/editor/Toolbar'
 
@@ -237,6 +238,23 @@ function buildEditorItems(
   const hasSelection = !view.state.selection.main.empty
   const items: Item[] = [
     {
+      label: 'Undo',
+      enabled: isEditable,
+      onClick: () => {
+        undo(view)
+        view.focus()
+      }
+    },
+    {
+      label: 'Redo',
+      enabled: isEditable,
+      onClick: () => {
+        redo(view)
+        view.focus()
+      }
+    },
+    { label: '', separator: true },
+    {
       label: 'Cut',
       enabled: isEditable && hasSelection,
       onClick: () => runCmCommand(view, 'cut')
@@ -358,6 +376,23 @@ function buildInputItems(input: HTMLElement): Item[] {
     if (document.activeElement !== input) input.focus()
   }
   return [
+    {
+      label: 'Undo',
+      enabled: !readonly,
+      onClick: () => {
+        focusFirst()
+        document.execCommand('undo')
+      }
+    },
+    {
+      label: 'Redo',
+      enabled: !readonly,
+      onClick: () => {
+        focusFirst()
+        document.execCommand('redo')
+      }
+    },
+    { label: '', separator: true },
     {
       label: 'Cut',
       enabled: !readonly && hasSelection,

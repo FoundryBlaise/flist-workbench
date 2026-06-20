@@ -22,6 +22,8 @@ export type MenuAction =
   | 'restore-userscript-help'
   | 'backup-all'
   | 'check-updates'
+  | 'edit-undo'
+  | 'edit-redo'
 
 // Lives in the main process because it touches shell.openPath; we
 // resolve the path from the sidecar so user_data_dir() stays the one
@@ -103,8 +105,31 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
     {
       label: '&Edit',
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        // role:'undo' would call webContents.undo() which only knows
+        // about Chromium's native input/contenteditable undo stack —
+        // CodeMirror's history is invisible to it, so the menu item
+        // did nothing when the editor was focused. We route through
+        // the renderer instead, which dispatches to CM or the native
+        // field depending on what's focused.
+        //
+        // registerAccelerator: false keeps the menu item displaying
+        // the Ctrl/Cmd+Z hint without claiming the keystroke, so
+        // CodeMirror's keymap still gets first crack at it (and our
+        // preview contentEditable handler too).
+        {
+          id: 'edit-undo',
+          label: 'Undo',
+          accelerator: 'CmdOrCtrl+Z',
+          registerAccelerator: false,
+          click: () => send(getWindow(), 'edit-undo')
+        },
+        {
+          id: 'edit-redo',
+          label: 'Redo',
+          accelerator: 'CmdOrCtrl+Shift+Z',
+          registerAccelerator: false,
+          click: () => send(getWindow(), 'edit-redo')
+        },
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },

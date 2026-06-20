@@ -21,6 +21,7 @@ import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
 import { AppContextMenu } from './AppContextMenu'
+import { runUndoRedo } from '../lib/undoRedo'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { ChatPanel } from '../features/rag/ChatPanel'
@@ -383,6 +384,12 @@ export function AppLayout() {
           void updater.check()
           break
         }
+        case 'edit-undo':
+          runUndoRedo('undo')
+          break
+        case 'edit-redo':
+          runUndoRedo('redo')
+          break
       }
     })
   }, [
