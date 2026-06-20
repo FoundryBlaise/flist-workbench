@@ -886,6 +886,30 @@ body {
 }
 .editor-cm .cm-scroller {
   overflow: auto;
+  /* Visible scrollbar on a dark canvas. The default chromium track
+     blends into the panel bg and the BBCode editor looks like it
+     has no scroll affordance even when the content overflows.
+     Slim styled thumb sits next to the line guide without crowding
+     the gutter. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+  background-clip: content-box;
 }
 /* Shared empty-state component (renderer/src/components/EmptyState.tsx)
    — codifies the visual vocabulary across Documents list (F1), RAG chat

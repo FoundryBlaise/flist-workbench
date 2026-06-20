@@ -2112,7 +2112,35 @@ export const useStore = create<State>((set, get) => ({
     // Load the persisted working copy. On 404 the slot is seeded from
     // Live in memory but not flushed to disk — first edit then PUTs
     // (Tier 2 §1.6 materialise-on-first-edit).
-    await get().flistLoadWorking(characterId)
+    //
+    // Working-sets v2 short-circuit: when the character has an active
+    // set, the legacy `working.json` slot is never written; calling
+    // `flistLoadWorking` would hit the legacy endpoint and 404 every
+    // time, polluting the console on every character switch. Seed the
+    // legacy mirror from Live in memory so consumers of
+    // `flistWorking[id]` still see a sensible payload, and skip the
+    // round-trip entirely.
+    const activeSetId = get().flistActiveSetId[characterId] ?? null
+    if (activeSetId) {
+      const liveForSeed = get().flistArchive[characterId]?.live ?? null
+      const seeded = liveForSeed
+        ? seedWorkingFromLive(liveForSeed)
+        : { ...emptyWorkingSlot().payload }
+      const slot: FlistWorkingSlot = {
+        ...emptyWorkingSlot(),
+        payload: seeded,
+        materialised: false
+      }
+      set((s) => ({
+        flistWorking: { ...s.flistWorking, [characterId]: slot },
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: 'ready'
+        }
+      }))
+    } else {
+      await get().flistLoadWorking(characterId)
+    }
     const slot = get().flistWorking[characterId]
     const live = archive?.live ?? null
     const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
