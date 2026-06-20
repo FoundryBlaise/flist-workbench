@@ -42,7 +42,6 @@ declare global {
         classifyCurrent: boolean
         classifyCharacter: boolean
         flistSessionActive: boolean
-        aiAssistantEnabled: boolean
       }) => void
       openExternal?: (url: string) => void
       spawnPowerShell?: (command: string) => void

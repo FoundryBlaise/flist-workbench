@@ -122,54 +122,6 @@ KEY_BACKUPS_LAST_SWEEP_FAILED = "backups.last_sweep_failed"
 # "ran on app launch" vs "you ran it from Settings".
 KEY_BACKUPS_LAST_SWEEP_SOURCE = "backups.last_sweep_source"
 
-# AI Assistant (Phase 9). Master opt-in toggle — default OFF. Until the
-# user flips this on in Settings, every /flist/character/*/ai-draft*
-# and /assistant/* endpoint refuses with feature_disabled, the Tools
-# menu hides the Character Assistant entry, and no ai-draft.json is
-# read or written. Keeps Workbench out-of-the-box from sending sheet
-# data to any model without explicit consent.
-KEY_AI_ASSISTANT_ENABLED = "ai_assistant.enabled"
-# Optional endpoint config — separate from the labels / RAG endpoints
-# so a user can point chat-only models at one server and the labels
-# classifier at another. When unset, falls back to the RAG chat
-# endpoint (which itself falls back to the labels endpoint). The
-# resolution order is documented inline near the chat-endpoint helper
-# in server.py.
-KEY_AI_ASSISTANT_ENDPOINT = "ai_assistant.endpoint"
-KEY_AI_ASSISTANT_MODEL = "ai_assistant.model"
-KEY_AI_ASSISTANT_API_KEY = "ai_assistant.api_key"
-KEY_AI_ASSISTANT_SYSTEM_PROMPT = "ai_assistant.system_prompt"
-# Retained as a dead key so older builds' writes don't error when
-# resurfaced — we never read it. Preset selection is purely a UI
-# affordance now (copies the chosen preset's body into
-# `ai_assistant.system_prompt`, mirroring the labels + rag panes).
-KEY_AI_ASSISTANT_PROMPT_PRESET = "ai_assistant.prompt_preset"  # deprecated
-KEY_AI_ASSISTANT_TEMPERATURE = "ai_assistant.temperature"
-KEY_AI_ASSISTANT_TOKEN_BUDGET = "ai_assistant.token_budget"
-KEY_AI_ASSISTANT_TIMEOUT_SEC = "ai_assistant.timeout_sec"
-KEY_AI_ASSISTANT_WARN_NON_LOOPBACK = "ai_assistant.warn_non_loopback"
-KEY_AI_ASSISTANT_LOG_REQUESTS = "ai_assistant.log_requests"
-# When true, append "/no_think" to the system prompt every turn so
-# Qwen 3 family models skip the chain-of-thought phase and write the
-# real reply straight into `content`. Non-thinking models treat it
-# as harmless literal text. Default OFF — most setups don't need it
-# and Qwen-specific syntax shouldn't bleed into other models by
-# default.
-KEY_AI_ASSISTANT_APPEND_NO_THINK = "ai_assistant.append_no_think"
-
-
-def ai_assistant_enabled(conn) -> bool:
-    """Convenience: parse the master opt-in toggle into a bool.
-
-    Used by every assistant endpoint as the first guard. Falsy
-    settings values ('', '0', 'false', 'no', 'off') all read as
-    disabled — defensive against any old build that wrote a different
-    truthy/falsey string convention than the current renderer.
-    """
-    raw = get(conn, KEY_AI_ASSISTANT_ENABLED) or ""
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def db_path(root: Path | None = None) -> Path:
     base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)

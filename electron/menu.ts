@@ -17,7 +17,6 @@ export type MenuAction =
   | 'ingest-character'
   | 'ingest-all'
   | 'chat-toggle'
-  | 'character-assistant'
   | 'ai-setup'
   | 'flist-activity'
   | 'restore-userscript-help'
@@ -196,17 +195,6 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           label: 'Ask the logs…',
           accelerator: 'CmdOrCtrl+J',
           click: () => send(getWindow(), 'chat-toggle')
-        },
-        {
-          // Hidden until the user flips the AI Assistant master toggle in
-          // Settings (Phase 9 opt-in gate). The main process re-builds the
-          // menu via menu:set-state when the flag changes, so this becomes
-          // visible without an app relaunch.
-          id: 'character-assistant',
-          label: 'Character Assistant…',
-          accelerator: 'CmdOrCtrl+Shift+J',
-          visible: false,
-          click: () => send(getWindow(), 'character-assistant')
         },
         { type: 'separator' },
         {

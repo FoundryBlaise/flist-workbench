@@ -22,7 +22,6 @@ import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { ChatPanel } from '../features/rag/ChatPanel'
-import { AssistantPane } from '../features/aiAssistant/AssistantPane'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
@@ -210,17 +209,8 @@ export function AppLayout() {
     }
     void (async () => {
       try {
-        // Always fetch settings — even when first-run toast is suppressed —
-        // because the AI Assistant master toggle needs to be mirrored
-        // into state on every app launch (otherwise the menu entry
-        // stays hidden until the user opens the Settings modal).
         const s = await api.settingsGet()
         if (cancelled) return
-        useStore.getState().setAiAssistantEnabled(s.ai_assistant.enabled)
-        useStore.getState().setAiAssistantPromptConfig(
-          s.ai_assistant.prompt_presets,
-          s.ai_assistant.system_prompt
-        )
         if (firstRunDismissed) return
         const rag = await api.ragStatus()
         if (cancelled) return
@@ -275,15 +265,13 @@ export function AppLayout() {
 
   // Push activeChar/activePartner state to the native menu so items
   // requiring a selection grey out instead of silently no-op'ing.
-  const aiAssistantEnabled = useStore((s) => s.aiAssistantEnabled)
   useEffect(() => {
     window.workbench?.setMenuState?.({
       classifyCurrent: !!(activeChar && activePartner),
       classifyCharacter: !!activeChar,
-      flistSessionActive: !!flistSession.active,
-      aiAssistantEnabled
+      flistSessionActive: !!flistSession.active
     })
-  }, [activeChar, activePartner, flistSession.active, aiAssistantEnabled])
+  }, [activeChar, activePartner, flistSession.active])
 
   // Native menu (electron/menu.ts) dispatches actions over IPC. Route
   // them to the existing local/store handlers so the menu items are
@@ -361,12 +349,6 @@ export function AppLayout() {
           // editor surface should put the user where the panel lives.
           if (mode !== 'logs') setMode('logs')
           toggleChatPanel()
-          break
-        case 'character-assistant':
-          // Character Assistant is editor-mode scoped; flip there if
-          // not already so the bottom dock has somewhere to attach.
-          if (mode !== 'editor') setMode('editor')
-          useStore.getState().toggleAiAssistantPane()
           break
         case 'backup-all':
           void useStore.getState().flistBackupAll()
@@ -646,7 +628,6 @@ function EditorWorkspace() {
         />
       )}
       {showToolbar && <Toolbar viewRef={viewRef} />}
-      <AiDraftBanner characterId={flistActiveId} />
       <div
         className="editor-workspace-row"
         data-view-mode={effectiveMode}
@@ -654,53 +635,6 @@ function EditorWorkspace() {
       >
         <EditorPane viewRef={viewRef} />
         <PreviewPane />
-      </div>
-      <AssistantPane />
-    </div>
-  )
-}
-
-/** Surfaces the "AI draft pending — N edits" callout on every editable
- *  tab when the assistant has proposed edits but the user hasn't yet
- *  accepted or rejected them. Clicking the banner opens the assistant
- *  pane so the user can review without hunting for the menu entry. */
-function AiDraftBanner({ characterId }: { characterId: string | null }) {
-  const enabled = useStore((s) => s.aiAssistantEnabled)
-  const draft = useStore((s) =>
-    characterId ? s.aiAssistantDrafts[characterId] ?? null : null
-  )
-  const paneOpen = useStore((s) => s.aiAssistantPaneOpen)
-  const togglePane = useStore((s) => s.toggleAiAssistantPane)
-  const discardDraft = useStore((s) => s.discardAiAssistantDraft)
-
-  if (!enabled || !characterId || !draft || draft.edits.length === 0) return null
-  const pending = draft.edits.filter((e) => e.status === 'pending').length
-  const stale = draft.edits.filter((e) => e.status === 'stale').length
-
-  return (
-    <div className="ai-draft-banner" data-testid="ai-draft-banner">
-      <span className="ai-draft-banner-icon" aria-hidden="true">✨</span>
-      <span className="ai-draft-banner-text">
-        AI draft pending — {pending} edit{pending === 1 ? '' : 's'}
-        {stale > 0 ? ` (${stale} stale)` : ''}
-      </span>
-      <div className="ai-draft-banner-actions">
-        {!paneOpen && (
-          <button
-            type="button"
-            className="ai-draft-banner-button"
-            onClick={() => togglePane(true)}
-          >
-            Review
-          </button>
-        )}
-        <button
-          type="button"
-          className="ai-draft-banner-button ai-draft-banner-button-secondary"
-          onClick={() => void discardDraft(characterId)}
-        >
-          Discard
-        </button>
       </div>
     </div>
   )

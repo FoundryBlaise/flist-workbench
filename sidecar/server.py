@@ -1,7 +1,7 @@
 import json
 import os
 from dataclasses import asdict
-from typing import Any, Iterator, Literal
+from typing import Any, Literal
 
 from fastapi import (
     Depends,
@@ -18,12 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-import ai_draft
-import ai_tools_atomic
-import ai_tools_composite
-import ai_tools_read
 import aliases as aliases_store
-import assistant_chat
 import character_archive
 import eicons as eicons_catalog
 import flist_activity
@@ -1426,278 +1421,6 @@ async def flist_character_working_put(
 async def flist_character_working_delete(character_id: str) -> dict:
     """Drop the working copy. Idempotent — `deleted: false` on a no-op."""
     return {"deleted": character_archive.delete_working(character_id)}
-
-
-# ---- AI assistant draft (Phase 9) -----------------------------------
-
-
-def _require_ai_assistant_enabled() -> None:
-    """First guard on every assistant endpoint. Lifts the master opt-in
-    toggle out of settings.db and 403s if the user hasn't flipped it
-    on. Keeps the surface inert for users who never want the feature.
-    Cheap enough to read per-request; not worth caching."""
-    conn = settings_store.connect()
-    try:
-        if not settings_store.ai_assistant_enabled(conn):
-            raise HTTPException(status_code=403, detail="feature_disabled")
-    finally:
-        conn.close()
-
-
-async def _resolve_mapping_list_for_assistant() -> dict[str, Any]:
-    """Best-effort fetch the mapping list for validation. The assistant
-    needs it to expand the allowlist + reverse-lookup infotag labels;
-    a stale cache is fine because the mapping data drifts only a few
-    times a year. If even the stale cache is missing this raises 503 —
-    no point pretending we can validate without it."""
-    cache_path = character_archive.cache_root() / "mapping-list.json"
-    try:
-        return await flist_api.fetch_mapping_list(cache_path)
-    except flist_api.FlistApiError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"detail": "mapping_list_unavailable", "message": str(exc)},
-        ) from exc
-
-
-@app.get("/flist/character/{character_id}/ai-draft")
-async def flist_character_ai_draft_get(character_id: str) -> dict:
-    """Return the on-disk draft + the current working etag the draft
-    is anchored against. 404 means no draft (which is the common
-    case — drafts only exist mid-conversation)."""
-    _require_ai_assistant_enabled()
-    draft = ai_draft.read_draft(character_id)
-    if draft is None:
-        raise HTTPException(status_code=404, detail="no_draft")
-    return {
-        "draft": draft,
-        "current_working_etag": character_archive.working_etag(character_id),
-    }
-
-
-@app.delete("/flist/character/{character_id}/ai-draft")
-async def flist_character_ai_draft_delete(character_id: str) -> dict:
-    """Discard the draft. Idempotent — `deleted: false` on a no-op.
-    Used by the chat-panel "Reject all"."""
-    _require_ai_assistant_enabled()
-    return {"deleted": ai_draft.delete_draft(character_id)}
-
-
-@app.delete("/assistant/drafts")
-async def assistant_drafts_delete_all() -> dict:
-    """Wipe every pending `ai-draft.json` across the local archive.
-
-    Backs the Settings → Disable AI Assistant + discard drafts button.
-    Per-character DELETE is the common path; this one runs only when
-    the user explicitly says "clean it all out" so we don't accidentally
-    nuke other characters' drafts via the normal per-pane flow.
-    """
-    _require_ai_assistant_enabled()
-    return {"deleted": ai_draft.delete_all_drafts()}
-
-
-class _AiDraftAppendBody(BaseModel):
-    edits: list[dict[str, Any]]
-    model_endpoint: str | None = None
-    model_id: str | None = None
-
-
-@app.post("/flist/character/{character_id}/ai-draft/edits")
-async def flist_character_ai_draft_append(
-    character_id: str, body: _AiDraftAppendBody
-) -> dict:
-    """Validate + persist a batch of proposed edits. Returns the full
-    canonical draft, plus per-edit accept/reject info so the chat
-    layer can reflect rejection reasons back to the model."""
-    _require_ai_assistant_enabled()
-    if not body.edits:
-        raise HTTPException(status_code=400, detail="edits[] required")
-    mapping_list = await _resolve_mapping_list_for_assistant()
-    result = ai_draft.append_edits(
-        character_id,
-        body.edits,
-        mapping_list,
-        model_endpoint=body.model_endpoint or "",
-        model_id=body.model_id or "",
-    )
-    if result["draft"] is None:
-        # No working copy on disk yet — surface clearly so the renderer
-        # can prompt the user to load/seed one first.
-        raise HTTPException(
-            status_code=409,
-            detail={"detail": "no_working_copy", "rejected": result["rejected"]},
-        )
-    return result
-
-
-class _AiDraftAcceptBody(BaseModel):
-    edit_ids: list[str]
-
-
-@app.post("/flist/character/{character_id}/ai-draft/accept")
-async def flist_character_ai_draft_accept(
-    character_id: str,
-    body: _AiDraftAcceptBody,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-) -> dict:
-    """Apply the given edits to working.json under one If-Match write.
-    Mismatch returns 409 with the current etag — same shape as the
-    working-copy PUT, so renderer can route through the existing
-    `EtagMismatch` handling without a new error code."""
-    _require_ai_assistant_enabled()
-    if not body.edit_ids:
-        raise HTTPException(status_code=400, detail="edit_ids[] required")
-    try:
-        result = ai_draft.accept_edits(character_id, body.edit_ids, if_match)
-    except character_archive.EtagMismatch as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"detail": "etag_mismatch", "current_etag": exc.current_etag},
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return result
-
-
-class _AiDraftRejectBody(BaseModel):
-    edit_ids: list[str]
-
-
-@app.post("/flist/character/{character_id}/ai-draft/reject")
-async def flist_character_ai_draft_reject(
-    character_id: str, body: _AiDraftRejectBody
-) -> dict:
-    """Remove edits from the pending draft without touching the
-    working copy. Returns the trimmed draft (or {draft: None} if the
-    last pending edit was removed and the draft was deleted)."""
-    _require_ai_assistant_enabled()
-    if not body.edit_ids:
-        raise HTTPException(status_code=400, detail="edit_ids[] required")
-    draft = ai_draft.reject_edits(character_id, body.edit_ids)
-    if draft is None:
-        return {"draft": None}
-    return {"draft": draft if draft.get("edits") else None}
-
-
-@app.get("/assistant/tools/atomic")
-async def assistant_tools_atomic() -> dict:
-    """Atomic write-tool schemas (the 12 single-field tools). The
-    chat endpoint (PR 3) registers these with the model alongside
-    read + composite tools below."""
-    _require_ai_assistant_enabled()
-    return {"tools": ai_tools_atomic.ATOMIC_TOOL_SCHEMAS}
-
-
-@app.get("/assistant/tools/read")
-async def assistant_tools_read() -> dict:
-    """Read-tool schemas (active + other characters, backups, mapping
-    options). No edits ever — these only return data."""
-    _require_ai_assistant_enabled()
-    return {"tools": ai_tools_read.READ_TOOL_SCHEMAS}
-
-
-@app.get("/assistant/tools/composite")
-async def assistant_tools_composite() -> dict:
-    """Composite write-tool schemas (bulk + copy-from-other). Each
-    fans into N atomic edits sharing a composite_id when persisted."""
-    _require_ai_assistant_enabled()
-    return {"tools": ai_tools_composite.COMPOSITE_TOOL_SCHEMAS}
-
-
-class _AssistantToolCallBody(BaseModel):
-    tool: str
-    args: dict[str, Any] = Field(default_factory=dict)
-    active_character_id: str | None = None
-
-
-@app.post("/assistant/tools/read/execute")
-async def assistant_tools_read_execute(body: _AssistantToolCallBody) -> dict:
-    """Run a read tool against the local archive. Mainly exposed for
-    renderer-side dev tooling + tests; the chat endpoint dispatches
-    in-process. Errors return 404 with the tool's `LookupError`
-    message so the model can self-correct."""
-    _require_ai_assistant_enabled()
-    if body.tool not in ai_tools_read.read_tool_names():
-        raise HTTPException(status_code=400, detail=f"unknown read tool '{body.tool}'")
-    mapping_list = await _resolve_mapping_list_for_assistant()
-    try:
-        result = ai_tools_read.execute_read_tool(
-            body.tool,
-            body.args,
-            active_character_id=body.active_character_id,
-            mapping_list=mapping_list,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"result": result}
-
-
-class _AssistantChatBody(BaseModel):
-    messages: list[dict[str, Any]]
-    active_character_id: str | None = None
-
-
-@app.post("/assistant/chat")
-async def assistant_chat_stream(body: _AssistantChatBody) -> StreamingResponse:
-    """SSE stream driving one assistant turn.
-
-    Body carries the renderer-held transcript (`messages`) + the
-    chip-selected character id. Sidecar resolves the assistant's
-    endpoint/model/system-prompt config from settings, runs the
-    tool-loop, and yields renderer-facing events. See
-    `assistant_chat.run_chat_turn` for the event schema.
-
-    Long-poll style: a single HTTP request per user turn; the
-    renderer reopens for the next turn. Keeps the sidecar stateless
-    on conversation history.
-    """
-    _require_ai_assistant_enabled()
-    if not body.messages:
-        raise HTTPException(status_code=400, detail="messages[] required")
-
-    settings_conn = settings_store.connect()
-    try:
-        config = assistant_chat.resolve_assistant_config(settings_conn)
-    finally:
-        settings_conn.close()
-
-    mapping_list = await _resolve_mapping_list_for_assistant()
-
-    def gen() -> Iterator[bytes]:
-        for event in assistant_chat.run_chat_turn(
-            config,
-            list(body.messages),
-            active_character_id=body.active_character_id,
-            mapping_list=mapping_list,
-        ):
-            yield assistant_chat.sse_format(event)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-@app.post("/assistant/tools/composite/execute")
-async def assistant_tools_composite_execute(body: _AssistantToolCallBody) -> dict:
-    """Run a composite tool and return the *raw edit list* it would
-    fan into. The caller then POSTs the list to
-    `/flist/character/<id>/ai-draft/edits` to validate + persist
-    (so the model can see per-edit rejection reasons in the chat).
-    Splitting compute from persistence keeps the dry-run cheap."""
-    _require_ai_assistant_enabled()
-    if body.tool not in ai_tools_composite.composite_tool_names():
-        raise HTTPException(
-            status_code=400, detail=f"unknown composite tool '{body.tool}'"
-        )
-    try:
-        edits = ai_tools_composite.execute_composite_tool(
-            body.tool,
-            body.args,
-            active_character_id=body.active_character_id,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"edits": edits}
 
 
 # ---- working sets v2 -------------------------------------------------
@@ -3689,28 +3412,6 @@ class BackupsSettingsUpdate(BaseModel):
     scheduled_keep_last_n: int | None = None
 
 
-class AiAssistantSettingsUpdate(BaseModel):
-    """Per-field updates for the AI Assistant. `enabled` is the master
-    opt-in gate. All transport-level fields use the empty-string-clears
-    convention so a Settings reset returns to RAG-endpoint fallback.
-
-    `system_prompt` is the authoritative editable copy — preset picker
-    in the UI just copies the chosen preset's body into this field,
-    matching how the labels pane works.
-    """
-    enabled: bool | None = None
-    endpoint: str | None = None
-    model: str | None = None
-    api_key: str | None = None
-    system_prompt: str | None = None
-    temperature: float | None = None
-    token_budget: int | None = None
-    timeout_sec: int | None = None
-    warn_non_loopback: bool | None = None
-    log_requests: bool | None = None
-    append_no_think: bool | None = None
-
-
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
@@ -3719,7 +3420,6 @@ class SettingsUpdate(BaseModel):
     labels: LabelsSettingsUpdate | None = None
     rag: RagSettingsUpdate | None = None
     backups: BackupsSettingsUpdate | None = None
-    ai_assistant: AiAssistantSettingsUpdate | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -3823,7 +3523,6 @@ def _settings_dict(conn) -> dict:
             "prompt_presets": _prompt_presets_for("rag"),
         },
         "backups": _backups_settings_dict(conn),
-        "ai_assistant": _ai_assistant_settings_dict(conn),
     }
 
 
@@ -3835,8 +3534,6 @@ def _prompt_presets_for(section: str) -> list[dict]:
         from rag_query import PROMPT_PRESETS as RAG_PRESETS
 
         presets = RAG_PRESETS
-    elif section == "assistant":
-        presets = assistant_chat.PROMPT_PRESETS
     else:
         return []
     return [
@@ -3849,148 +3546,6 @@ def _prompt_presets_for(section: str) -> list[dict]:
         }
         for p in presets
     ]
-
-
-def _ai_assistant_settings_dict(conn) -> dict:
-    """Snapshot of every AI-assistant key. Defaults mirror the resolved
-    runtime config from `assistant_chat.resolve_assistant_config` so
-    the Settings UI can show the same fallback chain the chat endpoint
-    actually uses."""
-
-    def _str(key: str, default: str = "") -> str:
-        return (settings_store.get(conn, key) or default).strip() or default
-
-    def _float(key: str, default: float) -> float:
-        raw = settings_store.get(conn, key)
-        if raw is None:
-            return default
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return default
-
-    def _int(key: str, default: int) -> int:
-        raw = settings_store.get(conn, key)
-        if raw is None:
-            return default
-        try:
-            return int(float(raw))
-        except (TypeError, ValueError):
-            return default
-
-    def _bool(key: str, default: bool) -> bool:
-        raw = settings_store.get(conn, key)
-        if raw is None:
-            return default
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-    # If the user has never edited, return the first preset body as
-    # the live prompt so the textarea isn't empty. Same convention
-    # labels uses.
-    saved_prompt = _str(settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT)
-    if not saved_prompt:
-        saved_prompt = assistant_chat.DEFAULT_PROMPT_NSFW
-
-    return {
-        "enabled": settings_store.ai_assistant_enabled(conn),
-        "endpoint": _str(settings_store.KEY_AI_ASSISTANT_ENDPOINT),
-        "model": _str(settings_store.KEY_AI_ASSISTANT_MODEL),
-        "api_key": _str(settings_store.KEY_AI_ASSISTANT_API_KEY),
-        "system_prompt": saved_prompt,
-        "temperature": _float(settings_store.KEY_AI_ASSISTANT_TEMPERATURE, 0.3),
-        "token_budget": _int(settings_store.KEY_AI_ASSISTANT_TOKEN_BUDGET, 12000),
-        "timeout_sec": _int(settings_store.KEY_AI_ASSISTANT_TIMEOUT_SEC, 120),
-        "warn_non_loopback": _bool(
-            settings_store.KEY_AI_ASSISTANT_WARN_NON_LOOPBACK, True
-        ),
-        "log_requests": _bool(
-            settings_store.KEY_AI_ASSISTANT_LOG_REQUESTS, False
-        ),
-        "append_no_think": _bool(
-            # Default ON. Most local-model use cases want the actual
-            # reply in `content`, not in `reasoning_content`. Users
-            # running a non-thinking model (Llama, Mistral, Hermes)
-            # are unaffected — the token is literal text they ignore.
-            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK,
-            True,
-        ),
-        # The defaults block lets the renderer offer a one-click
-        # "Reset to default" affordance. system_prompt default is the
-        # first preset's body — matches labels' convention.
-        "defaults": {
-            "system_prompt": assistant_chat.DEFAULT_PROMPT_NSFW,
-            "temperature": 0.3,
-            "token_budget": 12000,
-            "timeout_sec": 120,
-            "warn_non_loopback": True,
-            "log_requests": False,
-        },
-        "prompt_presets": _prompt_presets_for("assistant"),
-    }
-
-
-def _apply_ai_assistant_update(conn, update: AiAssistantSettingsUpdate) -> None:
-    """Persist each supplied AI Assistant setting. Empty strings clear
-    (fall back to RAG / labels config or shipped default), `None`
-    leaves the field untouched."""
-
-    def _set_str(key: str, value: str | None) -> None:
-        if value is None:
-            return
-        if value == "":
-            settings_store.clear(conn, key)
-        else:
-            settings_store.set_value(conn, key, value)
-
-    if update.enabled is not None:
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_ENABLED,
-            "true" if update.enabled else "false",
-        )
-    _set_str(settings_store.KEY_AI_ASSISTANT_ENDPOINT, update.endpoint)
-    _set_str(settings_store.KEY_AI_ASSISTANT_MODEL, update.model)
-    _set_str(settings_store.KEY_AI_ASSISTANT_API_KEY, update.api_key)
-    _set_str(settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT, update.system_prompt)
-    if update.temperature is not None:
-        clamped = max(0.0, min(2.0, float(update.temperature)))
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_TEMPERATURE,
-            str(clamped),
-        )
-    if update.token_budget is not None:
-        n = max(1024, min(200000, int(update.token_budget)))
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_TOKEN_BUDGET,
-            str(n),
-        )
-    if update.timeout_sec is not None:
-        n = max(5, min(600, int(update.timeout_sec)))
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_TIMEOUT_SEC,
-            str(n),
-        )
-    if update.warn_non_loopback is not None:
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_WARN_NON_LOOPBACK,
-            "true" if update.warn_non_loopback else "false",
-        )
-    if update.log_requests is not None:
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_LOG_REQUESTS,
-            "true" if update.log_requests else "false",
-        )
-    if update.append_no_think is not None:
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK,
-            "true" if update.append_no_think else "false",
-        )
 
 
 def _backups_settings_dict(conn) -> dict:
@@ -4224,9 +3779,6 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
                 settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N,
                 str(n),
             )
-
-    if body.ai_assistant is not None:
-        _apply_ai_assistant_update(conn, body.ai_assistant)
 
     return _settings_dict(conn)
 
