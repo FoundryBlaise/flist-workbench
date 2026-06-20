@@ -5,6 +5,7 @@ import {
   type AiDraftEdit,
   type AssistantChatMessage,
   type AssistantToolEvent,
+  type PromptPreset,
   type CharacterEntry,
   type FlistAccountCharacter,
   type FlistSnapshotEntry,
@@ -155,6 +156,14 @@ type State = {
    *  users couldn't tell why edits "weren't landing" in early
    *  smoke-testing (2026-06-20). */
   aiAssistantToolEvents: Record<number, AssistantToolEvent[]>
+  /** Shipped prompt presets from /settings — used by the in-chat
+   *  preset switcher above the input bar. Loaded once at app start
+   *  and refreshed after every Save in Settings. */
+  aiAssistantPromptPresets: PromptPreset[]
+  /** Live system prompt body (mirror of `ai_assistant.system_prompt`
+   *  from /settings). Used by the in-chat preset switcher to highlight
+   *  which preset is active. */
+  aiAssistantSystemPrompt: string
   /** Pending "scroll the log viewer to this timestamp range" intent
    *  raised by a clicked citation. LogViewer consumes & clears it. */
   logJump:
@@ -463,6 +472,17 @@ type State = {
 
   // ---- AI Assistant (Phase 9) -----------------------------------
   setAiAssistantEnabled: (enabled: boolean) => void
+  /** Mirror /settings.ai_assistant.prompt_presets + system_prompt
+   *  into the store so the in-chat preset switcher has data to drive
+   *  without a per-render API call. */
+  setAiAssistantPromptConfig: (
+    presets: PromptPreset[],
+    systemPrompt: string
+  ) => void
+  /** Picks one of the shipped presets as the active system prompt.
+   *  Persists via api.settingsUpdate so the next chat turn uses the
+   *  new prompt. */
+  setAiAssistantPromptBody: (body: string) => Promise<void>
   toggleAiAssistantPane: (force?: boolean) => void
   resetAiAssistantTranscript: () => void
   /** Drives one user turn through /assistant/chat.
@@ -1250,6 +1270,8 @@ export const useStore = create<State>((set, get) => ({
   aiAssistantLastError: null,
   aiAssistantInflight: null,
   aiAssistantToolEvents: {},
+  aiAssistantPromptPresets: [],
+  aiAssistantSystemPrompt: '',
 
   logJump: null,
 
@@ -4520,6 +4542,32 @@ export const useStore = create<State>((set, get) => ({
     }))
   },
 
+  setAiAssistantPromptConfig(presets, systemPrompt) {
+    set({
+      aiAssistantPromptPresets: presets,
+      aiAssistantSystemPrompt: systemPrompt
+    })
+  },
+
+  async setAiAssistantPromptBody(body) {
+    // Optimistic local update so the in-chat dropdown reflects
+    // immediately; on PUT failure, surface as an error chip.
+    const prev = get().aiAssistantSystemPrompt
+    set({ aiAssistantSystemPrompt: body })
+    try {
+      await api.settingsUpdate({ ai_assistant: { system_prompt: body } })
+    } catch (err) {
+      // Roll back + report.
+      set({
+        aiAssistantSystemPrompt: prev,
+        aiAssistantLastError:
+          err instanceof Error
+            ? `Couldn't save prompt: ${err.message}`
+            : 'Couldn’t save prompt.'
+      })
+    }
+  },
+
   toggleAiAssistantPane(force) {
     const s = get()
     if (!s.aiAssistantEnabled) {
@@ -4580,6 +4628,7 @@ export const useStore = create<State>((set, get) => ({
     // text events between tool calls; we coalesce into one assistant
     // turn so the transcript stays clean.
     let assistantText = ''
+    let fromReasoning = false
     // Capture every tool_call/tool_result pair the sidecar emits so
     // the user can see exactly what the model did — silent rejections
     // (anchor_mismatch etc.) were invisible in early smoke testing
@@ -4594,6 +4643,12 @@ export const useStore = create<State>((set, get) => ({
         {
           onText: (data) => {
             assistantText += (assistantText ? '\n\n' : '') + data.content
+            // Capture the reasoning-fallback flag so we can mark the
+            // appended assistant message and let the renderer style
+            // it differently from a normal reply.
+            if (data.from_reasoning) {
+              fromReasoning = true
+            }
           },
           onToolCall: (data) => {
             pendingCalls[data.call_id] = { tool: data.tool, args: data.args }
@@ -4668,7 +4723,11 @@ export const useStore = create<State>((set, get) => ({
           return {
             aiAssistantTranscript: [
               ...curr.aiAssistantTranscript,
-              { role: 'assistant', content: assistantText }
+              {
+                role: 'assistant',
+                content: assistantText,
+                ...(fromReasoning ? { _from_reasoning: true } : {})
+              }
             ],
             aiAssistantToolEvents:
               toolEvents.length > 0

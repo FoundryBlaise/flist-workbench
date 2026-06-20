@@ -411,6 +411,17 @@ def _call_openai_compat(
         "messages": messages,
         "temperature": config.temperature,
         "stream": False,
+        # Give the model enough room for thinking + the actual reply.
+        # Without an explicit cap, LM Studio defaults to ~2048, which
+        # thinking models like Qwen3.5 / Gemma4 burn through entirely
+        # on reasoning_content and finish with finish_reason='length'
+        # before emitting any content. 4096 leaves room for a real
+        # answer after a moderate reasoning trace.
+        "max_tokens": 4096,
+        # Hint to thinking-capable models (LM Studio + Qwen 3.5,
+        # OpenAI o-series, etc.) to keep reasoning brief. Servers that
+        # don't recognise the field ignore it harmlessly.
+        "reasoning_effort": "low",
     }
     if tools:
         payload["tools"] = tools
@@ -448,7 +459,45 @@ def _call_openai_compat(
     choices = body.get("choices") or []
     if not choices:
         raise ChatTransportError(f"no choices in response: {raw[:200]}")
-    return choices[0].get("message") or {}
+    msg = choices[0].get("message") or {}
+    return _coerce_thinking_message(msg, choices[0].get("finish_reason"))
+
+
+def _coerce_thinking_message(
+    message: dict[str, Any], finish_reason: str | None
+) -> dict[str, Any]:
+    """For thinking-capable models (Qwen 3.5, Gemma 4, the o-series),
+    LM Studio splits the response into `reasoning_content` (the
+    chain-of-thought) and `content` (the actual reply). When the
+    model spends its whole token budget reasoning and never produces
+    a final answer, `content` is empty and `finish_reason == 'length'`.
+
+    Surface the reasoning trace as the content in that case so the
+    user sees *something* instead of a blank assistant turn — and so
+    the renderer can render the model's reasoning as a fallback
+    rather than dropping it on the floor.
+
+    Empty-content turns that DID call tools are left alone — the
+    tool calls are the meaningful output.
+    """
+    if message.get("tool_calls"):
+        return message
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return message
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        # Mark the trace so the renderer can style it differently
+        # ("the model was thinking, here's the trace; it didn't write
+        # an explicit answer"). The flag is a custom key — OpenAI
+        # spec ignores it; our renderer reads it.
+        return {
+            **message,
+            "content": reasoning.strip(),
+            "_from_reasoning": True,
+            "_finish_reason": finish_reason,
+        }
+    return message
 
 
 def _call_ollama(
@@ -496,7 +545,23 @@ def _call_ollama(
         body = json.loads(raw)
     except ValueError as exc:
         raise ChatTransportError(f"non-JSON response: {raw[:200]}") from exc
-    return body.get("message") or {}
+    msg = body.get("message") or {}
+    # Ollama's native API also splits thinking models into a separate
+    # `thinking` field (analogous to OpenAI's `reasoning_content`).
+    # The coercion handles both keys uniformly.
+    return _coerce_thinking_message(_normalise_thinking_field(msg), body.get("done_reason"))
+
+
+def _normalise_thinking_field(msg: dict[str, Any]) -> dict[str, Any]:
+    """Rename Ollama's `thinking` field to `reasoning_content` so the
+    coercion path is shared with the OpenAI-compat case. Idempotent —
+    if both fields are present, OpenAI's wins. If neither, no-op."""
+    if msg.get("reasoning_content"):
+        return msg
+    thinking = msg.get("thinking")
+    if isinstance(thinking, str) and thinking.strip():
+        return {**msg, "reasoning_content": thinking}
+    return msg
 
 
 # ---- orchestration ---------------------------------------------------
@@ -576,7 +641,19 @@ def run_chat_turn(
         if not tool_calls:
             content = msg.get("content") or ""
             if content:
-                yield {"event": "text", "data": {"content": content, "round": round_n}}
+                yield {
+                    "event": "text",
+                    "data": {
+                        "content": content,
+                        "round": round_n,
+                        # Flag so the renderer can style this as a
+                        # "reasoning trace" rather than a normal reply
+                        # — e.g. dim it or label it "Model thinking
+                        # (no final answer)". The coercion fires when
+                        # the model ran out of budget reasoning.
+                        "from_reasoning": bool(msg.get("_from_reasoning")),
+                    },
+                }
             yield {"event": "done", "data": {}}
             return
 
