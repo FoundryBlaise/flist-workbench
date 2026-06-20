@@ -17,6 +17,8 @@ export type MenuAction =
   | 'flist-activity'
   | 'restore-userscript-help'
   | 'check-updates'
+  | 'edit-undo'
+  | 'edit-redo'
 
 declare global {
   interface Window {
