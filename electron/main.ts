@@ -5,7 +5,6 @@ import { isAbsolute, join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
-import { attachContextMenu } from './contextMenu'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -609,8 +608,6 @@ async function createWindow(): Promise<void> {
   if (isDev) {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
-
-  attachContextMenu(mainWindow)
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   appendDiagLog('createWindow', { isDev, devUrl: devUrl ?? null })
