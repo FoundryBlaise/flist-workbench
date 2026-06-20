@@ -1,4 +1,5 @@
 import { EditorView } from '@codemirror/view'
+import { EditorSelection } from '@codemirror/state'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { api } from '../../lib/api'
 import { useStore } from '../../state'
@@ -93,18 +94,22 @@ export function applyAction(view: EditorView, action: ToolbarAction) {
   view.dispatch(
     view.state.changeByRange((range) => {
       if (action.insert) {
+        const cursor = range.from + action.insert.length
         return {
           changes: { from: range.from, to: range.to, insert: action.insert },
-          range: { ...range, anchor: range.from + action.insert.length, head: range.from + action.insert.length }
-        } as never
+          range: EditorSelection.cursor(cursor)
+        }
       }
       const { open, close } = action.wrap!
       const selected = view.state.doc.sliceString(range.from, range.to)
       const insert = open + selected + close
       return {
         changes: { from: range.from, to: range.to, insert },
-        range: { ...range, anchor: range.from + open.length, head: range.from + open.length + selected.length }
-      } as never
+        range: EditorSelection.range(
+          range.from + open.length,
+          range.from + open.length + selected.length
+        )
+      }
     })
   )
   view.focus()
@@ -119,12 +124,11 @@ function wrapSelection(view: EditorView, open: string, close: string) {
       const insert = open + selected + close
       return {
         changes: { from: range.from, to: range.to, insert },
-        range: {
-          ...range,
-          anchor: range.from + open.length,
-          head: range.from + open.length + selected.length
-        }
-      } as never
+        range: EditorSelection.range(
+          range.from + open.length,
+          range.from + open.length + selected.length
+        )
+      }
     })
   )
   view.focus()
@@ -272,8 +276,8 @@ function UrlPopover({
         const insert = `[url=${url}]${text}[/url]`
         return {
           changes: { from: range.from, to: range.to, insert },
-          range: { ...range, anchor: range.from + insert.length, head: range.from + insert.length }
-        } as never
+          range: EditorSelection.cursor(range.from + insert.length)
+        }
       })
     )
     view.focus()
