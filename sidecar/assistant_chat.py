@@ -138,6 +138,10 @@ class AssistantConfig:
     temperature: float
     timeout_sec: float
     token_budget: int
+    # Per-turn Qwen-family escape hatch — appended to the resolved
+    # system prompt when true so Qwen 3.5 / Qwen 3 skip the thinking
+    # phase. Other model families ignore it as literal text.
+    append_no_think: bool = False
 
 
 def resolve_assistant_config(conn) -> AssistantConfig:
@@ -209,6 +213,12 @@ def resolve_assistant_config(conn) -> AssistantConfig:
         )
     )
 
+    append_no_think_raw = (
+        settings_store.get(conn, settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK)
+        or ""
+    ).strip().lower()
+    append_no_think = append_no_think_raw in {"1", "true", "yes", "on"}
+
     return AssistantConfig(
         endpoint=endpoint,
         model=model,
@@ -217,6 +227,7 @@ def resolve_assistant_config(conn) -> AssistantConfig:
         temperature=temperature,
         timeout_sec=timeout_sec,
         token_budget=token_budget,
+        append_no_think=append_no_think,
     )
 
 
@@ -570,14 +581,25 @@ def _normalise_thinking_field(msg: dict[str, Any]) -> dict[str, Any]:
 def build_initial_messages(
     system_prompt: str,
     history: list[dict[str, Any]],
+    *,
+    append_no_think: bool = False,
 ) -> list[dict[str, Any]]:
     """Prepend the system prompt to whatever transcript the renderer
     sends. The renderer can omit the system message (we always inject
     the resolved one) but a leading system entry from the client is
     accepted and overridden — it would otherwise stick around in
-    multi-turn conversations and confuse drift checks."""
+    multi-turn conversations and confuse drift checks.
+
+    When `append_no_think` is set, the literal token `/no_think` is
+    appended to the system prompt. Qwen 3.x family treats this as
+    "skip the chain-of-thought phase for this turn"; other model
+    families see it as text and ignore it harmlessly.
+    """
     cleaned = [m for m in history if m.get("role") != "system"]
-    return [{"role": "system", "content": system_prompt}, *cleaned]
+    effective_prompt = (
+        f"{system_prompt}\n\n/no_think" if append_no_think else system_prompt
+    )
+    return [{"role": "system", "content": effective_prompt}, *cleaned]
 
 
 def _parse_tool_arguments(call: dict[str, Any]) -> dict[str, Any]:
@@ -621,7 +643,11 @@ def run_chat_turn(
         },
     }
 
-    messages = build_initial_messages(config.system_prompt, history)
+    messages = build_initial_messages(
+        config.system_prompt,
+        history,
+        append_no_think=config.append_no_think,
+    )
     tools = all_tool_schemas()
 
     for round_n in range(MAX_TOOL_ROUNDS):
