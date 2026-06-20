@@ -1,9 +1,17 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+import { historyField } from '@codemirror/commands'
 import { selectWorkingSlot, useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
+
+// Per-character / per-set CodeMirror history pool. The map key
+// matches the `cmKey` we pass to <CodeMirror>; on unmount we stash
+// the EditorState JSON (doc + selection + history field), and on
+// re-mount we hydrate via @uiw's initialState. Stays in process
+// memory — cleared whenever the renderer reloads.
+const historyStash = new Map<string, ReturnType<EditorState['toJSON']>>()
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { KinksPane } from '../flist/KinksPane'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
@@ -223,18 +231,45 @@ function EditorActiveTabBody(props: {
 }) {
   const activeTab = useStore((s) => s.editorActiveTab)
   const flistActiveId = props.flistActiveId
-  // Reset CodeMirror's history (via a remounting `key`) on any
-  // boundary that changes which document is in the buffer — character,
-  // working set, Live ↔ working-set toggle. Without this, CM's undo
-  // stack carries across those boundaries, so spamming Ctrl+Z
-  // eventually rewinds into the *previous* character's content while
-  // the sidebar still shows the new one as active.
+  // Pin CodeMirror's identity to (character, working-set, Live ↔ working-set)
+  // so its undo history can't cross those boundaries — otherwise
+  // spamming Ctrl+Z rewinds into the previous character's content
+  // while the sidebar still shows the new one as active.
+  //
+  // Per-character history pool: when the user navigates away we stash
+  // the EditorState JSON keyed by cmKey, and when they come back we
+  // hydrate via @uiw's `initialState`. Storage lives in module memory
+  // for the Workbench session — clears on restart, no disk
+  // persistence. If the doc has drifted since the stash (e.g. an
+  // external F-list pull rewrote the working slot), @uiw's
+  // value-prop reconcile fires after mount and pushes the latest
+  // content over the stashed doc; the history sticks.
   const activeSetIdForKey = useStore((s) =>
     flistActiveId ? (s.flistActiveSetId[flistActiveId] ?? '') : ''
   )
   const cmKey = `${flistActiveId ?? 'doc'}|${activeSetIdForKey}|${
     props.readOnly ? 'ro' : 'rw'
   }`
+  const initialCmState = (() => {
+    const stash = historyStash.get(cmKey)
+    if (!stash) return undefined
+    return { json: stash, fields: { history: historyField } }
+  })()
+  const viewRef = props.viewRef
+  useEffect(() => {
+    return () => {
+      const v = viewRef.current
+      if (!v) return
+      try {
+        const json = v.state.toJSON({ history: historyField })
+        historyStash.set(cmKey, json)
+      } catch {
+        // Bad serialise → drop the stash for this key so we don't
+        // crash on the next hydrate.
+        historyStash.delete(cmKey)
+      }
+    }
+  }, [cmKey, viewRef])
 
   if (flistActiveId) {
     if (activeTab === 'profile-fields') {
@@ -291,6 +326,7 @@ function EditorActiveTabBody(props: {
         <div className="editor-cm" data-testid="editor-cm">
           <CodeMirror
             key={cmKey}
+            initialState={initialCmState}
             ref={props.cmRef}
             value={props.content}
             theme="dark"
