@@ -3907,7 +3907,12 @@ def _ai_assistant_settings_dict(conn) -> dict:
             settings_store.KEY_AI_ASSISTANT_LOG_REQUESTS, False
         ),
         "append_no_think": _bool(
-            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK, False
+            # Default ON. Most local-model use cases want the actual
+            # reply in `content`, not in `reasoning_content`. Users
+            # running a non-thinking model (Llama, Mistral, Hermes)
+            # are unaffected — the token is literal text they ignore.
+            settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK,
+            True,
         ),
         # The defaults block lets the renderer offer a one-click
         # "Reset to default" affordance. system_prompt default is the

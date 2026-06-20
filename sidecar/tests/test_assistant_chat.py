@@ -422,9 +422,24 @@ def test_build_initial_messages_appends_no_think_when_enabled(env):
     assert augmented[0]["content"].startswith("BE TERSE.")
 
 
-def test_resolve_config_threads_append_no_think_flag(env):
-    """The flag survives the settings → config round-trip so the chat
-    loop actually sees the user's pick."""
+def test_resolve_config_append_no_think_defaults_on(env):
+    """Default ON because most local-model setups produce empty replies
+    when the model spends its budget on reasoning. Users who want the
+    thinking trace visible explicitly opt out."""
+    import assistant_chat
+    import settings as settings_store
+
+    conn = settings_store.connect()
+    try:
+        config = assistant_chat.resolve_assistant_config(conn)
+    finally:
+        conn.close()
+    assert config.append_no_think is True
+
+
+def test_resolve_config_append_no_think_can_be_disabled(env):
+    """An explicit 'false' overrides the default — survives the
+    settings → config round-trip cleanly."""
     import assistant_chat
     import settings as settings_store
 
@@ -433,7 +448,7 @@ def test_resolve_config_threads_append_no_think_flag(env):
         settings_store.set_value(
             conn,
             settings_store.KEY_AI_ASSISTANT_APPEND_NO_THINK,
-            "true",
+            "false",
         )
     finally:
         conn.close()
@@ -442,7 +457,7 @@ def test_resolve_config_threads_append_no_think_flag(env):
         config = assistant_chat.resolve_assistant_config(conn)
     finally:
         conn.close()
-    assert config.append_no_think is True
+    assert config.append_no_think is False
 
 
 def test_assistant_prompt_presets_carry_all_four_languages(env):
