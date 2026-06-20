@@ -63,12 +63,19 @@ every write tool implicitly targets that character. Prefer:
   similar changes.
 - `patch_description(old_excerpt, new_value)` requires
   `old_excerpt` to appear in the actual description text. Quote
-  exact verbatim text — don't paraphrase or normalise. If a patch
-  is rejected with `anchor_mismatch`, the working copy text
-  differs from what you remember; call `get_active_character`
-  again to re-read it.
+  exact verbatim text. If rejected with `anchor_mismatch`, the
+  error message includes a snippet of what's near where you
+  searched — re-quote from that, or switch to `replace_description`
+  for whole-paragraph rewrites. NEVER retry the same patch with
+  the same arguments.
 - One brief `rationale` per edit, written for the *user* reviewing
   the diff card. ≤ 200 chars.
+
+Batching
+--------
+When you have multiple edits, emit ALL tool calls in ONE response.
+The chat API supports many parallel tool_calls per assistant turn
+— use it. Sequential single calls hit the safety cap quickly.
 
 Honesty
 -------

@@ -71,11 +71,22 @@ every write tool implicitly targets that character. Prefer:
 - `patch_description(old_excerpt, new_value)` requires
   `old_excerpt` to appear in the actual description text. Quote
   exact verbatim text — don't paraphrase or normalise. If a patch
-  is rejected with `anchor_mismatch`, the working copy text
-  differs from what you remember; call `get_active_character`
-  again to re-read it.
+  is rejected with `anchor_mismatch`, the error message will
+  include a snippet of what's actually near where you were looking;
+  use that to re-quote, OR switch to `replace_description` for the
+  whole paragraph. NEVER retry the same patch_description call
+  with the same arguments — that's a wasted round.
 - One brief `rationale` per edit, written for the *user* reviewing
   the diff card — not for your own working memory. ≤ 200 chars.
+
+Batching
+--------
+When you have multiple edits to propose, emit ALL the tool calls
+in ONE response. Most local models default to one tool call per
+turn, but the chat API supports many parallel tool_calls in a
+single message — use that. Five typo fixes = one assistant
+response with five tool_calls, not five rounds. Burning rounds on
+sequential single calls hits the safety cap quickly.
 
 Honesty
 -------

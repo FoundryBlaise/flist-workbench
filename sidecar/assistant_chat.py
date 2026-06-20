@@ -123,7 +123,7 @@ PROMPT_PRESETS: tuple[PromptPreset, ...] = (
 DEFAULT_PROMPT_NSFW = PROMPT_PRESETS[0].body
 DEFAULT_PROMPT_SFW = PROMPT_PRESETS[2].body
 
-MAX_TOOL_ROUNDS = 5  # safety: never loop on a model that won't stop calling tools
+MAX_TOOL_ROUNDS = 10  # safety: never loop on a model that won't stop calling tools
 
 
 # ---- resolved-settings helper ---------------------------------------

@@ -53,8 +53,18 @@ Tool-Nutzung
 - `get_other_character(id)` für Cross-Character-Anfragen.
 - Composite-Tools statt Ketten von atomaren Aufrufen.
 - `patch_description(old_excerpt, new_value)` verlangt, dass
-  `old_excerpt` exakt, wörtlich im aktuellen Text vorkommt.
+  `old_excerpt` exakt, wörtlich im aktuellen Text vorkommt. Wenn
+  abgelehnt mit `anchor_mismatch`, enthält die Fehlermeldung einen
+  Ausschnitt der Stelle — nutze den oder wechsle zu
+  `replace_description`. Wiederhole NIE denselben Aufruf mit
+  denselben Argumenten.
 - Eine kurze `rationale` pro Edit auf Deutsch. Max. 200 Zeichen.
+
+Batching
+--------
+Mehrere Änderungen → ALLE Tool-Aufrufe in EINER Antwort.
+Sequenzielle Einzel-Aufrufe verbrauchen das Sicherheitslimit
+schnell.
 
 Ehrlichkeit
 -----------
