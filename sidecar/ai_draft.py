@@ -476,15 +476,31 @@ def _apply_edit(
         current = character.get("description") or ""
         old_excerpt = edit.get("old_excerpt") or ""
         new_value = edit.get("new_value") or ""
-        # validate_edit now refuses non-literal matches, so a missing
-        # anchor here means the working copy moved between validate and
-        # apply (a stale edit slipped through the per-edit status guard).
-        # Silently no-op rather than risk a whole-body clobber — accept
-        # the edit, leave the working text intact, and let the user
-        # re-prompt.
-        if old_excerpt and old_excerpt in current:
+        # Validator resolved precise (start, end) raw bounds for both
+        # literal and whitespace-normalised matches. Splice exactly
+        # that range — no whole-body fallback, no risk of clobbering a
+        # prior text_patch edit in the same draft.
+        anchor_start = edit.get("anchor_start")
+        anchor_end = edit.get("anchor_end")
+        if (
+            isinstance(anchor_start, int)
+            and isinstance(anchor_end, int)
+            and 0 <= anchor_start < anchor_end <= len(current)
+        ):
+            character["description"] = (
+                current[:anchor_start] + new_value + current[anchor_end:]
+            )
+            overlay.add(field_path)
+        elif old_excerpt and old_excerpt in current:
+            # Backstop for legacy draft edits written before
+            # anchor_end was added — still safe (literal substring,
+            # first occurrence).
             character["description"] = current.replace(old_excerpt, new_value, 1)
             overlay.add(field_path)
+        # No-op if neither path matches: the working copy drifted
+        # between validate and apply (a stale edit slipped through).
+        # Better to silently leave the description intact than risk a
+        # whole-body clobber.
         return
 
     if tool == "set_custom_kink":

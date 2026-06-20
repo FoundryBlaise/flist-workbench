@@ -715,6 +715,13 @@ body {
 .editor-pane {
   display: flex;
   flex-direction: column;
+  /* min-height + overflow hidden are load-bearing when the assistant
+     bottom-dock is open: without them the pane refuses to shrink
+     below its content height, the CodeMirror scroller never gets a
+     bounded box to scroll inside, and the editor text just gets
+     clipped at the dock's top edge with no scrollbar. */
+  min-height: 0;
+  overflow: hidden;
 }
 
 .editor-head {

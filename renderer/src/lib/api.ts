@@ -328,6 +328,21 @@ export type AssistantChatMessage = {
   name?: string
 }
 
+/** Captured tool-call → tool-result pair surfaced to the transcript
+ *  so the user can see exactly which tool the model invoked and
+ *  whether it succeeded. Rejections (anchor_mismatch, stale_base,
+ *  bbcode_fidelity, etc.) surface here too with the reason code. */
+export type AssistantToolEvent = {
+  callId: string
+  tool: string
+  args: Record<string, unknown>
+  ok: boolean
+  error?: string
+  /** When the tool persisted edits, the count + ids so the chip can
+   *  link the user to the relevant proposal cards. */
+  resultSummary?: string
+}
+
 export type AssistantChatHandlers = {
   onStart?: (data: { model_id: string; model_endpoint: string }) => void
   onText?: (data: { content: string; round: number }) => void

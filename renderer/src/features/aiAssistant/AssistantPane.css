@@ -41,14 +41,68 @@
    bottom; error strip sits above input when set. */
 
 .assistant-pane {
+  position: relative;
   display: grid;
-  grid-template-rows: auto 1fr auto auto;
+  /* resize-handle, header, body, error-strip, input-bar */
+  grid-template-rows: auto auto 1fr auto auto;
   background: var(--panel);
   border-top: 1px solid var(--border);
   overflow: hidden;
-  min-height: 0;
+  min-height: 200px;
   flex: 0 0 auto;
+  /* Height comes from inline style now; the var stays as a fallback
+     when the pane is mounted before any drag/localStorage value
+     resolves. */
   height: var(--assistant-pane-height, 320px);
+}
+
+.assistant-pane-resize-handle {
+  height: 6px;
+  cursor: ns-resize;
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  touch-action: none;
+  /* Visible affordance: a 1px line sits in the middle of the handle so
+     the user knows it's grabbable without needing a full border. */
+  position: relative;
+}
+.assistant-pane-resize-handle:hover {
+  background: rgba(120, 180, 255, 0.08);
+}
+.assistant-pane-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  transform: translate(-50%, -50%);
+}
+.assistant-pane-resize-handle:hover::after {
+  background: rgba(120, 180, 255, 0.6);
+}
+
+/* Secondary header button (Clear conversation). Same visual rhythm as
+   the close button but tinted muted so the destructive primary close
+   is the eye-catching one. */
+.assistant-pane-close-secondary {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 13px;
+}
+.assistant-pane-close-secondary:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
+}
+.assistant-pane-close-secondary:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .assistant-pane-header {
@@ -117,6 +171,57 @@
   font-style: italic;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Tool-event chips inside an assistant turn */
+.assistant-tool-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.assistant-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.assistant-tool-chip-ok {
+  border-color: rgba(80, 200, 120, 0.4);
+  background: rgba(80, 200, 120, 0.08);
+}
+.assistant-tool-chip-fail {
+  border-color: rgba(255, 120, 120, 0.4);
+  background: rgba(255, 120, 120, 0.08);
+}
+.assistant-tool-chip-icon {
+  font-weight: bold;
+}
+.assistant-tool-chip-ok .assistant-tool-chip-icon {
+  color: rgb(120, 220, 150);
+}
+.assistant-tool-chip-fail .assistant-tool-chip-icon {
+  color: rgb(255, 140, 140);
+}
+.assistant-tool-chip-name {
+  color: var(--text);
+  background: none;
+  padding: 0;
+  font-size: 11px;
+}
+.assistant-tool-chip-args {
+  color: var(--text-muted);
+}
+.assistant-tool-chip-error {
+  color: rgb(255, 140, 140);
+  font-style: italic;
+}
+.assistant-tool-chip-summary {
+  color: var(--text-muted);
+  font-style: italic;
 }
 .assistant-typing {
   color: var(--text-muted);

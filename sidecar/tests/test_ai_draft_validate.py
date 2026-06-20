@@ -211,6 +211,52 @@ def test_validate_patch_description_anchor_mismatch():
     assert r.reason == "anchor_mismatch"
 
 
+def test_validate_patch_description_normalised_whitespace_match():
+    """Model quotes with collapsed whitespace; description has runs of
+    spaces or CRLF. Anchor matching tolerates the difference and
+    resolves to precise raw indices for a safe splice."""
+    al = v.generate_allowlist(MAPPING_LIST)
+    working = _working()
+    working["character"]["description"] = (
+        "Hello    [b]world[/b].\r\nLine    two with  extra   spaces."
+    )
+    edit = {
+        "tool": "patch_description",
+        "field_path": "character.description",
+        "old_excerpt": "Line two with extra spaces.",  # model-side collapsed
+        "new_value": "Line two replaced.",
+        "rationale": "tighten",
+    }
+    r = v.validate_edit(edit, working, al, MAPPING_LIST)
+    assert r.ok, r.message
+    # Bounds resolved.
+    assert r.edit["anchor_start"] is not None
+    assert r.edit["anchor_end"] > r.edit["anchor_start"]
+
+
+def test_locate_anchor_literal_first():
+    """Literal substring match wins over normalised even when both
+    would succeed — we want the cheapest, exactest path."""
+    bounds = v._locate_anchor("world", "hello world.")
+    assert bounds == (6, 11)
+
+
+def test_locate_anchor_unicode_diacritics():
+    """German `ß` and umlauts are stored composed; the model's quote
+    using the same composed form matches literally."""
+    haystack = "ausschließlich heißen Nächten"
+    bounds = v._locate_anchor("heißen Nächten", haystack)
+    assert bounds is not None
+    start, end = bounds
+    assert haystack[start:end] == "heißen Nächten"
+
+
+def test_locate_anchor_returns_none_on_real_mismatch():
+    """Whitespace-normalisation isn't fuzzy enough to invent matches
+    where the substantive text differs."""
+    assert v._locate_anchor("totally absent", "hello world") is None
+
+
 def test_validate_set_standard_kink_enum_violation():
     al = v.generate_allowlist(MAPPING_LIST)
     edit = {

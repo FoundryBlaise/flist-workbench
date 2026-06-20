@@ -4,6 +4,7 @@ import {
   type AiDraft,
   type AiDraftEdit,
   type AssistantChatMessage,
+  type AssistantToolEvent,
   type CharacterEntry,
   type FlistAccountCharacter,
   type FlistSnapshotEntry,
@@ -147,6 +148,13 @@ type State = {
    *  A new send or pane-close aborts the prior request so its late
    *  draft_update events can't mutate state under the next turn. */
   aiAssistantInflight: AbortController | null
+  /** Per-turn tool activity, keyed by transcript index of the
+   *  assistant message that the events belong to. Lets the
+   *  TranscriptRow render visible chips for every tool the model
+   *  called + its outcome — silent rejections were the #1 reason
+   *  users couldn't tell why edits "weren't landing" in early
+   *  smoke-testing (2026-06-20). */
+  aiAssistantToolEvents: Record<number, AssistantToolEvent[]>
   /** Pending "scroll the log viewer to this timestamp range" intent
    *  raised by a clicked citation. LogViewer consumes & clears it. */
   logJump:
@@ -1241,6 +1249,7 @@ export const useStore = create<State>((set, get) => ({
   aiAssistantStreaming: false,
   aiAssistantLastError: null,
   aiAssistantInflight: null,
+  aiAssistantToolEvents: {},
 
   logJump: null,
 
@@ -4527,7 +4536,11 @@ export const useStore = create<State>((set, get) => ({
   },
 
   resetAiAssistantTranscript() {
-    set({ aiAssistantTranscript: [], aiAssistantLastError: null })
+    set({
+      aiAssistantTranscript: [],
+      aiAssistantLastError: null,
+      aiAssistantToolEvents: {}
+    })
   },
 
   async sendAiAssistantTurn(userMessage) {
@@ -4567,6 +4580,13 @@ export const useStore = create<State>((set, get) => ({
     // text events between tool calls; we coalesce into one assistant
     // turn so the transcript stays clean.
     let assistantText = ''
+    // Capture every tool_call/tool_result pair the sidecar emits so
+    // the user can see exactly what the model did — silent rejections
+    // (anchor_mismatch etc.) were invisible in early smoke testing
+    // and led the user to assume edits should be landing when they
+    // weren't.
+    const toolEvents: AssistantToolEvent[] = []
+    const pendingCalls: Record<string, { tool: string; args: Record<string, unknown> }> = {}
 
     try {
       await api.assistantChat(
@@ -4574,6 +4594,37 @@ export const useStore = create<State>((set, get) => ({
         {
           onText: (data) => {
             assistantText += (assistantText ? '\n\n' : '') + data.content
+          },
+          onToolCall: (data) => {
+            pendingCalls[data.call_id] = { tool: data.tool, args: data.args }
+          },
+          onToolResult: (data) => {
+            const pending = pendingCalls[data.call_id]
+            const tool = pending?.tool ?? 'unknown'
+            const args = pending?.args ?? {}
+            delete pendingCalls[data.call_id]
+            // Build a short result summary for the chip. For writes
+            // we surface accepted/rejected counts; for reads we just
+            // mark ok.
+            let resultSummary: string | undefined
+            const r = data.result as
+              | { accepted_edit_ids?: string[]; rejected?: unknown[] }
+              | undefined
+            if (data.ok && r) {
+              const accepted = r.accepted_edit_ids?.length ?? 0
+              const rejected = r.rejected?.length ?? 0
+              if (accepted > 0 || rejected > 0) {
+                resultSummary = `${accepted} accepted${rejected > 0 ? `, ${rejected} rejected` : ''}`
+              }
+            }
+            toolEvents.push({
+              callId: data.call_id,
+              tool,
+              args,
+              ok: data.ok,
+              error: data.error,
+              resultSummary
+            })
           },
           onDraftUpdate: (data) => {
             if (controller.signal.aborted) return
@@ -4608,14 +4659,26 @@ export const useStore = create<State>((set, get) => ({
       // text. The transcript stub at AssistantPane.tsx renders
       // "Proposed edits — see the review column" for empty content
       // so the user doesn't watch a dead transcript while diff
-      // cards fill in on the right.
+      // cards fill in on the right. Tool events live alongside,
+      // keyed by the assistant message's index so the renderer
+      // can show them as chips on the same row.
       if (!controller.signal.aborted) {
-        set((curr) => ({
-          aiAssistantTranscript: [
-            ...curr.aiAssistantTranscript,
-            { role: 'assistant', content: assistantText }
-          ]
-        }))
+        set((curr) => {
+          const nextIndex = curr.aiAssistantTranscript.length
+          return {
+            aiAssistantTranscript: [
+              ...curr.aiAssistantTranscript,
+              { role: 'assistant', content: assistantText }
+            ],
+            aiAssistantToolEvents:
+              toolEvents.length > 0
+                ? {
+                    ...curr.aiAssistantToolEvents,
+                    [nextIndex]: toolEvents
+                  }
+                : curr.aiAssistantToolEvents
+          }
+        })
       }
       // Only clear streaming/inflight if WE are still the active
       // turn — a follow-up sendAiAssistantTurn would have already

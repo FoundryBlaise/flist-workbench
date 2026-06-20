@@ -10,6 +10,28 @@ import { useStore } from '../../state'
 import { DraftReview } from './DraftReview'
 import './AssistantPane.css'
 
+const ASSISTANT_PANE_HEIGHT_KEY = 'workbench.aiAssistantPaneHeight'
+const ASSISTANT_PANE_MIN_HEIGHT = 200
+const ASSISTANT_PANE_DEFAULT_HEIGHT = 320
+
+function clampPaneHeight(raw: number, max?: number): number {
+  const ceiling =
+    max ?? Math.floor((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.6)
+  return Math.max(ASSISTANT_PANE_MIN_HEIGHT, Math.min(ceiling, Math.round(raw)))
+}
+
+function readSavedHeight(): number {
+  try {
+    const raw = localStorage.getItem(ASSISTANT_PANE_HEIGHT_KEY)
+    if (raw === null) return ASSISTANT_PANE_DEFAULT_HEIGHT
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return ASSISTANT_PANE_DEFAULT_HEIGHT
+    return clampPaneHeight(n)
+  } catch {
+    return ASSISTANT_PANE_DEFAULT_HEIGHT
+  }
+}
+
 /** Bottom-dock chat row. Wide+short geometry: transcript on the left,
  *  collapsible draft-review panel on the right. The pane only mounts
  *  when the master opt-in toggle is on AND the user has opened it via
@@ -29,9 +51,13 @@ export function AssistantPane() {
   const sendTurn = useStore((s) => s.sendAiAssistantTurn)
   const loadDraft = useStore((s) => s.loadAiAssistantDraft)
   const discardDraft = useStore((s) => s.discardAiAssistantDraft)
+  const toolEventsByIndex = useStore((s) => s.aiAssistantToolEvents)
+  const resetTranscript = useStore((s) => s.resetAiAssistantTranscript)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const paneRef = useRef<HTMLElement | null>(null)
   const { content: lastUserMessage, index: lastUserIndex } =
     useLastUserMessage(transcript)
+  const [paneHeight, setPaneHeight] = useState<number>(() => readSavedHeight())
 
   // Load any persisted draft when the pane opens or active char changes.
   useEffect(() => {
@@ -53,18 +79,85 @@ export function AssistantPane() {
   const pendingCount = draft?.edits.filter((e) => e.status === 'pending').length ?? 0
   const staleCount = draft?.edits.filter((e) => e.status === 'stale').length ?? 0
 
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = paneRef.current?.getBoundingClientRect().height ?? paneHeight
+    const target = e.currentTarget
+    try {
+      target.setPointerCapture(e.pointerId)
+    } catch {
+      // Pointer capture is best-effort; not all environments support it.
+    }
+    const onMove = (ev: PointerEvent) => {
+      // Bottom dock: drag UP = grow height. Compute delta from startY.
+      const delta = startY - ev.clientY
+      const max = Math.floor(window.innerHeight * 0.6)
+      const next = clampPaneHeight(startHeight + delta, max)
+      setPaneHeight(next)
+    }
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      try {
+        target.releasePointerCapture(ev.pointerId)
+      } catch {
+        // ignore
+      }
+      try {
+        const final = paneRef.current?.getBoundingClientRect().height
+        if (typeof final === 'number') {
+          localStorage.setItem(
+            ASSISTANT_PANE_HEIGHT_KEY,
+            String(Math.round(final))
+          )
+        }
+      } catch {
+        // localStorage may be unavailable; silent degrade.
+      }
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
   return (
     <section
+      ref={paneRef}
       className="assistant-pane"
       data-testid="assistant-pane"
       aria-label="AI Assistant"
+      style={{ height: `${paneHeight}px` }}
     >
+      <div
+        className="assistant-pane-resize-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize AI Assistant pane"
+        title="Drag to resize"
+        onPointerDown={startResize}
+      />
       <header className="assistant-pane-header">
         <span className="assistant-pane-title">AI Assistant</span>
         <span className="assistant-pane-meta">
           {pendingCount} pending
           {staleCount > 0 ? ` · ${staleCount} stale` : ''}
         </span>
+        <button
+          type="button"
+          className="assistant-pane-close-secondary"
+          onClick={() => {
+            if (transcript.length === 0) return
+            resetTranscript()
+          }}
+          disabled={transcript.length === 0}
+          title="Clear conversation"
+          aria-label="Clear conversation"
+          data-testid="assistant-pane-clear"
+        >
+          ↻
+        </button>
         <button
           type="button"
           className="assistant-pane-close"
@@ -76,7 +169,11 @@ export function AssistantPane() {
         </button>
       </header>
       <div className="assistant-pane-body">
-        <Transcript transcript={transcript} streaming={streaming} />
+        <Transcript
+          transcript={transcript}
+          streaming={streaming}
+          toolEventsByIndex={toolEventsByIndex}
+        />
         {activeId ? (
           <DraftReview
             characterId={activeId}
@@ -145,10 +242,19 @@ export function AssistantPane() {
 
 function Transcript({
   transcript,
-  streaming
+  streaming,
+  toolEventsByIndex
 }: {
   transcript: Array<{ role: string; content?: string | null; tool_calls?: unknown[] }>
   streaming: boolean
+  toolEventsByIndex: Record<number, Array<{
+    callId: string
+    tool: string
+    args: Record<string, unknown>
+    ok: boolean
+    error?: string
+    resultSummary?: string
+  }>>
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   // Auto-scroll to the latest message; debounced via the rAF tick so
@@ -175,7 +281,12 @@ function Transcript({
         </div>
       )}
       {transcript.map((msg, idx) => (
-        <TranscriptRow key={idx} role={msg.role} content={msg.content ?? ''} />
+        <TranscriptRow
+          key={idx}
+          role={msg.role}
+          content={msg.content ?? ''}
+          toolEvents={toolEventsByIndex[idx]}
+        />
       ))}
       {streaming && (
         <div className="assistant-typing" aria-live="polite">
@@ -186,13 +297,29 @@ function Transcript({
   )
 }
 
-function TranscriptRow({ role, content }: { role: string; content: string }) {
+function TranscriptRow({
+  role,
+  content,
+  toolEvents
+}: {
+  role: string
+  content: string
+  toolEvents?: Array<{
+    callId: string
+    tool: string
+    args: Record<string, unknown>
+    ok: boolean
+    error?: string
+    resultSummary?: string
+  }>
+}) {
   if (role === 'tool' || role === 'system') return null
+  const events = toolEvents ?? []
   // An assistant turn that only emitted tool calls (no surrounding
   // text) lands here with empty content. Show a small chip so the
   // transcript doesn't go dead between the user's prompt and the
   // draft cards appearing in the right column.
-  if (role === 'assistant' && !content) {
+  if (role === 'assistant' && !content && events.length === 0) {
     return (
       <div className="assistant-msg assistant-msg-assistant">
         <span className="assistant-msg-role">Assistant</span>
@@ -205,9 +332,106 @@ function TranscriptRow({ role, content }: { role: string; content: string }) {
   return (
     <div className={`assistant-msg assistant-msg-${role}`}>
       <span className="assistant-msg-role">{role === 'user' ? 'You' : 'Assistant'}</span>
-      <pre className="assistant-msg-body">{content}</pre>
+      {events.length > 0 && (
+        <div className="assistant-tool-events" aria-label="Tool activity">
+          {events.map((event) => (
+            <ToolEventChip key={event.callId} event={event} />
+          ))}
+        </div>
+      )}
+      {content && <pre className="assistant-msg-body">{content}</pre>}
     </div>
   )
+}
+
+function ToolEventChip({
+  event
+}: {
+  event: {
+    tool: string
+    args: Record<string, unknown>
+    ok: boolean
+    error?: string
+    resultSummary?: string
+  }
+}) {
+  // Summarise args compactly — show the most-identifying field for the
+  // tool so the user can see what was being targeted at a glance. For
+  // unknown tools just show the key list.
+  const summary = describeToolArgs(event.tool, event.args)
+  return (
+    <span
+      className={`assistant-tool-chip ${
+        event.ok ? 'assistant-tool-chip-ok' : 'assistant-tool-chip-fail'
+      }`}
+      data-tool={event.tool}
+      title={
+        event.ok
+          ? event.resultSummary ?? 'succeeded'
+          : `rejected: ${event.error ?? 'unknown error'}`
+      }
+    >
+      <span className="assistant-tool-chip-icon">
+        {event.ok ? '✓' : '✗'}
+      </span>
+      <code className="assistant-tool-chip-name">{event.tool}</code>
+      {summary && <span className="assistant-tool-chip-args">{summary}</span>}
+      {!event.ok && (
+        <span className="assistant-tool-chip-error">
+          {event.error ?? 'rejected'}
+        </span>
+      )}
+      {event.ok && event.resultSummary && (
+        <span className="assistant-tool-chip-summary">
+          {event.resultSummary}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function describeToolArgs(tool: string, args: Record<string, unknown>): string {
+  // One-liner per tool that picks the field the user most cares about.
+  // Falls back to a generic key list so unknown tools still get *some*
+  // signal.
+  const get = (k: string) => {
+    const v = args[k]
+    return typeof v === 'string' ? v : v === undefined ? '' : String(v)
+  }
+  switch (tool) {
+    case 'set_infotag':
+      return `${get('infotag_id')} = ${get('value')}`
+    case 'clear_infotag':
+      return get('infotag_id')
+    case 'replace_description':
+      return 'whole body'
+    case 'patch_description': {
+      const old = get('old_excerpt')
+      const truncated = old.length > 40 ? old.slice(0, 37) + '…' : old
+      return `"${truncated}"`
+    }
+    case 'set_standard_kink':
+      return `${get('kink_id')} → ${get('choice')}`
+    case 'set_custom_kink':
+      return `${get('custom_kink_id')}.${get('attr')} = ${get('new_value')}`
+    case 'add_custom_kink':
+      return get('name')
+    case 'remove_custom_kink':
+      return get('custom_kink_id')
+    case 'set_character_setting':
+      return `${get('key')} = ${get('value')}`
+    case 'add_image_to_gallery':
+    case 'remove_image_from_gallery':
+      return get('image_id')
+    case 'get_other_character':
+      return get('character_id')
+    case 'copy_standard_kinks_from':
+    case 'copy_custom_kinks_from':
+    case 'copy_infotags_from':
+      return `from ${get('other_character_id')}`
+    default:
+      return Object.keys(args).slice(0, 3).join(', ')
+  }
 }
 
 function useLastUserMessage(
