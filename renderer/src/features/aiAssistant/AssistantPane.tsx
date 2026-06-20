@@ -14,6 +14,16 @@ const ASSISTANT_PANE_HEIGHT_KEY = 'workbench.aiAssistantPaneHeight'
 const ASSISTANT_PANE_MIN_HEIGHT = 200
 const ASSISTANT_PANE_DEFAULT_HEIGHT = 320
 
+// Singleton-stable empty array so `useStore` selectors that fall back
+// to it return the same reference on every render — otherwise the
+// store thinks the snapshot changed and we trigger the React
+// "Maximum update depth exceeded" infinite-loop crash.
+const EMPTY_HISTORY: ReadonlyArray<{
+  edit: import('../../lib/api').AiDraftEdit
+  outcome: 'accepted' | 'rejected'
+  timestamp: number
+}> = []
+
 function clampPaneHeight(raw: number, max?: number): number {
   const ceiling =
     max ?? Math.floor((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.6)
@@ -274,8 +284,12 @@ function DraftActionBar({
  *  compact card with an outcome stamp, newest first. Stays empty
  *  until the user has resolved at least one proposal. */
 function DoneHistory({ characterId }: { characterId: string | null }) {
+  // Stable empty reference: Zustand re-runs the selector on every
+  // store update, and returning a fresh `[]` each call makes React
+  // see a new snapshot every render → infinite-loop crash. Picking
+  // a singleton outside the component fixes that.
   const history = useStore((s) =>
-    characterId ? s.aiAssistantEditHistory[characterId] ?? [] : []
+    characterId ? s.aiAssistantEditHistory[characterId] ?? EMPTY_HISTORY : EMPTY_HISTORY
   )
   if (!characterId) {
     return (

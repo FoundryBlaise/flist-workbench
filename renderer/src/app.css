@@ -852,22 +852,37 @@ body {
 }
 
 .editor-cm-row {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
+/* CodeMirror flex chain — every link needs min-height/min-width: 0
+   so the scroller actually gets a bounded box. Without these, the
+   inner .cm-scroller sees an effectively-unbounded height (because
+   each flex child refuses to shrink below content), so its
+   overflow: auto never engages and mouse-wheel events pass through
+   to the document. The split-view case (editor + preview + bottom-
+   dock assistant pane open) is what makes this visible. */
 .editor-cm {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
   display: flex;
 }
 .editor-cm > div {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
+  display: flex;
 }
 .editor-cm .cm-editor {
-  height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
 }
 .editor-cm .cm-scroller {
   overflow: auto;
