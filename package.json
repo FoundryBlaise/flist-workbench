@@ -1,6 +1,6 @@
 {
   "name": "flist-workbench",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "description": "BBCode editor, log browser, and RAG chat over your own F-Chat logs.",
   "author": "Foundry Blaise <blaise@aiart-foundry.com>",
