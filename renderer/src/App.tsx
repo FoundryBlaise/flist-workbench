@@ -62,6 +62,13 @@ declare global {
         setAutoLogin: (next: boolean) => Promise<boolean>
         clear: () => Promise<boolean>
       }
+      updater?: {
+        getStatus: () => Promise<unknown>
+        check: () => Promise<boolean>
+        download: () => Promise<boolean>
+        install: () => void
+        onStatus: (listener: (status: unknown) => void) => () => void
+      }
     }
   }
 }

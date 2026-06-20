@@ -59,52 +59,70 @@ jobs:
       - name: npm ci
         run: npm ci
 
-      - name: Pack Windows portable
+      - name: Pack Windows (installer + portable)
         run: npm run pack:win
 
-      # Capture the artifact path + filename so subsequent steps don't
-      # have to repeat the pattern. electron-builder writes to
-      # dist-electron/F-list Workbench-<version>-x64-portable.exe.
-      - name: Locate artifact
+      # Capture both artifact paths so later steps don't repeat the
+      # pattern. electron-builder emits:
+      #   F-list Workbench-<version>-x64-Setup.exe        (NSIS)
+      #   F-list Workbench-<version>-x64-portable.exe     (portable)
+      #   latest.yml                                      (updater feed)
+      - name: Locate artifacts
         id: artifact
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $name = "F-list Workbench-$version-x64-portable.exe"
-          $path = "dist-electron/$name"
-          if (-not (Test-Path $path)) {
-            Write-Error "Expected artifact not found at $path"
-            Get-ChildItem dist-electron -Recurse | ForEach-Object { Write-Host $_.FullName }
-            exit 1
+          $setupName = "F-list Workbench-$version-x64-Setup.exe"
+          $portableName = "F-list Workbench-$version-x64-portable.exe"
+          $setupPath = "dist-electron/$setupName"
+          $portablePath = "dist-electron/$portableName"
+          $latestPath = "dist-electron/latest.yml"
+          foreach ($p in @($setupPath, $portablePath, $latestPath)) {
+            if (-not (Test-Path $p)) {
+              Write-Error "Expected artifact not found at $p"
+              Get-ChildItem dist-electron -Recurse | ForEach-Object { Write-Host $_.FullName }
+              exit 1
+            }
           }
-          "name=$name"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "path=$path"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "setupName=$setupName"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "setupPath=$setupPath"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "portableName=$portableName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "portablePath=$portablePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "latestPath=$latestPath"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Generate SHA256SUMS
         shell: pwsh
         run: |
-          $hash = (Get-FileHash "${{ steps.artifact.outputs.path }}" -Algorithm SHA256).Hash.ToLower()
-          $line = "$hash  ${{ steps.artifact.outputs.name }}"
-          Set-Content -Path dist-electron/SHA256SUMS.txt -Value $line -Encoding ascii
-          Write-Host $line
+          $lines = @()
+          foreach ($pair in @(
+            @("${{ steps.artifact.outputs.setupPath }}",    "${{ steps.artifact.outputs.setupName }}"),
+            @("${{ steps.artifact.outputs.portablePath }}", "${{ steps.artifact.outputs.portableName }}")
+          )) {
+            $hash = (Get-FileHash $pair[0] -Algorithm SHA256).Hash.ToLower()
+            $lines += "$hash  $($pair[1])"
+          }
+          Set-Content -Path dist-electron/SHA256SUMS.txt -Value $lines -Encoding ascii
+          $lines | ForEach-Object { Write-Host $_ }
 
-      # Manual runs (workflow_dispatch) upload to the run for download
-      # so we can smoke-test changes to the build pipeline without
-      # publishing.
+      # Manual runs (workflow_dispatch) upload artifacts to the run for
+      # download so we can smoke-test pipeline changes without publishing.
       - name: Upload artifacts to run
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: flist-workbench-windows-portable
+          name: flist-workbench-windows
           path: |
-            ${{ steps.artifact.outputs.path }}
+            ${{ steps.artifact.outputs.setupPath }}
+            ${{ steps.artifact.outputs.portablePath }}
+            ${{ steps.artifact.outputs.latestPath }}
             dist-electron/SHA256SUMS.txt
           if-no-files-found: error
 
-      # Tag pushes publish a real release. The body points at the
-      # install guide so users who land here from a fresh download see
-      # the SmartScreen click-through instructions immediately.
+      # Tag pushes publish a real release. latest.yml in the release
+      # assets is what electron-updater reads to detect a newer
+      # version — without it, in-app auto-update silently can't see
+      # the release.
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -114,16 +132,21 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            **Portable Windows build.** Drop the .exe anywhere and
-            double-click — no installer.
+            **Two Windows builds**:
+            - **Setup .exe** — installs to `%LOCALAPPDATA%\Programs\F-list Workbench`
+              (no admin prompt). Future versions auto-update from
+              inside the app.
+            - **Portable .exe** — drop anywhere and double-click. No
+              installer, no auto-update.
 
             **First launch:** Windows SmartScreen will warn that the
             app is unrecognised (it's unsigned). Click **More info →
             Run anyway**. Full walkthrough + hash verification in
             [`docs/INSTALL_WINDOWS.md`](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/INSTALL_WINDOWS.md).
 
-            `SHA256SUMS.txt` contains the sha256 of the .exe for
-            verification.
+            `SHA256SUMS.txt` contains the sha256s for verification.
           files: |
-            ${{ steps.artifact.outputs.path }}
+            ${{ steps.artifact.outputs.setupPath }}
+            ${{ steps.artifact.outputs.portablePath }}
+            ${{ steps.artifact.outputs.latestPath }}
             dist-electron/SHA256SUMS.txt

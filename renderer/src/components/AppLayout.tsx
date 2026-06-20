@@ -19,6 +19,7 @@ import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
+import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { ChatPanel } from '../features/rag/ChatPanel'
@@ -63,6 +64,21 @@ export function AppLayout() {
   const exportRestoreOpen = useStore((s) => s.flistExportRestoreCharacterId)
   const closeExportRestore = useStore((s) => s.flistCloseExportRestore)
   const [firstRunToast, setFirstRunToast] = useState(false)
+  // Auto-updater state. Main owns the electron-updater state machine
+  // and pushes status changes; we just decide whether to surface the
+  // modal. `updaterDismissed` keeps it gone for this session once the
+  // user clicks Later — they'll see the next prompt at next launch.
+  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus>({ kind: 'idle' })
+  const [updaterDismissed, setUpdaterDismissed] = useState(false)
+  useEffect(() => {
+    const updater = window.workbench?.updater
+    if (!updater) return
+    const off = updater.onStatus((s) => setUpdaterStatus(s as UpdaterStatus))
+    void updater.getStatus().then((s) => {
+      if (s && typeof s === 'object') setUpdaterStatus(s as UpdaterStatus)
+    })
+    return off
+  }, [])
   const [flistHintDismissed, setFlistHintDismissed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('workbench.flistHintDismissed') === '1'
@@ -471,6 +487,18 @@ export function AppLayout() {
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {!updaterDismissed
+        && !aiSetupOpen
+        && !flistSignInOpen
+        && (updaterStatus.kind === 'available'
+          || updaterStatus.kind === 'downloading'
+          || updaterStatus.kind === 'downloaded'
+          || updaterStatus.kind === 'error') && (
+          <UpdateAvailableModal
+            status={updaterStatus}
+            onDismiss={() => setUpdaterDismissed(true)}
+          />
+        )}
       {aiSetupOpen && <AISetupWizard onClose={closeAiSetup} />}
       {activityOpen && <ActivityLogModal onClose={() => setActivityOpen(false)} />}
       {userscriptHelpOpen && (

@@ -100,5 +100,26 @@ contextBridge.exposeInMainWorld('workbench', {
       ipcRenderer.invoke('workbench:creds:set-auto-login', next) as Promise<boolean>,
     clear: () =>
       ipcRenderer.invoke('workbench:creds:clear') as Promise<boolean>
+  },
+  // Auto-updater bridge. Main owns the electron-updater state machine;
+  // the renderer just listens for status changes and dispatches user
+  // intent (download / install) back over IPC.
+  updater: {
+    getStatus: () =>
+      ipcRenderer.invoke('workbench:updater:get-status') as Promise<unknown>,
+    check: () =>
+      ipcRenderer.invoke('workbench:updater:check') as Promise<boolean>,
+    download: () =>
+      ipcRenderer.invoke('workbench:updater:download') as Promise<boolean>,
+    install: () => {
+      ipcRenderer.send('workbench:updater:install')
+    },
+    onStatus: (listener: (status: unknown) => void) => {
+      const wrapped = (_event: unknown, status: unknown) => listener(status)
+      ipcRenderer.on('updater:status', wrapped)
+      return () => {
+        ipcRenderer.removeListener('updater:status', wrapped)
+      }
+    }
   }
 })

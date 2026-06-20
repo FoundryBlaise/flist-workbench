@@ -1737,6 +1737,68 @@ body {
 }
 .modal-close:hover { color: var(--text); }
 .modal-body { padding: 14px 20px; }
+
+/* Auto-updater modal — small, single-purpose, three states (available
+   → downloading → ready). Width tracked to the other small modals
+   (sign-in/userscript-help) so the visual rhythm stays consistent. */
+.updater-modal { width: 460px; }
+.updater-modal-body p { margin: 0 0 10px; line-height: 1.5; }
+.updater-modal-body p:last-child { margin-bottom: 0; }
+.updater-modal-notes {
+  max-height: 140px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.updater-modal-progress {
+  height: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 4px 0 10px;
+}
+.updater-modal-progress-bar {
+  height: 100%;
+  background: var(--accent, #4a9eff);
+  transition: width 120ms linear;
+}
+.updater-modal-hint {
+  font-size: 12px;
+  color: var(--muted, rgba(255, 255, 255, 0.55));
+}
+.updater-modal-error { color: var(--danger, #ff7676); }
+.updater-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.updater-modal-secondary,
+.updater-modal-primary {
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 13px;
+}
+.updater-modal-primary {
+  background: var(--accent, #4a9eff);
+  border-color: var(--accent, #4a9eff);
+  color: #fff;
+}
+.updater-modal-primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.updater-modal-secondary:hover { background: var(--bg-elevated, rgba(255, 255, 255, 0.05)); }
 /* The settings modal body can outgrow the 80vh max-height. Let it
    scroll inside the modal so the per-section Save buttons stay
    reachable without resizing the dialog. */

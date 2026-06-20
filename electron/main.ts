@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
+import { autoUpdater } from 'electron-updater'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
 import { attachContextMenu } from './contextMenu'
@@ -441,6 +442,111 @@ ipcMain.handle('workbench:creds:clear', async (event): Promise<boolean> => {
   return true
 })
 
+// Auto-update plumbing. electron-updater pulls latest.yml from the
+// GitHub Release configured in electron-builder.yml's `publish:`
+// block. We deliberately disable autoDownload so the renderer can
+// surface a modal first ("Update available — install now / later?")
+// rather than spending the user's bandwidth uninvited. The renderer
+// asks main to start the download once the user confirms; main
+// forwards progress + completion events back over IPC.
+//
+// Skipped entirely in dev (`!app.isPackaged`) because electron-updater
+// needs a packaged app-update.yml to resolve the feed and will throw
+// otherwise. Initial check is delayed so the first-run wizard / sign-in
+// modal own the user's attention on launch.
+type UpdaterStatus =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'available'; version: string; releaseNotes?: string | null }
+  | { kind: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
+  | { kind: 'downloaded'; version: string }
+  | { kind: 'not-available' }
+  | { kind: 'error'; message: string }
+
+let updaterStatus: UpdaterStatus = { kind: 'idle' }
+
+function sendUpdaterStatus(status: UpdaterStatus): void {
+  updaterStatus = status
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('updater:status', status)
+  }
+}
+
+function configureAutoUpdater(): void {
+  if (isDev) return
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.logger = {
+    info: (m: unknown) => appendDiagLog('updater', m),
+    warn: (m: unknown) => appendDiagLog('updater-warn', m),
+    error: (m: unknown) => appendDiagLog('updater-error', m),
+    debug: () => {}
+  }
+  autoUpdater.on('checking-for-update', () => sendUpdaterStatus({ kind: 'checking' }))
+  autoUpdater.on('update-available', (info) => {
+    sendUpdaterStatus({
+      kind: 'available',
+      version: info.version,
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : null
+    })
+  })
+  autoUpdater.on('update-not-available', () => sendUpdaterStatus({ kind: 'not-available' }))
+  autoUpdater.on('download-progress', (p) => {
+    sendUpdaterStatus({
+      kind: 'downloading',
+      percent: p.percent,
+      bytesPerSecond: p.bytesPerSecond,
+      transferred: p.transferred,
+      total: p.total
+    })
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdaterStatus({ kind: 'downloaded', version: info.version })
+  })
+  autoUpdater.on('error', (err) => {
+    sendUpdaterStatus({ kind: 'error', message: err?.message ?? String(err) })
+  })
+}
+
+ipcMain.handle('workbench:updater:get-status', (event): UpdaterStatus => {
+  if (event.sender !== mainWindow?.webContents) return { kind: 'idle' }
+  return updaterStatus
+})
+
+ipcMain.handle('workbench:updater:check', async (event): Promise<boolean> => {
+  if (event.sender !== mainWindow?.webContents) return false
+  if (isDev) return false
+  try {
+    await autoUpdater.checkForUpdates()
+    return true
+  } catch (err) {
+    appendDiagLog('updater-check-failed', err)
+    return false
+  }
+})
+
+ipcMain.handle('workbench:updater:download', async (event): Promise<boolean> => {
+  if (event.sender !== mainWindow?.webContents) return false
+  if (isDev) return false
+  try {
+    await autoUpdater.downloadUpdate()
+    return true
+  } catch (err) {
+    appendDiagLog('updater-download-failed', err)
+    return false
+  }
+})
+
+ipcMain.on('workbench:updater:install', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
+  if (isDev) return
+  // quitAndInstall: closes app, runs the NSIS installer in update mode,
+  // then relaunches. `isSilent: true` skips the installer UI; the
+  // user already consented in our modal. `isForceRunAfter: true` so
+  // we re-open the app once the update finishes.
+  autoUpdater.quitAndInstall(true, true)
+})
+
 ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   const menu = Menu.getApplicationMenu()
   if (!menu) return
@@ -538,6 +644,19 @@ app.whenReady().then(async () => {
     appendDiagLog('whenReady', 'window created')
   } catch (err) {
     appendDiagLog('createWindow-threw', err)
+  }
+
+  // Wire the updater after the window exists so its `update-available`
+  // event has a target to push to. 30s delay before the first check
+  // gives the first-run wizard + sign-in modal time to land first;
+  // an update prompt stacking on top of those would be jarring.
+  configureAutoUpdater()
+  if (!isDev) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch((err) => {
+        appendDiagLog('updater-check-failed', err)
+      })
+    }, 30_000)
   }
 
   app.on('activate', () => {
