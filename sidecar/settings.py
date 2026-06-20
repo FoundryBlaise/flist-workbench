@@ -139,7 +139,11 @@ KEY_AI_ASSISTANT_ENDPOINT = "ai_assistant.endpoint"
 KEY_AI_ASSISTANT_MODEL = "ai_assistant.model"
 KEY_AI_ASSISTANT_API_KEY = "ai_assistant.api_key"
 KEY_AI_ASSISTANT_SYSTEM_PROMPT = "ai_assistant.system_prompt"
-KEY_AI_ASSISTANT_PROMPT_PRESET = "ai_assistant.prompt_preset"  # 'nsfw' | 'sfw' | 'custom'
+# Retained as a dead key so older builds' writes don't error when
+# resurfaced — we never read it. Preset selection is purely a UI
+# affordance now (copies the chosen preset's body into
+# `ai_assistant.system_prompt`, mirroring the labels + rag panes).
+KEY_AI_ASSISTANT_PROMPT_PRESET = "ai_assistant.prompt_preset"  # deprecated
 KEY_AI_ASSISTANT_TEMPERATURE = "ai_assistant.temperature"
 KEY_AI_ASSISTANT_TOKEN_BUDGET = "ai_assistant.token_budget"
 KEY_AI_ASSISTANT_TIMEOUT_SEC = "ai_assistant.timeout_sec"

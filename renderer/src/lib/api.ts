@@ -374,25 +374,23 @@ export type AiAssistantSettings = {
   model: string
   api_key: string
   system_prompt: string
-  /** 'nsfw' | 'sfw' | 'custom'. Picks which shipped prompt to load;
-   *  'custom' means the user supplied their own and we honour
-   *  system_prompt verbatim. */
-  prompt_preset: string
   temperature: number
   token_budget: number
   timeout_sec: number
   warn_non_loopback: boolean
   log_requests: boolean
   defaults: {
-    prompt_preset: string
     temperature: number
     token_budget: number
     timeout_sec: number
     warn_non_loopback: boolean
     log_requests: boolean
-    system_prompt_nsfw: string
-    system_prompt_sfw: string
+    system_prompt: string
   }
+  /** Same shape as labels.prompt_presets — drives the shared
+   *  PromptPresetPicker. First entry is the "Reset to default"
+   *  target. Currently ships four: NSFW/SFW × English/German. */
+  prompt_presets: PromptPreset[]
 }
 
 export type BackupsSettings = {
@@ -474,6 +472,11 @@ export type RagSettings = {
     chunk_soft_split_chars: number
     chunk_overlap_msgs: number
   }
+  /** Shipped chat-prompt presets the user can swap between in the
+   *  Settings UI. Same shape as labels.prompt_presets — drives the
+   *  shared `PromptPresetPicker`. Currently ships English (default),
+   *  German, and language-agnostic minimal. */
+  prompt_presets: PromptPreset[]
 }
 
 export type RagCitation = {

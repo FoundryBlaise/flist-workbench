@@ -362,32 +362,27 @@ def test_resolve_assistant_config_falls_back_to_rag(env, monkeypatch):
     assert config.model == "rag-model"
 
 
-def test_resolve_assistant_config_picks_sfw_prompt(env, monkeypatch):
+def test_resolve_assistant_config_falls_back_to_default_when_no_prompt_saved(env):
+    """No saved prompt → first preset (NSFW-EN) wins as the live
+    system prompt. Matches labels' "first preset is the default"
+    convention."""
     import assistant_chat
+
     import settings as settings_store
 
-    conn = settings_store.connect()
-    try:
-        settings_store.set_value(
-            conn, settings_store.KEY_AI_ASSISTANT_PROMPT_PRESET, "sfw"
-        )
-    finally:
-        conn.close()
     conn = settings_store.connect()
     try:
         config = assistant_chat.resolve_assistant_config(conn)
     finally:
         conn.close()
-    assert config.system_prompt.strip().startswith(
-        "You assist a roleplayer in refining"
-    )
-    assert "NSFW" in config.system_prompt or "general audiences" in config.system_prompt
+    assert config.system_prompt == assistant_chat.DEFAULT_PROMPT_NSFW
 
 
-def test_resolve_assistant_config_custom_prompt_requires_preset(env, monkeypatch):
-    """A saved system_prompt only takes effect when preset=='custom'.
-    Earlier behaviour read the custom string whenever it was non-empty,
-    which silently overrode every preset switch — fixed 2026-06-19."""
+def test_resolve_assistant_config_uses_saved_prompt_verbatim(env):
+    """Any non-empty saved system_prompt is the live one. Preset
+    picker in the UI is purely a "copy this body into the textarea"
+    affordance — same model as labels / RAG. There's no mode switch
+    that could silently override the user's text."""
     import assistant_chat
     import settings as settings_store
 
@@ -396,10 +391,7 @@ def test_resolve_assistant_config_custom_prompt_requires_preset(env, monkeypatch
         settings_store.set_value(
             conn,
             settings_store.KEY_AI_ASSISTANT_SYSTEM_PROMPT,
-            "custom system prompt override",
-        )
-        settings_store.set_value(
-            conn, settings_store.KEY_AI_ASSISTANT_PROMPT_PRESET, "sfw"
+            "my custom thing",
         )
     finally:
         conn.close()
@@ -408,23 +400,19 @@ def test_resolve_assistant_config_custom_prompt_requires_preset(env, monkeypatch
         config = assistant_chat.resolve_assistant_config(conn)
     finally:
         conn.close()
-    # Preset wins.
-    assert config.system_prompt.strip().startswith("You assist a roleplayer")
+    assert config.system_prompt == "my custom thing"
 
-    # Now flip the preset to 'custom' — saved string wins.
-    conn = settings_store.connect()
-    try:
-        settings_store.set_value(
-            conn, settings_store.KEY_AI_ASSISTANT_PROMPT_PRESET, "custom"
-        )
-    finally:
-        conn.close()
-    conn = settings_store.connect()
-    try:
-        config = assistant_chat.resolve_assistant_config(conn)
-    finally:
-        conn.close()
-    assert config.system_prompt == "custom system prompt override"
+
+def test_assistant_prompt_presets_carry_all_four_languages(env):
+    """The picker dropdown must contain NSFW + SFW for both English
+    and German so the UI can offer the language toggle the user asked
+    for (2026-06-20)."""
+    import assistant_chat
+
+    ids = {p.id for p in assistant_chat.PROMPT_PRESETS}
+    assert ids == {"nsfw-en", "nsfw-de", "sfw-en", "sfw-de"}
+    languages = {p.language for p in assistant_chat.PROMPT_PRESETS}
+    assert languages == {"English", "German"}
 
 
 def test_all_tool_schemas_includes_every_kind(env):
