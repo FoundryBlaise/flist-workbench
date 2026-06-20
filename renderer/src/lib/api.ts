@@ -1105,7 +1105,7 @@ export const api = {
     >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
   // ---- F-list working copy (Tier 2: §1 persistence) ----
   flistWorkingRead: (characterId: string | number) =>
-    get<{ payload: Record<string, unknown>; etag: string | null }>(
+    get<{ payload: Record<string, unknown> | null; etag: string | null }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/working`
     ),
   flistWorkingWrite: async (

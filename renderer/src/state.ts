@@ -2168,6 +2168,28 @@ export const useStore = create<State>((set, get) => ({
     }))
     try {
       const { payload, etag } = await api.flistWorkingRead(characterId)
+      // payload: null is the sidecar's "no working copy yet" signal
+      // — handled identically to the legacy 404 path. Seeds the slot
+      // from Live for materialise-on-first-edit (Tier 2 §1.6).
+      if (payload === null) {
+        const live = get().flistArchive[characterId]?.live ?? null
+        const seeded = live
+          ? seedWorkingFromLive(live)
+          : { ...emptyWorkingSlot().payload }
+        const slot: FlistWorkingSlot = {
+          ...emptyWorkingSlot(),
+          payload: seeded,
+          materialised: false
+        }
+        set((s) => ({
+          flistWorking: { ...s.flistWorking, [characterId]: slot },
+          flistWorkingLoadStatus: {
+            ...s.flistWorkingLoadStatus,
+            [characterId]: 'ready'
+          }
+        }))
+        return
+      }
       const overlay = Array.isArray((payload as WorkingPayload)._overlay)
         ? ((payload as WorkingPayload)._overlay as string[])
         : []
