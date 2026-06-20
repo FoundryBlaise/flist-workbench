@@ -366,6 +366,80 @@ def test_apply_add_image_to_gallery(env: Path) -> None:
     assert "images" in working["_overlay"]
 
 
+def test_append_uses_active_set_payload_when_set_exists(env: Path) -> None:
+    """When the character has an active working set (working-sets v2),
+    the assistant must read/write the SET's payload, not the legacy
+    working.json slot. The previous shape read the legacy slot,
+    found it empty, and refused every edit with 'no_working_copy' —
+    even though the user had an active editable set."""
+    import ai_draft
+    import character_archive
+
+    # Seed a character with NO legacy working.json — set-only.
+    character_archive.register_character("42", "Alpha")
+    character_archive.write_live(
+        "42",
+        {
+            "id": 42,
+            "name": "Alpha",
+            "description": "old desc",
+            "character": {
+                "id": 42,
+                "name": "Alpha",
+                "description": "old desc",
+            },
+            "infotags": {"49": "21"},
+        },
+    )
+    meta = character_archive.create_set_from_live(
+        "42", "via-test"
+    )  # creates an empty set payload + meta
+    # Materialise the set's payload directly with editable content.
+    set_payload = {
+        "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+        "_overlay": [],
+        "character": {"id": 42, "name": "Alpha", "description": "old desc"},
+        "infotags": {"49": "21"},
+        "settings": {"public": True},
+        "kinks": {"100": "yes"},
+        "custom_kinks": {},
+        "_custom_kinks_order": [],
+        "images": [],
+    }
+    character_archive.write_set_payload(
+        "42", meta.id, set_payload, expected_etag=None
+    )
+    character_archive.set_active_set_id("42", meta.id)
+
+    # Legacy slot is empty.
+    assert character_archive.read_working("42") is None
+    # …but the assistant can still see the editable slot.
+    result = ai_draft.append_edits(
+        "42",
+        [
+            {
+                "tool": "set_infotag",
+                "field_path": "infotags.49",
+                "new_value": "German",
+                "rationale": "x",
+            }
+        ],
+        MAPPING_LIST,
+    )
+    assert len(result["accepted_edit_ids"]) == 1, result["rejected"]
+
+    # Accept and confirm the change landed in the SET payload, not
+    # the legacy slot.
+    edit_id = result["accepted_edit_ids"][0]
+    etag = character_archive.set_payload_etag("42", meta.id)
+    ai_draft.accept_edits("42", [edit_id], etag)
+
+    after = character_archive.read_set_payload("42", meta.id)
+    assert after["infotags"]["49"] == "22"
+    # Legacy slot still empty.
+    assert character_archive.read_working("42") is None
+
+
 def test_patch_description_auto_routes_to_custom_kink_description(env: Path) -> None:
     """Model quotes text from a custom-kink description but calls
     patch_description (which historically only targeted
