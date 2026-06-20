@@ -70,6 +70,11 @@ export function AppLayout() {
   // user clicks Later — they'll see the next prompt at next launch.
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus>({ kind: 'idle' })
   const [updaterDismissed, setUpdaterDismissed] = useState(false)
+  // Help → Check for Updates flag. Lets the modal surface the
+  // "checking" / "you're up to date" / "couldn't check" states only
+  // when the user explicitly asked, so the passive background check
+  // stays silent unless there's actually something to install.
+  const [updaterManualCheck, setUpdaterManualCheck] = useState(false)
   useEffect(() => {
     const updater = window.workbench?.updater
     if (!updater) return
@@ -369,6 +374,14 @@ export function AppLayout() {
         case 'backup-all':
           void useStore.getState().flistBackupAll()
           break
+        case 'check-updates': {
+          const updater = window.workbench?.updater
+          if (!updater) break
+          setUpdaterDismissed(false)
+          setUpdaterManualCheck(true)
+          void updater.check()
+          break
+        }
       }
     })
   }, [
@@ -493,10 +506,17 @@ export function AppLayout() {
         && (updaterStatus.kind === 'available'
           || updaterStatus.kind === 'downloading'
           || updaterStatus.kind === 'downloaded'
-          || updaterStatus.kind === 'error') && (
+          || (updaterManualCheck
+            && (updaterStatus.kind === 'checking'
+              || updaterStatus.kind === 'not-available'
+              || updaterStatus.kind === 'error'))) && (
           <UpdateAvailableModal
             status={updaterStatus}
-            onDismiss={() => setUpdaterDismissed(true)}
+            manualCheck={updaterManualCheck}
+            onDismiss={() => {
+              setUpdaterDismissed(true)
+              setUpdaterManualCheck(false)
+            }}
           />
         )}
       {aiSetupOpen && <AISetupWizard onClose={closeAiSetup} />}
