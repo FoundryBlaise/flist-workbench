@@ -21,8 +21,28 @@ asar: true
 # trying to surgically include just the .node file.
 asarUnpack:
   - node_modules/keytar/**
+# Lets electron-builder emit latest.yml alongside artifacts so
+# electron-updater can read it from GitHub Releases. The workflow
+# still uploads the release; this block just shapes the metadata.
+publish:
+  provider: github
+  owner: FoundryBlaise
+  repo: flist-workbench
 win:
   target:
+    - target: nsis
+      arch: [x64]
     - target: portable
       arch: [x64]
+  artifactName: ${productName}-${version}-${arch}-${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: F-list Workbench
+  artifactName: ${productName}-${version}-${arch}-Setup.${ext}
+portable:
   artifactName: ${productName}-${version}-${arch}-portable.${ext}
