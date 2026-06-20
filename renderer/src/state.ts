@@ -1387,22 +1387,30 @@ export const useStore = create<State>((set, get) => ({
       // saved password. Failures here don't block sign-in (the
       // user has already authenticated); a save failure surfaces
       // via flistSavedCreds.encryptionAvailable on the next reload.
-      const remember = !!opts?.rememberPassword || !!opts?.autoLogin
-      const autoLogin = !!opts?.autoLogin
-      const credsApi = window.workbench?.creds
-      if (credsApi) {
-        try {
-          if (remember) {
-            await credsApi.save({ account, password, autoLogin })
-          } else {
-            await credsApi.clear()
+      //
+      // `opts === undefined` means "this is a programmatic re-login"
+      // (auto-login path) — don't touch the keychain at all. Without
+      // this guard, every auto-login on launch ran the else-branch
+      // below and cleared the saved password, so the second close →
+      // relaunch always landed on the sign-in modal.
+      if (opts !== undefined) {
+        const remember = !!opts.rememberPassword || !!opts.autoLogin
+        const autoLogin = !!opts.autoLogin
+        const credsApi = window.workbench?.creds
+        if (credsApi) {
+          try {
+            if (remember) {
+              await credsApi.save({ account, password, autoLogin })
+            } else {
+              await credsApi.clear()
+            }
+            // Refresh in-memory mirror so Settings reflects reality
+            // without a page reload.
+            const meta = await credsApi.getMeta()
+            set({ flistSavedCreds: meta })
+          } catch (err) {
+            console.warn('[creds] save failed:', err)
           }
-          // Refresh in-memory mirror so Settings reflects reality
-          // without a page reload.
-          const meta = await credsApi.getMeta()
-          set({ flistSavedCreds: meta })
-        } catch (err) {
-          console.warn('[creds] save failed:', err)
         }
       }
       // Bump the session epoch so any in-flight mapping-list fetch from
