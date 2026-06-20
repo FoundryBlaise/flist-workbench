@@ -137,9 +137,122 @@
 
 .assistant-pane-body {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr 260px;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Top-bar bulk actions — appears only when a draft has pending edits.
+   Mirrors VS-Code-style sticky action bars: count on the left,
+   accept-all + discard-draft on the right. */
+.assistant-draft-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(120, 180, 255, 0.05);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-meta);
+}
+.assistant-draft-actionbar-count {
+  color: var(--text);
+  font-weight: 500;
+  margin-right: auto;
+}
+
+/* "Done" history pane — replaces the old per-turn pending list on the
+   right. Compact stack of accepted/rejected cards, newest first. */
+.assistant-done {
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.assistant-done-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.assistant-done-count {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+}
+.assistant-done-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.assistant-done-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-done-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.assistant-done-card-accepted {
+  border-left: 3px solid rgb(80, 200, 120);
+}
+.assistant-done-card-rejected {
+  border-left: 3px solid rgb(255, 120, 120);
+  opacity: 0.75;
+}
+.assistant-done-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.assistant-done-stamp {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.assistant-done-stamp-accepted {
+  color: rgb(120, 220, 150);
+}
+.assistant-done-stamp-rejected {
+  color: rgb(255, 140, 140);
+}
+.assistant-done-rationale {
+  margin: 0;
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.3;
+}
+
+/* Inline proposals inside assistant messages — Claude-Code-style
+   diff blocks that take the full transcript width, full-bleed
+   colored backgrounds for old/new, sized for readability. */
+.assistant-msg-proposals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 /* Transcript column */
@@ -329,16 +442,17 @@
   border-bottom: 1px solid var(--border);
 }
 
-/* Proposal cards */
+/* Proposal cards — inline in the assistant message, full width. */
 .proposal-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 8px 10px;
+  padding: 10px 12px;
+  max-width: 920px;
 }
 .proposal-card-stale {
   border-color: rgba(255, 200, 80, 0.5);
@@ -409,18 +523,21 @@
 .proposal-card-old,
 .proposal-card-new {
   margin: 0;
-  padding: 4px 6px;
+  padding: 6px 10px;
   border-radius: 3px;
   font-family: inherit;
   white-space: pre-wrap;
-  line-height: 1.4;
-  font-size: 12px;
+  line-height: 1.45;
+  font-size: 13px;
+  border-left: 3px solid transparent;
 }
 .proposal-card-old {
-  background: rgba(255, 80, 80, 0.08);
+  background: rgba(255, 80, 80, 0.1);
+  border-left-color: rgba(255, 80, 80, 0.6);
 }
 .proposal-card-new {
-  background: rgba(80, 200, 120, 0.08);
+  background: rgba(80, 200, 120, 0.1);
+  border-left-color: rgba(80, 200, 120, 0.6);
 }
 .proposal-card-arrow {
   color: var(--text-muted);

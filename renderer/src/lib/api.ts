@@ -343,9 +343,13 @@ export type AssistantToolEvent = {
   args: Record<string, unknown>
   ok: boolean
   error?: string
-  /** When the tool persisted edits, the count + ids so the chip can
-   *  link the user to the relevant proposal cards. */
+  /** Compact human-readable summary used in chip tooltips. */
   resultSummary?: string
+  /** Edit ids the tool landed in the draft (zero-length when the
+   *  tool was a read or every edit was rejected). The renderer
+   *  groups proposal cards by turn using this — each turn renders
+   *  the cards for its own edits inline. */
+  acceptedEditIds?: string[]
 }
 
 export type AssistantChatHandlers = {
