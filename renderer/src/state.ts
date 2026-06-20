@@ -4658,26 +4658,51 @@ export const useStore = create<State>((set, get) => ({
             const tool = pending?.tool ?? 'unknown'
             const args = pending?.args ?? {}
             delete pendingCalls[data.call_id]
-            // Build a short result summary for the chip. For writes
-            // we surface accepted/rejected counts; for reads we just
-            // mark ok.
+            // Truthful chip semantics:
+            //   ok=true  → at least one edit landed in the draft, or
+            //              a read tool returned data
+            //   ok=false → dispatch error, OR write tool ran but
+            //              every edit was rejected by validation
+            //              (looked like success before; mislead
+            //              users into thinking changes existed)
+            // The `error` field carries the rejection reason in the
+            // "ran-but-everything-rejected" case so the chip tooltip
+            // can show why.
             let resultSummary: string | undefined
+            let chipOk = data.ok
+            let chipError = data.error
             const r = data.result as
-              | { accepted_edit_ids?: string[]; rejected?: unknown[] }
+              | {
+                  accepted_edit_ids?: string[]
+                  rejected?: Array<{
+                    reason?: string
+                    message?: string
+                  }>
+                }
               | undefined
             if (data.ok && r) {
               const accepted = r.accepted_edit_ids?.length ?? 0
-              const rejected = r.rejected?.length ?? 0
+              const rejectedList = r.rejected ?? []
+              const rejected = rejectedList.length
               if (accepted > 0 || rejected > 0) {
                 resultSummary = `${accepted} accepted${rejected > 0 ? `, ${rejected} rejected` : ''}`
+              }
+              if (accepted === 0 && rejected > 0) {
+                // Tool dispatched but landed nothing — flip the chip
+                // to failure so the user sees something went wrong.
+                chipOk = false
+                const first = rejectedList[0]
+                const reason = first?.reason ?? 'unknown'
+                const detail = first?.message ?? ''
+                chipError = detail ? `${reason}: ${detail}` : reason
               }
             }
             toolEvents.push({
               callId: data.call_id,
               tool,
               args,
-              ok: data.ok,
-              error: data.error,
+              ok: chipOk,
+              error: chipError,
               resultSummary
             })
           },

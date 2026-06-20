@@ -443,9 +443,22 @@ def _validate_patch_description(
     ok, msg = check_bbcode_fidelity(new_value)
     if not ok:
         return ValidationResult(False, "bbcode_fidelity", msg)
-    current = _read_path(working, canonical["field_path"]) or ""
+    # Read the current text at the explicit target_path; if absent,
+    # search across every BBCode-bearing field to find where the
+    # model's quote actually lives and use that field path. This
+    # rescues the common failure where the model quotes text from a
+    # custom_kink description but calls patch_description (which used
+    # to be hard-coded to character.description).
+    target_path = canonical["field_path"]
+    current = _read_path(working, target_path) or ""
+    if not isinstance(current, str) or _locate_anchor(old_excerpt, current) is None:
+        autofound = _find_text_field_containing(old_excerpt, working)
+        if autofound is not None:
+            target_path = autofound
+            canonical["field_path"] = autofound
+            current = _read_path(working, autofound) or ""
     if not isinstance(current, str):
-        return ValidationResult(False, "no_anchor", "description is not a string")
+        return ValidationResult(False, "no_anchor", "field is not a string")
     # Anchor escalation:
     # 1. Raw literal match — cheapest, exact, the common case.
     # 2. Whitespace-normalised match — handles the typical local-model
@@ -484,6 +497,37 @@ def _validate_patch_description(
         anchor_end=anchor_end,
     )
     return ValidationResult(True, edit=canonical)
+
+
+def _find_text_field_containing(
+    needle: str, working: dict[str, Any]
+) -> str | None:
+    """Walk every BBCode-bearing text field in the working copy and
+    return the first dotted path whose content contains `needle`
+    (literal or whitespace-normalised). Order: main description,
+    then each custom-kink description.
+
+    Used by `patch_description` as a fallback when the model quotes
+    text that lives in a custom kink description rather than the
+    main field — without this, every patch silently fails validation
+    with `anchor_mismatch` and no card ever lands in the review pane.
+    """
+    if not isinstance(needle, str) or not needle:
+        return None
+
+    description = _read_path(working, "character.description")
+    if isinstance(description, str) and _locate_anchor(needle, description) is not None:
+        return "character.description"
+
+    custom_kinks = working.get("custom_kinks")
+    if isinstance(custom_kinks, dict):
+        for ck_id, row in custom_kinks.items():
+            if not isinstance(row, dict):
+                continue
+            ck_desc = row.get("description")
+            if isinstance(ck_desc, str) and _locate_anchor(needle, ck_desc) is not None:
+                return f"custom_kinks.{ck_id}.description"
+    return None
 
 
 def _nearest_substring_hint(needle: str, haystack: str, *, window: int = 80) -> str:

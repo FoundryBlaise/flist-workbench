@@ -366,6 +366,61 @@ def test_apply_add_image_to_gallery(env: Path) -> None:
     assert "images" in working["_overlay"]
 
 
+def test_patch_description_auto_routes_to_custom_kink_description(env: Path) -> None:
+    """Model quotes text from a custom-kink description but calls
+    patch_description (which historically only targeted
+    character.description). Validator now auto-discovers the field
+    holding the quote so the edit lands as a real pending card —
+    addresses the 2026-06-20 smoke-test failure where 6 batched
+    patch_description calls all silently rejected because the text
+    lived in custom_kinks[X].description, not the main field."""
+    import ai_draft
+    import character_archive
+
+    _seed_character("42")
+    working = character_archive.read_working("42")
+    working["character"]["description"] = "Main body — no German prose here."
+    working["custom_kinks"]["a1"] = {
+        "name": "Strap",
+        "description": "Im Hause Blaise ist alles abgesehen von der klassischen Vereinigung von Mann und Frau nicht gerne gesehen.",
+        "choice": "yes",
+    }
+    character_archive.write_working("42", working)
+    etag = character_archive.working_etag("42")
+
+    result = ai_draft.append_edits(
+        "42",
+        [
+            {
+                "tool": "patch_description",
+                "field_path": "character.description",  # model's wrong guess
+                "old_excerpt": (
+                    "Im Hause Blaise ist alles abgesehen von der "
+                    "klassischen Vereinigung von Mann und Frau "
+                    "nicht gerne gesehen."
+                ),
+                "new_value": (
+                    "Im Hause Blaise ist alles, abgesehen von der "
+                    "klassischen Vereinigung von Mann und Frau, "
+                    "nicht gerne gesehen."
+                ),
+                "rationale": "Kommas um den parenthetischen Einschub.",
+            }
+        ],
+        MAPPING_LIST,
+    )
+    assert len(result["accepted_edit_ids"]) == 1
+    persisted = result["draft"]["edits"][0]
+    # Path rewritten to where the quote actually lives.
+    assert persisted["field_path"] == "custom_kinks.a1.description"
+
+    ai_draft.accept_edits("42", [persisted["id"]], etag)
+    updated = character_archive.read_working("42")
+    assert "alles, abgesehen von" in updated["custom_kinks"]["a1"]["description"]
+    # Main description untouched.
+    assert updated["character"]["description"] == "Main body — no German prose here."
+
+
 def test_patch_description_lands_after_normalised_match(env: Path) -> None:
     """Reproduces the German typo case: model quotes with collapsed
     whitespace, description has CRLF + double spacing. Edit applies as

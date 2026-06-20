@@ -469,37 +469,36 @@ def _apply_edit(
         return
 
     if tool == "patch_description":
-        character = payload.setdefault("character", {})
-        if not isinstance(character, dict):
-            character = {}
-            payload["character"] = character
-        current = character.get("description") or ""
+        # field_path may be `character.description` (the historical
+        # default) OR `custom_kinks.<id>.description` when the
+        # validator auto-discovered that the model's quote lived in
+        # a custom kink. Walk the dotted path generically so both
+        # surfaces work without duplicating the splice logic.
         old_excerpt = edit.get("old_excerpt") or ""
         new_value = edit.get("new_value") or ""
-        # Validator resolved precise (start, end) raw bounds for both
-        # literal and whitespace-normalised matches. Splice exactly
-        # that range — no whole-body fallback, no risk of clobbering a
-        # prior text_patch edit in the same draft.
+        current = _read_path_for_patch(payload, field_path)
         anchor_start = edit.get("anchor_start")
         anchor_end = edit.get("anchor_end")
+        if not isinstance(current, str):
+            return
         if (
             isinstance(anchor_start, int)
             and isinstance(anchor_end, int)
             and 0 <= anchor_start < anchor_end <= len(current)
         ):
-            character["description"] = (
-                current[:anchor_start] + new_value + current[anchor_end:]
-            )
+            patched = current[:anchor_start] + new_value + current[anchor_end:]
+            _write_path_for_patch(payload, field_path, patched)
             overlay.add(field_path)
         elif old_excerpt and old_excerpt in current:
             # Backstop for legacy draft edits written before
             # anchor_end was added — still safe (literal substring,
             # first occurrence).
-            character["description"] = current.replace(old_excerpt, new_value, 1)
+            patched = current.replace(old_excerpt, new_value, 1)
+            _write_path_for_patch(payload, field_path, patched)
             overlay.add(field_path)
         # No-op if neither path matches: the working copy drifted
         # between validate and apply (a stale edit slipped through).
-        # Better to silently leave the description intact than risk a
+        # Better to silently leave the field intact than risk a
         # whole-body clobber.
         return
 
@@ -614,6 +613,35 @@ def _apply_edit(
             payload["images"] = reordered
         overlay.add("images")
         return
+
+
+def _read_path_for_patch(payload: dict[str, Any], path: str) -> Any:
+    """Walk a dotted path into the working payload to read a string-
+    valued leaf. Mirrors the validator's traversal so patch_description
+    can address either `character.description` or
+    `custom_kinks.<id>.description`."""
+    cur: Any = payload
+    for seg in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(seg)
+    return cur
+
+
+def _write_path_for_patch(payload: dict[str, Any], path: str, value: str) -> None:
+    """Walk a dotted path and assign `value` at the leaf, creating
+    intermediate dicts as needed. Used by patch_description's apply
+    step so the new value lands at the same path the validator
+    confirmed the anchor in."""
+    parts = path.split(".")
+    cur = payload
+    for seg in parts[:-1]:
+        nxt = cur.get(seg)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[seg] = nxt
+        cur = nxt
+    cur[parts[-1]] = value
 
 
 def _next_negative_id(custom_kinks: dict[str, Any]) -> int:
