@@ -22,6 +22,7 @@ declare global {
   interface Window {
     workbench?: {
       sidecarUrl: string
+      appVersion?: string
       selectDirectory?: (opts?: {
         title?: string
         defaultPath?: string

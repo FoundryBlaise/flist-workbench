@@ -1738,67 +1738,70 @@ body {
 .modal-close:hover { color: var(--text); }
 .modal-body { padding: 14px 20px; }
 
-/* Auto-updater modal — small, single-purpose, three states (available
-   → downloading → ready). Width tracked to the other small modals
-   (sign-in/userscript-help) so the visual rhythm stays consistent. */
-.updater-modal { width: 460px; }
-.updater-modal-body p { margin: 0 0 10px; line-height: 1.5; }
-.updater-modal-body p:last-child { margin-bottom: 0; }
-.updater-modal-notes {
-  max-height: 140px;
-  overflow: auto;
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 12px;
+/* Auto-updater banner — pinned at the top of the app shell, one
+   line, slim. Replaces the earlier modal which used CSS variables
+   that don't exist in this theme. */
+.updater-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
   line-height: 1.4;
-  white-space: pre-wrap;
+  z-index: 50;
 }
-.updater-modal-progress {
-  height: 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-  margin: 4px 0 10px;
-}
-.updater-modal-progress-bar {
-  height: 100%;
-  background: var(--accent, #4a9eff);
+.updater-banner-info { border-bottom-color: var(--accent); }
+.updater-banner-ready { border-bottom-color: var(--green); }
+.updater-banner-error { border-bottom-color: var(--accent-2); }
+.updater-banner-error .updater-banner-line { color: var(--accent-2); }
+.updater-banner-progress {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
   transition: width 120ms linear;
 }
-.updater-modal-hint {
-  font-size: 12px;
-  color: var(--muted, rgba(255, 255, 255, 0.55));
+.updater-banner-line {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.updater-modal-error { color: var(--danger, #ff7676); }
-.updater-modal-foot {
+.updater-banner-line strong { color: var(--text); font-weight: 600; }
+.updater-banner-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
-.updater-modal-secondary,
-.updater-modal-primary {
-  padding: 6px 14px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  cursor: pointer;
-  font-size: 13px;
-}
-.updater-modal-primary {
-  background: var(--accent, #4a9eff);
-  border-color: var(--accent, #4a9eff);
+.updater-banner-primary {
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
   color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
 }
-.updater-modal-primary:disabled {
-  opacity: 0.6;
-  cursor: progress;
+.updater-banner-primary:hover { filter: brightness(1.1); }
+.updater-banner-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 3px;
 }
-.updater-modal-secondary:hover { background: var(--bg-elevated, rgba(255, 255, 255, 0.05)); }
+.updater-banner-close:hover { background: var(--panel); color: var(--text); }
 /* The settings modal body can outgrow the 80vh max-height. Let it
    scroll inside the modal so the per-section Save buttons stay
    reachable without resizing the dialog. */

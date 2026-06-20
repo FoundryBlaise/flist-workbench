@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 
 export type UpdaterStatus =
   | { kind: 'idle' }
@@ -15,18 +15,15 @@ export type UpdaterStatus =
   | { kind: 'not-available' }
   | { kind: 'error'; message: string }
 
-function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let i = 0
-  let v = n
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i += 1
-  }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
-}
-
+/**
+ * Slim banner pinned at the top of the app — replaces the earlier
+ * full-screen modal. One line, current → new version, two buttons.
+ *
+ * Background launches that find no update never render this. Manual
+ * checks (Help → Check for Updates) opt into the "checking" /
+ * "up to date" / "error" states by passing `manualCheck`; the
+ * "up to date" line self-dismisses after a few seconds.
+ */
 export function UpdateAvailableModal({
   status,
   manualCheck = false,
@@ -36,156 +33,99 @@ export function UpdateAvailableModal({
   manualCheck?: boolean
   onDismiss: () => void
 }) {
-  // Don't block dismiss while downloading — the download continues in
-  // main; we just hide the modal. The user can re-open via the next
-  // launch's prompt, or via a future menu entry.
-  const installing = status.kind === 'downloaded'
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onDismiss()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onDismiss])
-
   const updater = window.workbench?.updater
-  const [downloadStarting, setDownloadStarting] = useState(false)
+  const currentVersion = window.workbench?.appVersion ?? ''
+
+  // Self-dismiss the manual "you're up to date" line after a beat so
+  // it doesn't sit there forever once the user has seen it.
+  useEffect(() => {
+    if (status.kind === 'not-available' && manualCheck) {
+      const t = setTimeout(onDismiss, 4000)
+      return () => clearTimeout(t)
+    }
+    return
+  }, [status.kind, manualCheck, onDismiss])
 
   const handleDownload = () => {
     if (!updater) return
-    setDownloadStarting(true)
-    void updater.download().finally(() => setDownloadStarting(false))
+    void updater.download()
   }
+  const handleInstall = () => updater?.install()
 
-  const handleInstall = () => {
-    updater?.install()
-  }
+  let tone: 'info' | 'progress' | 'ready' | 'error' = 'info'
+  let line: React.ReactNode = null
+  let primary: { label: string; onClick: () => void } | null = null
+  let percent: number | null = null
 
-  let title = 'Update available'
-  let version: string | null = null
-  let body: React.ReactNode = null
-  let primary: { label: string; onClick: () => void; disabled?: boolean } | null = null
-  let secondaryLabel = 'Later'
-
-  if (status.kind === 'checking') {
-    title = 'Checking for updates…'
-    body = (
-      <p>Asking GitHub if a newer version of F-list Workbench is available.</p>
-    )
-    primary = null
-    secondaryLabel = 'Close'
+  if (status.kind === 'checking' && manualCheck) {
+    tone = 'info'
+    line = <span>Checking for updates…</span>
   } else if (status.kind === 'not-available' && manualCheck) {
-    title = "You're up to date"
-    body = (
-      <p>
-        No newer version is available right now. Workbench checks again at
-        each launch.
-      </p>
+    tone = 'info'
+    line = (
+      <span>
+        You're on the latest version{currentVersion ? ` (${currentVersion})` : ''}.
+      </span>
     )
-    primary = null
-    secondaryLabel = 'Close'
   } else if (status.kind === 'available') {
-    version = status.version
-    body = (
-      <>
-        <p>
-          A new version of F-list Workbench is available. Update now and
-          we'll download it in the background — you can keep working.
-        </p>
-        {status.releaseNotes ? (
-          <pre className="updater-modal-notes">{status.releaseNotes}</pre>
-        ) : null}
-      </>
+    tone = 'info'
+    line = (
+      <span>
+        New version:{' '}
+        <strong>
+          {currentVersion || '?'} → {status.version}
+        </strong>
+      </span>
     )
-    primary = {
-      label: downloadStarting ? 'Starting…' : 'Update now',
-      onClick: handleDownload,
-      disabled: downloadStarting
-    }
+    primary = { label: 'Update', onClick: handleDownload }
   } else if (status.kind === 'downloading') {
-    title = 'Downloading update'
-    body = (
-      <>
-        <p>
-          {formatBytes(status.transferred)} of {formatBytes(status.total)}
-          {status.bytesPerSecond > 0
-            ? ` · ${formatBytes(status.bytesPerSecond)}/s`
-            : null}
-        </p>
-        <div className="updater-modal-progress">
-          <div
-            className="updater-modal-progress-bar"
-            style={{ width: `${Math.max(0, Math.min(100, status.percent)).toFixed(1)}%` }}
-          />
-        </div>
-        <p className="updater-modal-hint">
-          You can close this dialog — the download will continue.
-        </p>
-      </>
+    tone = 'progress'
+    percent = Math.max(0, Math.min(100, status.percent))
+    line = <span>Downloading update… {percent.toFixed(0)}%</span>
+  } else if (status.kind === 'downloaded') {
+    tone = 'ready'
+    line = (
+      <span>
+        Update ready{status.version ? `: ${status.version}` : ''}.
+      </span>
     )
-    primary = null
-  } else if (installing && status.kind === 'downloaded') {
-    title = 'Update ready'
-    version = status.version
-    body = (
-      <p>
-        Version {status.version} is ready to install. Workbench will close,
-        install the update, and reopen.
-      </p>
-    )
-    primary = { label: 'Restart and install', onClick: handleInstall }
-  } else if (status.kind === 'error') {
-    title = 'Update failed'
-    body = (
-      <p className="updater-modal-error">
-        Couldn't fetch the update: {status.message}. You can retry later, or
-        download the new version from the GitHub releases page manually.
-      </p>
-    )
-    primary = null
-    secondaryLabel = 'Close'
+    primary = { label: 'Restart', onClick: handleInstall }
+  } else if (status.kind === 'error' && manualCheck) {
+    tone = 'error'
+    line = <span>Update check failed: {status.message}</span>
   }
+
+  if (line === null) return null
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="modal updater-modal">
-        <header className="modal-head">
-          <div>
-            <h2 className="modal-title">{title}</h2>
-            {version ? (
-              <p className="modal-subtitle">Version {version}</p>
-            ) : null}
-          </div>
+    <div className={`updater-banner updater-banner-${tone}`} role="status">
+      {percent !== null ? (
+        <div
+          className="updater-banner-progress"
+          style={{ width: `${percent}%` }}
+          aria-hidden
+        />
+      ) : null}
+      <div className="updater-banner-line">{line}</div>
+      <div className="updater-banner-actions">
+        {primary ? (
           <button
             type="button"
-            className="modal-close"
-            onClick={onDismiss}
-            aria-label="Close"
+            className="updater-banner-primary"
+            onClick={primary.onClick}
           >
-            ✕
+            {primary.label}
           </button>
-        </header>
-        <div className="modal-body updater-modal-body">{body}</div>
-        <footer className="modal-foot updater-modal-foot">
-          <button
-            type="button"
-            className="updater-modal-secondary"
-            onClick={onDismiss}
-          >
-            {secondaryLabel}
-          </button>
-          {primary ? (
-            <button
-              type="button"
-              className="updater-modal-primary"
-              onClick={primary.onClick}
-              disabled={primary.disabled}
-            >
-              {primary.label}
-            </button>
-          ) : null}
-        </footer>
+        ) : null}
+        <button
+          type="button"
+          className="updater-banner-close"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          title="Dismiss"
+        >
+          ✕
+        </button>
       </div>
     </div>
   )
