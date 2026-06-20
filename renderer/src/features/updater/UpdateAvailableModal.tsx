@@ -16,13 +16,15 @@ export type UpdaterStatus =
   | { kind: 'error'; message: string }
 
 /**
- * Slim banner pinned at the top of the app — replaces the earlier
- * full-screen modal. One line, current → new version, two buttons.
+ * Floating card pinned to the bottom-left. Doesn't take document
+ * flow — sits on top of whatever's underneath. Compact: one line of
+ * status + the relevant button + a close ✕.
  *
- * Background launches that find no update never render this. Manual
- * checks (Help → Check for Updates) opt into the "checking" /
- * "up to date" / "error" states by passing `manualCheck`; the
- * "up to date" line self-dismisses after a few seconds.
+ * Auto-discovered updates (background launch check) and manual
+ * checks (Help → Check for Updates) both use the same card. Manual
+ * checks opt into the "checking" / "up to date" / "error" states by
+ * passing `manualCheck`; the "up to date" line self-dismisses after
+ * a few seconds.
  */
 export function UpdateAvailableModal({
   status,
@@ -36,8 +38,6 @@ export function UpdateAvailableModal({
   const updater = window.workbench?.updater
   const currentVersion = window.workbench?.appVersion ?? ''
 
-  // Self-dismiss the manual "you're up to date" line after a beat so
-  // it doesn't sit there forever once the user has seen it.
   useEffect(() => {
     if (status.kind === 'not-available' && manualCheck) {
       const t = setTimeout(onDismiss, 4000)
@@ -58,17 +58,14 @@ export function UpdateAvailableModal({
   let percent: number | null = null
 
   if (status.kind === 'checking' && manualCheck) {
-    tone = 'info'
     line = <span>Checking for updates…</span>
   } else if (status.kind === 'not-available' && manualCheck) {
-    tone = 'info'
     line = (
       <span>
         You're on the latest version{currentVersion ? ` (${currentVersion})` : ''}.
       </span>
     )
   } else if (status.kind === 'available') {
-    tone = 'info'
     line = (
       <span>
         New version:{' '}
@@ -98,20 +95,13 @@ export function UpdateAvailableModal({
   if (line === null) return null
 
   return (
-    <div className={`updater-banner updater-banner-${tone}`} role="status">
-      {percent !== null ? (
-        <div
-          className="updater-banner-progress"
-          style={{ width: `${percent}%` }}
-          aria-hidden
-        />
-      ) : null}
-      <div className="updater-banner-line">{line}</div>
-      <div className="updater-banner-actions">
+    <div className={`updater-toast updater-toast-${tone}`} role="status">
+      <div className="updater-toast-line">{line}</div>
+      <div className="updater-toast-actions">
         {primary ? (
           <button
             type="button"
-            className="updater-banner-primary"
+            className="updater-toast-primary"
             onClick={primary.onClick}
           >
             {primary.label}
@@ -119,7 +109,7 @@ export function UpdateAvailableModal({
         ) : null}
         <button
           type="button"
-          className="updater-banner-close"
+          className="updater-toast-close"
           onClick={onDismiss}
           aria-label="Dismiss"
           title="Dismiss"
@@ -127,6 +117,13 @@ export function UpdateAvailableModal({
           ✕
         </button>
       </div>
+      {percent !== null ? (
+        <div
+          className="updater-toast-progress"
+          style={{ width: `${percent}%` }}
+          aria-hidden
+        />
+      ) : null}
     </div>
   )
 }
