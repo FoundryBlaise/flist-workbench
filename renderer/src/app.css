@@ -905,14 +905,24 @@ body {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  /* column direction matters: cross-axis becomes horizontal, so the
+     .cm-editor child stretches across the full width via flex's
+     default align-items: stretch. With row (the default), cm-editor
+     would size to its intrinsic content width — leaving a darker
+     band of pane background to the right of the longest wrapped
+     line. */
   display: flex;
+  flex-direction: column;
 }
 .editor-cm .cm-editor {
-  /* `height: 100%` is the canonical CM6 sizing — anchors the editor
-     to its bounded parent so .cm-scroller actually sees overflow.
-     An earlier `height: auto` attempt let the editor grow to content
-     and the scroller never engaged. */
+  /* Fill the wrapper on both axes. height: 100% is the canonical CM6
+     sizing (anchors the scroller's bounded box). flex: 1 fills the
+     column-direction main axis; width: 100% is belt-and-braces in
+     case the wrapper isn't a flex container after some future edit. */
+  flex: 1 1 0;
+  min-height: 0;
   height: 100%;
+  width: 100%;
 }
 .editor-cm .cm-scroller {
   overflow: auto;
