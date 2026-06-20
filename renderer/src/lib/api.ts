@@ -272,152 +272,6 @@ export type LabelsSettings = {
   prompt_presets: PromptPreset[]
 }
 
-// ---- AI assistant draft + chat shapes (Phase 9) ----------------------
-
-/** One proposed edit inside `ai-draft.json`. The renderer reuses the
- *  Tier 4 DiffRow component to render `text_replace` / `value_replace`
- *  kinds and renders composite cards (sharing a `composite_id`) as a
- *  single summary with expand. */
-export type AiDraftEdit = {
-  id: string
-  tool: string
-  field_path: string
-  kind:
-    | 'text_replace'
-    | 'value_replace'
-    | 'value_clear'
-    | 'text_patch'
-    | 'custom_kink_add'
-    | 'custom_kink_remove'
-    | 'image_add'
-    | 'image_remove'
-    | 'gallery_reorder'
-  old_value?: unknown
-  new_value?: unknown
-  old_excerpt?: string
-  new_label_hint?: string
-  rationale: string
-  status: 'pending' | 'stale' | 'accepted' | 'rejected'
-  composite_id: string | null
-  created_at?: string
-}
-
-export type AiDraft = {
-  schema_version: number
-  base_etag: string | null
-  base_working_schema_version: number
-  created_at: string
-  updated_at: string
-  model_endpoint: string
-  model_id: string
-  edits: AiDraftEdit[]
-}
-
-/** OpenAI-style message shape the chat endpoint accepts. `tool_calls`
- *  / `tool_call_id` mirror the OpenAI function-calling contract;
- *  Workbench's chat layer relays them between turns without parsing. */
-export type AssistantChatMessage = {
-  role: 'system' | 'user' | 'assistant' | 'tool'
-  content?: string | null
-  tool_calls?: Array<{
-    id: string
-    type: 'function'
-    function: { name: string; arguments: string }
-  }>
-  tool_call_id?: string
-  name?: string
-  /** Set on assistant turns whose content was coerced from
-   *  `reasoning_content` (thinking model ran out of budget). Renderer
-   *  dims + labels these so the user knows it's reasoning, not a
-   *  final answer. Local-only annotation, not sent to the sidecar. */
-  _from_reasoning?: boolean
-}
-
-/** Captured tool-call → tool-result pair surfaced to the transcript
- *  so the user can see exactly which tool the model invoked and
- *  whether it succeeded. Rejections (anchor_mismatch, stale_base,
- *  bbcode_fidelity, etc.) surface here too with the reason code. */
-export type AssistantToolEvent = {
-  callId: string
-  tool: string
-  args: Record<string, unknown>
-  ok: boolean
-  error?: string
-  /** Compact human-readable summary used in chip tooltips. */
-  resultSummary?: string
-  /** Edit ids the tool landed in the draft (zero-length when the
-   *  tool was a read or every edit was rejected). The renderer
-   *  groups proposal cards by turn using this — each turn renders
-   *  the cards for its own edits inline. */
-  acceptedEditIds?: string[]
-}
-
-export type AssistantChatHandlers = {
-  onStart?: (data: { model_id: string; model_endpoint: string }) => void
-  onText?: (data: {
-    content: string
-    round: number
-    /** True when the sidecar coerced the model's reasoning_content
-     *  into the visible content because the regular `content` field
-     *  was empty — the model ran out of token budget reasoning.
-     *  Renderer dims this and labels it "Model thinking (no final
-     *  answer)" so users don't mistake reasoning for a reply. */
-    from_reasoning?: boolean
-  }) => void
-  onToolCall?: (data: {
-    round: number
-    tool: string
-    args: Record<string, unknown>
-    call_id: string
-  }) => void
-  onToolResult?: (data: {
-    round: number
-    call_id: string
-    ok: boolean
-    result?: unknown
-    error?: string
-  }) => void
-  onDraftUpdate?: (data: { draft: AiDraft }) => void
-  onError?: (data: { code: string; message: string }) => void
-  onDone?: (data: Record<string, unknown>) => void
-}
-
-export type AiAssistantSettings = {
-  /** Master opt-in toggle. Until on, the Tools menu hides the
-   *  Character Assistant entry, the bottom-dock pane never mounts,
-   *  and every assistant + ai-draft sidecar endpoint refuses with
-   *  feature_disabled. */
-  enabled: boolean
-  endpoint: string
-  model: string
-  api_key: string
-  system_prompt: string
-  temperature: number
-  token_budget: number
-  timeout_sec: number
-  warn_non_loopback: boolean
-  log_requests: boolean
-  /** Workaround for Qwen 3.x family thinking-loop failures. When on,
-   *  the sidecar appends `/no_think` to the resolved system prompt
-   *  every turn so the model skips its chain-of-thought phase. Other
-   *  model families ignore it as literal text. Default OFF. */
-  append_no_think: boolean
-  defaults: {
-    temperature: number
-    token_budget: number
-    timeout_sec: number
-    warn_non_loopback: boolean
-    log_requests: boolean
-    system_prompt: string
-  }
-  /** Same shape as labels.prompt_presets — drives the shared
-   *  PromptPresetPicker. First entry is the "Reset to default"
-   *  target. Currently ships four: NSFW/SFW × English/German.
-   *  Also re-exposed in the assistant chat dock so the user can
-   *  switch language/tone without leaving the conversation. */
-  prompt_presets: PromptPreset[]
-}
-
 export type BackupsSettings = {
   /** Day interval for the scheduled-on-start sweep. 0 disables. */
   scheduled_interval_days: number
@@ -639,53 +493,6 @@ function dispatchSseBlock(block: string, handlers: RagQueryHandlers): void {
   }
 }
 
-/** SSE dispatcher for the /assistant/chat stream. Mirrors
- *  dispatchSseBlock's parsing approach so error surfaces are uniform;
- *  the assistant's event vocabulary (start/text/tool_call/tool_result/
- *  draft_update/done/error) lives entirely in this function. */
-function dispatchAssistantSseBlock(
-  block: string,
-  handlers: AssistantChatHandlers
-): void {
-  let event: string | null = null
-  const dataLines: string[] = []
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
-    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
-  }
-  if (!event) return
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(dataLines.join('\n'))
-  } catch {
-    return
-  }
-  const data = parsed as Record<string, unknown>
-  switch (event) {
-    case 'start':
-      handlers.onStart?.(data as Parameters<NonNullable<AssistantChatHandlers['onStart']>>[0])
-      break
-    case 'text':
-      handlers.onText?.(data as Parameters<NonNullable<AssistantChatHandlers['onText']>>[0])
-      break
-    case 'tool_call':
-      handlers.onToolCall?.(data as Parameters<NonNullable<AssistantChatHandlers['onToolCall']>>[0])
-      break
-    case 'tool_result':
-      handlers.onToolResult?.(data as Parameters<NonNullable<AssistantChatHandlers['onToolResult']>>[0])
-      break
-    case 'draft_update':
-      handlers.onDraftUpdate?.(data as Parameters<NonNullable<AssistantChatHandlers['onDraftUpdate']>>[0])
-      break
-    case 'error':
-      handlers.onError?.(data as Parameters<NonNullable<AssistantChatHandlers['onError']>>[0])
-      break
-    case 'done':
-      handlers.onDone?.(data)
-      break
-  }
-}
-
 // Mid-session ticket recovery. The sidecar holds the F-list password
 // in RAM only and drops it after an idle window (P0-C safety), so a
 // long-running session eventually loses the ability to auto-refresh
@@ -861,14 +668,12 @@ export const api = {
       labels: LabelsSettings
       rag: RagSettings
       backups: BackupsSettings
-      ai_assistant: AiAssistantSettings
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
     rag?: Partial<Omit<RagSettings, 'defaults'>>
     backups?: Partial<Omit<BackupsSettings, 'defaults'>>
-    ai_assistant?: Partial<Omit<AiAssistantSettings, 'defaults'>>
   }) =>
     request<{
       fchat_data_dir: string | null
@@ -877,7 +682,6 @@ export const api = {
       labels: LabelsSettings
       rag: RagSettings
       backups: BackupsSettings
-      ai_assistant: AiAssistantSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)
@@ -1146,93 +950,6 @@ export const api = {
       }
       buffer += decoder.decode()
       if (buffer.trim()) dispatchSseBlock(buffer, handlers)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
-  },
-
-  // ---- AI assistant (Phase 9) ----
-
-  aiDraftGet: (characterId: string) =>
-    request<{
-      draft: AiDraft
-      current_working_etag: string | null
-    }>(`/flist/character/${encodeURIComponent(characterId)}/ai-draft`, {}),
-  aiDraftDelete: (characterId: string) =>
-    request<{ deleted: boolean }>(
-      `/flist/character/${encodeURIComponent(characterId)}/ai-draft`,
-      { method: 'DELETE' }
-    ),
-  /** Wipes every pending ai-draft.json across the local archive. Used
-   *  by Settings → Disable AI Assistant + discard drafts so disabling
-   *  the feature really does evict everything, not just the active
-   *  character's draft. */
-  aiDraftDeleteAll: () =>
-    request<{ deleted: number }>('/assistant/drafts', { method: 'DELETE' }),
-  aiDraftAccept: (
-    characterId: string,
-    body: { edit_ids: string[] },
-    ifMatch: string | null
-  ) =>
-    request<{
-      applied_edit_ids: string[]
-      new_etag: string | null
-      draft: AiDraft | null
-      /** Edits in the request whose status was `stale` and so weren't
-       *  applied. The renderer surfaces a non-error chip so the user
-       *  understands why some cards still appear after Accept-all. */
-      skipped_stale: string[]
-    }>(`/flist/character/${encodeURIComponent(characterId)}/ai-draft/accept`, {
-      method: 'POST',
-      headers: ifMatch ? { 'If-Match': ifMatch } : undefined,
-      body: JSON.stringify(body)
-    }),
-  aiDraftReject: (characterId: string, body: { edit_ids: string[] }) =>
-    request<{ draft: AiDraft | null }>(
-      `/flist/character/${encodeURIComponent(characterId)}/ai-draft/reject`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  /** Drives one user turn. Same fetch-SSE shape as ragQuery/ragTalk —
-   *  handlers fire as events arrive. The chat history lives in the
-   *  caller (state.ts); the sidecar does NOT remember conversations. */
-  assistantChat: async (
-    body: {
-      messages: AssistantChatMessage[]
-      active_character_id: string | null
-    },
-    handlers: AssistantChatHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/assistant/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(body),
-      signal: opts?.signal
-    })
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchAssistantSseBlock(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) dispatchAssistantSseBlock(buffer, handlers)
     } finally {
       try {
         reader.releaseLock()

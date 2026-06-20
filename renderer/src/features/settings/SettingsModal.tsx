@@ -12,7 +12,6 @@ import {
   acknowledgeRemoteEndpoint
 } from '../../lib/endpoint'
 import { useStore } from '../../state'
-import { ConfirmModal } from '../flist/working-sets/ConfirmModal'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
 
@@ -60,7 +59,6 @@ type SectionId =
   | 'labels'
   | 'chat'
   | 'embedding'
-  | 'ai_assistant'
   | 'security'
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
@@ -70,7 +68,6 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
   { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
-  { id: 'ai_assistant', label: 'AI Assistant', subtitle: 'Character-editing helper · OFF by default' },
   { id: 'security', label: 'Security', subtitle: 'Browser-extension pairing' }
 ]
 
@@ -154,23 +151,6 @@ type Draft = {
     scheduled_interval_days: string
     scheduled_keep_last_n: string
   }
-  ai_assistant: {
-    enabled: boolean
-    endpoint: string
-    model: string
-    api_key: string
-    /** The verbatim system prompt body sent to the model. Edits via
-     *  the textarea land here directly; the preset picker is just
-     *  syntactic sugar that copies a chosen preset's body into the
-     *  same field — same model labels uses. */
-    system_prompt: string
-    temperature: string
-    token_budget: string
-    timeout_sec: string
-    warn_non_loopback: boolean
-    log_requests: boolean
-    append_no_think: boolean
-  }
 }
 
 function buildDraft(state: SettingsState): Draft {
@@ -213,19 +193,6 @@ function buildDraft(state: SettingsState): Draft {
     backups: {
       scheduled_interval_days: String(state.backups.scheduled_interval_days),
       scheduled_keep_last_n: String(state.backups.scheduled_keep_last_n)
-    },
-    ai_assistant: {
-      enabled: state.ai_assistant.enabled,
-      endpoint: state.ai_assistant.endpoint,
-      model: state.ai_assistant.model,
-      api_key: state.ai_assistant.api_key,
-      system_prompt: state.ai_assistant.system_prompt,
-      temperature: String(state.ai_assistant.temperature),
-      token_budget: String(state.ai_assistant.token_budget),
-      timeout_sec: String(state.ai_assistant.timeout_sec),
-      warn_non_loopback: state.ai_assistant.warn_non_loopback,
-      log_requests: state.ai_assistant.log_requests,
-      append_no_think: state.ai_assistant.append_no_think
     }
   }
 }
@@ -273,20 +240,6 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
       baseline.backups.scheduled_interval_days ||
     draft.backups.scheduled_keep_last_n !==
       baseline.backups.scheduled_keep_last_n
-  const aiAssistantDirty =
-    draft.ai_assistant.enabled !== baseline.ai_assistant.enabled ||
-    draft.ai_assistant.endpoint !== baseline.ai_assistant.endpoint ||
-    draft.ai_assistant.model !== baseline.ai_assistant.model ||
-    draft.ai_assistant.api_key !== baseline.ai_assistant.api_key ||
-    draft.ai_assistant.system_prompt !== baseline.ai_assistant.system_prompt ||
-    draft.ai_assistant.temperature !== baseline.ai_assistant.temperature ||
-    draft.ai_assistant.token_budget !== baseline.ai_assistant.token_budget ||
-    draft.ai_assistant.timeout_sec !== baseline.ai_assistant.timeout_sec ||
-    draft.ai_assistant.warn_non_loopback !==
-      baseline.ai_assistant.warn_non_loopback ||
-    draft.ai_assistant.log_requests !== baseline.ai_assistant.log_requests ||
-    draft.ai_assistant.append_no_think !==
-      baseline.ai_assistant.append_no_think
   return {
     general: generalDirty,
     flist: false,
@@ -294,7 +247,6 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     labels: labelsDirty,
     chat: chatDirty,
     embedding: embeddingDirty,
-    ai_assistant: aiAssistantDirty,
     security: false
   }
 }
@@ -305,8 +257,7 @@ function anyDirty(d: Record<SectionId, boolean>): boolean {
     d.labels ||
     d.chat ||
     d.embedding ||
-    d.backups ||
-    d.ai_assistant
+    d.backups
   )
 }
 
@@ -467,11 +418,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const updateBackups = (patch: Partial<Draft['backups']>) =>
     setDraft((d) => (d ? { ...d, backups: { ...d.backups, ...patch } } : d))
 
-  const updateAiAssistant = (patch: Partial<Draft['ai_assistant']>) =>
-    setDraft((d) =>
-      d ? { ...d, ai_assistant: { ...d.ai_assistant, ...patch } } : d
-    )
-
   const saveAll = async () => {
     if (!state || !draft || !dirtyByDraft) return
     // First-save consent for remote endpoints. A user typing
@@ -629,46 +575,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           )
         }
       }
-      if (dirtyByDraft.ai_assistant) {
-        payload.ai_assistant = {
-          enabled: draft.ai_assistant.enabled,
-          endpoint: draft.ai_assistant.endpoint.trim(),
-          model: draft.ai_assistant.model.trim(),
-          api_key: draft.ai_assistant.api_key,
-          system_prompt: draft.ai_assistant.system_prompt,
-          temperature: clampFloat(
-            draft.ai_assistant.temperature,
-            0,
-            2,
-            state.ai_assistant.temperature
-          ),
-          token_budget: clampInt(
-            draft.ai_assistant.token_budget,
-            1024,
-            200000,
-            state.ai_assistant.token_budget
-          ),
-          timeout_sec: clampInt(
-            draft.ai_assistant.timeout_sec,
-            5,
-            600,
-            state.ai_assistant.timeout_sec
-          ),
-          warn_non_loopback: draft.ai_assistant.warn_non_loopback,
-          log_requests: draft.ai_assistant.log_requests,
-          append_no_think: draft.ai_assistant.append_no_think
-        }
-      }
       const updated = await api.settingsUpdate(payload)
       setState(updated)
       setDraft(buildDraft(updated))
       setStatus('idle')
-      // Mirror assistant prompt config into the store so the in-chat
-      // preset switcher updates without a manual reload.
-      useStore.getState().setAiAssistantPromptConfig(
-        updated.ai_assistant.prompt_presets,
-        updated.ai_assistant.system_prompt
-      )
       if (dirtyByDraft.general) {
         // Refresh the sidebar so the new directory's characters appear.
         await loadCharacters()
@@ -780,13 +690,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     rag={state.rag}
                     draft={draft.rag}
                     onChange={updateRag}
-                  />
-                )}
-                {activeSection === 'ai_assistant' && (
-                  <AiAssistantPane
-                    state={state.ai_assistant}
-                    draft={draft.ai_assistant}
-                    onChange={updateAiAssistant}
                   />
                 )}
                 {activeSection === 'security' && <SecurityPane />}
@@ -1264,279 +1167,6 @@ function GeneralPane({
           </p>
         )}
       </div>
-    </>
-  )
-}
-
-function AiAssistantPane({
-  state,
-  draft,
-  onChange
-}: {
-  state: SettingsState['ai_assistant']
-  draft: Draft['ai_assistant']
-  onChange: (patch: Partial<Draft['ai_assistant']>) => void
-}) {
-  // Settings → AI Assistant. Mirrors the visual rhythm of ChatPane /
-  // LabelsPane: PaneHeader at the top, then sections built from the
-  // shared EndpointField / ModelField / ApiKeyField components, then
-  // a PromptPresetPicker that drives the same textarea labels uses.
-  const setEnabledInStore = useStore((s) => s.setAiAssistantEnabled)
-  const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
-
-  const endpointCategory = categoriseEndpoint(draft.endpoint)
-  const showNonLoopbackWarning =
-    draft.enabled &&
-    draft.warn_non_loopback &&
-    endpointCategory === 'remote' &&
-    draft.endpoint.trim().length > 0
-
-  const isPromptDefault = draft.system_prompt === state.defaults.system_prompt
-
-  return (
-    <>
-      <PaneHeader
-        title="AI Assistant"
-        subtitle="Per-character editing helper. OFF by default; flip the master toggle to expose the Tools menu entry and the bottom-dock pane."
-      />
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">Feature toggle</h3>
-        <p className="settings-help">
-          Until you enable it here, the Tools menu hides the Character
-          Assistant entry, the bottom dock never mounts, and the
-          sidecar refuses every assistant + draft endpoint.
-        </p>
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => {
-              const next = e.target.checked
-              onChange({ enabled: next })
-              // Live-update the store so the native menu rebuilds
-              // without waiting for the Save round-trip.
-              setEnabledInStore(next)
-            }}
-            data-testid="ai-assistant-enable-toggle"
-          />
-          <span>
-            <strong>Enable AI Assistant</strong>
-          </span>
-        </label>
-      </div>
-
-      <fieldset
-        className="settings-section"
-        disabled={!draft.enabled}
-        data-disabled={!draft.enabled}
-      >
-        <h3 className="settings-section-title">Inference</h3>
-        <EndpointField
-          id="ai-assistant-endpoint"
-          value={draft.endpoint}
-          defaultUrl=""
-          onChange={(v) => onChange({ endpoint: v })}
-          help="Where the assistant sends chat completions. Empty falls back to your RAG · Chat endpoint."
-          testId="ai-assistant-endpoint-input"
-        />
-        <ModelField
-          id="ai-assistant-model"
-          value={draft.model}
-          defaultValue=""
-          endpoint={draft.endpoint}
-          onChange={(v) => onChange({ model: v })}
-          help={
-            <>
-              Tool-call-capable model (Hermes 3, Qwen 2.5+, Llama 3.1+,
-              Mistral Nemo/Small). <strong>Discover</strong> lists loaded
-              models from the endpoint above.
-            </>
-          }
-          testId="ai-assistant-model-input"
-        />
-        <ApiKeyField
-          id="ai-assistant-api-key"
-          value={draft.api_key}
-          onChange={(v) => onChange({ api_key: v })}
-          testId="ai-assistant-api-key-input"
-        />
-        {showNonLoopbackWarning && (
-          <p
-            className="settings-help"
-            data-testid="ai-assistant-non-loopback"
-            style={{ color: 'var(--accent-2)' }}
-          >
-            ⚠ Endpoint is non-loopback. Sending sheet data here ships
-            character contents over the network.
-          </p>
-        )}
-      </fieldset>
-
-      <fieldset
-        className="settings-section"
-        disabled={!draft.enabled}
-        data-disabled={!draft.enabled}
-      >
-        <h3 className="settings-section-title">System prompt</h3>
-        <p className="settings-help">
-          Sent as the system message before each chat turn. Pick a
-          preset to populate the textarea, then edit freely — your
-          changes are saved verbatim.
-        </p>
-        <PromptPresetPicker
-          presets={state.prompt_presets}
-          currentBody={draft.system_prompt}
-          onPick={(body) => onChange({ system_prompt: body })}
-          idPrefix="ai-assistant"
-        />
-        <textarea
-          id="ai-assistant-prompt"
-          className="settings-textarea"
-          rows={14}
-          value={draft.system_prompt}
-          onChange={(e) => onChange({ system_prompt: e.target.value })}
-          data-testid="ai-assistant-system-prompt"
-        />
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() =>
-              onChange({ system_prompt: state.defaults.system_prompt })
-            }
-            disabled={isPromptDefault}
-          >
-            Reset to default prompt
-          </button>
-          <span className="settings-meta">
-            {draft.system_prompt.length.toLocaleString()} chars
-          </span>
-        </div>
-      </fieldset>
-
-      <fieldset
-        className="settings-section"
-        disabled={!draft.enabled}
-        data-disabled={!draft.enabled}
-      >
-        <h3 className="settings-section-title">Tuning</h3>
-        <NumericRow
-          label="Temperature"
-          help="0 = deterministic, 1 = balanced, 2 = creative. 0.3 default."
-          value={Number(draft.temperature)}
-          onChange={(v) => onChange({ temperature: String(v) })}
-          min={0}
-          max={2}
-          step={0.1}
-          testId="ai-assistant-temperature-input"
-        />
-        <NumericRow
-          label="Token budget"
-          help="Approx. ceiling on prompt size; the sidecar refuses if the rendered messages exceed it."
-          value={Number(draft.token_budget)}
-          onChange={(v) => onChange({ token_budget: String(v) })}
-          min={1024}
-          max={200000}
-          step={1024}
-          testId="ai-assistant-token-budget-input"
-        />
-        <NumericRow
-          label="Timeout (s)"
-          help="Per-LLM-round-trip timeout. Bigger if your model is slow to warm."
-          value={Number(draft.timeout_sec)}
-          onChange={(v) => onChange({ timeout_sec: String(v) })}
-          min={5}
-          max={600}
-          step={1}
-          testId="ai-assistant-timeout-input"
-        />
-      </fieldset>
-
-      <fieldset
-        className="settings-section"
-        disabled={!draft.enabled}
-        data-disabled={!draft.enabled}
-      >
-        <h3 className="settings-section-title">Security</h3>
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
-            checked={draft.warn_non_loopback}
-            onChange={(e) => onChange({ warn_non_loopback: e.target.checked })}
-          />
-          <span>Warn before sending sheet to non-loopback endpoint</span>
-        </label>
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
-            checked={draft.log_requests}
-            onChange={(e) => onChange({ log_requests: e.target.checked })}
-          />
-          <span>Log requests to disk for debugging</span>
-        </label>
-
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
-            checked={draft.append_no_think}
-            onChange={(e) => onChange({ append_no_think: e.target.checked })}
-            data-testid="ai-assistant-append-no-think"
-          />
-          <span>
-            <strong>
-              Append <code>/no_think</code> to every message
-            </strong>{' '}
-            <span className="settings-meta">(default ON)</span>
-            <span className="settings-meta" style={{ display: 'block', marginTop: 4 }}>
-              Tells thinking-capable models (Qwen 3.x family, some Gemma
-              variants) to skip their chain-of-thought phase so the
-              actual reply lands in <code>content</code> directly. The
-              default ON because most local-model setups burn their
-              completion budget on reasoning and produce empty replies
-              otherwise. Non-thinking models (Llama, Mistral, Hermes)
-              treat it as literal text and ignore it.{' '}
-              <strong>Turn OFF</strong> if you specifically want a
-              thinking model's reasoning trace visible, or if your model
-              is misinterpreting the token.
-            </span>
-          </span>
-        </label>
-
-        <p className="settings-help">
-          Disabling the assistant from below also deletes every pending
-          ai-draft.json file under the archive — use this when you want
-          a clean uninstall of the feature, not just a temporary pause.
-        </p>
-        <button
-          type="button"
-          className="settings-clear"
-          onClick={() => setDisableConfirmOpen(true)}
-          data-testid="ai-assistant-disable-cleanup"
-        >
-          Disable AI Assistant + discard drafts
-        </button>
-      </fieldset>
-      {disableConfirmOpen && (
-        <ConfirmModal
-          title="Disable AI Assistant?"
-          body="The master toggle will flip off, the Tools menu entry will hide, and every pending ai-draft.json across your local archive will be deleted. Working copies are untouched."
-          confirmLabel="Disable + discard drafts"
-          cancelLabel="Keep enabled"
-          danger
-          onConfirm={async () => {
-            setDisableConfirmOpen(false)
-            onChange({ enabled: false })
-            setEnabledInStore(false)
-            try {
-              await api.aiDraftDeleteAll()
-            } catch {
-              // Best-effort — server may already be inert.
-            }
-          }}
-          onCancel={() => setDisableConfirmOpen(false)}
-        />
-      )}
     </>
   )
 }
