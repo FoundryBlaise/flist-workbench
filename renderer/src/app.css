@@ -127,6 +127,13 @@ body {
 .main {
   display: grid;
   overflow: hidden;
+  /* `min-height: 0` is load-bearing here: .main is a grid item of
+     .app's `1fr` row, and grid items default to `min-height: auto`
+     which lets their content grow past the row's allocated size.
+     Without this, tall editor content (long BBCode descriptions)
+     pushes .main past viewport height and the CodeMirror scroller
+     never sees overflow → no scrollbar engages anywhere. */
+  min-height: 0;
 }
 .main-editor { grid-template-columns: 260px 1fr; }
 .main-logs { grid-template-columns: 260px 1fr; }
@@ -724,6 +731,21 @@ body {
   overflow: hidden;
 }
 
+/* Wrapper inside EditorPane that holds the editor-cm-row for the
+   Description tab. Without these flex constraints the wrapper
+   refuses to shrink below CodeMirror's content height and the
+   scroller never engages. Each parent in the chain needs to be a
+   bounded box for `.cm-scroller`'s `overflow: auto` to mean
+   anything. */
+.editor-tab-description {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .editor-head {
   display: flex;
   align-items: center;
@@ -880,9 +902,11 @@ body {
   display: flex;
 }
 .editor-cm .cm-editor {
-  flex: 1 1 0;
-  min-height: 0;
-  height: auto;
+  /* `height: 100%` is the canonical CM6 sizing — anchors the editor
+     to its bounded parent so .cm-scroller actually sees overflow.
+     An earlier `height: auto` attempt let the editor grow to content
+     and the scroller never engaged. */
+  height: 100%;
 }
 .editor-cm .cm-scroller {
   overflow: auto;
