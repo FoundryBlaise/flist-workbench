@@ -20,6 +20,7 @@ import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { AISetupWizard } from '../features/setup/AISetupWizard'
 import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
+import { AppContextMenu } from './AppContextMenu'
 import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { ChatPanel } from '../features/rag/ChatPanel'
@@ -418,6 +419,7 @@ export function AppLayout() {
 
   return (
     <div className="app">
+      <AppContextMenu />
       <header className="titlebar">
         <span className="app-name">● F-list Workbench</span>
         <span className="title-doc" data-testid="titlebar-doc">{titleDoc}</span>
