@@ -14,7 +14,7 @@ import labels as labels_store
 import logs as log_store
 import settings as settings_store
 
-from ._context import ToolError
+from ._context import ToolError, resolve_conversation, resolve_log_character
 from ._registry import TAG_LOGS, tool
 
 #: A single read can pull in a lot of text; keep the default modest and
@@ -59,6 +59,7 @@ def list_partners(
     Channel logs (names starting with `#`) are excluded by default —
     they are group chat, not roleplay between two characters.
     """
+    character = resolve_log_character(character)
     try:
         entries = log_store.list_partners(character)
     except log_store.LogDirError as exc:
@@ -94,6 +95,8 @@ def read_log_messages(
     Unlabeled. Long conversations run to tens of thousands of messages
     — page with `offset`.
     """
+    conv = resolve_conversation(character, partner)
+    character, partner = conv.character, conv.partner
     capped = max(1, min(MAX_MESSAGE_LIMIT, int(limit)))
     wanted = {str(l).strip().lower() for l in (labels or [])}
 
@@ -158,6 +161,8 @@ def search_logs(
     """
     if not (query or "").strip():
         raise ToolError("validation_failed", "query is empty")
+    conv = resolve_conversation(character, partner)
+    character, partner = conv.character, conv.partner
     try:
         hits = log_store.search_messages(character, partner, query)
     except log_store.LogDirError as exc:
@@ -188,6 +193,7 @@ def search_all_partners(
     character. Linear scan — slow on a large corpus."""
     if not (query or "").strip():
         raise ToolError("validation_failed", "query is empty")
+    character = resolve_log_character(character)
     try:
         result = log_store.search_all_partners(
             character, query, limit_per_partner=max(1, int(limit_per_partner))
@@ -282,6 +288,11 @@ def get_label_stats(
     ones ingest skips. Omitting `partner` walks every conversation of
     the character, which takes a moment on a large corpus.
     """
+    if partner:
+        conv = resolve_conversation(character, partner)
+        character, partner = conv.character, conv.partner
+    else:
+        character = resolve_log_character(character)
     settings_conn = settings_store.connect()
     labels_conn = labels_store.connect()
     try:
@@ -363,6 +374,7 @@ def list_aliases(character: str) -> dict[str, Any]:
     linking the names merges the conversations everywhere — the log
     viewer, label lookups and search scope.
     """
+    character = resolve_log_character(character, required=False)
     conn = labels_store.connect()
     try:
         groups = aliases_store.list_groups(conn, character)

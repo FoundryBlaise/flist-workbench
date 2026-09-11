@@ -29,7 +29,12 @@ import labels as labels_store
 import logs as log_store
 import settings as settings_store
 
-from ._context import ToolError, audit
+from ._context import (
+    ToolError,
+    audit,
+    resolve_conversation,
+    resolve_log_character,
+)
 from ._registry import TAG_LOGS, prompt, tool
 
 #: Batch size that keeps a request comfortably inside a small model's
@@ -136,6 +141,8 @@ def get_messages_to_classify(
     this batch, so you can tell the user up front how long this will
     take instead of looping silently.
     """
+    conv = resolve_conversation(character, partner)
+    character, partner = conv.character, conv.partner
     capped = max(1, min(MAX_BATCH, int(limit)))
     from services import classification
 
@@ -211,6 +218,8 @@ def set_message_labels(
     if not isinstance(items, list) or not items:
         raise ToolError("validation_failed", "items is empty")
 
+    conv = resolve_conversation(character, partner)
+    character, partner = conv.character, conv.partner
     messages = _read_conversation(character, partner)
     by_hash = {labels_store.msg_hash(m): m for m in messages}
 
@@ -294,6 +303,12 @@ def clear_labels(
     as anything a model decided. Rule-based hints keep firing. Ask the
     user before calling this with confirm=true.
     """
+    if partner:
+        conv = resolve_conversation(character, partner)
+        character, partner = conv.character, conv.partner
+    else:
+        character = resolve_log_character(character)
+
     if not confirm:
         scope = f"{partner} with {character}" if partner else f"every conversation of {character}"
         raise ToolError(
