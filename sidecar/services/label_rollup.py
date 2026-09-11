@@ -17,7 +17,7 @@ from logs import LogDirError, list_characters, list_partners, read_messages
 
 
 def rollup() -> dict[str, Any]:
-    """Aggregate IC/OOC/Unlabeled/Failed counts across every character.
+    """Aggregate IC/OOC/Unlabeled counts across every character.
 
     Raises `LogDirError` when the configured F-Chat data directory is
     missing; callers decide whether that is a 404 or a soft failure.
@@ -30,7 +30,6 @@ def rollup() -> dict[str, Any]:
         labels_store.LABEL_IC: 0,
         labels_store.LABEL_OOC: 0,
         labels_store.LABEL_UNLABELED: 0,
-        labels_store.LABEL_FAILED: 0,
     }
     # Track manual-override count separately — it's a useful "how much
     # of this did I curate" signal independent of IC/OOC totals.
@@ -73,7 +72,6 @@ def rollup() -> dict[str, Any]:
         "ic": totals[labels_store.LABEL_IC],
         "ooc": totals[labels_store.LABEL_OOC],
         "unlabeled": totals[labels_store.LABEL_UNLABELED],
-        "failed": totals[labels_store.LABEL_FAILED],
         "manual": manual_overrides,
         "total": total,
         "character_count": len(characters),

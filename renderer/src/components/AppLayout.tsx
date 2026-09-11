@@ -18,10 +18,7 @@ import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
-import { AISetupWizard } from '../features/setup/AISetupWizard'
-import { ClassifyDialog } from '../features/labels/ClassifyDialog'
 import { IngestDialog } from '../features/rag/IngestDialog'
-import { ChatPanel } from '../features/rag/ChatPanel'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
@@ -39,22 +36,14 @@ export function AppLayout() {
   const browseBackup = useStore((s) => s.flistBrowseBackup)
   const crossSearchOpen = useStore((s) => s.crossSearchOpen)
   const setCrossSearchOpen = useStore((s) => s.setCrossSearchOpen)
-  const classifyTarget = useStore((s) => s.classifyTarget)
-  const openClassify = useStore((s) => s.openClassify)
-  const closeClassify = useStore((s) => s.closeClassify)
   const ingestTarget = useStore((s) => s.ingestTarget)
   const openIngest = useStore((s) => s.openIngest)
   const closeIngest = useStore((s) => s.closeIngest)
-  const chatPanelOpen = useStore((s) => s.chatPanelOpen)
-  const toggleChatPanel = useStore((s) => s.toggleChatPanel)
   const flistSignInOpen = useStore((s) => s.flistSignInOpen)
   const flistCloseSignIn = useStore((s) => s.flistCloseSignIn)
   const flistOpenSignIn = useStore((s) => s.flistOpenSignIn)
   const flistSession = useStore((s) => s.flistSession)
   const flistRoster = useStore((s) => s.flistRoster)
-  const aiSetupOpen = useStore((s) => s.aiSetupOpen)
-  const openAiSetup = useStore((s) => s.openAiSetup)
-  const closeAiSetup = useStore((s) => s.closeAiSetup)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -194,10 +183,11 @@ export function AppLayout() {
     return () => window.removeEventListener('flist-session-expired', onExpired)
   }, [])
 
-  // First-run detection: surface a non-blocking toast pointing at AI
-  // Setup when there's nothing indexed and no labels endpoint override.
-  // Less hostile than auto-opening the wizard; the user can dismiss
-  // permanently or click through. Runs once on mount per session.
+  // First-run detection: a non-blocking toast pointing at Settings →
+  // MCP. Workbench has no model of its own to configure any more, so
+  // the one thing a new user needs to know is that a model can drive
+  // it — and where to find the connection details. Shown once, when
+  // nothing has been indexed yet.
   useEffect(() => {
     let cancelled = false
     const KEY = 'workbench.firstRunDismissed'
@@ -208,16 +198,9 @@ export function AppLayout() {
     }
     void (async () => {
       try {
-        const [s, rag] = await Promise.all([api.settingsGet(), api.ragStatus()])
+        const rag = await api.ragStatus()
         if (cancelled) return
-        const labelsDefault =
-          s.labels.llm_endpoint === s.labels.defaults.llm_endpoint
-        const ragDefault =
-          s.rag.embed_endpoint === s.rag.defaults.embed_endpoint &&
-          s.rag.chat_endpoint === s.rag.defaults.chat_endpoint
-        if (labelsDefault && ragDefault && rag.chunk_count === 0) {
-          setFirstRunToast(true)
-        }
+        if (rag.chunk_count === 0) setFirstRunToast(true)
       } catch {
         // Sidecar unreachable — health card already covers that case.
       }
@@ -248,23 +231,22 @@ export function AppLayout() {
   }
 
   // Show only when the user clearly hasn't found F-list integration yet:
-  // not signed in, no archived characters, and they haven't dismissed it.
-  // Suppressed while any modal is open (sign-in, AI setup) so we don't
-  // stack toasts above modals.
+  // not signed in, no archived characters, and they haven't dismissed
+  // it. Suppressed while the sign-in modal or the other toast is up so
+  // we don't stack notices.
   const showFlistHint =
     !flistHintDismissed
     && !flistSession.active
     && flistRoster.length === 0
     && !flistSignInOpen
-    && !aiSetupOpen
     && !firstRunToast
 
   // Push activeChar/activePartner state to the native menu so items
   // requiring a selection grey out instead of silently no-op'ing.
   useEffect(() => {
     window.workbench?.setMenuState?.({
-      classifyCurrent: !!(activeChar && activePartner),
-      classifyCharacter: !!activeChar,
+      ingestCurrent: !!(activeChar && activePartner),
+      ingestCharacter: !!activeChar,
       flistSessionActive: !!flistSession.active
     })
   }, [activeChar, activePartner, flistSession.active])
@@ -292,25 +274,6 @@ export function AppLayout() {
         case 'settings':
           setSettingsOpen(true)
           break
-        case 'classify-current':
-          if (activeChar && activePartner) {
-            openClassify(
-              { character: activeChar, partner: activePartner },
-              `${displayPartner(activePartner)} with ${displayName(activeChar)}`
-            )
-          }
-          break
-        case 'classify-character':
-          if (activeChar) {
-            openClassify(
-              { character: activeChar },
-              `All partners for ${displayName(activeChar)}`
-            )
-          }
-          break
-        case 'classify-all':
-          openClassify({}, 'All characters, all partners')
-          break
         case 'ingest-current':
           if (activeChar && activePartner) {
             openIngest(
@@ -330,21 +293,11 @@ export function AppLayout() {
         case 'ingest-all':
           openIngest({}, 'All characters, all partners')
           break
-        case 'ai-setup':
-          openAiSetup()
-          break
         case 'flist-activity':
           setActivityOpen(true)
           break
         case 'restore-userscript-help':
           setUserscriptHelpOpen(true)
-          break
-        case 'chat-toggle':
-          // Opening the chat panel also flips to logs mode — chat is
-          // contextual to the log viewer, so launching it from the
-          // editor surface should put the user where the panel lives.
-          if (mode !== 'logs') setMode('logs')
-          toggleChatPanel()
           break
         case 'backup-all':
           void useStore.getState().flistBackupAll()
@@ -356,10 +309,7 @@ export function AppLayout() {
     setCrossSearchOpen,
     activeChar,
     activePartner,
-    openClassify,
-    openIngest,
-    toggleChatPanel,
-    mode
+    openIngest
   ])
 
   // The header centre piece identifies what the user is currently
@@ -396,26 +346,27 @@ export function AppLayout() {
           sidecar: {health}
         </span>
       </header>
-      {firstRunToast && !aiSetupOpen && (
+      {firstRunToast && (
         <div
           className="first-run-toast"
           role="status"
           data-testid="first-run-toast"
         >
           <span>
-            <strong>First time?</strong> Configure your local AI in{' '}
-            <strong>Tools → AI Setup…</strong> before classifying or indexing.
+            <strong>First time?</strong> A local model can read and edit
+            your characters through this app — connection details are in{' '}
+            <strong>Settings → MCP</strong>.
           </span>
           <button
             type="button"
             className="first-run-toast-open"
             onClick={() => {
-              openAiSetup()
+              setSettingsOpen(true)
               dismissFirstRun(true)
             }}
             data-testid="first-run-toast-open"
           >
-            Open AI Setup
+            Open Settings
           </button>
           <button
             type="button"
@@ -467,7 +418,6 @@ export function AppLayout() {
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-      {aiSetupOpen && <AISetupWizard onClose={closeAiSetup} />}
       {activityOpen && <ActivityLogModal onClose={() => setActivityOpen(false)} />}
       {userscriptHelpOpen && (
         <UserscriptHelpModal onClose={() => setUserscriptHelpOpen(false)} />
@@ -482,14 +432,6 @@ export function AppLayout() {
           }}
         />
       )}
-      {classifyTarget && (
-        <ClassifyDialog
-          key={`${classifyTarget.scope.character ?? '*'}::${classifyTarget.scope.partner ?? '*'}`}
-          scope={classifyTarget.scope}
-          scopeLabel={classifyTarget.label}
-          onClose={closeClassify}
-        />
-      )}
       {ingestTarget && (
         <IngestDialog
           key={`ingest::${ingestTarget.forceRewipe ? 'wipe' : 'add'}::${ingestTarget.scope.character ?? '*'}::${ingestTarget.scope.partner ?? '*'}`}
@@ -499,21 +441,14 @@ export function AppLayout() {
           onClose={closeIngest}
         />
       )}
-      <main
-        className={`main main-${mode}${
-          mode === 'logs' && chatPanelOpen ? ' main-logs-with-chat' : ''
-        }`}
-      >
+      <main className={`main main-${mode}`}>
         <Sidebar />
         {mode === 'editor' ? (
           <EditorWorkspace />
         ) : crossSearchOpen ? (
           <CrossSearch onClose={() => setCrossSearchOpen(false)} />
         ) : (
-          <>
-            <LogViewer />
-            {chatPanelOpen && <ChatPanel />}
-          </>
+          <LogViewer />
         )}
       </main>
     </div>

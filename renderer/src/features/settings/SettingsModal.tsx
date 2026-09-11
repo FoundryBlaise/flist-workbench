@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   type LabelsSettings,
-  type PromptPreset,
   type McpInfo,
   type RagSettings,
   type RagStatus
@@ -58,7 +57,7 @@ type SectionId =
   | 'flist'
   | 'backups'
   | 'labels'
-  | 'chat'
+  | 'retrieval'
   | 'embedding'
   | 'mcp'
   | 'security'
@@ -67,8 +66,8 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
   { id: 'flist', label: 'F-list', subtitle: 'Sign-in refresh + snapshot behaviour' },
   { id: 'backups', label: 'Backups', subtitle: 'Scheduled-on-start sweep + retention' },
-  { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
-  { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
+  { id: 'labels', label: 'Labels', subtitle: 'IC / OOC coverage + rules' },
+  { id: 'retrieval', label: 'Retrieval', subtitle: 'How log search ranks results' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
   { id: 'mcp', label: 'MCP', subtitle: 'Let a model drive Workbench' },
   { id: 'security', label: 'Security', subtitle: 'Browser-extension pairing' }
@@ -115,12 +114,6 @@ type Draft = {
   fchat_data_dir: string
   labels: {
     threshold_chars: string
-    llm_endpoint: string
-    llm_model: string
-    llm_api_key: string
-    system_prompt: string
-    context_before: string
-    context_after: string
   }
   rag: {
     embed_endpoint: string
@@ -128,10 +121,6 @@ type Draft = {
     embed_api_key: string
     embed_query_prefix: string
     embed_document_prefix: string
-    chat_endpoint: string
-    chat_model: string
-    chat_api_key: string
-    chat_system_prompt: string
     top_k: string
     rerank_candidates: string
     neighbors: string
@@ -142,10 +131,7 @@ type Draft = {
     rerank_min_ratio: string
     hybrid_enabled: boolean
     hybrid_bm25_candidates: string
-    multiquery_enabled: boolean
-    multiquery_variants: string
-    chat_num_ctx: string
-    chat_embed_keep_alive: string
+    embed_keep_alive: string
     chunk_max_chars: string
     chunk_soft_split_chars: string
     chunk_overlap_msgs: string
@@ -160,13 +146,7 @@ function buildDraft(state: SettingsState): Draft {
   return {
     fchat_data_dir: state.fchat_data_dir ?? '',
     labels: {
-      threshold_chars: String(state.labels.threshold_chars),
-      llm_endpoint: state.labels.llm_endpoint,
-      llm_model: state.labels.llm_model,
-      llm_api_key: state.labels.llm_api_key,
-      system_prompt: state.labels.system_prompt,
-      context_before: String(state.labels.context_before),
-      context_after: String(state.labels.context_after)
+      threshold_chars: String(state.labels.threshold_chars)
     },
     rag: {
       embed_endpoint: state.rag.embed_endpoint,
@@ -174,10 +154,6 @@ function buildDraft(state: SettingsState): Draft {
       embed_api_key: state.rag.embed_api_key,
       embed_query_prefix: state.rag.embed_query_prefix,
       embed_document_prefix: state.rag.embed_document_prefix,
-      chat_endpoint: state.rag.chat_endpoint,
-      chat_model: state.rag.chat_model,
-      chat_api_key: state.rag.chat_api_key,
-      chat_system_prompt: state.rag.chat_system_prompt,
       top_k: String(state.rag.top_k),
       rerank_candidates: String(state.rag.rerank_candidates),
       neighbors: String(state.rag.neighbors),
@@ -185,10 +161,7 @@ function buildDraft(state: SettingsState): Draft {
       rerank_min_ratio: String(state.rag.rerank_min_ratio),
       hybrid_enabled: state.rag.hybrid_enabled,
       hybrid_bm25_candidates: String(state.rag.hybrid_bm25_candidates),
-      multiquery_enabled: state.rag.multiquery_enabled,
-      multiquery_variants: String(state.rag.multiquery_variants),
-      chat_num_ctx: String(state.rag.chat_num_ctx),
-      chat_embed_keep_alive: state.rag.chat_embed_keep_alive,
+      embed_keep_alive: state.rag.embed_keep_alive,
       chunk_max_chars: String(state.rag.chunk_max_chars),
       chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
       chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
@@ -206,35 +179,22 @@ function buildDraft(state: SettingsState): Draft {
 function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean> {
   const generalDirty = draft.fchat_data_dir.trim() !== baseline.fchat_data_dir.trim()
   const labelsDirty =
-    draft.labels.threshold_chars !== baseline.labels.threshold_chars ||
-    draft.labels.llm_endpoint !== baseline.labels.llm_endpoint ||
-    draft.labels.llm_model !== baseline.labels.llm_model ||
-    draft.labels.llm_api_key !== baseline.labels.llm_api_key ||
-    draft.labels.system_prompt !== baseline.labels.system_prompt ||
-    draft.labels.context_before !== baseline.labels.context_before ||
-    draft.labels.context_after !== baseline.labels.context_after
-  const chatDirty =
-    draft.rag.chat_endpoint !== baseline.rag.chat_endpoint ||
-    draft.rag.chat_model !== baseline.rag.chat_model ||
-    draft.rag.chat_api_key !== baseline.rag.chat_api_key ||
-    draft.rag.chat_system_prompt !== baseline.rag.chat_system_prompt ||
+    draft.labels.threshold_chars !== baseline.labels.threshold_chars
+  const retrievalDirty =
     draft.rag.top_k !== baseline.rag.top_k ||
     draft.rag.rerank_candidates !== baseline.rag.rerank_candidates ||
     draft.rag.neighbors !== baseline.rag.neighbors ||
     draft.rag.rerank_model !== baseline.rag.rerank_model ||
     draft.rag.rerank_min_ratio !== baseline.rag.rerank_min_ratio ||
     draft.rag.hybrid_enabled !== baseline.rag.hybrid_enabled ||
-    draft.rag.hybrid_bm25_candidates !== baseline.rag.hybrid_bm25_candidates ||
-    draft.rag.multiquery_enabled !== baseline.rag.multiquery_enabled ||
-    draft.rag.multiquery_variants !== baseline.rag.multiquery_variants ||
-    draft.rag.chat_num_ctx !== baseline.rag.chat_num_ctx
+    draft.rag.hybrid_bm25_candidates !== baseline.rag.hybrid_bm25_candidates
   const embeddingDirty =
     draft.rag.embed_endpoint !== baseline.rag.embed_endpoint ||
     draft.rag.embed_model !== baseline.rag.embed_model ||
     draft.rag.embed_api_key !== baseline.rag.embed_api_key ||
     draft.rag.embed_query_prefix !== baseline.rag.embed_query_prefix ||
     draft.rag.embed_document_prefix !== baseline.rag.embed_document_prefix ||
-    draft.rag.chat_embed_keep_alive !== baseline.rag.chat_embed_keep_alive ||
+    draft.rag.embed_keep_alive !== baseline.rag.embed_keep_alive ||
     draft.rag.chunk_max_chars !== baseline.rag.chunk_max_chars ||
     draft.rag.chunk_soft_split_chars !== baseline.rag.chunk_soft_split_chars ||
     draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
@@ -248,7 +208,7 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     flist: false,
     backups: backupsDirty,
     labels: labelsDirty,
-    chat: chatDirty,
+    retrieval: retrievalDirty,
     embedding: embeddingDirty,
     // Read-only panes — nothing to save, so never dirty.
     mcp: false,
@@ -257,7 +217,7 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
 }
 
 function anyDirty(d: Record<SectionId, boolean>): boolean {
-  return d.general || d.labels || d.chat || d.embedding || d.backups
+  return d.general || d.labels || d.retrieval || d.embedding || d.backups
 }
 
 const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
@@ -354,64 +314,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     return () => cancelAnimationFrame(id)
   }, [status, draft])
 
-  // When true, edits to ANY endpoint field (labels.llm_endpoint /
-  // rag.chat_endpoint / rag.embed_endpoint) propagate to all three.
-  // Persisted in localStorage because this is a UI-mode preference,
-  // not a server-side setting — no sidecar round-trip needed.
-  const [mirrorEndpoints, setMirrorEndpoints] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('workbench.mirrorEndpoints') === '1'
-    } catch {
-      return false
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        'workbench.mirrorEndpoints',
-        mirrorEndpoints ? '1' : '0'
-      )
-    } catch {
-      // Storage may be unavailable in private mode; toggle still works
-      // in-session.
-    }
-  }, [mirrorEndpoints])
-
   const updateLabels = (patch: Partial<Draft['labels']>) =>
-    setDraft((d) => {
-      if (!d) return d
-      const next = { ...d, labels: { ...d.labels, ...patch } }
-      if (mirrorEndpoints && 'llm_endpoint' in patch && patch.llm_endpoint !== undefined) {
-        next.rag = {
-          ...next.rag,
-          chat_endpoint: patch.llm_endpoint,
-          embed_endpoint: patch.llm_endpoint
-        }
-      }
-      return next
-    })
+    setDraft((d) => (d ? { ...d, labels: { ...d.labels, ...patch } } : d))
   const updateRag = (patch: Partial<Draft['rag']>) =>
-    setDraft((d) => {
-      if (!d) return d
-      const next = { ...d, rag: { ...d.rag, ...patch } }
-      if (mirrorEndpoints) {
-        const v =
-          'chat_endpoint' in patch && patch.chat_endpoint !== undefined
-            ? patch.chat_endpoint
-            : 'embed_endpoint' in patch && patch.embed_endpoint !== undefined
-              ? patch.embed_endpoint
-              : null
-        if (v !== null) {
-          next.rag = {
-            ...next.rag,
-            chat_endpoint: v,
-            embed_endpoint: v
-          }
-          next.labels = { ...next.labels, llm_endpoint: v }
-        }
-      }
-      return next
-    })
+    setDraft((d) => (d ? { ...d, rag: { ...d.rag, ...patch } } : d))
   const updateGeneral = (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d))
   const updateBackups = (patch: Partial<Draft['backups']>) =>
@@ -425,8 +331,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     // confirm the first time per host, then remember the
     // acknowledgement so we don't nag on every Save.
     const candidateEndpoints: string[] = []
-    if (dirtyByDraft.labels) candidateEndpoints.push(draft.labels.llm_endpoint)
-    if (dirtyByDraft.chat) candidateEndpoints.push(draft.rag.chat_endpoint)
     if (dirtyByDraft.embedding) candidateEndpoints.push(draft.rag.embed_endpoint)
     const unconsented = candidateEndpoints.filter(
       (ep) =>
@@ -470,27 +374,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         payload.fchat_data_dir = draft.fchat_data_dir.trim() || null
       }
       if (dirtyByDraft.labels) {
-        payload.labels = {
-          threshold_chars: Math.floor(parsedThreshold),
-          llm_endpoint: draft.labels.llm_endpoint,
-          llm_model: draft.labels.llm_model,
-          llm_api_key: draft.labels.llm_api_key,
-          system_prompt: draft.labels.system_prompt,
-          context_before: clampInt(
-            draft.labels.context_before,
-            0,
-            10,
-            state.labels.context_before
-          ),
-          context_after: clampInt(
-            draft.labels.context_after,
-            0,
-            10,
-            state.labels.context_after
-          )
-        }
+        payload.labels = { threshold_chars: Math.floor(parsedThreshold) }
       }
-      if (dirtyByDraft.chat || dirtyByDraft.embedding) {
+      if (dirtyByDraft.retrieval || dirtyByDraft.embedding) {
         const nextChunkMax = clampInt(
           draft.rag.chunk_max_chars,
           500,
@@ -503,10 +389,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           embed_api_key: draft.rag.embed_api_key,
           embed_query_prefix: draft.rag.embed_query_prefix,
           embed_document_prefix: draft.rag.embed_document_prefix,
-          chat_endpoint: draft.rag.chat_endpoint,
-          chat_model: draft.rag.chat_model,
-          chat_api_key: draft.rag.chat_api_key,
-          chat_system_prompt: draft.rag.chat_system_prompt,
           rerank_model: draft.rag.rerank_model,
           rerank_candidates: clampInt(
             draft.rag.rerank_candidates,
@@ -529,20 +411,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             200,
             state.rag.hybrid_bm25_candidates
           ),
-          multiquery_enabled: draft.rag.multiquery_enabled,
-          multiquery_variants: clampInt(
-            draft.rag.multiquery_variants,
-            2,
-            5,
-            state.rag.multiquery_variants
-          ),
-          chat_num_ctx: clampInt(
-            draft.rag.chat_num_ctx,
-            0,
-            131072,
-            state.rag.chat_num_ctx
-          ),
-          chat_embed_keep_alive: draft.rag.chat_embed_keep_alive.trim().slice(0, 32),
+          embed_keep_alive: draft.rag.embed_keep_alive.trim().slice(0, 32),
           chunk_max_chars: nextChunkMax,
           chunk_soft_split_chars: clampInt(
             draft.rag.chunk_soft_split_chars,
@@ -647,8 +516,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     draft={draft}
                     onChange={updateGeneral}
                     firstFieldRef={firstFieldRef}
-                    mirrorEndpoints={mirrorEndpoints}
-                    onMirrorEndpointsChange={setMirrorEndpoints}
                   />
                 )}
                 {activeSection === 'flist' && <FlistPane />}
@@ -677,8 +544,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onChange={updateLabels}
                   />
                 )}
-                {activeSection === 'chat' && (
-                  <ChatPane
+                {activeSection === 'retrieval' && (
+                  <RetrievalPane
                     rag={state.rag}
                     draft={draft.rag}
                     onChange={updateRag}
@@ -1026,16 +893,12 @@ function GeneralPane({
   state,
   draft,
   onChange,
-  firstFieldRef,
-  mirrorEndpoints,
-  onMirrorEndpointsChange
+  firstFieldRef
 }: {
   state: SettingsState
   draft: Draft
   onChange: (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) => void
   firstFieldRef: React.RefObject<HTMLInputElement>
-  mirrorEndpoints: boolean
-  onMirrorEndpointsChange: (v: boolean) => void
 }) {
   const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
   const envLocked = state.fchat_data_dir_env_locked
@@ -1122,31 +985,6 @@ function GeneralPane({
             </p>
           )}
         </div>
-      </div>
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">Inference endpoints</h3>
-        <p className="settings-help">
-          Labels, RAG chat, and embedding each have their own endpoint
-          field. Most users run one LM Studio with everything loaded side
-          by side — flip this on and edits to any endpoint propagate to
-          all three at once.
-        </p>
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
-            checked={mirrorEndpoints}
-            onChange={(e) => onMirrorEndpointsChange(e.target.checked)}
-            data-testid="settings-mirror-endpoints"
-          />
-          <span>
-            <strong>Use one endpoint for Labels / Chat / Embedding</strong>
-            <span className="settings-meta">
-              Editing any endpoint field syncs the other two. Toggle off
-              to set them independently.
-            </span>
-          </span>
-        </label>
       </div>
 
       <div className="settings-section">
@@ -1824,24 +1662,11 @@ function LabelsPane({
   draft: Draft['labels']
   onChange: (patch: Partial<Draft['labels']>) => void
 }) {
-  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>(
-    'idle'
-  )
-  const [testResult, setTestResult] = useState<{
-    ok: boolean
-    elapsed_ms: number
-    error?: string | null
-    raw?: string
-    parsed?: { label: string; reason: string } | null
-  } | null>(null)
-
   type Rollup = Awaited<ReturnType<typeof api.labelsRollup>>
-  type JobHistory = Awaited<ReturnType<typeof api.labelsJobHistory>>
   const [rollup, setRollup] = useState<Rollup | null>(null)
   const [rollupStatus, setRollupStatus] = useState<'idle' | 'loading' | 'error'>(
     'loading'
   )
-  const [history, setHistory] = useState<JobHistory | null>(null)
   const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'done' | 'error'>(
     'idle'
   )
@@ -1858,24 +1683,14 @@ function LabelsPane({
     }
   }
 
-  const refreshHistory = async () => {
-    try {
-      const h = await api.labelsJobHistory(20)
-      setHistory(h)
-    } catch {
-      // History is cosmetic; silent failure.
-    }
-  }
-
   useEffect(() => {
     void refreshRollup()
-    void refreshHistory()
   }, [])
 
   const triggerResetAll = async () => {
     const confirmed = window.confirm(
       'Reset ALL labels across every character?\n\n' +
-        'Every LLM and manual label for every conversation reverts to ' +
+        'Every stored IC/OOC verdict for every conversation reverts to ' +
         'Unlabeled. Rule-based hints (short messages, "((", etc.) keep ' +
         'firing as OOC. This cannot be undone.'
     )
@@ -1892,40 +1707,11 @@ function LabelsPane({
     }
   }
 
-  const runTest = async () => {
-    setTestStatus('running')
-    setTestResult(null)
-    try {
-      const result = await api.labelsTestConnection({
-        llm_endpoint: draft.llm_endpoint,
-        llm_model: draft.llm_model,
-        llm_api_key: draft.llm_api_key,
-        system_prompt: draft.system_prompt
-      })
-      setTestResult(result)
-      setTestStatus(result.ok ? 'ok' : 'fail')
-    } catch (err) {
-      setTestResult({
-        ok: false,
-        elapsed_ms: 0,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      setTestStatus('fail')
-    }
-  }
-
-  const isPromptDefault = draft.system_prompt === labels.defaults.system_prompt
-  const testText = testResult
-    ? testResult.ok
-      ? `OK · ${testResult.elapsed_ms} ms · ${testResult.parsed?.label}`
-      : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`
-    : 'not run yet'
-
   return (
     <>
       <PaneHeader
-        title="Labels — IC / OOC classifier"
-        subtitle="Settings for the on-demand classifier. Short messages and `((…` auto-OOC by rule; everything else stays Unlabeled until you run Classify on a conversation."
+        title="Labels — IC / OOC"
+        subtitle="Only labelled messages are indexed for search. Short messages and `((…` are OOC by rule; the rest is judged by a model you connect over MCP, or by you."
       />
 
       <div className="settings-section" data-testid="labels-rollup">
@@ -1946,12 +1732,16 @@ function LabelsPane({
             <strong>{rollup.ooc.toLocaleString()}</strong> OOC ·{' '}
             <strong>{rollup.manual.toLocaleString()}</strong> manual ·{' '}
             <strong>{rollup.unlabeled.toLocaleString()}</strong> Unlabeled
-            {rollup.failed > 0 && (
-              <>
-                {' '}·{' '}
-                <strong>{rollup.failed.toLocaleString()}</strong> Failed
-              </>
-            )}
+          </p>
+        )}
+        {rollup && rollup.unlabeled > 0 && (
+          <p className="settings-help">
+            Unlabeled messages are skipped by ingest — an unjudged message
+            could be either roleplay or player chatter, and indexing the
+            latter poisons search. To clear the backlog, ask a model
+            connected through <strong>Settings → MCP</strong> to classify
+            the conversation, or right-click individual messages in the log
+            viewer.
           </p>
         )}
         <div className="settings-actions">
@@ -1973,16 +1763,16 @@ function LabelsPane({
         </div>
       </div>
 
-      <LabelsHistorySection history={history} />
-
       <div className="settings-section">
+        <h3 className="settings-section-title">Rules</h3>
         <div className="settings-field">
           <label className="settings-label" htmlFor="labels-threshold">
             OOC threshold (chars)
           </label>
           <p className="settings-help">
-            Chat messages shorter than this many characters are auto-classified
-            as OOC without asking the LLM.
+            Chat messages shorter than this many characters are OOC without
+            asking anyone. Applied at read time, so changing it takes effect
+            immediately — no re-labelling needed.
           </p>
           <div className="settings-row">
             <input
@@ -2005,264 +1795,16 @@ function LabelsPane({
             </button>
           </div>
         </div>
-
-        <div className="settings-field">
-          <label className="settings-label">Context window (surrounding messages)</label>
-          <p className="settings-help">
-            How many messages before and after the target are attached as{' '}
-            <code>KONTEXT</code> to each classify call. Defaults to{' '}
-            <code>1 / 1</code> — wider windows cause the model to latch onto the
-            surrounding cluster and bleed across IC/OOC boundaries. If you see
-            boundary messages mislabeled, drop to <code>0 / 0</code>, not up.
-            Range 0–10 each.
-          </p>
-          <div className="settings-row">
-            <label htmlFor="labels-ctx-before" className="settings-row-label">
-              Before
-            </label>
-            <input
-              id="labels-ctx-before"
-              type="number"
-              min={0}
-              max={10}
-              className="settings-input settings-input-narrow"
-              value={draft.context_before}
-              onChange={(e) => onChange({ context_before: e.target.value })}
-              data-testid="labels-context-before-input"
-            />
-            <label htmlFor="labels-ctx-after" className="settings-row-label">
-              After
-            </label>
-            <input
-              id="labels-ctx-after"
-              type="number"
-              min={0}
-              max={10}
-              className="settings-input settings-input-narrow"
-              value={draft.context_after}
-              onChange={(e) => onChange({ context_after: e.target.value })}
-              data-testid="labels-context-after-input"
-            />
-            <button
-              type="button"
-              className="settings-clear"
-              onClick={() =>
-                onChange({
-                  context_before: String(labels.defaults.context_before),
-                  context_after: String(labels.defaults.context_after)
-                })
-              }
-            >
-              Default ({labels.defaults.context_before} / {labels.defaults.context_after})
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">Inference</h3>
-        <EndpointField
-          id="labels-endpoint"
-          value={draft.llm_endpoint}
-          defaultUrl={labels.defaults.llm_endpoint}
-          onChange={(v) => onChange({ llm_endpoint: v })}
-          help={
-            <>
-              OpenAI-compatible URL. The classifier posts to{' '}
-              <code>&lt;endpoint&gt;/chat/completions</code>.
-            </>
-          }
-          testId="labels-endpoint-input"
-        />
-        <ModelField
-          id="labels-model"
-          value={draft.llm_model}
-          defaultValue={labels.defaults.llm_model}
-          endpoint={draft.llm_endpoint}
-          onChange={(v) => onChange({ llm_model: v })}
-          help={
-            <>The model identifier the server expects. <strong>Discover</strong> queries the endpoint for loaded models.</>
-          }
-          testId="labels-model-input"
-        />
-        <ApiKeyField
-          id="labels-api-key"
-          value={draft.llm_api_key}
-          onChange={(v) => onChange({ llm_api_key: v })}
-          testId="labels-api-key-input"
-        />
-
-        <div className="settings-field">
-          <label className="settings-label">Test connection</label>
-          <p className="settings-help">
-            One canned classification roundtrip against the endpoint + model +
-            prompt above. Useful before kicking off a long classify job.
-          </p>
-          <div className="settings-actions">
-            <button
-              type="button"
-              className="settings-pick"
-              onClick={() => void runTest()}
-              disabled={testStatus === 'running'}
-              data-testid="labels-test-connection"
-            >
-              {testStatus === 'running' ? 'Testing…' : 'Test connection'}
-            </button>
-            {testResult && (
-              <TestStatusPill
-                status={testStatus}
-                text={testText}
-                testId="labels-test-result"
-              />
-            )}
-          </div>
-          {testResult && testResult.raw && !testResult.ok && (
-            <p className="settings-meta classify-last-error">
-              Raw response: <code>{testResult.raw}</code>
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">System prompt</h3>
         <p className="settings-help">
-          Sent as the system message before each target message + its context
-          window.
+          Two more rules always apply and are not configurable: an empty
+          message is OOC, and a message starting with <code>((</code> is OOC.
         </p>
-        <PromptPresetPicker
-          presets={labels.prompt_presets}
-          currentBody={draft.system_prompt}
-          onPick={(body) => onChange({ system_prompt: body })}
-        />
-        <textarea
-          id="labels-prompt"
-          className="settings-textarea"
-          rows={14}
-          value={draft.system_prompt}
-          onChange={(e) => onChange({ system_prompt: e.target.value })}
-          data-testid="labels-prompt-input"
-        />
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() => onChange({ system_prompt: labels.defaults.system_prompt })}
-            disabled={isPromptDefault}
-          >
-            Reset to default prompt
-          </button>
-          <span className="settings-meta">
-            {draft.system_prompt.length.toLocaleString()} chars
-          </span>
-        </div>
       </div>
     </>
   )
 }
 
-// Single-select dropdown that swaps the system_prompt textarea content
-// for one of the bundled presets. The "(custom)" option shows when the
-// current body doesn't match any preset verbatim — i.e. the user has
-// edited the prompt after picking a preset; selecting a preset replaces
-// the body without confirmation, but the user can still Undo via the
-// textarea's native edit history.
-function LabelsHistorySection({
-  history
-}: {
-  history: Awaited<ReturnType<typeof api.labelsJobHistory>> | null
-}) {
-  if (!history || history.jobs.length === 0) return null
-  return (
-    <div className="settings-section" data-testid="labels-history">
-      <h3 className="settings-section-title">Recent classify runs</h3>
-      <p className="settings-help">
-        Persistent across sidecar restarts — the live progress for in-flight
-        jobs lives in the Classify panel instead.
-      </p>
-      <ul className="settings-history-list">
-        {history.jobs.map((job) => {
-          const scopeLabel = formatJobScope(job.scope)
-          const when = new Date(job.finished_at * 1000).toLocaleString()
-          const failedNote = job.failed > 0 ? ` · ${job.failed} failed` : ''
-          return (
-            <li key={job.id} className={`settings-history-row state-${job.state}`}>
-              <span className="settings-history-when">{when}</span>
-              <span className="settings-history-scope">{scopeLabel}</span>
-              <span className="settings-history-counts">
-                {job.classified.toLocaleString()} / {job.total.toLocaleString()}
-                {failedNote}
-              </span>
-              <span className={`settings-history-state state-${job.state}`}>
-                {job.state}
-              </span>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
-function formatJobScope(scope: { character?: string; partner?: string }): string {
-  if (scope.character && scope.partner) {
-    return `${scope.partner} × ${scope.character}`
-  }
-  if (scope.character) return `all partners × ${scope.character}`
-  return 'all characters'
-}
-
-function PromptPresetPicker({
-  presets,
-  currentBody,
-  onPick
-}: {
-  presets: PromptPreset[]
-  currentBody: string
-  onPick: (body: string) => void
-}) {
-  if (presets.length === 0) return null
-  const matched = presets.find((p) => p.body === currentBody)
-  const selectedId = matched?.id ?? ''
-  const selectedDesc = matched?.description ?? 'Edited prompt — no preset selected.'
-  return (
-    <div className="settings-row" style={{ marginBottom: 8 }}>
-      <label
-        htmlFor="labels-prompt-preset"
-        className="settings-row-label settings-row-label-wide"
-      >
-        Preset
-      </label>
-      <select
-        id="labels-prompt-preset"
-        className="settings-input"
-        value={selectedId}
-        onChange={(e) => {
-          const id = e.target.value
-          const next = presets.find((p) => p.id === id)
-          if (next) onPick(next.body)
-        }}
-        data-testid="labels-prompt-preset"
-      >
-        {!matched && (
-          <option value="" disabled>
-            (custom — edited)
-          </option>
-        )}
-        {presets.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.label} · {p.language}
-          </option>
-        ))}
-      </select>
-      <span className="settings-meta" style={{ marginLeft: 8 }}>
-        {selectedDesc}
-      </span>
-    </div>
-  )
-}
-
-function ChatPane({
+function RetrievalPane({
   rag,
   draft,
   onChange
@@ -2271,152 +1813,22 @@ function ChatPane({
   draft: Draft['rag']
   onChange: (patch: Partial<Draft['rag']>) => void
 }) {
-  const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>(
-    'idle'
-  )
-  const [testResult, setTestResult] = useState<{
-    ok: boolean
-    elapsed_ms: number
-    error: string | null
-    raw?: string
-  } | null>(null)
-
-  const runTest = async () => {
-    setTestStatus('running')
-    setTestResult(null)
-    try {
-      const result = await api.ragTestChat({
-        chat_endpoint: draft.chat_endpoint,
-        chat_model: draft.chat_model,
-        chat_api_key: draft.chat_api_key,
-        chat_system_prompt: draft.chat_system_prompt
-      })
-      setTestResult(result)
-      setTestStatus(result.ok ? 'ok' : 'fail')
-    } catch (err) {
-      setTestResult({
-        ok: false,
-        elapsed_ms: 0,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      setTestStatus('fail')
-    }
-  }
-
-  const testText = testResult
-    ? testResult.ok
-      ? `OK · ${testResult.elapsed_ms} ms`
-      : `${testResult.error ?? 'failed'} · ${testResult.elapsed_ms} ms`
-    : 'not run yet'
-  const isChatPromptDefault =
-    draft.chat_system_prompt === rag.defaults.chat_system_prompt
-
   return (
     <>
       <PaneHeader
-        title="RAG · Chat"
-        subtitle="LLM that answers questions over the retrieved chunks. Changes here take effect on the next message — no re-ingest needed."
+        title="Retrieval"
+        subtitle="How searching your logs picks and ranks chunks. None of this requires a re-ingest."
       />
 
       <div className="settings-section">
-        <h3 className="settings-section-title">Inference</h3>
-        <EndpointField
-          id="rag-chat-endpoint"
-          value={draft.chat_endpoint}
-          defaultUrl={rag.defaults.chat_endpoint}
-          onChange={(v) => onChange({ chat_endpoint: v })}
-          help="Same OpenAI-compatible shape as the Labels endpoint. Often the same server, different loaded model."
-          testId="rag-chat-endpoint-input"
-        />
-        <ModelField
-          id="rag-chat-model"
-          value={draft.chat_model}
-          defaultValue={rag.defaults.chat_model}
-          endpoint={draft.chat_endpoint}
-          onChange={(v) => onChange({ chat_model: v })}
-          help={<>For chat questions over your logs. <strong>Discover</strong> lists loaded models from the endpoint above.</>}
-          testId="rag-chat-model-input"
-        />
-        <ApiKeyField
-          id="rag-chat-api-key"
-          value={draft.chat_api_key}
-          onChange={(v) => onChange({ chat_api_key: v })}
-          testId="rag-chat-api-key-input"
-        />
-
-        <div className="settings-field">
-          <label className="settings-label">Test connection</label>
-          <p className="settings-help">
-            One non-streaming chat completion to validate the endpoint + model.
-            Doesn't touch your index or chat history.
-          </p>
-          <div className="settings-actions">
-            <button
-              type="button"
-              className="settings-pick"
-              onClick={() => void runTest()}
-              disabled={testStatus === 'running'}
-              data-testid="rag-chat-test-connection"
-            >
-              {testStatus === 'running' ? 'Testing…' : 'Test connection'}
-            </button>
-            {testResult && (
-              <TestStatusPill
-                status={testStatus}
-                text={testText}
-                testId="rag-chat-test-result"
-              />
-            )}
-          </div>
-          {testResult && testResult.raw && !testResult.ok && (
-            <p className="settings-meta classify-last-error">
-              Raw response: <code>{testResult.raw}</code>
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">System prompt</h3>
+        <h3 className="settings-section-title">Result shape</h3>
         <p className="settings-help">
-          Prepended as the system message before each retrieval call. Empty
-          resets to the bundled English default that asks the model to ground
-          answers in the cited chunks.
-        </p>
-        <textarea
-          id="rag-chat-prompt"
-          className="settings-textarea"
-          rows={10}
-          value={draft.chat_system_prompt}
-          onChange={(e) => onChange({ chat_system_prompt: e.target.value })}
-          data-testid="rag-chat-prompt-input"
-        />
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-clear"
-            onClick={() =>
-              onChange({ chat_system_prompt: rag.defaults.chat_system_prompt })
-            }
-            disabled={isChatPromptDefault}
-          >
-            Reset to default prompt
-          </button>
-          <span className="settings-meta">
-            {draft.chat_system_prompt.length.toLocaleString()} chars
-          </span>
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <h3 className="settings-section-title">Retrieval</h3>
-        <p className="settings-help">
-          How many chunks fetch / rerank / send to the LLM per question. No
-          re-ingest required.
+          Applies to the <code>search_logs_semantic</code> MCP tool — the way
+          a connected model reads your logs.
         </p>
         <NumericRow
           label="Top-K"
-          help="Number of chunks sent to the chat model."
+          help="Number of chunks returned per search."
           value={draft.top_k}
           onChange={(v) => onChange({ top_k: v })}
           min={1}
@@ -2448,10 +1860,11 @@ function ChatPane({
           </label>
           <p className="settings-help">
             Cross-encoder that re-scores Qdrant candidates against the query.
-            Downloads on first use to{' '}
-            <code>~/Documents/flist-workbench/models/</code>. Bigger multilingual
-            models cost more disk + memory but recover recall on non-English
-            corpora.
+            Runs locally — no inference server involved. Downloads on first
+            use to <code>~/Documents/flist-workbench/models/</code>. Bigger
+            multilingual models cost more disk + memory but recover recall on
+            non-English corpora. Set to <strong>Disabled</strong> to skip
+            reranking entirely.
           </p>
           <div className="settings-row">
             <select
@@ -2481,8 +1894,8 @@ function ChatPane({
       <div className="settings-section">
         <h3 className="settings-section-title">Quality</h3>
         <p className="settings-help">
-          Optional retrieval extensions. All off by default — turn each on
-          once you've validated it improves answers against your own logs.
+          Optional retrieval extensions. Both off by default — turn each on
+          once you've validated it improves results against your own logs.
         </p>
 
         <div className="settings-field settings-field-tight">
@@ -2575,97 +1988,6 @@ function ChatPane({
               </button>
             </div>
           )}
-        </div>
-
-        <div className="settings-field">
-          <label className="settings-checkbox-row">
-            <input
-              type="checkbox"
-              checked={draft.multiquery_enabled}
-              onChange={(e) =>
-                onChange({ multiquery_enabled: e.target.checked })
-              }
-              data-testid="rag-multiquery-enabled-input"
-            />
-            <span>Multi-query expansion</span>
-          </label>
-          <p className="settings-help">
-            Asks the chat model to paraphrase your question (and quietly
-            autocorrect proper-noun typos) before retrieval. Each variant
-            triggers its own embedding round; results are unioned. Adds
-            1–3 s of latency per question.
-          </p>
-          {draft.multiquery_enabled && (
-            <div className="settings-row">
-              <label
-                className="settings-row-label settings-row-label-wide"
-                htmlFor="rag-multiquery-variants"
-              >
-                Variants
-              </label>
-              <input
-                id="rag-multiquery-variants"
-                type="number"
-                min={2}
-                max={5}
-                className="settings-input settings-input-narrow"
-                value={draft.multiquery_variants}
-                onChange={(e) =>
-                  onChange({ multiquery_variants: e.target.value })
-                }
-                data-testid="rag-multiquery-variants-input"
-              />
-              <button
-                type="button"
-                className="settings-clear"
-                onClick={() =>
-                  onChange({
-                    multiquery_variants: String(rag.defaults.multiquery_variants)
-                  })
-                }
-              >
-                Default ({rag.defaults.multiquery_variants})
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="settings-field settings-field-tight">
-          <div className="settings-row">
-            <label
-              className="settings-row-label settings-row-label-wide"
-              htmlFor="rag-num-ctx"
-            >
-              Context window
-            </label>
-            <input
-              id="rag-num-ctx"
-              type="number"
-              min={0}
-              max={131072}
-              step={1024}
-              className="settings-input settings-input-narrow"
-              value={draft.chat_num_ctx}
-              onChange={(e) => onChange({ chat_num_ctx: e.target.value })}
-              data-testid="rag-num-ctx-input"
-            />
-            <button
-              type="button"
-              className="settings-clear"
-              onClick={() =>
-                onChange({ chat_num_ctx: String(rag.defaults.chat_num_ctx) })
-              }
-            >
-              Default ({rag.defaults.chat_num_ctx})
-            </button>
-          </div>
-          <p className="settings-help settings-help-tight">
-            Sent as <code>options.num_ctx</code> in the chat payload.
-            <strong>Ollama:</strong> default 8192 — Ollama's own per-request
-            default is only 2048, which truncates retrieved chunks on most
-            RAG queries. <strong>LM Studio:</strong> ignored (context is
-            set at model load). <code>0</code> suppresses the field.
-          </p>
         </div>
       </div>
     </>
@@ -2908,20 +2230,20 @@ function EmbeddingPane({
               id="rag-embed-keep-alive"
               type="text"
               className="settings-input"
-              value={draft.chat_embed_keep_alive}
+              value={draft.embed_keep_alive}
               placeholder="(server default)"
-              onChange={(e) => onChange({ chat_embed_keep_alive: e.target.value })}
+              onChange={(e) => onChange({ embed_keep_alive: e.target.value })}
               data-testid="rag-embed-keep-alive-input"
             />
             <button
               type="button"
               className="settings-reset"
               onClick={() =>
-                onChange({ chat_embed_keep_alive: rag.defaults.chat_embed_keep_alive })
+                onChange({ embed_keep_alive: rag.defaults.embed_keep_alive })
               }
               data-testid="rag-embed-keep-alive-reset"
             >
-              Default ({rag.defaults.chat_embed_keep_alive || 'unset'})
+              Default ({rag.defaults.embed_keep_alive || 'unset'})
             </button>
           </div>
         </div>

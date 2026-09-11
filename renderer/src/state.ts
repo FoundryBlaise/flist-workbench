@@ -96,9 +96,6 @@ type State = {
 
   activePartner: string | null
 
-  /** When set, a Classify-labels progress dialog is open over the app. */
-  classifyTarget: { scope: { character?: string | null; partner?: string | null }; label: string } | null
-
   /** When set, a RAG-ingest progress dialog is open over the app.
    *  forceRewipe=true makes the dialog start the job with wipe-and-
    *  reingest semantics; used by the Settings → RAG "Re-ingest all"
@@ -109,17 +106,6 @@ type State = {
         label: string
         forceRewipe: boolean
       }
-    | null
-
-  /** Visibility of the RAG chat panel beside the Log Viewer. */
-  chatPanelOpen: boolean
-  /** Bumped any time something wants the chat input focused — e.g. the
-   *  "Chat with this log" context-menu action. ChatPanel watches it. */
-  chatFocusNonce: number
-  /** Pending "scroll the log viewer to this timestamp range" intent
-   *  raised by a clicked citation. LogViewer consumes & clears it. */
-  logJump:
-    | { character: string; partner: string; ts_start: number; ts_end: number; nonce: number }
     | null
 
   messagesByPartner: Record<string, LogMessage[]>
@@ -405,29 +391,12 @@ type State = {
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
-  aiSetupOpen: boolean
-  openAiSetup: () => void
-  closeAiSetup: () => void
-  openClassify: (
-    scope: { character?: string | null; partner?: string | null },
-    label: string
-  ) => void
-  closeClassify: () => void
   openIngest: (
     scope: { character?: string | null; partner?: string | null },
     label: string,
     opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
-  toggleChatPanel: (force?: boolean) => void
-  requestChatFocus: () => void
-  requestLogJump: (
-    character: string,
-    partner: string,
-    ts_start: number,
-    ts_end: number
-  ) => void
-  clearLogJump: () => void
   applyLabelOverride: (
     char: string,
     partner: string,
@@ -1176,12 +1145,7 @@ export const useStore = create<State>((set, get) => ({
   partnersStatus: {},
   activePartner: null,
 
-  classifyTarget: null,
-  aiSetupOpen: false,
   ingestTarget: null,
-  chatPanelOpen: false,
-  chatFocusNonce: 0,
-  logJump: null,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -4410,20 +4374,6 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
-  openAiSetup() {
-    set({ aiSetupOpen: true })
-  },
-  closeAiSetup() {
-    set({ aiSetupOpen: false })
-  },
-  openClassify(scope, label) {
-    set({ classifyTarget: { scope, label } })
-  },
-
-  closeClassify() {
-    set({ classifyTarget: null })
-  },
-
   openIngest(scope, label, opts) {
     set({
       ingestTarget: { scope, label, forceRewipe: opts?.forceRewipe ?? false }
@@ -4432,28 +4382,6 @@ export const useStore = create<State>((set, get) => ({
 
   closeIngest() {
     set({ ingestTarget: null })
-  },
-
-  toggleChatPanel(force) {
-    set((s) => ({
-      chatPanelOpen: typeof force === 'boolean' ? force : !s.chatPanelOpen
-    }))
-  },
-
-  requestChatFocus() {
-    set((s) => ({ chatFocusNonce: s.chatFocusNonce + 1 }))
-  },
-
-  requestLogJump(character, partner, ts_start, ts_end) {
-    // nonce guarantees a fresh value even if the user clicks the same
-    // citation twice — useEffect dependencies see a new reference.
-    set({
-      logJump: { character, partner, ts_start, ts_end, nonce: Date.now() }
-    })
-  },
-
-  clearLogJump() {
-    set({ logJump: null })
   },
 
   // Patches a single message's label fields in place. `patch === null`

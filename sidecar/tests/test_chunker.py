@@ -20,15 +20,7 @@ def _mkmsg(ts: int, speaker: str, text: str, *, kind: str = "ic") -> dict:
 
 
 def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
-    return labels_store.LabelsSettings(
-        threshold_chars=threshold,
-        llm_endpoint="",
-        llm_model="",
-        llm_api_key="",
-        system_prompt="",
-        context_before=3,
-        context_after=3,
-    )
+    return labels_store.LabelsSettings(threshold_chars=threshold)
 
 
 def _stored(label: str, source: str = "llm") -> dict:

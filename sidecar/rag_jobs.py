@@ -46,6 +46,10 @@ class IngestProgress:
     embedded: int = 0
     upserted: int = 0
     skipped_existing: int = 0
+    # Messages dropped because nothing has judged them IC or OOC yet.
+    # A high count means the user should run the classification flow
+    # (MCP: get_messages_to_classify / set_message_labels) first.
+    skipped_unlabeled: int = 0
     failed: int = 0
     total_chunks: int = 0
     current_partner: str | None = None
@@ -86,6 +90,7 @@ class IngestJob:
             "skipped_existing": self.progress.skipped_existing,
             "failed": self.progress.failed,
             "total_chunks": self.progress.total_chunks,
+            "skipped_unlabeled": self.progress.skipped_unlabeled,
             "current_partner": self.progress.current_partner,
             "last_error": self.progress.last_error,
             "error": self.error,
@@ -382,6 +387,7 @@ def _ingest_one_partner(
     by_hash = labels_store.labels_for_partner(
         labels_conn, character, partner, partner_aliases=alias_group
     )
+    unlabeled_counter = [0]
     chunks = chunker.chunk_messages(
         messages,
         character=character,
@@ -393,7 +399,9 @@ def _ingest_one_partner(
         max_chars=rag_set.chunk_max_chars,
         soft_split=rag_set.chunk_soft_split_chars,
         overlap=rag_set.chunk_overlap_msgs,
+        skipped_unlabeled=unlabeled_counter,
     )
+    job.progress.skipped_unlabeled += unlabeled_counter[0]
     job.progress.chunked += len(chunks)
     job.progress.total_chunks += len(chunks)
     if not chunks:

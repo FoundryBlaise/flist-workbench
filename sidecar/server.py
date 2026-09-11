@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 from contextlib import asynccontextmanager
@@ -25,14 +26,9 @@ import eicons as eicons_catalog
 import flist_activity
 import flist_api
 import labels as labels_store
-import labels_jobs
-import labels_llm
 import restore as restore_svc
-import system as system_probe
 import rag as rag_settings
-import rag_chat
 import rag_embed
-import rag_expand
 import rag_jobs
 import rag_lexical
 import rag_query
@@ -2217,35 +2213,24 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
         by_hash = labels_store.labels_for_partner(
             labels_conn, char, partner, partner_aliases=alias_group
         )
-        failures = labels_store.failures_for_partner(
-            labels_conn, char, partner, partner_aliases=alias_group
-        )
         for m in messages:
             h = labels_store.msg_hash(m)
             # Send the hash so the renderer can call /labels/override
             # without re-implementing sha1(ts|speaker|raw) client-side.
             m["hash"] = h
             row = by_hash.get(h)
-            fail = failures.get(h)
-            m["label"] = labels_store.resolve(
-                m, row, lab_settings, failed=fail is not None,
-            )
+            m["label"] = labels_store.resolve(m, row, lab_settings)
             if row is not None:
                 m["label_source"] = row["source"]
-                # Surface the model's own reason string in the badge
+                # Surface the labeller's own reason string in the badge
                 # tooltip so the user can audit why a label was chosen.
                 if row["reason"]:
                     m["label_reason"] = row["reason"]
-                # Carry the prior snapshot so the UI can show "LLM had
+                # Carry the prior snapshot so the UI can show "the model
                 # said IC; you changed it to OOC" on manual overrides.
                 if row["prior_label"] is not None:
                     m["prior_label"] = row["prior_label"]
                     m["prior_source"] = row["prior_source"]
-            elif fail is not None:
-                # Surface the classifier's error so the badge tooltip
-                # explains *why* this message is Failed.
-                m["label_source"] = "failed"
-                m["label_error"] = fail["error"]
             # Otherwise no source is attached — the UI infers "rule
             # or unlabeled" from absence of label_source.
     finally:
@@ -2308,7 +2293,6 @@ def labels_stats(char: str, partner: str) -> dict:
         "ic": counts[labels_store.LABEL_IC],
         "ooc": counts[labels_store.LABEL_OOC],
         "unlabeled": counts[labels_store.LABEL_UNLABELED],
-        "failed": counts[labels_store.LABEL_FAILED],
         "total": sum(counts.values()),
     }
 
@@ -2380,8 +2364,7 @@ def labels_stats_all(char: str) -> dict:
                     "ic": counts[labels_store.LABEL_IC],
                     "ooc": counts[labels_store.LABEL_OOC],
                     "unlabeled": counts[labels_store.LABEL_UNLABELED],
-                    "failed": counts[labels_store.LABEL_FAILED],
-                    "total": sum(counts.values()),
+                                "total": sum(counts.values()),
                     "log_mtime": log_mtime if log_mtime > 0 else None,
                     "last_label_at": last_label,
                 }
@@ -2390,131 +2373,6 @@ def labels_stats_all(char: str) -> dict:
         settings_conn.close()
         labels_conn.close()
     return {"character": char, "partners": out}
-
-
-class ClassifyJobRequest(BaseModel):
-    # All optional. {} = classify every character × every partner.
-    # {character: X} = all partners for character X. {character: X,
-    # partner: Y} = a single conversation.
-    character: str | None = None
-    partner: str | None = None
-    # When true, ignore the skip-existing guard and re-classify every
-    # message in scope — useful after a prompt or model change. Manual
-    # overrides are NOT preserved; the LLM verdict replaces them.
-    overwrite: bool = False
-
-
-class TestConnectionRequest(BaseModel):
-    # All optional — when omitted we pull from saved settings. The
-    # renderer typically posts the current edit-state so the user can
-    # test before saving.
-    llm_endpoint: str | None = None
-    llm_model: str | None = None
-    llm_api_key: str | None = None
-    system_prompt: str | None = None
-
-
-@app.post("/labels/test-connection")
-def labels_test_connection(body: TestConnectionRequest) -> dict:
-    """One canned classification roundtrip so the user can validate
-    endpoint / model / prompt without launching a real job.
-
-    Returns latency + raw model output + parsed JSON (if any). All
-    failure modes return 200 with `ok=false` and a structured `error`
-    so the UI can show actionable feedback without HTTP-error parsing.
-    """
-    import time as _time
-    from urllib.error import HTTPError, URLError
-
-    import labels_llm
-
-    settings_conn = settings_store.connect()
-    try:
-        saved = labels_store.load_settings(settings_conn)
-    finally:
-        settings_conn.close()
-
-    endpoint = body.llm_endpoint or saved.llm_endpoint
-    model = body.llm_model or saved.llm_model
-    api_key = body.llm_api_key if body.llm_api_key is not None else saved.llm_api_key
-    prompt = body.system_prompt or saved.system_prompt
-
-    # Realistic test message: an IC-shaped paragraph long enough that
-    # the resolver wouldn't have rule-skipped it, so the model has
-    # something coherent to classify. Older two-word probes ("hello
-    # there") confused the classifier into returning empty content.
-    # IC-shaped paragraph long enough that the resolver wouldn't have
-    # rule-skipped it, so the model has something coherent to classify.
-    # Speaker uses a canonical fantasy name (Witcher) to avoid any
-    # overlap with real F-list characters in the user's corpus.
-    canned_user = (
-        ">>> ZIELNACHRICHT <<<\n"
-        "[01-15 22:13 | 312 chars] Triss: She turned slowly, her gaze settling on him with a "
-        "measured calm that belied the storm of thoughts behind her eyes. The candlelight caught "
-        "the silver threads woven through her cloak as she spoke, voice low and deliberate. \"You "
-        "knew this moment would come, didn't you? You've been waiting for it.\"\n"
-        ">>> ENDE ZIELNACHRICHT <<<"
-    )
-    # Cold-start inference on a 20B+ model can take 30–60 s on first
-    # call. 90 s gives the model room without making "endpoint is
-    # actually unreachable" feel like an eternity. Trade-off chosen
-    # deliberately — faster models will return in 1–3 s.
-    test_timeout = 90.0
-    started = _time.monotonic()
-    try:
-        content = labels_llm.call_llm(
-            endpoint, model, api_key, prompt, canned_user, timeout=test_timeout
-        )
-    except HTTPError as exc:
-        return {
-            "ok": False,
-            "error": f"HTTP {exc.code}: {exc.reason}",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    except URLError as exc:
-        return {
-            "ok": False,
-            "error": f"connection failed: {exc.reason}",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    except TimeoutError as exc:
-        return {
-            "ok": False,
-            "error": (
-                f"timed out after {int(test_timeout)} s — the model may be cold-loading. "
-                f"Try again, or pick a smaller model. ({exc})"
-            ),
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    except Exception as exc:  # noqa: BLE001 — surface to UI
-        return {
-            "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    elapsed_ms = int((_time.monotonic() - started) * 1000)
-    if not content.strip():
-        return {
-            "ok": False,
-            "elapsed_ms": elapsed_ms,
-            "raw": "",
-            "parsed": None,
-            "error": (
-                "model returned empty content. The system prompt may be incompatible "
-                "with this model, or the model needs more time to warm up — retry once."
-            ),
-        }
-    parsed = labels_llm.parse_label(content)
-    return {
-        "ok": parsed is not None,
-        "elapsed_ms": elapsed_ms,
-        "raw": content[:400],
-        "parsed": parsed,
-        "error": None if parsed is not None else "model output did not contain a valid {label, reason} JSON object",
-    }
-
-
-# ---- rag (settings-side; ingest endpoints land in 4.6) ----------------
 
 
 class RagTestEmbeddingRequest(BaseModel):
@@ -2541,43 +2399,21 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
 
     saved = rag_settings.load_settings()
     # Only the embedding-side fields are overridable from this endpoint
-    # — chat / rerank / retrieval tunables ride on saved settings to
-    # keep the test surface tight.
-    merged = rag_settings.RagSettings(
-        embed_endpoint=body.embed_endpoint or saved.embed_endpoint,
-        embed_model=body.embed_model or saved.embed_model,
-        embed_api_key=(
-            body.embed_api_key if body.embed_api_key is not None else saved.embed_api_key
-        ),
-        embed_query_prefix=(
-            body.embed_query_prefix
-            if body.embed_query_prefix is not None
-            else saved.embed_query_prefix
-        ),
-        embed_document_prefix=(
-            body.embed_document_prefix
-            if body.embed_document_prefix is not None
-            else saved.embed_document_prefix
-        ),
-        chat_endpoint=saved.chat_endpoint,
-        chat_model=saved.chat_model,
-        chat_api_key=saved.chat_api_key,
-        chat_system_prompt=saved.chat_system_prompt,
-        rerank_model=saved.rerank_model,
-        rerank_candidates=saved.rerank_candidates,
-        top_k=saved.top_k,
-        neighbors=saved.neighbors,
-        rerank_min_ratio=saved.rerank_min_ratio,
-        hybrid_enabled=saved.hybrid_enabled,
-        hybrid_bm25_candidates=saved.hybrid_bm25_candidates,
-        multiquery_enabled=saved.multiquery_enabled,
-        multiquery_variants=saved.multiquery_variants,
-        chat_num_ctx=saved.chat_num_ctx,
-        chat_embed_keep_alive=saved.chat_embed_keep_alive,
-        chunk_max_chars=saved.chunk_max_chars,
-        chunk_soft_split_chars=saved.chunk_soft_split_chars,
-        chunk_overlap_msgs=saved.chunk_overlap_msgs,
-    )
+    # — rerank / retrieval tunables ride on saved settings to keep the
+    # test surface tight. `replace` rather than a field-by-field copy so
+    # a new RagSettings field can't silently go missing here.
+    overrides = {
+        name: value
+        for name, value in (
+            ("embed_endpoint", body.embed_endpoint or None),
+            ("embed_model", body.embed_model or None),
+            ("embed_api_key", body.embed_api_key),
+            ("embed_query_prefix", body.embed_query_prefix),
+            ("embed_document_prefix", body.embed_document_prefix),
+        )
+        if value is not None
+    }
+    merged = dataclasses.replace(saved, **overrides)
 
     # 60 s probe budget: cold-loading a 768-dim model in LM Studio
     # takes 15–30 s; loaded-already returns in <1 s. 60 s leaves a
@@ -2608,116 +2444,6 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
         "dimension": dimension,
         "model": merged.embed_model,
         "elapsed_ms": int((_time.monotonic() - started) * 1000),
-    }
-
-
-class RagTestChatRequest(BaseModel):
-    """Override-or-saved fields for one canned chat probe.
-
-    Same overlay-on-saved pattern as RagTestEmbeddingRequest and
-    TestConnectionRequest: the renderer typically sends the current
-    edit-state from the form so the user can validate before saving.
-    """
-    chat_endpoint: str | None = None
-    chat_model: str | None = None
-    chat_api_key: str | None = None
-    chat_system_prompt: str | None = None
-
-
-@app.post("/rag/test-chat")
-def rag_test_chat(body: RagTestChatRequest) -> dict:
-    """One non-streaming chat completion to validate endpoint + model.
-
-    Mirrors /labels/test-connection: 200-always shape with ok/elapsed_ms
-    /raw/error so the UI can render either result with one path. We
-    deliberately bypass rag_chat.stream_chat (streaming + tools, wrong
-    cost surface for a probe) and reuse labels_llm.call_llm with a tiny
-    "say hi" exchange.
-    """
-    import time as _time
-    from urllib.error import HTTPError, URLError
-
-    import labels_llm
-
-    saved = rag_settings.load_settings()
-    endpoint = body.chat_endpoint or saved.chat_endpoint
-    model = body.chat_model or saved.chat_model
-    api_key = body.chat_api_key if body.chat_api_key is not None else saved.chat_api_key
-    system_prompt = (
-        body.chat_system_prompt
-        if body.chat_system_prompt is not None
-        else saved.chat_system_prompt
-    )
-
-    # Canned probe: a single instruction-following exchange. We
-    # explicitly ask for a short reply so cold-start latency dominates
-    # over generation time — the test should reflect "is the endpoint
-    # alive" not "is the model fast at writing prose".
-    canned_user = (
-        "Reply with the single word 'ready' (lowercase, no quotes, "
-        "no punctuation) so the test harness can confirm the model is "
-        "answering instructions."
-    )
-    test_timeout = 90.0
-    started = _time.monotonic()
-    try:
-        content = labels_llm.call_llm(
-            endpoint,
-            model,
-            api_key,
-            system_prompt,
-            canned_user,
-            max_tokens=64,
-            timeout=test_timeout,
-        )
-    except HTTPError as exc:
-        return {
-            "ok": False,
-            "error": f"HTTP {exc.code}: {exc.reason}",
-            "raw": "",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    except URLError as exc:
-        return {
-            "ok": False,
-            "error": f"connection failed: {exc.reason}",
-            "raw": "",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    except TimeoutError as exc:
-        return {
-            "ok": False,
-            "error": (
-                f"timed out after {int(test_timeout)} s — the model may be "
-                f"cold-loading. Try again, or pick a smaller model. ({exc})"
-            ),
-            "raw": "",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    except Exception as exc:  # noqa: BLE001 — surface to UI
-        return {
-            "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
-            "raw": "",
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
-    elapsed_ms = int((_time.monotonic() - started) * 1000)
-    if not content.strip():
-        return {
-            "ok": False,
-            "elapsed_ms": elapsed_ms,
-            "raw": "",
-            "error": (
-                "model returned empty content. The system prompt may be "
-                "incompatible with this model, or the model needs more "
-                "time to warm up — retry once."
-            ),
-        }
-    return {
-        "ok": True,
-        "elapsed_ms": elapsed_ms,
-        "raw": content[:400],
-        "error": None,
     }
 
 
@@ -2845,40 +2571,6 @@ def rag_status() -> dict:
     }
 
 
-class RagQueryScope(BaseModel):
-    character: str | None = None
-    partner: str | None = None
-    partners: list[str] | None = None
-
-
-class RagQueryRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=4000)
-    scope: RagQueryScope | None = None
-    # Per-request overrides — the chat panel exposes these via slash
-    # commands (/top, /neighbors). Server clamps the same way the
-    # settings loader does so a runaway /top 9999 doesn't try to
-    # retrieve thousands of chunks.
-    top_k: int | None = None
-    neighbors: int | None = None
-
-
-class TalkMessage(BaseModel):
-    # OpenAI-shaped chat message. The renderer rebuilds the full history
-    # on every Talk turn so the server stays stateless — easier than
-    # storing per-tab conversation state we'd then have to expire.
-    role: Literal["system", "user", "assistant"]
-    content: str = Field(max_length=8000)
-
-
-class RagTalkRequest(BaseModel):
-    # The full history including the latest user turn. Renderer enforces
-    # an upper bound on length so a runaway loop can't blow context.
-    messages: list[TalkMessage] = Field(min_length=1, max_length=80)
-    # Optional system message override. Empty / unset → no system
-    # message; Talk mode is intentionally free-form, no grounding prompt.
-    system: str | None = None
-
-
 def _sse_event(event: str, data: dict | str) -> bytes:
     """Format one SSE message. Reuses the OpenAI streaming convention:
     each event has an `event:` name + a JSON `data:` payload, separated
@@ -2889,262 +2581,6 @@ def _sse_event(event: str, data: dict | str) -> bytes:
     else:
         payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
-
-
-@app.post("/rag/query")
-def rag_query_stream(body: RagQueryRequest) -> StreamingResponse:
-    """SSE stream: 'token' events with per-delta content, then a 'done'
-    event carrying the citation list. Errors emit an 'error' event and
-    close the stream so the renderer can render a single failure pill
-    rather than parsing HTTP non-2xx.
-
-    Pipeline runs synchronously up to the LLM call (cheap), then yields
-    deltas as the LLM streams. Citations are computed up-front from the
-    retrieval hits — they don't depend on the LLM's response, so the
-    final `done` event has them ready the instant the stream completes.
-    """
-    rag_set = rag_settings.load_settings()
-    scope = body.scope.model_dump(exclude_none=True) if body.scope else None
-    # Expand a single-partner scope into the full alias group so
-    # queries scoped to "Ashvalia" also pull chunks indexed under the
-    # pre-rename name "Daemon Enariel". Skips the expansion when scope
-    # is character-only / cross-RP — those don't filter by partner.
-    if scope and scope.get("character") and scope.get("partner") and not scope.get("partners"):
-        alias_conn = aliases_store.connect()
-        try:
-            group = aliases_store.all_names_for(
-                alias_conn, scope["character"], scope["partner"]
-            )
-        finally:
-            alias_conn.close()
-        if len(group) > 1:
-            # Move from single-partner filter to multi-partner filter;
-            # rag_store._scope_to_filter handles both shapes.
-            scope = {
-                "character": scope["character"],
-                "partners": group,
-            }
-    top_k = body.top_k if body.top_k is not None else rag_set.top_k
-    neighbors = body.neighbors if body.neighbors is not None else rag_set.neighbors
-    # Clamp the same way the settings loader does — overrides shouldn't
-    # be able to do what saved settings can't.
-    top_k = max(1, min(50, int(top_k)))
-    neighbors = max(0, min(5, int(neighbors)))
-
-    def producer():
-        # Phase 1: retrieval. Failures here are visible to the user
-        # immediately as an `error` SSE event — no partial LLM stream.
-        try:
-            # Multi-query expansion runs OUTSIDE the RagStore context so
-            # the chat LLM call doesn't hold the embedded-Qdrant file
-            # lock open longer than necessary. Failure here is logged +
-            # ignored — the original question still drives retrieval.
-            query_variants: list[str] = []
-            if rag_set.multiquery_enabled:
-                try:
-                    query_variants = rag_expand.expand_query(
-                        body.question,
-                        n=rag_set.multiquery_variants,
-                        rag_set=rag_set,
-                    )
-                except Exception:  # noqa: BLE001 — expansion never breaks chat
-                    query_variants = []
-                if query_variants:
-                    yield _sse_event(
-                        "expanded",
-                        {"variants": query_variants},
-                    )
-
-            with rag_store.RagStore() as store:
-                if not store.collection_exists():
-                    yield _sse_event(
-                        "error",
-                        {
-                            "stage": "retrieval",
-                            "message": (
-                                "no RAG index yet — run Logs → Ingest before asking."
-                            ),
-                        },
-                    )
-                    return
-
-                # Open the lexical store only when hybrid is enabled.
-                # Skipping the connect() avoids a labels.db handle on
-                # the most common "dense-only" path.
-                lex: rag_lexical.LexicalStore | None = None
-                if rag_set.hybrid_enabled:
-                    lex = rag_lexical.LexicalStore()
-                    # Backfill safety net: a user who enabled hybrid
-                    # after an existing ingest has an empty FTS5 table
-                    # while Qdrant has thousands of chunks. Rebuilding
-                    # from payloads is a few seconds and avoids the "I
-                    # turned it on and got no hits" surprise.
-                    try:
-                        if lex.count() == 0 and store.count() > 0:
-                            rag_lexical.backfill_from_qdrant(store, lex)
-                    except Exception:  # noqa: BLE001 — backfill is best-effort
-                        pass
-                try:
-                    result = rag_query.run_query(
-                        body.question,
-                        scope=scope,
-                        store=store,
-                        rag_set=rag_set,
-                        rerank_model=rag_set.rerank_model,
-                        rerank_candidates=rag_set.rerank_candidates,
-                        top_k=top_k,
-                        neighbors=neighbors,
-                        rerank_min_ratio=rag_set.rerank_min_ratio,
-                        lex=lex,
-                        hybrid_bm25_candidates=rag_set.hybrid_bm25_candidates,
-                        query_variants=query_variants,
-                        system_prompt=rag_set.chat_system_prompt,
-                    )
-                except rag_embed.EmbedError as exc:
-                    yield _sse_event(
-                        "error", {"stage": "embed", "message": str(exc)}
-                    )
-                    return
-                finally:
-                    if lex is not None:
-                        lex.close()
-                citations = rag_query.citation_payload(result.hits)
-
-            # Phase 1.5: tell the renderer what we retrieved before any
-            # LLM tokens arrive — useful so the citation chip strip can
-            # render while the answer streams.
-            yield _sse_event(
-                "retrieved",
-                {
-                    "hit_count": len(citations),
-                    "rerank_applied": result.rerank_applied,
-                    "rerank_model": result.rerank_model,
-                    "embed_model": result.embed_model,
-                    "hybrid_applied": result.hybrid_applied,
-                    "hybrid_lexical_hits": result.hybrid_lexical_hits,
-                },
-            )
-
-            # Phase 2: stream the LLM answer.
-            try:
-                for delta in rag_chat.stream_chat(
-                    rag_set.chat_endpoint,
-                    rag_set.chat_model,
-                    rag_set.chat_api_key,
-                    result.messages,
-                    num_ctx=rag_set.chat_num_ctx or None,
-                ):
-                    yield _sse_event("token", {"content": delta})
-            except rag_chat.ChatError as exc:
-                yield _sse_event(
-                    "error", {"stage": "chat", "message": str(exc)}
-                )
-                return
-
-            yield _sse_event("done", {"citations": citations})
-        except Exception as exc:  # noqa: BLE001 — last-resort: don't bring down the stream silently
-            yield _sse_event(
-                "error", {"stage": "unknown", "message": repr(exc)}
-            )
-
-    return StreamingResponse(
-        producer(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.post("/rag/talk")
-def rag_talk_stream(body: RagTalkRequest) -> StreamingResponse:
-    """SSE stream: free-form chat with no retrieval, no citations.
-
-    Counterpart to /rag/query. The renderer routes user "Talk mode"
-    turns here when the user wants to brainstorm / draft / chat with
-    the model without dragging the log corpus into the prompt. Same
-    chat endpoint + model as the grounded path (rag_set.chat_*) so
-    Talk and Question share the user's one configured LLM.
-
-    Emits only `token`, `done`, and `error` events — no `retrieved`
-    or `expanded`. `done` carries an empty `citations: []` so the
-    renderer's existing handler shape works either way.
-    """
-    rag_set = rag_settings.load_settings()
-    # Build the message list. A system message (if provided) goes first;
-    # then the renderer-supplied history verbatim. We deliberately do
-    # NOT inject the grounding system prompt that /rag/query uses —
-    # Talk mode is supposed to feel like a vanilla chat surface.
-    messages: list[dict] = []
-    if body.system and body.system.strip():
-        messages.append({"role": "system", "content": body.system.strip()})
-    for m in body.messages:
-        messages.append({"role": m.role, "content": m.content})
-
-    def producer():
-        try:
-            for delta in rag_chat.stream_chat(
-                rag_set.chat_endpoint,
-                rag_set.chat_model,
-                rag_set.chat_api_key,
-                messages,
-                num_ctx=rag_set.chat_num_ctx or None,
-            ):
-                yield _sse_event("token", {"content": delta})
-            yield _sse_event("done", {"citations": []})
-        except rag_chat.ChatError as exc:
-            yield _sse_event("error", {"stage": "chat", "message": str(exc)})
-        except Exception as exc:  # noqa: BLE001 — last-resort, mirror /rag/query
-            yield _sse_event(
-                "error", {"stage": "unknown", "message": repr(exc)}
-            )
-
-    return StreamingResponse(
-        producer(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ---- labels jobs (continued) ------------------------------------------
-
-
-@app.post("/labels/classify", status_code=202)
-def labels_classify_start(body: ClassifyJobRequest) -> dict:
-    if body.partner and not body.character:
-        raise HTTPException(status_code=400, detail="partner requires character")
-    scope: dict = {}
-    if body.character:
-        scope["character"] = body.character
-    if body.partner:
-        scope["partner"] = body.partner
-    job = labels_jobs.start(scope, overwrite=body.overwrite)
-    return job.to_dict()
-
-
-@app.get("/labels/jobs")
-def labels_jobs_list() -> dict:
-    return {"jobs": [j.to_dict() for j in labels_jobs.registry().list()]}
-
-
-@app.get("/labels/jobs/{job_id}")
-def labels_job_get(job_id: str) -> dict:
-    job = labels_jobs.registry().get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
-    return job.to_dict()
-
-
-@app.delete("/labels/jobs/{job_id}")
-def labels_job_cancel(job_id: str) -> dict:
-    ok = labels_jobs.registry().cancel(job_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
-    return {"id": job_id, "cancel_requested": True}
 
 
 class LabelOverride(BaseModel):
@@ -3160,21 +2596,6 @@ class LabelOverride(BaseModel):
 class LabelsClearRequest(BaseModel):
     character: str
     partner: str
-
-
-@app.get("/labels/failure-log")
-def labels_failure_log() -> dict:
-    """Where the classify failure JSONL lives + whether it has anything yet.
-
-    The renderer hands the path to Electron's shell.openPath so the
-    user can inspect / forward the file to a model for debugging. We
-    don't stream contents over HTTP — these can grow long, and the OS
-    text viewer is the right tool.
-    """
-    path = labels_llm.failure_log_path()
-    exists = path.exists()
-    size = path.stat().st_size if exists else 0
-    return {"path": str(path), "exists": exists, "byte_size": size}
 
 
 @app.post("/labels/clear")
@@ -3207,7 +2628,7 @@ def labels_clear(body: LabelsClearRequest) -> dict:
 
 @app.post("/labels/clear-all")
 def labels_clear_all() -> dict:
-    """Wipe every row from labels + label_failures across all characters.
+    """Wipe every stored IC/OOC verdict across all characters.
 
     The Settings → Labels "Reset all labels…" button calls this. After
     it returns, every message in every conversation falls back to
@@ -3216,37 +2637,16 @@ def labels_clear_all() -> dict:
     """
     conn = labels_store.connect()
     try:
-        labels_cur = conn.execute("DELETE FROM labels")
-        failures_cur = conn.execute("DELETE FROM label_failures")
+        cur = conn.execute("DELETE FROM labels")
         conn.commit()
-        return {
-            "labels_deleted": labels_cur.rowcount,
-            "failures_deleted": failures_cur.rowcount,
-        }
+        return {"labels_deleted": cur.rowcount}
     finally:
         conn.close()
-
-
-@app.get("/labels/job-history")
-def labels_job_history(limit: int = 50) -> dict:
-    """Recent finished classify runs, newest first.
-
-    Persisted across sidecar restarts unlike the live JobRegistry —
-    the renderer's Settings → Labels history panel queries this on
-    open and after every classify completion.
-    """
-    limit = max(1, min(200, limit))
-    conn = labels_store.connect()
-    try:
-        rows = labels_store.list_job_history(conn, limit=limit)
-    finally:
-        conn.close()
-    return {"jobs": rows, "limit": limit}
 
 
 @app.get("/labels/rollup")
 def labels_rollup() -> dict:
-    """Aggregate IC/OOC/Unlabeled/Failed counts across every character.
+    """Aggregate IC/OOC/Unlabeled counts across every character.
 
     Walks every (character × partner) log under the configured data
     directory; for large corpora this is a few seconds the first time
@@ -3379,16 +2779,10 @@ def _settings_db():
 
 
 class LabelsSettingsUpdate(BaseModel):
-    # Empty strings restore the default for any of these — see
-    # labels.load_settings() for the fallback policy. None means "leave
-    # untouched". threshold_chars below 1 is clamped silently.
+    # Only the rule threshold is left — the classifier's endpoint,
+    # model, prompt and context window went away with the in-app LLM.
+    # None means "leave untouched"; below 1 is clamped silently.
     threshold_chars: int | None = None
-    llm_endpoint: str | None = None
-    llm_model: str | None = None
-    llm_api_key: str | None = None
-    system_prompt: str | None = None
-    context_before: int | None = None
-    context_after: int | None = None
 
 
 class RagSettingsUpdate(BaseModel):
@@ -3402,13 +2796,9 @@ class RagSettingsUpdate(BaseModel):
     embed_api_key: str | None = None
     embed_query_prefix: str | None = None
     embed_document_prefix: str | None = None
-    # Chat / query-time fields. None = untouched; "" = reset to default.
+    # Retrieval fields. None = untouched; "" = reset to default.
     # Numeric fields are int|None — empty string isn't meaningful for an
     # int. The renderer just sends None when the user wants the default.
-    chat_endpoint: str | None = None
-    chat_model: str | None = None
-    chat_api_key: str | None = None
-    chat_system_prompt: str | None = None
     rerank_model: str | None = None
     rerank_candidates: int | None = None
     top_k: int | None = None
@@ -3418,13 +2808,10 @@ class RagSettingsUpdate(BaseModel):
     rerank_min_ratio: float | None = None
     hybrid_enabled: bool | None = None
     hybrid_bm25_candidates: int | None = None
-    multiquery_enabled: bool | None = None
-    multiquery_variants: int | None = None
-    chat_num_ctx: int | None = None
     # Empty string clears the override and lets the server default fire
     # (Ollama: ~5 min keep_alive). Free-text so users can write Ollama's
     # duration grammar verbatim ("30s", "1m", "0").
-    chat_embed_keep_alive: str | None = None
+    embed_keep_alive: str | None = None
     chunk_max_chars: int | None = None
     chunk_soft_split_chars: int | None = None
     chunk_overlap_msgs: int | None = None
@@ -3467,33 +2854,11 @@ def _settings_dict(conn) -> dict:
         "fchat_data_dir_env_locked": env_pinned,
         "labels": {
             "threshold_chars": lab.threshold_chars,
-            "llm_endpoint": lab.llm_endpoint,
-            "llm_model": lab.llm_model,
-            "llm_api_key": lab.llm_api_key,
-            "system_prompt": lab.system_prompt,
-            "context_before": lab.context_before,
-            "context_after": lab.context_after,
             # Defaults exposed so the UI can show "(default)" hints and
             # offer a one-click reset without hardcoding them.
             "defaults": {
                 "threshold_chars": labels_store.DEFAULT_THRESHOLD_CHARS,
-                "llm_endpoint": labels_store.DEFAULT_LLM_ENDPOINT,
-                "llm_model": labels_store.DEFAULT_LLM_MODEL,
-                "llm_api_key": labels_store.DEFAULT_LLM_API_KEY,
-                "system_prompt": labels_store.DEFAULT_SYSTEM_PROMPT,
-                "context_before": labels_store.DEFAULT_CONTEXT_BEFORE,
-                "context_after": labels_store.DEFAULT_CONTEXT_AFTER,
             },
-            "prompt_presets": [
-                {
-                    "id": p.id,
-                    "label": p.label,
-                    "language": p.language,
-                    "description": p.description,
-                    "body": p.body,
-                }
-                for p in labels_store.PROMPT_PRESETS
-            ],
         },
         "rag": {
             "embed_endpoint": rag.embed_endpoint,
@@ -3501,10 +2866,6 @@ def _settings_dict(conn) -> dict:
             "embed_api_key": rag.embed_api_key,
             "embed_query_prefix": rag.embed_query_prefix,
             "embed_document_prefix": rag.embed_document_prefix,
-            "chat_endpoint": rag.chat_endpoint,
-            "chat_model": rag.chat_model,
-            "chat_api_key": rag.chat_api_key,
-            "chat_system_prompt": rag.chat_system_prompt,
             "rerank_model": rag.rerank_model,
             "rerank_candidates": rag.rerank_candidates,
             "top_k": rag.top_k,
@@ -3512,10 +2873,7 @@ def _settings_dict(conn) -> dict:
             "rerank_min_ratio": rag.rerank_min_ratio,
             "hybrid_enabled": rag.hybrid_enabled,
             "hybrid_bm25_candidates": rag.hybrid_bm25_candidates,
-            "multiquery_enabled": rag.multiquery_enabled,
-            "multiquery_variants": rag.multiquery_variants,
-            "chat_num_ctx": rag.chat_num_ctx,
-            "chat_embed_keep_alive": rag.chat_embed_keep_alive,
+            "embed_keep_alive": rag.embed_keep_alive,
             "chunk_max_chars": rag.chunk_max_chars,
             "chunk_soft_split_chars": rag.chunk_soft_split_chars,
             "chunk_overlap_msgs": rag.chunk_overlap_msgs,
@@ -3525,12 +2883,6 @@ def _settings_dict(conn) -> dict:
                 "embed_api_key": rag_settings.DEFAULT_EMBED_API_KEY,
                 "embed_query_prefix": rag_settings.DEFAULT_EMBED_QUERY_PREFIX,
                 "embed_document_prefix": rag_settings.DEFAULT_EMBED_DOCUMENT_PREFIX,
-                "chat_endpoint": rag_settings.DEFAULT_CHAT_ENDPOINT,
-                "chat_model": rag_settings.DEFAULT_CHAT_MODEL,
-                "chat_api_key": rag_settings.DEFAULT_CHAT_API_KEY,
-                # Expose the resolved English default so the UI can
-                # show "Reset to default" without hardcoding it.
-                "chat_system_prompt": _resolve_default_chat_prompt(),
                 "rerank_model": rag_settings.DEFAULT_RERANK_MODEL,
                 "rerank_candidates": rag_settings.DEFAULT_RERANK_CANDIDATES,
                 "top_k": rag_settings.DEFAULT_TOP_K,
@@ -3538,10 +2890,7 @@ def _settings_dict(conn) -> dict:
                 "rerank_min_ratio": rag_settings.DEFAULT_RERANK_MIN_RATIO,
                 "hybrid_enabled": rag_settings.DEFAULT_HYBRID_ENABLED,
                 "hybrid_bm25_candidates": rag_settings.DEFAULT_HYBRID_BM25_CANDIDATES,
-                "multiquery_enabled": rag_settings.DEFAULT_MULTIQUERY_ENABLED,
-                "multiquery_variants": rag_settings.DEFAULT_MULTIQUERY_VARIANTS,
-                "chat_num_ctx": rag_settings.DEFAULT_CHAT_NUM_CTX,
-                "chat_embed_keep_alive": rag_settings.DEFAULT_CHAT_EMBED_KEEP_ALIVE,
+                "embed_keep_alive": rag_settings.DEFAULT_EMBED_KEEP_ALIVE,
                 "chunk_max_chars": rag_settings.DEFAULT_CHUNK_MAX_CHARS,
                 "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
@@ -3619,14 +2968,6 @@ def _backups_settings_dict(conn) -> dict:
         },
         "next_due_at": next_due_at,
     }
-
-
-def _resolve_default_chat_prompt() -> str:
-    # Lazy import — rag_query imports rag, rag imports rag_query in
-    # its loader, so doing this at module top would cycle.
-    from rag_query import DEFAULT_SYSTEM_PROMPT
-
-    return DEFAULT_SYSTEM_PROMPT
 
 
 class DiscoverModelsRequest(BaseModel):
@@ -3789,7 +3130,6 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
 def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
     """Persist each labels field that was supplied.
 
-    Convention: empty string clears (falls back to default on read).
     None means "leave untouched". threshold_chars below 1 is clamped to
     1 — zero or negative would make every message OOC and is almost
     certainly a typo.
@@ -3797,27 +3137,6 @@ def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
     if update.threshold_chars is not None:
         n = max(1, int(update.threshold_chars))
         settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(n))
-    if update.context_before is not None:
-        # Clamp same as load_settings: 0..10. Higher is risky on small
-        # context windows; lower than 0 is meaningless.
-        n = max(0, min(10, int(update.context_before)))
-        settings_store.set_value(conn, settings_store.KEY_LABELS_CONTEXT_BEFORE, str(n))
-    if update.context_after is not None:
-        n = max(0, min(10, int(update.context_after)))
-        settings_store.set_value(conn, settings_store.KEY_LABELS_CONTEXT_AFTER, str(n))
-    for field, key in (
-        ("llm_endpoint", settings_store.KEY_LABELS_LLM_ENDPOINT),
-        ("llm_model", settings_store.KEY_LABELS_LLM_MODEL),
-        ("llm_api_key", settings_store.KEY_LABELS_LLM_API_KEY),
-        ("system_prompt", settings_store.KEY_LABELS_SYSTEM_PROMPT),
-    ):
-        value = getattr(update, field)
-        if value is None:
-            continue
-        if value == "":
-            settings_store.clear(conn, key)
-        else:
-            settings_store.set_value(conn, key, value)
 
 
 def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
@@ -3832,10 +3151,6 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
         ("embed_api_key", settings_store.KEY_RAG_EMBED_API_KEY),
         ("embed_query_prefix", settings_store.KEY_RAG_EMBED_QUERY_PREFIX),
         ("embed_document_prefix", settings_store.KEY_RAG_EMBED_DOCUMENT_PREFIX),
-        ("chat_endpoint", settings_store.KEY_RAG_CHAT_ENDPOINT),
-        ("chat_model", settings_store.KEY_RAG_CHAT_MODEL),
-        ("chat_api_key", settings_store.KEY_RAG_CHAT_API_KEY),
-        ("chat_system_prompt", settings_store.KEY_RAG_CHAT_SYSTEM_PROMPT),
         ("rerank_model", settings_store.KEY_RAG_RERANK_MODEL),
     ):
         value = getattr(update, field)
@@ -3873,26 +3188,14 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
         settings_store.set_value(
             conn, settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES, str(n)
         )
-    if update.multiquery_enabled is not None:
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_RAG_MULTIQUERY_ENABLED,
-            "1" if update.multiquery_enabled else "0",
-        )
-    if update.multiquery_variants is not None:
-        n = max(2, min(5, int(update.multiquery_variants)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_MULTIQUERY_VARIANTS, str(n))
-    if update.chat_num_ctx is not None:
-        n = max(0, min(131072, int(update.chat_num_ctx)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_CHAT_NUM_CTX, str(n))
-    if update.chat_embed_keep_alive is not None:
+    if update.embed_keep_alive is not None:
         # Free-text: Ollama accepts "30s" / "1m" / "0" / integer seconds.
         # Trim, clamp to a sane upper bound on length (no validation —
         # the server returns 400 if the grammar is wrong, which surfaces
-        # to the user on the next chat query).
-        raw = update.chat_embed_keep_alive.strip()[:32]
+        # on the next search).
+        raw = update.embed_keep_alive.strip()[:32]
         settings_store.set_value(
-            conn, settings_store.KEY_RAG_CHAT_EMBED_KEEP_ALIVE, raw
+            conn, settings_store.KEY_RAG_EMBED_KEEP_ALIVE, raw
         )
     if update.chunk_max_chars is not None:
         n = max(500, min(20000, int(update.chunk_max_chars)))
@@ -3913,77 +3216,7 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
         settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_OVERLAP_MSGS, str(n))
 
 
-# ---- system / setup ----------------------------------------------------
-
-
-@app.get("/system/ollama-status")
-def system_ollama_status() -> dict:
-    """Synchronous probe used by the AI Setup wizard's first page.
-
-    Returns {running, installed, version, models, error}. Fast (≤5 s)
-    by design — the renderer treats this as instant feedback.
-    """
-    return system_probe.ollama_status().to_dict()
-
-
-class OllamaPullRequest(BaseModel):
-    name: str
-
-
-@app.post("/system/ollama-pull")
-def system_ollama_pull(body: OllamaPullRequest) -> StreamingResponse:
-    """SSE stream of Ollama pull progress.
-
-    Body: {name: "<model id>"}. The model id is whatever Ollama
-    accepts on /api/pull — including `hf.co/<repo>/<model>:<tag>` paths.
-    Emits one `progress` event per upstream NDJSON line, then `done`
-    when Ollama reports `status:"success"`, or `error` on any failure.
-
-    Cancel: if the renderer closes the SSE connection mid-stream, the
-    underlying urlopen handle is GC'd which closes the HTTP socket;
-    Ollama stops pulling and the partial blob stays on disk for resume.
-    """
-
-    name = body.name
-
-    def gen():
-        try:
-            for evt in system_probe.ollama_pull_stream(name):
-                # Pass through the raw fields the renderer renders against.
-                yield _sse_event("progress", {
-                    "status": evt.get("status", ""),
-                    "digest": evt.get("digest"),
-                    "completed": evt.get("completed"),
-                    "total": evt.get("total"),
-                })
-                if evt.get("status") == "success":
-                    yield _sse_event("done", {"model": name})
-                    return
-            # Stream ended without `success` — Ollama dropped us, but
-            # didn't error. Surface that so the UI doesn't hang on the
-            # last `progress` event.
-            yield _sse_event(
-                "error",
-                {"message": "pull stream ended without success status"},
-            )
-        except Exception as exc:  # noqa: BLE001 — boundary
-            # HTTPError / URLError / TimeoutError land here too. Wrap
-            # them in the same SSE shape so the renderer has one path.
-            yield _sse_event(
-                "error",
-                {"message": f"{type(exc).__name__}: {exc}"},
-            )
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-# ---- Restore (browser-extension pairing + snapshot serving) ----------
-#
-# Endpoints below back the F-list Workbench browser extension. Pairing
-# is OBS-style: extension POSTs /restore/handshake; renderer surfaces
-# an Accept-this-extension modal; on accept the token becomes valid
-# and the extension can list / fetch snapshots and post pre-restore
-# form-state snapshots. See repo/sidecar/restore.py for state model.
+# ---- browser-extension pairing -----------------------------------------
 
 
 class _PairAcceptBody(BaseModel):

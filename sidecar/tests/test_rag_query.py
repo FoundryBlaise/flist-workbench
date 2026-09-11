@@ -31,10 +31,6 @@ def rag_set() -> rag_settings.RagSettings:
         embed_api_key="",
         embed_query_prefix="",
         embed_document_prefix="",
-        chat_endpoint="http://chat.test/v1",
-        chat_model="chat-model",
-        chat_api_key="",
-        chat_system_prompt="test system",
         rerank_model="disabled",
         rerank_candidates=30,
         top_k=5,
@@ -42,10 +38,7 @@ def rag_set() -> rag_settings.RagSettings:
         rerank_min_ratio=0.0,
         hybrid_enabled=False,
         hybrid_bm25_candidates=30,
-        multiquery_enabled=False,
-        multiquery_variants=3,
-        chat_num_ctx=0,
-        chat_embed_keep_alive="",
+        embed_keep_alive="",
         chunk_max_chars=5000,
         chunk_soft_split_chars=4000,
         chunk_overlap_msgs=1,
@@ -125,7 +118,7 @@ def _mkchunk(
 # ---- run_query ---------------------------------------------------------
 
 
-def test_run_query_returns_hits_and_messages(
+def test_run_query_returns_hits_with_their_text(
     store: rag_store.RagStore,
     rag_set: rag_settings.RagSettings,
     monkeypatch: pytest.MonkeyPatch,
@@ -152,11 +145,9 @@ def test_run_query_returns_hits_and_messages(
     assert chunk_ids[0] == "a"
     assert len(result.hits) == 2
     assert result.rerank_applied is False
-    # System + user messages, in that order.
-    assert [m["role"] for m in result.messages] == ["system", "user"]
-    # Citation context blocks landed in the user message body.
-    assert "Source 1" in result.messages[-1]["content"]
-    assert "closest" in result.messages[-1]["content"]
+    # The connected model answers from the chunk text, so it has to
+    # come back on the hit rather than being folded into a prompt.
+    assert (result.hits[0].get("payload") or {})["text"] == "closest"
 
 
 def test_run_query_applies_rerank_when_enabled(
@@ -278,7 +269,6 @@ def test_run_query_handles_empty_hits(
         neighbors=0,
     )
     assert result.hits == []
-    assert "no relevant context" in result.messages[-1]["content"]
 
 
 def test_run_query_scope_filter_narrows_hits(
@@ -416,75 +406,3 @@ def test_run_query_without_lex_skips_lexical_search(
     )
     assert result.hybrid_applied is False
     assert result.hybrid_lexical_hits == 0
-
-
-# ---- multi-query expansion ---------------------------------------------
-
-
-def test_run_query_multiquery_unions_variants_by_chunk_id(
-    store: rag_store.RagStore,
-    rag_set: rag_settings.RagSettings,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Each variant gets a different dense vector — set up the embedder
-    # to map each query string to the vector that lands it on a
-    # specific chunk. Then the union must cover both chunks.
-    by_query = {
-        "ophelia?": [1.0, 0.0, 0.0],     # hits "ophelia_chunk"
-        "ophelia who?": [0.0, 1.0, 0.0], # hits "variant_chunk"
-    }
-
-    def fake_embed(texts, kind, settings, **_):  # noqa: ARG001
-        return [by_query.get(t, [0.0, 0.0, 1.0]) for t in texts]
-
-    monkeypatch.setattr(rag_embed, "embed_texts", fake_embed)
-    _seed_chunks(
-        store,
-        [
-            (_mkchunk("ophelia_chunk", text="Ophelia at the ball"), [1.0, 0.0, 0.0]),
-            (_mkchunk("variant_chunk", text="Whoever Ophelia is"), [0.0, 1.0, 0.0]),
-        ],
-    )
-    result = rag_query.run_query(
-        "ophelia?",
-        scope=None,
-        store=store,
-        rag_set=rag_set,
-        rerank_model="disabled",
-        top_k=5,
-        neighbors=0,
-        query_variants=["ophelia who?"],
-    )
-    cids = {(h.get("payload") or {}).get("chunk_id") for h in result.hits}
-    assert cids == {"ophelia_chunk", "variant_chunk"}
-    assert result.query_variants == ["ophelia who?"]
-
-
-def test_run_query_multiquery_dedupes_against_original(
-    store: rag_store.RagStore,
-    rag_set: rag_settings.RagSettings,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A variant identical to the original (after normalisation) must
-    # not add a second retrieval round.
-    embed_calls: list[str] = []
-
-    def fake_embed(texts, kind, settings, **_):  # noqa: ARG001
-        embed_calls.extend(texts)
-        return [[1.0, 0.0, 0.0]] * len(texts)
-
-    monkeypatch.setattr(rag_embed, "embed_texts", fake_embed)
-    _seed_chunks(store, [(_mkchunk("a"), [1.0, 0.0, 0.0])])
-    rag_query.run_query(
-        "Wer ist Amber?",
-        scope=None,
-        store=store,
-        rag_set=rag_set,
-        rerank_model="disabled",
-        top_k=3,
-        neighbors=0,
-        query_variants=["Wer ist Amber?", "Beschreibe Amber"],
-    )
-    # Exact-dup variant collapsed; only the original + the second
-    # variant got embedded.
-    assert embed_calls == ["Wer ist Amber?", "Beschreibe Amber"]

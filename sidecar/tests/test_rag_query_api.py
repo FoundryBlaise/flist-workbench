@@ -1,21 +1,21 @@
-"""SSE endpoint tests for /rag/query.
+"""Search + RAG settings API tests.
 
-Pipeline is heavily mocked: probe/embed/rerank/chat are all stubbed so
-the test runs in <1 s and asserts the SSE wire format, error stages,
-and citation payload shape.
+`/rag/query` and its SSE stream are gone — searching happens through
+`services.retrieval` (and the MCP `search_logs_semantic` tool that
+wraps it), so the retrieval assertions call the service directly.
+Embedding and reranking are stubbed so the suite stays fast and never
+downloads a model.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
 
 import pytest
 from fastapi.testclient import TestClient
 
 import labels as labels_store
-import rag_chat
 import rag_embed
 import rag_rerank
 import rag_store
@@ -91,11 +91,9 @@ def _seed_chunk(tmp_path: Path) -> None:
     rag_store.write_manifest(embed_model="m", embed_dimension=4)
 
 
-def _stub_pipeline(
+def _stub_embed(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    chat_chunks: Iterable[str] = ("Hello", " world"),
-    chat_error: Exception | None = None,
     embed_error: Exception | None = None,
 ) -> None:
     def fake_embed_texts(texts, kind, settings, **_):  # noqa: ARG001
@@ -105,211 +103,90 @@ def _stub_pipeline(
 
     monkeypatch.setattr(rag_embed, "embed_texts", fake_embed_texts)
 
-    def fake_stream_chat(*args, **kwargs):  # noqa: ARG001
-        if chat_error:
-            raise chat_error
-        for c in chat_chunks:
-            yield c
 
-    monkeypatch.setattr(rag_chat, "stream_chat", fake_stream_chat)
+# ---- retrieval ---------------------------------------------------------
 
 
-# ---- happy path --------------------------------------------------------
-
-
-def test_query_streams_tokens_and_done(
+def test_search_returns_the_chunk_with_its_text(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The connected model answers from the chunk text, so the text has
+    to survive all the way out — the old citation payload stripped it."""
+    from services import retrieval
+
     _seed_chunk(tmp_path)
-    _stub_pipeline(monkeypatch, chat_chunks=["Hi ", "there"])
+    _stub_embed(monkeypatch)
 
-    with client.stream(
-        "POST", "/rag/query", json={"question": "what happened?"}
-    ) as resp:
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("text/event-stream")
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-
-    names = [e for e, _ in events]
-    # Order: retrieved → token...token → done. No error events.
-    assert names[0] == "retrieved"
-    assert names[-1] == "done"
-    assert "error" not in names
-    tokens = [d.get("content") for e, d in events if e == "token"]
-    assert tokens == ["Hi ", "there"]
-    done = events[-1][1]
-    assert isinstance(done, dict)
-    assert "citations" in done
-    cites = done["citations"]
-    assert len(cites) == 1
-    assert cites[0]["chunk_id"] == "C__P__2026-01-01__IC#0"
-    assert cites[0]["ts_start"] == 1735689600
+    result = retrieval.search("what happened")
+    assert [h.chunk_id for h in result.hits] == ["C__P__2026-01-01__IC#0"]
+    hit = result.hits[0]
+    assert hit.text == "hello world"
+    assert hit.character == "C"
+    assert hit.partner == "P"
+    assert hit.date == "2026-01-01"
+    assert hit.label == "IC"
+    # The configured embedding model, not the one recorded in the
+    # manifest — the caller wants to know what embedded the query.
+    assert result.embed_model
 
 
-def test_query_scope_filter_narrows_hits(
+def test_search_scope_narrows_to_one_partner(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Two chunks in different partners — scope must trim out one.
-    with rag_store.RagStore(path=tmp_path / "qdrant") as store:
-        store.ensure_collection(vector_size=4)
-        store.upsert_chunks(
-            [
-                {
-                    "chunk_id": "C__A__2026-01-01__IC#0",
-                    "char_owner": "C",
-                    "partner": "A",
-                    "date": "2026-01-01",
-                    "label": "IC",
-                    "subchunk": 0,
-                    "ts_start": 1,
-                    "ts_end": 2,
-                    "speakers": ["A"],
-                    "msg_count": 1,
-                    "char_count": 1,
-                    "text": "alpha",
-                    "prev_chunk_id": None,
-                    "next_chunk_id": None,
-                },
-                {
-                    "chunk_id": "C__B__2026-01-01__IC#0",
-                    "char_owner": "C",
-                    "partner": "B",
-                    "date": "2026-01-01",
-                    "label": "IC",
-                    "subchunk": 0,
-                    "ts_start": 1,
-                    "ts_end": 2,
-                    "speakers": ["B"],
-                    "msg_count": 1,
-                    "char_count": 1,
-                    "text": "beta",
-                    "prev_chunk_id": None,
-                    "next_chunk_id": None,
-                },
-            ],
-            [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
-        )
-    rag_store.write_manifest(embed_model="m", embed_dimension=4)
-    _stub_pipeline(monkeypatch, chat_chunks=["x"])
+    from services import retrieval
 
-    with client.stream(
-        "POST",
-        "/rag/query",
-        json={
-            "question": "q",
-            "scope": {"character": "C", "partner": "A"},
-        },
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    done = next(d for e, d in events if e == "done")
-    cites = done["citations"]
-    assert {c["chunk_id"] for c in cites} == {"C__A__2026-01-01__IC#0"}
-
-
-# ---- failure modes -----------------------------------------------------
-
-
-def test_query_emits_error_when_no_index(client: TestClient) -> None:
-    with client.stream(
-        "POST", "/rag/query", json={"question": "anything"}
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    # First (and only) event is a retrieval-stage error.
-    assert len(events) == 1
-    event, payload = events[0]
-    assert event == "error"
-    assert payload["stage"] == "retrieval"
-    assert "no RAG index" in payload["message"]
-
-
-def test_query_emits_error_on_embed_failure(
-    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
     _seed_chunk(tmp_path)
-    _stub_pipeline(monkeypatch, embed_error=rag_embed.EmbedError("HTTP 404"))
+    _stub_embed(monkeypatch)
 
-    with client.stream(
-        "POST", "/rag/query", json={"question": "q"}
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    # Stop at the first error event.
-    errors = [(e, d) for e, d in events if e == "error"]
-    assert errors
-    assert errors[0][1]["stage"] == "embed"
+    assert retrieval.search(
+        "q", scope={"character": "C", "partner": "P"}
+    ).hits
+    assert not retrieval.search(
+        "q", scope={"character": "C", "partner": "Nobody"}
+    ).hits
 
 
-def test_query_emits_error_on_chat_failure(
+def test_search_without_an_index_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from services import retrieval
+
+    _stub_embed(monkeypatch)
+    with pytest.raises(retrieval.NoIndexError) as exc:
+        retrieval.search("anything")
+    assert "ingest_logs" in str(exc.value)
+
+
+def test_search_surfaces_an_unreachable_embedding_endpoint(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from services import retrieval
+
     _seed_chunk(tmp_path)
-    _stub_pipeline(monkeypatch, chat_error=rag_chat.ChatError("model OOM"))
-
-    with client.stream(
-        "POST", "/rag/query", json={"question": "q"}
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    # `retrieved` lands first (retrieval succeeded), then the chat error.
-    names = [e for e, _ in events]
-    assert names[0] == "retrieved"
-    errs = [(e, d) for e, d in events if e == "error"]
-    assert errs
-    assert errs[0][1]["stage"] == "chat"
-    assert "model OOM" in errs[0][1]["message"]
+    _stub_embed(monkeypatch, embed_error=rag_embed.EmbedError("connection refused"))
+    with pytest.raises(rag_embed.EmbedError):
+        retrieval.search("anything")
 
 
-def test_query_per_request_top_k_override(
+def test_search_top_k_override_is_clamped(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Seed a couple of chunks; top_k=1 must return exactly one citation.
-    with rag_store.RagStore(path=tmp_path / "qdrant") as store:
-        store.ensure_collection(vector_size=4)
-        store.upsert_chunks(
-            [
-                {
-                    "chunk_id": f"C__P__2026-01-01__IC#{i}",
-                    "char_owner": "C",
-                    "partner": "P",
-                    "date": "2026-01-01",
-                    "label": "IC",
-                    "subchunk": i,
-                    "ts_start": i,
-                    "ts_end": i + 1,
-                    "speakers": ["C"],
-                    "msg_count": 1,
-                    "char_count": 5,
-                    "text": f"chunk {i}",
-                    "prev_chunk_id": None,
-                    "next_chunk_id": None,
-                }
-                for i in range(3)
-            ],
-            [[1.0 - 0.1 * i, 0.0, 0.0, 0.0] for i in range(3)],
-        )
-    rag_store.write_manifest(embed_model="m", embed_dimension=4)
-    _stub_pipeline(monkeypatch, chat_chunks=["x"])
+    from services import retrieval
 
-    with client.stream(
-        "POST",
-        "/rag/query",
-        json={"question": "q", "top_k": 1, "neighbors": 0},
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    done = next(d for e, d in events if e == "done")
-    assert len(done["citations"]) == 1
+    _seed_chunk(tmp_path)
+    _stub_embed(monkeypatch)
+    # Absurd top_k must not raise; it is clamped like the saved setting.
+    assert len(retrieval.search("q", top_k=9999).hits) == 1
 
 
 # ---- settings PUT + GET extended fields --------------------------------
 
 
-def test_settings_put_persists_rag_chat_fields(client: TestClient) -> None:
+def test_settings_put_persists_retrieval_fields(client: TestClient) -> None:
     res = client.put(
         "/settings",
         json={
             "rag": {
-                "chat_endpoint": "http://chat.test/v1",
-                "chat_model": "gpt-test",
-                "chat_api_key": "sk-x",
-                "chat_system_prompt": "answer briefly",
                 "rerank_model": "disabled",
                 "rerank_candidates": 50,
                 "top_k": 8,
@@ -318,14 +195,38 @@ def test_settings_put_persists_rag_chat_fields(client: TestClient) -> None:
         },
     ).json()
     rag = res["rag"]
-    assert rag["chat_endpoint"] == "http://chat.test/v1"
-    assert rag["chat_model"] == "gpt-test"
-    assert rag["chat_api_key"] == "sk-x"
-    assert rag["chat_system_prompt"] == "answer briefly"
     assert rag["rerank_model"] == "disabled"
     assert rag["rerank_candidates"] == 50
     assert rag["top_k"] == 8
     assert rag["neighbors"] == 2
+
+
+def test_settings_no_longer_carries_chat_fields(client: TestClient) -> None:
+    """Workbench runs no language model; a chat endpoint in Settings
+    would be a control with nothing behind it."""
+    rag = client.get("/settings").json()["rag"]
+    for gone in (
+        "chat_endpoint",
+        "chat_model",
+        "chat_api_key",
+        "chat_system_prompt",
+        "chat_num_ctx",
+        "multiquery_enabled",
+        "multiquery_variants",
+    ):
+        assert gone not in rag, gone
+        assert gone not in rag["defaults"], gone
+    labels = client.get("/settings").json()["labels"]
+    for gone in ("llm_endpoint", "llm_model", "llm_api_key", "system_prompt"):
+        assert gone not in labels, gone
+
+
+def test_settings_renames_keep_alive_to_drop_the_chat_prefix(
+    client: TestClient,
+) -> None:
+    res = client.put("/settings", json={"rag": {"embed_keep_alive": "45s"}}).json()
+    assert res["rag"]["embed_keep_alive"] == "45s"
+    assert "chat_embed_keep_alive" not in res["rag"]
 
 
 def test_settings_clamps_runaway_top_k(client: TestClient) -> None:
@@ -422,25 +323,6 @@ def test_settings_exposes_chunk_defaults(client: TestClient) -> None:
     assert d["chunk_overlap_msgs"] == rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS
 
 
-def test_settings_default_chat_prompt_is_english(client: TestClient) -> None:
-    res = client.get("/settings").json()
-    # The default lives in rag_query — we can't import directly here
-    # without circular ugliness, so check phrases that are stable.
-    body = res["rag"]["defaults"]["chat_system_prompt"].lower()
-    assert "roleplay logs" in body
-    assert "exclusively from the provided sources" in body
-
-
-def test_settings_chat_prompt_falls_back_to_default_when_empty(
-    client: TestClient,
-) -> None:
-    # Save a custom prompt then clear it; the reload must surface the default.
-    client.put("/settings", json={"rag": {"chat_system_prompt": "custom"}})
-    res = client.put("/settings", json={"rag": {"chat_system_prompt": ""}}).json()
-    assert res["rag"]["chat_system_prompt"] != "custom"
-    assert "exclusively from the provided sources" in res["rag"]["chat_system_prompt"].lower()
-
-
 # ---- labels.connect side-effect: rag_meta lives in same DB --------------
 
 
@@ -461,7 +343,7 @@ def test_no_collision_with_labels_db(client: TestClient, tmp_path: Path) -> None
             ts=1,
             speaker="X",
             label="IC",
-            source="llm",
+            source="mcp",
         )
         labels = conn.execute("SELECT COUNT(*) AS n FROM labels").fetchone()["n"]
         meta = conn.execute("SELECT COUNT(*) AS n FROM rag_meta").fetchone()["n"]

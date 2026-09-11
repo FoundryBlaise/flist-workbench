@@ -130,12 +130,19 @@ def chunk_messages(
     soft_split: int = DEFAULT_SOFT_SPLIT_CHARS,
     overlap: int = DEFAULT_OVERLAP_MSGS,
     speaker_aliases: list[str] | None = None,
+    skipped_unlabeled: list[int] | None = None,
 ) -> list[Chunk]:
     """Group an in-memory conversation into retrieval chunks.
 
     `labels_by_hash` is what `labels.labels_for_partner` returns (just
     the DB rows). The resolver fills in rule-driven IC/OOC outcomes
     on the fly — we never trust a Unlabeled message into the corpus.
+
+    `skipped_unlabeled` — pass a one-element list to receive the count
+    of messages dropped for lack of a verdict. Callers surface it so a
+    user whose log is mostly unjudged is told to run the MCP
+    classification flow rather than left wondering why the index is
+    empty.
 
     `speaker_aliases` — pass the partner's alias group when this
     conversation is a merged rename. Any message whose `speaker`
@@ -155,6 +162,9 @@ def chunk_messages(
         if aliased:
             speaker_map = {n: partner for n in aliased}
 
+    if skipped_unlabeled is None:
+        skipped_unlabeled = [0]
+
     groups: dict[tuple[str, str], list[dict]] = {}
     for m in messages:
         # F-Chat 'system' (warn/event/etc) is never useful for RP
@@ -165,6 +175,12 @@ def chunk_messages(
         h = msg_hash(m)
         label = labels_store.resolve(m, labels_by_hash.get(h), label_settings)
         if label == labels_store.LABEL_UNLABELED:
+            # Not indexed: an unjudged message could be either IC prose
+            # or OOC chatter, and mixing OOC into the index poisons
+            # retrieval. Counted so the caller can tell the user to run
+            # the classification flow first — silently dropping half a
+            # log and reporting "0 chunks" is the confusing alternative.
+            skipped_unlabeled[0] += 1
             continue
         if label == labels_store.LABEL_OOC and not include_ooc:
             continue

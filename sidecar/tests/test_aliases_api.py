@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 import aliases as aliases_store
 import labels as labels_store
-import rag_chat
 import rag_embed
 import rag_rerank
 import rag_store
@@ -153,66 +152,33 @@ def _seed_two_partner_chunks(qdrant_path: Path) -> None:
     rag_store.write_manifest(embed_model="m", embed_dimension=4)
 
 
-def _stub_chat_and_embed(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_embed(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_embed(texts: list[str], kind, settings, **_):
         return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
 
-    def fake_stream(*a, **k):
-        yield "ok"
-
     monkeypatch.setattr(rag_embed, "embed_texts", fake_embed)
-    monkeypatch.setattr(rag_chat, "stream_chat", fake_stream)
 
 
-def _parse_sse(body: bytes) -> list[tuple[str, dict | str]]:
-    import json as _json
-
-    out: list[tuple[str, dict | str]] = []
-    for block in body.decode("utf-8").split("\n\n"):
-        if not block.strip():
-            continue
-        event = None
-        data_lines = []
-        for line in block.split("\n"):
-            if line.startswith("event:"):
-                event = line[len("event:") :].strip()
-            elif line.startswith("data:"):
-                data_lines.append(line[len("data:") :].strip())
-        if event is None:
-            continue
-        raw = "\n".join(data_lines)
-        try:
-            out.append((event, _json.loads(raw)))
-        except Exception:
-            out.append((event, raw))
-    return out
-
-
-def test_rag_query_scope_expansion_to_alias_group(
+def test_search_scope_expands_to_the_alias_group(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A query scoped to (MyChar, Ashvalia) must return BOTH the chunk
-    indexed under "Ashvalia" and the chunk indexed under "Daemon
-    Enariel" once the rename is linked via /aliases.
+    """A search scoped to (MyChar, Ashvalia) must return BOTH the chunk
+    indexed under "Ashvalia" and the chunk indexed under the pre-rename
+    "Daemon Enariel" once the rename is linked via /aliases.
     """
+    from services import retrieval
+
     _seed_two_partner_chunks(tmp_path / "qdrant")
-    _stub_chat_and_embed(monkeypatch)
+    _stub_embed(monkeypatch)
+    scope = {"character": "MyChar", "partner": "Ashvalia"}
 
-    # Without the link: only the partner-matching chunk is returned.
-    with client.stream(
-        "POST",
-        "/rag/query",
-        json={
-            "question": "what happened",
-            "scope": {"character": "MyChar", "partner": "Ashvalia"},
-        },
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    done = next(d for e, d in events if e == "done")
-    chunk_ids = {c["chunk_id"] for c in done["citations"]}
-    assert chunk_ids == {"MyChar__Ashvalia__2026-01-02__IC#0"}
+    # Without the link: only the partner-matching chunk is in scope.
+    result = retrieval.search("what happened", scope=scope)
+    assert {h.chunk_id for h in result.hits} == {
+        "MyChar__Ashvalia__2026-01-02__IC#0"
+    }
 
-    # Link the rename, then re-query: both chunks now in scope.
+    # Link the rename, then search again: both chunks now in scope.
     client.post(
         "/aliases",
         json={
@@ -221,18 +187,8 @@ def test_rag_query_scope_expansion_to_alias_group(
             "primary_name": "Ashvalia",
         },
     )
-    with client.stream(
-        "POST",
-        "/rag/query",
-        json={
-            "question": "what happened",
-            "scope": {"character": "MyChar", "partner": "Ashvalia"},
-        },
-    ) as resp:
-        events = _parse_sse(b"".join(resp.iter_bytes()))
-    done = next(d for e, d in events if e == "done")
-    chunk_ids = {c["chunk_id"] for c in done["citations"]}
-    assert chunk_ids == {
+    result = retrieval.search("what happened", scope=scope)
+    assert {h.chunk_id for h in result.hits} == {
         "MyChar__Ashvalia__2026-01-02__IC#0",
         "MyChar__Daemon_Enariel__2026-01-01__IC#0",
     }

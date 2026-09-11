@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from typing import Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from rag import RagSettings
@@ -46,6 +47,41 @@ EmbedKind = Literal["query", "document"]
 class EmbedError(RuntimeError):
     """Wraps transport / decode failures so callers don't import urllib themselves."""
 
+
+def detect_endpoint_kind(endpoint: str) -> Literal["openai", "ollama"]:
+    """Return 'ollama' when the URL looks like an Ollama instance, else 'openai'.
+
+    Signals (any one wins):
+      - the port is 11434 (Ollama's default)
+      - the path contains "/api/" (already targeting Ollama's native API)
+
+    Everything else (LM Studio :1234, openai.com, vLLM, TEI) falls back
+    to the OpenAI-compatible path.
+
+    Lives here rather than in a chat module because embedding is the
+    only endpoint Workbench still calls — it runs no language model of
+    its own, the connected MCP client brings that.
+    """
+    try:
+        parsed = urlparse(endpoint)
+    except Exception:  # noqa: BLE001 — malformed URLs degrade safely
+        return "openai"
+    if parsed.port == 11434:
+        return "ollama"
+    # An endpoint already on a /api path is unmistakably Ollama-native.
+    if "/api/" in (parsed.path or "") or (parsed.path or "").endswith("/api"):
+        return "ollama"
+    return "openai"
+
+
+def _ollama_base(endpoint: str) -> str:
+    """Strip a trailing /v1 (or /v1/) from the endpoint so the Ollama
+    native API path can be appended cleanly. Idempotent.
+    """
+    e = endpoint.rstrip("/")
+    if e.endswith("/v1"):
+        e = e[: -len("/v1")]
+    return e
 
 def _prefix_for(kind: EmbedKind, settings: RagSettings) -> str:
     if kind == "query":
@@ -185,10 +221,6 @@ def try_unload(settings: RagSettings, *, timeout: float = 10.0) -> bool:
     Returns True on a 2xx response, False on any failure. Caller must
     treat this as advisory only — never raises.
     """
-    # Import locally to avoid a cycle (rag_chat imports rag_store, which
-    # in some test contexts imports rag_embed for probe).
-    from rag_chat import _ollama_base, detect_endpoint_kind  # noqa: PLC0415
-
     headers = {"Content-Type": "application/json"}
     if settings.embed_api_key:
         headers["Authorization"] = f"Bearer {settings.embed_api_key}"

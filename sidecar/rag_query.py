@@ -3,16 +3,16 @@
 Pipeline:
 
   query string
-    -> embed via rag_embed (LM Studio)
+    -> embed via rag_embed (the one inference server Workbench uses)
     -> top-N from Qdrant via rag_store (filtered by scope)
-    -> rerank via rag_rerank (cross-encoder, optional)
+    -> optional BM25 fusion via rag_lexical
+    -> rerank via rag_rerank (local cross-encoder, optional)
     -> ±M neighbor expansion via prev_chunk_id / next_chunk_id
-    -> build context blocks
-    -> return {hits, llm_messages}
+    -> return the chunks
 
-The function is pure-Python and synchronous — the SSE endpoint in
-server.py wraps it. Splitting query-pipeline from streaming-output
-keeps the pipeline testable without a real LLM in the loop.
+No language model is involved. The chunks go out through the MCP tool
+`search_logs_semantic`; the model the user connected reads them and
+answers. Pure-Python and synchronous, so it stays testable.
 
 Scope shape matches rag_store._scope_to_filter:
     None                                  — all chunks (cross-RP)
@@ -23,7 +23,7 @@ Scope shape matches rag_store._scope_to_filter:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import rag as rag_settings
@@ -37,48 +37,18 @@ import rag_store
 class QueryResult:
     """Bundles the retrieval output for the SSE endpoint.
 
-    `hits` are the post-expansion ordered chunks (the same list that
-    fed the LLM context). The endpoint serialises a slim subset of
-    each as a citation in the final `done` event.
-
-    `messages` is the OpenAI-compatible {role, content} list ready to
-    pass to /v1/chat/completions. The system prompt is included so the
-    streaming client doesn't have to reconstruct it.
+    `hits` are the post-expansion ordered chunks, newest-relevance
+    first, each carrying its full text. The MCP `search_logs_semantic`
+    tool serialises them for the connected model to read and answer
+    from — Workbench itself never calls a language model.
     """
 
     hits: list[dict]
-    messages: list[dict]
     embed_model: str
     rerank_model: str | None
     rerank_applied: bool
-    # Empty when hybrid/multi-query are disabled; the SSE endpoint uses
-    # these to optionally emit a "expanded" / "hybrid" status event so
-    # the chat panel can show the user what happened.
     hybrid_applied: bool = False
     hybrid_lexical_hits: int = 0
-    query_variants: list[str] = field(default_factory=list)
-
-
-def build_context(hits: list[dict]) -> str:
-    """Concatenate hit payloads into source blocks for the LLM context.
-
-    Mirrors Chat_RAG/query.py.build_context — each block carries date,
-    partner, speakers and chunk_id so the model can cite back to a
-    specific source the renderer knows how to deep-link to.
-    """
-    blocks: list[str] = []
-    for i, hit in enumerate(hits, 1):
-        p = hit.get("payload") or {}
-        speakers = ", ".join(p.get("speakers", []) or [])
-        tag = " (expanded context)" if p.get("expanded") else ""
-        block = (
-            f"=== Source {i}{tag} | date: {p.get('date')} | "
-            f"partner: {p.get('partner')} | speakers: {speakers} | "
-            f"id: {p.get('chunk_id')} ===\n"
-            f"{p.get('text', '')}"
-        )
-        blocks.append(block)
-    return "\n\n".join(blocks)
 
 
 def expand_with_neighbors(
@@ -218,38 +188,31 @@ def run_query(
     rerank_min_ratio: float = rag_rerank.DEFAULT_RERANK_MIN_RATIO,
     lex: rag_lexical.LexicalStore | None = None,
     hybrid_bm25_candidates: int = rag_settings.DEFAULT_HYBRID_BM25_CANDIDATES,
-    query_variants: list[str] | None = None,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     cache_dir: Path | None = None,
 ) -> QueryResult:
-    """Execute one retrieval round and return the data needed to stream
-    an LLM answer. Does not call the LLM — the caller streams it.
+    """Retrieve the log chunks most relevant to `question`.
 
-    Optional retrieval extensions (callers wire from saved settings):
-      lex                  — LexicalStore instance enables BM25 hybrid
-                             retrieval fused via RRF
-      query_variants       — extra paraphrases of `question` to embed
-                             alongside it (multi-query expansion); the
-                             original question is always included first
+    No language model is involved: dense retrieval, optional BM25
+    fusion, optional local cross-encoder rerank, neighbour expansion.
+    The caller (the MCP retrieval tool) hands the chunks to whatever
+    model the user has connected.
+
+    `lex` — a LexicalStore instance — enables BM25 hybrid retrieval
+    fused via RRF.
     """
     rerank_disabled = rag_rerank.is_disabled(rerank_model)
     retrieve_n = top_k if rerank_disabled else max(rerank_candidates, top_k)
 
-    # 1. Dense retrieval — one round per query variant. Multi-query
-    #    callers pre-compute paraphrases; without it we just have one
-    #    question.
+    # 1. Dense retrieval.
     variants = [question]
-    if query_variants:
-        for v in query_variants:
-            if v and v.strip() and v not in variants:
-                variants.append(v)
 
     hits_by_cid: dict[str, dict] = {}
     dense_rank_lists: list[list[str]] = []
-    # Forward chat_embed_keep_alive so Ollama drops the embed model
-    # shortly after the question is embedded — keeps VRAM free for the
-    # chat model. Empty string means "don't override the server default".
-    query_keep_alive = rag_set.chat_embed_keep_alive or None
+    # Forward embed_keep_alive so Ollama drops the embed model shortly
+    # after the question is embedded, instead of pinning VRAM against
+    # whatever the user has loaded for their MCP client. Empty string
+    # means "don't override the server default".
+    query_keep_alive = rag_set.embed_keep_alive or None
     for q in variants:
         qvec = rag_embed.embed_texts(
             [q], "query", rag_set, keep_alive=query_keep_alive
@@ -333,33 +296,13 @@ def run_query(
 
     hits = expand_with_neighbors(store, hits, hops=neighbors)
 
-    if hits:
-        context = build_context(hits)
-        user_msg = f"CONTEXT:\n{context}\n\nQUESTION: {question}"
-    else:
-        # No hits — still call the LLM so the renderer gets a
-        # streamed "I can't find anything" reply rather than a silent
-        # empty response.
-        user_msg = (
-            f"QUESTION: {question}\n\n"
-            "(no relevant context was retrieved from the logs)"
-        )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_msg},
-    ]
     return QueryResult(
         hits=hits,
-        messages=messages,
         embed_model=rag_set.embed_model,
         rerank_model=None if rerank_disabled else rerank_model,
         rerank_applied=rerank_applied,
         hybrid_applied=hybrid_applied,
         hybrid_lexical_hits=len(lexical_hits),
-        # Drop the original from the variants reported back — the UI
-        # cares about the *extra* queries we generated, not the input.
-        query_variants=variants[1:],
     )
 
 
