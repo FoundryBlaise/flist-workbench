@@ -37,6 +37,7 @@ import settings as settings_store
 import workbench_mcp
 from services import label_rollup, payload_ops
 from services import backup_all as backup_all_service
+from services import events as event_bus
 from services import pull as pull_service
 from logs import (
     LogDirError,
@@ -71,6 +72,9 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     lifespan is present. The startup routines themselves still live
     next to the code they belong to; this only sequences them.
     """
+    import asyncio as _asyncio
+
+    event_bus.bind_loop(_asyncio.get_running_loop())
     if not OFFLINE_STARTUP:
         await _eicons_warm_up()
     await _hydrate_activity_log_on_startup()
@@ -178,6 +182,49 @@ async def _flist_touch_middleware(request, call_next):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}
+
+
+@app.get("/events")
+async def events_stream(request: Request) -> StreamingResponse:
+    """Server-sent stream of changes to shared state.
+
+    The renderer holds one of these open for the life of the window.
+    It exists because the window is no longer the only writer: a model
+    connected over MCP edits the same working sets, and without this
+    the window would keep showing a stale draft and then autosave it
+    back over the model's work.
+
+    Events are hints — `{event, at, ...ids}`. The renderer re-reads
+    through the normal endpoints when one arrives.
+    """
+
+    async def producer():
+        import asyncio
+
+        async with event_bus.subscribe() as sub:
+            # Announce immediately so the client knows the stream is
+            # live rather than merely connected.
+            yield _sse_event("ready", {"subscribers": event_bus.subscriber_count()})
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    payload = await asyncio.wait_for(sub.queue.get(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    # A comment frame keeps proxies and the renderer's
+                    # own read timeout from treating idle as dead.
+                    yield b": keep-alive\n\n"
+                    continue
+                yield _sse_event(payload["event"], payload)
+
+    return StreamingResponse(
+        producer(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/mcp-info")

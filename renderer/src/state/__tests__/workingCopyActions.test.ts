@@ -64,6 +64,7 @@ beforeEach(() => {
     flistSetWorking: {},
     flistActiveSetId: {},
     flistSets: {},
+    flistExternalChange: {},
     flistArchive: {},
     flistCustomKinksUI: {},
     flistResetUndo: null,
@@ -140,26 +141,121 @@ describe('autosave debouncer', () => {
   })
 })
 
+const conflictResponse = async () =>
+  ({
+    ok: false,
+    status: 409,
+    json: async () => ({
+      detail: { detail: 'etag_mismatch', current_etag: 'server-etag' }
+    }),
+    text: async () => '{}'
+  }) as unknown as Response
+
 describe('flistFlushWorking 409 etag-mismatch path', () => {
-  it('keeps unsavedDirty + sets refresh-or-overwrite saveError', async () => {
+  it('does NOT adopt the server etag, so a retry cannot overwrite', async () => {
+    // The window is no longer the only writer: a model editing through
+    // MCP hits the same set. Adopting the server's etag here would let
+    // the next keystroke's autosave succeed and silently overwrite the
+    // model's work — the whole point of the conflict.
     seedSlot('99', { character: { description: 'mine' } })
-    mockFetch([
-      async () =>
-        ({
-          ok: false,
-          status: 409,
-          json: async () => ({
-            detail: { detail: 'etag_mismatch', current_etag: 'server-etag' }
-          }),
-          text: async () => '{}'
-        }) as unknown as Response
-    ])
+    mockFetch([conflictResponse])
     useStore.getState().flistSetWorkingField('99', 'character.description', 'mine-updated')
     await vi.advanceTimersByTimeAsync(500)
     const slot = useStore.getState().flistWorking['99']
     expect(slot.unsavedDirty).toBe(true)
-    expect(slot.saveError).toMatch(/Another window/i)
-    expect(slot.etag).toBe('server-etag')
+    expect(slot.saveError).toMatch(/whose version to keep/i)
+    expect(slot.etag).toBe('seed-etag')
+  })
+
+  it('raises the conflict banner carrying the server etag', async () => {
+    seedSlot('99', { character: { description: 'mine' } })
+    mockFetch([conflictResponse])
+    useStore.getState().flistSetWorkingField('99', 'character.description', 'mine-updated')
+    await vi.advanceTimersByTimeAsync(500)
+    const change = useStore.getState().flistExternalChange['99']
+    expect(change).toBeTruthy()
+    expect(change?.setId).toBe(SET_ID)
+    expect(change?.etag).toBe('server-etag')
+  })
+})
+
+describe('external-change resolution', () => {
+  it('ignores a change carrying the etag we already hold', () => {
+    // Our own write comes back over the event stream too.
+    seedSlot('99', { character: { description: 'mine' } })
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: 'seed-etag',
+      origin: 'mcp:set_description'
+    })
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
+  })
+
+  it('raises a banner for a change made by something else', () => {
+    seedSlot('99', { character: { description: 'mine' } })
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: 'theirs',
+      origin: 'mcp:set_description'
+    })
+    const change = useStore.getState().flistExternalChange['99']
+    expect(change?.origin).toBe('mcp:set_description')
+  })
+
+  it('reload takes their version and clears the banner', async () => {
+    seedSlot('99', { character: { description: 'mine' } })
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: 'theirs',
+      origin: 'mcp:set_description'
+    })
+    mockFetch([
+      async () =>
+        ok({
+          payload: {
+            _schema_version: 2,
+            _overlay: [],
+            character: { description: 'theirs' }
+          },
+          etag: 'theirs'
+        })
+    ])
+    await useStore.getState().flistReloadAfterExternalChange('99')
+    const slot = useStore.getState().flistWorking['99']
+    const char = slot.payload.character as { description?: string } | undefined
+    expect(char?.description).toBe('theirs')
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.etag).toBe('theirs')
+    expect(useStore.getState().flistExternalChange['99']).toBeNull()
+  })
+
+  it('keep-mine writes against their etag, which is what makes it win', async () => {
+    seedSlot('99', { character: { description: 'mine' } })
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: 'theirs',
+      origin: 'mcp:set_description'
+    })
+    const calls = mockFetch([async () => ok({ etag: 'mine-now' })])
+    await useStore.getState().flistOverwriteAfterExternalChange('99')
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put?.headers?.['If-Match']).toBe('theirs')
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.etag).toBe('mine-now')
+    expect(slot.unsavedDirty).toBe(false)
+    expect(useStore.getState().flistExternalChange['99']).toBeNull()
+  })
+
+  it('a failed keep-mine leaves the banner up', async () => {
+    seedSlot('99', { character: { description: 'mine' } })
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: 'theirs',
+      origin: 'mcp:set_description'
+    })
+    mockFetch([conflictResponse])
+    await useStore.getState().flistOverwriteAfterExternalChange('99')
+    expect(useStore.getState().flistExternalChange['99']).toBeTruthy()
   })
 })
 

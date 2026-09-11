@@ -14,11 +14,15 @@ two things:
 
 from __future__ import annotations
 
+import functools
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from mcp.types import ToolAnnotations
+
+from services import events
 
 #: Tag applied to tools that belong on the character-editing endpoint.
 TAG_CHARACTER = "character"
@@ -66,6 +70,7 @@ def tool(
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
         tool_name = name or fn.__name__
         origin = f"{fn.__module__}.{fn.__qualname__}"
+        wrapped = _attributed(fn, tool_name)
         previous = _SEEN.get(tool_name)
         if previous is not None and previous != origin:
             raise ValueError(
@@ -79,7 +84,7 @@ def tool(
         _SEEN[tool_name] = origin
         _TOOLS.append(
             ToolSpec(
-                fn=fn,
+                fn=wrapped,
                 name=tool_name,
                 title=title,
                 tags=tag_set,
@@ -96,6 +101,34 @@ def tool(
         return fn
 
     return decorate
+
+
+
+def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
+    """Tag everything a tool publishes on the event bus as coming from
+    MCP, naming the tool.
+
+    The renderer ignores changes it made itself and reloads for
+    everything else, so a write has to say where it came from — and
+    "the set you have open just changed" is far more useful to a user
+    when it can name `set_description` as the cause.
+    """
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            with events.origin(f"mcp:{tool_name}"):
+                return await fn(*args, **kwargs)
+
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with events.origin(f"mcp:{tool_name}"):
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def registered_tools(tags: frozenset[str] | None = None) -> list[ToolSpec]:

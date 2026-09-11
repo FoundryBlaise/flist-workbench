@@ -552,6 +552,23 @@ def maybe_run_scheduled_backup(
 # ---- live + snapshot read/write ---------------------------------------
 
 
+def _publish(event: str, **data: Any) -> None:
+    """Announce a change on the event bus, if one is running.
+
+    Publishing lives here rather than in the callers so *every* writer
+    is covered — the REST routes the window calls and the MCP tools a
+    model calls alike. Imported lazily and failure-swallowing: a
+    notification is never worth failing a write for, and the archive
+    must stay importable in tests that don't run a loop.
+    """
+    try:
+        from services import events
+
+        events.publish(event, **data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Atomic JSON write. Retries `Path.replace` once on OSError with a
     short jittered backoff — OneDrive / Dropbox-synced directories can
@@ -598,6 +615,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
     _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+    _publish("live-changed", character_id=str(character_id))
 
 
 def read_live(character_id: int | str) -> dict[str, Any] | None:
@@ -1347,6 +1365,12 @@ def write_set_meta(
         updated_at=int(updated_at),
     )
     _atomic_write_json(set_meta_path(character_id, set_id), meta.to_dict())
+    _publish(
+        "sets-changed",
+        character_id=str(character_id),
+        set_id=set_id,
+        name=clean,
+    )
     return meta
 
 
@@ -1419,6 +1443,12 @@ def write_set_payload(
     )
     new_etag = _file_sha256(p)
     assert new_etag is not None
+    _publish(
+        "set-payload-changed",
+        character_id=str(character_id),
+        set_id=set_id,
+        etag=new_etag,
+    )
     return new_etag
 
 
@@ -1444,10 +1474,18 @@ def set_active_set_id(character_id: int | str, set_id: str) -> None:
     if not _is_valid_set_id(set_id):
         raise ValueError(f"invalid set_id: {set_id!r}")
     _atomic_write_json(active_set_path(character_id), {"active_set_id": set_id})
+    _publish(
+        "active-set-changed",
+        character_id=str(character_id),
+        set_id=set_id,
+    )
 
 
 def clear_active_set_id(character_id: int | str) -> None:
     _atomic_write_json(active_set_path(character_id), {"active_set_id": None})
+    _publish(
+        "active-set-changed", character_id=str(character_id), set_id=None
+    )
 
 
 def list_sets(character_id: int | str) -> list[SetMeta]:
@@ -1581,6 +1619,7 @@ def delete_set(character_id: int | str, set_id: str) -> None:
     import shutil
 
     shutil.rmtree(d, ignore_errors=True)
+    _publish("sets-changed", character_id=str(character_id), set_id=set_id)
     if read_active_set_id(character_id) == set_id:
         clear_active_set_id(character_id)
 

@@ -16,11 +16,13 @@ import { ActivityLogModal } from '../features/flist/ActivityLogModal'
 import { ExtensionPairWatcher } from '../features/flist/ExtensionPairModal'
 import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
+import { ExternalChangeBanner } from './ExternalChangeBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { useStore } from '../state'
 import { api } from '../lib/api'
+import { subscribeToWorkbenchEvents } from '../lib/eventStream'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
 import type { MenuAction } from '../App'
 
@@ -181,6 +183,50 @@ export function AppLayout() {
     }
     window.addEventListener('flist-session-expired', onExpired)
     return () => window.removeEventListener('flist-session-expired', onExpired)
+  }, [])
+
+  // Watch the sidecar for changes this window didn't make. A model
+  // connected over MCP writes the same working sets, labels the same
+  // logs and changes the same settings; without this the window shows
+  // a stale draft and then autosaves it back over the model's work.
+  useEffect(() => {
+    const base = window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
+    return subscribeToWorkbenchEvents(base, (event) => {
+      // Our own writes come back too; nothing to do about those.
+      if (event.origin === 'ui') return
+      const store = useStore.getState()
+      switch (event.event) {
+        case 'set-payload-changed':
+          if (event.character_id && event.set_id) {
+            store.flistNoteExternalChange(event.character_id, {
+              setId: event.set_id,
+              etag: event.etag ?? null,
+              origin: event.origin
+            })
+          }
+          break
+        case 'sets-changed':
+        case 'active-set-changed':
+          if (event.character_id) void store.flistLoadSets(event.character_id)
+          break
+        case 'live-changed':
+          if (event.character_id) void store.flistLoadArchive(event.character_id)
+          break
+        case 'labels-changed': {
+          // Label chips are rendered from the cached message list, so
+          // the cache has to go before they can refresh.
+          const char = store.activeCharacter
+          const partner = store.activePartner
+          if (char && partner) {
+            store.invalidateMessages(char, partner)
+            void store.loadMessages(char, partner, { force: true })
+          }
+          break
+        }
+        default:
+          break
+      }
+    })
   }, [])
 
   // First-run detection: a non-blocking toast pointing at Settings →
@@ -413,6 +459,7 @@ export function AppLayout() {
           </button>
         </div>
       )}
+      <ExternalChangeBanner />
       <BackupAllBanner />
       <ExtensionPairWatcher />
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
