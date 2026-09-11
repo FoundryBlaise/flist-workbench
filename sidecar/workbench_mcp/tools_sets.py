@@ -1,9 +1,13 @@
 """Characters, working sets and descriptions (design §3.2–3.4).
 
 Addressing note that runs through all of these: `character` takes a
-name or an id, and `set` takes a set name, a set id, or the string
-`"live"` for the read-only profile last pulled from F-list. Omitting
-`set` means "the active one".
+name or an id, and `working_set` takes a set name, a set id, or the
+string `"live"` for the read-only profile last pulled from F-list.
+Omitting `working_set` means "the active one".
+
+The parameter is not called `set`: that shadows the Python builtin
+inside every tool body, and the first tool that reached for `set(...)`
+to de-duplicate a list called `None` instead.
 """
 
 from __future__ import annotations
@@ -123,7 +127,8 @@ def list_working_sets(character: str) -> dict[str, Any]:
     """The named drafts stored for a character.
 
     Exactly one is active at a time — that is the one the Workbench
-    window is showing and the one tools edit when `set` is omitted.
+    window is showing and the one tools edit when `working_set` is
+    omitted.
     """
     target = resolve_character(character)
     active = character_archive.read_active_set_id(target.id)
@@ -158,7 +163,7 @@ SET_SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "setti
 @tool(tags=TAG_CHARACTER, title="Read a working set", read_only=True)
 async def get_working_set(
     character: str,
-    set: str | None = None,  # noqa: A002 — the domain word
+    working_set: str | None = None,
     include: list[str] | None = None,
 ) -> dict[str, Any]:
     """A working set's contents, by section.
@@ -169,7 +174,7 @@ async def get_working_set(
     through it.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, set)
+    resolved = resolve_set(target, working_set)
     payload = load_payload(resolved)
     sections = [s.strip().lower() for s in (include or ["summary"])]
     unknown = [s for s in sections if s not in SET_SECTIONS]
@@ -271,7 +276,7 @@ def _describe_infotag(catalogue, key: str, value: Any) -> dict[str, Any]:  # noq
 @tool(tags=TAG_CHARACTER, title="Read the description", read_only=True)
 def get_description(
     character: str,
-    set: str | None = None,  # noqa: A002
+    working_set: str | None = None,
     offset: int = 0,
     length: int | None = None,
 ) -> dict[str, Any]:
@@ -281,7 +286,7 @@ def get_description(
     Pass set="live" to read what is currently published.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, set)
+    resolved = resolve_set(target, working_set)
     payload = load_payload(resolved)
     char = payload.get("character") if isinstance(payload.get("character"), dict) else {}
     text = (char or {}).get("description") or ""
@@ -304,7 +309,7 @@ def get_description(
 @tool(tags=TAG_CHARACTER, title="Profile fields", read_only=True)
 async def list_profile_fields(
     character: str,
-    set: str | None = None,  # noqa: A002
+    working_set: str | None = None,
     group: str | None = None,
     only_set: bool = False,
     query: str | None = None,
@@ -317,7 +322,7 @@ async def list_profile_fields(
     value; `group` and `query` filter by category and by name.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, set)
+    resolved = resolve_set(target, working_set)
     payload = load_payload(resolved)
     values = payload.get("infotags") or {}
 
@@ -366,7 +371,7 @@ async def list_profile_fields(
 @tool(tags=TAG_CHARACTER, title="Kinks", read_only=True)
 async def list_kinks(
     character: str,
-    set: str | None = None,  # noqa: A002
+    working_set: str | None = None,
     choice: str | None = None,
     query: str | None = None,
     include_unset: bool = False,
@@ -379,7 +384,7 @@ async def list_kinks(
     separately — they are free text the user wrote.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, set)
+    resolved = resolve_set(target, working_set)
     payload = load_payload(resolved)
     chosen = payload.get("kinks") or {}
 
@@ -549,7 +554,7 @@ def list_backups(character: str) -> dict[str, Any]:
 @tool(tags=TAG_CHARACTER, title="List images", read_only=True)
 def list_images(
     character: str,
-    set: str | None = None,  # noqa: A002
+    working_set: str | None = None,
 ) -> dict[str, Any]:
     """The character's gallery, plus any images on disk that are not
     currently on the profile.
@@ -557,7 +562,7 @@ def list_images(
     `sort_order` is the position on the profile page, counting from 0.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, set)
+    resolved = resolve_set(target, working_set)
     payload = load_payload(resolved)
 
     gallery = [

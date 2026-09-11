@@ -1607,9 +1607,14 @@ def _materialise_set(
 
 
 def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    """Build a fresh working payload from a Live snapshot. Mirrors the
-    renderer's `seedWorkingFromLive` so a sidecar-only create still hands
-    the editor something structurally complete."""
+    """Build a fresh working payload from a Live snapshot.
+
+    The one implementation on the Python side — `services.payload_ops`
+    re-exports it as `seed_from_live`, and both the set-create path and
+    the export fallback go through that. It mirrors the renderer's
+    `seedWorkingFromLive`; the two have to stay in step, because a set
+    created in the sidecar and one created in the UI must be the same
+    shape."""
     out: dict[str, Any] = {
         "_schema_version": WORKING_SCHEMA_VERSION,
         "_overlay": [],
