@@ -1284,11 +1284,16 @@ export const useStore = create<State>((set, get) => ({
 
   // ---- F-list actions ----------------------------------------------------
 
-  flistGetLastAccount() {
+  // Return type is annotated on purpose: the body reads back through
+  // `useStore`, so without it TypeScript has to infer `useStore` from
+  // an initializer that references `useStore` and gives up — turning
+  // the whole store into `any` and silently disabling type checking
+  // in every component that selects from it.
+  flistGetLastAccount(): string {
     // Saved-creds account wins when present so the sign-in modal
     // pre-fills the username the user explicitly chose to remember.
     // Falls back to the localStorage last-used account otherwise.
-    const saved = useStore.getState().flistSavedCreds.account
+    const saved: string | null = useStore.getState().flistSavedCreds.account
     if (saved) return saved
     if (typeof localStorage === 'undefined') return ''
     try {

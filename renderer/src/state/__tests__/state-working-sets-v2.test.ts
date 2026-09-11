@@ -103,25 +103,28 @@ describe('selectWorkingSlot', () => {
     expect(selectWorkingSlot(useStore.getState(), '99')).toBeUndefined()
   })
 
-  it('returns the slot at flistSetWorking[activeId] when a set is active', () => {
+  it('returns the active set payload when a set is active', () => {
+    // `flistWorking[characterId]` is the canonical edit slot and
+    // `flistSetWorking[setId]` the per-set mirror the activate flow
+    // keeps in step; seed both, the way activation leaves them.
+    const seeded = {
+      payload: {
+        _schema_version: 5,
+        _overlay: [],
+        character: { description: 'hello' }
+      },
+      overlay: [],
+      etag: 'etag-1',
+      unsavedDirty: false,
+      saveStatus: 'idle' as const,
+      saveError: null,
+      lastSavedAt: null,
+      materialised: true
+    }
     useStore.setState({
       flistActiveSetId: { '99': 'abc123' },
-      flistSetWorking: {
-        'abc123': {
-          payload: {
-            _schema_version: 5,
-            _overlay: [],
-            character: { description: 'hello' }
-          },
-          overlay: [],
-          etag: 'etag-1',
-          unsavedDirty: false,
-          saveStatus: 'idle',
-          saveError: null,
-          lastSavedAt: null,
-          materialised: true
-        }
-      }
+      flistSetWorking: { 'abc123': seeded },
+      flistWorking: { '99': seeded }
     })
     const slot = selectWorkingSlot(useStore.getState(), '99')
     expect(slot).toBeDefined()
@@ -157,8 +160,12 @@ describe('flistLoadSets', () => {
     expect(s.flistSets['99']?.map((m) => m.id)).toEqual(['two', 'one'])
     expect(s.flistActiveSetId['99']).toBe('two')
     expect(s.flistSetWorking['two']?.etag).toBe('e1')
+    // Loading routes through the activate flow so the editor's view
+    // slot lands in sync with the server's active_set.json: list →
+    // activate → read that set's payload.
     expect(calls[0].url).toMatch(/\/flist\/character\/99\/sets$/)
-    expect(calls[1].url).toMatch(/\/sets\/two\/payload$/)
+    expect(calls[1].url).toMatch(/\/sets\/two\/activate$/)
+    expect(calls[2].url).toMatch(/\/sets\/two\/payload$/)
   })
 
   it('marks status error when the list call fails', async () => {
@@ -279,6 +286,17 @@ describe('flistDeleteSet', () => {
 
 describe('flistActivateSet', () => {
   it('flushes pending autosave on the outgoing set BEFORE activating', async () => {
+    const outgoingSlot = {
+      payload: { _schema_version: 5, _overlay: [], character: { description: 'edited' } },
+      overlay: ['character.description'],
+      etag: 'etag-old',
+      // Pretend the user typed but the debounce hasn't fired yet.
+      unsavedDirty: true,
+      saveStatus: 'idle' as const,
+      saveError: null,
+      lastSavedAt: null,
+      materialised: true
+    }
     useStore.setState({
       flistSets: {
         '99': [
@@ -287,19 +305,8 @@ describe('flistActivateSet', () => {
         ]
       },
       flistActiveSetId: { '99': 'old' },
-      flistSetWorking: {
-        'old': {
-          payload: { _schema_version: 5, _overlay: [], character: { description: 'edited' } },
-          overlay: ['character.description'],
-          etag: 'etag-old',
-          // Pretend the user typed but the debounce hasn't fired yet.
-          unsavedDirty: true,
-          saveStatus: 'idle',
-          saveError: null,
-          lastSavedAt: null,
-          materialised: true
-        }
-      }
+      flistSetWorking: { 'old': outgoingSlot },
+      flistWorking: { '99': outgoingSlot }
     })
     const calls = mockFetch([
       // 1. flush of the outgoing set fires a PUT to /sets/old/payload
@@ -326,20 +333,20 @@ describe('flistActivateSet', () => {
 
 describe('flistActivateFromFlist', () => {
   it('flushes pending autosave then nulls the active id', async () => {
+    const currentSlot = {
+      payload: { _schema_version: 5, _overlay: [], character: { description: 'x' } },
+      overlay: ['character.description'],
+      etag: 'e',
+      unsavedDirty: true,
+      saveStatus: 'idle' as const,
+      saveError: null,
+      lastSavedAt: null,
+      materialised: true
+    }
     useStore.setState({
       flistActiveSetId: { '99': 'cur' },
-      flistSetWorking: {
-        'cur': {
-          payload: { _schema_version: 5, _overlay: [], character: { description: 'x' } },
-          overlay: ['character.description'],
-          etag: 'e',
-          unsavedDirty: true,
-          saveStatus: 'idle',
-          saveError: null,
-          lastSavedAt: null,
-          materialised: true
-        }
-      }
+      flistSetWorking: { 'cur': currentSlot },
+      flistWorking: { '99': currentSlot }
     })
     const calls = mockFetch([
       async () => ok({ etag: 'flushed' }),

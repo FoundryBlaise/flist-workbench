@@ -61,7 +61,7 @@ test('kinks buckets render standard rows when mapping + working both loaded', as
   window.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await window.waitForLoadState('domcontentloaded')
   await window.evaluate(() => {
-    try { window.localStorage.clear() } catch { /* */ }
+    try { globalThis.localStorage.clear() } catch { /* */ }
   })
   await window.waitForTimeout(2500)
 

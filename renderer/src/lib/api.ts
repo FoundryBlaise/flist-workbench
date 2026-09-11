@@ -455,6 +455,22 @@ export type RagStatus = {
   chunk_count: number
 }
 
+/** One MCP endpoint the sidecar serves. `all` carries every tool; the
+ *  narrow ones exist because small local models choke on long tool
+ *  lists. */
+export type McpEndpoint = {
+  id: 'all' | 'character' | 'logs'
+  label: string
+  path: string
+  url: string
+  tool_count: number
+}
+
+export type McpInfo = {
+  port: number
+  endpoints: McpEndpoint[]
+}
+
 function base(): string {
   return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
 }
@@ -851,6 +867,9 @@ export const api = {
       { method: 'DELETE' }
     ),
   ragStatus: () => get<RagStatus>('/rag/status'),
+  /** Which MCP endpoints the sidecar serves and how many tools each
+   *  carries. Powers Settings → MCP. */
+  mcpInfo: () => get<McpInfo>('/mcp-info'),
   ragWipe: () =>
     request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.
@@ -1384,11 +1403,19 @@ export const api = {
    *  renders. */
   flistBackupAll: async (
     handlers: FlistBackupAllHandlers,
-    opts?: ApiOptions & { kind?: 'manual_bulk' | 'scheduled' }
+    // `source` tags the sweep in the last-run telemetry Settings →
+    // Backups reads back: 'post_login' for the automatic sweep after
+    // sign-in, 'manual' for the Trigger button.
+    opts?: ApiOptions & {
+      kind?: 'manual_bulk' | 'scheduled'
+      source?: 'manual' | 'post_login'
+    }
   ): Promise<void> => {
     const kind = opts?.kind ?? 'manual_bulk'
+    const source = opts?.source ?? 'manual'
     const res = await fetch(
-      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}`,
+      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}` +
+        `&source=${encodeURIComponent(source)}`,
       {
         method: 'POST',
         headers: { Accept: 'text/event-stream' },
