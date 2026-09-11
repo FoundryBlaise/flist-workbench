@@ -3,6 +3,7 @@ import {
   api,
   type LabelsSettings,
   type PromptPreset,
+  type McpInfo,
   type RagSettings,
   type RagStatus
 } from '../../lib/api'
@@ -59,6 +60,7 @@ type SectionId =
   | 'labels'
   | 'chat'
   | 'embedding'
+  | 'mcp'
   | 'security'
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
@@ -68,6 +70,7 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC classifier' },
   { id: 'chat', label: 'RAG · Chat', subtitle: 'Question-answering model + retrieval' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
+  { id: 'mcp', label: 'MCP', subtitle: 'Let a model drive Workbench' },
   { id: 'security', label: 'Security', subtitle: 'Browser-extension pairing' }
 ]
 
@@ -247,6 +250,8 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     labels: labelsDirty,
     chat: chatDirty,
     embedding: embeddingDirty,
+    // Read-only panes — nothing to save, so never dirty.
+    mcp: false,
     security: false
   }
 }
@@ -686,6 +691,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onChange={updateRag}
                   />
                 )}
+                {activeSection === 'mcp' && <McpPane />}
                 {activeSection === 'security' && <SecurityPane />}
               </>
             )}
@@ -1544,6 +1550,177 @@ function FlistPane() {
         </p>
       </div>
     </>
+  )
+}
+
+/** Settings → MCP. The "getting started" surface that replaced the AI
+ *  Setup wizard: Workbench has no model of its own any more, so the
+ *  only thing to configure is which client drives it. */
+function McpPane() {
+  const [info, setInfo] = useState<McpInfo | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    api
+      .mcpInfo()
+      .then((next) => alive && setInfo(next))
+      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const copy = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(id)
+      window.setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500)
+    } catch {
+      setCopied(null)
+    }
+  }
+
+  const url = info?.endpoints.find((e) => e.id === 'all')?.url ?? ''
+
+  const lmStudioConfig = JSON.stringify(
+    { mcpServers: { 'flist-workbench': { url } } },
+    null,
+    2
+  )
+  const claudeCodeConfig = `claude mcp add --transport http flist-workbench ${url}`
+  const claudeDesktopConfig = JSON.stringify(
+    {
+      mcpServers: {
+        'flist-workbench': {
+          command: 'npx',
+          args: ['-y', 'mcp-remote', url]
+        }
+      }
+    },
+    null,
+    2
+  )
+
+  return (
+    <>
+      <PaneHeader
+        title="MCP"
+        subtitle="Let a model read and edit your characters through this app"
+      />
+      <p className="settings-help">
+        Workbench runs a local <strong>Model Context Protocol</strong>{' '}
+        server. Point an MCP-capable client at it and the model can do
+        everything the UI can: read and rewrite descriptions, set
+        profile fields and kinks, browse your logs, label them IC/OOC
+        and search the index. Workbench itself no longer runs any
+        language model — the client brings its own.
+      </p>
+      <p className="settings-help">
+        <strong>It never uploads anything to F-list.</strong> Every tool
+        changes local files only. Publishing stays your manual step in
+        the browser, via the userscript or the extension.
+      </p>
+
+      <h3 className="settings-section-h">Endpoints</h3>
+      {error && (
+        <p className="settings-help">
+          <strong>Could not reach the sidecar: {error}</strong>
+        </p>
+      )}
+      {info?.endpoints.map((endpoint) => (
+        <div className="settings-row settings-row-grid" key={endpoint.id}>
+          <span className="settings-label">{endpoint.label}</span>
+          <div className="settings-inline-input">
+            <code data-testid={`settings-mcp-url-${endpoint.id}`}>
+              {endpoint.url}
+            </code>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() => copy(`url-${endpoint.id}`, endpoint.url)}
+            >
+              {copied === `url-${endpoint.id}` ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="settings-help">
+            {endpoint.tool_count} tools.
+            {endpoint.id === 'all'
+              ? ' Use this one unless your model struggles with long tool lists.'
+              : ' A smaller set for models that get confused by the full list.'}
+          </p>
+        </div>
+      ))}
+
+      <h3 className="settings-section-h">Connect a client</h3>
+      <McpSnippet
+        title="LM Studio"
+        hint={
+          <>
+            Put this in <code>%USERPROFILE%\.lmstudio\mcp.json</code>, or
+            use the app&apos;s Program → Install → Edit mcp.json. Needs
+            LM Studio 0.3.17 or newer and a model that supports tool
+            calling.
+          </>
+        }
+        text={lmStudioConfig}
+        copied={copied === 'lmstudio'}
+        onCopy={() => copy('lmstudio', lmStudioConfig)}
+      />
+      <McpSnippet
+        title="Claude Code"
+        hint="Run this once in any terminal."
+        text={claudeCodeConfig}
+        copied={copied === 'claude-code'}
+        onCopy={() => copy('claude-code', claudeCodeConfig)}
+      />
+      <McpSnippet
+        title="Claude Desktop"
+        hint={
+          <>
+            Put this in <code>claude_desktop_config.json</code>. Desktop
+            only speaks stdio to local servers, so it goes through the{' '}
+            <code>mcp-remote</code> bridge — that needs Node installed.
+          </>
+        }
+        text={claudeDesktopConfig}
+        copied={copied === 'claude-desktop'}
+        onCopy={() => copy('claude-desktop', claudeDesktopConfig)}
+      />
+      <p className="settings-help">
+        Ollama on its own is not an MCP client. Use a front-end that is
+        — LM Studio, Goose, Open WebUI or Jan — and point it at your
+        Ollama model.
+      </p>
+    </>
+  )
+}
+
+function McpSnippet({
+  title,
+  hint,
+  text,
+  copied,
+  onCopy
+}: {
+  title: string
+  hint: React.ReactNode
+  text: string
+  copied: boolean
+  onCopy: () => void
+}) {
+  return (
+    <div className="settings-row settings-row-grid">
+      <span className="settings-label">{title}</span>
+      <div className="settings-inline-input">
+        <button type="button" className="settings-clear" onClick={onCopy}>
+          {copied ? 'Copied' : 'Copy config'}
+        </button>
+      </div>
+      <pre className="settings-help settings-mcp-snippet">{text}</pre>
+      <p className="settings-help">{hint}</p>
+    </div>
   )
 }
 

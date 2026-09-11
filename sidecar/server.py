@@ -1,7 +1,8 @@
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import (
     Depends,
@@ -37,6 +38,8 @@ import rag_lexical
 import rag_query
 import rag_store
 import settings as settings_store
+import workbench_mcp
+from services import label_rollup
 from logs import (
     LogDirError,
     data_dir,
@@ -48,7 +51,48 @@ from logs import (
     search_messages,
 )
 
-app = FastAPI(title="F-list Workbench sidecar", version="0.0.0")
+
+# Tests (and anyone running the sidecar air-gapped) set this to skip
+# the one startup step that blocks on the network: the eicon catalog
+# warm-up fetches from xariah.net when no disk cache exists.
+OFFLINE_STARTUP = os.environ.get("FLIST_WORKBENCH_OFFLINE_STARTUP") == "1"
+
+# The port Electron spawns the sidecar on. Fixed at 27384 by default —
+# the browser extension and every MCP client config hardcode it too.
+SIDECAR_PORT = int(os.environ.get("SIDECAR_PORT", "27384"))
+
+
+@asynccontextmanager
+async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Sidecar startup work, in the order the four former
+    `@app.on_event("startup")` hooks ran.
+
+    This has to be a lifespan rather than `on_event` because the MCP
+    sub-app mounted at `/mcp` needs its session manager started, and
+    FastAPI silently ignores every `on_event` handler as soon as a
+    lifespan is present. The startup routines themselves still live
+    next to the code they belong to; this only sequences them.
+    """
+    if not OFFLINE_STARTUP:
+        await _eicons_warm_up()
+    await _hydrate_activity_log_on_startup()
+    await _avatar_cleanup_on_startup()
+    await _password_idle_watchdog()
+    async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
+        yield
+
+
+# Sub-servers keyed by mount suffix: "" (everything), "character"
+# (profile editing only) and "logs" (logs, labels, retrieval). Small
+# local models choke on a 75-tool list, so the narrow ones exist as
+# separate endpoints over the same implementations.
+_MCP_SERVERS = workbench_mcp.build_mcp_servers()
+
+app = FastAPI(
+    title="F-list Workbench sidecar",
+    version="0.0.0",
+    lifespan=sidecar_lifespan,
+)
 
 # The renderer runs in Electron at file:// or http://localhost:<vite>.
 # Allow any local origin in dev; tighten in Phase 8 packaging.
@@ -58,6 +102,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _strip_cors_on_mcp(request, call_next):
+    """Keep the app-wide `Access-Control-Allow-Origin: *` off `/mcp`.
+
+    The MCP endpoints do their own Host/Origin validation
+    (DNS-rebinding protection) and reject cross-origin callers before
+    any handler runs, so this is belt-and-braces — but advertising the
+    endpoint as browser-callable from any page would be a misleading
+    signal to a web client that then can't actually use it.
+
+    Registered after CORSMiddleware, which makes it the outer layer:
+    CORS has already written its headers by the time we see the
+    response.
+    """
+    response = await call_next(request)
+    if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
+        for header in (
+            "access-control-allow-origin",
+            "access-control-allow-credentials",
+            "access-control-expose-headers",
+        ):
+            if header in response.headers:
+                del response.headers[header]
+    return response
+
+
+workbench_mcp.mount(app, _MCP_SERVERS)
 
 
 # Idle password watchdog. When set to >0, drops the cached F-list
@@ -109,6 +182,17 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}
 
 
+@app.get("/mcp-info")
+def mcp_info() -> dict:
+    """What the MCP endpoints are and how many tools each carries.
+
+    Powers Settings → MCP. Deliberately *not* under /mcp — that prefix
+    belongs to the protocol itself, and this is a plain REST read for
+    the renderer.
+    """
+    return workbench_mcp.describe(_MCP_SERVERS, SIDECAR_PORT)
+
+
 @app.get("/eicons/search")
 def eicons_search(q: str = "", limit: int = 200) -> dict:
     """Search the cached eicon catalog (sourced from xariah.net).
@@ -121,8 +205,8 @@ def eicons_search(q: str = "", limit: int = 200) -> dict:
     return eicons_catalog.search(q, limit)
 
 
-@app.on_event("startup")
 async def _eicons_warm_up() -> None:
+    """Warm the eicon catalog. Sequenced by `sidecar_lifespan`."""
     await eicons_catalog.start()
 
 
@@ -1949,7 +2033,6 @@ def _cleanup_placeholder_avatars() -> int:
     return deleted
 
 
-@app.on_event("startup")
 async def _hydrate_activity_log_on_startup() -> None:
     """Load the on-disk redacted activity log into the in-memory
     buffer so a restart-after-incident still surfaces audit context
@@ -1962,7 +2045,6 @@ async def _hydrate_activity_log_on_startup() -> None:
         )
 
 
-@app.on_event("startup")
 async def _avatar_cleanup_on_startup() -> None:
     count = _cleanup_placeholder_avatars()
     if count > 0:
@@ -2026,7 +2108,6 @@ def _record_scheduled_sweep_telemetry(
 
 
 
-@app.on_event("startup")
 async def _password_idle_watchdog() -> None:
     """Periodically drop the cached F-list password after idle. Disabled
     when IDLE_PASSWORD_TIMEOUT_SEC is 0 (the default) — the password is
@@ -3173,64 +3254,9 @@ def labels_rollup() -> dict:
     state ("3,402 IC · 18,720 OOC · …").
     """
     try:
-        characters = list_characters()
+        return label_rollup.rollup()
     except LogDirError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    totals = {
-        labels_store.LABEL_IC: 0,
-        labels_store.LABEL_OOC: 0,
-        labels_store.LABEL_UNLABELED: 0,
-        labels_store.LABEL_FAILED: 0,
-    }
-    # Track manual-override count separately — it's a useful "how much
-    # of this did I curate" signal independent of IC/OOC totals.
-    manual_overrides = int(
-        labels_conn.execute(
-            "SELECT COUNT(*) FROM labels WHERE source = 'manual'"
-        ).fetchone()[0]
-        or 0
-    )
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        for char in characters:
-            try:
-                entries = list_partners(char.name)
-            except LogDirError:
-                continue
-            for entry in entries:
-                try:
-                    messages = list(read_messages(char.name, entry.name))
-                except LogDirError:
-                    continue
-                alias_group = aliases_store.all_names_for(
-                    labels_conn, char.name, entry.name
-                )
-                counts = labels_store.stats(
-                    labels_conn,
-                    char.name,
-                    entry.name,
-                    messages,
-                    lab_settings,
-                    partner_aliases=alias_group,
-                )
-                for k, v in counts.items():
-                    totals[k] = totals.get(k, 0) + v
-    finally:
-        settings_conn.close()
-        labels_conn.close()
-    total = sum(totals.values())
-    return {
-        "ic": totals[labels_store.LABEL_IC],
-        "ooc": totals[labels_store.LABEL_OOC],
-        "unlabeled": totals[labels_store.LABEL_UNLABELED],
-        "failed": totals[labels_store.LABEL_FAILED],
-        "manual": manual_overrides,
-        "total": total,
-        "character_count": len(characters),
-    }
 
 
 @app.post("/labels/override")
@@ -4062,5 +4088,4 @@ def restore_done(
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("SIDECAR_PORT", "27384"))
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=SIDECAR_PORT, log_level="info")
