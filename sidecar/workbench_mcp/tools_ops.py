@@ -355,7 +355,12 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     return {"wiped": True, "note": "Run ingest_logs to rebuild."}
 
 
-@tool(tags=(TAG_CORE, TAG_LOGS), title="Test the embedding endpoint")
+@tool(
+    tags=(TAG_CORE, TAG_LOGS),
+    title="Test the embedding endpoint",
+    read_only=True,
+    open_world=True,
+)
 def test_embedding_connection() -> dict[str, Any]:
     """Check that the configured embedding endpoint answers.
 

@@ -1,9 +1,12 @@
 # MCP server — replacing the in-app AI
 
-Status: **v3, 2026-09-11 — owner-approved.** Decisions D1–D4, D7–D10
-settled (see §8); D5, D6 deferred.
-**No code has landed. Do not start implementation until the owner
-says so.**
+Status: **v4, 2026-09-11 — implemented.** Phases 0–7 are built and
+shipped on `feat/mcp-server`. This document is kept as the record of
+*why*; `docs/MCP.md` is the guide for using the result, and
+`docs/OVERVIEW.md` describes the app as it now stands.
+
+Where the build differs from the plan, §9 says so and why. Everything
+else landed as written.
 
 Goal: every action the Workbench UI can perform becomes reachable for
 an LLM client (LM Studio primarily, Claude Code for debugging, Claude
@@ -526,9 +529,9 @@ Each phase ships a working build. Order: prove the risky part
 Written so a lower-effort session can work phase by phase without
 re-deriving the analysis.
 
-- The design is approved; **each phase still needs the owner's go
-  before work starts.** One phase per branch/PR; never push (see repo
-  `CLAUDE.md`).
+- All eight phases are built; this section is kept for the commands
+  and the ordering reasoning, which still apply to follow-up work.
+  Never push (see repo `CLAUDE.md`).
 - Commands: sidecar tests `cd sidecar && uv run pytest`; renderer
   `npm test`; types `npm run typecheck`; packaged sidecar `npm run
   pack:sidecar` (needs the `sidecar/.venv` from `uv sync`); full
@@ -625,3 +628,64 @@ of `/mcp`.
 - Claude Desktop local servers via stdio / `mcp-remote`: https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers
 - FastMCP ⇄ FastAPI mounting + `from_fastapi`: https://gofastmcp.com/integrations/fastapi
 - Reference SDK mounting pitfall (task group not initialised without lifespan): https://github.com/modelcontextprotocol/python-sdk/issues/1367
+
+---
+
+## 9. What changed during the build
+
+The design held up; five things were decided differently once the code
+was in front of us.
+
+**The MCP library.** §2.1 picked `fastmcp` 2.x. The build uses the
+reference SDK's bundled FastMCP (`mcp.server.fastmcp`) instead.
+`import fastmcp` eagerly pulls redis, docket, authlib, joserfc,
+opentelemetry, cloudpickle and beartype — 20+ packages PyInstaller
+would bundle into the portable `sidecar.exe` for features this app
+never uses (distributed task queues, OAuth providers, server proxying).
+The reference SDK carries everything actually needed: typed tool
+decorators with annotations, `Context.report_progress`,
+`streamable_http_app()`, prompts, resources, and
+`TransportSecuritySettings` for DNS-rebinding protection. The design
+named this as the fallback; it turned out to be the right first choice.
+
+**The package is `workbench_mcp/`, not `mcp/`.** `sidecar/` is on
+`sys.path`, so a local package called `mcp` would shadow the SDK.
+
+**Routes, not mounts.** A Starlette `Mount("/mcp")` never matches the
+bare path `/mcp` — its pattern requires something after the prefix — so
+the router answers with a 307 to `/mcp/`, and not every MCP client
+follows a redirect on POST. Clients are configured with the bare path,
+so each endpoint is an explicit `Route` over the raw ASGI handler.
+
+**The `set` parameter is `working_set`.** Naming it `set` shadows the
+Python builtin inside every tool body. `reorder_images` reached for
+`set(...)` to catch duplicate ids and called `None` instead. Renaming
+removed the landmine and reads better to a model besides.
+
+**D6 resolved: a structural diff.** `diff_working_set` reports facts —
+"Species went from Human to Elf, three kinks changed, the description
+grew by 400 characters" — rather than porting the renderer's
+side-by-side engine. A model needs something it can act on; two 30 KB
+BBCode blobs in a tool result help nobody. The description is
+summarised, with a pointer to `get_description` for the text.
+
+**D5 still deferred.** A headless sidecar for MCP-only use needs its
+own credential path, since sign-in lives in the UI and keytar. Nothing
+in phases 0–7 depended on it.
+
+### Things the migration uncovered
+
+Not part of the plan, but fixed along the way because the work
+depended on them:
+
+* `npm run typecheck` had been failing with 279 errors, all cascading
+  from one circular type inference in `state.ts` that had silently
+  turned the whole renderer's store into `any`. Fixing it exposed three
+  real defects, including a menu action the renderer could not name and
+  a backup-sweep argument that was never sent.
+* Eight renderer tests were stranded by the working-sets v1 → v2
+  migration and had been failing since.
+* The `labels` table's CHECK constraint only allowed `source` values
+  `'llm'` and `'manual'`, so the first verdict a connected model wrote
+  would have failed with an IntegrityError on every install created
+  before this version. The table is rebuilt on connect.

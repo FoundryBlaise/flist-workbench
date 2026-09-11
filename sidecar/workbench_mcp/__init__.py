@@ -132,6 +132,7 @@ def build_mcp_servers() -> dict[str, FastMCP]:
     """Build every MCP endpoint. Importing the tool modules here is
     what populates the registry."""
     from . import (  # noqa: F401  (registration side effects)
+        resources,
         tools_classify,
         tools_edit,
         tools_logs,
@@ -166,6 +167,51 @@ def endpoint_path(suffix: str) -> str:
     return "/mcp" if not suffix else f"/mcp/{suffix}"
 
 
+class _TokenGate:
+    """Wraps an MCP endpoint with the optional bearer check.
+
+    A plain ASGI wrapper rather than FastAPI middleware because the
+    endpoints are raw ASGI apps — and because the check has to happen
+    before the MCP session manager sees the request, or an
+    unauthenticated caller could open a session.
+    """
+
+    def __init__(self, inner) -> None:  # noqa: ANN001
+        self._inner = inner
+
+    async def __call__(self, scope, receive, send) -> None:  # noqa: ANN001
+        from services import mcp_auth
+
+        header = None
+        for key, value in scope.get("headers") or []:
+            if key == b"authorization":
+                header = value.decode("latin-1")
+                break
+        if not mcp_auth.check(header):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"text/plain; charset=utf-8"),
+                        (b"www-authenticate", b'Bearer realm="flist-workbench"'),
+                    ],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": (
+                        b"This Workbench requires a token on /mcp. It is "
+                        b"shown in Settings -> MCP; send it as "
+                        b"'Authorization: Bearer <token>'."
+                    ),
+                }
+            )
+            return
+        await self._inner(scope, receive, send)
+
+
 def mount(app: "FastAPI", servers: dict[str, FastMCP]) -> None:
     """Attach every MCP server to the sidecar app.
 
@@ -182,10 +228,11 @@ def mount(app: "FastAPI", servers: dict[str, FastMCP]) -> None:
 
     Each endpoint is registered with and without a trailing slash;
     every MCP verb (POST for calls, GET for the SSE stream, DELETE to
-    end a session) hits the same handler.
+    end a session) hits the same handler, behind the optional bearer
+    check.
     """
     for suffix, server in servers.items():
-        asgi = StreamableHTTPASGIApp(_session_manager(server))
+        asgi = _TokenGate(StreamableHTTPASGIApp(_session_manager(server)))
         path = endpoint_path(suffix)
         app.router.routes.append(Route(path, endpoint=asgi))
         app.router.routes.append(Route(f"{path}/", endpoint=asgi))
@@ -206,7 +253,16 @@ def describe(servers: dict[str, FastMCP], port: int) -> dict[str, object]:
                 "tool_count": len(registered_tools(ENDPOINTS[suffix])),
             }
         )
-    return {"port": port, "endpoints": endpoints}
+    from services import mcp_auth
+
+    return {
+        "port": port,
+        "endpoints": endpoints,
+        "auth": {
+            "required": mcp_auth.current_token() is not None,
+            "token": mcp_auth.current_token(),
+        },
+    }
 
 
 _ENDPOINT_LABELS = {

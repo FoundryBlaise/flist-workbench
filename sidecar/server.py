@@ -238,6 +238,29 @@ def mcp_info() -> dict:
     return workbench_mcp.describe(_MCP_SERVERS, SIDECAR_PORT)
 
 
+@app.post("/mcp-info/token")
+def mcp_token_create() -> dict:
+    """Issue a bearer token for the MCP endpoints, replacing any
+    existing one. Clients using the old token stop working.
+
+    Off by default — see `services/mcp_auth.py` for why. The token is
+    returned once here and again from `/mcp-info`, because the user has
+    to be able to copy it into a client config at any point.
+    """
+    from services import mcp_auth
+
+    return {"token": mcp_auth.generate()}
+
+
+@app.delete("/mcp-info/token")
+def mcp_token_revoke() -> dict:
+    """Turn the MCP bearer requirement back off."""
+    from services import mcp_auth
+
+    mcp_auth.revoke()
+    return {"required": False}
+
+
 @app.get("/eicons/search")
 def eicons_search(q: str = "", limit: int = 200) -> dict:
     """Search the cached eicon catalog (sourced from xariah.net).
