@@ -1,20 +1,23 @@
 """IC/OOC labels store + read-time resolver.
 
-Persists only **explicit** labels (LLM + manual). Rules are recomputed
-at every read against the current settings, so changing the threshold
-is instant — no DB rebuild needed. See `docs/RAG_DESIGN.md` for the
-full design contract.
+Persists only **explicit** verdicts — written either by the model the
+user connected over MCP or by the user's own right-click override.
+Rules are recomputed at every read against the current settings, so
+changing the threshold is instant; no DB rebuild needed.
 
 Resolver precedence:
-    1. DB label (LLM or manual)             -> stored row's label
+    1. DB label (model or manual)           -> stored row's label
     2. empty body                           -> OOC  (rule:empty)
     3. text_len < settings.threshold_chars  -> OOC  (rule:short)
     4. body starts with "((" (LRP convention) -> OOC (rule:parens)
     5. otherwise                            -> Unlabeled
 
+Case 5 is what `services.classification` hands to the connected model,
+and what `chunker` refuses to index.
+
 Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
-so users can wipe it without losing their drafts and the LLM ingest
-job can safely WAL the file under load.
+so users can wipe it without losing their drafts and the ingest job can
+safely WAL the file under load.
 """
 
 from __future__ import annotations
@@ -30,38 +33,26 @@ from typing import Iterable
 import paths
 import settings as settings_store
 
-# Four-state result the resolver returns. The labels table only ever
+# Three-state result the resolver returns. The labels table only ever
 # stores IC or OOC; "Unlabeled" is what the resolver returns when no
-# explicit label exists and no rule matched; "Failed" surfaces a row
-# in the parallel label_failures table — the LLM was asked but didn't
-# produce a usable answer (HTTP/JSON/parse error). The user can fix it
-# manually from the message context menu; manual overrides clear the
-# failure row.
+# explicit label exists and no rule matched — those are the messages
+# handed to the connected MCP client to judge.
+#
+# A fourth state, "Failed", used to exist for messages the in-app
+# classifier couldn't get a usable answer about. With no in-app
+# classifier there is nothing to fail: a message the model declines to
+# label simply stays Unlabeled and comes back in the next batch.
 LABEL_IC = "IC"
 LABEL_OOC = "OOC"
 LABEL_UNLABELED = "Unlabeled"
-LABEL_FAILED = "Failed"
 
 DEFAULT_THRESHOLD_CHARS = 200
-DEFAULT_LLM_ENDPOINT = "http://localhost:1234/v1"
-DEFAULT_LLM_MODEL = "gemma-4-26b-a4b-it-uncensored-heretic"
-DEFAULT_LLM_API_KEY = ""
-# Default surrounding-context window size for classify calls. RAG_DESIGN
-# originally picked 3 + 3; in practice that bleeds — the model latches
-# onto the surrounding cluster (e.g. mid-RP banter) and mislabels the
-# target. 1 + 1 holds the IC/OOC boundary much better.
-#
-# WARNING: if you tune this UP and start seeing messages at the *start*
-# or *end* of IC/OOC blocks classified wrongly (the target is IC but
-# all visible context is OOC, or vice versa), the bleed is back —
-# reduce, don't increase. Set to 0 for no surroundings at all when
-# debugging the prompt in isolation.
-DEFAULT_CONTEXT_BEFORE = 1
-DEFAULT_CONTEXT_AFTER = 1
 
-# Default classifier prompt. Lifted from Chat_RAG/classify.py (German
-# RP). Users can edit this in Settings → Labels; a blank stored value
-# falls back to this default, so "reset to default" is just "save blank".
+# Classifier prompt, lifted from Chat_RAG/classify.py (German RP).
+# Workbench no longer runs a classifier itself; this and the two
+# presets below are handed to the connected MCP client through
+# `get_classification_guidelines` so its verdicts stay comparable with
+# everything labelled before the migration.
 DEFAULT_SYSTEM_PROMPT = """Du bist ein Klassifikator für deutschsprachige Roleplay-Chat-Logs aus F-Chat.
 Klassifiziere die ZIELNACHRICHT zwingend als "IC" (in-character) oder "OOC" (out-of-character).
 
@@ -339,32 +330,17 @@ CREATE TABLE IF NOT EXISTS labels (
     label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
     confidence   REAL NOT NULL,
     reason       TEXT,
-    source       TEXT NOT NULL CHECK (source IN ('llm','manual')),
+    -- 'mcp': a verdict from the model the user connected over MCP.
+    -- 'manual': the user's own right-click override.
+    -- 'llm': written by the in-app classifier that existed before the
+    -- MCP migration; kept so old rows stay readable.
+    source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
     prior_label  TEXT,
     prior_source TEXT,
     updated_at   REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner);
 CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
-
--- Persistent classify-job history. JobRegistry retains in-memory jobs
--- for ~300s; this table survives sidecar restarts so users can see
--- "last classified Auldren Nazr yesterday at 23:14" weeks later.
--- Manual classify runs append on completion; nothing here is
--- consulted by the resolver — purely for UI display.
-CREATE TABLE IF NOT EXISTS label_jobs (
-    id            TEXT PRIMARY KEY,
-    scope         TEXT NOT NULL,    -- JSON: {"character"?: X, "partner"?: Y}
-    state         TEXT NOT NULL,    -- 'done' | 'cancelled' | 'failed'
-    classified    INTEGER NOT NULL,
-    failed        INTEGER NOT NULL,
-    total         INTEGER NOT NULL,
-    started_at    REAL NOT NULL,
-    finished_at   REAL NOT NULL,
-    error         TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_label_jobs_finished
-    ON label_jobs(finished_at DESC);
 
 -- Partner aliases share this DB so every labels.connect() is
 -- automatically alias-aware. aliases.py owns the read/write logic;
@@ -381,21 +357,6 @@ CREATE TABLE IF NOT EXISTS partner_aliases (
 CREATE INDEX IF NOT EXISTS idx_aliases_primary
     ON partner_aliases(character, primary_name);
 
--- Parallel to `labels`, but tracks messages whose classify attempt
--- failed (HTTP/JSON/parse error). The resolver returns "Failed" when
--- a hash exists here AND no labels row + no rule hit. Cleared on
--- successful re-classify and on any manual override.
-CREATE TABLE IF NOT EXISTS label_failures (
-    hash         TEXT PRIMARY KEY,
-    character    TEXT NOT NULL,
-    partner      TEXT NOT NULL,
-    ts           INTEGER NOT NULL,
-    speaker      TEXT NOT NULL,
-    error        TEXT NOT NULL,
-    updated_at   REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_label_failures_partner
-    ON label_failures(character, partner);
 """
 
 
@@ -415,7 +376,82 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path(root), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _drop_retired_tables(conn)
+    _widen_source_check(conn)
     return conn
+
+
+#: Tables that belonged to the in-app classifier: failed classify
+#: attempts, and the history of classify jobs. Nothing writes either
+#: since classification moved to the connected MCP client, so they are
+#: dropped rather than left to sit in every existing labels.db. The
+#: `labels` table itself — the actual verdicts — is untouched.
+_RETIRED_TABLES = ("label_failures", "label_jobs")
+
+
+def _drop_retired_tables(conn: sqlite3.Connection) -> None:
+    try:
+        for table in _RETIRED_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.commit()
+    except sqlite3.DatabaseError:
+        # Never let cleanup stop the sidecar from serving labels.
+        pass
+
+
+def _widen_source_check(conn: sqlite3.Connection) -> None:
+    """Let existing databases accept `source = 'mcp'`.
+
+    The CHECK constraint predates the MCP migration and only allowed
+    'llm' and 'manual', so the first verdict written by a connected
+    model would fail with an IntegrityError on any install created
+    before this version. SQLite cannot alter a constraint in place, so
+    the table is rebuilt — rows and all — the one time it is needed.
+    """
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'labels'"
+        ).fetchone()
+        if row is None or "'mcp'" in (row["sql"] or ""):
+            return
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = off;
+            BEGIN;
+            CREATE TABLE labels_migrated (
+                hash         TEXT PRIMARY KEY,
+                character    TEXT NOT NULL,
+                partner      TEXT NOT NULL,
+                ts           INTEGER NOT NULL,
+                speaker      TEXT NOT NULL,
+                label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+                confidence   REAL NOT NULL,
+                reason       TEXT,
+                source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
+                prior_label  TEXT,
+                prior_source TEXT,
+                updated_at   REAL NOT NULL
+            );
+            INSERT INTO labels_migrated SELECT
+                hash, character, partner, ts, speaker, label, confidence,
+                reason, source, prior_label, prior_source, updated_at
+            FROM labels;
+            DROP TABLE labels;
+            ALTER TABLE labels_migrated RENAME TO labels;
+            CREATE INDEX IF NOT EXISTS idx_labels_partner
+                ON labels(character, partner);
+            CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
+            COMMIT;
+            PRAGMA foreign_keys = on;
+            """
+        )
+    except sqlite3.DatabaseError:
+        # A failed widening leaves the old table intact: MCP writes will
+        # error visibly, which beats losing the user's curated verdicts.
+        try:
+            conn.rollback()
+        except sqlite3.DatabaseError:
+            pass
 
 
 def msg_hash(msg: dict) -> str:
@@ -425,13 +461,12 @@ def msg_hash(msg: dict) -> str:
 
 @dataclass(slots=True, frozen=True)
 class LabelsSettings:
+    """What the rule resolver needs. Nothing else survives: the
+    classifier's endpoint, model, key, prompt and context window went
+    away with the in-app LLM — the connected MCP client decides those
+    now (see services/classification.py)."""
+
     threshold_chars: int
-    llm_endpoint: str
-    llm_model: str
-    llm_api_key: str
-    system_prompt: str
-    context_before: int
-    context_after: int
 
 
 def _coerce_int(raw: str | None, default: int) -> int:
@@ -456,22 +491,8 @@ def load_settings(conn: sqlite3.Connection | None = None) -> LabelsSettings:
         own_conn = True
     try:
         threshold_raw = settings_store.get(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS)
-        endpoint = settings_store.get(conn, settings_store.KEY_LABELS_LLM_ENDPOINT) or DEFAULT_LLM_ENDPOINT
-        model = settings_store.get(conn, settings_store.KEY_LABELS_LLM_MODEL) or DEFAULT_LLM_MODEL
-        api_key = settings_store.get(conn, settings_store.KEY_LABELS_LLM_API_KEY) or DEFAULT_LLM_API_KEY
-        prompt = settings_store.get(conn, settings_store.KEY_LABELS_SYSTEM_PROMPT) or DEFAULT_SYSTEM_PROMPT
-        ctx_before_raw = settings_store.get(conn, settings_store.KEY_LABELS_CONTEXT_BEFORE)
-        ctx_after_raw = settings_store.get(conn, settings_store.KEY_LABELS_CONTEXT_AFTER)
         return LabelsSettings(
             threshold_chars=_coerce_int(threshold_raw, DEFAULT_THRESHOLD_CHARS),
-            llm_endpoint=endpoint,
-            llm_model=model,
-            llm_api_key=api_key,
-            system_prompt=prompt,
-            # Clamp to a sane range — context that's too wide blows the
-            # model's window; negative or zero is fine (no surroundings).
-            context_before=max(0, min(10, _coerce_int(ctx_before_raw, DEFAULT_CONTEXT_BEFORE))),
-            context_after=max(0, min(10, _coerce_int(ctx_after_raw, DEFAULT_CONTEXT_AFTER))),
         )
     finally:
         if own_conn:
@@ -485,20 +506,15 @@ def resolve(
     msg: dict,
     db_label: sqlite3.Row | dict | None,
     settings: LabelsSettings,
-    *,
-    failed: bool = False,
 ) -> str:
     """Return the effective label for a message.
 
     `db_label` is the explicit-labels row keyed by `msg_hash(msg)`, or
-    None. `failed` is True when a label_failures row exists for the
-    same hash (a prior classify call couldn't produce a usable answer).
-    `msg` must have `text` (BBCode-stripped) and `raw` keys — matching
-    what `parser.parse_log` yields.
+    None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
+    matching what `parser.parse_log` yields.
 
     Precedence: explicit DB label wins; otherwise rules (empty / short /
-    `((` prefix) decide; otherwise a recorded failure surfaces as
-    "Failed"; otherwise "Unlabeled".
+    `((` prefix) decide; otherwise "Unlabeled".
     """
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
@@ -511,8 +527,6 @@ def resolve(
     raw = msg.get("raw") or ""
     if _PARENS_PREFIX.match(raw):
         return LABEL_OOC
-    if failed:
-        return LABEL_FAILED
     return LABEL_UNLABELED
 
 
@@ -568,7 +582,10 @@ def upsert_label(
 ) -> None:
     """Insert or replace a label, snapshotting any prior label.
 
-    `source` is 'llm' or 'manual'.
+    `source` is 'mcp' (a verdict from the connected model), 'manual'
+    (the user's right-click override) or 'llm' (written by the in-app
+    classifier that existed before the MCP migration — still accepted
+    so old rows round-trip).
 
     Note: the schema still carries a `confidence REAL NOT NULL` column
     for backwards compatibility with on-disk DBs from earlier versions.
@@ -579,7 +596,7 @@ def upsert_label(
     """
     if label not in (LABEL_IC, LABEL_OOC):
         raise ValueError(f"invalid label: {label!r}")
-    if source not in ("llm", "manual"):
+    if source not in ("mcp", "manual", "llm"):
         raise ValueError(f"invalid source: {source!r}")
     existing = conn.execute(
         "SELECT label, source FROM labels WHERE hash = ?", (hash,)
@@ -606,72 +623,7 @@ def upsert_label(
             1.0, reason, source, prior_label, prior_source, time.time(),
         ),
     )
-    # Any explicit label clears a prior failure — the user fixed it
-    # (manual override) or a re-classify finally got an answer.
-    conn.execute("DELETE FROM label_failures WHERE hash = ?", (hash,))
     conn.commit()
-
-
-def record_failure(
-    conn: sqlite3.Connection,
-    *,
-    hash: str,
-    character: str,
-    partner: str,
-    ts: int,
-    speaker: str,
-    error: str,
-) -> None:
-    """Mark a message as classify-failed.
-
-    No-op if an explicit label already exists for this hash — a
-    successful prior classify shouldn't be downgraded to "Failed" just
-    because a re-classify attempt errored. The error string is
-    truncated; the JSONL log file is the full debug surface.
-    """
-    has_label = conn.execute(
-        "SELECT 1 FROM labels WHERE hash = ?", (hash,)
-    ).fetchone()
-    if has_label is not None:
-        return
-    conn.execute(
-        """
-        INSERT INTO label_failures (
-            hash, character, partner, ts, speaker, error, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET
-            error = excluded.error,
-            updated_at = excluded.updated_at
-        """,
-        (hash, character, partner, ts, speaker, error[:500], time.time()),
-    )
-    conn.commit()
-
-
-def clear_failure(conn: sqlite3.Connection, hash: str) -> bool:
-    cur = conn.execute("DELETE FROM label_failures WHERE hash = ?", (hash,))
-    conn.commit()
-    return cur.rowcount > 0
-
-
-def failures_for_partner(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
-) -> dict[str, sqlite3.Row]:
-    """All failure rows for one conversation, keyed by message hash.
-
-    Same alias-aware lookup shape as `labels_for_partner`.
-    """
-    names = _partner_query_set(partner, partner_aliases)
-    placeholders = ",".join("?" * len(names))
-    rows = conn.execute(
-        f"SELECT * FROM label_failures WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    ).fetchall()
-    return {row["hash"]: row for row in rows}
 
 
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
@@ -688,122 +640,17 @@ def delete_labels_for_partner(
     *,
     partner_aliases: list[str] | None = None,
 ) -> int:
-    """Drop every explicit label for one (character, partner) pair.
-
-    Also drops any recorded failure rows — "Reset all labels" should
-    reset every classifier-side state, not just the success rows.
-    Returns the count of deleted label rows (failure rows aren't
-    counted; they're an implementation detail of the chip strip).
-    """
+    """Drop every explicit label for one (character, partner) pair,
+    reverting each message to rule-or-Unlabeled. Returns the number of
+    rows removed."""
     names = _partner_query_set(partner, partner_aliases)
     placeholders = ",".join("?" * len(names))
     cur = conn.execute(
         f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
         (character, *names),
     )
-    conn.execute(
-        f"DELETE FROM label_failures WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    )
     conn.commit()
     return cur.rowcount
-
-
-def record_job_history(
-    conn: sqlite3.Connection,
-    *,
-    id: str,
-    scope: dict,
-    state: str,
-    classified: int,
-    failed: int,
-    total: int,
-    started_at: float,
-    finished_at: float,
-    error: str | None,
-    keep: int = 200,
-) -> None:
-    """Persist one finished classify run for the Settings job-history view.
-
-    Inserts the row, then trims to the most recent `keep` entries to
-    keep the file bounded — even an aggressive user running 1 classify
-    per minute stays under 200 rows for a couple of hours of history,
-    which is the use-case the table exists for.
-    """
-    import json
-
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO label_jobs
-            (id, scope, state, classified, failed, total,
-             started_at, finished_at, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            id,
-            json.dumps(scope, sort_keys=True),
-            state,
-            classified,
-            failed,
-            total,
-            started_at,
-            finished_at,
-            error,
-        ),
-    )
-    conn.execute(
-        """
-        DELETE FROM label_jobs
-         WHERE id NOT IN (
-            SELECT id FROM label_jobs ORDER BY finished_at DESC LIMIT ?
-         )
-        """,
-        (keep,),
-    )
-    conn.commit()
-
-
-def list_job_history(
-    conn: sqlite3.Connection, *, limit: int = 50
-) -> list[dict]:
-    """Return the most recent finished classify runs, newest first.
-
-    Each row is the shape the renderer expects on the
-    Settings → Labels jobs panel: scope decoded back to a dict,
-    timestamps as epoch seconds.
-    """
-    import json
-
-    rows = conn.execute(
-        """
-        SELECT id, scope, state, classified, failed, total,
-               started_at, finished_at, error
-          FROM label_jobs
-      ORDER BY finished_at DESC
-         LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-    out: list[dict] = []
-    for r in rows:
-        try:
-            scope = json.loads(r[1])
-        except (TypeError, ValueError):
-            scope = {}
-        out.append(
-            {
-                "id": r[0],
-                "scope": scope,
-                "state": r[2],
-                "classified": r[3],
-                "failed": r[4],
-                "total": r[5],
-                "started_at": r[6],
-                "finished_at": r[7],
-                "error": r[8],
-            }
-        )
-    return out
 
 
 def max_label_time(
@@ -855,14 +702,8 @@ def stats(
     by_hash = labels_for_partner(
         conn, character, partner, partner_aliases=partner_aliases
     )
-    failed_hashes = failures_for_partner(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
-    counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0, LABEL_FAILED: 0}
+    counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
-        h = msg_hash(msg)
-        lab = resolve(
-            msg, by_hash.get(h), settings, failed=h in failed_hashes,
-        )
+        lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
         counts[lab] = counts.get(lab, 0) + 1
     return counts

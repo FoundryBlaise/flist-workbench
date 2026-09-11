@@ -82,6 +82,12 @@ The sidecar binds to port **27384** on loopback only. Nothing is
 exposed to your network or to the internet by Workbench itself —
 the sidecar isn't reachable from outside your own machine.
 
+That same port also serves a **Model Context Protocol** endpoint at
+`/mcp`, which is how a local model (LM Studio, Claude) can read and
+edit your characters through the app. It is loopback-only too, and it
+rejects requests that don't come from your own machine. See
+**Settings → MCP** in the app for the connection details.
+
 ## 5. Optional: verify the download
 
 If you'd rather not trust GitHub's TLS alone, verify the sha256 hash
@@ -100,12 +106,17 @@ the file and report it.
 Nothing lives next to the .exe. Everything goes under
 `%APPDATA%\flist-workbench\`:
 
-- `documents.db` — your scratch document + saved BBCode docs
-- `characters/` — character archive working copies + backups
-- `logs/` — F-Chat log index (if you point Settings → F-Chat data
-  directory at your real F-Chat folder)
+- `characters/` — your character archive: pulled profiles, working
+  sets, snapshots, ZIP backups and images
+- `settings.db` — preferences (F-Chat log directory, embedding
+  endpoint, retrieval tuning)
+- `labels.db` — the IC/OOC verdict for each log message, plus partner
+  aliases
+- `qdrant/` — the local vector index built by Logs → Ingest
+- `models/` — the reranker model, downloaded on first search
+- `avatars/` — cached character avatars
+- `restore-state.json` — the paired browser extension's token
 - `main-diag.log` — main-process diagnostic log; safe to delete
-- `settings/` — preferences, paired browser extensions, etc.
 
 To completely uninstall: delete the .exe, then delete
 `%APPDATA%\flist-workbench\`. That's it.
