@@ -523,6 +523,50 @@ _BBCODE_TAGS: list[dict[str, str]] = [
 ]
 
 
+@tool(tags=TAG_CHARACTER, title="Compare two versions", read_only=True)
+async def diff_working_set(
+    character: str,
+    working_set: str | None = None,
+    against: str = "live",
+) -> dict[str, Any]:
+    """What differs between two versions of a profile.
+
+    By default compares a working set against `live` — the published
+    profile — which answers "what would change if I uploaded this".
+    Pass another set's name to `against` to compare two drafts.
+
+    The description is summarised rather than diffed line by line;
+    read both with get_description if the text itself matters.
+    """
+    target = resolve_character(character)
+    left = resolve_set(target, working_set)
+    right = resolve_set(target, against)
+    if left.id == right.id and left.is_live == right.is_live:
+        raise ToolError(
+            "validation_failed",
+            "both sides are the same version; nothing to compare",
+        )
+
+    from services import diff as diff_service
+    from services import mapping as mapping_service
+
+    catalogue = await mapping_service.catalogue()
+    result = diff_service.compare(
+        load_payload(right), load_payload(left), catalogue
+    )
+    return {
+        "character": target.name,
+        "from": right.name,
+        "to": left.name,
+        "changes": result.to_dict(),
+        "note": (
+            f"{left.name} matches {right.name} exactly."
+            if result.is_empty
+            else NO_PUSH_NOTE
+        ),
+    }
+
+
 @tool(tags=TAG_CHARACTER, title="List snapshots", read_only=True)
 def list_snapshots(character: str) -> dict[str, Any]:
     """Automatic JSON snapshots, one per pull that found a change.

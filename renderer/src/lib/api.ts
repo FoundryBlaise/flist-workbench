@@ -379,6 +379,10 @@ export type McpEndpoint = {
 export type McpInfo = {
   port: number
   endpoints: McpEndpoint[]
+  /** The optional bearer token. Off by default — the endpoints are
+   *  loopback-only, so requiring one buys nothing against an attacker
+   *  already running code as this user. */
+  auth: { required: boolean; token: string | null }
 }
 
 function base(): string {
@@ -694,6 +698,12 @@ export const api = {
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */
   mcpInfo: () => get<McpInfo>('/mcp-info'),
+  /** Issue a bearer token for /mcp, replacing any existing one. */
+  mcpCreateToken: () =>
+    request<{ token: string }>('/mcp-info/token', { method: 'POST' }),
+  /** Turn the bearer requirement back off. */
+  mcpRevokeToken: () =>
+    request<{ required: boolean }>('/mcp-info/token', { method: 'DELETE' }),
   ragWipe: () =>
     request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.

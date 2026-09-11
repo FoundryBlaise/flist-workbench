@@ -1398,6 +1398,7 @@ function McpPane() {
   const [info, setInfo] = useState<McpInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -1421,25 +1422,49 @@ function McpPane() {
   }
 
   const url = info?.endpoints.find((e) => e.id === 'all')?.url ?? ''
+  const token = info?.auth.token ?? null
 
   const lmStudioConfig = JSON.stringify(
-    { mcpServers: { 'flist-workbench': { url } } },
+    {
+      mcpServers: {
+        'flist-workbench': token
+          ? { url, headers: { Authorization: `Bearer ${token}` } }
+          : { url }
+      }
+    },
     null,
     2
   )
-  const claudeCodeConfig = `claude mcp add --transport http flist-workbench ${url}`
+  const claudeCodeConfig = token
+    ? `claude mcp add --transport http flist-workbench ${url} \\\n  --header "Authorization: Bearer ${token}"`
+    : `claude mcp add --transport http flist-workbench ${url}`
   const claudeDesktopConfig = JSON.stringify(
     {
       mcpServers: {
         'flist-workbench': {
           command: 'npx',
-          args: ['-y', 'mcp-remote', url]
+          args: token
+            ? ['-y', 'mcp-remote', url, '--header', `Authorization: Bearer ${token}`]
+            : ['-y', 'mcp-remote', url]
         }
       }
     },
     null,
     2
   )
+
+  const setToken = async (create: boolean) => {
+    setBusy(true)
+    try {
+      if (create) await api.mcpCreateToken()
+      else await api.mcpRevokeToken()
+      setInfo(await api.mcpInfo())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <>
@@ -1490,6 +1515,52 @@ function McpPane() {
           </p>
         </div>
       ))}
+
+      <h3 className="settings-section-h">Access</h3>
+      <div className="settings-row settings-row-grid">
+        <span className="settings-label">Require a token</span>
+        <div className="settings-inline-input">
+          <button
+            type="button"
+            className="settings-clear"
+            disabled={busy}
+            onClick={() => void setToken(!info?.auth.required)}
+            data-testid="settings-mcp-token-toggle"
+          >
+            {info?.auth.required ? 'Turn off' : 'Turn on'}
+          </button>
+          {info?.auth.required && (
+            <button
+              type="button"
+              className="settings-clear"
+              disabled={busy}
+              onClick={() => void setToken(true)}
+              data-testid="settings-mcp-token-rotate"
+            >
+              New token
+            </button>
+          )}
+        </div>
+        <p className="settings-help">
+          Off by default, and that is usually right: the endpoint only
+          listens on this machine, and anything already running here can
+          reach the rest of the app without a token anyway. Turn it on if
+          you share this computer, or want to keep a sandboxed tool out.
+          The snippets below include the token once there is one.
+        </p>
+        {info?.auth.required && token && (
+          <div className="settings-inline-input">
+            <code data-testid="settings-mcp-token">{token}</code>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() => copy('token', token)}
+            >
+              {copied === 'token' ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        )}
+      </div>
 
       <h3 className="settings-section-h">Connect a client</h3>
       <McpSnippet
