@@ -107,11 +107,16 @@ def test_default_data_dir_picks_os_native_location(
     win = _logs.default_data_dir()
     assert str(win).replace("\\", "/").endswith("/AppData/Roaming/fchat/data")
 
+    # Path renders with the *host* separator, so normalise before
+    # comparing — on Windows this builds a WindowsPath with backslashes
+    # even though we are simulating macOS.
     monkeypatch.setattr(_sys, "platform", "darwin")
     mac = _logs.default_data_dir()
-    assert str(mac).endswith("Library/Application Support/fchat/data")
+    assert str(mac).replace("\\", "/").endswith(
+        "Library/Application Support/fchat/data"
+    )
 
     monkeypatch.setattr(_sys, "platform", "linux")
     monkeypatch.setenv("XDG_CONFIG_HOME", "/home/x/.config")
     linux = _logs.default_data_dir()
-    assert str(linux) == "/home/x/.config/fchat/data"
+    assert str(linux).replace("\\", "/") == "/home/x/.config/fchat/data"

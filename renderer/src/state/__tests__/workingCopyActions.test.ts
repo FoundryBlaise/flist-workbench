@@ -61,6 +61,9 @@ beforeEach(() => {
   vi.useFakeTimers()
   useStore.setState({
     flistWorking: {},
+    flistSetWorking: {},
+    flistActiveSetId: {},
+    flistSets: {},
     flistArchive: {},
     flistCustomKinksUI: {},
     flistResetUndo: null,
@@ -78,23 +81,29 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+const SET_ID = 'aaaaaaaaaaaa'
+
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
+  const slot = {
+    payload: { _schema_version: 2, _overlay: [], ...payload },
+    overlay: Array.isArray(payload._overlay)
+      ? (payload._overlay as string[])
+      : [],
+    etag: 'seed-etag',
+    unsavedDirty: false,
+    saveStatus: 'idle' as const,
+    saveError: null,
+    lastSavedAt: null,
+    materialised: true
+  }
   useStore.setState((s) => ({
-    flistWorking: {
-      ...s.flistWorking,
-      [characterId]: {
-        payload: { _schema_version: 2, _overlay: [], ...payload },
-        overlay: Array.isArray(payload._overlay)
-          ? (payload._overlay as string[])
-          : [],
-        etag: 'seed-etag',
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
-    },
+    flistWorking: { ...s.flistWorking, [characterId]: slot },
+    // Working sets v2: a flush routes through the *active set's*
+    // payload endpoint and silently no-ops when no set is active
+    // (that's F-list read-only mode). Without this the autosave
+    // assertions below can never see a PUT.
+    flistSetWorking: { ...s.flistSetWorking, [SET_ID]: slot },
+    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistActiveCharacterId: characterId
   }))
 }

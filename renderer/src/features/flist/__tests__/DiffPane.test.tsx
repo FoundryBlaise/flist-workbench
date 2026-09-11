@@ -19,7 +19,6 @@ const minimalMapping = {
 function seed(state: {
   payload: Record<string, unknown>
   live?: Record<string, unknown> | null
-  backups?: { filename: string; created_at: number; size: number }[]
 }) {
   const slot = {
     payload: { _schema_version: 2, _overlay: [], ...state.payload },
@@ -43,8 +42,8 @@ function seed(state: {
     flistArchive: {
       '99': {
         live: (state.live ?? null) as Record<string, unknown> | null,
-        backups: state.backups ?? [],
-        pullStatus: 'idle'
+        snapshots: [],
+        pullStatus: 'idle' as const
       }
     },
     flistMapping: {

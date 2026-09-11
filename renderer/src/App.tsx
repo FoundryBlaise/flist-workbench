@@ -16,6 +16,7 @@ export type MenuAction =
   | 'ai-setup'
   | 'flist-activity'
   | 'restore-userscript-help'
+  | 'backup-all'
 
 declare global {
   interface Window {
