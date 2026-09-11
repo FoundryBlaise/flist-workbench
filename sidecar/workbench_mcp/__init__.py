@@ -131,7 +131,12 @@ def _build(name: str, tags: frozenset[str] | None) -> FastMCP:
 def build_mcp_servers() -> dict[str, FastMCP]:
     """Build every MCP endpoint. Importing the tool modules here is
     what populates the registry."""
-    from . import tools_session  # noqa: F401  (registration side effect)
+    from . import (  # noqa: F401  (registration side effects)
+        tools_logs,
+        tools_rag,
+        tools_session,
+        tools_sets,
+    )
 
     return {
         suffix: _build(_server_name(suffix), tags)

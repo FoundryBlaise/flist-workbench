@@ -40,13 +40,16 @@ async def mcp_client(suffix: str = ""):
         yield session
 
 
-async def call_tool(session: ClientSession, name: str, **arguments: Any):
+async def call_tool(session: ClientSession, tool: str, /, **arguments: Any):
     """Call a tool and return `(result, parsed_json_or_text)`.
 
     Tools return dicts, which the SDK serialises into a text block of
     JSON plus `structuredContent`. Tests mostly want the dict.
+
+    The first two parameters are positional-only so a tool argument
+    called `name` or `session` doesn't collide with them.
     """
-    result = await session.call_tool(name, arguments)
+    result = await session.call_tool(tool, arguments)
     if result.structuredContent is not None:
         return result, result.structuredContent
     texts = [c.text for c in result.content if getattr(c, "type", None) == "text"]
