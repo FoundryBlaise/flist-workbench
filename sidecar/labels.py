@@ -74,6 +74,14 @@ Charakternamen als Subjekt einer Handlung nutzt (Indikativ, Präsens/Präteritum
 ist das IC — auch bei alltäglichen Aktivitäten wie Schlafen, Essen, Lesen,
 Gehen, Putzen. Die Banalität der Handlung sagt NICHTS über IC vs OOC; die
 Perspektive (dritte Person über den Charakter) ist der entscheidende Marker.
+Der Sprechername muss NICHT der erzählte Charakter sein — Spieler führen oft
+mehrere Figuren unter einem Account. Dritte-Person-Narration über IRGENDEINE
+Figur ist IC.
+
+UMGEBUNGS- / SZENEN-NARRATION: Ein Sprecher darf auch Umgebung, NPCs und
+Ereignisse erzählen, ohne den eigenen Charakter zu nennen. Beschreibt der Text,
+was in der Spielwelt geschieht oder was das Gegenüber dort vorfindet, ist es IC
+— auch ohne eigenen Charakternamen als Subjekt.
 
 DIALOGE: Direkte Rede in Anführungszeichen mit Dialog-Tag (sagte, murmelte, etc.)
 ist IC.
@@ -95,7 +103,13 @@ Sobald das Geschehen hypothetisch ist oder vorgeschlagen wird, ist es OOC.
 
 Signalwörter: "Zum Beispiel...", "Stell dir vor...", "Wir könnten...", "Idee:..."
 
-Nutzung des Konjunktivs: "Sie würde / könnte..." -> OOC (da nicht real geschehend).
+KONJUNKTIV ALLEIN ENTSCHEIDET NICHT. Die Frage ist: Wird dem MITSPIELER etwas
+vorgeschlagen, oder wird der SPIELWELT etwas erzählt?
+- Vorschlag an den Mitspieler ("wir könnten...", "sie würde dann vielleicht ...
+  was meinst du?") -> OOC
+- Erzählte Handlung, die dem Gegenüber Reaktionsraum lässt ("Sie würde die Tür
+  öffnen und eintreten", "Sollte er sich umdrehen, sieht er...") -> IC. Das ist
+  in F-Chat die übliche Höflichkeitsform, kein Vorschlag.
 
 REALE WELT-ANEKDOTEN (OOC) — NUR bei IRL-Themen:
 
@@ -119,6 +133,12 @@ WÜRFEL- / META-NACHRICHTEN (OOC):
 In F-Chat sind Spieler-Meta-Kommentare oft in (...) Klammern oder beginnen mit
 "OOC:" / "//". Würfelwürfe, Regelfragen, Sichtbarkeits-Absprachen ("willst du den
 Wurf sehen?"), Pausenansagen ("kurz AFK") sind OOC.
+
+GEMISCHTE NACHRICHTEN:
+
+Enthält eine Nachricht IC-Erzählung UND einen Spieler-Einschub in (…),
+entscheidet der Hauptteil. Ein angehängter Klammerkommentar macht einen
+IC-Post nicht zu OOC.
 
 BEISPIELE ZUR MUSTERERKENNUNG:
 
@@ -157,8 +177,18 @@ NACHRICHT: "Ich hab es in der IT oft mitgekriegt. Komm aus ner Handwerker Famili
 kann mir also vorstellen wie das ist"
 ANTWORT: {"label":"OOC","reason":"Spieler-Anekdote aus echtem Leben (IT, Handwerker), erste Person"}
 
-NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt."
-ANTWORT: {"label":"OOC","reason":"Konjunktiv 'würde' beschreibt Möglichkeit, nicht Geschehen"}
+NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt.
+Wäre das so okay für dich?"
+ANTWORT: {"label":"OOC","reason":"Vorschlag an den Mitspieler, nicht erzählte Handlung"}
+
+NACHRICHT: "Sie würde den Rest des Tages nicht mehr stören. Sollte Amber die Tür
+öffnen, findet sie eine Flasche Wasser und zwei Kekse davor."
+ANTWORT: {"label":"IC","reason":"Erzählte Handlung im Konjunktiv, kein Vorschlag"}
+
+NACHRICHT: "[08-31 09:32 | 3735 chars | action] Ashvalia: Wie angekündigt kam am
+nächsten Tag ein junger Herr am Haus an. In der Limousine findet sie gekühlten
+Champagner vor. Die Flugtickets liegen rechts des Fernsehers."
+ANTWORT: {"label":"IC","reason":"Szenen- und Umgebungsnarration ohne eigenen Charakternamen"}
 
 NACHRICHT: "(Ich werde jetzt würfeln für den Magieffekt. Willst du den Wurf sehen
 oder soll ich das eher heimlich machen?)"
@@ -196,6 +226,13 @@ as the subject of an action in indicative mood (present/past tense), it is IC �
 even for mundane activities like sleeping, eating, reading, walking, cleaning.
 The mundanity of the action says NOTHING about IC vs OOC; the perspective
 (third person about the character) is the decisive marker.
+The speaker name need NOT be the narrated character — players often run several
+figures from one account. Third-person narration about ANY figure is IC.
+
+SCENE / ENVIRONMENT NARRATION: a speaker may also narrate surroundings, NPCs and
+events without naming their own character. If the text describes what happens in
+the game world, or what the other character finds there, it is IC — even with no
+own character name as the subject.
 
 DIALOGUE: Direct speech in quotation marks with a dialog tag (said, murmured,
 etc.) is IC.
@@ -217,7 +254,13 @@ As soon as the event is hypothetical or being proposed, it is OOC.
 
 Signal words: "for example…", "imagine…", "we could…", "idea:…"
 
-Subjunctive / conditional: "she would / could…" → OOC (not actually happening).
+SUBJUNCTIVE ALONE DOES NOT DECIDE. The question is: is something being proposed
+to the PLAYER, or narrated to the GAME WORLD?
+- a proposal to the other player ("we could…", "she would maybe … what do you
+  think?") → OOC
+- a narrated action that leaves the other side room to react ("She would open the
+  door and step inside", "Should he turn around, he sees…") → IC. In F-Chat this
+  is the customary polite form, not a proposal.
 
 REAL-WORLD ANECDOTES (OOC) — ONLY for IRL topics:
 
@@ -241,6 +284,11 @@ In F-Chat, player meta-comments are often in (...) parentheses or begin with
 "OOC:" / "//". Dice rolls, rule questions, visibility checks ("want to see
 the roll?"), away announcements ("brb afk") are OOC.
 
+MIXED MESSAGES:
+
+When a message contains IC narration AND a player aside in (…), the main body
+decides. A trailing parenthetical does not turn an IC post into OOC.
+
 FORMAT (STRICT):
 Respond ONLY with a single JSON object.
 NO code fences (no ```json). NO markdown blocks. NO arrays (no [ ]).
@@ -261,7 +309,9 @@ Rules of thumb:
 - Third-person narration about the speaker's own character, in indicative mood, is IC — even for mundane actions.
 - Direct speech in quotation marks with a dialog tag is IC.
 - Player parentheses (...), brackets ((...)), explicit "OOC:" / "//" prefixes, dice rolls, and planning ("we could…", "imagine…") are OOC.
-- Hypothetical / conditional / subjunctive ("would", "could") about a character is OOC.
+- Conditional / subjunctive alone does not decide: a proposal to the other PLAYER ("we could…", "what do you think?") is OOC, but a narrated action phrased politely ("She would open the door", "Should he look, he sees…") is IC.
+- Narration of surroundings, NPCs or events without the speaker's own character name is still IC.
+- One account may voice several characters; third-person narration about any of them is IC.
 
 Respond with one JSON object, no code fences, no preamble:
 {"label":"IC"|"OOC","reason":"short reason, max 60 chars"}"""
