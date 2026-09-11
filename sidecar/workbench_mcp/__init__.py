@@ -135,6 +135,7 @@ def build_mcp_servers() -> dict[str, FastMCP]:
         tools_classify,
         tools_edit,
         tools_logs,
+        tools_ops,
         tools_rag,
         tools_session,
         tools_sets,
