@@ -22,6 +22,19 @@ dependencies = [
   # for bge-reranker-v2-m3 and downloads to a user cache on first use.
   # Embedding stays in LM Studio; fastembed is rerank-only here.
   "fastembed>=0.7,<1",
+  # Model Context Protocol server, mounted at /mcp. This is the
+  # reference SDK's bundled FastMCP (`mcp.server.fastmcp`), not the
+  # third-party `fastmcp` 2.x package. docs/MCP_DESIGN.md originally
+  # picked fastmcp 2.x, but it eagerly imports redis, docket, authlib,
+  # joserfc, opentelemetry, cloudpickle and beartype at `import
+  # fastmcp` time — 20+ extra packages that PyInstaller would have to
+  # bundle into the portable sidecar.exe for features (distributed
+  # task queues, OAuth providers, server proxying) this app never
+  # uses. The reference SDK carries everything we do need: typed tool
+  # decorators with annotations, Context.report_progress,
+  # streamable_http_app(), prompts, resources and
+  # TransportSecuritySettings for DNS-rebinding protection.
+  "mcp>=1.18,<2",
 ]
 
 [dependency-groups]
