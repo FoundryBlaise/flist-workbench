@@ -271,6 +271,18 @@ type State = {
    *  via `flistSetWorkingMaterialise` + the autosave path. */
   flistSetWorking: Record<string, FlistWorkingSlot>
   flistSetWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
+  /** A change to a working set that this window did not make — almost
+   *  always a model editing through MCP. Keyed by character id.
+   *
+   *  This exists because the window is no longer the only writer. It
+   *  used to be safe to assume the slot in memory matched disk; now it
+   *  can be stale, and autosaving a stale payload overwrites whatever
+   *  the other writer did. The banner this drives makes the user pick:
+   *  take theirs, or keep mine. */
+  flistExternalChange: Record<
+    string,
+    { setId: string; etag: string | null; origin: string; at: number } | null
+  >
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
@@ -510,6 +522,18 @@ type State = {
   flistDeleteSet: (characterId: string, setId: string) => Promise<void>
   flistActivateSet: (characterId: string, setId: string) => Promise<void>
   flistActivateFromFlist: (characterId: string) => Promise<void>
+  /** Record that something outside this window changed a set. Called
+   *  by the `/events` subscription; ignored when the change is one we
+   *  made ourselves. */
+  flistNoteExternalChange: (
+    characterId: string,
+    change: { setId: string; etag: string | null; origin: string }
+  ) => void
+  /** Take the other writer's version, discarding unsaved local edits. */
+  flistReloadAfterExternalChange: (characterId: string) => Promise<void>
+  /** Keep this window's version, overwriting the other writer's. */
+  flistOverwriteAfterExternalChange: (characterId: string) => Promise<void>
+  flistDismissExternalChange: (characterId: string) => void
   /** Export a working set as a Workbench-native bundle ZIP. Opens the
    *  native save dialog. Returns the bytes written and the chosen path
    *  on success; null when the user cancels or the IPC plumbing is
@@ -1191,6 +1215,7 @@ export const useStore = create<State>((set, get) => ({
   flistActiveSetId: {},
   flistSetWorking: {},
   flistSetWorkingLoadStatus: {},
+  flistExternalChange: {},
   flistMapping: {
     status: 'idle',
     payload: null,
@@ -1503,6 +1528,7 @@ export const useStore = create<State>((set, get) => ({
       flistActiveSetId: {},
       flistSetWorking: {},
       flistSetWorkingLoadStatus: {},
+      flistExternalChange: {},
       flistDriftBanners: {},
       flistResetUndo: null,
       flistDiffRightSource: {},
@@ -2386,22 +2412,37 @@ export const useStore = create<State>((set, get) => ({
         set((s) => {
           const existing = s.flistWorking[characterId]
           if (!existing) return {}
-          return {
+          const patch: Partial<State> = {
             flistWorking: {
               ...s.flistWorking,
               [characterId]: {
                 ...existing,
                 saveStatus: 'error',
                 saveError: conflict
-                  ? 'Another window saved a different version. Reload to merge.'
+                  ? 'Someone else changed this set. Choose whose version to keep.'
                   : raw,
-                etag: conflict
-                  ? errWith.currentEtag ?? existing.etag
-                  : existing.etag,
+                // The server etag is deliberately NOT adopted on a
+                // conflict. Adopting it would let the next keystroke's
+                // autosave succeed and silently overwrite the other
+                // writer; keeping the stale one makes every retry
+                // conflict until the user decides.
+                etag: existing.etag,
                 unsavedDirty: true
               }
             }
           }
+          if (conflict) {
+            patch.flistExternalChange = {
+              ...s.flistExternalChange,
+              [characterId]: {
+                setId: activeSetId,
+                etag: errWith.currentEtag ?? null,
+                origin: 'unknown',
+                at: Date.now()
+              }
+            }
+          }
+          return patch
         })
       }
     })()
@@ -2686,6 +2727,99 @@ export const useStore = create<State>((set, get) => ({
       }
       return patch
     })
+  },
+
+  flistNoteExternalChange(characterId, change) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      // A change we made ourselves arrives with the etag we already
+      // hold; there is nothing to tell the user about.
+      if (slot && change.etag && slot.etag === change.etag) return {}
+      return {
+        flistExternalChange: {
+          ...s.flistExternalChange,
+          [characterId]: { ...change, at: Date.now() }
+        }
+      }
+    })
+  },
+
+  async flistReloadAfterExternalChange(characterId) {
+    const change = get().flistExternalChange[characterId]
+    if (!change) return
+    _cancelFlush(characterId)
+    try {
+      const res = await api.flistSetPayloadRead(characterId, change.setId)
+      const payload = res.payload as WorkingPayload
+      const overlay = Array.isArray(payload._overlay) ? payload._overlay : []
+      const slot: FlistWorkingSlot = {
+        payload,
+        overlay,
+        etag: res.etag,
+        unsavedDirty: false,
+        saveStatus: 'idle',
+        saveError: null,
+        lastSavedAt: Date.now(),
+        materialised: true
+      }
+      set((s) => {
+        const patch: Partial<State> = {
+          flistWorking: { ...s.flistWorking, [characterId]: slot },
+          flistSetWorking: { ...s.flistSetWorking, [change.setId]: slot },
+          flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+        }
+        if (s.flistActiveCharacterId === characterId) {
+          patch.editorContent = descriptionOf(payload)
+          patch.editorDirty = false
+        }
+        return patch
+      })
+    } catch {
+      // Leave the banner up — the user can retry or keep theirs.
+    }
+  },
+
+  async flistOverwriteAfterExternalChange(characterId) {
+    const change = get().flistExternalChange[characterId]
+    const slot = get().flistWorking[characterId]
+    if (!change || !slot) return
+    _cancelFlush(characterId)
+    try {
+      // Write against the etag the other writer left, which is what
+      // makes this an overwrite rather than another conflict.
+      const { etag } = await api.flistSetPayloadPut(
+        characterId,
+        change.setId,
+        slot.payload,
+        change.etag
+      )
+      set((s) => {
+        const existing = s.flistWorking[characterId]
+        if (!existing) return {}
+        const next: FlistWorkingSlot = {
+          ...existing,
+          etag,
+          unsavedDirty: false,
+          saveStatus: 'saved',
+          saveError: null,
+          lastSavedAt: Date.now(),
+          materialised: true
+        }
+        return {
+          flistWorking: { ...s.flistWorking, [characterId]: next },
+          flistSetWorking: { ...s.flistSetWorking, [change.setId]: next },
+          flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+        }
+      })
+    } catch {
+      // Still conflicting — a third write landed. The banner stays.
+    }
+  },
+
+  flistDismissExternalChange(characterId) {
+    set((s) => ({
+      flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+    }))
   },
 
   async flistActivateFromFlist(characterId) {

@@ -1441,6 +1441,52 @@ body {
   z-index: 30;
   max-width: 460px;
 }
+/* Shown when a model editing through MCP changed the working set the
+   user has open. Sits at the top, not the bottom: this is a decision
+   the user has to make, not a notice they can scroll past. */
+.external-change-banner {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--select);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  font-size: var(--font-meta);
+  z-index: 40;
+  max-width: 720px;
+}
+.external-change-reload,
+.external-change-keep,
+.external-change-dismiss {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--btn-radius);
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.external-change-reload {
+  border-color: var(--accent);
+}
+.external-change-reload:hover,
+.external-change-keep:hover {
+  background: var(--hover-soft);
+}
+.external-change-dismiss {
+  border: none;
+  color: var(--text-dim);
+  padding: 4px 6px;
+}
+.external-change-dismiss:hover { color: var(--text); }
+
 .backup-all-banner {
   position: fixed;
   bottom: 20px;

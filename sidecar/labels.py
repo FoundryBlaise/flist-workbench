@@ -455,6 +455,21 @@ def _widen_source_check(conn: sqlite3.Connection) -> None:
             pass
 
 
+def _publish(event: str, **data) -> None:
+    """Announce a label change on the event bus, if one is running.
+
+    Here rather than in the callers so the manual override from the
+    log viewer and a model's verdict through MCP both reach the
+    window. Never fails a write.
+    """
+    try:
+        from services import events
+
+        events.publish(event, **data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def msg_hash(msg: dict) -> str:
     h = hashlib.sha1(f"{msg['ts']}|{msg['speaker']}|{msg['raw']}".encode("utf-8"))
     return h.hexdigest()[:16]
@@ -625,12 +640,17 @@ def upsert_label(
         ),
     )
     conn.commit()
+    _publish(
+        "labels-changed", character=character, partner=partner, hashes=1
+    )
 
 
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     """Remove an explicit label, reverting the message to rule-or-Unlabeled."""
     cur = conn.execute("DELETE FROM labels WHERE hash = ?", (hash,))
     conn.commit()
+    if cur.rowcount:
+        _publish("labels-changed", hashes=cur.rowcount)
     return cur.rowcount > 0
 
 
@@ -651,6 +671,12 @@ def delete_labels_for_partner(
         (character, *names),
     )
     conn.commit()
+    _publish(
+        "labels-changed",
+        character=character,
+        partner=partner,
+        deleted=cur.rowcount,
+    )
     return cur.rowcount
 
 
