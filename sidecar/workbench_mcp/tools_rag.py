@@ -12,7 +12,7 @@ from typing import Any
 
 import rag_store
 
-from ._context import ToolError
+from ._context import ToolError, resolve_conversation, resolve_log_character
 from ._registry import TAG_CORE, TAG_LOGS, tool
 
 
@@ -45,9 +45,14 @@ def search_logs_semantic(
 
     scope: dict[str, Any] | None = None
     if character:
-        scope = {"character": character}
+        # Resolve to the on-disk spelling: the chunk payloads the index
+        # was written with carry that one, so a differently-cased scope
+        # would filter every hit away without saying why.
         if partner:
-            scope["partner"] = partner
+            conv = resolve_conversation(character, partner)
+            scope = {"character": conv.character, "partner": conv.partner}
+        else:
+            scope = {"character": resolve_log_character(character)}
     elif partner:
         raise ToolError(
             "validation_failed",

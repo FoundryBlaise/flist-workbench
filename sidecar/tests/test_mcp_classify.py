@@ -403,3 +403,99 @@ async def test_clear_labels_is_annotated_destructive() -> None:
         tools = {t.name: t for t in (await session.list_tools()).tools}
     assert tools["clear_labels"].annotations.destructiveHint is True
     assert tools["set_message_labels"].annotations.readOnlyHint is False
+
+
+# ---- addressing by name, whatever the case -----------------------------
+
+
+async def test_verdicts_survive_a_differently_cased_address(conversation) -> None:
+    """Labels written under the on-disk spelling must still be found when
+    the caller spells either name differently.
+
+    The regression this guards: messages are read through the filesystem,
+    which is case-insensitive on Windows, while the `labels` and
+    `partner_aliases` tables match their key exactly. A call addressed as
+    `lady amber blaise` / `daemon enariel` therefore used to return the
+    right messages with none of their verdicts — `ic: 0` and every judged
+    message back in `unlabeled`, with no error to show for it.
+    """
+    async with mcp_client("logs") as session:
+        _, batch = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+        await call_tool(
+            session,
+            "set_message_labels",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+            items=[
+                {"hash": batch["messages"][0]["hash"], "label": "IC"},
+                {"hash": batch["messages"][1]["hash"], "label": "OOC"},
+            ],
+        )
+
+        _, canonical = await call_tool(
+            session,
+            "get_label_stats",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+        for character, partner in (
+            ("lady amber blaise", "daemon enariel"),
+            ("LADY AMBER BLAISE", "DAEMON ENARIEL"),
+            ("Lady Amber Blaise", "daemon enariel"),
+        ):
+            _, body = await call_tool(
+                session,
+                "get_label_stats",
+                character=character,
+                partner=partner,
+            )
+            assert body == canonical, (character, partner)
+
+
+async def test_writing_labels_through_a_cased_address_hits_one_row_set(
+    conversation,
+) -> None:
+    """A verdict written under `daemon enariel` must be the same row the
+    canonical address reads — not a second, parallel set of labels."""
+    async with mcp_client("logs") as session:
+        _, batch = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="lady amber blaise",
+            partner="daemon enariel",
+        )
+        await call_tool(
+            session,
+            "set_message_labels",
+            character="lady amber blaise",
+            partner="daemon enariel",
+            items=[{"hash": batch["messages"][0]["hash"], "label": "IC"}],
+        )
+        _, body = await call_tool(
+            session,
+            "get_label_stats",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+    assert body["ic"] == 1
+    assert body["unlabeled"] == 1
+
+
+async def test_an_unknown_partner_is_refused_rather_than_counted(
+    conversation,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(
+            session,
+            "get_label_stats",
+            character="Lady Amber Blaise",
+            partner="Nobody At All",
+        )
+    text = tool_error_text(result)
+    assert "partner_not_found" in text
+    assert "list_partners" in text

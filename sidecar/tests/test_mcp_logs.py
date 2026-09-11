@@ -310,3 +310,44 @@ async def test_rag_status_on_a_fresh_install(corpus) -> None:
         _, body = await call_tool(session, "get_rag_status")
     assert body["chunk_count"] == 0
     assert "ingest_logs" in body["note"]
+
+
+async def test_alias_group_folds_in_whatever_case_the_caller_uses(
+    corpus, tmp_path
+) -> None:
+    """Linking two log files must fold them together for every spelling
+    of both names.
+
+    Alias rows are matched exactly by SQL, so an address the caller
+    capitalised differently used to miss the group and report one file's
+    numbers as if they were the whole conversation.
+    """
+    write_log(
+        tmp_path / "fchat" / "Lady Amber Blaise" / "logs" / "Ashvalia",
+        [(1700000400, "Ashvalia", LONG), (1700000460, "Ashvalia", SHORT)],
+    )
+    async with mcp_client("logs") as session:
+        await call_tool(
+            session,
+            "add_alias",
+            character="Lady Amber Blaise",
+            name="Daemon Enariel",
+            primary_name="Ashvalia",
+        )
+        seen = []
+        for character, partner in (
+            ("Lady Amber Blaise", "Ashvalia"),
+            ("Lady Amber Blaise", "Daemon Enariel"),
+            ("lady amber blaise", "daemon enariel"),
+            ("LADY AMBER BLAISE", "ashvalia"),
+        ):
+            _, body = await call_tool(
+                session,
+                "get_label_stats",
+                character=character,
+                partner=partner,
+            )
+            seen.append(body["total"])
+    # Three records in one file, two in the other — every spelling sees
+    # the whole group, never one half of it.
+    assert seen == [5, 5, 5, 5]

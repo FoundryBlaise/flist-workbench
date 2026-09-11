@@ -14,6 +14,7 @@ from typing import Any
 
 import character_archive
 import flist_activity
+import logs as log_store
 
 #: Sentinel a `set` argument can carry to address the read-only
 #: `live.json` pulled from F-list rather than an editable working set.
@@ -251,3 +252,88 @@ def audit(tool_name: str, **fields: Any) -> None:
         flist_activity.record(f"mcp:{tool_name}", source="mcp", **fields)
     except Exception:  # noqa: BLE001 — auditing must never fail a tool
         pass
+
+
+# --------------------------------------------------------------------
+# Log addressing
+# --------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolvedConversation:
+    """One conversation, spelled the way the log store spells it."""
+
+    character: str
+    partner: str
+
+
+def _log_dir_unavailable(exc: Exception) -> ToolError:
+    return ToolError(
+        "log_dir_unavailable",
+        f"{exc} The F-Chat data directory is set in Settings → General.",
+    )
+
+
+def resolve_log_character(character: str, *, required: bool = True) -> str:
+    """Accept a log character name case-insensitively; return the on-disk
+    spelling.
+
+    Necessary because the two halves of a label lookup disagree about
+    case. Messages come off the filesystem, which is case-insensitive on
+    Windows, so `lady amber blaise` opens the right directory. The
+    `labels` and `partner_aliases` tables are keyed on the string the
+    caller passed and match it exactly, so the same call finds no
+    verdicts and no alias group. The result is not an error but a
+    plausible-looking count with `ic: 0` and every judged message back in
+    `unlabeled`. Resolving once, here, keeps both halves in agreement.
+
+    `required=False` canonicalises without insisting the character has
+    logs — for tools that only touch the labels DB, where a character
+    may legitimately have rows but no log directory.
+    """
+    if not isinstance(character, str) or not character.strip():
+        raise validation_failed("character", "must be a log character name")
+    needle = character.strip().lower()
+    try:
+        entries = log_store.list_characters()
+    except log_store.LogDirError as exc:
+        if not required:
+            return character.strip()
+        raise _log_dir_unavailable(exc) from exc
+    for entry in entries:
+        if entry.name.lower() == needle:
+            return entry.name
+    if not required:
+        return character.strip()
+    raise ToolError(
+        "log_character_not_found",
+        f"No F-Chat logs for {character.strip()!r}.",
+        known_characters=sorted(e.name for e in entries),
+    )
+
+
+def resolve_conversation(character: str, partner: str) -> ResolvedConversation:
+    """Resolve both halves of a conversation address to their on-disk
+    spelling. Alias members resolve to their group's primary, so callers
+    never have to think about which name a log file was written under.
+    """
+    name = resolve_log_character(character)
+    if not isinstance(partner, str) or not partner.strip():
+        raise validation_failed("partner", "must be a partner name")
+    needle = partner.strip().lower()
+    try:
+        entries = log_store.list_partners(name)
+    except log_store.LogDirError as exc:
+        raise _log_dir_unavailable(exc) from exc
+    for entry in entries:
+        if entry.name.lower() == needle or any(
+            alt.lower() == needle for alt in entry.aliases
+        ):
+            return ResolvedConversation(character=name, partner=entry.name)
+    close = sorted(e.name for e in entries if needle in e.name.lower())[:10]
+    raise ToolError(
+        "partner_not_found",
+        f"{name} has no conversation with {partner.strip()!r}. "
+        "Call list_partners for the names as they are stored.",
+        did_you_mean=close,
+    )
