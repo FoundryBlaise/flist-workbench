@@ -35,7 +35,7 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from services import label_rollup
+from services import label_rollup, payload_ops
 from logs import (
     LogDirError,
     data_dir,
@@ -1891,7 +1891,7 @@ async def flist_character_export_zip(character_id: str) -> Response:
                 status_code=404,
                 detail="no working copy or Live snapshot to export",
             )
-        working = _seed_working_from_live(live)
+        working = payload_ops.seed_from_live(live)
     name_for_file = "character"
     char = working.get("character")
     if isinstance(char, dict):
@@ -1921,59 +1921,6 @@ async def flist_character_export_zip(character_id: str) -> Response:
             "Content-Disposition": f'attachment; filename="{download_name}"'
         },
     )
-
-
-def _seed_working_from_live(live: dict) -> dict:
-    """Sidecar-side mirror of `seedWorkingFromLive` for the export
-    fallback path (user hasn't edited yet). Only the fields the ZIP
-    serialiser reads are populated; everything else can stay missing."""
-    out: dict[str, Any] = {
-        "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
-        "_overlay": [],
-    }
-    if isinstance(live.get("character"), dict):
-        out["character"] = dict(live["character"])
-    else:
-        out["character"] = {
-            "id": live.get("id"),
-            "name": live.get("name"),
-            "description": live.get("description", ""),
-            "custom_title": live.get("custom_title"),
-        }
-    for key in ("settings", "infotags", "custom_kinks", "inlines"):
-        if key in live:
-            out[key] = live[key]
-    kinks = live.get("kinks")
-    out["kinks"] = {} if isinstance(kinks, list) else (kinks or {})
-    gallery: list[dict] = []
-    raw_images = live.get("images")
-    if isinstance(raw_images, list):
-        for index, entry in enumerate(raw_images):
-            if not isinstance(entry, dict):
-                continue
-            iid = entry.get("image_id") or entry.get("id")
-            if iid is None:
-                continue
-            sort_raw = entry.get("sort_order")
-            if isinstance(sort_raw, (int, float)):
-                sort = int(sort_raw)
-            elif isinstance(sort_raw, str) and sort_raw:
-                try:
-                    sort = int(sort_raw)
-                except ValueError:
-                    sort = index
-            else:
-                sort = index
-            gallery.append(
-                {
-                    "image_id": str(iid),
-                    "description": entry.get("description", "") or "",
-                    "sort_order": sort,
-                }
-            )
-    gallery.sort(key=lambda e: e["sort_order"])
-    out["images"] = gallery
-    return out
 
 
 def _safe_filename_part(name: str) -> str:

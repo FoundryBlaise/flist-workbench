@@ -181,7 +181,7 @@ async def test_reading_a_set_without_one_active_explains_itself(
 async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:
     async with mcp_client() as session:
         _, body = await call_tool(
-            session, "get_description", character="Lady Amber Blaise", set="live"
+            session, "get_description", character="Lady Amber Blaise", working_set="live"
         )
     assert body["read_only"] is True
     assert body["description"] == "[b]A published profile.[/b]"
