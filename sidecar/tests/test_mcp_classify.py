@@ -279,20 +279,89 @@ async def test_verdicts_are_readable_back_with_their_reason(
 # ---- validation --------------------------------------------------------
 
 
-async def test_an_unknown_hash_is_reported_not_written(conversation) -> None:
+async def test_a_write_that_stores_nothing_raises(conversation) -> None:
     """A wrong hash would label some other message, so it must never be
-    silently accepted."""
+    silently accepted — and a call that stored none of its verdicts has
+    to fail loudly. Returned as a result, a caller reads `written: 0`
+    as a finished batch and moves on; that is how a real run left a
+    third of a conversation unjudged while reporting it complete."""
     async with mcp_client("logs") as session:
-        _, body = await call_tool(
+        result, _ = await call_tool(
             session,
             "set_message_labels",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             items=[{"hash": "0123456789abcdef", "label": "IC"}],
         )
-    assert body["written"] == 0
+    text = tool_error_text(result)
+    assert "nothing_written" in text
+    assert "0123456789abcdef" in text
+    assert "get_messages_to_classify" in text
+
+
+async def test_a_partial_write_keeps_the_good_verdicts_and_says_so(
+    conversation,
+) -> None:
+    async with mcp_client("logs") as session:
+        _, batch = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+        )
+        _, body = await call_tool(
+            session,
+            "set_message_labels",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+            items=[
+                {"hash": batch["messages"][0]["hash"], "label": "IC"},
+                {"hash": "0123456789abcdef", "label": "IC"},
+            ],
+        )
+    assert body["written"] == 1
     assert body["unknown_hashes"] == ["0123456789abcdef"]
-    assert "get_messages_to_classify" in body["note"]
+    assert "were not written" in body["note"]
+
+
+async def test_every_write_reports_what_is_still_unjudged(conversation) -> None:
+    """The number a caller should trust about its own progress. Without
+    it the last thing a long run sees is `written: 20`, and a model
+    summarising the run fills the gap with a plausible figure."""
+    async with mcp_client("logs") as session:
+        _, batch = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+            limit=1,
+        )
+        _, first = await call_tool(
+            session,
+            "set_message_labels",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+            items=[{"hash": batch["messages"][0]["hash"], "label": "IC"}],
+        )
+        assert first["unlabeled_remaining"] == 1
+        assert "NOT FINISHED" in first["note"]
+
+        _, batch2 = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+            cursor=0,
+        )
+        _, second = await call_tool(
+            session,
+            "set_message_labels",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+            items=[{"hash": batch2["messages"][0]["hash"], "label": "OOC"}],
+        )
+    assert second["unlabeled_remaining"] == 0
+    assert "ingest_logs" in second["note"]
 
 
 async def test_a_bad_label_is_rejected_per_item(conversation) -> None:
