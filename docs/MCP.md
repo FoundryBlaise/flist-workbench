@@ -126,6 +126,29 @@ published.
 characters?"), and `search_logs_semantic`, which finds passages that
 are *about* something rather than containing a word.
 
+The two searches fail in opposite directions, and knowing which to
+reach for saves a lot of guessing.
+
+`search_logs_semantic` needs the words to mean something to the
+embedding model. Invented setting terms often do not: a query for
+"Storkakyten" found the right passage only once the spelling matched
+the logs exactly, and a near-miss found nothing useful. For a name,
+place or coined term you half-remember, `search_logs` on a stem —
+`kakyt` — is the better tool. It is a plain substring match, so it
+finds every spelling variant a long roleplay accumulates, and it
+answers "where is this mentioned at all" rather than "what is the
+single most relevant passage".
+
+The other trap is the referent. Chunks carry the *speaker* name on
+every line, so asking about a character normally works. But when one
+account voices several characters — a GM running the whole crew, or a
+player with two figures in one scene — the line says the account name
+and the prose says "she". A chunk that only says "she" cannot be found
+by a question that names the character, and neighbour expansion does
+not rescue it: neighbours expand around chunks that were already
+retrieved, and this one never scored. Ask about the *thing* instead —
+"machete", "ammunition press" — or use `search_logs`.
+
 **Labels** — see below.
 
 **Operations** — `pull_character`, `create_backup`,
