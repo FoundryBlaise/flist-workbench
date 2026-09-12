@@ -883,6 +883,63 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/working`,
       { method: 'DELETE' }
     ),
+  // ---- The workbench --------------------------------------------
+  // A character has one editable copy of its profile, always present,
+  // seeded from Live when first needed. "Working sets" — several named
+  // drafts with one active — stayed on disk and left the vocabulary:
+  // testers could not say what one was or how it related to the
+  // read-only F-list row above it.
+  /** Resolve the character's workbench, creating it from Live if it
+   *  does not exist. `create: false` asks without making one, which is
+   *  what a read-only render wants — merely looking at a character
+   *  should not bring a bench into being. */
+  flistWorkbench: (characterId: string | number, create = true) =>
+    get<{
+      workbench: SetMetaWire | null
+      active_set_id?: string | null
+      reason?: string
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
+        + (create ? '' : '?create=false')
+    ),
+  /** What the confirm dialog needs before overwriting the bench:
+   *  whether it holds unpublished edits, and whether F-list has moved
+   *  on since this backup was taken. */
+  flistWorkbenchLoadPreflight: (
+    characterId: string | number,
+    filename: string
+  ) =>
+    get<{
+      filename: string
+      backup_created_at: number | null
+      live_pulled_at: number | null
+      live_diverged: boolean
+      workbench_has_edits: boolean
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}`
+        + `/workbench/load-backup/preflight?filename=`
+        + encodeURIComponent(filename)
+    ),
+  /** Replace the workbench contents with a backup's. `backUpFirst` is
+   *  the dialog's third button — the safety net is offered, never
+   *  imposed. */
+  flistWorkbenchLoadBackup: (
+    characterId: string | number,
+    filename: string,
+    backUpFirst: boolean
+  ) =>
+    request<{
+      workbench: SetMetaWire
+      loaded: string
+      backed_up_first: { filename: string; created_at: number } | null
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}`
+        + `/workbench/load-backup`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ filename, back_up_first: backUpFirst })
+      }
+    ),
   // ---- F-list working sets v2 (sets list + per-set payload) ----
   flistSetsList: (characterId: string | number) =>
     get<SetsListResponseWire>(
