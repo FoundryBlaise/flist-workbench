@@ -415,6 +415,97 @@ def _unlabeled_remaining(
 
 
 @tool(
+    tags=(TAG_CLASSIFY, TAG_LOGS),
+    title="Label every unlabeled message at once",
+    destructive=True,
+)
+def label_all_unlabeled(
+    character: str,
+    partner: str,
+    label: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Give every still-unlabeled message in one conversation the same
+    verdict, in one call.
+
+    Only for a conversation the *user* has told you is entirely IC (or
+    entirely OOC). It is not a shortcut for judging: never call it
+    because a batch looks uniform, or to finish a long classification
+    run faster. If the user has not said so about this specific
+    conversation, keep labelling in batches.
+
+    Messages that already have a verdict keep it, and messages the
+    rules decide (empty, short, `((` prefix) keep resolving through the
+    rules — so this adds labels and never overwrites. `hashes` in the
+    reply is exactly what was written, and the user can undo it in the
+    app.
+
+    Unlabeled messages are skipped by ingest, so a conversation filled
+    this way needs re-ingesting before it can be found by search.
+    """
+    if label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
+        raise ToolError(
+            "invalid_label", f"label must be 'IC' or 'OOC', got {label!r}"
+        )
+
+    conv = resolve_conversation(character, partner)
+    character, partner = conv.character, conv.partner
+    messages = _read_conversation(character, partner)
+
+    if not confirm:
+        pending = _unlabeled_remaining(character, partner, messages)
+        raise ToolError(
+            "confirm_required",
+            f"This writes {label} to all {pending} unlabeled message(s) "
+            f"in {partner} with {character} without reading them. Only do "
+            "it if the user said this conversation is entirely "
+            f"{label}. Ask them, then call again with confirm=true.",
+        )
+
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        alias_group = aliases_store.all_names_for(
+            labels_conn, character, partner
+        )
+        primary = aliases_store.primary_for(labels_conn, character, partner)
+        result = labels_store.fill_unlabeled(
+            labels_conn,
+            character,
+            primary,
+            messages,
+            lab_settings,
+            label,
+            partner_aliases=alias_group,
+        )
+    finally:
+        settings_conn.close()
+        labels_conn.close()
+
+    audit(
+        "label_all_unlabeled",
+        character=character,
+        partner=partner,
+        label=label,
+        labeled=result["labeled"],
+    )
+    return {
+        "character": character,
+        "partner": partner,
+        "label": label,
+        "labeled": result["labeled"],
+        "already_labeled": result["already_labeled"],
+        "decided_by_rules": result["decided_by_rules"],
+        "total_messages": result["total_messages"],
+        "note": (
+            f"{result['labeled']} message(s) are now {label}. Re-ingest this "
+            "conversation to make them searchable."
+        ),
+    }
+
+
+@tool(
     tags=TAG_LOGS,
     title="Clear stored verdicts",
     destructive=True,

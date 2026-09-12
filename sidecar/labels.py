@@ -739,6 +739,131 @@ def delete_labels_for_partner(
     return cur.rowcount
 
 
+def fill_unlabeled(
+    conn: sqlite3.Connection,
+    character: str,
+    partner: str,
+    messages: Iterable[dict],
+    settings: LabelsSettings,
+    label: str,
+    *,
+    partner_aliases: list[str] | None = None,
+    source: str = "manual",
+    reason: str = "bulk: all unlabeled",
+) -> dict:
+    """Give every still-Unlabeled message in one conversation the same
+    verdict.
+
+    For the case the user actually has: a conversation they know is
+    pure IC end to end, where asking a model to judge two thousand
+    messages one batch at a time buys nothing. They know the answer.
+
+    Only the Unlabeled ones are touched. A message that already has a
+    stored verdict keeps it — this is not a way to overwrite a model's
+    work, and it never widens into one. Messages the rules already
+    decided (empty, shorter than the threshold, `((` prefix) keep
+    resolving through the rules, so a one-word IC line stays OOC here;
+    that is what the rules are for, and the user can still override a
+    single row by hand.
+
+    Returns the counts plus every hash written, so the caller can offer
+    to undo exactly this write and nothing else.
+    """
+    if label not in (LABEL_IC, LABEL_OOC):
+        raise ValueError(f"invalid label: {label!r}")
+    by_hash = labels_for_partner(
+        conn, character, partner, partner_aliases=partner_aliases
+    )
+    targets: list[tuple[str, dict]] = []
+    already_labelled = 0
+    decided_by_rules = 0
+    total = 0
+    for msg in messages:
+        total += 1
+        h = msg_hash(msg)
+        if h in by_hash:
+            already_labelled += 1
+            continue
+        if resolve(msg, None, settings) != LABEL_UNLABELED:
+            decided_by_rules += 1
+            continue
+        targets.append((h, msg))
+
+    now = time.time()
+    conn.executemany(
+        """
+        INSERT INTO labels (
+            hash, character, partner, ts, speaker, label,
+            confidence, reason, source, prior_label, prior_source, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+        ON CONFLICT(hash) DO NOTHING
+        """,
+        [
+            (
+                h,
+                character,
+                partner,
+                int(msg.get("ts") or 0),
+                msg.get("speaker") or "",
+                label,
+                1.0,
+                reason,
+                source,
+                now,
+            )
+            for h, msg in targets
+        ],
+    )
+    conn.commit()
+    if targets:
+        _publish(
+            "labels-changed",
+            character=character,
+            partner=partner,
+            hashes=len(targets),
+        )
+    return {
+        "label": label,
+        "labeled": len(targets),
+        "hashes": [h for h, _ in targets],
+        "already_labeled": already_labelled,
+        "decided_by_rules": decided_by_rules,
+        "total_messages": total,
+    }
+
+
+def delete_labels_by_hash(
+    conn: sqlite3.Connection,
+    hashes: Iterable[str],
+    *,
+    character: str | None = None,
+    partner: str | None = None,
+) -> int:
+    """Remove specific labels, reverting those messages to
+    rule-or-Unlabeled. Undoes one `fill_unlabeled` without touching
+    anything else in the conversation."""
+    ids = [h for h in hashes if h]
+    if not ids:
+        return 0
+    removed = 0
+    for start in range(0, len(ids), 500):
+        batch = ids[start : start + 500]
+        placeholders = ",".join("?" * len(batch))
+        cur = conn.execute(
+            f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
+        )
+        removed += cur.rowcount
+    conn.commit()
+    if removed:
+        _publish(
+            "labels-changed",
+            character=character,
+            partner=partner,
+            deleted=removed,
+        )
+    return removed
+
+
 def max_label_time(
     conn: sqlite3.Connection,
     character: str,

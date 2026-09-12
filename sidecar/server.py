@@ -2101,6 +2101,91 @@ def labels_rollup() -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class LabelsFillUnlabeled(BaseModel):
+    character: str
+    partner: str
+    label: str
+
+
+class LabelsDeleteHashes(BaseModel):
+    character: str
+    partner: str
+    hashes: list[str]
+
+
+@app.post("/labels/fill-unlabeled")
+def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> dict:
+    """Give every still-Unlabeled message in one conversation the same
+    verdict.
+
+    For a conversation the user knows is pure IC (or pure OOC) end to
+    end. Walking it batch by batch through a connected model buys
+    nothing when they already know the answer.
+
+    Deliberately narrow: messages that already carry a verdict keep it,
+    and messages the rules decide keep resolving through the rules. So
+    this can add labels but never overwrite a model's or the user's
+    own. The response carries every hash written, which is what makes
+    the undo exact.
+    """
+    if body.label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
+        raise HTTPException(
+            status_code=400,
+            detail=f"label must be IC or OOC, got {body.label!r}",
+        )
+    try:
+        messages = list(read_messages(body.character, body.partner))
+    except LogDirError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        alias_group = aliases_store.all_names_for(
+            labels_conn, body.character, body.partner
+        )
+        # Written under the alias group's primary, like every other
+        # label, so a later rename does not orphan them.
+        primary = aliases_store.primary_for(
+            labels_conn, body.character, body.partner
+        )
+        result = labels_store.fill_unlabeled(
+            labels_conn,
+            body.character,
+            primary,
+            messages,
+            lab_settings,
+            body.label,
+            partner_aliases=alias_group,
+        )
+    finally:
+        settings_conn.close()
+        labels_conn.close()
+    return {"character": body.character, "partner": body.partner, **result}
+
+
+@app.post("/labels/delete-hashes")
+def labels_delete_hashes(body: LabelsDeleteHashes) -> dict:
+    """Remove named labels and nothing else — the undo for
+    `/labels/fill-unlabeled`. Distinct from `/labels/clear`, which
+    drops every verdict in the conversation including a model's."""
+    conn = labels_store.connect()
+    try:
+        removed = labels_store.delete_labels_by_hash(
+            conn,
+            body.hashes,
+            character=body.character,
+            partner=body.partner,
+        )
+    finally:
+        conn.close()
+    return {
+        "character": body.character,
+        "partner": body.partner,
+        "deleted": removed,
+    }
+
+
 @app.post("/labels/override")
 def labels_override(body: LabelOverride) -> dict:
     conn = labels_store.connect()

@@ -719,3 +719,68 @@ async def test_the_rule_survives_a_truncated_read(conversation) -> None:
         c.text for c in result.content if getattr(c, "type", None) == "text"
     )
     assert text.index('"rules"') < text.index('"messages"')
+
+
+# ---- the whole conversation at once ------------------------------------
+#
+# For the case where the user already knows: "this chat is pure IC".
+# Judging it message by message buys nothing, so they can say so once.
+
+
+async def test_labelling_everything_at_once_needs_the_users_word(
+    conversation,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(
+            session,
+            "label_all_unlabeled",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+            label="IC",
+        )
+    text = tool_error_text(result)
+    assert "confirm_required" in text
+    # The count belongs in the refusal: a model asking the user to
+    # approve this should be able to say how much it covers.
+    assert "2" in text
+
+
+async def test_labelling_everything_at_once_spares_the_rules(
+    conversation,
+) -> None:
+    async with mcp_client("logs") as session:
+        _, body = await call_tool(
+            session,
+            "label_all_unlabeled",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+            label="IC",
+            confirm=True,
+        )
+        assert body["labeled"] == 2
+        assert body["decided_by_rules"] == 1, "the short message stays OOC"
+        assert "Re-ingest" in body["note"]
+
+        _, stats = await call_tool(
+            session,
+            "get_label_stats",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+    assert stats["ic"] == 2
+    assert stats["unlabeled"] == 0
+
+
+async def test_labelling_everything_at_once_refuses_a_non_verdict(
+    conversation,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(
+            session,
+            "label_all_unlabeled",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+            label="Unlabeled",
+            confirm=True,
+        )
+    assert "invalid_label" in tool_error_text(result)

@@ -403,3 +403,198 @@ def test_override_rejects_invalid_label(api_client: TestClient) -> None:
     res = api_client.post("/labels/override", json=_override_body("MAYBE"))
     assert res.status_code == 400
     assert "IC or OOC" in res.json()["detail"]
+
+
+# ---- bulk fill ----------------------------------------------------------
+#
+# For the conversation a user knows is pure IC end to end: they have the
+# answer, and walking two thousand messages through a model one batch at
+# a time buys nothing.
+
+
+def _long(n: int, ts: int) -> dict:
+    body = f"{n} " + ("Sie trat durch das Tor und sah sich um. " * 8)
+    return _msg(ts=ts, raw=body, text=body)
+
+
+def test_fill_unlabeled_labels_only_the_unlabeled(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+    try:
+        msgs = [_long(1, 100), _long(2, 200), _msg(ts=300, raw="ok", text="ok")]
+        # A verdict already in the DB must survive untouched.
+        labels_store.upsert_label(
+            conn, hash=labels_store.msg_hash(msgs[0]), character="C",
+            partner="P", ts=100, speaker="Alice", label="OOC", source="mcp",
+        )
+
+        res = labels_store.fill_unlabeled(
+            conn, "C", "P", msgs, _settings(), "IC"
+        )
+
+        assert res["labeled"] == 1, "only message 2 was Unlabeled"
+        assert res["already_labeled"] == 1
+        assert res["decided_by_rules"] == 1, "the short one stays with the rules"
+        rows = labels_store.labels_for_partner(conn, "C", "P")
+        assert rows[labels_store.msg_hash(msgs[0])]["label"] == "OOC"
+        assert rows[labels_store.msg_hash(msgs[1])]["label"] == "IC"
+        assert rows[labels_store.msg_hash(msgs[1])]["source"] == "manual"
+        assert labels_store.msg_hash(msgs[2]) not in rows
+    finally:
+        conn.close()
+
+
+def test_fill_unlabeled_is_reported_hash_by_hash_so_it_can_be_undone(
+    tmp_path: Path,
+) -> None:
+    conn = _db(tmp_path)
+    try:
+        msgs = [_long(i, 100 + i) for i in range(5)]
+        res = labels_store.fill_unlabeled(
+            conn, "C", "P", msgs, _settings(), "IC"
+        )
+        assert len(res["hashes"]) == 5
+
+        removed = labels_store.delete_labels_by_hash(conn, res["hashes"])
+
+        assert removed == 5
+        assert labels_store.labels_for_partner(conn, "C", "P") == {}
+    finally:
+        conn.close()
+
+
+def test_undo_leaves_other_verdicts_alone(tmp_path: Path) -> None:
+    # The difference between this and /labels/clear: clearing drops the
+    # model's work too. Undoing a fill must not.
+    conn = _db(tmp_path)
+    try:
+        msgs = [_long(i, 100 + i) for i in range(3)]
+        kept = labels_store.msg_hash(msgs[0])
+        labels_store.upsert_label(
+            conn, hash=kept, character="C", partner="P", ts=100,
+            speaker="Alice", label="OOC", source="mcp",
+        )
+        res = labels_store.fill_unlabeled(
+            conn, "C", "P", msgs, _settings(), "IC"
+        )
+
+        labels_store.delete_labels_by_hash(conn, res["hashes"])
+
+        rows = labels_store.labels_for_partner(conn, "C", "P")
+        assert list(rows) == [kept]
+    finally:
+        conn.close()
+
+
+def test_fill_unlabeled_rejects_a_label_that_is_not_a_verdict(
+    tmp_path: Path,
+) -> None:
+    conn = _db(tmp_path)
+    try:
+        with pytest.raises(ValueError):
+            labels_store.fill_unlabeled(
+                conn, "C", "P", [_long(1, 100)], _settings(), "Unlabeled"
+            )
+    finally:
+        conn.close()
+
+
+def test_fill_unlabeled_route_rejects_a_bad_label(api_client: TestClient) -> None:
+    res = api_client.post(
+        "/labels/fill-unlabeled",
+        json={"character": "C", "partner": "P", "label": "maybe"},
+    )
+    assert res.status_code == 400
+
+
+# ---- /labels/fill-unlabeled, over a real log ---------------------------
+
+
+@pytest.fixture
+def conversation_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    """One conversation on disk: two long messages with no verdict, one
+    short one the rules already call OOC."""
+    from test_mcp_logs import write_log
+
+    root = tmp_path / "fchat"
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(root))
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
+    monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    long_a = "Sie trat durch das Tor und sah sich um. " * 8
+    long_b = "Er zog den Mantel enger und wartete im Regen. " * 8
+    write_log(
+        root / "Lady Amber Blaise" / "logs" / "Daemon Enariel",
+        [
+            (1700000000, "Lady Amber Blaise", long_a),
+            (1700000060, "Daemon Enariel", "mhm"),
+            (1700000120, "Daemon Enariel", long_b),
+        ],
+    )
+
+    # No module reloads here: logs.data_dir() and paths both read the
+    # env vars per call, and reloading them inside a shared test
+    # process rebinds module globals that other test files captured at
+    # import time — it broke two log tests that run after this one.
+    from server import app
+
+    return TestClient(app)
+
+
+_CONV = {"character": "Lady Amber Blaise", "partner": "Daemon Enariel"}
+
+
+def test_fill_unlabeled_route_labels_the_conversation(
+    conversation_api: TestClient,
+) -> None:
+    before = conversation_api.get(
+        "/labels/stats",
+        params={"char": _CONV["character"], "partner": _CONV["partner"]},
+    ).json()
+    assert before["unlabeled"] == 2
+
+    res = conversation_api.post(
+        "/labels/fill-unlabeled", json={**_CONV, "label": "IC"}
+    ).json()
+
+    assert res["labeled"] == 2
+    assert res["decided_by_rules"] == 1
+    after = conversation_api.get(
+        "/labels/stats",
+        params={"char": _CONV["character"], "partner": _CONV["partner"]},
+    ).json()
+    assert (after["ic"], after["unlabeled"]) == (2, 0)
+
+
+def test_delete_hashes_route_undoes_exactly_that_fill(
+    conversation_api: TestClient,
+) -> None:
+    res = conversation_api.post(
+        "/labels/fill-unlabeled", json={**_CONV, "label": "IC"}
+    ).json()
+
+    undone = conversation_api.post(
+        "/labels/delete-hashes", json={**_CONV, "hashes": res["hashes"]}
+    ).json()
+
+    assert undone["deleted"] == 2
+    after = conversation_api.get(
+        "/labels/stats",
+        params={"char": _CONV["character"], "partner": _CONV["partner"]},
+    ).json()
+    assert after["unlabeled"] == 2
+
+
+def test_filling_twice_writes_nothing_the_second_time(
+    conversation_api: TestClient,
+) -> None:
+    conversation_api.post("/labels/fill-unlabeled", json={**_CONV, "label": "IC"})
+
+    again = conversation_api.post(
+        "/labels/fill-unlabeled", json={**_CONV, "label": "OOC"}
+    ).json()
+
+    # Not a way to flip a conversation that is already judged — the
+    # first pass owns those messages now.
+    assert again["labeled"] == 0
+    assert again["already_labeled"] == 2

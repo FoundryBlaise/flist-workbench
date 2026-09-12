@@ -68,19 +68,19 @@ Ollama model.
 
 ### Smaller endpoints
 
-A small local model handling 70 tools tends to pick badly. Two narrower
+A small local model handling 72 tools tends to pick badly. Two narrower
 endpoints serve the same implementations:
 
 | URL | What it carries |
 |---|---|
-| `.../mcp` | everything (70 tools) |
-| `.../mcp/character` | profile editing (53) |
-| `.../mcp/logs` | logs, labels, search (29) |
-| `.../mcp/classify` | the IC/OOC labelling loop only (8) |
+| `.../mcp` | everything (72 tools) |
+| `.../mcp/character` | profile editing (54) |
+| `.../mcp/logs` | logs, labels, search (30) |
+| `.../mcp/classify` | the IC/OOC labelling loop only (9) |
 
 Tool schemas are not free. Every tool an endpoint carries is
-described in the model's context before it does any work: the 29 on
-`/mcp/logs` cost roughly 5800 tokens, the 70 on `/mcp` roughly 13700.
+described in the model's context before it does any work: the 30 on
+`/mcp/logs` cost roughly 5800 tokens, the 72 on `/mcp` roughly 13700.
 A client with a 12k window could not fit one batch of messages to
 classify alongside them. Point a long labelling run at
 `/mcp/classify` and that drops to about 1500.
@@ -106,7 +106,7 @@ ends up in a transcript.
 
 ## What it can do
 
-70 tools. The ones worth knowing about:
+72 tools. The ones worth knowing about:
 
 **Finding your way around** — `get_workbench_status` first, then
 `list_characters`, `list_working_sets`, `explain_set_addressing` if an
@@ -175,6 +175,16 @@ set_message_labels(character, partner, [...]) the verdicts
                                               repeat while remaining > 0
 ```
 
+Some conversations do not need judging at all. A user who knows a
+chat is in-character from the first line to the last can say so once —
+`label_all_unlabeled(character, partner, "IC", confirm=true)`, or
+right-click the conversation header in the app — and every unlabeled
+message in it gets that verdict in one write. It only ever adds:
+messages that already carry a verdict keep it, and the rules keep
+deciding the short lines and `((` asides. The app can undo exactly
+that write. A model must not reach for it on its own — only when the
+user has said it about that conversation.
+
 Each batch reports how many are left and roughly how many more calls
 that means. Worth telling the user before starting: on a long log this
 is dozens of rounds — a real run labelled about 15 messages a minute, so
@@ -213,9 +223,9 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (70 tools) | ~13700 | does not fit in 24k |
-| `/mcp/logs` (29 tools) | ~5800 | ~14900 |
-| `/mcp/classify` (8 tools) | ~1500 | ~10600 |
+| `/mcp` (72 tools) | ~13700 | does not fit in 24k |
+| `/mcp/logs` (30 tools) | ~5800 | ~14900 |
+| `/mcp/classify` (9 tools) | ~1500 | ~10600 |
 
 So: point a labelling run at **`/mcp/classify`**. It carries only the
 eight tools the loop calls, which is the one change that lowers the
