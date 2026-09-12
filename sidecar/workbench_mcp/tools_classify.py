@@ -135,6 +135,7 @@ def get_messages_to_classify(
     cursor: int = 0,
     context_before: int = 1,
     context_after: int = 1,
+    language: str = "de",
 ) -> dict[str, Any]:
     """A batch of messages that still need an IC/OOC verdict, each with
     its neighbours for context.
@@ -166,6 +167,13 @@ def get_messages_to_classify(
     `remaining` says how many are left after this batch. It and
     `next_cursor` come before `messages` in the response so a truncated
     read still tells you where you are.
+
+    Every batch is a complete work order: `rules` carries the decision
+    rule in short form, so the judgement does not depend on the full
+    rulebook still being in context. A long loop fills a client's
+    context, and what a client drops first is its oldest turn — which is
+    where the system prompt, and the instruction to re-fetch it, both
+    live. `language` picks the wording: `de` (default), `en`, `minimal`.
     """
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
@@ -199,6 +207,9 @@ def get_messages_to_classify(
     out: dict[str, Any] = {
         "character": character,
         "partner": partner,
+        "rules": labels_store.COMPACT_RULES.get(
+            str(language).strip().lower(), labels_store.COMPACT_RULES["de"]
+        ),
         "returned": len(batch.items),
         "remaining": batch.remaining,
         "conversation": {

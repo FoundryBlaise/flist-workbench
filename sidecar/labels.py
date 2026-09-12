@@ -793,3 +793,51 @@ def stats(
         lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
         counts[lab] = counts.get(lab, 0) + 1
     return counts
+
+
+# Condensed decision rule, shipped with every batch of messages to
+# classify. The full prompt above is ~4 KB and lives in the caller's
+# system prompt, which is exactly what a client evicts first when a long
+# classification loop fills its context: a rolling window drops the
+# oldest turns, and the oldest turn is the rulebook. The instruction to
+# re-fetch it lives there too, so by the time it would help it is gone.
+#
+# This is the part that has to survive. It goes in the batch response
+# instead, where it is always the most recent context, so a model can
+# keep judging correctly with no memory of how it started.
+COMPACT_RULES: dict[str, str] = {
+    "de": (
+        "Kernfrage: Passiert das Beschriebene JETZT in der Spielwelt (IC), "
+        "oder reden Spieler darüber (OOC)?\n"
+        "IC: Erzählung in dritter Person über irgendeine Figur, auch bei "
+        "banalen Handlungen; direkte Rede mit Dialog-Tag; Umgebung, NPCs "
+        "und Ereignisse erzählt, auch ohne eigenen Charakternamen; "
+        "Konjunktiv als erzählte Handlung ('Sie würde die Tür öffnen', "
+        "'Sollte er sich umdrehen, sieht er...').\n"
+        "OOC: Vorschläge an den Mitspieler ('wir könnten', 'zum Beispiel', "
+        "'was meinst du?'); Anekdoten aus dem echten Leben in erster "
+        "Person; Würfel, Regelfragen, AFK; Text in (…) oder nach "
+        "'OOC:' / '//'.\n"
+        "Gemischt: der Hauptteil entscheidet — ein angehängter "
+        "Klammerkommentar macht einen IC-Post nicht zu OOC.\n"
+        "Ein Account kann mehrere Figuren sprechen; der Sprechername muss "
+        "nicht die erzählte Figur sein."
+    ),
+    "en": (
+        "Core question: is this happening NOW in the game world (IC), or "
+        "are players talking about it (OOC)?\n"
+        "IC: third-person narration about any figure, however mundane; "
+        "direct speech with a dialogue tag; surroundings, NPCs and events "
+        "narrated, even with no own character name; conditional phrasing "
+        "as narrated action ('She would open the door', 'Should he turn "
+        "around, he sees...').\n"
+        "OOC: proposals to the other player ('we could', 'for example', "
+        "'what do you think?'); first-person real-life anecdotes; dice, "
+        "rule questions, afk; text in (…) or after 'OOC:' / '//'.\n"
+        "Mixed: the main body decides — a trailing parenthetical does not "
+        "turn an IC post into OOC.\n"
+        "One account may voice several characters; the speaker name need "
+        "not be the narrated figure."
+    ),
+}
+COMPACT_RULES["minimal"] = COMPACT_RULES["en"]
