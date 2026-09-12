@@ -62,74 +62,112 @@ async def _catalogue():  # noqa: ANN202
 
 
 # --------------------------------------------------------------------
-# Working sets
+# The workbench
+#
+# A character has one editable copy of its profile, always present,
+# seeded from Live the first time anything needs it. The window calls it
+# the Workbench and shows it directly under "Live on F-List".
+#
+# Several named drafts per character used to be the model, and the tools
+# further down still address them because old archives still hold them.
+# They are kept for that and nothing else: a model working over MCP
+# should never create a second one, or the window and the tools stop
+# describing the same thing.
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Create a working set")
+@tool(tags=TAG_CHARACTER, title="Open the workbench")
 def create_working_set(
     character: str, name: str | None = None, source: str = "live"
 ) -> dict[str, Any]:
-    """Start a new draft of a character's profile and make it active.
+    """The character's workbench, created from Live if it does not exist.
 
-    `source` is `live` (a copy of what is published — the usual
-    starting point), `set:<name or id>` to branch off another draft, or
-    `backup:<filename>` to restore from a ZIP backup.
+    Despite the name this never makes a second one. A character has one
+    workbench; calling this when it already exists returns the existing
+    bench untouched, edits and all, so it is safe to call before editing
+    without checking first.
+
+    To put something else in the bench use `load_backup_into_workbench`,
+    which replaces the contents rather than adding another draft. `name`
+    and `source` are ignored and kept only so existing callers do not
+    break.
     """
     target = resolve_character(character)
-    label = (name or "").strip() or _next_set_name(target.id)
+    existed = character_archive.resolve_workbench(target.id, create=False)
+    bench = character_archive.resolve_workbench(target.id)
+    if bench is None:
+        raise ToolError(
+            "no_live_profile",
+            "There is no pulled profile to seed a workbench from. Pull "
+            "the character first with pull_character.",
+        )
+    if existed is None:
+        audit("create_working_set", character=target.name, set=bench.name)
+    return {
+        "character": target.name,
+        "set": bench.name,
+        "set_id": bench.id,
+        "active": True,
+        "created": existed is None,
+        "note": (
+            "This character has one workbench"
+            + ("." if existed is None else " — it already existed and is unchanged.")
+            + " "
+            + NO_PUSH_NOTE
+        ),
+    }
 
+
+@tool(tags=TAG_CHARACTER, title="Load a backup into the workbench")
+def load_backup_into_workbench(
+    character: str, backup: str, confirm: bool = False
+) -> dict[str, Any]:
+    """Replace the workbench contents with a backup's.
+
+    Overwrites whatever is in the bench, so it needs `confirm=true`.
+    Nothing is saved first — if the current edits matter, call
+    `create_backup` before this. `backup` is a filename from
+    `list_backups`.
+    """
+    target = resolve_character(character)
+    if not confirm:
+        raise ToolError(
+            "confirm_required",
+            "Loading a backup replaces everything currently in the "
+            "workbench. If those edits matter, call create_backup "
+            "first, then call this again with confirm=true.",
+        )
     try:
-        if source == "live" or not source:
-            meta = character_archive.create_set_from_live(target.id, label)
-        elif source.startswith("set:"):
-            origin = resolve_set(target, source[4:], allow_live=False)
-            meta = character_archive.duplicate_set(
-                target.id, origin.id or "", label
-            )
-        elif source.startswith("backup:"):
-            meta = character_archive.create_set_from_zip_backup(
-                target.id, source[len("backup:") :], label
-            )
-        else:
-            raise ToolError(
-                "validation_failed",
-                f"unknown source {source!r}",
-                allowed=["live", "set:<name or id>", "backup:<filename>"],
-            )
+        meta = character_archive.load_zip_backup_into_workbench(target.id, backup)
     except FileNotFoundError as exc:
-        raise ToolError("source_not_found", str(exc)) from exc
+        raise ToolError("backup_not_found", str(exc)) from exc
+    except KeyError as exc:
+        raise ToolError(
+            "backup_too_old",
+            "That backup predates the stored profile payload, so there "
+            "is nothing in it to load into the bench.",
+        ) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
-
-    character_archive.set_active_set_id(target.id, meta.id)
-    audit("create_working_set", character=target.name, set=meta.name, source=source)
+    audit("load_backup_into_workbench", character=target.name, backup=backup)
     return {
         "character": target.name,
         "set": meta.name,
-        "set_id": meta.id,
-        "active": True,
-        "source": source,
+        "loaded": backup,
         "note": NO_PUSH_NOTE,
     }
 
 
-def _next_set_name(character_id: str) -> str:
-    existing = {m.name for m in character_archive.list_sets(character_id)}
-    for n in range(1, 1000):
-        candidate = f"Working set {n}"
-        if candidate not in existing:
-            return candidate
-    return "Working set"
-
-
-@tool(tags=TAG_CHARACTER, title="Rename a working set")
+@tool(tags=TAG_CHARACTER, title="Rename a working set (legacy)")
 def rename_working_set(
     character: str, working_set: str, name: str
 ) -> dict[str, Any]:
-    """Give a draft a different name. Names are for the user's benefit
-    and need not be unique, though addressing a duplicate name needs
-    the id."""
+    """Rename a draft.
+
+    Legacy: the window shows one workbench per character and does not
+    name it, so this only matters for drafts an older version left
+    behind.
+    """
     target = resolve_character(character)
     resolved = resolve_set(target, working_set, allow_live=False)
     try:
@@ -140,14 +178,14 @@ def rename_working_set(
     return {"character": target.name, "set": meta.name, "set_id": meta.id}
 
 
-@tool(tags=TAG_CHARACTER, title="Activate a working set")
+@tool(tags=TAG_CHARACTER, title="Activate a working set (legacy)")
 def activate_working_set(character: str, working_set: str) -> dict[str, Any]:
-    """Switch which draft is active — this is what the Workbench window
-    shows and what editing tools change when `working_set` is
-    omitted.
+    """Choose which draft is the workbench.
 
-    Pass `live` to leave editing mode and show the published profile
-    read-only.
+    Legacy: with one bench per character there is nothing to switch
+    between, unless an older version left several drafts behind — then
+    this is how to pick the one to keep working in. Passing `live` still
+    drops out of editing and shows the published profile read-only.
     """
     target = resolve_character(character)
     resolved = resolve_set(target, working_set)
@@ -164,7 +202,11 @@ def activate_working_set(character: str, working_set: str) -> dict[str, Any]:
     return {"character": target.name, "active_set": resolved.name}
 
 
-@tool(tags=TAG_CHARACTER, title="Delete a working set", destructive=True)
+@tool(
+    tags=TAG_CHARACTER,
+    title="Delete a working set (legacy)",
+    destructive=True,
+)
 def delete_working_set(
     character: str,
     working_set: str,
@@ -173,7 +215,11 @@ def delete_working_set(
     """Delete a draft and everything in it. Permanent.
 
     The published profile is untouched — this only removes a local
-    draft. Ask the user before calling with confirm=true.
+    draft. Legacy: deleting a character's only workbench throws away
+    unpublished edits and gains nothing, since the bench is recreated
+    from Live on next use. Its purpose is clearing out extra drafts an
+    older version left behind. Ask the user before calling with
+    confirm=true.
     """
     target = resolve_character(character)
     resolved = resolve_set(target, working_set, allow_live=False)
