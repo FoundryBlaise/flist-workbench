@@ -732,6 +732,13 @@ body {
   padding: 3px 8px;
   border-radius: 3px;
   font-size: var(--font-body);
+  /* Fixed inner height, so nothing the title box happens to contain
+     can change the height of the header. The read-only pill is taller
+     than a 12px line of text, and it used to push the whole document
+     down by those few pixels whenever the user looked at Live. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
 }
 .editor-head .editor-meta { color: var(--text-dim); font-size: var(--font-meta); }
 
@@ -2912,7 +2919,10 @@ body {
 /* Read-only editor pills */
 .doc-readonly-pill {
   display: inline-block;
-  padding: 1px 6px;
+  /* Must stay shorter than .doc-name's 20px: 10px text at 1.3 plus two
+     1px borders is 15px. */
+  line-height: 1.3;
+  padding: 0 6px;
   margin-right: 6px;
   background: rgba(220, 160, 80, 0.15);
   border: 1px solid rgba(220, 160, 80, 0.45);
