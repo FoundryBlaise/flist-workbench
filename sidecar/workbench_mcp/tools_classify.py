@@ -231,7 +231,15 @@ def set_message_labels(
     Only hashes from get_messages_to_classify (or read_log_messages)
     are accepted; an unknown hash is reported back rather than
     silently written, because a wrong hash would label some other
-    message.
+    message. If nothing at all could be written this raises instead of
+    returning — a write that stored none of its verdicts is a failed
+    call, and reporting it as a result invites a caller to treat the
+    batch as finished.
+
+    The response carries `unlabeled_remaining` for this conversation,
+    counted after the write. That number, not the caller's memory of
+    how many batches it has done, is what says whether the work is
+    complete.
     """
     if not isinstance(items, list) or not items:
         raise ToolError("validation_failed", "items is empty")
@@ -290,21 +298,79 @@ def set_message_labels(
         rejected=len(rejected),
     )
 
+    if not written:
+        raise ToolError(
+            "nothing_written",
+            "None of the verdicts could be stored, so this batch is "
+            "unchanged. Hashes must be copied verbatim from "
+            "get_messages_to_classify — fetch a fresh batch and try "
+            "again with the hashes it returns.",
+            unknown_hashes=unknown,
+            rejected=rejected,
+        )
+
+    remaining = _unlabeled_remaining(character, partner, messages)
     out: dict[str, Any] = {
         "character": character,
         "partner": partner,
         "written": len(written),
+        "unlabeled_remaining": remaining,
     }
+    notes: list[str] = []
     if unknown:
         out["unknown_hashes"] = unknown
-        out["note"] = (
-            "Some hashes aren't in this conversation. They may belong to "
-            "a different partner, or the log may have been re-read since. "
-            "Fetch a fresh batch with get_messages_to_classify."
+        notes.append(
+            f"{len(unknown)} hash(es) aren't in this conversation and were "
+            "not written. They may belong to a different partner, or the "
+            "log may have been re-read since. Fetch a fresh batch."
         )
     if rejected:
         out["rejected"] = rejected
+    if remaining:
+        notes.append(
+            f"NOT FINISHED: {remaining} message(s) in this conversation "
+            "still have no verdict and stay out of the index. Call "
+            "get_messages_to_classify again (cursor=0) and keep going."
+        )
+    else:
+        notes.append(
+            "Every message in this conversation now has a verdict. Run "
+            "ingest_logs to make the new ones searchable."
+        )
+    out["note"] = " ".join(notes)
     return out
+
+
+def _unlabeled_remaining(
+    character: str, partner: str, messages: list[dict[str, Any]]
+) -> int:
+    """How many messages still have no verdict, counted after a write.
+
+    Cheap: the conversation is already parsed, so this is one labels
+    query plus a resolve per message. Worth it on every write — a
+    caller that only ever sees `written: 20` has nothing to check its
+    own bookkeeping against, and a model summarising a long run will
+    fill that gap with a plausible number instead of a true one.
+    """
+    settings_conn = settings_store.connect()
+    labels_conn = labels_store.connect()
+    try:
+        lab_settings = labels_store.load_settings(settings_conn)
+        alias_group = aliases_store.all_names_for(labels_conn, character, partner)
+        by_hash = labels_store.labels_for_partner(
+            labels_conn, character, partner, partner_aliases=alias_group
+        )
+        return sum(
+            1
+            for m in messages
+            if labels_store.resolve(
+                m, by_hash.get(labels_store.msg_hash(m)), lab_settings
+            )
+            == labels_store.LABEL_UNLABELED
+        )
+    finally:
+        settings_conn.close()
+        labels_conn.close()
 
 
 @tool(
