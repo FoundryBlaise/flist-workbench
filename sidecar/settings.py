@@ -40,8 +40,15 @@ KEY_LABELS_THRESHOLD_CHARS = "labels.threshold_chars"
 # RAG / embedding settings. Endpoint defaults to the labels endpoint
 # (most users run one LM Studio with both a chat model and an embedding
 # model loaded). Prefixes only matter for nomic-* models; default empty.
+KEY_RAG_EMBED_BACKEND = "rag.embed_backend"
 KEY_RAG_EMBED_ENDPOINT = "rag.embed_endpoint"
 KEY_RAG_EMBED_MODEL = "rag.embed_model"
+# Kept apart from KEY_RAG_EMBED_MODEL on purpose: the two backends
+# use different naming schemes ("text-embedding-bge-m3" is an LM
+# Studio id, "jinaai/jina-embeddings-v2-base-de" a fastembed one).
+# One shared key would hand each backend the other's id on every
+# switch, which fails at load time with nothing useful to say.
+KEY_RAG_LOCAL_EMBED_MODEL = "rag.local_embed_model"
 KEY_RAG_EMBED_API_KEY = "rag.embed_api_key"
 KEY_RAG_EMBED_QUERY_PREFIX = "rag.embed_query_prefix"
 KEY_RAG_EMBED_DOCUMENT_PREFIX = "rag.embed_document_prefix"

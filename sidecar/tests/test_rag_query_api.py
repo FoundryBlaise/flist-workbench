@@ -235,6 +235,9 @@ def test_settings_clamps_runaway_top_k(client: TestClient) -> None:
 
 
 def test_settings_persists_chunk_settings(client: TestClient) -> None:
+    # Chunk range is an endpoint-backend concern; the local
+    # backend clamps to its model window instead.
+    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
     res = client.put(
         "/settings",
         json={
@@ -251,6 +254,9 @@ def test_settings_persists_chunk_settings(client: TestClient) -> None:
 
 
 def test_settings_clamps_chunk_settings(client: TestClient) -> None:
+    # Chunk range is an endpoint-backend concern; the local
+    # backend clamps to its model window instead.
+    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
     res = client.put(
         "/settings",
         json={

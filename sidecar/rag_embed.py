@@ -1,9 +1,13 @@
-"""OpenAI-compatible embedding client.
+"""Embedding: in-process by default, or an OpenAI-compatible server.
 
-Talks to `<endpoint>/embeddings` (LM Studio, OpenAI, Ollama-via-openai,
-TEI, vLLM all expose this shape). No torch, no onnx, no sentence-
-transformers — the model lives in whatever inference server the user
-already runs for chat. One process, one config, one set of GPU.
+`settings.embed_backend` picks. "local" runs the model here through
+`rag_embed_local` (ONNX via fastembed) so a fresh install needs nothing
+installed; "endpoint" posts to `<endpoint>/embeddings`, which LM Studio,
+OpenAI, Ollama-via-openai, TEI and vLLM all expose, for users who would
+rather put a GPU behind it.
+
+Both backends sit behind the same two entry points, so callers — the
+ingest job, the query path, the connection test — never branch on it.
 
 Two callable entry points:
 
@@ -29,6 +33,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+import rag_embed_local
 from rag import RagSettings
 
 # Bigger than the labels batch (which is one-message-at-a-time) — an
@@ -160,6 +165,14 @@ def embed_texts(
     """
     if not texts:
         return []
+    if settings.embed_backend == "local":
+        # The local backend applies its own model-specific prefixes —
+        # measured, not assumed: fastembed's query_embed/passage_embed
+        # do not add them. The settings prefixes stay endpoint-only.
+        try:
+            return rag_embed_local.embed(texts, kind, settings.embed_model)
+        except rag_embed_local.LocalEmbedError as exc:
+            raise EmbedError(str(exc)) from exc
     prefix = _prefix_for(kind, settings)
     out: list[list[float]] = []
     for i in range(0, len(texts), batch):
@@ -200,6 +213,9 @@ def probe(settings: RagSettings, *, timeout: float = 30.0) -> tuple[int, list[fl
 def try_unload(settings: RagSettings, *, timeout: float = 10.0) -> bool:
     """Best-effort request to unload the embedding model from VRAM.
 
+    No-op on the local backend: the model sits in this process's own
+    memory, costs no VRAM, and is worth keeping for the next query.
+
     Why this exists: an ingest job pegs the user's GPU for the duration
     of the run, then by default Ollama keeps the model resident for 5
     minutes after the last request — wasted VRAM if the user wanted to
@@ -221,6 +237,8 @@ def try_unload(settings: RagSettings, *, timeout: float = 10.0) -> bool:
     Returns True on a 2xx response, False on any failure. Caller must
     treat this as advisory only — never raises.
     """
+    if settings.embed_backend == "local":
+        return False
     headers = {"Content-Type": "application/json"}
     if settings.embed_api_key:
         headers["Authorization"] = f"Bearer {settings.embed_api_key}"
