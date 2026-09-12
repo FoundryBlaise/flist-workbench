@@ -617,12 +617,15 @@ async def flist_character_zip_backup(
     force: bool = True,
     kind: str = "manual_single",
 ) -> dict:
-    """Pack the current Live into a userscript-restoreable ZIP at
-    `backups/<ISO>.zip`. The explicit right-click → "Back up now"
-    action defaults to `force=True` — the user clicked because they
-    want a new artefact in hand, dedup would be surprising. The bulk
-    `/backup-all` flow calls `save_zip_backup` directly with
-    `force=False`.
+    """Pack the character into a userscript-restoreable ZIP at
+    `backups/<ISO>.zip`.
+
+    What goes in is the workbench if there is one, and Live otherwise —
+    a backup is for the state the user cares about, and once they have
+    started editing that is the bench. `force=True` is the default
+    because the explicit right-click asked for an artefact in hand and
+    dedup would be surprising; the bulk `/backup-all` flow calls
+    `save_zip_backup` directly with `force=False`.
 
     `kind` lets a caller mark the provenance: `manual_single` (the
     default — right-click Back-up-now), `import` (set when an

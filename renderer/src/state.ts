@@ -590,7 +590,19 @@ type State = {
    *  the character (full, with images), then forces a ZIP backup write
    *  to `characters/<id>/backups/<ISO>.zip`. Uses the same Backup-all
    *  banner UI so the user sees progress, with `total: 1`. */
-  flistBackupCharacter: (name: string) => Promise<void>
+  /** Pack a character into a restoreable ZIP.
+   *
+   *  `pull` decides what is being archived. From the read-only
+   *  "Live on F-List" row it is true: refresh from the website
+   *  first, so the ZIP holds every image byte the userscript would
+   *  need. From the Workbench row it must be false — the bench
+   *  holds edits that exist nowhere else, and pulling to save them
+   *  would move Live underneath them (and fail offline, for a
+   *  backup that needs no network at all). */
+  flistBackupCharacter: (
+    name: string,
+    opts?: { pull?: boolean }
+  ) => Promise<void>
   flistSetWorkingMaterialise: (
     characterId: string,
     setId: string
@@ -2120,11 +2132,15 @@ export const useStore = create<State>((set, get) => ({
     const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
     const content = slot ? descriptionOf(slot.payload) : ''
     const entry = get().flistRoster.find((r) => String(r.id ?? '') === characterId)
-    const name = entry?.name ?? 'My edits'
+    // "Workbench", not "My edits": the sidebar row, the window title
+    // and the read-only hints all name the same one thing now. Two
+    // names for it was half the reason testers could not say what they
+    // were editing.
+    const name = entry?.name ?? 'Workbench'
     const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
     set({
       editorContent: content,
-      editorTitle: `${name} — My edits${titleSuffix}`,
+      editorTitle: `${name} — Workbench${titleSuffix}`,
       editorInlines: inlines,
       editorReadOnly: false,
       editorDirty: !!slot?.unsavedDirty,
@@ -3104,7 +3120,7 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async flistBackupCharacter(name) {
+  async flistBackupCharacter(name, opts) {
     if (get().flistBackupAllStatus.phase === 'running') return
     set({
       flistBackupAllStatus: {
@@ -3153,30 +3169,33 @@ export const useStore = create<State>((set, get) => ({
       }
     }
 
-    try {
-      // Full pull (JSON + images + avatar) so the ZIP that follows
-      // can include every byte the userscript would need to restore
-      // the profile. Reuses the existing per-character pull endpoint
-      // — that flow already handles ticket refresh, dedup of cached
-      // images, and snapshot side-effect.
-      await get().flistPullCharacter(name)
-    } catch (err) {
-      finalise(
-        {
-          phase: 'error',
-          done: 1,
-          failed: 1,
-          errorMessage:
-            err instanceof Error ? err.message : 'pull failed'
-        },
-        false
-      )
-      return
+    const pullFirst = opts?.pull !== false
+    if (pullFirst) {
+      try {
+        // Full pull (JSON + images + avatar) so the ZIP that follows
+        // can include every byte the userscript would need to restore
+        // the profile. Reuses the existing per-character pull endpoint
+        // — that flow already handles ticket refresh, dedup of cached
+        // images, and snapshot side-effect.
+        await get().flistPullCharacter(name)
+      } catch (err) {
+        finalise(
+          {
+            phase: 'error',
+            done: 1,
+            failed: 1,
+            errorMessage:
+              err instanceof Error ? err.message : 'pull failed'
+          },
+          false
+        )
+        return
+      }
     }
 
-    // Resolve the character id post-pull — `flistRoster` is keyed by
-    // name, and `flistArchive` by id; the pull writes the id into the
-    // roster (live.fetched_at) so this lookup is safe right after it.
+    // Resolve the character id — `flistRoster` is keyed by name, and
+    // `flistArchive` by id; a pull writes the id into the roster
+    // (live.fetched_at), and without one the roster already holds it.
     const roster = get().flistRoster
     const match = roster.find(
       (r) => r.name.toLowerCase() === name.toLowerCase()

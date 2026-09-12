@@ -149,9 +149,13 @@ export function FlistCharacterZone() {
     const s = sets.find((x) => x.id === setId)
     return [
       {
-        label: 'Back up now',
+        // What this saves is the bench, not the website — so no pull.
+        // A pull would overwrite Live while the user was trying to
+        // protect their unpublished edits, and would need a session
+        // for a backup that is purely local.
+        label: 'Back up the Workbench',
         onSelect: () => {
-          void backupCharacter(name)
+          void backupCharacter(name, { pull: false })
         }
       },
       ...(s
@@ -310,9 +314,9 @@ export function FlistCharacterZone() {
             void activateFromFlist(activeId)
           }}
           onContextMenu={(e) => {
-            // Read-only row, so only the actions that make sense for
-            // it: Back up now. Everything that edits belongs to the
-            // bench below.
+            // Read-only row, so only the action that makes sense
+            // for it: pull it fresh and archive that. Everything that
+            // edits belongs to the bench below.
             if (!hasLive) return
             e.preventDefault()
             setFromFlistCtx({ x: e.clientX, y: e.clientY })
@@ -388,7 +392,7 @@ export function FlistCharacterZone() {
           y={fromFlistCtx.y}
           items={[
             {
-              label: 'Back up now',
+              label: 'Pull and back up',
               onSelect: () => {
                 void backupCharacter(name)
               }

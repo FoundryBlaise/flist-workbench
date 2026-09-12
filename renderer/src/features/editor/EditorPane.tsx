@@ -35,16 +35,16 @@ export function EditorPane({
   const titleRaw = useStore((s) => s.editorTitle)
   // Reactive title — the underlying editorTitle is set once at openWorking
   // time and stays stale as unsavedDirty flips. Wrap it here so the
-  // " — My edits (unsaved)" suffix tracks per-keystroke (QA P3-1).
+  // " — Workbench (unsaved)" suffix tracks per-keystroke (QA P3-1).
   const flistActiveIdForTitle = useStore((s) => s.flistActiveCharacterId)
   const flistSlotForTitle = useStore((s) =>
     s.flistActiveCharacterId ? selectWorkingSlot(s, s.flistActiveCharacterId) : undefined
   )
   const title = (() => {
     if (!flistActiveIdForTitle || !flistSlotForTitle) return titleRaw
-    const m = titleRaw.match(/^(.+?) — My edits(?:\s*\(unsaved\))?$/)
+    const m = titleRaw.match(/^(.+?) — Workbench(?:\s*\(unsaved\))?$/)
     if (!m) return titleRaw
-    return `${m[1]} — My edits${flistSlotForTitle.unsavedDirty ? ' (unsaved)' : ''}`
+    return `${m[1]} — Workbench${flistSlotForTitle.unsavedDirty ? ' (unsaved)' : ''}`
   })()
   const dirty = useStore((s) => s.editorDirty)
   const fetchStatus = useStore((s) => s.editorFetchStatus)
