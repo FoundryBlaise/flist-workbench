@@ -100,6 +100,9 @@ _WORKFLOW = [
     "get_messages_to_classify(character, partner) — a batch with context",
     "decide IC or OOC for each, using the guidelines above",
     "set_message_labels(character, partner, items) — send the verdicts",
+    "get_messages_to_classify takes 10 messages at a time — leave the "
+    "limit alone; a bigger batch risks a truncated response and silently "
+    "skipped messages",
     "repeat while `remaining` > 0 — calling again with cursor=0 is "
     "the safe way: judged messages drop out, so nothing can be skipped",
 ]
@@ -135,6 +138,15 @@ def get_messages_to_classify(
 ) -> dict[str, Any]:
     """A batch of messages that still need an IC/OOC verdict, each with
     its neighbours for context.
+
+    Leave `limit` at its default of 10. Raising it does not make the run
+    faster — each message carries its own text plus two context
+    messages, so a larger batch mostly buys a response too big for the
+    context it has to fit in. What follows is not an error: the reply is
+    truncated, the caller labels only the part it could read, and the
+    rest of the batch is never seen again. A real run lost a third of a
+    conversation that way while reporting it complete. Ten messages,
+    more calls.
 
     Only messages the rules couldn't settle are returned — empty,
     short and `((`-prefixed ones are already OOC and never appear here.
@@ -210,6 +222,16 @@ def get_messages_to_classify(
             f"{batches_left} further call(s) at this limit. Tell the user "
             "before starting a long run."
         )
+    if capped > DEFAULT_BATCH:
+        # Said in the response as well as the description, because the
+        # description is read once and this is read every round.
+        out["note"] = (
+            f"You asked for {capped} messages; {DEFAULT_BATCH} is the "
+            "recommended maximum. A batch this size may not fit your "
+            "context, and anything you cannot read you will not label — "
+            f"it then drops out of this walk silently. "
+            + str(out.get("note") or "")
+        ).strip()
     return out
 
 
