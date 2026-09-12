@@ -37,10 +37,13 @@ from ._context import (
 )
 from ._registry import TAG_LOGS, prompt, tool
 
-#: Batch size that keeps a request comfortably inside a small model's
-#: context while still making progress. The tool reports how many
-#: batches are left so a caller can decide whether to keep going.
-DEFAULT_BATCH = 40
+#: Batch size. Deliberately small: each message carries its own text
+#: plus two context messages, so a batch of 40 runs to ~60 KB of JSON.
+#: A model whose context cannot hold that sees a truncated response —
+#: and a caller that labels only what it could see, then advances the
+#: cursor past the whole batch, silently leaves the rest unjudged. Ten
+#: fits any client; a client with room can ask for more.
+DEFAULT_BATCH = 10
 MAX_BATCH = 200
 
 
@@ -97,7 +100,8 @@ _WORKFLOW = [
     "get_messages_to_classify(character, partner) — a batch with context",
     "decide IC or OOC for each, using the guidelines above",
     "set_message_labels(character, partner, items) — send the verdicts",
-    "repeat while `remaining` > 0, passing back `next_cursor`",
+    "repeat while `remaining` > 0 — calling again with cursor=0 is "
+    "the safe way: judged messages drop out, so nothing can be skipped",
 ]
 
 
@@ -136,10 +140,20 @@ def get_messages_to_classify(
     short and `((`-prefixed ones are already OOC and never appear here.
     Each carries a `hash`; pass those back to set_message_labels.
 
-    Work through a conversation by passing the returned `next_cursor`
-    on the following call. `remaining` says how many are left after
-    this batch, so you can tell the user up front how long this will
-    take instead of looping silently.
+    Two ways to walk a conversation:
+
+    - Simplest, and safe: label the batch, then call again with
+      `cursor=0`. Judged messages drop out of the pending list, so
+      cursor 0 returns the next ones. Repeat until `messages` is empty.
+      Nothing can be skipped this way, whatever happened in between.
+    - With `next_cursor`, if you want to keep your place across a
+      pause. Only do this if you labelled every message in the batch —
+      the cursor moves past all of them, so any you left out will not
+      come back in this walk. Lower `limit` rather than risk it.
+
+    `remaining` says how many are left after this batch. It and
+    `next_cursor` come before `messages` in the response so a truncated
+    read still tells you where you are.
     """
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
@@ -167,10 +181,13 @@ def get_messages_to_classify(
         settings_conn.close()
         labels_conn.close()
 
+    # Field order is load-bearing: a client whose context cannot hold
+    # the whole response loses the tail, so everything needed to
+    # continue goes in front of the payload.
     out: dict[str, Any] = {
         "character": character,
         "partner": partner,
-        "messages": [item.to_dict() for item in batch.items],
+        "returned": len(batch.items),
         "remaining": batch.remaining,
         "conversation": {
             "total_messages": batch.total_messages,
@@ -180,6 +197,7 @@ def get_messages_to_classify(
     }
     if batch.next_cursor is not None:
         out["next_cursor"] = batch.next_cursor
+    out["messages"] = [item.to_dict() for item in batch.items]
     if not batch.items:
         out["note"] = (
             "Nothing left to judge in this conversation — every message "
