@@ -144,22 +144,22 @@ BEISPIELE ZUR MUSTERERKENNUNG:
 
 NACHRICHT: "Galadriel legte sanft ihre seidige Hand auf das kühle Metall des
 Türgriffs und zog die Tür langsam auf."
-ANTWORT: {"label":"IC","reason":"Szenenerzählung in dritter Person, passiert jetzt"}
+URTEIL: {"label":"IC","reason":"Szenenerzählung in dritter Person, passiert jetzt"}
 
 NACHRICHT: "[03-12 21:08 | 92 chars] Yennefer: Yennefer kommt durch die Tür,
 trägt einen langen Mantel und schaut sich suchend um."
-ANTWORT: {"label":"IC","reason":"Sprecher Yennefer beschreibt sich selbst in dritter Person"}
+URTEIL: {"label":"IC","reason":"Sprecher Yennefer beschreibt sich selbst in dritter Person"}
 
 NACHRICHT: "\\"Das ist eine wirklich schlechte Idee\\", murmelte sie und schüttelte
 den Kopf, ohne ihn anzusehen."
-ANTWORT: {"label":"IC","reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
+URTEIL: {"label":"IC","reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
 
 NACHRICHT: "Éowyn von Rohan hebt kurz einen Mundwinkel. \\"Nun, dann wünsche
 ich euch eine gute Nacht in der Scheune, denn ich werde dieses Zimmer beziehen.\\"
 Sie schnauft kurz aus, als sie zur Seite geschoben wird. \\"Aber ihr seid sicher
 eine dieser Straßenelfen von denen man hört. Also nehmt eure Sachen und zieht von
 dannen.\\""
-ANTWORT: {"label":"IC","reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
+URTEIL: {"label":"IC","reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
 
 NACHRICHT: "[04-15 22:30 | 1240 chars | action] Galadriel: Galadriel hat sich aufs
 Bett gelegt, einen Kopfhörer im Ohr, und blättert in ihrem Buch, während ihre
@@ -167,40 +167,44 @@ Gedanken auf Reisen gehen. Kurzzeitig versucht sie zu schlafen, gibt es dann abe
 auf und widmet sich wieder dem Buch. Sie merkt dass ihr Magen knurrt und verlässt
 ihr Zimmer, um die Küche anzusteuern. \\"Sag, gibt es irgendwelche Schränke an die
 ich nicht ran darf?\\", fragt sie."
-ANTWORT: {"label":"IC","reason":"Dritte-Person-Selbstnarration mit | action-Marker; mundane Aktivitäten zählen trotzdem als IC"}
+URTEIL: {"label":"IC","reason":"Dritte-Person-Selbstnarration mit | action-Marker; mundane Aktivitäten zählen trotzdem als IC"}
 
 NACHRICHT: "Zum Beispiel, ja. Denke so spontan daran dass sie in einem
 Untergrundtreff rumtreibt um Kontakte zu knüpfen."
-ANTWORT: {"label":"OOC","reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
+URTEIL: {"label":"OOC","reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
 
 NACHRICHT: "Ich hab es in der IT oft mitgekriegt. Komm aus ner Handwerker Familie,
 kann mir also vorstellen wie das ist"
-ANTWORT: {"label":"OOC","reason":"Spieler-Anekdote aus echtem Leben (IT, Handwerker), erste Person"}
+URTEIL: {"label":"OOC","reason":"Spieler-Anekdote aus echtem Leben (IT, Handwerker), erste Person"}
 
 NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt.
 Wäre das so okay für dich?"
-ANTWORT: {"label":"OOC","reason":"Vorschlag an den Mitspieler, nicht erzählte Handlung"}
+URTEIL: {"label":"OOC","reason":"Vorschlag an den Mitspieler, nicht erzählte Handlung"}
 
 NACHRICHT: "Sie würde den Rest des Tages nicht mehr stören. Sollte Amber die Tür
 öffnen, findet sie eine Flasche Wasser und zwei Kekse davor."
-ANTWORT: {"label":"IC","reason":"Erzählte Handlung im Konjunktiv, kein Vorschlag"}
+URTEIL: {"label":"IC","reason":"Erzählte Handlung im Konjunktiv, kein Vorschlag"}
 
 NACHRICHT: "[08-31 09:32 | 3735 chars | action] Ashvalia: Wie angekündigt kam am
 nächsten Tag ein junger Herr am Haus an. In der Limousine findet sie gekühlten
 Champagner vor. Die Flugtickets liegen rechts des Fernsehers."
-ANTWORT: {"label":"IC","reason":"Szenen- und Umgebungsnarration ohne eigenen Charakternamen"}
+URTEIL: {"label":"IC","reason":"Szenen- und Umgebungsnarration ohne eigenen Charakternamen"}
 
 NACHRICHT: "(Ich werde jetzt würfeln für den Magieffekt. Willst du den Wurf sehen
 oder soll ich das eher heimlich machen?)"
-ANTWORT: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
+URTEIL: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
 
-FORMAT (STRIKTE PFLICHT):
-Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt.
-KEINE Code-Fences (kein ```json). KEINE Markdown-Blöcke. KEINE Arrays (kein [ ]).
-KEINE Vor-Überlegung, kein Chain-of-Thought, KEIN Text vor oder nach dem JSON.
-Das "reason"-Feld MAX 60 Zeichen. Verwende KEINE wörtlichen Zitate aus dem Text
-und KEINE Anführungszeichen im Reason — beschreibe das Muster, nicht den Inhalt.
-{"label":"IC"|"OOC","reason":"kurze Begründung max 60 Zeichen"}"""
+FORMAT:
+Gib die Urteile über das Tool `set_message_labels` zurück — ein Eintrag pro
+Nachricht: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
+Der Hash muss exakt der aus `get_messages_to_classify` sein; ein falscher
+Hash beschriftet eine fremde Nachricht.
+Beurteile jede Nachricht des Batches, lass keine aus.
+
+Nachdenken vor dem Tool-Aufruf ist erlaubt und erwünscht — es landet nicht in
+den Daten. Gespeichert wird nur `reason`: MAX 60 Zeichen, KEINE wörtlichen
+Zitate aus dem Text und KEINE Anführungszeichen — beschreibe das Muster,
+nicht den Inhalt."""
 
 # English equivalent of the default German prompt. Same heuristics,
 # same JSON output contract — keeps users on a non-German chat model
@@ -289,13 +293,16 @@ MIXED MESSAGES:
 When a message contains IC narration AND a player aside in (…), the main body
 decides. A trailing parenthetical does not turn an IC post into OOC.
 
-FORMAT (STRICT):
-Respond ONLY with a single JSON object.
-NO code fences (no ```json). NO markdown blocks. NO arrays (no [ ]).
-NO preamble, no chain-of-thought, NO text before or after the JSON.
-The "reason" field MAX 60 characters. Do NOT quote text verbatim and do NOT
-use quotation marks in reason — describe the pattern, not the content.
-{"label":"IC"|"OOC","reason":"short reason max 60 chars"}"""
+FORMAT:
+Return the verdicts through the `set_message_labels` tool — one entry per
+message: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
+The hash must be exactly the one from `get_messages_to_classify`; a wrong
+hash labels someone else's message.
+Judge every message in the batch, skip none.
+
+Thinking before the tool call is allowed and welcome — it does not reach the
+data. Only `reason` is stored: MAX 60 characters, no verbatim quotes from the
+text and no quotation marks — describe the pattern, not the content."""
 
 # Language-agnostic minimal prompt. Use this when the corpus mixes
 # multiple languages or when the chat model is small and tends to
@@ -313,8 +320,10 @@ Rules of thumb:
 - Narration of surroundings, NPCs or events without the speaker's own character name is still IC.
 - One account may voice several characters; third-person narration about any of them is IC.
 
-Respond with one JSON object, no code fences, no preamble:
-{"label":"IC"|"OOC","reason":"short reason, max 60 chars"}"""
+Return verdicts through the `set_message_labels` tool: one entry per message,
+{"hash": ..., "label": "IC"|"OOC", "reason": ...}, reusing the hash exactly as
+given. Think first if it helps; only `reason` is stored, max 60 chars, no
+verbatim quotes."""
 
 
 @dataclass(slots=True, frozen=True)

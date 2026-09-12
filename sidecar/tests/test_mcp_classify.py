@@ -499,3 +499,77 @@ async def test_an_unknown_partner_is_refused_rather_than_counted(
     text = tool_error_text(result)
     assert "partner_not_found" in text
     assert "list_partners" in text
+
+
+def test_the_guidelines_describe_a_tool_call_not_a_text_answer() -> None:
+    """The prompt predates MCP. It used to demand one bare JSON object and
+    forbid chain-of-thought, because Workbench parsed the model's reply
+    itself. Over MCP the verdicts arrive as `set_message_labels`
+    arguments, so that contract contradicted the workflow in the same
+    response — and told a reasoning model to stop reasoning for no gain.
+    """
+    import labels as labels_store
+
+    for preset in labels_store.PROMPT_PRESETS:
+        body = preset.body
+        assert "set_message_labels" in body, preset.id
+        assert "chain-of-thought" not in body.lower(), preset.id
+        assert "Vor-Überlegung" not in body, preset.id
+        # The one output rule that still applies is the stored field.
+        assert "60" in body, preset.id
+
+
+async def test_progress_fields_come_before_the_messages(conversation) -> None:
+    """A client whose context cannot hold the whole response loses the
+    tail of it. When `remaining` and `next_cursor` sat after `messages`,
+    that is exactly what went missing — and a caller that then labelled
+    only what it could see and advanced the cursor past the whole batch
+    left the invisible remainder unjudged for the rest of the walk.
+    """
+    async with mcp_client("logs") as session:
+        result, body = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+    text = "\n".join(
+        c.text for c in result.content if getattr(c, "type", None) == "text"
+    )
+    assert text.index('"remaining"') < text.index('"messages"')
+    assert body["returned"] == len(body["messages"])
+
+
+async def test_cursor_zero_walks_the_whole_conversation(conversation) -> None:
+    """The documented safe loop: label, then ask again at cursor 0."""
+    async with mcp_client("logs") as session:
+        seen: set[str] = set()
+        for _ in range(10):
+            _, batch = await call_tool(
+                session,
+                "get_messages_to_classify",
+                character="Lady Amber Blaise",
+                partner="Daemon Enariel",
+                cursor=0,
+                limit=1,
+            )
+            if not batch["messages"]:
+                break
+            hashes = [m["hash"] for m in batch["messages"]]
+            assert not seen.intersection(hashes), "cursor 0 re-offered a judged one"
+            seen.update(hashes)
+            await call_tool(
+                session,
+                "set_message_labels",
+                character="Lady Amber Blaise",
+                partner="Daemon Enariel",
+                items=[{"hash": h, "label": "IC"} for h in hashes],
+            )
+        _, stats = await call_tool(
+            session,
+            "get_label_stats",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+    assert stats["unlabeled"] == 0
+    assert len(seen) == 2
