@@ -20,12 +20,55 @@ def test_get_settings_returns_rag_defaults(client: TestClient) -> None:
     body = client.get("/settings").json()
     assert "rag" in body
     rag = body["rag"]
+    # A fresh install embeds in-process: nothing to install, nothing to
+    # configure. The endpoint fields keep their defaults for whoever
+    # switches back.
+    assert rag["embed_backend"] == rag_settings.BACKEND_LOCAL
+    assert rag["embed_model"] == rag_settings.DEFAULT_LOCAL_EMBED_MODEL
     assert rag["embed_endpoint"] == rag_settings.DEFAULT_EMBED_ENDPOINT
-    assert rag["embed_model"] == rag_settings.DEFAULT_EMBED_MODEL
     assert rag["embed_api_key"] == rag_settings.DEFAULT_EMBED_API_KEY
     assert rag["embed_query_prefix"] == rag_settings.DEFAULT_EMBED_QUERY_PREFIX
     assert rag["embed_document_prefix"] == rag_settings.DEFAULT_EMBED_DOCUMENT_PREFIX
-    assert rag["defaults"]["embed_model"] == rag_settings.DEFAULT_EMBED_MODEL
+
+
+def test_switching_backend_keeps_each_model_id_apart(client: TestClient) -> None:
+    """The two backends name models differently; one shared key would
+    hand each the other's id on every switch."""
+    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
+    client.put("/settings", json={"rag": {"embed_model": "text-embedding-bge-m3"}})
+    assert client.get("/settings").json()["rag"]["embed_model"] == (
+        "text-embedding-bge-m3"
+    )
+
+    client.put("/settings", json={"rag": {"embed_backend": "local"}})
+    import rag as rag_settings
+
+    back = client.get("/settings").json()["rag"]
+    assert back["embed_model"] == rag_settings.DEFAULT_LOCAL_EMBED_MODEL
+
+    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
+    assert client.get("/settings").json()["rag"]["embed_model"] == (
+        "text-embedding-bge-m3"
+    )
+
+
+def test_local_backend_clamps_chunking_to_the_model_window(
+    client: TestClient,
+) -> None:
+    """Local models truncate silently past their token window, so the
+    chunk size follows the model instead of the stored setting."""
+    client.put("/settings", json={"rag": {"embed_backend": "local"}})
+    client.put("/settings", json={"rag": {"chunk_max_chars": 3000}})
+
+    import rag as rag_settings
+
+    loaded = rag_settings.load_settings()
+    cap = rag_settings.rag_embed_local.profile_for(loaded.embed_model).max_chars
+    assert loaded.chunk_max_chars == cap
+    assert loaded.chunk_soft_split_chars < loaded.chunk_max_chars
+
+    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
+    assert rag_settings.load_settings().chunk_max_chars == 3000
 
 
 def test_put_persists_rag_settings(client: TestClient) -> None:

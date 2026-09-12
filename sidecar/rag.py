@@ -4,9 +4,12 @@ Storage and loader mirror labels.load_settings. Empty strings stored in
 the settings table fall back to the defaults defined here, which is how
 "Reset to default" is implemented from the UI.
 
-The embedding endpoint is the only inference server Workbench still
-talks to — no chat model, no classifier. Everything that needs a
-language model runs in the MCP client the user connects.
+Embedding runs in-process by default (`rag_embed_local`, ONNX through
+fastembed) so a fresh install needs no inference server at all — attach
+an MCP client, ingest, ask. Setting `rag.embed_backend` to "endpoint"
+switches back to an OpenAI-compatible server for anyone who would
+rather spend a GPU on it. Either way no chat model and no classifier
+runs here; that is the connected MCP client's job.
 
 Prefixes are a quirk of the nomic-* family — those models require
 "search_document: " on indexed text and "search_query: " on queries to
@@ -21,6 +24,7 @@ from dataclasses import dataclass
 
 import chunker
 import labels as labels_store
+import rag_embed_local
 import rag_rerank
 import settings as settings_store
 
@@ -36,6 +40,15 @@ DEFAULT_EMBED_ENDPOINT = "http://localhost:1234/v1"
 # inference servers may need a different name; user can override in
 # Settings → RAG.
 DEFAULT_EMBED_MODEL = "text-embedding-bge-m3"
+
+# "local" runs the model inside the sidecar; "endpoint" posts to an
+# OpenAI-compatible server. Local is the default because it is the only
+# one that works with no setup, which is the whole point of driving the
+# app over MCP.
+BACKEND_LOCAL = "local"
+BACKEND_ENDPOINT = "endpoint"
+DEFAULT_EMBED_BACKEND = BACKEND_LOCAL
+DEFAULT_LOCAL_EMBED_MODEL = rag_embed_local.DEFAULT_LOCAL_EMBED_MODEL
 DEFAULT_EMBED_API_KEY = ""
 DEFAULT_EMBED_QUERY_PREFIX = ""
 DEFAULT_EMBED_DOCUMENT_PREFIX = ""
@@ -81,6 +94,10 @@ class RagSettings:
     chunk_max_chars: int
     chunk_soft_split_chars: int
     chunk_overlap_msgs: int
+    # Last and defaulted so a hand-built RagSettings still describes the
+    # endpoint backend, which is what every caller meant before the local
+    # one existed. `load_settings` always passes it explicitly.
+    embed_backend: str = BACKEND_ENDPOINT
 
 
 def _coerce_int(raw: str | None, default: int, *, lo: int, hi: int) -> int:
@@ -120,10 +137,26 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             settings_store.get(conn, settings_store.KEY_RAG_EMBED_ENDPOINT)
             or DEFAULT_EMBED_ENDPOINT
         )
-        model = (
-            settings_store.get(conn, settings_store.KEY_RAG_EMBED_MODEL)
-            or DEFAULT_EMBED_MODEL
-        )
+        backend = (
+            settings_store.get(conn, settings_store.KEY_RAG_EMBED_BACKEND)
+            or DEFAULT_EMBED_BACKEND
+        ).strip().lower()
+        if backend not in (BACKEND_LOCAL, BACKEND_ENDPOINT):
+            backend = DEFAULT_EMBED_BACKEND
+        # The two backends name models differently — "text-embedding-
+        # bge-m3" is an LM Studio id, "jinaai/..." is a fastembed one —
+        # so the fallback depends on which side we are on. A user who
+        # set a model explicitly keeps it either way.
+        if backend == BACKEND_LOCAL:
+            model = (
+                settings_store.get(conn, settings_store.KEY_RAG_LOCAL_EMBED_MODEL)
+                or DEFAULT_LOCAL_EMBED_MODEL
+            )
+        else:
+            model = (
+                settings_store.get(conn, settings_store.KEY_RAG_EMBED_MODEL)
+                or DEFAULT_EMBED_MODEL
+            )
         api_key = (
             settings_store.get(conn, settings_store.KEY_RAG_EMBED_API_KEY)
             or DEFAULT_EMBED_API_KEY
@@ -188,7 +221,7 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
         chunk_max = _coerce_int(
             settings_store.get(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS),
             DEFAULT_CHUNK_MAX_CHARS,
-            lo=500,
+            lo=200,
             hi=20000,
         )
         chunk_soft = _coerce_int(
@@ -205,7 +238,19 @@ def load_settings(conn: sqlite3.Connection | None = None) -> RagSettings:
             lo=0,
             hi=5,
         )
+        if backend == BACKEND_LOCAL:
+            # Local models have short token windows and truncate without
+            # complaining: two texts sharing a long head embed to the
+            # same vector, the tail simply gone. Chunking is clamped to
+            # what the chosen model can actually read so the user never
+            # has to know the number — the alternative is a setting whose
+            # wrong value costs recall with no symptom.
+            cap = rag_embed_local.profile_for(model).max_chars
+            chunk_max = min(chunk_max, cap)
+            chunk_soft = min(chunk_soft, max(200, chunk_max - 50))
+
         return RagSettings(
+            embed_backend=backend,
             embed_endpoint=endpoint,
             embed_model=model,
             embed_api_key=api_key,

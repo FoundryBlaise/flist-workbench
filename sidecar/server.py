@@ -2097,6 +2097,8 @@ class RagSettingsUpdate(BaseModel):
     # are special — an empty string for them is a real value (not a
     # default), but we still accept it as "clear" since the default
     # also happens to be empty.
+    # "local" (in-process ONNX) or "endpoint" (OpenAI-compatible server).
+    embed_backend: str | None = None
     embed_endpoint: str | None = None
     embed_model: str | None = None
     embed_api_key: str | None = None
@@ -2167,6 +2169,7 @@ def _settings_dict(conn) -> dict:
             },
         },
         "rag": {
+            "embed_backend": rag.embed_backend,
             "embed_endpoint": rag.embed_endpoint,
             "embed_model": rag.embed_model,
             "embed_api_key": rag.embed_api_key,
@@ -2445,15 +2448,41 @@ def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
         settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(n))
 
 
+def _embed_model_key(conn) -> str:
+    """Which model key `embed_model` addresses, given the active backend.
+
+    The two backends name models differently, so they keep separate
+    keys — but callers only ever see one `embed_model` field. Routing it
+    here means switching backend never hands the other side an id it
+    cannot load.
+    """
+    current = (
+        settings_store.get(conn, settings_store.KEY_RAG_EMBED_BACKEND)
+        or rag_settings.DEFAULT_EMBED_BACKEND
+    ).strip().lower()
+    return (
+        settings_store.KEY_RAG_LOCAL_EMBED_MODEL
+        if current == rag_settings.BACKEND_LOCAL
+        else settings_store.KEY_RAG_EMBED_MODEL
+    )
+
+
 def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
     """Persist each RAG field that was supplied.
 
     Same convention as _apply_labels_update: None leaves the field
     untouched, empty string clears (falls back to default on read).
     """
+    if update.embed_backend is not None:
+        wanted = str(update.embed_backend).strip().lower()
+        if wanted in (rag_settings.BACKEND_LOCAL, rag_settings.BACKEND_ENDPOINT):
+            settings_store.set_value(
+                conn, settings_store.KEY_RAG_EMBED_BACKEND, wanted
+            )
+
     for field, key in (
         ("embed_endpoint", settings_store.KEY_RAG_EMBED_ENDPOINT),
-        ("embed_model", settings_store.KEY_RAG_EMBED_MODEL),
+        ("embed_model", _embed_model_key(conn)),
         ("embed_api_key", settings_store.KEY_RAG_EMBED_API_KEY),
         ("embed_query_prefix", settings_store.KEY_RAG_EMBED_QUERY_PREFIX),
         ("embed_document_prefix", settings_store.KEY_RAG_EMBED_DOCUMENT_PREFIX),

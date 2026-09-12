@@ -214,6 +214,7 @@ async def ingest_logs(
     character: str | None = None,
     partner: str | None = None,
     include_ooc: bool = False,
+    include_channels: bool = False,
     rebuild: bool = False,
     wait: bool = True,
 ) -> dict[str, Any]:
@@ -225,9 +226,13 @@ async def ingest_logs(
     unless `include_ooc=true`; it is usually noise in a search over
     roleplay.
 
-    Needs the embedding endpoint configured in Settings → RAG ·
-    Embedding to be running. `wait=false` returns a job id to poll with
-    get_job instead of blocking.
+    Channel logs are excluded unless `include_channels=true`, matching
+    list_partners. They are group chat rather than this character's
+    roleplay, and they are large enough to bury everything else.
+
+    Embedding runs in-process by default, so nothing needs to be
+    installed. `wait=false` returns a job id to poll with get_job
+    instead of blocking.
     """
     if partner and not character:
         raise ToolError(
@@ -240,6 +245,8 @@ async def ingest_logs(
         scope["character"] = character
     if partner:
         scope["partner"] = partner
+    if include_channels:
+        scope["include_channels"] = True
 
     job = rag_jobs.start(scope, include_ooc=include_ooc, force_rewipe=rebuild)
     audit("ingest_logs", character=character, partner=partner, job=job.id)
@@ -660,8 +667,20 @@ def update_settings(
             )
             changed["embed_endpoint"] = embed_endpoint
         if embed_model is not None:
+            # Routed by the active backend — local (fastembed ids) and
+            # endpoint (server-specific ids) keep separate keys.
+            import rag as rag_mod
+
+            active = (
+                settings_store.get(conn, settings_store.KEY_RAG_EMBED_BACKEND)
+                or rag_mod.DEFAULT_EMBED_BACKEND
+            ).strip().lower()
             settings_store.set_value(
-                conn, settings_store.KEY_RAG_EMBED_MODEL, str(embed_model)
+                conn,
+                settings_store.KEY_RAG_LOCAL_EMBED_MODEL
+                if active == rag_mod.BACKEND_LOCAL
+                else settings_store.KEY_RAG_EMBED_MODEL,
+                str(embed_model),
             )
             changed["embed_model"] = embed_model
         if top_k is not None:
