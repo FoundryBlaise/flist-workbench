@@ -676,3 +676,46 @@ async def test_the_workflow_tells_a_client_to_leave_the_limit_alone() -> None:
     joined = " ".join(tools_classify._WORKFLOW)
     assert "10 messages at a time" in joined
     assert "leave the limit alone" in joined
+
+
+async def test_every_batch_carries_the_decision_rule(conversation) -> None:
+    """A long loop fills the client's context, and what a client drops
+    first is its oldest turn — the system prompt with the rulebook, and
+    the instruction to re-fetch it. Both are gone exactly when they
+    would help. So the short form rides along with every batch, where it
+    is always the most recent context."""
+    async with mcp_client("logs") as session:
+        _, de = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+        )
+        _, en = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+            language="en",
+        )
+    assert "Kernfrage" in de["rules"]
+    assert "Konjunktiv als erzählte Handlung" in de["rules"]
+    assert "Core question" in en["rules"]
+    # Short enough to repeat every round without crowding the batch out.
+    assert len(de["rules"]) < 1200
+
+
+async def test_the_rule_survives_a_truncated_read(conversation) -> None:
+    """Same reason the progress fields come first: a client that cannot
+    hold the whole response keeps the front of it."""
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daelan Envale",
+        )
+    text = "\n".join(
+        c.text for c in result.content if getattr(c, "type", None) == "text"
+    )
+    assert text.index('"rules"') < text.index('"messages"')
