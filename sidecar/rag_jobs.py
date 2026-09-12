@@ -164,9 +164,22 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
     explicit single-conversation scope we normalize the supplied
     partner to its primary so the chunker keys chunks canonically;
     read_messages on the primary will pick up every member's log file.
+
+    Channel logs (`#name`) are left out unless asked for. They are group
+    chat, not this character's roleplay, and they dwarf everything else:
+    on one real archive they carried two thirds of all unjudged messages
+    and millions of rule-OOC lines. Indexing them buries the private
+    conversations the user is actually asking about. `list_partners`
+    already hides them by default; the ingest used to be the one place
+    that did not.
     """
     character = scope.get("character")
     partner = scope.get("partner")
+    include_channels = bool(scope.get("include_channels"))
+
+    def wanted(name: str) -> bool:
+        return include_channels or not name.startswith("#")
+
     if character and partner:
         conn = aliases_store.connect()
         try:
@@ -176,7 +189,7 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
         return [(character, primary)]
     if character:
         partners = logs_store.list_partners(character)
-        return [(character, p.name) for p in partners]
+        return [(character, p.name) for p in partners if wanted(p.name)]
     targets: list[tuple[str, str]] = []
     chars = logs_store.list_characters()
     for c in chars:
@@ -185,7 +198,8 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
         except logs_store.LogDirError:
             continue
         for p in partners:
-            targets.append((c.name, p.name))
+            if wanted(p.name):
+                targets.append((c.name, p.name))
     return targets
 
 
