@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import type { FlistZipBackupEntry } from '../../lib/api'
+import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
 
 /** Per-character Backups list in the sidebar. Reads from
  *  `flistArchive[activeId].zipBackups` (populated by
- *  `flistLoadArchive`). Right-click on a row → Browse / Download.
+ *  `flistLoadArchive`). Right-click on a row → Browse / Load into
+ *  Workbench / Download.
  *
  *  Grouped into three always-shown default folders by `kind`:
  *    - "Manual backups"     — manual_single + manual_bulk
@@ -37,6 +39,7 @@ export function BackupsList() {
   const [renameTarget, setRenameTarget] = useState<FlistZipBackupEntry | null>(
     null
   )
+  const [loadTarget, setLoadTarget] = useState<FlistZipBackupEntry | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -124,13 +127,16 @@ export function BackupsList() {
             className="ctx-menu-item"
             role="menuitem"
             onClick={() => {
-              const cid = activeId
-              const fname = menu.backup.filename
+              // Replaces the one bench rather than adding a draft next
+              // to it. The old "Create working set from backup" is how
+              // a user ended up with several and stopped knowing which
+              // one they were editing.
+              const b = menu.backup
               setMenu(null)
-              void useStore.getState().flistCreateSetFromBackup(cid, fname)
+              setLoadTarget(b)
             }}
           >
-            Create working set from backup
+            Load into Workbench…
           </button>
           <button
             className="ctx-menu-item"
@@ -179,6 +185,24 @@ export function BackupsList() {
             void useStore
               .getState()
               .flistDeleteZipBackup(activeId, target.filename)
+          }}
+        />
+      )}
+      {loadTarget && (
+        <LoadIntoWorkbenchDialog
+          characterId={activeId}
+          backup={loadTarget}
+          onCancel={() => setLoadTarget(null)}
+          onConfirm={(backUpFirst) => {
+            const target = loadTarget
+            setLoadTarget(null)
+            void useStore
+              .getState()
+              .flistLoadBackupIntoWorkbench(
+                activeId,
+                target.filename,
+                backUpFirst
+              )
           }}
         />
       )}

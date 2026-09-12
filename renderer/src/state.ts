@@ -508,6 +508,17 @@ type State = {
   flistGetLastAccount: () => string
   // ---- Working-sets v2 actions ----
   flistLoadSets: (characterId: string) => Promise<void>
+  /** Resolve (and if needed create) the character's workbench, then
+   *  show it. This is what the Workbench row does when clicked — the
+   *  user never names or creates anything. */
+  flistOpenWorkbench: (characterId: string) => Promise<SetMeta | null>
+  /** Replace the workbench contents with a backup's. `backUpFirst`
+   *  saves what is on the bench before overwriting it. */
+  flistLoadBackupIntoWorkbench: (
+    characterId: string,
+    filename: string,
+    backUpFirst: boolean
+  ) => Promise<boolean>
   flistCreateSet: (characterId: string, name: string) => Promise<SetMeta | null>
   flistRenameSet: (
     characterId: string,
@@ -2551,6 +2562,47 @@ export const useStore = create<State>((set, get) => ({
       set((s) => ({
         flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'error' }
       }))
+    }
+  },
+
+  async flistOpenWorkbench(characterId) {
+    try {
+      const wire = await api.flistWorkbench(characterId, true)
+      if (!wire.workbench) return null
+      const meta = _setMetaFromWire(wire.workbench)
+      set((s) => {
+        const list = s.flistSets[characterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [characterId]: [meta, ...list.filter((m) => m.id !== meta.id)]
+          }
+        }
+      })
+      await get().flistActivateSet(characterId, meta.id)
+      return meta
+    } catch {
+      return null
+    }
+  },
+
+  async flistLoadBackupIntoWorkbench(characterId, filename, backUpFirst) {
+    try {
+      const res = await api.flistWorkbenchLoadBackup(
+        characterId,
+        filename,
+        backUpFirst
+      )
+      const meta = _setMetaFromWire(res.workbench)
+      // Re-activating is what reloads the payload into the editor —
+      // the bench id has not changed, but its contents just did.
+      await get().flistActivateSet(characterId, meta.id)
+      // A save-first run produced a new backup; refresh the list so the
+      // user can see the rescue it just made for them.
+      if (res.backed_up_first) await get().flistLoadArchive(characterId)
+      return true
+    } catch {
+      return false
     }
   },
 
