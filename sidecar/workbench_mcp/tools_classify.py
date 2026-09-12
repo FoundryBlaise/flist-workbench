@@ -35,7 +35,7 @@ from ._context import (
     resolve_conversation,
     resolve_log_character,
 )
-from ._registry import TAG_LOGS, prompt, tool
+from ._registry import TAG_CLASSIFY, TAG_LOGS, prompt, tool
 
 #: Batch size. Deliberately small: each message carries its own text
 #: plus two context messages, so a batch of 40 runs to ~60 KB of JSON.
@@ -75,7 +75,11 @@ def _read_conversation(character: str, partner: str) -> list[dict[str, Any]]:
         ) from exc
 
 
-@tool(tags=TAG_LOGS, title="Classification guidelines", read_only=True)
+@tool(
+    tags=(TAG_LOGS, TAG_CLASSIFY),
+    title="Classification guidelines",
+    read_only=True,
+)
 def get_classification_guidelines(language: str = "de") -> dict[str, Any]:
     """The rulebook for deciding whether a message is IC or OOC.
 
@@ -127,7 +131,11 @@ def classify_ic_ooc_prompt(language: str = "de") -> str:
     )
 
 
-@tool(tags=TAG_LOGS, title="Messages awaiting a verdict", read_only=True)
+@tool(
+    tags=(TAG_LOGS, TAG_CLASSIFY),
+    title="Messages awaiting a verdict",
+    read_only=True,
+)
 def get_messages_to_classify(
     character: str,
     partner: str,
@@ -247,7 +255,7 @@ def get_messages_to_classify(
 
 
 @tool(
-    tags=TAG_LOGS,
+    tags=(TAG_LOGS, TAG_CLASSIFY),
     title="Record IC/OOC verdicts",
     idempotent=True,
 )

@@ -27,7 +27,7 @@ import rag_jobs
 from mcp.server.fastmcp import Context
 
 from ._context import ToolError, audit, resolve_character, resolve_set
-from ._registry import TAG_CHARACTER, TAG_CORE, TAG_LOGS, tool
+from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 from .tools_session import NO_PUSH_NOTE
 
 #: How long a tool will sit waiting on a job before handing the caller
@@ -208,7 +208,7 @@ async def backup_all_characters(ctx: Context) -> dict[str, Any]:
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_LOGS, title="Index logs for search")
+@tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Index logs for search")
 async def ingest_logs(
     ctx: Context,
     character: str | None = None,
@@ -312,7 +312,11 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@tool(tags=(TAG_CORE, TAG_LOGS), title="Job status", read_only=True)
+@tool(
+    tags=(TAG_CORE, TAG_LOGS, TAG_CLASSIFY),
+    title="Job status",
+    read_only=True,
+)
 def get_job(job_id: str) -> dict[str, Any]:
     """Progress of a background ingest started with wait=false."""
     job = rag_jobs.registry().get(job_id)

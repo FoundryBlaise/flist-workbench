@@ -76,6 +76,14 @@ endpoints serve the same implementations:
 | `.../mcp` | everything (70 tools) |
 | `.../mcp/character` | profile editing (53) |
 | `.../mcp/logs` | logs, labels, search (29) |
+| `.../mcp/classify` | the IC/OOC labelling loop only (8) |
+
+Tool schemas are not free. Every tool an endpoint carries is
+described in the model's context before it does any work: the 29 on
+`/mcp/logs` cost roughly 5800 tokens, the 70 on `/mcp` roughly 13700.
+A client with a 12k window could not fit one batch of messages to
+classify alongside them. Point a long labelling run at
+`/mcp/classify` and that drops to about 1500.
 
 ## Security
 

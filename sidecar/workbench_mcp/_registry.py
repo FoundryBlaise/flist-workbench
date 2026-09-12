@@ -30,6 +30,12 @@ TAG_CHARACTER = "character"
 TAG_LOGS = "logs"
 #: Tag for tools every endpoint should carry (status, help, settings).
 TAG_CORE = "core"
+#: The IC/OOC labelling loop and nothing else. Its own endpoint exists
+#: because tool schemas are not free: 29 tools on /mcp/logs cost ~5800
+#: tokens of context before a single message is judged, and a client
+#: running the loop at 12k context could not fit one batch alongside
+#: them. Eight tools cost a quarter of that.
+TAG_CLASSIFY = "classify"
 
 
 @dataclass(frozen=True)

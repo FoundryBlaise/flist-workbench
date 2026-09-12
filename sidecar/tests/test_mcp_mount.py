@@ -200,3 +200,59 @@ async def test_every_tool_declares_annotations() -> None:
         for tool in (await session.list_tools()).tools:
             assert tool.annotations is not None, tool.name
             assert tool.description, tool.name
+
+
+def test_the_classify_endpoint_is_the_smallest_surface() -> None:
+    """Tool schemas are not free. 29 tools on /mcp/logs cost ~5800 tokens
+    of context before a single message is judged — half of what a 12k
+    client has, which is why one could not fit a batch alongside them.
+    Eight tools cost a quarter of that.
+    """
+    import json
+
+    import workbench_mcp
+    from workbench_mcp._registry import registered_tools
+
+    workbench_mcp.build_mcp_servers()
+
+    def schema_bytes(tags):
+        return sum(
+            len(
+                json.dumps(
+                    {"name": spec.name, "title": spec.title}, ensure_ascii=False
+                )
+            )
+            + len(spec.fn.__doc__ or "")
+            for spec in registered_tools(tags)
+        )
+
+    classify = registered_tools(workbench_mcp.ENDPOINTS["classify"])
+    logs = registered_tools(workbench_mcp.ENDPOINTS["logs"])
+    assert {t.name for t in classify} == {
+        "list_log_characters",
+        "list_partners",
+        "get_label_stats",
+        "get_classification_guidelines",
+        "get_messages_to_classify",
+        "set_message_labels",
+        "ingest_logs",
+        "get_job",
+    }
+    assert len(classify) < len(logs)
+    assert schema_bytes(workbench_mcp.ENDPOINTS["classify"]) < 0.5 * schema_bytes(
+        workbench_mcp.ENDPOINTS["logs"]
+    )
+
+
+def test_the_classify_endpoint_is_reachable_and_described() -> None:
+    import workbench_mcp
+
+    servers = workbench_mcp.build_mcp_servers()
+    assert "classify" in servers
+    described = workbench_mcp.describe(servers, 27384)
+    row = next(
+        e for e in described["endpoints"] if e["id"] == "classify"  # type: ignore[index]
+    )
+    assert row["path"] == "/mcp/classify"
+    assert row["tool_count"] == 8
+    assert "labelling" in row["label"]
