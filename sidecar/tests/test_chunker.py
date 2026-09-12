@@ -424,3 +424,56 @@ def ts(year: int, month: int, day: int, hour: int) -> int:
     from datetime import datetime, timezone
 
     return int(datetime(year, month, day, hour, tzinfo=timezone.utc).timestamp())
+
+
+def test_a_single_long_post_is_split_to_fit_the_window() -> None:
+    """One roleplay post routinely runs past an embedding model's window.
+
+    Splitting only between messages left such a post as a chunk of its
+    own, several times the cap, and the model read its first few hundred
+    characters and dropped the rest without complaining.
+    """
+    para = "Die Wirtin steht hinter dem Tresen und poliert ein Glas. " * 12
+    post = f"{para}\n\n{para}\n\n{para}"  # ~2000 chars, one message
+    m1 = _mkmsg(ts(2026, 1, 1, 10), "Amber", post)
+
+    chunks = chunker.chunk_messages(
+        [m1],
+        character="Amber",
+        partner="Enariel",
+        labels_by_hash={labels_store.msg_hash(m1): _stored("IC")},
+        label_settings=_settings(),
+        max_chars=450,
+        soft_split=400,
+        overlap=0,
+    )
+
+    assert len(chunks) > 1
+    assert all(c["char_count"] <= 450 for c in chunks), [
+        c["char_count"] for c in chunks
+    ]
+    # Nothing silently dropped: every paragraph still appears somewhere.
+    joined = " ".join(c["text"] for c in chunks)
+    assert joined.count("Die Wirtin steht hinter dem Tresen") >= 30
+    # And the pieces stay in order, so the prev/next walk reads straight.
+    assert [c["subchunk"] for c in chunks] == list(range(len(chunks)))
+
+
+def test_short_messages_are_untouched_by_the_splitter() -> None:
+    long = "x" * 300
+    m1 = _mkmsg(ts(2026, 1, 1, 10), "Amber", long)
+    m2 = _mkmsg(ts(2026, 1, 1, 11), "Enariel", long)
+    chunks = chunker.chunk_messages(
+        [m1, m2],
+        character="Amber",
+        partner="Enariel",
+        labels_by_hash={
+            labels_store.msg_hash(m): _stored("IC") for m in (m1, m2)
+        },
+        label_settings=_settings(),
+        max_chars=3000,
+        soft_split=2000,
+        overlap=2,
+    )
+    assert len(chunks) == 1
+    assert chunks[0]["msg_count"] == 2
