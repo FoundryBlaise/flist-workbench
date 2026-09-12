@@ -235,6 +235,7 @@ def test_the_classify_endpoint_is_the_smallest_surface() -> None:
         "get_classification_guidelines",
         "get_messages_to_classify",
         "set_message_labels",
+        "label_all_unlabeled",
         "ingest_logs",
         "get_job",
     }
@@ -254,5 +255,5 @@ def test_the_classify_endpoint_is_reachable_and_described() -> None:
         e for e in described["endpoints"] if e["id"] == "classify"  # type: ignore[index]
     )
     assert row["path"] == "/mcp/classify"
-    assert row["tool_count"] == 8
+    assert row["tool_count"] == 9
     assert "labelling" in row["label"]

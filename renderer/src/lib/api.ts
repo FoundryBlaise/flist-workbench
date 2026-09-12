@@ -607,6 +607,42 @@ export const api = {
     request<{ labels_deleted: number }>('/labels/clear-all', {
       method: 'POST'
     }),
+  /** Give every still-Unlabeled message in one conversation the same
+   *  verdict. Adds labels only: an existing verdict is kept, and the
+   *  rules keep deciding what they decide. `hashes` is exactly what
+   *  was written, which is what `labelsDeleteHashes` undoes. */
+  labelsFillUnlabeled: (body: {
+    character: string
+    partner: string
+    label: 'IC' | 'OOC'
+  }) =>
+    request<{
+      character: string
+      partner: string
+      label: 'IC' | 'OOC'
+      labeled: number
+      hashes: string[]
+      already_labeled: number
+      decided_by_rules: number
+      total_messages: number
+    }>('/labels/fill-unlabeled', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  /** Undo for the above — removes named labels and nothing else.
+   *  `labelsClear` would take the model's verdicts with it. */
+  labelsDeleteHashes: (body: {
+    character: string
+    partner: string
+    hashes: string[]
+  }) =>
+    request<{ character: string; partner: string; deleted: number }>(
+      '/labels/delete-hashes',
+      {
+        method: 'POST',
+        body: JSON.stringify(body)
+      }
+    ),
   labelsRollup: () =>
     get<{
       ic: number

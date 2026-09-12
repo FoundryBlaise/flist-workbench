@@ -524,6 +524,68 @@ export function LogViewer() {
     }
   }
 
+  // Give every still-unlabeled message in this conversation the same
+  // verdict. For the chats the user already knows the answer about —
+  // some are IC from the first line to the last, and walking two
+  // thousand messages past a model one batch at a time to hear that
+  // back is a waste of their evening.
+  //
+  // Narrow on purpose: existing verdicts are kept and the rules keep
+  // deciding what they decide, so this can only add. The sidecar
+  // reports the hashes it wrote, which is what Undo removes — unlike
+  // "Remove all IC/OOC labels", it cannot take a model's work with it.
+  const fillUnlabeled = async (label: 'IC' | 'OOC') => {
+    if (!activeChar || !partner) return
+    const partnerName = displayPartner(partner)
+    const confirmed = window.confirm(
+      `Mark all ${unlabeledCount.toLocaleString()} unlabeled message(s) in ` +
+        `${partnerName} with ${activeChar} as ${label}?
+
+` +
+        `Only do this if you know the whole conversation is ${label}. ` +
+        `Messages that already have a verdict keep it, and short ` +
+        `messages / "((" lines stay with the rules.`
+    )
+    if (!confirmed) return
+    try {
+      const res = await api.labelsFillUnlabeled({
+        character: activeChar,
+        partner,
+        label
+      })
+      useStore.getState().invalidateMessages(activeChar, partner)
+      await useStore
+        .getState()
+        .loadMessages(activeChar, partner, { force: true })
+      if (res.labeled === 0) return
+      showUndoToast(
+        `${res.labeled.toLocaleString()} message${res.labeled === 1 ? '' : 's'} → ${label}`,
+        () => {
+          void (async () => {
+            try {
+              await api.labelsDeleteHashes({
+                character: activeChar,
+                partner,
+                hashes: res.hashes
+              })
+              useStore.getState().invalidateMessages(activeChar, partner)
+              void useStore
+                .getState()
+                .loadMessages(activeChar, partner, { force: true })
+            } catch (err) {
+              console.error('[labels] undo bulk fill failed', err)
+            }
+          })()
+        }
+      )
+    } catch (err) {
+      console.error('[labels] bulk fill failed', err)
+      window.alert(
+        `Couldn't label the conversation: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
   const selBounds =
     selRange === null
       ? null
@@ -596,6 +658,10 @@ export function LogViewer() {
           characterLabel={activeChar}
           unlabeledCount={unlabeledCount}
           labeledCount={stats.labeled}
+          onFillUnlabeled={(label) => {
+            setConvMenu(null)
+            void fillUnlabeled(label)
+          }}
           onIngest={() => {
             setConvMenu(null)
             openIngest(
@@ -1011,6 +1077,7 @@ function ConversationContextMenu({
   characterLabel,
   unlabeledCount,
   labeledCount,
+  onFillUnlabeled,
   onIngest,
   onResetAll
 }: {
@@ -1020,14 +1087,15 @@ function ConversationContextMenu({
   characterLabel: string
   unlabeledCount: number
   labeledCount: number
+  onFillUnlabeled: (label: 'IC' | 'OOC') => void
   onIngest: () => void
   onResetAll: () => void
 }) {
   const W = 280
-  // 2 menu items (Ingest, Reset); H sized so the viewport-edge clamp
-  // keeps the whole menu on-screen when right-clicking near the bottom
-  // of a tall pane.
-  const H = 180
+  // 4 menu items (Ingest, all-IC, all-OOC, Reset); H sized so the
+  // viewport-edge clamp keeps the whole menu on-screen when
+  // right-clicking near the bottom of a tall pane.
+  const H = 300
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -1098,15 +1166,45 @@ function ConversationContextMenu({
           </span>
         )}
       </button>
+      {(['IC', 'OOC'] as const).map((label, i) => (
+        <button
+          key={label}
+          ref={(el) => {
+            itemRefs.current[1 + i] = el
+          }}
+          type="button"
+          role="menuitem"
+          className="log-label-menu-item"
+          onClick={() => onFillUnlabeled(label)}
+          onKeyDown={onItemKeyDown(1 + i)}
+          disabled={unlabeledCount === 0}
+          title={
+            unlabeledCount === 0
+              ? 'Nothing is unlabeled in this conversation.'
+              : `Write ${label} to all ${unlabeledCount.toLocaleString()} ` +
+                `unlabeled message(s) at once. For a conversation you know ` +
+                `is ${label} throughout — existing verdicts are kept, and ` +
+                `short messages / "((" lines stay with the rules. Undoable.`
+          }
+          data-testid={`log-conv-menu-fill-${label.toLowerCase()}`}
+        >
+          Mark all Unlabeled as {label}
+          <span className="log-label-menu-current">
+            {unlabeledCount === 0
+              ? 'nothing unlabeled'
+              : `${unlabeledCount.toLocaleString()} → ${label}`}
+          </span>
+        </button>
+      ))}
       <button
         ref={(el) => {
-          itemRefs.current[1] = el
+          itemRefs.current[3] = el
         }}
         type="button"
         role="menuitem"
         className="log-label-menu-item log-label-menu-reset"
         onClick={onResetAll}
-        onKeyDown={onItemKeyDown(1)}
+        onKeyDown={onItemKeyDown(3)}
         disabled={resetDisabled}
         title={
           resetDisabled
