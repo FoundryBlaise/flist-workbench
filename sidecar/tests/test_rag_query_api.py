@@ -221,23 +221,12 @@ def test_settings_no_longer_carries_chat_fields(client: TestClient) -> None:
         assert gone not in labels, gone
 
 
-def test_settings_renames_keep_alive_to_drop_the_chat_prefix(
-    client: TestClient,
-) -> None:
-    res = client.put("/settings", json={"rag": {"embed_keep_alive": "45s"}}).json()
-    assert res["rag"]["embed_keep_alive"] == "45s"
-    assert "chat_embed_keep_alive" not in res["rag"]
-
-
 def test_settings_clamps_runaway_top_k(client: TestClient) -> None:
     res = client.put("/settings", json={"rag": {"top_k": 9999}}).json()
     assert res["rag"]["top_k"] == 50  # capped at 50
 
 
 def test_settings_persists_chunk_settings(client: TestClient) -> None:
-    # Chunk range is an endpoint-backend concern; the local
-    # backend clamps to its model window instead.
-    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
     res = client.put(
         "/settings",
         json={
@@ -248,15 +237,19 @@ def test_settings_persists_chunk_settings(client: TestClient) -> None:
             }
         },
     ).json()
-    assert res["rag"]["chunk_max_chars"] == 3000
-    assert res["rag"]["chunk_soft_split_chars"] == 2400
+    # Stored as asked, then reported clamped to the embedding model's
+    # window — the model truncates past it without saying so.
+    import rag as rag_settings
+
+    cap = rag_settings.rag_embed_local.profile_for(
+        rag_settings.DEFAULT_EMBED_MODEL
+    ).max_chars
+    assert res["rag"]["chunk_max_chars"] == min(3000, cap)
+    assert res["rag"]["chunk_soft_split_chars"] < res["rag"]["chunk_max_chars"]
     assert res["rag"]["chunk_overlap_msgs"] == 2
 
 
 def test_settings_clamps_chunk_settings(client: TestClient) -> None:
-    # Chunk range is an endpoint-backend concern; the local
-    # backend clamps to its model window instead.
-    client.put("/settings", json={"rag": {"embed_backend": "endpoint"}})
     res = client.put(
         "/settings",
         json={
@@ -266,7 +259,12 @@ def test_settings_clamps_chunk_settings(client: TestClient) -> None:
             }
         },
     ).json()
-    assert res["rag"]["chunk_max_chars"] == 20000
+    import rag as rag_settings
+
+    cap = rag_settings.rag_embed_local.profile_for(
+        rag_settings.DEFAULT_EMBED_MODEL
+    ).max_chars
+    assert res["rag"]["chunk_max_chars"] == cap
     assert res["rag"]["chunk_overlap_msgs"] == 5
 
 

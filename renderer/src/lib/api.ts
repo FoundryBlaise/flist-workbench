@@ -281,11 +281,7 @@ export type BackupsSettings = {
 }
 
 export type RagSettings = {
-  embed_endpoint: string
   embed_model: string
-  embed_api_key: string
-  embed_query_prefix: string
-  embed_document_prefix: string
   rerank_model: string
   rerank_candidates: number
   top_k: number
@@ -293,25 +289,19 @@ export type RagSettings = {
   rerank_min_ratio: number
   hybrid_enabled: boolean
   hybrid_bm25_candidates: number
-  embed_keep_alive: string
   chunk_max_chars: number
   chunk_soft_split_chars: number
   chunk_overlap_msgs: number
   defaults: {
-    embed_endpoint: string
-    embed_model: string
-    embed_api_key: string
-    embed_query_prefix: string
-    embed_document_prefix: string
-    rerank_model: string
+      embed_model: string
+          rerank_model: string
     rerank_candidates: number
     top_k: number
     neighbors: number
     rerank_min_ratio: number
     hybrid_enabled: boolean
     hybrid_bm25_candidates: number
-    embed_keep_alive: string
-    chunk_max_chars: number
+      chunk_max_chars: number
     chunk_soft_split_chars: number
     chunk_overlap_msgs: number
   }
@@ -646,11 +636,7 @@ export const api = {
       body: JSON.stringify(body)
     }),
   ragTestEmbedding: (body: {
-    embed_endpoint?: string
     embed_model?: string
-    embed_api_key?: string
-    embed_query_prefix?: string
-    embed_document_prefix?: string
   }) =>
     request<{
       ok: boolean
@@ -665,15 +651,22 @@ export const api = {
   // Probe an OpenAI-compatible or Ollama endpoint for the list of
   // loaded/installed models. Returns sorted+deduped IDs. Failure is
   // signalled by an empty `models` + populated `error`.
-  discoverModels: (endpoint: string) =>
+  /** The embedding models that can be selected — fastembed's catalogue,
+   *  with the numbers the choice actually turns on. Licence is in there
+   *  because the catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0. */
+  discoverModels: () =>
     request<{
-      models: string[]
-      source: 'openai' | 'ollama' | 'unknown'
+      models: Array<{
+        model: string
+        dimension: number
+        size_gb: number | null
+        license: string | null
+      }>
+      source: 'local'
       error: string | null
-      elapsed_ms?: number
     }>('/settings/discover-models', {
       method: 'POST',
-      body: JSON.stringify({ endpoint })
+      body: JSON.stringify({})
     }),
   ragIngestStart: (
     scope: IngestJobScope,

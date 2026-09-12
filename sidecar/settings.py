@@ -40,18 +40,9 @@ KEY_LABELS_THRESHOLD_CHARS = "labels.threshold_chars"
 # RAG / embedding settings. Endpoint defaults to the labels endpoint
 # (most users run one LM Studio with both a chat model and an embedding
 # model loaded). Prefixes only matter for nomic-* models; default empty.
-KEY_RAG_EMBED_BACKEND = "rag.embed_backend"
-KEY_RAG_EMBED_ENDPOINT = "rag.embed_endpoint"
+#: A fastembed model id, always "org/name". Values without a slash are
+#: leftovers from the removed endpoint backend and are ignored on read.
 KEY_RAG_EMBED_MODEL = "rag.embed_model"
-# Kept apart from KEY_RAG_EMBED_MODEL on purpose: the two backends
-# use different naming schemes ("text-embedding-bge-m3" is an LM
-# Studio id, "jinaai/jina-embeddings-v2-base-de" a fastembed one).
-# One shared key would hand each backend the other's id on every
-# switch, which fails at load time with nothing useful to say.
-KEY_RAG_LOCAL_EMBED_MODEL = "rag.local_embed_model"
-KEY_RAG_EMBED_API_KEY = "rag.embed_api_key"
-KEY_RAG_EMBED_QUERY_PREFIX = "rag.embed_query_prefix"
-KEY_RAG_EMBED_DOCUMENT_PREFIX = "rag.embed_document_prefix"
 
 # Retrieval / rerank tunables. Stored as strings; numeric coercion in
 # the loader, with clamping for safety.
@@ -70,7 +61,6 @@ KEY_RAG_HYBRID_BM25_CANDIDATES = "rag.hybrid_bm25_candidates"
 # default ~5 minutes. A short value like "30s" lets bge-m3 drop quickly
 # on VRAM-tight setups. Free-text so users can write Ollama's duration
 # grammar verbatim ("30s" / "1m" / "0").
-KEY_RAG_EMBED_KEEP_ALIVE = "rag.embed_keep_alive"
 
 # Chunking tunables. Changing any of these requires a re-ingest with
 # wipe for existing data — chunk_ids encode the subchunk index, so
@@ -148,12 +138,22 @@ RETIRED_KEYS = (
     "rag.chat_num_ctx",
     "rag.multiquery_enabled",
     "rag.multiquery_variants",
+    # The embedding endpoint is gone: embedding runs in-process, so
+    # there is no server to address, no key to send it, no prefix to
+    # guess and nothing to keep warm in someone else's VRAM.
+    "rag.embed_backend",
+    "rag.embed_endpoint",
+    "rag.embed_api_key",
+    "rag.embed_query_prefix",
+    "rag.embed_document_prefix",
+    "rag.embed_keep_alive",
+    "rag.chat_embed_keep_alive",
 )
 
-#: `rag.chat_embed_keep_alive` was only ever about the *embedding*
-#: endpoint; the "chat_" prefix was a leftover from when the key lived
-#: in the chat pane. Carry the user's value over to the honest name.
-_RENAMED_KEYS = {"rag.chat_embed_keep_alive": KEY_RAG_EMBED_KEEP_ALIVE}
+#: `rag.local_embed_model` existed only while both backends did. With
+#: one backend the honest name is `rag.embed_model`; carry the value
+#: over rather than silently resetting someone's model choice.
+_RENAMED_KEYS = {"rag.local_embed_model": KEY_RAG_EMBED_MODEL}
 
 
 def _drop_retired_ai_keys(conn: sqlite3.Connection) -> None:

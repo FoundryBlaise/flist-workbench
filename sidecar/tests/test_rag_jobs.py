@@ -58,17 +58,17 @@ def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> rag_jobs.JobRegistry:
 def workbench_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
-    # These tests stub the embedding transport, so they exercise the
-    # endpoint backend. Pinning it keeps the chunk sizes here fixed: the
-    # local backend clamps chunking to whatever window its model has,
-    # which would silently re-split the fixtures.
-    import rag
+    # Chunking follows the embedding model's window, and these tests
+    # stub the embedding away entirely. Pin a model with a wide window
+    # so the fixtures keep the chunk boundaries they were written for.
     import settings as settings_store
 
     conn = settings_store.connect()
     try:
         settings_store.set_value(
-            conn, settings_store.KEY_RAG_EMBED_BACKEND, rag.BACKEND_ENDPOINT
+            conn,
+            settings_store.KEY_RAG_EMBED_MODEL,
+            "jinaai/jina-embeddings-v2-base-en",
         )
     finally:
         conn.close()
@@ -381,7 +381,10 @@ def test_job_scoped_force_rewipe_deletes_only_that_scope(
     import rag as rag_settings_mod
 
     rag_store.write_manifest(
-        embed_model=rag_settings_mod.DEFAULT_EMBED_MODEL,
+        # The loaded name, not the module default — the fixture pins a
+        # wide-window model, and a mismatch here reads as a model swap
+        # and wipes everything instead of just scope A.
+        embed_model=rag_settings_mod.load_settings().embed_model,
         embed_dimension=4,
     )
 
