@@ -34,6 +34,7 @@ from starlette.routing import Route
 
 from ._registry import (
     TAG_CHARACTER,
+    TAG_CLASSIFY,
     TAG_CORE,
     TAG_LOGS,
     registered_prompts,
@@ -50,6 +51,10 @@ ENDPOINTS: dict[str, frozenset[str] | None] = {
     "": None,
     "character": frozenset({TAG_CORE, TAG_CHARACTER}),
     "logs": frozenset({TAG_CORE, TAG_LOGS}),
+    # Deliberately without TAG_CORE: status, settings and pairing tools
+    # are schema a labelling run never calls, and schema is what this
+    # endpoint exists to save.
+    "classify": frozenset({TAG_CLASSIFY}),
 }
 
 _INSTRUCTIONS = """\
@@ -269,6 +274,7 @@ _ENDPOINT_LABELS = {
     "": "Everything",
     "character": "Character editing only",
     "logs": "Logs, labels and retrieval only",
+    "classify": "IC/OOC labelling only (smallest tool surface)",
 }
 
 

@@ -15,7 +15,7 @@ import logs as log_store
 import settings as settings_store
 
 from ._context import ToolError, resolve_conversation, resolve_log_character
-from ._registry import TAG_LOGS, tool
+from ._registry import TAG_CLASSIFY, TAG_LOGS, tool
 
 #: A single read can pull in a lot of text; keep the default modest and
 #: let the caller page with `offset`.
@@ -35,7 +35,7 @@ def _log_dir_error(exc: Exception) -> ToolError:
     )
 
 
-@tool(tags=TAG_LOGS, title="Characters with logs", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Characters with logs", read_only=True)
 def list_log_characters() -> dict[str, Any]:
     """Which of the user's characters have F-Chat logs on this machine."""
     try:
@@ -50,7 +50,7 @@ def list_log_characters() -> dict[str, Any]:
     }
 
 
-@tool(tags=TAG_LOGS, title="Conversation partners", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Conversation partners", read_only=True)
 def list_partners(
     character: str, include_channels: bool = False, query: str | None = None
 ) -> dict[str, Any]:
@@ -277,7 +277,7 @@ def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
     return {"name": needle, "matched": "partial", "conversations": found}
 
 
-@tool(tags=TAG_LOGS, title="Label coverage", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Label coverage", read_only=True)
 def get_label_stats(
     character: str, partner: str | None = None
 ) -> dict[str, Any]:
