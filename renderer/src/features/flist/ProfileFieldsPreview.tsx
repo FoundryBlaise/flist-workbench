@@ -24,7 +24,7 @@ export function ProfileFieldsPreview() {
   const readOnly = useStore((s) => s.editorReadOnly)
   const mapping = useStore((s) => s.flistMapping.payload)
 
-  // In read-only views (From F-list / Backup) we mirror the live
+  // In read-only views (Live on F-List / Backup) we mirror the live
   // payload directly; otherwise we follow the working copy. Either
   // way the data shape is the same (the F-list character payload).
   const effectivePayload: Record<string, unknown> | null =

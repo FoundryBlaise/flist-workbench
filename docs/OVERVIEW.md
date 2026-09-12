@@ -57,11 +57,22 @@ it rather than beside it.
 
 Per character under `%APPDATA%\flist-workbench\characters\<Folder>\`:
 
-- `live.json` — the last profile pulled from F-list. Read-only.
-- `sets/<12hex>/{payload,meta}.json` — **working sets**, the only
-  editable thing. A character can have many; one is active.
-- `active_set.json`, `snapshots/`, `backups/*.zip`, `images/`,
-  `inlines/`
+- `live.json` — the last profile pulled from F-list. Read-only. The
+  window calls it **Live on F-List**.
+- `sets/<12hex>/{payload,meta}.json` — the editable copy. On disk this
+  is still the working-set format, and a character can technically hold
+  several; the window shows exactly one and calls it the **Workbench**.
+  `active_set.json` says which one that is.
+- `snapshots/`, `backups/*.zip`, `images/`, `inlines/`
+
+Working sets were once a user-facing concept — create, name, keep
+several, pick an active one. Testers could not say what one was or how
+it differed from the read-only row above it, so the concept stayed on
+disk and left the vocabulary. `character_archive.resolve_workbench()`
+picks the bench: the active set, else the most recently changed, else a
+new one seeded from Live. Extra sets an older version left behind stay
+on disk, out of the window, and are logged once when chosen — there is
+no migration step to remove later.
 
 The working payload (schema v6) carries `_overlay` — the dotted paths
 the user has touched — so a later pull can refresh untouched fields

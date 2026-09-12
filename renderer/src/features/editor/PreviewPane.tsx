@@ -59,7 +59,7 @@ export function PreviewPane() {
   //   profile-fields → website-style Info preview
   //   kinks          → Undecided pool (interactive in edit mode, locked
   //                    in read-only — same surface, same scroll position
-  //                    when you toggle between My edits and From F-list)
+  //                    when you toggle between the Workbench and Live)
   //   anything else  → BBCode preview
   // Read-only just changes how each component sources its data
   // (live archive instead of working copy) — the right-pane shape

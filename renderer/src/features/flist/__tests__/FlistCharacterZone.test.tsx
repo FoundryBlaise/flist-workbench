@@ -9,7 +9,7 @@
 // tests pin the arrangement.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useStore } from '../../../state'
 import { FlistCharacterZone } from '../FlistCharacterZone'
 
@@ -113,4 +113,31 @@ it('hides extra drafts an older version left behind', () => {
 
   expect(screen.getAllByTestId('flist-zone-workbench')).toHaveLength(1)
   expect(screen.queryByText(/Copy_old/)).toBeNull()
+})
+
+it('backs the Workbench up without pulling from F-list', () => {
+  // The bench holds edits that exist nowhere else. Pulling in order to
+  // save them would move Live underneath them — and would fail offline,
+  // for a backup that needs no network at all.
+  seed({ sets: [{ id: 'bench1', name: 'Workbench' }] })
+  const backup = vi.fn().mockResolvedValue(undefined)
+  useStore.setState({ flistBackupCharacter: backup } as never)
+  render(<FlistCharacterZone />)
+
+  fireEvent.contextMenu(screen.getByTestId('flist-zone-workbench'))
+  fireEvent.click(screen.getByText('Back up the Workbench'))
+
+  expect(backup).toHaveBeenCalledWith('Lady Amber Blaise', { pull: false })
+})
+
+it('pulls first when backing up the read-only F-list row', () => {
+  seed({ sets: [{ id: 'bench1', name: 'Workbench' }] })
+  const backup = vi.fn().mockResolvedValue(undefined)
+  useStore.setState({ flistBackupCharacter: backup } as never)
+  render(<FlistCharacterZone />)
+
+  fireEvent.contextMenu(screen.getByTestId('flist-zone-from-flist'))
+  fireEvent.click(screen.getByText('Pull and back up'))
+
+  expect(backup).toHaveBeenCalledWith('Lady Amber Blaise')
 })
