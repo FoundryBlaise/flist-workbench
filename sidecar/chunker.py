@@ -164,6 +164,30 @@ def _split_oversize(
         speaker = (speaker_map or {}).get(m["speaker"])
         return len(_fmt_line(m, speaker_override=speaker)) + 1
 
+    def carry(part: list[dict], incoming: int) -> list[dict]:
+        """Messages to repeat at the head of the next part.
+
+        Bounded by characters, not only by `overlap`. The count was
+        chosen when a chunk held 3000 characters, where repeating two
+        messages is a rounding error. Against a cap that follows an
+        embedding model's window it becomes the dominant term — two
+        400-character tails plus the new message put every part near
+        1200, three times the cap it was just split to respect. Keep as
+        much of the tail as still leaves the next part under max_chars,
+        which is a no-op at the large caps the endpoint backend uses.
+        """
+        if overlap <= 0:
+            return []
+        kept: list[dict] = []
+        acc = incoming
+        for m in reversed(part[-overlap:]):
+            c = line_len(m)
+            if acc + c > max_chars:
+                break
+            kept.insert(0, m)
+            acc += c
+        return kept
+
     parts: list[list[dict]] = []
     current: list[dict] = []
     cur_chars = 0
@@ -171,8 +195,7 @@ def _split_oversize(
         line_chars = line_len(m)
         if cur_chars + line_chars > soft_split and current:
             parts.append(current)
-            tail = current[-overlap:] if overlap > 0 else []
-            current = list(tail) + [m]
+            current = carry(current, line_chars) + [m]
             cur_chars = _total_chars(current, speaker_map)
         else:
             current.append(m)
