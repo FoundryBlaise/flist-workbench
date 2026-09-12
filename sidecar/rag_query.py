@@ -208,15 +208,8 @@ def run_query(
 
     hits_by_cid: dict[str, dict] = {}
     dense_rank_lists: list[list[str]] = []
-    # Forward embed_keep_alive so Ollama drops the embed model shortly
-    # after the question is embedded, instead of pinning VRAM against
-    # whatever the user has loaded for their MCP client. Empty string
-    # means "don't override the server default".
-    query_keep_alive = rag_set.embed_keep_alive or None
     for q in variants:
-        qvec = rag_embed.embed_texts(
-            [q], "query", rag_set, keep_alive=query_keep_alive
-        )[0]
+        qvec = rag_embed.embed_texts([q], "query", rag_set)[0]
         round_hits = store.search(qvec, scope=scope, limit=retrieve_n)
         round_cids: list[str] = []
         for h in round_hits:

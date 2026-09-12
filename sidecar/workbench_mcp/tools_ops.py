@@ -305,8 +305,9 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
     elif out["state"] == "failed":
         out["note"] = (
-            "Check that the embedding endpoint in Settings → RAG · "
-            "Embedding is running."
+            "The embedding model failed to load — see `last_error`. "
+            "test_embedding_connection reports the same failure on its "
+            "own, which is the quicker way to see what went wrong."
         )
     return out
 
@@ -364,15 +365,15 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
 
 @tool(
     tags=(TAG_CORE, TAG_LOGS),
-    title="Test the embedding endpoint",
+    title="Test the embedding model",
     read_only=True,
-    open_world=True,
 )
 def test_embedding_connection() -> dict[str, Any]:
-    """Check that the configured embedding endpoint answers.
+    """Check that the embedding model loads, and report its dimension.
 
-    Embedding is the one inference server Workbench still needs; ingest
-    and semantic search both fail without it.
+    Embedding runs inside Workbench — there is no server to start and
+    nothing to configure. The first call downloads the model, so it can
+    take a moment; after that it is milliseconds.
     """
     import rag as rag_settings
     import rag_embed
@@ -384,14 +385,12 @@ def test_embedding_connection() -> dict[str, Any]:
     except rag_embed.EmbedError as exc:
         return {
             "ok": False,
-            "endpoint": settings.embed_endpoint,
             "model": settings.embed_model,
             "error": str(exc),
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
     return {
         "ok": True,
-        "endpoint": settings.embed_endpoint,
         "model": settings.embed_model,
         "dimension": dimension,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -595,9 +594,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
 @tool(tags=TAG_CORE, title="Settings", read_only=True)
 def get_settings() -> dict[str, Any]:
     """Workbench's settings: the F-Chat log directory, the IC/OOC rule
-    threshold, the embedding endpoint and the retrieval tuning.
-
-    The embedding API key is reported as a boolean, never as a value.
+    threshold, the embedding model and the retrieval tuning.
     """
     import logs as log_store
     import rag as rag_settings
@@ -609,12 +606,8 @@ def get_settings() -> dict[str, Any]:
         "log_directory": str(log_store.data_dir()),
         "labels": {"ooc_threshold_chars": labels.threshold_chars},
         "embedding": {
-            "endpoint": rag.embed_endpoint,
             "model": rag.embed_model,
-            "api_key_set": bool(rag.embed_api_key),
-            "query_prefix": rag.embed_query_prefix,
-            "document_prefix": rag.embed_document_prefix,
-            "keep_alive": rag.embed_keep_alive,
+            "runs": "in-process (no server to configure)",
         },
         "retrieval": {
             "top_k": rag.top_k,
@@ -635,7 +628,6 @@ def get_settings() -> dict[str, Any]:
 @tool(tags=TAG_CORE, title="Change settings")
 def update_settings(
     ooc_threshold_chars: int | None = None,
-    embed_endpoint: str | None = None,
     embed_model: str | None = None,
     top_k: int | None = None,
     neighbors: int | None = None,
@@ -661,26 +653,9 @@ def update_settings(
                 conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(value)
             )
             changed["ooc_threshold_chars"] = value
-        if embed_endpoint is not None:
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_EMBED_ENDPOINT, str(embed_endpoint)
-            )
-            changed["embed_endpoint"] = embed_endpoint
         if embed_model is not None:
-            # Routed by the active backend — local (fastembed ids) and
-            # endpoint (server-specific ids) keep separate keys.
-            import rag as rag_mod
-
-            active = (
-                settings_store.get(conn, settings_store.KEY_RAG_EMBED_BACKEND)
-                or rag_mod.DEFAULT_EMBED_BACKEND
-            ).strip().lower()
             settings_store.set_value(
-                conn,
-                settings_store.KEY_RAG_LOCAL_EMBED_MODEL
-                if active == rag_mod.BACKEND_LOCAL
-                else settings_store.KEY_RAG_EMBED_MODEL,
-                str(embed_model),
+                conn, settings_store.KEY_RAG_EMBED_MODEL, str(embed_model)
             )
             changed["embed_model"] = embed_model
         if top_k is not None:

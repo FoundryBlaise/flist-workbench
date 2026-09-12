@@ -222,7 +222,7 @@ def _run_job(job: IngestJob) -> None:
         return
 
     labels_conn = labels_store.connect()
-    # Hoisted so the `finally` block can call try_unload even if the
+    # Hoisted so the `finally` block can still see the settings if the
     # settings load below raises before rag_set gets bound inside try.
     rag_set: rag_settings.RagSettings | None = None
     try:
@@ -353,16 +353,6 @@ def _run_job(job: IngestJob) -> None:
         job.state = "failed"
     finally:
         labels_conn.close()
-        # Best-effort: tell Ollama to evict the embedding model now that
-        # the ingest run is over. LM Studio ignores the keep_alive
-        # field harmlessly. Worth doing on every terminal state
-        # (done / cancelled / failed) so a partial run still frees VRAM
-        # for whatever the user wants to do next.
-        if rag_set is not None:
-            try:
-                rag_embed.try_unload(rag_set)
-            except Exception:  # noqa: BLE001 — unload is advisory
-                pass
         job.finished_at = time.time()
 
 

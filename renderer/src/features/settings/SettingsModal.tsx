@@ -6,26 +6,9 @@ import {
   type RagSettings,
   type RagStatus
 } from '../../lib/api'
-import {
-  categoriseEndpoint,
-  isRemoteEndpointAcknowledged,
-  acknowledgeRemoteEndpoint
-} from '../../lib/endpoint'
 import { useStore } from '../../state'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
-
-// Endpoint presets used everywhere a URL field is offered. The first
-// entry is what most users want — LM Studio running on the Windows
-// host, reachable from the dev container via host.docker.internal
-// (see CLAUDE.md). Falls back to localhost-shaped URLs for users who
-// run LM Studio / Ollama on the same machine the app runs on.
-const ENDPOINT_PRESETS = [
-  { label: 'LM Studio (host)', url: 'http://host.docker.internal:1234/v1' },
-  { label: 'LM Studio', url: 'http://localhost:1234/v1' },
-  { label: 'Ollama', url: 'http://localhost:11434/v1' },
-  { label: 'OpenAI', url: 'https://api.openai.com/v1' }
-]
 
 // Reranker dropdown options — fastembed's TextCrossEncoder list plus
 // a "disabled" sentinel the sidecar honours.
@@ -49,8 +32,6 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 
 // Nomic-family embed models need these task prefixes; one-click apply
 // keeps the magic strings out of user-facing copy.
-const NOMIC_QUERY_PREFIX = 'search_query: '
-const NOMIC_DOCUMENT_PREFIX = 'search_document: '
 
 type SectionId =
   | 'general'
@@ -116,11 +97,7 @@ type Draft = {
     threshold_chars: string
   }
   rag: {
-    embed_endpoint: string
     embed_model: string
-    embed_api_key: string
-    embed_query_prefix: string
-    embed_document_prefix: string
     top_k: string
     rerank_candidates: string
     neighbors: string
@@ -131,7 +108,6 @@ type Draft = {
     rerank_min_ratio: string
     hybrid_enabled: boolean
     hybrid_bm25_candidates: string
-    embed_keep_alive: string
     chunk_max_chars: string
     chunk_soft_split_chars: string
     chunk_overlap_msgs: string
@@ -149,11 +125,7 @@ function buildDraft(state: SettingsState): Draft {
       threshold_chars: String(state.labels.threshold_chars)
     },
     rag: {
-      embed_endpoint: state.rag.embed_endpoint,
       embed_model: state.rag.embed_model,
-      embed_api_key: state.rag.embed_api_key,
-      embed_query_prefix: state.rag.embed_query_prefix,
-      embed_document_prefix: state.rag.embed_document_prefix,
       top_k: String(state.rag.top_k),
       rerank_candidates: String(state.rag.rerank_candidates),
       neighbors: String(state.rag.neighbors),
@@ -161,7 +133,6 @@ function buildDraft(state: SettingsState): Draft {
       rerank_min_ratio: String(state.rag.rerank_min_ratio),
       hybrid_enabled: state.rag.hybrid_enabled,
       hybrid_bm25_candidates: String(state.rag.hybrid_bm25_candidates),
-      embed_keep_alive: state.rag.embed_keep_alive,
       chunk_max_chars: String(state.rag.chunk_max_chars),
       chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
       chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
@@ -189,12 +160,7 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.rag.hybrid_enabled !== baseline.rag.hybrid_enabled ||
     draft.rag.hybrid_bm25_candidates !== baseline.rag.hybrid_bm25_candidates
   const embeddingDirty =
-    draft.rag.embed_endpoint !== baseline.rag.embed_endpoint ||
     draft.rag.embed_model !== baseline.rag.embed_model ||
-    draft.rag.embed_api_key !== baseline.rag.embed_api_key ||
-    draft.rag.embed_query_prefix !== baseline.rag.embed_query_prefix ||
-    draft.rag.embed_document_prefix !== baseline.rag.embed_document_prefix ||
-    draft.rag.embed_keep_alive !== baseline.rag.embed_keep_alive ||
     draft.rag.chunk_max_chars !== baseline.rag.chunk_max_chars ||
     draft.rag.chunk_soft_split_chars !== baseline.rag.chunk_soft_split_chars ||
     draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
@@ -325,36 +291,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
   const saveAll = async () => {
     if (!state || !draft || !dirtyByDraft) return
-    // First-save consent for remote endpoints. A user typing
-    // api.openai.com into any endpoint field is about to ship their
-    // RP chunks to a third party — gate Save behind an explicit
-    // confirm the first time per host, then remember the
-    // acknowledgement so we don't nag on every Save.
-    const candidateEndpoints: string[] = []
-    if (dirtyByDraft.embedding) candidateEndpoints.push(draft.rag.embed_endpoint)
-    const unconsented = candidateEndpoints.filter(
-      (ep) =>
-        categoriseEndpoint(ep) === 'remote'
-        && !isRemoteEndpointAcknowledged(ep)
-    )
-    if (unconsented.length > 0) {
-      const hosts = unconsented
-        .map((ep) => {
-          try {
-            return new URL(ep).host
-          } catch {
-            return ep
-          }
-        })
-        .join(', ')
-      const ok = window.confirm(
-        `Workbench is about to save an external endpoint:\n\n  ${hosts}\n\n`
-          + 'Messages, retrieved log chunks, and any prompt text will be '
-          + 'sent to this host. Continue?'
-      )
-      if (!ok) return
-      for (const ep of unconsented) acknowledgeRemoteEndpoint(ep)
-    }
+    // The remote-endpoint consent prompt that used to live here is
+    // gone with the endpoints themselves: embedding runs in-process,
+    // so no setting can send a log chunk anywhere any more.
     setStatus('saving')
     setSaveError(null)
     // Validate Labels threshold up-front — non-finite or zero would
@@ -384,11 +323,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           state.rag.chunk_max_chars
         )
         payload.rag = {
-          embed_endpoint: draft.rag.embed_endpoint,
           embed_model: draft.rag.embed_model,
-          embed_api_key: draft.rag.embed_api_key,
-          embed_query_prefix: draft.rag.embed_query_prefix,
-          embed_document_prefix: draft.rag.embed_document_prefix,
           rerank_model: draft.rag.rerank_model,
           rerank_candidates: clampInt(
             draft.rag.rerank_candidates,
@@ -411,7 +346,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             200,
             state.rag.hybrid_bm25_candidates
           ),
-          embed_keep_alive: draft.rag.embed_keep_alive.trim().slice(0, 32),
           chunk_max_chars: nextChunkMax,
           chunk_soft_split_chars: clampInt(
             draft.rag.chunk_soft_split_chars,
@@ -596,274 +530,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 }
 
 // ---------- Reusable building blocks ------------------------------------
-
-function EndpointField({
-  id,
-  value,
-  defaultUrl,
-  onChange,
-  help,
-  testId
-}: {
-  id: string
-  value: string
-  defaultUrl: string
-  onChange: (v: string) => void
-  help?: React.ReactNode
-  testId: string
-}) {
-  return (
-    <div className="settings-field">
-      <label className="settings-label" htmlFor={id}>
-        Endpoint
-      </label>
-      {help && <p className="settings-help">{help}</p>}
-      <div className="settings-row settings-row-wrap">
-        {ENDPOINT_PRESETS.map((p) => (
-          <button
-            key={p.url}
-            type="button"
-            className={`settings-preset ${value === p.url ? 'on' : ''}`}
-            onClick={() => onChange(p.url)}
-          >
-            {p.label}
-          </button>
-        ))}
-        <button
-          type="button"
-          className="settings-clear"
-          onClick={() => onChange(defaultUrl)}
-        >
-          Default
-        </button>
-      </div>
-      <input
-        id={id}
-        type="text"
-        className="settings-input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        data-testid={testId}
-      />
-      <EndpointCategoryBadge url={value} />
-    </div>
-  )
-}
-
-function EndpointCategoryBadge({ url }: { url: string }) {
-  const category = categoriseEndpoint(url)
-  if (category === 'unknown') return null
-  if (category === 'local') {
-    return (
-      <div
-        className="endpoint-badge endpoint-badge-local"
-        data-testid="endpoint-badge-local"
-      >
-        ● Local — traffic stays on your machine or LAN
-      </div>
-    )
-  }
-  // remote
-  let host = ''
-  try {
-    host = new URL(url).host
-  } catch {
-    host = url
-  }
-  return (
-    <div
-      className="endpoint-badge endpoint-badge-remote"
-      role="status"
-      data-testid="endpoint-badge-remote"
-    >
-      ⚠ External endpoint — messages and log excerpts will be sent to{' '}
-      <strong>{host}</strong>
-    </div>
-  )
-}
-
-function ApiKeyField({
-  id,
-  value,
-  onChange,
-  label,
-  testId
-}: {
-  id: string
-  value: string
-  onChange: (v: string) => void
-  label?: string
-  testId: string
-}) {
-  const [show, setShow] = useState(false)
-  return (
-    <div className="settings-field">
-      <label className="settings-label" htmlFor={id}>
-        {label ?? 'API key (blank for local LM Studio / Ollama)'}
-      </label>
-      <div className="settings-row">
-        <input
-          id={id}
-          type={show ? 'text' : 'password'}
-          className="settings-input"
-          value={value}
-          placeholder="sk-…"
-          autoComplete="off"
-          onChange={(e) => onChange(e.target.value)}
-          data-testid={testId}
-        />
-        <button
-          type="button"
-          className="settings-clear"
-          onClick={() => setShow((v) => !v)}
-          title={show ? 'Hide key' : 'Show key'}
-        >
-          {show ? 'Hide' : 'Show'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ModelField({
-  id,
-  value,
-  defaultValue,
-  endpoint,
-  onChange,
-  help,
-  testId
-}: {
-  id: string
-  value: string
-  defaultValue: string
-  endpoint: string
-  onChange: (v: string) => void
-  help?: React.ReactNode
-  testId: string
-}) {
-  // Discover is lazy — we never auto-fetch on mount. Users often open
-  // Settings *because* the endpoint is broken; a hanging fetch on
-  // open is the worst UX. The dropdown only appears after an explicit
-  // click; an error inlines below the button so the form stays usable.
-  const [discoverStatus, setDiscoverStatus] = useState<
-    'idle' | 'loading' | 'ok' | 'err'
-  >('idle')
-  const [discovered, setDiscovered] = useState<string[]>([])
-  const [discoverError, setDiscoverError] = useState<string | null>(null)
-  const [showList, setShowList] = useState(false)
-
-  const discover = async () => {
-    const ep = endpoint.trim()
-    if (!ep) {
-      setDiscoverError('Set the endpoint first.')
-      setDiscoverStatus('err')
-      return
-    }
-    // Cached result from an earlier click against the same endpoint in
-    // this modal session — render it without hitting the network.
-    const cached = discoverCache.get(ep)
-    if (cached) {
-      if (cached.models.length > 0) {
-        setDiscovered(cached.models)
-        setDiscoverStatus('ok')
-        setShowList(true)
-      } else {
-        setDiscovered([])
-        setDiscoverError(cached.error ?? 'no models returned')
-        setDiscoverStatus('err')
-        setShowList(false)
-      }
-      return
-    }
-    setDiscoverStatus('loading')
-    setDiscoverError(null)
-    try {
-      const res = await api.discoverModels(ep)
-      discoverCache.set(ep, { models: res.models, error: res.error ?? null })
-      if (res.models.length === 0) {
-        setDiscovered([])
-        setDiscoverError(res.error ?? 'no models returned')
-        setDiscoverStatus('err')
-        setShowList(false)
-        return
-      }
-      setDiscovered(res.models)
-      setDiscoverStatus('ok')
-      setShowList(true)
-    } catch (err) {
-      setDiscoverError(err instanceof Error ? err.message : String(err))
-      setDiscoverStatus('err')
-      setShowList(false)
-    }
-  }
-
-  return (
-    <div className="settings-field">
-      <label className="settings-label" htmlFor={id}>
-        Model
-      </label>
-      {help && <p className="settings-help">{help}</p>}
-      <div className="settings-row">
-        <input
-          id={id}
-          type="text"
-          className="settings-input"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          data-testid={testId}
-        />
-        <button
-          type="button"
-          className="settings-pick"
-          onClick={() => void discover()}
-          disabled={discoverStatus === 'loading'}
-          title="Query the endpoint above for loaded models (LM Studio / OpenAI / Ollama)"
-          data-testid={`${testId}-discover`}
-        >
-          {discoverStatus === 'loading' ? '…' : '↻ Discover'}
-        </button>
-        <button
-          type="button"
-          className="settings-clear"
-          onClick={() => onChange(defaultValue)}
-        >
-          Default
-        </button>
-      </div>
-      {showList && discovered.length > 0 && (
-        <div className="settings-discovered" data-testid={`${testId}-list`}>
-          <p className="settings-meta">
-            {discovered.length} loaded — click to fill the field
-          </p>
-          <ul className="settings-discovered-list">
-            {discovered.map((m) => (
-              <li key={m}>
-                <button
-                  type="button"
-                  className={`settings-discovered-item${
-                    m === value ? ' on' : ''
-                  }`}
-                  onClick={() => {
-                    onChange(m)
-                    setShowList(false)
-                  }}
-                >
-                  {m}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {discoverStatus === 'err' && discoverError && (
-        <p className="settings-meta classify-last-error">
-          Discover failed: {discoverError}
-        </p>
-      )}
-    </div>
-  )
-}
 
 // Pill rendering shared between the Labels and Chat test rows so the
 // "OK / latency / extra" surface looks identical across panes.
@@ -2096,11 +1762,7 @@ function EmbeddingPane({
     setTestResult(null)
     try {
       const result = await api.ragTestEmbedding({
-        embed_endpoint: draft.embed_endpoint,
-        embed_model: draft.embed_model,
-        embed_api_key: draft.embed_api_key,
-        embed_query_prefix: draft.embed_query_prefix,
-        embed_document_prefix: draft.embed_document_prefix
+        embed_model: draft.embed_model
       })
       setTestResult(result)
       setTestStatus(result.ok ? 'ok' : 'fail')
@@ -2173,10 +1835,6 @@ function EmbeddingPane({
     })
   }
 
-  const usesNomicPrefixes =
-    draft.embed_query_prefix === NOMIC_QUERY_PREFIX &&
-    draft.embed_document_prefix === NOMIC_DOCUMENT_PREFIX
-
   const testText = testResult
     ? testResult.ok
       ? `OK · ${testResult.elapsed_ms} ms · dim ${testResult.dimension} · ${testResult.model}`
@@ -2191,139 +1849,18 @@ function EmbeddingPane({
       />
 
       <div className="settings-section">
-        <h3 className="settings-section-title">Inference</h3>
-        <EndpointField
-          id="rag-endpoint"
-          value={draft.embed_endpoint}
-          defaultUrl={rag.defaults.embed_endpoint}
-          onChange={(v) => onChange({ embed_endpoint: v })}
-          help="Usually the same server as the labels classifier — LM Studio can host a chat model and an embedding model side by side."
-          testId="rag-endpoint-input"
-        />
-        <ModelField
-          id="rag-model"
-          value={draft.embed_model}
-          defaultValue={rag.defaults.embed_model}
-          endpoint={draft.embed_endpoint}
-          onChange={(v) => onChange({ embed_model: v })}
-          help={
-            <>
-              For LM Studio that's the name shown in the model loader — e.g.{' '}
-              <code>nomic-ai/nomic-embed-text-v1.5</code> or{' '}
-              <code>BAAI/bge-m3</code>. <strong>Discover</strong> lists what's
-              loaded.
-            </>
-          }
-          testId="rag-model-input"
-        />
-        <ApiKeyField
-          id="rag-api-key"
-          value={draft.embed_api_key}
-          onChange={(v) => onChange({ embed_api_key: v })}
-          testId="rag-api-key-input"
-        />
-
+        <h3 className="settings-section-title">Embedding model</h3>
+        <p className="settings-help">
+          Runs inside Workbench — there is no server to start and nothing to
+          configure. The model downloads itself the first time it is used.
+          Changing it invalidates every existing chunk, so a re-ingest is
+          required afterwards.
+        </p>
         <div className="settings-field">
-          <label className="settings-label">Task-specific prefixes</label>
+          <label className="settings-label">{rag.embed_model}</label>
           <p className="settings-help">
-            Only the <code>nomic-embed-text-*</code> family requires these — they
-            drop recall ~30% without them. BGE, e5, Voyage, Gemini and most
-            others ignore prefixes; leave blank.
-          </p>
-          <div className="settings-row">
-            <button
-              type="button"
-              className={`settings-preset ${usesNomicPrefixes ? 'on' : ''}`}
-              onClick={() =>
-                onChange({
-                  embed_query_prefix: NOMIC_QUERY_PREFIX,
-                  embed_document_prefix: NOMIC_DOCUMENT_PREFIX
-                })
-              }
-              data-testid="rag-prefix-nomic"
-            >
-              Use nomic prefixes
-            </button>
-            <button
-              type="button"
-              className="settings-clear"
-              onClick={() =>
-                onChange({ embed_query_prefix: '', embed_document_prefix: '' })
-              }
-              data-testid="rag-prefix-clear"
-            >
-              Clear
-            </button>
-          </div>
-          <div className="settings-row">
-            <label htmlFor="rag-query-prefix" className="settings-row-label settings-row-label-wide">
-              Query
-            </label>
-            <input
-              id="rag-query-prefix"
-              type="text"
-              className="settings-input"
-              value={draft.embed_query_prefix}
-              placeholder="(none)"
-              onChange={(e) => onChange({ embed_query_prefix: e.target.value })}
-              data-testid="rag-query-prefix-input"
-            />
-          </div>
-          <div className="settings-row">
-            <label htmlFor="rag-doc-prefix" className="settings-row-label settings-row-label-wide">
-              Document
-            </label>
-            <input
-              id="rag-doc-prefix"
-              type="text"
-              className="settings-input"
-              value={draft.embed_document_prefix}
-              placeholder="(none)"
-              onChange={(e) => onChange({ embed_document_prefix: e.target.value })}
-              data-testid="rag-doc-prefix-input"
-            />
-          </div>
-        </div>
-
-        <div className="settings-field">
-          <label className="settings-label" htmlFor="rag-embed-keep-alive">
-            Chat query keep-alive
-          </label>
-          <p className="settings-help">
-            How long Ollama should keep the embedding model resident after
-            embedding a chat question. Short values (e.g. <code>30s</code>)
-            free VRAM quickly on tight cards so it doesn't fight your chat
-            model. Leave blank to use the server default (~5 min). Ignored
-            by LM Studio and other servers that don't honour keep_alive.
-          </p>
-          <div className="settings-row">
-            <input
-              id="rag-embed-keep-alive"
-              type="text"
-              className="settings-input"
-              value={draft.embed_keep_alive}
-              placeholder="(server default)"
-              onChange={(e) => onChange({ embed_keep_alive: e.target.value })}
-              data-testid="rag-embed-keep-alive-input"
-            />
-            <button
-              type="button"
-              className="settings-reset"
-              onClick={() =>
-                onChange({ embed_keep_alive: rag.defaults.embed_keep_alive })
-              }
-              data-testid="rag-embed-keep-alive-reset"
-            >
-              Default ({rag.defaults.embed_keep_alive || 'unset'})
-            </button>
-          </div>
-        </div>
-
-        <div className="settings-field">
-          <label className="settings-label">Test connection</label>
-          <p className="settings-help">
-            One canned embedding roundtrip. Validates the endpoint, that the
-            model is loaded, and reports the vector dimension.
+            Chunk size follows this model's context window automatically; a
+            chunk longer than the window would be silently truncated.
           </p>
           <div className="settings-actions">
             <button
@@ -2333,7 +1870,7 @@ function EmbeddingPane({
               disabled={testStatus === 'running'}
               data-testid="rag-test-embedding"
             >
-              {testStatus === 'running' ? 'Testing…' : 'Test connection'}
+              {testStatus === 'running' ? 'Checking…' : 'Check model'}
             </button>
             {testResult && (
               <TestStatusPill

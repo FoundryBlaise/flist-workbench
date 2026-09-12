@@ -72,10 +72,10 @@ def search_logs_semantic(
         raise ToolError("no_index", str(exc)) from exc
     except rag_embed.EmbedError as exc:
         raise ToolError(
-            "embedding_unreachable",
-            f"The embedding endpoint didn't answer: {exc}. It is "
-            "configured in Settings → RAG · Embedding and has to be "
-            "running for search to work.",
+            "embedding_failed",
+            f"The embedding model could not be used: {exc}. It runs "
+            "inside Workbench and downloads itself on first use, so "
+            "this is usually a download problem rather than a setting.",
         ) from exc
 
     payload = result.to_dict()

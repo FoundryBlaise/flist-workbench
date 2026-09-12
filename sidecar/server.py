@@ -1682,20 +1682,15 @@ def labels_stats_all(char: str) -> dict:
 
 
 class RagTestEmbeddingRequest(BaseModel):
-    # All optional — when omitted we pull from saved settings. The
-    # renderer typically posts the current edit-state so the user can
-    # test before saving, mirroring /labels/test-connection.
-    embed_endpoint: str | None = None
+    # Optional — omitted means "the saved model". Kept so a model can be
+    # tried before it is saved.
     embed_model: str | None = None
-    embed_api_key: str | None = None
-    embed_query_prefix: str | None = None
-    embed_document_prefix: str | None = None
 
 
 @app.post("/rag/test-embedding")
 def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
-    """One canned embedding roundtrip — validates endpoint + model +
-    that the model is actually loaded in LM Studio / equivalent.
+    """One canned embedding — validates that the model loads and says
+    what dimension it produces.
 
     Returns latency + dimension on success; ok=false + structured
     error string on failure. Same 200-always shape as
@@ -1704,26 +1699,14 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> dict:
     import time as _time
 
     saved = rag_settings.load_settings()
-    # Only the embedding-side fields are overridable from this endpoint
-    # — rerank / retrieval tunables ride on saved settings to keep the
-    # test surface tight. `replace` rather than a field-by-field copy so
-    # a new RagSettings field can't silently go missing here.
-    overrides = {
-        name: value
-        for name, value in (
-            ("embed_endpoint", body.embed_endpoint or None),
-            ("embed_model", body.embed_model or None),
-            ("embed_api_key", body.embed_api_key),
-            ("embed_query_prefix", body.embed_query_prefix),
-            ("embed_document_prefix", body.embed_document_prefix),
-        )
-        if value is not None
-    }
-    merged = dataclasses.replace(saved, **overrides)
+    merged = (
+        dataclasses.replace(saved, embed_model=body.embed_model)
+        if body.embed_model
+        else saved
+    )
 
-    # 60 s probe budget: cold-loading a 768-dim model in LM Studio
-    # takes 15–30 s; loaded-already returns in <1 s. 60 s leaves a
-    # cushion without making "endpoint unreachable" feel forever.
+    # First call downloads the model and deserialises the ONNX graph;
+    # after that it is milliseconds.
     test_timeout = 60.0
     started = _time.monotonic()
     try:
@@ -2098,12 +2081,7 @@ class RagSettingsUpdate(BaseModel):
     # default), but we still accept it as "clear" since the default
     # also happens to be empty.
     # "local" (in-process ONNX) or "endpoint" (OpenAI-compatible server).
-    embed_backend: str | None = None
-    embed_endpoint: str | None = None
     embed_model: str | None = None
-    embed_api_key: str | None = None
-    embed_query_prefix: str | None = None
-    embed_document_prefix: str | None = None
     # Retrieval fields. None = untouched; "" = reset to default.
     # Numeric fields are int|None — empty string isn't meaningful for an
     # int. The renderer just sends None when the user wants the default.
@@ -2116,10 +2094,6 @@ class RagSettingsUpdate(BaseModel):
     rerank_min_ratio: float | None = None
     hybrid_enabled: bool | None = None
     hybrid_bm25_candidates: int | None = None
-    # Empty string clears the override and lets the server default fire
-    # (Ollama: ~5 min keep_alive). Free-text so users can write Ollama's
-    # duration grammar verbatim ("30s", "1m", "0").
-    embed_keep_alive: str | None = None
     chunk_max_chars: int | None = None
     chunk_soft_split_chars: int | None = None
     chunk_overlap_msgs: int | None = None
@@ -2169,12 +2143,7 @@ def _settings_dict(conn) -> dict:
             },
         },
         "rag": {
-            "embed_backend": rag.embed_backend,
-            "embed_endpoint": rag.embed_endpoint,
             "embed_model": rag.embed_model,
-            "embed_api_key": rag.embed_api_key,
-            "embed_query_prefix": rag.embed_query_prefix,
-            "embed_document_prefix": rag.embed_document_prefix,
             "rerank_model": rag.rerank_model,
             "rerank_candidates": rag.rerank_candidates,
             "top_k": rag.top_k,
@@ -2182,16 +2151,11 @@ def _settings_dict(conn) -> dict:
             "rerank_min_ratio": rag.rerank_min_ratio,
             "hybrid_enabled": rag.hybrid_enabled,
             "hybrid_bm25_candidates": rag.hybrid_bm25_candidates,
-            "embed_keep_alive": rag.embed_keep_alive,
             "chunk_max_chars": rag.chunk_max_chars,
             "chunk_soft_split_chars": rag.chunk_soft_split_chars,
             "chunk_overlap_msgs": rag.chunk_overlap_msgs,
             "defaults": {
-                "embed_endpoint": rag_settings.DEFAULT_EMBED_ENDPOINT,
                 "embed_model": rag_settings.DEFAULT_EMBED_MODEL,
-                "embed_api_key": rag_settings.DEFAULT_EMBED_API_KEY,
-                "embed_query_prefix": rag_settings.DEFAULT_EMBED_QUERY_PREFIX,
-                "embed_document_prefix": rag_settings.DEFAULT_EMBED_DOCUMENT_PREFIX,
                 "rerank_model": rag_settings.DEFAULT_RERANK_MODEL,
                 "rerank_candidates": rag_settings.DEFAULT_RERANK_CANDIDATES,
                 "top_k": rag_settings.DEFAULT_TOP_K,
@@ -2199,7 +2163,6 @@ def _settings_dict(conn) -> dict:
                 "rerank_min_ratio": rag_settings.DEFAULT_RERANK_MIN_RATIO,
                 "hybrid_enabled": rag_settings.DEFAULT_HYBRID_ENABLED,
                 "hybrid_bm25_candidates": rag_settings.DEFAULT_HYBRID_BM25_CANDIDATES,
-                "embed_keep_alive": rag_settings.DEFAULT_EMBED_KEEP_ALIVE,
                 "chunk_max_chars": rag_settings.DEFAULT_CHUNK_MAX_CHARS,
                 "chunk_soft_split_chars": rag_settings.DEFAULT_CHUNK_SOFT_SPLIT_CHARS,
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
@@ -2280,110 +2243,29 @@ def _backups_settings_dict(conn) -> dict:
 
 
 class DiscoverModelsRequest(BaseModel):
-    """Endpoint URL for one inference server to enumerate.
-
-    The renderer sends the current text-field value (not the saved
-    settings) so the user can discover before they hit Save. We don't
-    require any of the other settings — just the URL the user typed.
-    """
-    endpoint: str
+    """No fields — kept so the route keeps its POST shape."""
 
 
 @app.post("/settings/discover-models")
 def settings_discover_models(body: DiscoverModelsRequest) -> dict:
-    """Enumerate models on an OpenAI-compatible or Ollama endpoint.
+    """The embedding models that can be selected.
 
-    Tries `<endpoint>/models` first (OpenAI shape — LM Studio, OpenAI
-    itself, llamafile). Falls back to `<endpoint>/api/tags` (Ollama).
-    Returns `{models: list[str], source: 'openai'|'ollama'|'unknown',
-    error: str | None}`. 200-always — failure surfaces as ok=false-ish
-    via empty `models` + populated `error`.
-
-    Proxied through the sidecar (instead of the renderer fetching
-    directly) because: (a) some configs of LM Studio omit CORS headers,
-    so a browser-side fetch silently fails; (b) the sidecar already
-    has the URL parsing + timeout patterns we want.
+    This used to enumerate whatever an inference server had loaded.
+    Embedding runs in-process now, so the honest answer is fastembed's
+    own catalogue — with the dimension, download size and licence, since
+    those are what the choice actually turns on. Licence matters:
+    the catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0.
     """
-    import time as _time
-    from urllib.error import HTTPError, URLError
-    from urllib.request import Request, urlopen
+    import rag_embed_local
 
-    endpoint = body.endpoint.strip()
-    if not endpoint:
-        return {"models": [], "source": "unknown", "error": "endpoint is empty"}
-
-    # Short timeout — discovery runs on a user button click and the
-    # right answer for "endpoint is wrong" is fast feedback, not a
-    # 60 s wait. Cold-loaded models don't need to be ready to be
-    # listed; the /models endpoint is metadata-only.
-    timeout = 5.0
-    base = endpoint.rstrip("/")
-
-    def _try(url: str) -> tuple[int, str]:
-        req = Request(url, headers={"Accept": "application/json"})
-        with urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", errors="replace")
-
-    started = _time.monotonic()
-    # Order: /models then /api/tags. LM Studio and OpenAI answer
-    # /models; Ollama answers /api/tags. Trying both in sequence is
-    # cheap (5 s each worst-case) and avoids asking the user "is this
-    # Ollama or OpenAI?".
-    last_error: str | None = None
-    for candidate, source in (
-        (f"{base}/models", "openai"),
-        (f"{base}/api/tags", "ollama"),
-    ):
-        try:
-            _status, body_text = _try(candidate)
-        except HTTPError as exc:
-            # 404 from LM Studio means "no /models route" — keep trying
-            # the Ollama URL. 401/403 means auth issue — surface and stop.
-            if exc.code in (401, 403):
-                last_error = f"HTTP {exc.code} from {candidate}: {exc.reason}"
-                break
-            last_error = f"HTTP {exc.code} from {candidate}"
-            continue
-        except URLError as exc:
-            last_error = f"connection failed: {exc.reason}"
-            continue
-        except TimeoutError:
-            last_error = f"timed out after {int(timeout)} s"
-            continue
-        except Exception as exc:  # noqa: BLE001 — surface to UI
-            last_error = f"{type(exc).__name__}: {exc}"
-            continue
-        try:
-            payload = json.loads(body_text)
-        except json.JSONDecodeError:
-            last_error = f"non-JSON response from {candidate}"
-            continue
-        models: list[str] = []
-        if source == "openai":
-            # OpenAI shape: {data: [{id: "...", ...}, ...]}
-            data = payload.get("data") if isinstance(payload, dict) else None
-            if isinstance(data, list):
-                for entry in data:
-                    if isinstance(entry, dict) and isinstance(entry.get("id"), str):
-                        models.append(entry["id"])
-        else:
-            # Ollama shape: {models: [{name: "...", ...}, ...]}
-            data = payload.get("models") if isinstance(payload, dict) else None
-            if isinstance(data, list):
-                for entry in data:
-                    if isinstance(entry, dict) and isinstance(entry.get("name"), str):
-                        models.append(entry["name"])
-        return {
-            "models": sorted(set(models)),
-            "source": source,
-            "error": None,
-            "elapsed_ms": int((_time.monotonic() - started) * 1000),
-        }
+    try:
+        models = rag_embed_local.available_models()
+    except Exception as exc:  # noqa: BLE001 — surfaces in the UI
+        return {"models": [], "source": "local", "error": str(exc)}
     return {
-        "models": [],
-        "source": "unknown",
-        "error": last_error or "no models endpoint responded",
-        "elapsed_ms": int((_time.monotonic() - started) * 1000),
+        "models": sorted(models, key=lambda m: m["model"]),
+        "source": "local",
+        "error": None,
     }
 
 
@@ -2448,44 +2330,14 @@ def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
         settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(n))
 
 
-def _embed_model_key(conn) -> str:
-    """Which model key `embed_model` addresses, given the active backend.
-
-    The two backends name models differently, so they keep separate
-    keys — but callers only ever see one `embed_model` field. Routing it
-    here means switching backend never hands the other side an id it
-    cannot load.
-    """
-    current = (
-        settings_store.get(conn, settings_store.KEY_RAG_EMBED_BACKEND)
-        or rag_settings.DEFAULT_EMBED_BACKEND
-    ).strip().lower()
-    return (
-        settings_store.KEY_RAG_LOCAL_EMBED_MODEL
-        if current == rag_settings.BACKEND_LOCAL
-        else settings_store.KEY_RAG_EMBED_MODEL
-    )
-
-
 def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
     """Persist each RAG field that was supplied.
 
     Same convention as _apply_labels_update: None leaves the field
     untouched, empty string clears (falls back to default on read).
     """
-    if update.embed_backend is not None:
-        wanted = str(update.embed_backend).strip().lower()
-        if wanted in (rag_settings.BACKEND_LOCAL, rag_settings.BACKEND_ENDPOINT):
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_EMBED_BACKEND, wanted
-            )
-
     for field, key in (
-        ("embed_endpoint", settings_store.KEY_RAG_EMBED_ENDPOINT),
-        ("embed_model", _embed_model_key(conn)),
-        ("embed_api_key", settings_store.KEY_RAG_EMBED_API_KEY),
-        ("embed_query_prefix", settings_store.KEY_RAG_EMBED_QUERY_PREFIX),
-        ("embed_document_prefix", settings_store.KEY_RAG_EMBED_DOCUMENT_PREFIX),
+        ("embed_model", settings_store.KEY_RAG_EMBED_MODEL),
         ("rerank_model", settings_store.KEY_RAG_RERANK_MODEL),
     ):
         value = getattr(update, field)
@@ -2522,15 +2374,6 @@ def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
         n = max(1, min(200, int(update.hybrid_bm25_candidates)))
         settings_store.set_value(
             conn, settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES, str(n)
-        )
-    if update.embed_keep_alive is not None:
-        # Free-text: Ollama accepts "30s" / "1m" / "0" / integer seconds.
-        # Trim, clamp to a sane upper bound on length (no validation —
-        # the server returns 400 if the grammar is wrong, which surfaces
-        # on the next search).
-        raw = update.embed_keep_alive.strip()[:32]
-        settings_store.set_value(
-            conn, settings_store.KEY_RAG_EMBED_KEEP_ALIVE, raw
         )
     if update.chunk_max_chars is not None:
         n = max(500, min(20000, int(update.chunk_max_chars)))

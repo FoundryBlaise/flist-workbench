@@ -26,11 +26,7 @@ def store(tmp_path: Path) -> rag_store.RagStore:
 @pytest.fixture
 def rag_set() -> rag_settings.RagSettings:
     return rag_settings.RagSettings(
-        embed_endpoint="http://test/v1",
-        embed_model="test-embed",
-        embed_api_key="",
-        embed_query_prefix="",
-        embed_document_prefix="",
+        embed_model="test/embed",
         rerank_model="disabled",
         rerank_candidates=30,
         top_k=5,
@@ -38,7 +34,6 @@ def rag_set() -> rag_settings.RagSettings:
         rerank_min_ratio=0.0,
         hybrid_enabled=False,
         hybrid_bm25_candidates=30,
-        embed_keep_alive="",
         chunk_max_chars=5000,
         chunk_soft_split_chars=4000,
         chunk_overlap_msgs=1,

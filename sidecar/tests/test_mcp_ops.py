@@ -404,17 +404,18 @@ async def test_extension_pairing_is_read_only(workbench) -> None:
 # ---- settings ----------------------------------------------------------
 
 
-async def test_settings_never_return_the_api_key(workbench) -> None:
-    import settings as settings_store
-
-    conn = settings_store.connect()
-    settings_store.set_value(conn, settings_store.KEY_RAG_EMBED_API_KEY, "sk-secret")
-    conn.close()
-
+async def test_settings_expose_no_inference_server(workbench) -> None:
+    """There is nothing to point at any more, so there is nothing to
+    leak: no endpoint URL, no API key, no keep-alive. The API key used to
+    be reported as a boolean so it could never appear in a transcript;
+    now the field is simply gone."""
     async with mcp_client("character") as session:
         _, body = await call_tool(session, "get_settings")
-    assert body["embedding"]["api_key_set"] is True
-    assert "sk-secret" not in json.dumps(body)
+    embedding = body["embedding"]
+    assert set(embedding) == {"model", "runs"}
+    rendered = json.dumps(body)
+    for leak in ("endpoint", "api_key", "keep_alive", "11434", "1234"):
+        assert leak not in rendered, leak
 
 
 async def test_update_settings_clamps_and_reports(workbench) -> None:

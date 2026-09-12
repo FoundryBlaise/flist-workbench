@@ -33,8 +33,14 @@ stays in-app is data plumbing only:
    interaction. MCP tools must say so in their descriptions so models
    never claim to have "published" anything.
 2. **No LLM calls inside Workbench.** Classification, summarising,
-   rewriting — all done by the connected model via MCP tools. Only the
-   embedding endpoint (for ingest + query vectors) remains.
+   rewriting — all done by the connected model via MCP tools.
+   *Amended after the build:* the embedding endpoint is gone too, but
+   not by moving it to the client — MCP has `sampling/createMessage`
+   for completions and nothing that returns vectors, so embedding
+   cannot be delegated. It runs in-process instead (ONNX via
+   fastembed, like the reranker), which is what makes "install
+   nothing, attach a client, ask" true. Two models now live in the
+   sidecar; neither is a language model.
 3. The reranker stays, switchable off (D2).
 4. `/mcp` runs without a token by default; a bearer token is an
    opt-in feature in Settings (D3).

@@ -179,7 +179,7 @@ Tool errors carry a stable code as their first word:
 | `etag_conflict` | the window saved while the edit was in flight |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
 | `no_index` | nothing ingested yet |
-| `embedding_unreachable` | the embedding endpoint isn't answering |
+| `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |
 
 ## For reference
