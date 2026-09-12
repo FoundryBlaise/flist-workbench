@@ -82,6 +82,62 @@ def _utc_date(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _split_long_message(m: dict, *, max_chars: int) -> list[dict]:
+    """Break one over-long message into several, on text boundaries.
+
+    `_split_oversize` only ever splits *between* messages, which is fine
+    while the cap is large. It is not fine once the cap follows an
+    embedding model's token window: a single roleplay post routinely runs
+    to three thousand characters, so it became one chunk of its own and
+    the model silently read the first few hundred characters of it. This
+    splits within the post — paragraphs first, then sentences, then a
+    hard cut — so every piece actually fits.
+
+    The pieces keep the original timestamp and speaker; they differ only
+    in text. Ordering is preserved, so the prev/next chain a query walks
+    for context still reads as one continuous post.
+    """
+    text = (m.get("text") or "").strip()
+    # The rendered line carries "[date time] speaker: " in front of the
+    # text, and that prefix counts against the window too.
+    overhead = len(_fmt_line({**m, "text": ""}))
+    budget = max(80, max_chars - overhead)
+    if len(text) <= budget:
+        return [m]
+
+    pieces: list[str] = []
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= budget:
+            pieces.append(para)
+            continue
+        # Sentence-ish boundaries, keeping the delimiter with the
+        # sentence. BBCode and roleplay punctuation make a real sentence
+        # splitter pointless here; this is about not cutting mid-word.
+        current = ""
+        for sentence in re.split(r"(?<=[.!?…])\s+", para):
+            if not sentence:
+                continue
+            if len(sentence) > budget:
+                if current:
+                    pieces.append(current)
+                    current = ""
+                for i in range(0, len(sentence), budget):
+                    pieces.append(sentence[i : i + budget])
+                continue
+            if len(current) + 1 + len(sentence) > budget and current:
+                pieces.append(current)
+                current = sentence
+            else:
+                current = f"{current} {sentence}".strip()
+        if current:
+            pieces.append(current)
+
+    return [{**m, "text": piece} for piece in pieces] or [m]
+
+
 def _split_oversize(
     msgs: list[dict],
     *,
@@ -95,6 +151,14 @@ def _split_oversize(
     """
     if _total_chars(msgs, speaker_map) <= max_chars:
         return [msgs]
+
+    # Expand any single message that cannot fit on its own before
+    # grouping — otherwise it lands in a part of its own and blows the
+    # cap no matter how the parts are arranged.
+    expanded: list[dict] = []
+    for m in msgs:
+        expanded.extend(_split_long_message(m, max_chars=max_chars))
+    msgs = expanded
 
     def line_len(m: dict) -> int:
         speaker = (speaker_map or {}).get(m["speaker"])
