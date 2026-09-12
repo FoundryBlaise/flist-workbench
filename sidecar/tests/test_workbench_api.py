@@ -86,6 +86,9 @@ def test_a_read_only_render_can_ask_without_creating_one(client) -> None:
 
     body = api.get("/flist/character/42/workbench?create=false").json()
     assert body["workbench"] is None
+    # Not the same nothing as "never pulled": the window offers the row
+    # in this case and hides it in the other.
+    assert body["reason"] == "not_created_yet"
     assert archive.list_sets("42") == []
 
 
