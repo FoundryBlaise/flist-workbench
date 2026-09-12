@@ -154,13 +154,68 @@ set_message_labels(character, partner, [...]) the verdicts
 
 Each batch reports how many are left and roughly how many more calls
 that means. Worth telling the user before starting: on a long log this
-is dozens of rounds. With LM Studio that is time; with a hosted model
-it is tokens.
+is dozens of rounds — a real run labelled about 15 messages a minute, so
+1500 messages took under two hours. With a local model that is time;
+with a hosted model it is tokens.
 
 The guidelines come in German (the default), English and a
 language-agnostic minimal version. They are the same prompts the
 in-app classifier used, so verdicts stay comparable with anything
 labelled before.
+
+Every batch also carries the decision rule in short form, and every
+write reports how many messages are still unjudged. That is not
+redundancy. A long loop fills the client's context, the client starts
+dropping turns, and the first turn to go is the system prompt — holding
+the rulebook and the loop protocol. "Re-fetch the guidelines if you
+lose them" does not help, because that instruction is in the block that
+gets dropped. So each batch is a complete work order: it says how to
+judge, where you are, and what to do next, and a model can run the
+whole loop with no memory of how it started.
+
+### Running it without running out of context
+
+Tool schemas are charged to the context before any work happens. There
+is therefore a floor under every single call:
+
+    tool schemas + one batch of messages
+
+and no client setting can go below it. This is worth spelling out
+because it is the failure people hit first, and because it looks like
+something a context-overflow policy should solve. It isn't: those
+policies manage the *history*. When one request on its own exceeds the
+window, discarding history changes nothing.
+
+Measured against a running sidecar:
+
+| | schema | with one 10-message batch |
+|---|---|---|
+| `/mcp` (70 tools) | ~13700 | does not fit in 24k |
+| `/mcp/logs` (29 tools) | ~5800 | ~14900 |
+| `/mcp/classify` (8 tools) | ~1500 | ~10600 |
+
+So: point a labelling run at **`/mcp/classify`**. It carries only the
+eight tools the loop calls, which is the one change that lowers the
+floor rather than shuffling what sits above it.
+
+If a batch is still too large, shrink it rather than the context:
+`limit=5` roughly halves the payload, and `context_after=0` takes
+another slice off. Keep `context_before=1` if you can — the preceding
+message is what settles the awkward cases, like a short greeting
+between two in-character posts.
+
+In LM Studio, set the context-overflow policy to **Truncate Middle**.
+Of the three (`stopAtLimit`, `rollingWindow`, `truncateMiddle`) it is
+the only one that fits this shape of work: it keeps the top, where the
+rulebook is, and the bottom, where the current batch is, and discards
+the middle — which is old batches, and those are exactly what the
+self-contained design makes disposable. It also leaves the prompt
+prefix intact, so prefix caching keeps working; a rolling window moves
+the start of the prompt and costs a full reprocess every round. A real
+run got through 1500 messages this way with no drop in speed or
+quality. `stopAtLimit` is the honest setting while you are still
+calibrating, because it tells you rather than quietly dropping
+something.
 
 ## Sharing the app with the window
 
