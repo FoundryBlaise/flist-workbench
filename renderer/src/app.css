@@ -976,6 +976,13 @@ body {
   text-align: center;
 }
 .tool:hover { background: #4a4a4a; }
+/* Read-only document: the bar holds its place so the text below does
+   not move, and says plainly that it is out of service. */
+.tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tool:disabled:hover { background: var(--tag-bg); }
 .tool-view-mode {
   margin-left: auto;
   display: inline-flex;

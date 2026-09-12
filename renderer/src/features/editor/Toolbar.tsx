@@ -132,10 +132,12 @@ function wrapSelection(view: EditorView, open: string, close: string) {
 
 function ToolButton({
   action,
-  viewRef
+  viewRef,
+  disabled
 }: {
   action: ToolbarAction
   viewRef: RefObject<EditorView | null>
+  disabled?: boolean
 }) {
   const title = action.shortcut ? `${action.title} (${shortcutLabel(action.shortcut)})` : action.title
   const [popoverOpen, setPopoverOpen] = useState(false)
@@ -174,9 +176,10 @@ function ToolButton({
       <button
         type="button"
         className="tool"
-        title={title}
+        title={disabled ? `${title} — read-only` : title}
         aria-label={title}
         aria-expanded={action.popover ? popoverOpen : undefined}
+        disabled={disabled}
         onClick={handleClick}
       >
         {action.label}
@@ -417,7 +420,23 @@ function EiconPopover({
   )
 }
 
-export function Toolbar({ viewRef }: { viewRef: RefObject<EditorView | null> }) {
+/** The BBCode bar, and the one place the Code/Split/Preview toggle
+ *  lives.
+ *
+ *  `disabled` dims the formatting buttons for a read-only document
+ *  instead of unmounting the bar. The bar is 27px of chrome above the
+ *  text: dropping it moved every line up by that much, so toggling
+ *  between Live on F-List and the Workbench made the passage you were
+ *  reading jump — worst at the top of the document, where there is no
+ *  scroll position to anchor it. The view-mode toggle stays live
+ *  either way; choosing how to look at a document is not an edit. */
+export function Toolbar({
+  viewRef,
+  disabled
+}: {
+  viewRef: RefObject<EditorView | null>
+  disabled?: boolean
+}) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreWrapRef = useRef<HTMLDivElement>(null)
   const overflowGroup = TOOLBAR_GROUPS.find((g) => g.overflow)
@@ -441,11 +460,22 @@ export function Toolbar({ viewRef }: { viewRef: RefObject<EditorView | null> }) 
   }, [moreOpen])
 
   return (
-    <div className="editor-toolbar" role="toolbar" aria-label="BBCode formatting">
+    <div
+      className="editor-toolbar"
+      role="toolbar"
+      aria-label="BBCode formatting"
+      data-disabled={disabled ? 'true' : undefined}
+      data-testid="editor-toolbar"
+    >
       {visibleGroups.map((group, idx) => (
         <span key={group.key} className="tool-group" data-group={group.key}>
           {group.actions.map((a) => (
-            <ToolButton key={a.label} action={a} viewRef={viewRef} />
+            <ToolButton
+              key={a.label}
+              action={a}
+              viewRef={viewRef}
+              disabled={disabled}
+            />
           ))}
           {idx < visibleGroups.length - 1 && <span className="tool-divider" aria-hidden />}
         </span>
@@ -458,7 +488,8 @@ export function Toolbar({ viewRef }: { viewRef: RefObject<EditorView | null> }) 
             className="tool tool-more"
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
-            title="More tags"
+            disabled={disabled}
+            title={disabled ? 'More tags — read-only' : 'More tags'}
           >
             more…
           </button>

@@ -592,7 +592,10 @@ function EditorWorkspace() {
   // Diff). Force split for those so a leftover 'preview' mode from
   // Description doesn't hide their editor side.
   const effectiveMode = editorActiveTab === 'description' ? viewMode : 'split'
-  const showToolbar = editorActiveTab === 'description' && !readOnly
+  // Always mounted on the Description tab, disabled when the
+  // document is read-only: unmounting it shifted the text up by
+  // the bar's height every time the user looked at Live.
+  const showToolbar = editorActiveTab === 'description'
 
   return (
     <div className="editor-workspace" data-testid="editor-workspace">
@@ -605,7 +608,7 @@ function EditorWorkspace() {
           testId="editor-tabs-bar"
         />
       )}
-      {showToolbar && <Toolbar viewRef={viewRef} />}
+      {showToolbar && <Toolbar viewRef={viewRef} disabled={readOnly} />}
       <div
         className="editor-workspace-row"
         data-view-mode={effectiveMode}
