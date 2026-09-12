@@ -642,3 +642,37 @@ async def test_cursor_zero_walks_the_whole_conversation(conversation) -> None:
         )
     assert stats["unlabeled"] == 0
     assert len(seen) == 2
+
+
+async def test_asking_for_more_than_ten_is_answered_with_a_warning(
+    conversation,
+) -> None:
+    """A model optimising for fewer round trips will raise the limit. The
+    tool description says not to, but a description is read once and the
+    response is read every round — so the warning goes in the response
+    too, naming the number that was asked for."""
+    async with mcp_client("logs") as session:
+        _, small = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+        )
+        _, big = await call_tool(
+            session,
+            "get_messages_to_classify",
+            character="Lady Amber Blaise",
+            partner="Daemon Enariel",
+            limit=80,
+        )
+    assert "recommended maximum" not in (small.get("note") or "")
+    assert "You asked for 80 messages" in big["note"]
+    assert "10 is the recommended maximum" in big["note"]
+
+
+async def test_the_workflow_tells_a_client_to_leave_the_limit_alone() -> None:
+    from workbench_mcp import tools_classify
+
+    joined = " ".join(tools_classify._WORKFLOW)
+    assert "10 messages at a time" in joined
+    assert "leave the limit alone" in joined
