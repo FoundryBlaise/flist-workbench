@@ -452,6 +452,21 @@ def test_a_single_long_post_is_split_to_fit_the_window() -> None:
     assert all(c["char_count"] <= 450 for c in chunks), [
         c["char_count"] for c in chunks
     ]
+    # Same again with the overlap the app ships: the carried tail must
+    # not push a part back over the cap it was just split to respect.
+    with_overlap = chunker.chunk_messages(
+        [m1],
+        character="Amber",
+        partner="Enariel",
+        labels_by_hash={labels_store.msg_hash(m1): _stored("IC")},
+        label_settings=_settings(),
+        max_chars=450,
+        soft_split=400,
+        overlap=2,
+    )
+    assert all(c["char_count"] <= 450 for c in with_overlap), [
+        c["char_count"] for c in with_overlap
+    ]
     # Nothing silently dropped: every paragraph still appears somewhere.
     joined = " ".join(c["text"] for c in chunks)
     assert joined.count("Die Wirtin steht hinter dem Tresen") >= 30
