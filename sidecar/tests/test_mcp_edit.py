@@ -64,33 +64,68 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     mapping_service.invalidate()
 
 
-def payload_of(archive, set_name: str = "Draft") -> dict[str, Any]:
-    meta = next(m for m in archive.list_sets("42") if m.name == set_name)
-    return archive.read_set_payload("42", meta.id) or {}
+def payload_of(archive) -> dict[str, Any]:
+    """The workbench payload. There is one per character, so nothing to
+    address it by."""
+    bench = archive.resolve_workbench("42", create=False)
+    assert bench is not None, "no workbench yet"
+    return archive.read_set_payload("42", bench.id) or {}
 
 
-async def make_draft(session, name: str = "Draft") -> dict[str, Any]:
+async def make_draft(session, name: str | None = None) -> dict[str, Any]:
+    """Open the character's workbench. `name` is accepted and ignored,
+    the way the tool itself now does."""
     _, body = await call_tool(
         session, "create_working_set", character="Lady Amber Blaise", name=name
     )
     return body
 
 
-# ---- working sets ------------------------------------------------------
+# ---- the workbench -----------------------------------------------------
 
 
-async def test_create_working_set_seeds_from_live_and_activates(
-    workbench,
-) -> None:
+async def test_the_workbench_starts_as_a_copy_of_live(workbench) -> None:
     async with mcp_client("character") as session:
         body = await make_draft(session)
         assert body["active"] is True
+        assert body["created"] is True
+        assert body["set"] == workbench.WORKBENCH_SET_NAME
         _, sets = await call_tool(
             session, "list_working_sets", character="Lady Amber Blaise"
         )
-    assert sets["active_set"] == "Draft"
+    assert sets["active_set"] == workbench.WORKBENCH_SET_NAME
     payload = payload_of(workbench)
     assert payload["character"]["description"] == "[b]Published.[/b]"
+
+
+async def test_opening_the_workbench_twice_returns_the_same_one(
+    workbench,
+) -> None:
+    """A character has one bench, so this is safe to call before editing
+    without checking first — which is why it does not need a name and
+    cannot make a second."""
+    async with mcp_client("character") as session:
+        first = await make_draft(session)
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="my unpublished edit",
+        )
+        second = await make_draft(session, "Something Else")
+
+        assert second["set_id"] == first["set_id"]
+        assert second["created"] is False
+        assert "already existed and is unchanged" in second["note"]
+
+        _, desc = await call_tool(
+            session, "get_description", character="Lady Amber Blaise"
+        )
+        _, sets = await call_tool(
+            session, "list_working_sets", character="Lady Amber Blaise"
+        )
+    assert desc["description"] == "my unpublished edit", "edits must survive"
+    assert len(sets["sets"]) == 1
 
 
 async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
@@ -112,50 +147,51 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
     assert payload["kinks"] == {"100": "fave"}
 
 
-async def test_create_from_another_set_copies_its_edits(workbench) -> None:
+async def test_the_old_source_argument_cannot_branch_a_second_draft(
+    workbench,
+) -> None:
+    """`source` used to accept live / set:<name> / backup:<file> and
+    produce another draft each time. It is accepted and ignored now, so
+    a caller written against the old contract gets the bench rather than
+    a surprise second copy."""
     async with mcp_client("character") as session:
-        await make_draft(session, "Main")
+        await make_draft(session)
         await call_tool(
             session,
             "set_description",
             character="Lady Amber Blaise",
-            text="edited in main",
+            text="edited on the bench",
         )
-        _, branched = await call_tool(
-            session,
-            "create_working_set",
-            character="Lady Amber Blaise",
-            name="AU",
-            source="set:Main",
+        for source in ("set:Workbench", "backup:whatever.zip", "magic"):
+            _, body = await call_tool(
+                session,
+                "create_working_set",
+                character="Lady Amber Blaise",
+                name="AU",
+                source=source,
+            )
+            assert body["set"] == workbench.WORKBENCH_SET_NAME
+        _, sets = await call_tool(
+            session, "list_working_sets", character="Lady Amber Blaise"
         )
-        assert branched["set"] == "AU"
         _, desc = await call_tool(
-            session, "get_description", character="Lady Amber Blaise", working_set="AU"
+            session, "get_description", character="Lady Amber Blaise"
         )
-    assert desc["description"] == "edited in main"
-
-
-async def test_an_unknown_source_lists_the_valid_forms(workbench) -> None:
-    async with mcp_client("character") as session:
-        result, _ = await call_tool(
-            session,
-            "create_working_set",
-            character="Lady Amber Blaise",
-            source="magic",
-        )
-    text = tool_error_text(result)
-    assert "validation_failed" in text
-    assert "backup:" in text
+    assert len(sets["sets"]) == 1
+    assert desc["description"] == "edited on the bench"
 
 
 async def test_deleting_a_set_needs_confirmation(workbench) -> None:
+    """Kept for the drafts an older version left behind — deleting a
+    character's only bench discards unpublished edits and gains nothing,
+    since the next call recreates it from Live."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        bench = await make_draft(session)
         result, _ = await call_tool(
             session,
             "delete_working_set",
             character="Lady Amber Blaise",
-            working_set="Draft",
+            working_set=bench["set"],
         )
         assert "confirm_required" in tool_error_text(result)
 
@@ -163,7 +199,7 @@ async def test_deleting_a_set_needs_confirmation(workbench) -> None:
             session,
             "delete_working_set",
             character="Lady Amber Blaise",
-            working_set="Draft",
+            working_set=bench["set"],
             confirm=True,
         )
     assert body["remaining_sets"] == []

@@ -918,6 +918,18 @@ async def flist_character_working_delete(character_id: str) -> dict:
 # ---- working sets v2 -------------------------------------------------
 
 
+class _LoadBackupBody(BaseModel):
+    """Load a backup into the workbench.
+
+    `back_up_first` is the window's third button — cancel, load, or back
+    up and load. Whether the current bench is worth keeping is the
+    user's call, not a default we pick for them.
+    """
+
+    filename: str
+    back_up_first: bool = False
+
+
 class _SetNameBody(BaseModel):
     name: str
 
@@ -949,6 +961,135 @@ def _require_valid_character_id(character_id: str) -> None:
         character_id
     ):
         raise HTTPException(status_code=400, detail="invalid character_id")
+
+
+@app.get("/flist/character/{character_id}/workbench")
+async def flist_character_workbench(character_id: str, create: bool = True) -> dict:
+    """The character's one editable copy, created from Live if needed.
+
+    The window asks for this instead of listing sets and picking one.
+    `create=false` answers "is there one yet" without making it so,
+    which is what a read-only render wants.
+    """
+    meta = character_archive.resolve_workbench(character_id, create=create)
+    if meta is None:
+        return {"workbench": None, "reason": "no_live"}
+    return {
+        "workbench": _set_meta_to_json(meta),
+        "active_set_id": character_archive.read_active_set_id(character_id),
+    }
+
+
+@app.post("/flist/character/{character_id}/workbench/load-backup")
+async def flist_character_workbench_load_backup(
+    character_id: str, body: _LoadBackupBody
+) -> dict:
+    """Replace the workbench contents with a backup's.
+
+    Destructive by design, so the window asks first — cancel, load, or
+    back up and load. `back_up_first` is that third button: it saves
+    what is currently on the bench before overwriting it, which is the
+    only way the user can be sure a misclick costs nothing.
+
+    `live_diverged` is reported back rather than enforced. A backup can
+    be older than the profile now on F-list, and loading it anyway is a
+    legitimate thing to want — the window says so and lets the user
+    decide.
+    """
+    filename = (body.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=422, detail="filename is required")
+
+    saved_first: dict | None = None
+    if body.back_up_first:
+        result = character_archive.save_zip_backup(
+            character_id, kind="manual_single", force=True
+        )
+        if result.get("saved"):
+            saved_first = {
+                "filename": result.get("filename"),
+                "created_at": result.get("created_at"),
+            }
+
+    try:
+        meta = character_archive.load_zip_backup_into_workbench(
+            character_id, filename
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "That backup predates the stored profile payload, so there "
+                "is nothing in it to load."
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "workbench": _set_meta_to_json(meta),
+        "loaded": filename,
+        "backed_up_first": saved_first,
+    }
+
+
+@app.get("/flist/character/{character_id}/workbench/load-backup/preflight")
+async def flist_character_workbench_load_preflight(
+    character_id: str, filename: str
+) -> dict:
+    """What the confirm dialog needs to say before overwriting the bench.
+
+    Answers two questions the user cannot see for themselves: whether
+    the bench currently holds anything that is not already in Live, and
+    whether F-list has moved on since the backup was taken.
+    """
+    filename = (filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=422, detail="filename is required")
+    entry = next(
+        (
+            e
+            for e in character_archive.list_zip_backups(character_id)
+            if e.get("filename") == filename
+        ),
+        None,
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="no such backup")
+
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    bench_has_edits = False
+    if bench is not None:
+        payload = character_archive.read_set_payload(character_id, bench.id)
+        if isinstance(payload, dict):
+            overlay = payload.get("_overlay")
+            bench_has_edits = bool(overlay)
+
+    # "Diverged" means the profile on F-list was pulled after this
+    # backup was taken, so the backup is not a picture of what is up
+    # there now. Cheap and honest: a timestamp comparison, not a diff.
+    live_pulled_at = None
+    live = character_archive.read_live(character_id)
+    if isinstance(live, dict):
+        fetched = live.get("fetched_at")
+        if isinstance(fetched, (int, float)):
+            live_pulled_at = int(fetched)
+    created_at = entry.get("created_at")
+    live_diverged = bool(
+        live_pulled_at is not None
+        and isinstance(created_at, (int, float))
+        and live_pulled_at > int(created_at)
+    )
+
+    return {
+        "filename": filename,
+        "backup_created_at": created_at,
+        "live_pulled_at": live_pulled_at,
+        "live_diverged": live_diverged,
+        "workbench_has_edits": bench_has_edits,
+    }
 
 
 @app.get("/flist/character/{character_id}/sets")

@@ -153,27 +153,50 @@ async def test_a_backup_note_becomes_the_backups_name(workbench) -> None:
     assert listed["backups"][0]["name"] == "before the rewrite"
 
 
-async def test_a_backup_can_seed_a_working_set(workbench) -> None:
-    """The round trip the backup exists for."""
+async def test_a_backup_loads_back_into_the_workbench(workbench) -> None:
+    """The round trip the backup exists for. It replaces the bench in
+    place — the old path made a *new* draft from the backup, which is one
+    of the ways a user ended up with several and lost track of which one
+    they were editing."""
     async with mcp_client("character") as session:
+        await call_tool(
+            session, "create_working_set", character="Lady Amber Blaise"
+        )
         _, backup = await call_tool(
             session, "create_backup", character="Lady Amber Blaise"
         )
-        _, created = await call_tool(
+        await call_tool(
             session,
-            "create_working_set",
+            "set_description",
             character="Lady Amber Blaise",
-            name="Restored",
-            source=f"backup:{backup['filename']}",
+            text="[b]Work in progress.[/b]",
         )
-        assert created["set"] == "Restored"
-        _, desc = await call_tool(
+
+        result, _ = await call_tool(
             session,
-            "get_description",
+            "load_backup_into_workbench",
             character="Lady Amber Blaise",
-            working_set="Restored",
+            backup=backup["filename"],
+        )
+        assert "confirm_required" in tool_error_text(result)
+
+        _, loaded = await call_tool(
+            session,
+            "load_backup_into_workbench",
+            character="Lady Amber Blaise",
+            backup=backup["filename"],
+            confirm=True,
+        )
+        assert loaded["loaded"] == backup["filename"]
+
+        _, desc = await call_tool(
+            session, "get_description", character="Lady Amber Blaise"
+        )
+        _, sets = await call_tool(
+            session, "list_working_sets", character="Lady Amber Blaise"
         )
     assert desc["description"] == "[b]Published.[/b]"
+    assert len(sets["sets"]) == 1, "loading must not add a second draft"
 
 
 async def test_backing_up_a_character_never_pulled(workbench) -> None:
