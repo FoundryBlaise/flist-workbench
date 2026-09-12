@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -972,7 +973,17 @@ def save_zip_backup(
     if live is None:
         return {"saved": False, "reason": "no_live"}
 
-    working = _live_to_zip_payload(live)
+    # What a backup is for: Live can be fetched from F-list again at any
+    # time, the workbench cannot. So the ZIP carries the bench — the
+    # user's unpublished work — and falls back to Live only when there
+    # is no bench yet. Live's own history is not lost by this; it has
+    # always lived separately under snapshots/.
+    working = None
+    bench = resolve_workbench(character_id, create=False)
+    if bench is not None:
+        working = read_set_payload(character_id, bench.id)
+    if working is None:
+        working = _live_to_zip_payload(live)
     image_extensions: dict[str, str] = {}
     img_dir = images_dir(character_id)
     if img_dir.exists():
@@ -1524,6 +1535,112 @@ def create_set_from_live(character_id: int | str, name: str) -> SetMeta:
         raise ValueError("no live snapshot to seed from")
     payload = _seed_payload_from_live(live)
     return _materialise_set(character_id, clean, payload)
+
+
+#: The one working set a character has. Named after the app, because
+#: that is what it is: the bench you work on, as opposed to the
+#: read-only copy of what is live on F-list.
+#:
+#: Working sets used to be a user-facing concept — create, name, keep
+#: several, pick an active one. Testers could not explain what a
+#: working set was, how it related to Live, or why backups were a third
+#: thing. So the concept stays on disk and leaves the vocabulary: one
+#: bench per character, always present, seeded from Live the first time
+#: it is needed.
+WORKBENCH_SET_NAME = "Workbench"
+
+
+def resolve_workbench(
+    character_id: int | str, *, create: bool = True
+) -> SetMeta | None:
+    """The character's workbench, creating it from Live if absent.
+
+    This is the definition, not a migration: "the workbench" has to
+    resolve to a stored set, and the rule is
+
+        the active set, else the most recently changed, else a new one
+        seeded from Live.
+
+    Which means an archive from before the rename needs no conversion.
+    A character with one set keeps working on it under a new label; one
+    with several keeps working on whichever was active, and the rest sit
+    untouched on disk, reachable through the MCP tools and invisible in
+    the window. Nothing is renamed behind the user's back and nothing is
+    deleted.
+
+    `create=False` answers "is there one yet" without making it so —
+    what a read-only caller wants.
+    """
+    active_id = read_active_set_id(character_id)
+    if active_id is not None:
+        meta = read_set_meta(character_id, active_id)
+        if meta is not None:
+            return meta
+
+    existing = list_sets(character_id)
+    if existing:
+        if len(existing) > 1:
+            # Deliberately a log line and not a dialog: the extra sets
+            # are only reachable by people who made them with the old
+            # UI or through MCP, and asking them to make a decision is
+            # the confusion this change exists to remove. Remove the
+            # warning once no archive can have more than one set.
+            print(
+                f"legacy: character {character_id} has {len(existing)}"
+                f" working sets; using {existing[0].name!r} as the"
+                " workbench",
+                file=sys.stderr,
+            )
+        chosen = existing[0]
+        set_active_set_id(character_id, chosen.id)
+        return chosen
+
+    if not create:
+        return None
+    if read_live(character_id) is None:
+        return None
+    meta = create_set_from_live(character_id, WORKBENCH_SET_NAME)
+    set_active_set_id(character_id, meta.id)
+    return meta
+
+
+def load_zip_backup_into_workbench(
+    character_id: int | str, backup_filename: str
+) -> SetMeta:
+    """Replace the workbench's payload with a backup's contents.
+
+    The old path for this made a *new* set from the backup, which is
+    how the user ended up with several and stopped knowing which one
+    they were editing. Now it overwrites the one bench, in place, so
+    "load this backup" means what it says.
+
+    Backing up the current contents first is the caller's decision and
+    the caller's call — see the three-way prompt in the window. This
+    function only loads.
+    """
+    import zipfile
+
+    _migrate_working_v2(character_id)
+    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
+        raise ValueError("invalid backup filename")
+    target = backups_dir(character_id) / backup_filename
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(str(target))
+    try:
+        with zipfile.ZipFile(target, "r") as zf:
+            raw = zf.read("working.json").decode("utf-8")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"corrupt backup file: {exc}") from exc
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("backup working.json is not an object")
+
+    bench = resolve_workbench(character_id)
+    if bench is None:
+        raise ValueError("no live snapshot to seed a workbench from")
+    write_set_payload(character_id, bench.id, payload, expected_etag=None)
+    meta = read_set_meta(character_id, bench.id)
+    return meta if meta is not None else bench
 
 
 def create_set_from_zip_backup(

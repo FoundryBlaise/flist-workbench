@@ -382,3 +382,169 @@ def test_delete_missing_set_raises(isolated_userdata) -> None:
     archive = isolated_userdata
     with pytest.raises(FileNotFoundError):
         archive.delete_set("123", "abcdef012345")
+
+
+# ---- the workbench -----------------------------------------------------
+
+
+def test_the_workbench_is_created_from_live_on_first_ask(
+    isolated_userdata,
+) -> None:
+    """One bench per character, always there. The user never creates it,
+    which is the point: "what is a working set and do I need one" was
+    the question testers could not answer."""
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+
+    assert ca.resolve_workbench("123", create=False) is None
+    bench = ca.resolve_workbench("123")
+    assert bench is not None
+    assert bench.name == ca.WORKBENCH_SET_NAME
+    assert ca.read_active_set_id("123") == bench.id
+    # Idempotent: asking again is the same bench, not a second one.
+    assert ca.resolve_workbench("123").id == bench.id
+    assert len(ca.list_sets("123")) == 1
+
+
+def test_an_existing_set_becomes_the_workbench_without_being_renamed(
+    isolated_userdata,
+) -> None:
+    """An archive from before the rename needs no migration step. The set
+    the user was already editing stays the one they edit — relabelled in
+    the window, its own name untouched on disk."""
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+    mine = ca.create_set_from_live("123", "V2")
+    ca.clear_active_set_id("123")
+
+    bench = ca.resolve_workbench("123")
+    assert bench.id == mine.id
+    assert bench.name == "V2"
+    assert len(ca.list_sets("123")) == 1
+
+
+def test_several_sets_resolve_to_the_newest_and_keep_the_rest(
+    isolated_userdata,
+) -> None:
+    """Nothing is deleted or renamed behind the user's back. The extras
+    stay on disk, reachable through the MCP tools, absent from the
+    window."""
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+    older = ca.create_set_from_live("123", "Copy_old")
+    newer = ca.create_set_from_live("123", "Experikent")
+    ca.clear_active_set_id("123")
+    # Both were created in the same second, so the sort ties and falls
+    # back to the id. Bump the intended winner so "most recently
+    # changed" is a real distinction here.
+    ca.write_set_meta(
+        "123",
+        newer.id,
+        name=newer.name,
+        created_at=newer.created_at,
+        updated_at=newer.updated_at + 60,
+    )
+
+    bench = ca.resolve_workbench("123")
+    assert bench.id == newer.id
+    assert {m.id for m in ca.list_sets("123")} == {older.id, newer.id}
+
+
+def test_the_active_set_wins_over_a_newer_one(isolated_userdata) -> None:
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+    chosen = ca.create_set_from_live("123", "the one I was editing")
+    ca.create_set_from_live("123", "newer but never activated")
+    ca.set_active_set_id("123", chosen.id)
+
+    assert ca.resolve_workbench("123").id == chosen.id
+
+
+def test_without_live_there_is_nothing_to_seed_a_workbench_from(
+    isolated_userdata,
+) -> None:
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    assert ca.resolve_workbench("123") is None
+
+
+def test_loading_a_backup_overwrites_the_one_bench(isolated_userdata) -> None:
+    """The old path made a *new* set from a backup, which is how a user
+    ended up with several and stopped knowing which one they were
+    editing. Loading now replaces the bench in place."""
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+    bench = ca.resolve_workbench("123")
+    edited = _payload(
+        character={"id": "123", "name": "Probe", "description": "edited since"}
+    )
+    ca.write_set_payload("123", bench.id, edited, expected_etag=None)
+    saved = ca.save_zip_backup("123", kind="manual_single")
+
+    later = _payload(
+        character={"id": "123", "name": "Probe", "description": "later change"}
+    )
+    ca.write_set_payload("123", bench.id, later, expected_etag=None)
+    loaded = ca.load_zip_backup_into_workbench("123", saved["filename"])
+
+    assert loaded.id == bench.id, "must not create a second set"
+    assert len(ca.list_sets("123")) == 1
+    restored = ca.read_set_payload("123", bench.id)
+    assert restored["character"]["description"] == "edited since"
+
+
+def test_a_backup_captures_the_workbench_not_live(isolated_userdata) -> None:
+    """Live can be pulled from F-list again whenever you like; the
+    workbench cannot. A backup exists to protect what is irreplaceable,
+    so it carries the bench. Live's own history is unaffected — that has
+    always lived separately under snapshots/.
+    """
+    import json
+    import zipfile
+
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+    bench = ca.resolve_workbench("123")
+    ca.write_set_payload(
+        "123",
+        bench.id,
+        _payload(
+            character={
+                "id": "123",
+                "name": "Lady Amber Blaise",
+                "description": "unpublished work",
+            }
+        ),
+        expected_etag=None,
+    )
+
+    saved = ca.save_zip_backup("123", kind="manual_single")
+    with zipfile.ZipFile(saved["path"], "r") as zf:
+        stored = json.loads(zf.read("working.json").decode("utf-8"))
+    assert stored["character"]["description"] == "unpublished work"
+    # Live said "[b]hi[/b]"; the backup is not a copy of it.
+    assert stored["character"]["description"] != "[b]hi[/b]"
+
+
+def test_a_backup_falls_back_to_live_when_there_is_no_bench_yet(
+    isolated_userdata,
+) -> None:
+    """Backing up a character the user has never edited still has to
+    produce something useful."""
+    import json
+    import zipfile
+
+    ca = isolated_userdata
+    ca.register_character("123", "Lady Amber Blaise")
+    _seed_live(ca)
+
+    saved = ca.save_zip_backup("123", kind="manual_single")
+    with zipfile.ZipFile(saved["path"], "r") as zf:
+        stored = json.loads(zf.read("working.json").decode("utf-8"))
+    assert stored["character"]["description"] == "[b]hi[/b]"
