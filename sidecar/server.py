@@ -973,7 +973,16 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
     """
     meta = character_archive.resolve_workbench(character_id, create=create)
     if meta is None:
-        return {"workbench": None, "reason": "no_live"}
+        # Two different nothings, and the window renders them
+        # differently: a character never pulled has nothing to copy
+        # from, while one merely not edited yet gets the row that
+        # offers to start.
+        reason = (
+            "no_live"
+            if character_archive.read_live(character_id) is None
+            else "not_created_yet"
+        )
+        return {"workbench": None, "reason": reason}
     return {
         "workbench": _set_meta_to_json(meta),
         "active_set_id": character_archive.read_active_set_id(character_id),
