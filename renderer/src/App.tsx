@@ -12,11 +12,15 @@ export type MenuAction =
   | 'flist-activity'
   | 'restore-userscript-help'
   | 'backup-all'
+  | 'check-updates'
+  | 'edit-undo'
+  | 'edit-redo'
 
 declare global {
   interface Window {
     workbench?: {
       sidecarUrl: string
+      appVersion?: string
       selectDirectory?: (opts?: {
         title?: string
         defaultPath?: string
@@ -39,6 +43,10 @@ declare global {
         ingestCharacter: boolean
         flistSessionActive: boolean
       }) => void
+      openExternal?: (url: string) => void
+      fetchImageBytes?: (
+        url: string
+      ) => Promise<{ bytes: Uint8Array; mime: string } | null>
       openSettings?: () => void
       creds?: {
         getMeta: () => Promise<{
@@ -55,6 +63,13 @@ declare global {
         }) => Promise<boolean>
         setAutoLogin: (next: boolean) => Promise<boolean>
         clear: () => Promise<boolean>
+      }
+      updater?: {
+        getStatus: () => Promise<unknown>
+        check: () => Promise<boolean>
+        download: () => Promise<boolean>
+        install: () => void
+        onStatus: (listener: (status: unknown) => void) => () => void
       }
     }
   }

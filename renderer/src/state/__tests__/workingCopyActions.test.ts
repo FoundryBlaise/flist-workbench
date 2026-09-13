@@ -356,3 +356,118 @@ describe('flistResetWorkingToLive + undo round-trip', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(true)
   })
 })
+
+describe('switching characters must not strand the last edit', () => {
+  // Reported from the field: "switching between characters silently
+  // discards all changes". Autosave waits 500 ms for quiet time, so an
+  // edit followed straight away by a character switch is exactly the
+  // window where bytes could be lost — and losing them without a word
+  // is the worst version of it.
+  it('flushes a pending edit before the switch', async () => {
+    seedSlot('99', { character: { description: 'before' } })
+    const calls = mockFetch([async () => ok({ etag: 'flushed' })])
+
+    useStore
+      .getState()
+      .flistSetWorkingField('99', 'character.description', 'typed then left')
+    // No timer advance: the debounce is still armed, the way it is when
+    // someone types and immediately clicks another character.
+    await useStore.getState().flistSelectCharacter('100')
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts.length).toBe(1)
+    expect(
+      (puts[0].body as Record<string, Record<string, string>>).character
+        .description
+    ).toBe('typed then left')
+    expect(useStore.getState().flistActiveCharacterId).toBe('100')
+  })
+
+  it('keeps the edit in the slot when the save fails, and says so', async () => {
+    // The switch goes through either way — blocking it would trap the
+    // user — so the edit has to survive in memory with the error
+    // visible, not vanish quietly.
+    seedSlot('99', { character: { description: 'before' } })
+    mockFetch([
+      async () => {
+        throw new Error('sidecar down')
+      }
+    ])
+
+    useStore
+      .getState()
+      .flistSetWorkingField('99', 'character.description', 'at risk')
+    await useStore.getState().flistSelectCharacter('100')
+
+    const slot = useStore.getState().flistWorking['99']
+    expect(
+      (slot.payload as Record<string, Record<string, string>>).character
+        .description
+    ).toBe('at risk')
+    expect(slot.unsavedDirty).toBe(true)
+    expect(slot.saveStatus).toBe('error')
+  })
+})
+
+describe('reopening a character must not discard what was typed', () => {
+  // Reported from the field: "switching between characters silently
+  // discards all changes." Two ways that happened, both fixed here.
+  it('a picker click on the character already open keeps the edit', async () => {
+    // The picker calls flistOpenWorking on every click — including on
+    // the character already open, which is how a user leaves a
+    // read-only Live view. That reseeded the slot from Live, and the
+    // armed autosave then found nothing dirty and dropped the write.
+    seedSlot('99', { character: { description: 'before' } })
+    useStore.setState({
+      flistRoster: [{ id: 99, name: 'Amber' }] as never,
+      flistArchive: {
+        '99': {
+          live: { character: { name: 'Amber', description: 'live text' } },
+          snapshots: [],
+          pullStatus: 'idle'
+        }
+      } as never,
+      editorReadOnly: false
+    })
+    const calls = mockFetch([async () => ok({ etag: 'x' })])
+
+    useStore.getState().setEditorContent('typed just now')
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts.length).toBe(1)
+    expect(
+      (puts[0].body as Record<string, Record<string, string>>).character
+        .description
+    ).toBe('typed just now')
+    expect(useStore.getState().editorContent).toBe('typed just now')
+  })
+
+  it('the first edit opens the Workbench instead of going nowhere', async () => {
+    // With no set active the flush used to return early and write
+    // nothing, while saveStatus stayed 'idle' — so the UI showed no
+    // sign that the text was only in memory.
+    seedSlot('99', { character: { description: 'before' } })
+    useStore.setState((s) => ({
+      flistActiveSetId: { ...s.flistActiveSetId, '99': null },
+      editorReadOnly: false
+    }))
+    const calls = mockFetch([
+      // flistOpenWorkbench: resolve the bench, then activate it.
+      async () => ok({ workbench: { id: 'bbbbbbbbbbbb', name: 'Workbench', created_at: 1, updated_at: 2 }, active_set_id: 'bbbbbbbbbbbb' }),
+      async () => ok({ ok: true }),
+      async () => ok({ payload: { character: { description: 'typed' } }, etag: 'e1' }),
+      async () => ok({ etag: 'saved' })
+    ])
+
+    useStore.getState().setEditorContent('typed')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts.length).toBeGreaterThan(0)
+    expect(puts.some((p) => p.url.includes('/sets/bbbbbbbbbbbb/payload'))).toBe(
+      true
+    )
+  })
+})

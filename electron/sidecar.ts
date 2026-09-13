@@ -83,7 +83,14 @@ export async function startSidecar(): Promise<void> {
     // to stderr, and we want that traceback in a place a user can
     // grep without attaching a debugger.
     proc = spawn(exe, [], {
-      env: { ...process.env, SIDECAR_PORT: String(PORT) },
+      env: {
+        ...process.env,
+        SIDECAR_PORT: String(PORT),
+        // So /health reports the app's version rather than a
+        // hardcoded placeholder. The frozen sidecar has no
+        // package.json to read it from.
+        FLIST_WORKBENCH_VERSION: app.getVersion()
+      },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     proc.stdout?.on('data', (chunk: Buffer) =>
@@ -118,7 +125,14 @@ export async function startSidecar(): Promise<void> {
       ['-m', 'uvicorn', 'server:app', '--port', String(PORT)],
       {
         cwd: sidecarDir,
-        env: { ...process.env, SIDECAR_PORT: String(PORT) },
+        env: {
+        ...process.env,
+        SIDECAR_PORT: String(PORT),
+        // So /health reports the app's version rather than a
+        // hardcoded placeholder. The frozen sidecar has no
+        // package.json to read it from.
+        FLIST_WORKBENCH_VERSION: app.getVersion()
+      },
         stdio: ['ignore', 'inherit', 'inherit'],
         detached: process.platform !== 'win32'
       }

@@ -95,7 +95,6 @@ KEY_BACKUPS_LAST_SWEEP_FAILED = "backups.last_sweep_failed"
 # "ran on app launch" vs "you ran it from Settings".
 KEY_BACKUPS_LAST_SWEEP_SOURCE = "backups.last_sweep_source"
 
-
 def db_path(root: Path | None = None) -> Path:
     base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)

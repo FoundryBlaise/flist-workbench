@@ -12,12 +12,21 @@ function resolvePort(): number {
 
 const sidecarPort = resolvePort()
 
+function resolveAppVersion(): string {
+  const arg = process.argv.find((a) => a.startsWith('--app-version='))
+  if (arg) return arg.split('=')[1] ?? ''
+  return ''
+}
+
+const appVersion = resolveAppVersion()
+
 // Menu items in main send `menu:action` with a string id; renderer subscribes
 // here. Returns an unsubscriber so React effects can clean up on unmount.
 type MenuActionListener = (action: string) => void
 
 contextBridge.exposeInMainWorld('workbench', {
   sidecarUrl: `http://127.0.0.1:${sidecarPort}`,
+  appVersion,
   selectDirectory: (opts?: { title?: string; defaultPath?: string }) =>
     ipcRenderer.invoke('workbench:select-directory', opts ?? {}) as Promise<string | null>,
   // Working-set bundle export/import — pick a file path, then the
@@ -61,6 +70,20 @@ contextBridge.exposeInMainWorld('workbench', {
   }) => {
     ipcRenderer.send('menu:set-state', flags)
   },
+  // Opens an https URL from the host's allowlist in the user's default
+  // browser — the image context menu's "Open in browser". Main does the
+  // shell.openExternal call so the renderer never holds a Node module
+  // reference.
+  openExternal: (url: string) => {
+    ipcRenderer.send('workbench:open-external', url)
+  },
+  // Fetch raw image bytes for the right-click "Copy image" action.
+  // Main has a host allowlist + https-only filter; nulls back on
+  // anything else.
+  fetchImageBytes: (url: string) =>
+    ipcRenderer.invoke('workbench:fetch-image-bytes', url) as Promise<
+      { bytes: Uint8Array; mime: string } | null
+    >,
   // Fires the same menu action path settings already use, so the modal
   // opens consistently from wherever it is triggered.
   openSettings: () => {
@@ -88,5 +111,26 @@ contextBridge.exposeInMainWorld('workbench', {
       ipcRenderer.invoke('workbench:creds:set-auto-login', next) as Promise<boolean>,
     clear: () =>
       ipcRenderer.invoke('workbench:creds:clear') as Promise<boolean>
+  },
+  // Auto-updater bridge. Main owns the electron-updater state machine;
+  // the renderer just listens for status changes and dispatches user
+  // intent (download / install) back over IPC.
+  updater: {
+    getStatus: () =>
+      ipcRenderer.invoke('workbench:updater:get-status') as Promise<unknown>,
+    check: () =>
+      ipcRenderer.invoke('workbench:updater:check') as Promise<boolean>,
+    download: () =>
+      ipcRenderer.invoke('workbench:updater:download') as Promise<boolean>,
+    install: () => {
+      ipcRenderer.send('workbench:updater:install')
+    },
+    onStatus: (listener: (status: unknown) => void) => {
+      const wrapped = (_event: unknown, status: unknown) => listener(status)
+      ipcRenderer.on('updater:status', wrapped)
+      return () => {
+        ipcRenderer.removeListener('updater:status', wrapped)
+      }
+    }
   }
 })

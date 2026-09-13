@@ -19,6 +19,9 @@ import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExternalChangeBanner } from './ExternalChangeBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
+import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
+import { AppContextMenu } from './AppContextMenu'
+import { runUndoRedo } from '../lib/undoRedo'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { useStore } from '../state'
 import { api } from '../lib/api'
@@ -54,6 +57,26 @@ export function AppLayout() {
   const exportRestoreOpen = useStore((s) => s.flistExportRestoreCharacterId)
   const closeExportRestore = useStore((s) => s.flistCloseExportRestore)
   const [firstRunToast, setFirstRunToast] = useState(false)
+  // Auto-updater state. Main owns the electron-updater state machine
+  // and pushes status changes; we just decide whether to surface the
+  // modal. `updaterDismissed` keeps it gone for this session once the
+  // user clicks Later — they'll see the next prompt at next launch.
+  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus>({ kind: 'idle' })
+  const [updaterDismissed, setUpdaterDismissed] = useState(false)
+  // Help → Check for Updates flag. Lets the modal surface the
+  // "checking" / "you're up to date" / "couldn't check" states only
+  // when the user explicitly asked, so the passive background check
+  // stays silent unless there's actually something to install.
+  const [updaterManualCheck, setUpdaterManualCheck] = useState(false)
+  useEffect(() => {
+    const updater = window.workbench?.updater
+    if (!updater) return
+    const off = updater.onStatus((s) => setUpdaterStatus(s as UpdaterStatus))
+    void updater.getStatus().then((s) => {
+      if (s && typeof s === 'object') setUpdaterStatus(s as UpdaterStatus)
+    })
+    return off
+  }, [])
   const [flistHintDismissed, setFlistHintDismissed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('workbench.flistHintDismissed') === '1'
@@ -237,13 +260,15 @@ export function AppLayout() {
   useEffect(() => {
     let cancelled = false
     const KEY = 'workbench.firstRunDismissed'
+    let firstRunDismissed = false
     try {
-      if (localStorage.getItem(KEY) === '1') return
+      firstRunDismissed = localStorage.getItem(KEY) === '1'
     } catch {
       // localStorage unavailable — fall through and just suppress next session.
     }
     void (async () => {
       try {
+        if (firstRunDismissed) return
         const rag = await api.ragStatus()
         if (cancelled) return
         if (rag.chunk_count === 0) setFirstRunToast(true)
@@ -348,6 +373,20 @@ export function AppLayout() {
         case 'backup-all':
           void useStore.getState().flistBackupAll()
           break
+        case 'check-updates': {
+          const updater = window.workbench?.updater
+          if (!updater) break
+          setUpdaterDismissed(false)
+          setUpdaterManualCheck(true)
+          void updater.check()
+          break
+        }
+        case 'edit-undo':
+          runUndoRedo('undo')
+          break
+        case 'edit-redo':
+          runUndoRedo('redo')
+          break
       }
     })
   }, [
@@ -381,6 +420,7 @@ export function AppLayout() {
 
   return (
     <div className="app">
+      <AppContextMenu />
       <header className="titlebar">
         <span className="app-name">● F-list Workbench</span>
         <span className="title-doc" data-testid="titlebar-doc">{titleDoc}</span>
@@ -392,6 +432,23 @@ export function AppLayout() {
           sidecar: {health}
         </span>
       </header>
+      {!updaterDismissed
+        && (updaterStatus.kind === 'available'
+          || updaterStatus.kind === 'downloading'
+          || updaterStatus.kind === 'downloaded'
+          || (updaterManualCheck
+            && (updaterStatus.kind === 'checking'
+              || updaterStatus.kind === 'not-available'
+              || updaterStatus.kind === 'error'))) && (
+          <UpdateAvailableModal
+            status={updaterStatus}
+            manualCheck={updaterManualCheck}
+            onDismiss={() => {
+              setUpdaterDismissed(true)
+              setUpdaterManualCheck(false)
+            }}
+          />
+        )}
       {firstRunToast && (
         <div
           className="first-run-toast"

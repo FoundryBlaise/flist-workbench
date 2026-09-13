@@ -47,3 +47,4 @@ desktop.ini
 pip-wheel-metadata/
 tests/screenshots/*.txt
 tests/uxtest/artifacts/
+.claude/worktrees/

@@ -1,4 +1,5 @@
 import { EditorView } from '@codemirror/view'
+import { EditorSelection } from '@codemirror/state'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { api } from '../../lib/api'
 import { useStore } from '../../state'
@@ -49,6 +50,10 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'I', title: 'Italic', shortcut: 'Mod-i', wrap: { open: '[i]', close: '[/i]' } },
   { label: 'U', title: 'Underline', shortcut: 'Mod-u', wrap: { open: '[u]', close: '[/u]' } },
   { label: 'S', title: 'Strikethrough', wrap: { open: '[s]', close: '[/s]' } },
+  { label: 'big', title: 'Big text', wrap: { open: '[big]', close: '[/big]' } },
+  { label: 'small', title: 'Small text', wrap: { open: '[small]', close: '[/small]' } },
+  { label: 'sub', title: 'Subscript', wrap: { open: '[sub]', close: '[/sub]' } },
+  { label: 'sup', title: 'Superscript', wrap: { open: '[sup]', close: '[/sup]' } },
   { label: 'color', title: 'Colour — pick a named swatch', popover: 'color' },
   { label: 'icon', title: 'Character icon', wrap: { open: '[icon]', close: '[/icon]' } },
   { label: 'eicon', title: 'Emote icon — pick from catalog', popover: 'eicon' },
@@ -59,9 +64,15 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
     title: 'Collapse',
     wrap: { open: '[collapse=Show]', close: '[/collapse]' }
   },
+  { label: 'quote', title: 'Quote block', wrap: { open: '[quote]', close: '[/quote]' } },
   { label: 'hr', title: 'Horizontal rule', insert: '[hr]' },
   { label: 'center', title: 'Centre', wrap: { open: '[center]', close: '[/center]' } },
-  { label: 'indent', title: 'Indent', wrap: { open: '[indent]', close: '[/indent]' } }
+  { label: 'indent', title: 'Indent', wrap: { open: '[indent]', close: '[/indent]' } },
+  {
+    label: 'noparse',
+    title: 'No parse — show raw BBCode',
+    wrap: { open: '[noparse]', close: '[/noparse]' }
+  }
 ]
 
 // Visual grouping for the toolbar. Order within each group is its
@@ -69,10 +80,11 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
 // popover to keep the main bar uncluttered.
 const TOOLBAR_GROUPS: ToolbarGroup[] = [
   { key: 'format', actions: TOOLBAR_ACTIONS.slice(0, 4) },
-  { key: 'colour', actions: TOOLBAR_ACTIONS.slice(4, 5) },
-  { key: 'refs', actions: TOOLBAR_ACTIONS.slice(5, 8) },
-  { key: 'blocks', actions: TOOLBAR_ACTIONS.slice(8, 10) },
-  { key: 'structural', actions: TOOLBAR_ACTIONS.slice(10, 13), overflow: true }
+  { key: 'size', actions: TOOLBAR_ACTIONS.slice(4, 8) },
+  { key: 'colour', actions: TOOLBAR_ACTIONS.slice(8, 9) },
+  { key: 'refs', actions: TOOLBAR_ACTIONS.slice(9, 12) },
+  { key: 'blocks', actions: TOOLBAR_ACTIONS.slice(12, 15) },
+  { key: 'structural', actions: TOOLBAR_ACTIONS.slice(15, 19), overflow: true }
 ]
 
 // Convert "Mod-b" to a human label that mirrors how F-Chat shows
@@ -93,18 +105,22 @@ export function applyAction(view: EditorView, action: ToolbarAction) {
   view.dispatch(
     view.state.changeByRange((range) => {
       if (action.insert) {
+        const cursor = range.from + action.insert.length
         return {
           changes: { from: range.from, to: range.to, insert: action.insert },
-          range: { ...range, anchor: range.from + action.insert.length, head: range.from + action.insert.length }
-        } as never
+          range: EditorSelection.cursor(cursor)
+        }
       }
       const { open, close } = action.wrap!
       const selected = view.state.doc.sliceString(range.from, range.to)
       const insert = open + selected + close
       return {
         changes: { from: range.from, to: range.to, insert },
-        range: { ...range, anchor: range.from + open.length, head: range.from + open.length + selected.length }
-      } as never
+        range: EditorSelection.range(
+          range.from + open.length,
+          range.from + open.length + selected.length
+        )
+      }
     })
   )
   view.focus()
@@ -119,12 +135,11 @@ function wrapSelection(view: EditorView, open: string, close: string) {
       const insert = open + selected + close
       return {
         changes: { from: range.from, to: range.to, insert },
-        range: {
-          ...range,
-          anchor: range.from + open.length,
-          head: range.from + open.length + selected.length
-        }
-      } as never
+        range: EditorSelection.range(
+          range.from + open.length,
+          range.from + open.length + selected.length
+        )
+      }
     })
   )
   view.focus()
@@ -275,8 +290,8 @@ function UrlPopover({
         const insert = `[url=${url}]${text}[/url]`
         return {
           changes: { from: range.from, to: range.to, insert },
-          range: { ...range, anchor: range.from + insert.length, head: range.from + insert.length }
-        } as never
+          range: EditorSelection.cursor(range.from + insert.length)
+        }
       })
     )
     view.focus()

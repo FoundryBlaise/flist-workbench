@@ -92,7 +92,10 @@ _MCP_SERVERS = workbench_mcp.build_mcp_servers()
 
 app = FastAPI(
     title="F-list Workbench sidecar",
-    version="0.0.0",
+    # Electron passes its own version when it spawns us, so /health
+    # reports what the user actually installed. Standalone runs
+    # (tests, a bare `uv run`) have no app around to ask.
+    version=os.environ.get("FLIST_WORKBENCH_VERSION") or "0.0.0-dev",
     lifespan=sidecar_lifespan,
 )
 
@@ -869,12 +872,16 @@ async def flist_character_working_get(character_id: str) -> dict:
     """Return the on-disk working copy + its current sha256 etag.
 
     The etag is returned even on a clean read so the renderer can pin it
-    for the next PUT's `If-Match`. 404 means no file yet — renderer
-    seeds from Live, materialise-on-first-edit (Tier 2 §1.6).
+    for the next PUT's `If-Match`. `payload: null` means no file yet —
+    renderer seeds from Live, materialise-on-first-edit (Tier 2 §1.6).
+    Earlier this returned 404 for the same case, but Chrome's network
+    panel logs every 4xx unconditionally and the noise was scaring
+    users into thinking the app was broken. 200 + null payload is the
+    same signal, surfaced cleanly.
     """
     payload = character_archive.read_working(character_id)
     if payload is None:
-        raise HTTPException(status_code=404, detail="no working copy")
+        return {"payload": None, "etag": None}
     etag = character_archive.working_etag(character_id)
     return {"payload": payload, "etag": etag}
 

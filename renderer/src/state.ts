@@ -1400,22 +1400,30 @@ export const useStore = create<State>((set, get) => ({
       // saved password. Failures here don't block sign-in (the
       // user has already authenticated); a save failure surfaces
       // via flistSavedCreds.encryptionAvailable on the next reload.
-      const remember = !!opts?.rememberPassword || !!opts?.autoLogin
-      const autoLogin = !!opts?.autoLogin
-      const credsApi = window.workbench?.creds
-      if (credsApi) {
-        try {
-          if (remember) {
-            await credsApi.save({ account, password, autoLogin })
-          } else {
-            await credsApi.clear()
+      //
+      // `opts === undefined` means "this is a programmatic re-login"
+      // (auto-login path) — don't touch the keychain at all. Without
+      // this guard, every auto-login on launch ran the else-branch
+      // below and cleared the saved password, so the second close →
+      // relaunch always landed on the sign-in modal.
+      if (opts !== undefined) {
+        const remember = !!opts.rememberPassword || !!opts.autoLogin
+        const autoLogin = !!opts.autoLogin
+        const credsApi = window.workbench?.creds
+        if (credsApi) {
+          try {
+            if (remember) {
+              await credsApi.save({ account, password, autoLogin })
+            } else {
+              await credsApi.clear()
+            }
+            // Refresh in-memory mirror so Settings reflects reality
+            // without a page reload.
+            const meta = await credsApi.getMeta()
+            set({ flistSavedCreds: meta })
+          } catch (err) {
+            console.warn('[creds] save failed:', err)
           }
-          // Refresh in-memory mirror so Settings reflects reality
-          // without a page reload.
-          const meta = await credsApi.getMeta()
-          set({ flistSavedCreds: meta })
-        } catch (err) {
-          console.warn('[creds] save failed:', err)
         }
       }
       // Bump the session epoch so any in-flight mapping-list fetch from
@@ -2126,7 +2134,51 @@ export const useStore = create<State>((set, get) => ({
     // Load the persisted working copy. On 404 the slot is seeded from
     // Live in memory but not flushed to disk — first edit then PUTs
     // (Tier 2 §1.6 materialise-on-first-edit).
-    await get().flistLoadWorking(characterId)
+    //
+    // Working-sets v2 short-circuit: when the character has an active
+    // set, the legacy `working.json` slot is never written; calling
+    // `flistLoadWorking` would hit the legacy endpoint and 404 every
+    // time, polluting the console on every character switch. Seed the
+    // legacy mirror from Live in memory so consumers of
+    // `flistWorking[id]` still see a sensible payload, and skip the
+    // round-trip entirely.
+    const activeSetId = get().flistActiveSetId[characterId] ?? null
+    // Never reseed over unsaved edits. Autosave waits 500 ms for quiet
+    // time, and the picker calls this on every click — including a
+    // click on the character already open, which is how a user gets
+    // out of a read-only Live view. Reseeding then replaced the slot
+    // with a fresh copy of Live, and the armed flush, finding nothing
+    // dirty, dropped the write: what the user had just typed was gone
+    // with nothing said. The edits live in the slot; leave them there
+    // and let the pending flush do its job.
+    const pending = get().flistWorking[characterId]
+    if (pending?.unsavedDirty) {
+      set((s) => ({
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: 'ready'
+        }
+      }))
+    } else if (activeSetId) {
+      const liveForSeed = get().flistArchive[characterId]?.live ?? null
+      const seeded = liveForSeed
+        ? seedWorkingFromLive(liveForSeed)
+        : { ...emptyWorkingSlot().payload }
+      const slot: FlistWorkingSlot = {
+        ...emptyWorkingSlot(),
+        payload: seeded,
+        materialised: false
+      }
+      set((s) => ({
+        flistWorking: { ...s.flistWorking, [characterId]: slot },
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: 'ready'
+        }
+      }))
+    } else {
+      await get().flistLoadWorking(characterId)
+    }
     const slot = get().flistWorking[characterId]
     const live = archive?.live ?? null
     const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
@@ -2158,6 +2210,28 @@ export const useStore = create<State>((set, get) => ({
     }))
     try {
       const { payload, etag } = await api.flistWorkingRead(characterId)
+      // payload: null is the sidecar's "no working copy yet" signal
+      // — handled identically to the legacy 404 path. Seeds the slot
+      // from Live for materialise-on-first-edit (Tier 2 §1.6).
+      if (payload === null) {
+        const live = get().flistArchive[characterId]?.live ?? null
+        const seeded = live
+          ? seedWorkingFromLive(live)
+          : { ...emptyWorkingSlot().payload }
+        const slot: FlistWorkingSlot = {
+          ...emptyWorkingSlot(),
+          payload: seeded,
+          materialised: false
+        }
+        set((s) => ({
+          flistWorking: { ...s.flistWorking, [characterId]: slot },
+          flistWorkingLoadStatus: {
+            ...s.flistWorkingLoadStatus,
+            [characterId]: 'ready'
+          }
+        }))
+        return
+      }
       const overlay = Array.isArray((payload as WorkingPayload)._overlay)
         ? ((payload as WorkingPayload)._overlay as string[])
         : []
@@ -2358,11 +2432,39 @@ export const useStore = create<State>((set, get) => ({
       _cancelFlush(characterId)
       return
     }
-    // Working-sets v2: every PUT routes through the active set's payload
-    // endpoint. When no set is active, the editor is in F-list read-only
-    // mode; nothing to flush, so silently drop the schedule.
-    const activeSetId = get().flistActiveSetId[characterId]
+    // Every PUT routes through the active set's payload endpoint. If
+    // nothing is active yet but the user has typed, the Workbench has
+    // simply never been opened for this character — so open it now and
+    // save into it. Materialise-on-first-edit, the same doctrine the
+    // legacy working.json followed (Tier 2 §1.6): looking at a
+    // character creates nothing, the first edit does.
+    //
+    // This used to return early and drop the write. Nothing said so —
+    // saveStatus stayed 'idle' — and the edits died with the next
+    // character switch.
+    let activeSetId = get().flistActiveSetId[characterId]
     if (!activeSetId) {
+      const bench = await get().flistOpenWorkbench(characterId)
+      activeSetId = bench?.id ?? get().flistActiveSetId[characterId] ?? null
+    }
+    if (!activeSetId) {
+      // No Live to seed a Workbench from — a character that was never
+      // pulled. Keep the edits in memory and say so, rather than
+      // pretending they were saved.
+      set((st) => {
+        const existing = st.flistWorking[characterId]
+        if (!existing) return {}
+        return {
+          flistWorking: {
+            ...st.flistWorking,
+            [characterId]: {
+              ...existing,
+              saveStatus: 'error',
+              saveError: 'No Workbench yet — pull this character first.'
+            }
+          }
+        }
+      })
       _cancelFlush(characterId)
       return
     }
@@ -4462,6 +4564,14 @@ export const useStore = create<State>((set, get) => ({
     if (match && match.id !== null) {
       const id = String(match.id)
       const switched = get().flistActiveCharacterId !== id
+      // Drain the character being left, the way flistSelectCharacter
+      // does. Fire-and-forget: the picker must not wait on a PUT, and
+      // a failed save raises saveStatus 'error' where the user can see
+      // it rather than blocking the click.
+      const prevId = get().flistActiveCharacterId
+      if (switched && prevId) {
+        void get().flistFlushWorking(prevId).catch(() => {})
+      }
       if (switched) {
         try {
           localStorage.setItem(FLIST_LAST_CHAR_KEY, id)

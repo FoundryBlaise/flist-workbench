@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
+import { autoUpdater } from 'electron-updater'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { buildMenu } from './menu'
-import { attachContextMenu } from './contextMenu'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -194,6 +194,82 @@ type MenuFlags = {
   ingestCharacter: boolean
   flistSessionActive: boolean
 }
+// Both handlers accept fixed shapes and filter strictly, so a
+// compromised renderer can't smuggle arbitrary commands into the
+// host. Each also verifies the sender is our main window's
+// WebContents — IPC from any other source (an unexpected iframe, say)
+// is dropped without acting.
+
+// Hostnames we'll open in the user's browser, locked down so a
+// compromised renderer can't redirect the user somewhere that looks
+// like us. Only the image context menu uses this today.
+const EXTERNAL_HOSTS = new Set([
+  'github.com',
+  // F-list main site and the static CDN that serves character
+  // avatars (/images/avatar), eicons (/images/eicon), and inline
+  // images (/images/charinline). The right-click menu's "Open
+  // image in browser" hands URLs from these hosts straight to the
+  // shell so the user's default browser opens them.
+  'f-list.net',
+  'www.f-list.net',
+  'static.f-list.net'
+])
+
+ipcMain.on('workbench:open-external', (event, url: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  if (typeof url !== 'string') return
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return
+  }
+  if (parsed.protocol !== 'https:') return
+  if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
+  void shell.openExternal(parsed.toString())
+})
+
+// Fetch arbitrary image bytes for the right-click "Copy image"
+// action. The renderer can't fetch f-list.net's CDN directly —
+// it doesn't return CORS headers, so cross-origin reads fail and
+// a canvas drawImage()+toBlob() round-trip taints the canvas.
+// Main-process fetch has no such restriction. Same allowlist
+// posture as openExternal: only known image hosts, https only.
+const IMAGE_FETCH_HOSTS = new Set([
+  'static.f-list.net',
+  'f-list.net',
+  'www.f-list.net'
+])
+
+ipcMain.handle(
+  'workbench:fetch-image-bytes',
+  async (
+    event,
+    url: unknown
+  ): Promise<{ bytes: Uint8Array; mime: string } | null> => {
+    if (event.sender !== mainWindow?.webContents) return null
+    if (typeof url !== 'string') return null
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return null
+    }
+    if (parsed.protocol !== 'https:') return null
+    if (!IMAGE_FETCH_HOSTS.has(parsed.hostname.toLowerCase())) return null
+    try {
+      const res = await fetch(parsed.toString())
+      if (!res.ok) return null
+      const mime = res.headers.get('content-type') ?? 'application/octet-stream'
+      const buf = await res.arrayBuffer()
+      return { bytes: new Uint8Array(buf), mime }
+    } catch (err) {
+      console.error('[main] fetch-image-bytes failed:', err)
+      return null
+    }
+  }
+)
+
 ipcMain.on('workbench:open-settings', (event) => {
   if (event.sender !== mainWindow?.webContents) return
   const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
@@ -380,6 +456,111 @@ ipcMain.handle('workbench:creds:clear', async (event): Promise<boolean> => {
   return true
 })
 
+// Auto-update plumbing. electron-updater pulls latest.yml from the
+// GitHub Release configured in electron-builder.yml's `publish:`
+// block. We deliberately disable autoDownload so the renderer can
+// surface a modal first ("Update available — install now / later?")
+// rather than spending the user's bandwidth uninvited. The renderer
+// asks main to start the download once the user confirms; main
+// forwards progress + completion events back over IPC.
+//
+// Skipped entirely in dev (`!app.isPackaged`) because electron-updater
+// needs a packaged app-update.yml to resolve the feed and will throw
+// otherwise. Initial check is delayed so the first-run wizard / sign-in
+// modal own the user's attention on launch.
+type UpdaterStatus =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'available'; version: string; releaseNotes?: string | null }
+  | { kind: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
+  | { kind: 'downloaded'; version: string }
+  | { kind: 'not-available' }
+  | { kind: 'error'; message: string }
+
+let updaterStatus: UpdaterStatus = { kind: 'idle' }
+
+function sendUpdaterStatus(status: UpdaterStatus): void {
+  updaterStatus = status
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('updater:status', status)
+  }
+}
+
+function configureAutoUpdater(): void {
+  if (isDev) return
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.logger = {
+    info: (m: unknown) => appendDiagLog('updater', m),
+    warn: (m: unknown) => appendDiagLog('updater-warn', m),
+    error: (m: unknown) => appendDiagLog('updater-error', m),
+    debug: () => {}
+  }
+  autoUpdater.on('checking-for-update', () => sendUpdaterStatus({ kind: 'checking' }))
+  autoUpdater.on('update-available', (info) => {
+    sendUpdaterStatus({
+      kind: 'available',
+      version: info.version,
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : null
+    })
+  })
+  autoUpdater.on('update-not-available', () => sendUpdaterStatus({ kind: 'not-available' }))
+  autoUpdater.on('download-progress', (p) => {
+    sendUpdaterStatus({
+      kind: 'downloading',
+      percent: p.percent,
+      bytesPerSecond: p.bytesPerSecond,
+      transferred: p.transferred,
+      total: p.total
+    })
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdaterStatus({ kind: 'downloaded', version: info.version })
+  })
+  autoUpdater.on('error', (err) => {
+    sendUpdaterStatus({ kind: 'error', message: err?.message ?? String(err) })
+  })
+}
+
+ipcMain.handle('workbench:updater:get-status', (event): UpdaterStatus => {
+  if (event.sender !== mainWindow?.webContents) return { kind: 'idle' }
+  return updaterStatus
+})
+
+ipcMain.handle('workbench:updater:check', async (event): Promise<boolean> => {
+  if (event.sender !== mainWindow?.webContents) return false
+  if (isDev) return false
+  try {
+    await autoUpdater.checkForUpdates()
+    return true
+  } catch (err) {
+    appendDiagLog('updater-check-failed', err)
+    return false
+  }
+})
+
+ipcMain.handle('workbench:updater:download', async (event): Promise<boolean> => {
+  if (event.sender !== mainWindow?.webContents) return false
+  if (isDev) return false
+  try {
+    await autoUpdater.downloadUpdate()
+    return true
+  } catch (err) {
+    appendDiagLog('updater-download-failed', err)
+    return false
+  }
+})
+
+ipcMain.on('workbench:updater:install', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
+  if (isDev) return
+  // quitAndInstall: closes app, runs the NSIS installer in update mode,
+  // then relaunches. `isSilent: true` skips the installer UI; the
+  // user already consented in our modal. `isForceRunAfter: true` so
+  // we re-open the app once the update finishes.
+  autoUpdater.quitAndInstall(true, true)
+})
+
 ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   const menu = Menu.getApplicationMenu()
   if (!menu) return
@@ -405,9 +586,13 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       sandbox: true,
-      // Forward the resolved sidecar port to the sandboxed preload
-      // (process.env isn't reliable across the sandbox boundary).
-      additionalArguments: [`--sidecar-port=${process.env['SIDECAR_PORT'] ?? ''}`]
+      // Forward the resolved sidecar port + current app version to the
+      // sandboxed preload (process.env isn't reliable across the
+      // sandbox boundary).
+      additionalArguments: [
+        `--sidecar-port=${process.env['SIDECAR_PORT'] ?? ''}`,
+        `--app-version=${app.getVersion()}`
+      ]
     }
   })
 
@@ -434,8 +619,6 @@ async function createWindow(): Promise<void> {
   if (isDev) {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
-
-  attachContextMenu(mainWindow)
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   appendDiagLog('createWindow', { isDev, devUrl: devUrl ?? null })
@@ -473,6 +656,19 @@ app.whenReady().then(async () => {
     appendDiagLog('whenReady', 'window created')
   } catch (err) {
     appendDiagLog('createWindow-threw', err)
+  }
+
+  // Wire the updater after the window exists so its `update-available`
+  // event has a target to push to. 30s delay before the first check
+  // gives the first-run wizard + sign-in modal time to land first;
+  // an update prompt stacking on top of those would be jarring.
+  configureAutoUpdater()
+  if (!isDev) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch((err) => {
+        appendDiagLog('updater-check-failed', err)
+      })
+    }, 30_000)
   }
 
   app.on('activate', () => {

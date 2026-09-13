@@ -126,6 +126,13 @@ body {
 .main {
   display: grid;
   overflow: hidden;
+  /* `min-height: 0` is load-bearing here: .main is a grid item of
+     .app's `1fr` row, and grid items default to `min-height: auto`
+     which lets their content grow past the row's allocated size.
+     Without this, tall editor content (long BBCode descriptions)
+     pushes .main past viewport height and the CodeMirror scroller
+     never sees overflow → no scrollbar engages anywhere. */
+  min-height: 0;
 }
 .main-editor { grid-template-columns: 260px 1fr; }
 .main-logs { grid-template-columns: 260px 1fr; }
@@ -712,6 +719,34 @@ body {
 .editor-pane {
   display: flex;
   flex-direction: column;
+  /* min-height + overflow hidden are load-bearing when the assistant
+     bottom-dock is open: without them the pane refuses to shrink
+     below its content height, the CodeMirror scroller never gets a
+     bounded box to scroll inside, and the editor text just gets
+     clipped at the dock's top edge with no scrollbar.
+     min-width: 0 is the horizontal twin — without it CM6 reports
+     the longest unwrapped line's intrinsic width up the flex chain
+     and the pane expands past the column, shoving the preview off
+     the right edge. lineWrapping inside CM can't do its job until
+     the container actually shrinks first. */
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Wrapper inside EditorPane that holds the editor-cm-row for the
+   Description tab. Without these flex constraints the wrapper
+   refuses to shrink below CodeMirror's content height and the
+   scroller never engages. Each parent in the chain needs to be a
+   bounded box for `.cm-scroller`'s `overflow: auto` to mean
+   anything. */
+.editor-tab-description {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .editor-head {
@@ -849,25 +884,76 @@ body {
 }
 
 .editor-cm-row {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
+/* CodeMirror flex chain — every link needs min-height/min-width: 0
+   so the scroller actually gets a bounded box. Without these, the
+   inner .cm-scroller sees an effectively-unbounded height (because
+   each flex child refuses to shrink below content), so its
+   overflow: auto never engages and mouse-wheel events pass through
+   to the document. The split-view case (editor + preview + bottom-
+   dock assistant pane open) is what makes this visible. */
 .editor-cm {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
   display: flex;
 }
 .editor-cm > div {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
+  /* column direction matters: cross-axis becomes horizontal, so the
+     .cm-editor child stretches across the full width via flex's
+     default align-items: stretch. With row (the default), cm-editor
+     would size to its intrinsic content width — leaving a darker
+     band of pane background to the right of the longest wrapped
+     line. */
+  display: flex;
+  flex-direction: column;
 }
 .editor-cm .cm-editor {
+  /* Fill the wrapper on both axes. height: 100% is the canonical CM6
+     sizing (anchors the scroller's bounded box). flex: 1 fills the
+     column-direction main axis; width: 100% is belt-and-braces in
+     case the wrapper isn't a flex container after some future edit. */
+  flex: 1 1 0;
+  min-height: 0;
   height: 100%;
+  width: 100%;
 }
 .editor-cm .cm-scroller {
   overflow: auto;
+  /* Visible scrollbar on a dark canvas. The default chromium track
+     blends into the panel bg and the BBCode editor looks like it
+     has no scroll affordance even when the content overflows.
+     Slim styled thumb sits next to the line guide without crowding
+     the gutter. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.editor-cm .cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+  background-clip: content-box;
 }
 /* Shared empty-state component (renderer/src/components/EmptyState.tsx)
    — codifies the visual vocabulary across Documents list (F1), RAG chat
@@ -1724,6 +1810,134 @@ body {
 }
 .modal-close:hover { color: var(--text); }
 .modal-body { padding: 14px 20px; }
+
+/* Custom right-click menu — replaces Electron's native one (removed
+   from main.ts) so we can add BBCode-aware items like "Delete [tag]
+   (keep content)" alongside the standard clipboard actions. */
+.app-ctx-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 180px;
+  padding: 4px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 13px;
+  user-select: none;
+}
+.app-ctx-menu-row {
+  position: relative;
+}
+.app-ctx-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 14px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  font-size: inherit;
+  cursor: pointer;
+  font-family: inherit;
+}
+.app-ctx-menu-item:hover:not(:disabled) {
+  background: var(--select);
+  color: #fff;
+}
+.app-ctx-menu-item:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+.app-ctx-menu-chev {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.app-ctx-menu-item:hover .app-ctx-menu-chev { color: #fff; }
+.app-ctx-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+.app-ctx-submenu {
+  /* Same surface as the parent menu; offset via inline left/top set
+     by the React component. */
+}
+
+/* Auto-updater toast — floating card pinned to the bottom-left of
+   the viewport. Out of document flow so it doesn't push or shrink
+   anything; small enough to be glanced at and ignored. */
+.updater-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  max-width: min(420px, calc(100vw - 32px));
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 5px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+.updater-toast-ready { border-left-color: var(--green); }
+.updater-toast-error { border-left-color: var(--accent-2); }
+.updater-toast-error .updater-toast-line { color: var(--accent-2); }
+.updater-toast-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+.updater-toast-line {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.updater-toast-line strong { color: var(--text); font-weight: 600; }
+.updater-toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.updater-toast-primary {
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+.updater-toast-primary:hover { filter: brightness(1.1); }
+.updater-toast-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 3px;
+}
+.updater-toast-close:hover { background: var(--panel); color: var(--text); }
 /* The settings modal body can outgrow the 80vh max-height. Let it
    scroll inside the modal so the per-section Save buttons stay
    reachable without resizing the dialog. */
