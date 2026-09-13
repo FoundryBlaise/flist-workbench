@@ -394,11 +394,72 @@ def test_put_payload_invalid_shape_returns_422(
     sid = client.post(
         "/flist/character/123/sets", json={"name": "Main"}
     ).json()["set"]["id"]
+    # With the etag, so the write gets as far as shape validation —
+    # without one it is refused earlier as a blind overwrite.
+    etag = client.get(f"/flist/character/123/sets/{sid}/payload").json()["etag"]
     res = client.put(
         f"/flist/character/123/sets/{sid}/payload",
         json={"_schema_version": 6, "_overlay": []},
+        headers={"If-Match": etag},
     )
     assert res.status_code == 422
+
+
+def test_a_write_that_never_read_the_set_is_refused(
+    client: TestClient, archive
+) -> None:
+    """The bug this guards: the window seeded its editor from Live,
+    then autosaved that over a much longer draft — one keystroke at a
+    time, with no etag, and the sidecar took it. A PUT with no If-Match
+    over an existing payload has not seen what it is replacing."""
+    _seed_live(client, archive)
+    sid = client.post(
+        "/flist/character/123/sets", json={"name": "Main"}
+    ).json()["set"]["id"]
+    before = client.get(f"/flist/character/123/sets/{sid}/payload").json()
+
+    res = client.put(
+        f"/flist/character/123/sets/{sid}/payload",
+        json={
+            "_schema_version": 6,
+            "_overlay": ["character.description"],
+            "character": {"description": "short"},
+        },
+    )
+
+    assert res.status_code == 409
+    assert res.json()["detail"]["detail"] == "etag_required"
+    assert res.json()["detail"]["current_etag"] == before["etag"]
+    after = client.get(f"/flist/character/123/sets/{sid}/payload").json()
+    assert after["payload"] == before["payload"], "nothing was written"
+
+
+def test_a_write_that_read_first_goes_through(
+    client: TestClient, archive
+) -> None:
+    """The guard costs a well-behaved client nothing: read, send the
+    etag back, write. Creating a set writes its payload immediately —
+    from Live or empty — so there is no etag-free window to fall
+    through."""
+    _seed_live(client, archive)
+    sid = client.post(
+        "/flist/character/123/sets", json={"name": "Fresh", "source": "empty"}
+    ).json()["set"]["id"]
+    etag = client.get(f"/flist/character/123/sets/{sid}/payload").json()["etag"]
+
+    res = client.put(
+        f"/flist/character/123/sets/{sid}/payload",
+        json={
+            "_schema_version": 6,
+            "_overlay": ["character.description"],
+            "character": {"description": "first words"},
+        },
+        headers={"If-Match": etag},
+    )
+
+    assert res.status_code == 200, res.text
+    after = client.get(f"/flist/character/123/sets/{sid}/payload").json()
+    assert after["payload"]["character"]["description"] == "first words"
 
 
 # ---- M3 migration via API ---------------------------------------------

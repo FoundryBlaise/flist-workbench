@@ -2135,13 +2135,9 @@ export const useStore = create<State>((set, get) => ({
     // Live in memory but not flushed to disk — first edit then PUTs
     // (Tier 2 §1.6 materialise-on-first-edit).
     //
-    // Working-sets v2 short-circuit: when the character has an active
-    // set, the legacy `working.json` slot is never written; calling
-    // `flistLoadWorking` would hit the legacy endpoint and 404 every
-    // time, polluting the console on every character switch. Seed the
-    // legacy mirror from Live in memory so consumers of
-    // `flistWorking[id]` still see a sensible payload, and skip the
-    // round-trip entirely.
+    // When a set is active, its payload is the truth and the legacy
+    // `working.json` endpoint is not written at all — asking it would
+    // 404 on every character switch. Read the set instead.
     const activeSetId = get().flistActiveSetId[characterId] ?? null
     // Never reseed over unsaved edits. Autosave waits 500 ms for quiet
     // time, and the picker calls this on every click — including a
@@ -2160,17 +2156,38 @@ export const useStore = create<State>((set, get) => ({
         }
       }))
     } else if (activeSetId) {
-      const liveForSeed = get().flistArchive[characterId]?.live ?? null
-      const seeded = liveForSeed
-        ? seedWorkingFromLive(liveForSeed)
-        : { ...emptyWorkingSlot().payload }
+      // The set's own payload, fetched fresh — the same thing
+      // flistActivateSet reads when the user clicks the row. This used
+      // to seed from Live instead, on the theory that the slot was
+      // only a mirror nobody displayed. The editor displays it: after
+      // switching away and back, the Workbench row was selected while
+      // the panel showed the published profile, and only a detour
+      // through Live and back fixed it. The edits were never in
+      // danger — the window was reading the wrong file.
+      let payload: WorkingPayload
+      let etag: string | null = null
+      try {
+        const res = await api.flistSetPayloadRead(characterId, activeSetId)
+        payload = res.payload as WorkingPayload
+        etag = res.etag
+      } catch {
+        // No payload on disk yet: the bench exists but has never been
+        // written to. Live is the right seed for that one case.
+        const liveForSeed = get().flistArchive[characterId]?.live ?? null
+        payload = liveForSeed
+          ? seedWorkingFromLive(liveForSeed)
+          : { ...emptyWorkingSlot().payload }
+      }
       const slot: FlistWorkingSlot = {
         ...emptyWorkingSlot(),
-        payload: seeded,
-        materialised: false
+        payload,
+        overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
+        etag,
+        materialised: etag !== null
       }
       set((s) => ({
         flistWorking: { ...s.flistWorking, [characterId]: slot },
+        flistSetWorking: { ...s.flistSetWorking, [activeSetId]: slot },
         flistWorkingLoadStatus: {
           ...s.flistWorkingLoadStatus,
           [characterId]: 'ready'

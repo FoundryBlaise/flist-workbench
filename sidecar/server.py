@@ -1228,6 +1228,28 @@ async def flist_character_set_payload_put(
         body = await request.json()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid JSON body") from exc
+    # A write with no If-Match is a write by something that never read
+    # what it is replacing. That is fine for the first one — the file
+    # does not exist yet, which is how materialise-on-first-edit works
+    # — and is never fine afterwards. A window that had seeded its
+    # editor from Live once flattened a 556-character draft down to the
+    # 41 published characters this way, one keystroke at a time, and
+    # the blind PUT is what carried it out.
+    if if_match is None:
+        existing = character_archive.set_payload_etag(character_id, set_id)
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "detail": "etag_required",
+                    "current_etag": existing,
+                    "message": (
+                        "This set already has a payload. Read it and send "
+                        "its etag as If-Match; a write that has not seen "
+                        "the current contents would overwrite them."
+                    ),
+                },
+            )
     try:
         new_etag = character_archive.write_set_payload(
             character_id, set_id, body, expected_etag=if_match

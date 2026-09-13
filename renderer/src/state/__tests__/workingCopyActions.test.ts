@@ -471,3 +471,47 @@ describe('reopening a character must not discard what was typed', () => {
     )
   })
 })
+
+describe('coming back to a character shows the Workbench, not Live', () => {
+  it('loads the active set payload instead of reseeding from Live', async () => {
+    // Reported from the field: edit a character, switch away, switch
+    // back — the Workbench row is selected but the editor shows the
+    // published profile. The edits were fine on disk; the window was
+    // reading the wrong thing. Clicking Live and then Workbench fixed
+    // it, because that path goes through flistActivateSet, which does
+    // read the set's payload.
+    seedSlot('99', { character: { description: 'stale' } })
+    useStore.setState((s) => ({
+      flistWorking: {},
+      flistArchive: {
+        '99': {
+          live: { character: { name: 'Amber', description: 'what the site has' } },
+          snapshots: [],
+          pullStatus: 'idle'
+        }
+      } as never,
+      flistActiveSetId: { ...s.flistActiveSetId, '99': SET_ID },
+      flistActiveCharacterId: '99'
+    }))
+    mockFetch([
+      async () =>
+        ok({
+          payload: {
+            _schema_version: 2,
+            _overlay: ['character.description'],
+            character: { description: 'what I typed earlier' }
+          },
+          etag: 'e1'
+        })
+    ])
+
+    await useStore.getState().flistOpenWorking('99')
+
+    expect(useStore.getState().editorContent).toBe('what I typed earlier')
+    const slot = useStore.getState().flistWorking['99']
+    expect(
+      (slot.payload as Record<string, Record<string, string>>).character
+        .description
+    ).toBe('what I typed earlier')
+  })
+})
