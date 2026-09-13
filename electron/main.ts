@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
+import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
@@ -640,6 +641,9 @@ app.whenReady().then(async () => {
   try {
     await startSidecar()
     appendDiagLog('whenReady', 'sidecar started')
+    // Answers render requests from a connected model for as long as
+    // the app runs. Survives sidecar restarts on its own.
+    startRenderLoop()
   } catch (err) {
     appendDiagLog('sidecar-failed', err)
   }
@@ -706,6 +710,7 @@ app.on('before-quit', async (event) => {
   } catch {
     // Sidecar unreachable / already gone — SIGTERM below covers it.
   }
+  stopRenderLoop()
   stopSidecar()
   app.quit()
 })

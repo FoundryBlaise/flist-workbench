@@ -14,6 +14,11 @@
   },
   "include": [
     "electron/**/*.ts",
+    // The main process renders profile previews to PNG and calls the
+    // renderer's BBCode converter to do it — one implementation, so a
+    // model's picture and the user's preview cannot disagree. Pure
+    // string functions, no DOM.
+    "renderer/src/lib/bbcode/index.ts",
     "electron.vite.config.ts",
     "playwright.config.ts",
     "tests/**/*.ts"

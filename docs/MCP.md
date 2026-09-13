@@ -68,19 +68,19 @@ Ollama model.
 
 ### Smaller endpoints
 
-A small local model handling 72 tools tends to pick badly. Two narrower
+A small local model handling 73 tools tends to pick badly. Two narrower
 endpoints serve the same implementations:
 
 | URL | What it carries |
 |---|---|
-| `.../mcp` | everything (72 tools) |
-| `.../mcp/character` | profile editing (54) |
+| `.../mcp` | everything (73 tools) |
+| `.../mcp/character` | profile editing (55) |
 | `.../mcp/logs` | logs, labels, search (30) |
 | `.../mcp/classify` | the IC/OOC labelling loop only (9) |
 
 Tool schemas are not free. Every tool an endpoint carries is
 described in the model's context before it does any work: the 30 on
-`/mcp/logs` cost roughly 5800 tokens, the 72 on `/mcp` roughly 13700.
+`/mcp/logs` cost roughly 5800 tokens, the 73 on `/mcp` roughly 13700.
 A client with a 12k window could not fit one batch of messages to
 classify alongside them. Point a long labelling run at
 `/mcp/classify` and that drops to about 1500.
@@ -106,7 +106,7 @@ ends up in a transcript.
 
 ## What it can do
 
-72 tools. The ones worth knowing about:
+73 tools. The ones worth knowing about:
 
 **Finding your way around** — `get_workbench_status` first, then
 `list_characters`, `list_working_sets`, `explain_set_addressing` if an
@@ -114,6 +114,19 @@ addressing error is puzzling.
 
 **Reading a profile** — `get_description` (pages through a long one),
 `list_profile_fields`, `list_kinks`, `list_images`, `get_live_profile`.
+
+**Looking at the result** — `render_profile_image` returns the profile
+as a picture, rendered by the app's own preview: same BBCode renderer,
+same stylesheet, same F-list theme mimics. BBCode is not a format
+anyone parses accurately in their head — an unclosed `[collapse]`
+swallows the rest of the page, a colour that reads well on Dark can
+vanish on Light, an `[img]` id that no longer resolves leaves a hole —
+and none of that shows up when you re-read the source you just wrote.
+Worth a look after any substantial edit, and worth trying a second
+`theme` when the description sets colours. The Workbench window has to
+be open: it is the thing that draws. A picture-heavy profile comes
+back as JPEG rather than PNG, because the image travels to the model
+as base64 and an oversized tool result is refused outright.
 
 **Editing** — `create_working_set`, then `edit_description` (an exact
 string replacement, far safer than `set_description` on a 30 KB
@@ -223,7 +236,7 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (72 tools) | ~13700 | does not fit in 24k |
+| `/mcp` (73 tools) | ~13700 | does not fit in 24k |
 | `/mcp/logs` (30 tools) | ~5800 | ~14900 |
 | `/mcp/classify` (9 tools) | ~1500 | ~10600 |
 

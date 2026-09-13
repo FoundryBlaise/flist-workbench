@@ -166,16 +166,31 @@ async def test_list_working_sets_marks_the_active_one(workbench) -> None:
     assert body["active_set"] == "AU"
 
 
-async def test_reading_a_set_without_one_active_explains_itself(
-    workbench,
-) -> None:
+async def test_naming_no_set_means_the_workbench(workbench) -> None:
+    """Every character has one Workbench and the window shows it, so a
+    caller that names no set means that one. It used to refuse with
+    "no active set — create one first", which matched a UI that no
+    longer exists: seeding it from Live on first ask is what the
+    window does too."""
     async with mcp_client() as session:
-        result, _ = await call_tool(
+        _, body = await call_tool(
             session, "get_description", character="Lady Amber Blaise"
         )
-    text = tool_error_text(result)
-    assert "no_active_set" in text
-    assert "create_working_set" in text
+    assert body["set"] == "Workbench"
+    assert body["read_only"] is False
+    # Seeded from what is published, so the first read is not empty.
+    assert body["description"] == "[b]A published profile.[/b]"
+
+
+async def test_a_character_never_pulled_has_nothing_to_open(workbench) -> None:
+    import character_archive
+
+    character_archive.register_character("99", "Ghost")
+    async with mcp_client() as session:
+        result, _ = await call_tool(
+            session, "get_description", character="Ghost"
+        )
+    assert "nothing_to_edit" in tool_error_text(result)
 
 
 async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:

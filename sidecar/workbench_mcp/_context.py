@@ -177,22 +177,23 @@ def resolve_set(
         return ResolvedSet(character=character, id=None, name="live")
 
     if set_ref is None or not str(set_ref).strip():
-        active = character_archive.read_active_set_id(character.id)
-        if active is None:
+        # No set named: the character's Workbench, which is what the
+        # window shows and the only thing a user means by "my edits".
+        # It is seeded from Live the first time anything asks — for a
+        # read this is harmless, and it spares every caller a
+        # "create one first" dance that no longer matches the UI.
+        meta = character_archive.resolve_workbench(character.id)
+        if meta is None:
             raise ToolError(
-                "no_active_set",
-                f"{character.name} has no active working set. Pass an "
-                "explicit set, or create one with create_working_set.",
+                "nothing_to_edit",
+                f"{character.name} has never been pulled from F-list, so "
+                "there is nothing to copy into a Workbench. Pull the "
+                "character first.",
                 available_sets=[
                     {"id": s.id, "name": s.name} for s in sets
                 ],
             )
-        meta = character_archive.read_set_meta(character.id, active)
-        return ResolvedSet(
-            character=character,
-            id=active,
-            name=(meta.name if meta else active),
-        )
+        return ResolvedSet(character=character, id=meta.id, name=meta.name)
 
     needle = str(set_ref).strip()
     for meta in sets:

@@ -48,6 +48,8 @@ it rather than beside it.
 | `sidecar/server.py` | the REST surface the renderer and extension call |
 | `sidecar/services/` | orchestration shared by REST routes and MCP tools |
 | `sidecar/workbench_mcp/` | the MCP server: tool registry + tool modules |
+| `sidecar/services/render.py` | parks a render request until the app draws it |
+| `electron/renderProfile.ts` | offscreen capture of a profile, for `render_profile_image` |
 | `sidecar/character_archive.py` | on-disk character archive (working sets, snapshots, backups) |
 | `sidecar/labels.py` | IC/OOC verdicts + the read-time rule resolver |
 | `sidecar/rag_*.py`, `chunker.py` | chunking, embedding, Qdrant, BM25, reranking |

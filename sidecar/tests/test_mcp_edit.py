@@ -220,15 +220,30 @@ async def test_live_is_never_writable(workbench) -> None:
     assert workbench.read_live("42")["character"]["description"] == "[b]Published.[/b]"
 
 
-async def test_editing_without_an_active_set_refuses(workbench) -> None:
+async def test_editing_without_naming_a_set_lands_in_the_workbench(
+    workbench,
+) -> None:
+    """No set named means the Workbench, created on the spot if this is
+    the first edit. Refusing with "create one first" belonged to the
+    era of several named sets; there is one now, and the window makes
+    it without asking either."""
     async with mcp_client("character") as session:
-        result, _ = await call_tool(
+        _, body = await call_tool(
             session,
             "set_description",
             character="Lady Amber Blaise",
-            text="nowhere to put this",
+            text="written straight into the bench",
         )
-    assert "no_active_set" in tool_error_text(result)
+        assert body["set"] == "Workbench"
+        _, read = await call_tool(
+            session, "get_description", character="Lady Amber Blaise"
+        )
+    assert read["description"] == "written straight into the bench"
+    # Live is untouched: editing never publishes.
+    import character_archive
+
+    live = character_archive.read_live("42")
+    assert live["character"]["description"] == "[b]Published.[/b]"
 
 
 # ---- description -------------------------------------------------------
