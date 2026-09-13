@@ -58,6 +58,20 @@ def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> rag_jobs.JobRegistry:
 def workbench_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
+    # Chunking follows the embedding model's window, and these tests
+    # stub the embedding away entirely. Pin a model with a wide window
+    # so the fixtures keep the chunk boundaries they were written for.
+    import settings as settings_store
+
+    conn = settings_store.connect()
+    try:
+        settings_store.set_value(
+            conn,
+            settings_store.KEY_RAG_EMBED_MODEL,
+            "jinaai/jina-embeddings-v2-base-en",
+        )
+    finally:
+        conn.close()
     return tmp_path
 
 
@@ -367,7 +381,10 @@ def test_job_scoped_force_rewipe_deletes_only_that_scope(
     import rag as rag_settings_mod
 
     rag_store.write_manifest(
-        embed_model=rag_settings_mod.DEFAULT_EMBED_MODEL,
+        # The loaded name, not the module default — the fixture pins a
+        # wide-window model, and a mismatch here reads as a model swap
+        # and wipes everything instead of just scope A.
+        embed_model=rag_settings_mod.load_settings().embed_model,
         embed_dimension=4,
     )
 
@@ -548,3 +565,27 @@ def test_rag_status_after_ingest(
     status = api_client.get("/rag/status").json()
     assert status["embed_dimension"] == 4
     assert status["chunk_count"] >= 1
+
+
+def test_channels_are_left_out_of_the_ingest_scope(monkeypatch, workbench_dir) -> None:
+    """Group chat is not this character's roleplay, and there is a lot of
+    it — on a real archive the channels carried two thirds of every
+    unjudged message. list_partners hides them; the ingest used not to."""
+
+    class _Entry:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.bytes = 1
+            self.aliases = ()
+
+    monkeypatch.setattr(
+        rag_jobs.logs_store, "list_partners",
+        lambda _c: [_Entry("Envale"), _Entry("#german ooc"), _Entry("#adh-abc")],
+    )
+    targets = rag_jobs._resolve_targets({"character": "Amber"})
+    assert targets == [("Amber", "Envale")]
+
+    with_channels = rag_jobs._resolve_targets(
+        {"character": "Amber", "include_channels": True}
+    )
+    assert [p for _, p in with_channels] == ["Envale", "#german ooc", "#adh-abc"]

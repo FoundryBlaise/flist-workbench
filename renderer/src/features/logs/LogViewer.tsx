@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useStore } from '../../state'
-import { api, type Label, type LogMessage } from '../../lib/api'
+import { api, type Label, type LabelSource, type LogMessage } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
 
@@ -16,18 +16,16 @@ type Filter = {
   ic: boolean
   ooc: boolean
   unlabeled: boolean
-  failed: boolean
   system: boolean
 }
 const DEFAULT_FILTER: Filter = {
   ic: true,
   ooc: true,
   unlabeled: true,
-  failed: true,
   system: true,
 }
 
-type Bucket = 'ic' | 'ooc' | 'unlabeled' | 'failed' | 'system'
+type Bucket = 'ic' | 'ooc' | 'unlabeled' | 'system'
 
 // A message's effective label for filtering. System-type messages
 // (ad/roll/warn/event) get bucketed as "System" regardless of label
@@ -36,7 +34,6 @@ function effectiveBucket(m: LogMessage): Bucket {
   if (m.kind === 'system') return 'system'
   if (m.label === 'IC') return 'ic'
   if (m.label === 'OOC') return 'ooc'
-  if (m.label === 'Failed') return 'failed'
   // Missing label (shouldn't happen with new sidecar, but defensive) or
   // explicit Unlabeled — both bucket as unlabeled.
   return 'unlabeled'
@@ -158,7 +155,6 @@ export function LogViewer() {
 
   const markSeen = useStore((s) => s.markCharacterSeen)
   const applyLabelOverride = useStore((s) => s.applyLabelOverride)
-  const openClassify = useStore((s) => s.openClassify)
   const openIngest = useStore((s) => s.openIngest)
 
   useEffect(() => {
@@ -180,16 +176,6 @@ export function LogViewer() {
     setLabelMenu(null)
     setConvMenu(null)
   }, [key])
-
-  // RAG citation jump state — populated by the effect further below
-  // (after `filtered` and `rendered` are computed). Declaring the
-  // state here keeps it accessible from the Virtuoso row callback.
-  const [jumpRange, setJumpRange] = useState<{ start: number; end: number } | null>(null)
-  const [jumpFading, setJumpFading] = useState(false)
-  const logJump = useStore((s) => s.logJump)
-  const clearLogJump = useStore((s) => s.clearLogJump)
-  const selectCharacter = useStore((s) => s.selectCharacter)
-  const selectPartner = useStore((s) => s.selectPartner)
 
   // Close the conversation menu on Escape or any non-menu click.
   useEffect(() => {
@@ -282,31 +268,29 @@ export function LogViewer() {
   const stats = useMemo(() => {
     if (!messages)
       return {
-        total: 0, ic: 0, ooc: 0, unlabeled: 0, failed: 0, system: 0,
+        total: 0, ic: 0, ooc: 0, unlabeled: 0, system: 0,
         labeled: 0, from: '', to: '',
       }
     let ic = 0
     let ooc = 0
     let unlabeled = 0
-    let failed = 0
     let system = 0
-    // Messages with an explicit LLM/manual label — i.e. rows in
-    // labels.db that the "Reset all labels" action would clear.
-    // Failed rows live in a parallel table and don't count here.
+    // Messages with a stored verdict — i.e. rows in labels.db that
+    // "Reset all labels" would clear. Rule-decided messages have no
+    // row and don't count.
     let labeled = 0
     for (const m of messages) {
       const b = effectiveBucket(m)
       if (b === 'ic') ic++
       else if (b === 'ooc') ooc++
       else if (b === 'unlabeled') unlabeled++
-      else if (b === 'failed') failed++
       else system++
-      if (m.label_source === 'llm' || m.label_source === 'manual') labeled++
+      if (m.label_source) labeled++
     }
     const from = messages.length ? dayLabel(messages[0].ts) : ''
     const to = messages.length ? dayLabel(messages[messages.length - 1].ts) : ''
     return {
-      total: messages.length, ic, ooc, unlabeled, failed, system,
+      total: messages.length, ic, ooc, unlabeled, system,
       labeled, from, to,
     }
   }, [messages])
@@ -353,47 +337,6 @@ export function LogViewer() {
     }
     return { items, hitTotal }
   }, [filtered, search])
-
-  // RAG citation click — scroll to and briefly highlight the cited
-  // message range. The jump intent may arrive while a different
-  // partner is loaded; in that case we flip the sidebar selection and
-  // wait for the messages to land before scrolling.
-  useEffect(() => {
-    if (!logJump) return
-    // Wrong conversation open → swap sidebar selection. The next render
-    // (after messages load) re-fires this effect with the matching pair.
-    if (logJump.character !== activeChar || logJump.partner !== partner) {
-      if (logJump.character !== activeChar) selectCharacter(logJump.character)
-      selectPartner(logJump.partner)
-      return
-    }
-    if (!filtered.length) return
-    // Walk rendered.items (not filtered) so the scroll index lines up
-    // with what Virtuoso sees — items include day-separator pseudo-rows.
-    const targetItem = rendered.items.findIndex(
-      (it) => it.kind === 'msg' && it.msg.ts >= logJump.ts_start
-    )
-    if (targetItem >= 0) {
-      virtuosoRef.current?.scrollToIndex({
-        index: targetItem,
-        align: 'center',
-        behavior: 'smooth'
-      })
-    }
-    setJumpRange({ start: logJump.ts_start, end: logJump.ts_end })
-    setJumpFading(false)
-    clearLogJump()
-    const fade = window.setTimeout(() => setJumpFading(true), 2500)
-    const clear = window.setTimeout(() => {
-      setJumpRange(null)
-      setJumpFading(false)
-    }, 4500)
-    return () => {
-      window.clearTimeout(fade)
-      window.clearTimeout(clear)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logJump, activeChar, partner, filtered.length])
 
   // With virtualisation we can't grab mark.log-hit-active from the DOM
   // (it may not be mounted yet). Look up the index of the message that
@@ -448,13 +391,9 @@ export function LogViewer() {
   // because it's neither IC nor OOC and the user might want to silence
   // it independently.
   const labelTooltip =
-    'IC / OOC / Unlabeled come from the classifier. ' +
-    'Short text (<200 chars by default) and "((…" are auto-OOC; ' +
-    'everything else is Unlabeled until you run Classify on this conversation.'
-  const failedTooltip =
-    'Messages whose classify call errored (bad JSON, HTTP error, timeout). ' +
-    'Right-click → Mark IC / Mark OOC to fix manually, or re-run Classify ' +
-    'to retry. Full debug context is in classify-failures.log (Tools menu).'
+    'Short text (<200 chars by default) and "((…" are auto-OOC. ' +
+    'Everything else stays Unlabeled until a connected model judges it ' +
+    'or you set a label yourself by right-clicking a message.'
   const systemTooltip =
     'Ads, dice rolls, warnings and channel events. Not roleplay content.'
 
@@ -585,6 +524,68 @@ export function LogViewer() {
     }
   }
 
+  // Give every still-unlabeled message in this conversation the same
+  // verdict. For the chats the user already knows the answer about —
+  // some are IC from the first line to the last, and walking two
+  // thousand messages past a model one batch at a time to hear that
+  // back is a waste of their evening.
+  //
+  // Narrow on purpose: existing verdicts are kept and the rules keep
+  // deciding what they decide, so this can only add. The sidecar
+  // reports the hashes it wrote, which is what Undo removes — unlike
+  // "Remove all IC/OOC labels", it cannot take a model's work with it.
+  const fillUnlabeled = async (label: 'IC' | 'OOC') => {
+    if (!activeChar || !partner) return
+    const partnerName = displayPartner(partner)
+    const confirmed = window.confirm(
+      `Mark all ${unlabeledCount.toLocaleString()} unlabeled message(s) in ` +
+        `${partnerName} with ${activeChar} as ${label}?
+
+` +
+        `Only do this if you know the whole conversation is ${label}. ` +
+        `Messages that already have a verdict keep it, and short ` +
+        `messages / "((" lines stay with the rules.`
+    )
+    if (!confirmed) return
+    try {
+      const res = await api.labelsFillUnlabeled({
+        character: activeChar,
+        partner,
+        label
+      })
+      useStore.getState().invalidateMessages(activeChar, partner)
+      await useStore
+        .getState()
+        .loadMessages(activeChar, partner, { force: true })
+      if (res.labeled === 0) return
+      showUndoToast(
+        `${res.labeled.toLocaleString()} message${res.labeled === 1 ? '' : 's'} → ${label}`,
+        () => {
+          void (async () => {
+            try {
+              await api.labelsDeleteHashes({
+                character: activeChar,
+                partner,
+                hashes: res.hashes
+              })
+              useStore.getState().invalidateMessages(activeChar, partner)
+              void useStore
+                .getState()
+                .loadMessages(activeChar, partner, { force: true })
+            } catch (err) {
+              console.error('[labels] undo bulk fill failed', err)
+            }
+          })()
+        }
+      )
+    } catch (err) {
+      console.error('[labels] bulk fill failed', err)
+      window.alert(
+        `Couldn't label the conversation: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
   const selBounds =
     selRange === null
       ? null
@@ -657,12 +658,9 @@ export function LogViewer() {
           characterLabel={activeChar}
           unlabeledCount={unlabeledCount}
           labeledCount={stats.labeled}
-          onClassify={() => {
+          onFillUnlabeled={(label) => {
             setConvMenu(null)
-            openClassify(
-              { character: activeChar, partner },
-              `${displayPartner(partner)} with ${activeChar}`
-            )
+            void fillUnlabeled(label)
           }}
           onIngest={() => {
             setConvMenu(null)
@@ -670,15 +668,6 @@ export function LogViewer() {
               { character: activeChar, partner },
               `${displayPartner(partner)} with ${activeChar}`
             )
-          }}
-          onChatWithThis={() => {
-            setConvMenu(null)
-            // Panel auto-syncs scope to the active partner when in
-            // 'partner' mode (the default when a partner is selected),
-            // so just opening it is enough. Focus is a nicety so the
-            // user can type immediately.
-            useStore.getState().toggleChatPanel(true)
-            useStore.getState().requestChatFocus()
           }}
           onResetAll={async () => {
             setConvMenu(null)
@@ -742,16 +731,6 @@ export function LogViewer() {
           on={filter.unlabeled}
           onClick={() => setFilter((f) => ({ ...f, unlabeled: !f.unlabeled }))}
           title={labelTooltip}
-        />
-        {/* Always render the Failed chip so users know where to look
-            before they have any. Greyed out at 0; loud when populated.
-            Discoverability beats screen-space savings here. */}
-        <FilterButton
-          label="Failed"
-          count={stats.failed}
-          on={filter.failed}
-          onClick={() => setFilter((f) => ({ ...f, failed: !f.failed }))}
-          title={failedTooltip}
         />
         <FilterButton
           label="System"
@@ -885,12 +864,6 @@ export function LogViewer() {
                   selectMode={selectMode}
                   selected={sourceIdx !== -1 && isInSelection(sourceIdx)}
                   isMenuTarget={labelMenu?.msg.hash === item.msg.hash}
-                  isJumpTarget={
-                    jumpRange !== null &&
-                    item.msg.ts >= jumpRange.start &&
-                    item.msg.ts <= jumpRange.end
-                  }
-                  jumpFading={jumpFading}
                   onSelectClick={(shift) => {
                     if (sourceIdx !== -1) handleRowClick(sourceIdx, shift)
                   }}
@@ -1024,8 +997,6 @@ function MessageRow({
   selectMode,
   selected,
   isMenuTarget,
-  isJumpTarget,
-  jumpFading,
   onSelectClick,
   onContextMenu,
   onLabelKeyboardOpen
@@ -1038,8 +1009,6 @@ function MessageRow({
   selectMode: boolean
   selected: boolean
   isMenuTarget: boolean
-  isJumpTarget: boolean
-  jumpFading: boolean
   onSelectClick: (shift: boolean) => void
   onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => void
   onLabelKeyboardOpen: (anchor: HTMLElement) => void
@@ -1060,8 +1029,6 @@ function MessageRow({
     selectMode ? 'log-msg-selectable' : '',
     selected ? 'log-msg-selected' : '',
     isMenuTarget ? 'log-msg-menu-target' : '',
-    isJumpTarget ? 'log-msg-jump-target' : '',
-    isJumpTarget && jumpFading ? 'fading' : ''
   ]
     .filter(Boolean)
     .join(' ')
@@ -1097,7 +1064,6 @@ function MessageRow({
         reason={msg.label_reason}
         priorLabel={msg.prior_label}
         priorSource={msg.prior_source}
-        error={msg.label_error}
       />
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
@@ -1111,9 +1077,8 @@ function ConversationContextMenu({
   characterLabel,
   unlabeledCount,
   labeledCount,
-  onClassify,
+  onFillUnlabeled,
   onIngest,
-  onChatWithThis,
   onResetAll
 }: {
   x: number
@@ -1122,16 +1087,15 @@ function ConversationContextMenu({
   characterLabel: string
   unlabeledCount: number
   labeledCount: number
-  onClassify: () => void
+  onFillUnlabeled: (label: 'IC' | 'OOC') => void
   onIngest: () => void
-  onChatWithThis: () => void
   onResetAll: () => void
 }) {
   const W = 280
-  // 4 menu items (Classify, Ingest, Chat with this, Reset); H sized so
-  // the viewport-edge clamp keeps the whole menu on-screen when right-
-  // clicking near the bottom of a tall pane.
-  const H = 280
+  // 4 menu items (Ingest, all-IC, all-OOC, Reset); H sized so the
+  // viewport-edge clamp keeps the whole menu on-screen when
+  // right-clicking near the bottom of a tall pane.
+  const H = 300
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -1162,7 +1126,6 @@ function ConversationContextMenu({
       moveFocus(idx, -1)
     }
   }
-  const classifyDisabled = unlabeledCount === 0
   const resetDisabled = labeledCount === 0
   return (
     <div
@@ -1184,51 +1147,55 @@ function ConversationContextMenu({
         type="button"
         role="menuitem"
         className="log-label-menu-item"
-        onClick={onClassify}
+        onClick={onIngest}
         onKeyDown={onItemKeyDown(0)}
-        disabled={classifyDisabled}
         title={
-          classifyDisabled
-            ? 'Nothing left to classify in this conversation.'
-            : `Send ${unlabeledCount.toLocaleString()} unlabeled messages to the LLM.`
+          unlabeledCount > 0
+            ? `Embed this conversation into the search index. ` +
+              `${unlabeledCount.toLocaleString()} message(s) have no IC/OOC ` +
+              `verdict yet and will be skipped — ask a connected model to ` +
+              `label them first.`
+            : "Embed this conversation's chunks into the local search index."
         }
-        data-testid="log-conv-menu-classify"
+        data-testid="log-conv-menu-ingest"
       >
-        Classify this conversation
-        {!classifyDisabled && (
+        Ingest this chat (RAG)
+        {unlabeledCount > 0 && (
           <span className="log-label-menu-current">
             {unlabeledCount.toLocaleString()} unlabeled
           </span>
         )}
       </button>
-      <button
-        ref={(el) => {
-          itemRefs.current[1] = el
-        }}
-        type="button"
-        role="menuitem"
-        className="log-label-menu-item"
-        onClick={onIngest}
-        onKeyDown={onItemKeyDown(1)}
-        title="Embed this conversation's IC chunks into the local RAG index."
-        data-testid="log-conv-menu-ingest"
-      >
-        Ingest this chat (RAG)
-      </button>
-      <button
-        ref={(el) => {
-          itemRefs.current[2] = el
-        }}
-        type="button"
-        role="menuitem"
-        className="log-label-menu-item"
-        onClick={onChatWithThis}
-        onKeyDown={onItemKeyDown(2)}
-        title="Open the chat panel scoped to this conversation."
-        data-testid="log-conv-menu-chat"
-      >
-        Chat with this log
-      </button>
+      {(['IC', 'OOC'] as const).map((label, i) => (
+        <button
+          key={label}
+          ref={(el) => {
+            itemRefs.current[1 + i] = el
+          }}
+          type="button"
+          role="menuitem"
+          className="log-label-menu-item"
+          onClick={() => onFillUnlabeled(label)}
+          onKeyDown={onItemKeyDown(1 + i)}
+          disabled={unlabeledCount === 0}
+          title={
+            unlabeledCount === 0
+              ? 'Nothing is unlabeled in this conversation.'
+              : `Write ${label} to all ${unlabeledCount.toLocaleString()} ` +
+                `unlabeled message(s) at once. For a conversation you know ` +
+                `is ${label} throughout — existing verdicts are kept, and ` +
+                `short messages / "((" lines stay with the rules. Undoable.`
+          }
+          data-testid={`log-conv-menu-fill-${label.toLowerCase()}`}
+        >
+          Mark all Unlabeled as {label}
+          <span className="log-label-menu-current">
+            {unlabeledCount === 0
+              ? 'nothing unlabeled'
+              : `${unlabeledCount.toLocaleString()} → ${label}`}
+          </span>
+        </button>
+      ))}
       <button
         ref={(el) => {
           itemRefs.current[3] = el
@@ -1241,8 +1208,8 @@ function ConversationContextMenu({
         disabled={resetDisabled}
         title={
           resetDisabled
-            ? 'No LLM or manual labels to clear.'
-            : `Delete ${labeledCount.toLocaleString()} LLM + manual labels and fall back to rules.`
+            ? 'No stored labels to clear.'
+            : `Delete ${labeledCount.toLocaleString()} stored verdicts and fall back to rules.`
         }
         data-testid="log-conv-menu-reset-all"
       >
@@ -1382,32 +1349,33 @@ function LabelContextMenu({
   )
 }
 
+/** How a stored verdict's source reads in a tooltip. */
+const SOURCE_LABELS: Record<LabelSource, string> = {
+  mcp: 'model',
+  manual: 'you',
+  llm: 'model (legacy)'
+}
+
 function LabelBadge({
   bucket,
   label,
   source,
   reason,
   priorLabel,
-  priorSource,
-  error
+  priorSource
 }: {
   bucket: Bucket
   label?: Label
-  source?: 'llm' | 'manual' | 'failed'
+  source?: LabelSource
   reason?: string
   // Sidecar only ever sets prior_label when the user manually
   // overrode an IC or OOC label, so the wire shape is just IC|OOC.
   priorLabel?: 'IC' | 'OOC'
-  priorSource?: 'llm' | 'manual'
-  // Classifier error string when bucket === 'failed'. Truncated
-  // server-side to 500 chars; the full prompt + raw is in the JSONL
-  // log accessed via Tools → Open classify failure log.
-  error?: string
+  priorSource?: LabelSource
 }) {
-  // IC / OOC / Failed get a visible word; Unlabeled and System show
-  // an em-dash because the chip strip already names them and a tiny
-  // "UNL"/"SYS" badge was both jargon-y and a contrast hazard. Failed
-  // is loud-by-design — the user needs to *see* it to fix it.
+  // IC / OOC get a visible word; Unlabeled and System show an em-dash
+  // because the chip strip already names them and a tiny "UNL"/"SYS"
+  // badge was both jargon-y and a contrast hazard.
   const text =
     bucket === 'system'
       ? '—'
@@ -1415,9 +1383,7 @@ function LabelBadge({
         ? '—'
         : bucket === 'ic'
           ? 'IC'
-          : bucket === 'failed'
-            ? '!'
-            : 'OOC'
+          : 'OOC'
   const klass = [
     'log-label',
     `log-label-${bucket}`,
@@ -1425,33 +1391,28 @@ function LabelBadge({
   ]
     .filter(Boolean)
     .join(' ')
-  // Tooltip: source line, model's reason (if any), prior-label trail
-  // for manual overrides, or the failure error string for Failed.
+  // Tooltip: who decided, their reason if any, and the prior-label
+  // trail on manual overrides.
   const lines: string[] = []
-  if (bucket === 'failed') {
-    lines.push('Classify failed — right-click to fix manually')
-    if (error) lines.push(error)
-  } else if (source === 'llm' || source === 'manual') {
-    lines.push(`${label} · ${source}`)
+  if (source) {
+    lines.push(`${label} · ${SOURCE_LABELS[source] ?? source}`)
   } else if (bucket === 'system') {
     lines.push('F-Chat system message')
   } else if (bucket === 'unlabeled') {
-    lines.push('Not classified — Classify on demand')
+    lines.push('No IC/OOC verdict yet — a connected model can decide, or right-click to set one')
   } else {
     lines.push(`${label} · rule`)
   }
-  if (reason && bucket !== 'failed') lines.push(reason)
+  if (reason) lines.push(reason)
   if (source === 'manual' && priorLabel) {
-    lines.push(`was ${priorLabel} (${priorSource ?? 'auto'})`)
+    lines.push(`was ${priorLabel} (${priorSource ? SOURCE_LABELS[priorSource] : 'auto'})`)
   }
   return (
     <span
       className={klass}
       title={lines.join('\n')}
       aria-label={
-        bucket === 'failed'
-          ? 'Classification failed'
-          : source === 'manual' ? `${label}, manually labeled` : undefined
+        source === 'manual' ? `${label}, manually labeled` : undefined
       }
     >
       {text}

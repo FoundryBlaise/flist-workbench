@@ -46,6 +46,10 @@ class IngestProgress:
     embedded: int = 0
     upserted: int = 0
     skipped_existing: int = 0
+    # Messages dropped because nothing has judged them IC or OOC yet.
+    # A high count means the user should run the classification flow
+    # (MCP: get_messages_to_classify / set_message_labels) first.
+    skipped_unlabeled: int = 0
     failed: int = 0
     total_chunks: int = 0
     current_partner: str | None = None
@@ -86,6 +90,7 @@ class IngestJob:
             "skipped_existing": self.progress.skipped_existing,
             "failed": self.progress.failed,
             "total_chunks": self.progress.total_chunks,
+            "skipped_unlabeled": self.progress.skipped_unlabeled,
             "current_partner": self.progress.current_partner,
             "last_error": self.progress.last_error,
             "error": self.error,
@@ -159,9 +164,22 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
     explicit single-conversation scope we normalize the supplied
     partner to its primary so the chunker keys chunks canonically;
     read_messages on the primary will pick up every member's log file.
+
+    Channel logs (`#name`) are left out unless asked for. They are group
+    chat, not this character's roleplay, and they dwarf everything else:
+    on one real archive they carried two thirds of all unjudged messages
+    and millions of rule-OOC lines. Indexing them buries the private
+    conversations the user is actually asking about. `list_partners`
+    already hides them by default; the ingest used to be the one place
+    that did not.
     """
     character = scope.get("character")
     partner = scope.get("partner")
+    include_channels = bool(scope.get("include_channels"))
+
+    def wanted(name: str) -> bool:
+        return include_channels or not name.startswith("#")
+
     if character and partner:
         conn = aliases_store.connect()
         try:
@@ -171,7 +189,7 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
         return [(character, primary)]
     if character:
         partners = logs_store.list_partners(character)
-        return [(character, p.name) for p in partners]
+        return [(character, p.name) for p in partners if wanted(p.name)]
     targets: list[tuple[str, str]] = []
     chars = logs_store.list_characters()
     for c in chars:
@@ -180,7 +198,8 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
         except logs_store.LogDirError:
             continue
         for p in partners:
-            targets.append((c.name, p.name))
+            if wanted(p.name):
+                targets.append((c.name, p.name))
     return targets
 
 
@@ -203,7 +222,7 @@ def _run_job(job: IngestJob) -> None:
         return
 
     labels_conn = labels_store.connect()
-    # Hoisted so the `finally` block can call try_unload even if the
+    # Hoisted so the `finally` block can still see the settings if the
     # settings load below raises before rag_set gets bound inside try.
     rag_set: rag_settings.RagSettings | None = None
     try:
@@ -334,16 +353,6 @@ def _run_job(job: IngestJob) -> None:
         job.state = "failed"
     finally:
         labels_conn.close()
-        # Best-effort: tell Ollama to evict the embedding model now that
-        # the ingest run is over. LM Studio ignores the keep_alive
-        # field harmlessly. Worth doing on every terminal state
-        # (done / cancelled / failed) so a partial run still frees VRAM
-        # for whatever the user wants to do next.
-        if rag_set is not None:
-            try:
-                rag_embed.try_unload(rag_set)
-            except Exception:  # noqa: BLE001 — unload is advisory
-                pass
         job.finished_at = time.time()
 
 
@@ -382,6 +391,7 @@ def _ingest_one_partner(
     by_hash = labels_store.labels_for_partner(
         labels_conn, character, partner, partner_aliases=alias_group
     )
+    unlabeled_counter = [0]
     chunks = chunker.chunk_messages(
         messages,
         character=character,
@@ -393,7 +403,9 @@ def _ingest_one_partner(
         max_chars=rag_set.chunk_max_chars,
         soft_split=rag_set.chunk_soft_split_chars,
         overlap=rag_set.chunk_overlap_msgs,
+        skipped_unlabeled=unlabeled_counter,
     )
+    job.progress.skipped_unlabeled += unlabeled_counter[0]
     job.progress.chunked += len(chunks)
     job.progress.total_chunks += len(chunks)
     if not chunks:

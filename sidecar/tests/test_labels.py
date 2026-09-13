@@ -26,15 +26,7 @@ def _msg(ts: int = 1_700_000_000, speaker: str = "Alice", raw: str = "hello worl
 
 
 def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
-    return labels_store.LabelsSettings(
-        threshold_chars=threshold,
-        llm_endpoint=labels_store.DEFAULT_LLM_ENDPOINT,
-        llm_model=labels_store.DEFAULT_LLM_MODEL,
-        llm_api_key="",
-        system_prompt=labels_store.DEFAULT_SYSTEM_PROMPT,
-        context_before=labels_store.DEFAULT_CONTEXT_BEFORE,
-        context_after=labels_store.DEFAULT_CONTEXT_AFTER,
-    )
+    return labels_store.LabelsSettings(threshold_chars=threshold)
 
 
 # ---- resolver -----------------------------------------------------------
@@ -112,13 +104,13 @@ def test_upsert_then_get_returns_label(tmp_path: Path) -> None:
     try:
         labels_store.upsert_label(
             conn, hash="abc", character="Char", partner="Bob",
-            ts=1, speaker="Bob", label="IC", source="llm",
+            ts=1, speaker="Bob", label="IC", source="mcp",
             reason="long narrative",
         )
         rows = labels_store.labels_for_partner(conn, "Char", "Bob")
         assert "abc" in rows
         assert rows["abc"]["label"] == "IC"
-        assert rows["abc"]["source"] == "llm"
+        assert rows["abc"]["source"] == "mcp"
         assert rows["abc"]["prior_label"] is None
     finally:
         conn.close()
@@ -129,7 +121,7 @@ def test_upsert_snapshots_prior_label_on_override(tmp_path: Path) -> None:
     try:
         labels_store.upsert_label(
             conn, hash="h1", character="C", partner="P",
-            ts=1, speaker="P", label="IC", source="llm",
+            ts=1, speaker="P", label="IC", source="mcp",
         )
         labels_store.upsert_label(
             conn, hash="h1", character="C", partner="P",
@@ -139,7 +131,7 @@ def test_upsert_snapshots_prior_label_on_override(tmp_path: Path) -> None:
         assert rows["h1"]["label"] == "OOC"
         assert rows["h1"]["source"] == "manual"
         assert rows["h1"]["prior_label"] == "IC"
-        assert rows["h1"]["prior_source"] == "llm"
+        assert rows["h1"]["prior_source"] == "mcp"
     finally:
         conn.close()
 
@@ -184,7 +176,7 @@ def test_delete_labels_for_partner_scopes_correctly(tmp_path: Path) -> None:
         for h, p in (("h1", "P"), ("h2", "P"), ("h3", "Q")):
             labels_store.upsert_label(
                 conn, hash=h, character="C", partner=p,
-                ts=1, speaker="S", label="IC", source="llm",
+                ts=1, speaker="S", label="IC", source="mcp",
             )
         deleted = labels_store.delete_labels_for_partner(conn, "C", "P")
         assert deleted == 2
@@ -208,85 +200,102 @@ def test_stats_counts_three_buckets(tmp_path: Path) -> None:
         labels_store.upsert_label(
             conn, hash=labels_store.msg_hash(m_db_ic),
             character="C", partner="P", ts=30, speaker="A",
-            label="IC", source="llm",
+            label="IC", source="mcp",
         )
         counts = labels_store.stats(conn, "C", "P", [m_long, m_short, m_db_ic], _settings())
-        assert counts == {"IC": 1, "OOC": 1, "Unlabeled": 1, "Failed": 0}
+        assert counts == {"IC": 1, "OOC": 1, "Unlabeled": 1}
     finally:
         conn.close()
 
 
-# ---- failure tracking ---------------------------------------------------
+# ---- retired: the "Failed" state ---------------------------------------
 
 
-def test_record_failure_surfaces_in_resolver_and_stats(tmp_path: Path) -> None:
+def test_failed_state_is_gone(tmp_path: Path) -> None:
+    """A message the model declines to judge simply stays Unlabeled and
+    comes back in the next batch, so there is nothing to record."""
     conn = _db(tmp_path)
     try:
-        long_text = "A" * 250
-        m = _msg(ts=10, speaker="A", raw=long_text, text=long_text)
-        h = labels_store.msg_hash(m)
-        labels_store.record_failure(
-            conn, hash=h, character="C", partner="P",
-            ts=10, speaker="A", error="bad json: 'foo'",
-        )
-        failures = labels_store.failures_for_partner(conn, "C", "P")
-        assert h in failures
-        assert failures[h]["error"] == "bad json: 'foo'"
-        assert labels_store.resolve(m, None, _settings(), failed=True) == "Failed"
-        counts = labels_store.stats(conn, "C", "P", [m], _settings())
-        assert counts == {"IC": 0, "OOC": 0, "Unlabeled": 0, "Failed": 1}
+        tables = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        assert "label_failures" not in tables
+        assert "label_jobs" not in tables
+    finally:
+        conn.close()
+    assert not hasattr(labels_store, "record_failure")
+    assert not hasattr(labels_store, "LABEL_FAILED")
+
+
+def test_existing_databases_have_the_retired_tables_dropped(
+    tmp_path: Path,
+) -> None:
+    """Upgrading over an install that still has them must clear them."""
+    import sqlite3
+
+    db = labels_store.db_path(tmp_path)
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        "CREATE TABLE label_failures (hash TEXT PRIMARY KEY);"
+        "CREATE TABLE label_jobs (id TEXT PRIMARY KEY);"
+    )
+    raw.commit()
+    raw.close()
+
+    conn = labels_store.connect(tmp_path)
+    try:
+        tables = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        assert "label_failures" not in tables
+        assert "label_jobs" not in tables
     finally:
         conn.close()
 
 
-def test_upsert_label_clears_failure_row(tmp_path: Path) -> None:
-    conn = _db(tmp_path)
+def test_existing_databases_accept_an_mcp_verdict(tmp_path: Path) -> None:
+    """The old CHECK constraint only allowed 'llm' and 'manual', so the
+    first verdict from a connected model would have failed on any
+    install created before the migration."""
+    import sqlite3
+
+    db = labels_store.db_path(tmp_path)
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        """
+        CREATE TABLE labels (
+            hash TEXT PRIMARY KEY, character TEXT NOT NULL,
+            partner TEXT NOT NULL, ts INTEGER NOT NULL,
+            speaker TEXT NOT NULL,
+            label TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+            confidence REAL NOT NULL, reason TEXT,
+            source TEXT NOT NULL CHECK (source IN ('llm','manual')),
+            prior_label TEXT, prior_source TEXT, updated_at REAL NOT NULL
+        );
+        INSERT INTO labels VALUES
+            ('old', 'C', 'P', 1, 'A', 'IC', 1.0, NULL, 'llm', NULL, NULL, 1.0);
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    conn = labels_store.connect(tmp_path)
     try:
-        labels_store.record_failure(
-            conn, hash="abc", character="C", partner="P",
-            ts=1, speaker="A", error="api error",
-        )
-        assert "abc" in labels_store.failures_for_partner(conn, "C", "P")
         labels_store.upsert_label(
-            conn, hash="abc", character="C", partner="P",
-            ts=1, speaker="A", label="IC", source="manual",
+            conn, hash="fresh", character="C", partner="P",
+            ts=2, speaker="A", label="OOC", source="mcp",
         )
-        assert "abc" not in labels_store.failures_for_partner(conn, "C", "P")
-    finally:
-        conn.close()
-
-
-def test_record_failure_skips_already_labeled(tmp_path: Path) -> None:
-    """A successful prior label shouldn't be downgraded to Failed."""
-    conn = _db(tmp_path)
-    try:
-        labels_store.upsert_label(
-            conn, hash="abc", character="C", partner="P",
-            ts=1, speaker="A", label="IC", source="llm",
-        )
-        labels_store.record_failure(
-            conn, hash="abc", character="C", partner="P",
-            ts=1, speaker="A", error="transient",
-        )
-        assert "abc" not in labels_store.failures_for_partner(conn, "C", "P")
-    finally:
-        conn.close()
-
-
-def test_delete_labels_for_partner_also_clears_failures(tmp_path: Path) -> None:
-    conn = _db(tmp_path)
-    try:
-        labels_store.upsert_label(
-            conn, hash="ok", character="C", partner="P",
-            ts=1, speaker="A", label="IC", source="llm",
-        )
-        labels_store.record_failure(
-            conn, hash="bad", character="C", partner="P",
-            ts=2, speaker="A", error="boom",
-        )
-        labels_store.delete_labels_for_partner(conn, "C", "P")
-        assert labels_store.labels_for_partner(conn, "C", "P") == {}
-        assert labels_store.failures_for_partner(conn, "C", "P") == {}
+        rows = labels_store.labels_for_partner(conn, "C", "P")
+        # The pre-existing row survived the table rebuild.
+        assert set(rows) == {"old", "fresh"}
+        assert rows["old"]["source"] == "llm"
+        assert rows["fresh"]["source"] == "mcp"
     finally:
         conn.close()
 
@@ -300,11 +309,6 @@ def test_load_settings_falls_back_to_defaults(tmp_path: Path, monkeypatch) -> No
     try:
         s = labels_store.load_settings(conn)
         assert s.threshold_chars == labels_store.DEFAULT_THRESHOLD_CHARS
-        assert s.llm_endpoint == labels_store.DEFAULT_LLM_ENDPOINT
-        assert s.llm_model == labels_store.DEFAULT_LLM_MODEL
-        assert s.llm_api_key == ""
-        # The default prompt is long German text; just sanity-check it's there.
-        assert "Klassifikator" in s.system_prompt
     finally:
         conn.close()
 
@@ -314,33 +318,8 @@ def test_load_settings_reads_stored_overrides(tmp_path: Path, monkeypatch) -> No
     conn = settings_store.connect()
     try:
         settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, "300")
-        settings_store.set_value(
-            conn, settings_store.KEY_LABELS_LLM_ENDPOINT, "http://localhost:11434/v1"
-        )
-        settings_store.set_value(conn, settings_store.KEY_LABELS_LLM_MODEL, "llama3")
-        settings_store.set_value(conn, settings_store.KEY_LABELS_LLM_API_KEY, "sk-test")
-        settings_store.set_value(
-            conn, settings_store.KEY_LABELS_SYSTEM_PROMPT, "be a helpful classifier"
-        )
         s = labels_store.load_settings(conn)
         assert s.threshold_chars == 300
-        assert s.llm_endpoint == "http://localhost:11434/v1"
-        assert s.llm_model == "llama3"
-        assert s.llm_api_key == "sk-test"
-        assert s.system_prompt == "be a helpful classifier"
-    finally:
-        conn.close()
-
-
-def test_load_settings_treats_empty_as_unset(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
-    conn = settings_store.connect()
-    try:
-        settings_store.set_value(conn, settings_store.KEY_LABELS_SYSTEM_PROMPT, "")
-        s = labels_store.load_settings(conn)
-        # Empty stored value falls back to default — that's how "Reset"
-        # works from the UI.
-        assert s.system_prompt == labels_store.DEFAULT_SYSTEM_PROMPT
     finally:
         conn.close()
 
@@ -362,35 +341,16 @@ def test_settings_get_exposes_labels_and_defaults(api_client: TestClient) -> Non
     assert "labels" in res
     lab = res["labels"]
     assert lab["threshold_chars"] == labels_store.DEFAULT_THRESHOLD_CHARS
-    assert lab["llm_endpoint"] == labels_store.DEFAULT_LLM_ENDPOINT
-    assert lab["llm_model"] == labels_store.DEFAULT_LLM_MODEL
     # Defaults block is mirrored so the UI can do "Reset" without
-    # hardcoding strings.
+    # hardcoding numbers.
     assert lab["defaults"]["threshold_chars"] == labels_store.DEFAULT_THRESHOLD_CHARS
-    assert "Klassifikator" in lab["defaults"]["system_prompt"]
 
 
 def test_settings_put_persists_labels(api_client: TestClient) -> None:
-    body = {"labels": {
-        "threshold_chars": 350,
-        "llm_endpoint": "http://localhost:11434/v1",
-        "llm_model": "qwen2.5",
-        "llm_api_key": "secret",
-        "system_prompt": "custom prompt",
-    }}
-    res = api_client.put("/settings", json=body).json()
-    lab = res["labels"]
-    assert lab["threshold_chars"] == 350
-    assert lab["llm_endpoint"] == "http://localhost:11434/v1"
-    assert lab["llm_model"] == "qwen2.5"
-    assert lab["llm_api_key"] == "secret"
-    assert lab["system_prompt"] == "custom prompt"
-
-
-def test_settings_put_empty_string_resets_to_default(api_client: TestClient) -> None:
-    api_client.put("/settings", json={"labels": {"system_prompt": "override"}})
-    res = api_client.put("/settings", json={"labels": {"system_prompt": ""}}).json()
-    assert res["labels"]["system_prompt"] == labels_store.DEFAULT_SYSTEM_PROMPT
+    res = api_client.put(
+        "/settings", json={"labels": {"threshold_chars": 350}}
+    ).json()
+    assert res["labels"]["threshold_chars"] == 350
 
 
 def test_settings_put_clamps_threshold_below_one(api_client: TestClient) -> None:
@@ -443,3 +403,198 @@ def test_override_rejects_invalid_label(api_client: TestClient) -> None:
     res = api_client.post("/labels/override", json=_override_body("MAYBE"))
     assert res.status_code == 400
     assert "IC or OOC" in res.json()["detail"]
+
+
+# ---- bulk fill ----------------------------------------------------------
+#
+# For the conversation a user knows is pure IC end to end: they have the
+# answer, and walking two thousand messages through a model one batch at
+# a time buys nothing.
+
+
+def _long(n: int, ts: int) -> dict:
+    body = f"{n} " + ("Sie trat durch das Tor und sah sich um. " * 8)
+    return _msg(ts=ts, raw=body, text=body)
+
+
+def test_fill_unlabeled_labels_only_the_unlabeled(tmp_path: Path) -> None:
+    conn = _db(tmp_path)
+    try:
+        msgs = [_long(1, 100), _long(2, 200), _msg(ts=300, raw="ok", text="ok")]
+        # A verdict already in the DB must survive untouched.
+        labels_store.upsert_label(
+            conn, hash=labels_store.msg_hash(msgs[0]), character="C",
+            partner="P", ts=100, speaker="Alice", label="OOC", source="mcp",
+        )
+
+        res = labels_store.fill_unlabeled(
+            conn, "C", "P", msgs, _settings(), "IC"
+        )
+
+        assert res["labeled"] == 1, "only message 2 was Unlabeled"
+        assert res["already_labeled"] == 1
+        assert res["decided_by_rules"] == 1, "the short one stays with the rules"
+        rows = labels_store.labels_for_partner(conn, "C", "P")
+        assert rows[labels_store.msg_hash(msgs[0])]["label"] == "OOC"
+        assert rows[labels_store.msg_hash(msgs[1])]["label"] == "IC"
+        assert rows[labels_store.msg_hash(msgs[1])]["source"] == "manual"
+        assert labels_store.msg_hash(msgs[2]) not in rows
+    finally:
+        conn.close()
+
+
+def test_fill_unlabeled_is_reported_hash_by_hash_so_it_can_be_undone(
+    tmp_path: Path,
+) -> None:
+    conn = _db(tmp_path)
+    try:
+        msgs = [_long(i, 100 + i) for i in range(5)]
+        res = labels_store.fill_unlabeled(
+            conn, "C", "P", msgs, _settings(), "IC"
+        )
+        assert len(res["hashes"]) == 5
+
+        removed = labels_store.delete_labels_by_hash(conn, res["hashes"])
+
+        assert removed == 5
+        assert labels_store.labels_for_partner(conn, "C", "P") == {}
+    finally:
+        conn.close()
+
+
+def test_undo_leaves_other_verdicts_alone(tmp_path: Path) -> None:
+    # The difference between this and /labels/clear: clearing drops the
+    # model's work too. Undoing a fill must not.
+    conn = _db(tmp_path)
+    try:
+        msgs = [_long(i, 100 + i) for i in range(3)]
+        kept = labels_store.msg_hash(msgs[0])
+        labels_store.upsert_label(
+            conn, hash=kept, character="C", partner="P", ts=100,
+            speaker="Alice", label="OOC", source="mcp",
+        )
+        res = labels_store.fill_unlabeled(
+            conn, "C", "P", msgs, _settings(), "IC"
+        )
+
+        labels_store.delete_labels_by_hash(conn, res["hashes"])
+
+        rows = labels_store.labels_for_partner(conn, "C", "P")
+        assert list(rows) == [kept]
+    finally:
+        conn.close()
+
+
+def test_fill_unlabeled_rejects_a_label_that_is_not_a_verdict(
+    tmp_path: Path,
+) -> None:
+    conn = _db(tmp_path)
+    try:
+        with pytest.raises(ValueError):
+            labels_store.fill_unlabeled(
+                conn, "C", "P", [_long(1, 100)], _settings(), "Unlabeled"
+            )
+    finally:
+        conn.close()
+
+
+def test_fill_unlabeled_route_rejects_a_bad_label(api_client: TestClient) -> None:
+    res = api_client.post(
+        "/labels/fill-unlabeled",
+        json={"character": "C", "partner": "P", "label": "maybe"},
+    )
+    assert res.status_code == 400
+
+
+# ---- /labels/fill-unlabeled, over a real log ---------------------------
+
+
+@pytest.fixture
+def conversation_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    """One conversation on disk: two long messages with no verdict, one
+    short one the rules already call OOC."""
+    from test_mcp_logs import write_log
+
+    root = tmp_path / "fchat"
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(root))
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
+    monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    long_a = "Sie trat durch das Tor und sah sich um. " * 8
+    long_b = "Er zog den Mantel enger und wartete im Regen. " * 8
+    write_log(
+        root / "Lady Amber Blaise" / "logs" / "Daelan Envale",
+        [
+            (1700000000, "Lady Amber Blaise", long_a),
+            (1700000060, "Daelan Envale", "mhm"),
+            (1700000120, "Daelan Envale", long_b),
+        ],
+    )
+
+    # No module reloads here: logs.data_dir() and paths both read the
+    # env vars per call, and reloading them inside a shared test
+    # process rebinds module globals that other test files captured at
+    # import time — it broke two log tests that run after this one.
+    from server import app
+
+    return TestClient(app)
+
+
+_CONV = {"character": "Lady Amber Blaise", "partner": "Daelan Envale"}
+
+
+def test_fill_unlabeled_route_labels_the_conversation(
+    conversation_api: TestClient,
+) -> None:
+    before = conversation_api.get(
+        "/labels/stats",
+        params={"char": _CONV["character"], "partner": _CONV["partner"]},
+    ).json()
+    assert before["unlabeled"] == 2
+
+    res = conversation_api.post(
+        "/labels/fill-unlabeled", json={**_CONV, "label": "IC"}
+    ).json()
+
+    assert res["labeled"] == 2
+    assert res["decided_by_rules"] == 1
+    after = conversation_api.get(
+        "/labels/stats",
+        params={"char": _CONV["character"], "partner": _CONV["partner"]},
+    ).json()
+    assert (after["ic"], after["unlabeled"]) == (2, 0)
+
+
+def test_delete_hashes_route_undoes_exactly_that_fill(
+    conversation_api: TestClient,
+) -> None:
+    res = conversation_api.post(
+        "/labels/fill-unlabeled", json={**_CONV, "label": "IC"}
+    ).json()
+
+    undone = conversation_api.post(
+        "/labels/delete-hashes", json={**_CONV, "hashes": res["hashes"]}
+    ).json()
+
+    assert undone["deleted"] == 2
+    after = conversation_api.get(
+        "/labels/stats",
+        params={"char": _CONV["character"], "partner": _CONV["partner"]},
+    ).json()
+    assert after["unlabeled"] == 2
+
+
+def test_filling_twice_writes_nothing_the_second_time(
+    conversation_api: TestClient,
+) -> None:
+    conversation_api.post("/labels/fill-unlabeled", json={**_CONV, "label": "IC"})
+
+    again = conversation_api.post(
+        "/labels/fill-unlabeled", json={**_CONV, "label": "OOC"}
+    ).json()
+
+    # Not a way to flip a conversation that is already judged — the
+    # first pass owns those messages now.
+    assert again["labeled"] == 0
+    assert again["already_labeled"] == 2

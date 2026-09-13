@@ -96,9 +96,6 @@ type State = {
 
   activePartner: string | null
 
-  /** When set, a Classify-labels progress dialog is open over the app. */
-  classifyTarget: { scope: { character?: string | null; partner?: string | null }; label: string } | null
-
   /** When set, a RAG-ingest progress dialog is open over the app.
    *  forceRewipe=true makes the dialog start the job with wipe-and-
    *  reingest semantics; used by the Settings → RAG "Re-ingest all"
@@ -109,17 +106,6 @@ type State = {
         label: string
         forceRewipe: boolean
       }
-    | null
-
-  /** Visibility of the RAG chat panel beside the Log Viewer. */
-  chatPanelOpen: boolean
-  /** Bumped any time something wants the chat input focused — e.g. the
-   *  "Chat with this log" context-menu action. ChatPanel watches it. */
-  chatFocusNonce: number
-  /** Pending "scroll the log viewer to this timestamp range" intent
-   *  raised by a clicked citation. LogViewer consumes & clears it. */
-  logJump:
-    | { character: string; partner: string; ts_start: number; ts_end: number; nonce: number }
     | null
 
   messagesByPartner: Record<string, LogMessage[]>
@@ -285,6 +271,18 @@ type State = {
    *  via `flistSetWorkingMaterialise` + the autosave path. */
   flistSetWorking: Record<string, FlistWorkingSlot>
   flistSetWorkingLoadStatus: Record<string, 'idle' | 'loading' | 'ready' | 'error'>
+  /** A change to a working set that this window did not make — almost
+   *  always a model editing through MCP. Keyed by character id.
+   *
+   *  This exists because the window is no longer the only writer. It
+   *  used to be safe to assume the slot in memory matched disk; now it
+   *  can be stale, and autosaving a stale payload overwrites whatever
+   *  the other writer did. The banner this drives makes the user pick:
+   *  take theirs, or keep mine. */
+  flistExternalChange: Record<
+    string,
+    { setId: string; etag: string | null; origin: string; at: number } | null
+  >
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
@@ -405,29 +403,12 @@ type State = {
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
-  aiSetupOpen: boolean
-  openAiSetup: () => void
-  closeAiSetup: () => void
-  openClassify: (
-    scope: { character?: string | null; partner?: string | null },
-    label: string
-  ) => void
-  closeClassify: () => void
   openIngest: (
     scope: { character?: string | null; partner?: string | null },
     label: string,
     opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
-  toggleChatPanel: (force?: boolean) => void
-  requestChatFocus: () => void
-  requestLogJump: (
-    character: string,
-    partner: string,
-    ts_start: number,
-    ts_end: number
-  ) => void
-  clearLogJump: () => void
   applyLabelOverride: (
     char: string,
     partner: string,
@@ -527,6 +508,17 @@ type State = {
   flistGetLastAccount: () => string
   // ---- Working-sets v2 actions ----
   flistLoadSets: (characterId: string) => Promise<void>
+  /** Resolve (and if needed create) the character's workbench, then
+   *  show it. This is what the Workbench row does when clicked — the
+   *  user never names or creates anything. */
+  flistOpenWorkbench: (characterId: string) => Promise<SetMeta | null>
+  /** Replace the workbench contents with a backup's. `backUpFirst`
+   *  saves what is on the bench before overwriting it. */
+  flistLoadBackupIntoWorkbench: (
+    characterId: string,
+    filename: string,
+    backUpFirst: boolean
+  ) => Promise<boolean>
   flistCreateSet: (characterId: string, name: string) => Promise<SetMeta | null>
   flistRenameSet: (
     characterId: string,
@@ -541,6 +533,18 @@ type State = {
   flistDeleteSet: (characterId: string, setId: string) => Promise<void>
   flistActivateSet: (characterId: string, setId: string) => Promise<void>
   flistActivateFromFlist: (characterId: string) => Promise<void>
+  /** Record that something outside this window changed a set. Called
+   *  by the `/events` subscription; ignored when the change is one we
+   *  made ourselves. */
+  flistNoteExternalChange: (
+    characterId: string,
+    change: { setId: string; etag: string | null; origin: string }
+  ) => void
+  /** Take the other writer's version, discarding unsaved local edits. */
+  flistReloadAfterExternalChange: (characterId: string) => Promise<void>
+  /** Keep this window's version, overwriting the other writer's. */
+  flistOverwriteAfterExternalChange: (characterId: string) => Promise<void>
+  flistDismissExternalChange: (characterId: string) => void
   /** Export a working set as a Workbench-native bundle ZIP. Opens the
    *  native save dialog. Returns the bytes written and the chosen path
    *  on success; null when the user cancels or the IPC plumbing is
@@ -586,7 +590,19 @@ type State = {
    *  the character (full, with images), then forces a ZIP backup write
    *  to `characters/<id>/backups/<ISO>.zip`. Uses the same Backup-all
    *  banner UI so the user sees progress, with `total: 1`. */
-  flistBackupCharacter: (name: string) => Promise<void>
+  /** Pack a character into a restoreable ZIP.
+   *
+   *  `pull` decides what is being archived. From the read-only
+   *  "Live on F-List" row it is true: refresh from the website
+   *  first, so the ZIP holds every image byte the userscript would
+   *  need. From the Workbench row it must be false — the bench
+   *  holds edits that exist nowhere else, and pulling to save them
+   *  would move Live underneath them (and fail offline, for a
+   *  backup that needs no network at all). */
+  flistBackupCharacter: (
+    name: string,
+    opts?: { pull?: boolean }
+  ) => Promise<void>
   flistSetWorkingMaterialise: (
     characterId: string,
     setId: string
@@ -1176,12 +1192,7 @@ export const useStore = create<State>((set, get) => ({
   partnersStatus: {},
   activePartner: null,
 
-  classifyTarget: null,
-  aiSetupOpen: false,
   ingestTarget: null,
-  chatPanelOpen: false,
-  chatFocusNonce: 0,
-  logJump: null,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -1227,6 +1238,7 @@ export const useStore = create<State>((set, get) => ({
   flistActiveSetId: {},
   flistSetWorking: {},
   flistSetWorkingLoadStatus: {},
+  flistExternalChange: {},
   flistMapping: {
     status: 'idle',
     payload: null,
@@ -1284,11 +1296,16 @@ export const useStore = create<State>((set, get) => ({
 
   // ---- F-list actions ----------------------------------------------------
 
-  flistGetLastAccount() {
+  // Return type is annotated on purpose: the body reads back through
+  // `useStore`, so without it TypeScript has to infer `useStore` from
+  // an initializer that references `useStore` and gives up — turning
+  // the whole store into `any` and silently disabling type checking
+  // in every component that selects from it.
+  flistGetLastAccount(): string {
     // Saved-creds account wins when present so the sign-in modal
     // pre-fills the username the user explicitly chose to remember.
     // Falls back to the localStorage last-used account otherwise.
-    const saved = useStore.getState().flistSavedCreds.account
+    const saved: string | null = useStore.getState().flistSavedCreds.account
     if (saved) return saved
     if (typeof localStorage === 'undefined') return ''
     try {
@@ -1534,6 +1551,7 @@ export const useStore = create<State>((set, get) => ({
       flistActiveSetId: {},
       flistSetWorking: {},
       flistSetWorkingLoadStatus: {},
+      flistExternalChange: {},
       flistDriftBanners: {},
       flistResetUndo: null,
       flistDiffRightSource: {},
@@ -2114,11 +2132,15 @@ export const useStore = create<State>((set, get) => ({
     const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
     const content = slot ? descriptionOf(slot.payload) : ''
     const entry = get().flistRoster.find((r) => String(r.id ?? '') === characterId)
-    const name = entry?.name ?? 'My edits'
+    // "Workbench", not "My edits": the sidebar row, the window title
+    // and the read-only hints all name the same one thing now. Two
+    // names for it was half the reason testers could not say what they
+    // were editing.
+    const name = entry?.name ?? 'Workbench'
     const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
     set({
       editorContent: content,
-      editorTitle: `${name} — My edits${titleSuffix}`,
+      editorTitle: `${name} — Workbench${titleSuffix}`,
       editorInlines: inlines,
       editorReadOnly: false,
       editorDirty: !!slot?.unsavedDirty,
@@ -2417,22 +2439,37 @@ export const useStore = create<State>((set, get) => ({
         set((s) => {
           const existing = s.flistWorking[characterId]
           if (!existing) return {}
-          return {
+          const patch: Partial<State> = {
             flistWorking: {
               ...s.flistWorking,
               [characterId]: {
                 ...existing,
                 saveStatus: 'error',
                 saveError: conflict
-                  ? 'Another window saved a different version. Reload to merge.'
+                  ? 'Someone else changed this set. Choose whose version to keep.'
                   : raw,
-                etag: conflict
-                  ? errWith.currentEtag ?? existing.etag
-                  : existing.etag,
+                // The server etag is deliberately NOT adopted on a
+                // conflict. Adopting it would let the next keystroke's
+                // autosave succeed and silently overwrite the other
+                // writer; keeping the stale one makes every retry
+                // conflict until the user decides.
+                etag: existing.etag,
                 unsavedDirty: true
               }
             }
           }
+          if (conflict) {
+            patch.flistExternalChange = {
+              ...s.flistExternalChange,
+              [characterId]: {
+                setId: activeSetId,
+                etag: errWith.currentEtag ?? null,
+                origin: 'unknown',
+                at: Date.now()
+              }
+            }
+          }
+          return patch
         })
       }
     })()
@@ -2541,6 +2578,47 @@ export const useStore = create<State>((set, get) => ({
       set((s) => ({
         flistSetsStatus: { ...s.flistSetsStatus, [characterId]: 'error' }
       }))
+    }
+  },
+
+  async flistOpenWorkbench(characterId) {
+    try {
+      const wire = await api.flistWorkbench(characterId, true)
+      if (!wire.workbench) return null
+      const meta = _setMetaFromWire(wire.workbench)
+      set((s) => {
+        const list = s.flistSets[characterId] ?? []
+        return {
+          flistSets: {
+            ...s.flistSets,
+            [characterId]: [meta, ...list.filter((m) => m.id !== meta.id)]
+          }
+        }
+      })
+      await get().flistActivateSet(characterId, meta.id)
+      return meta
+    } catch {
+      return null
+    }
+  },
+
+  async flistLoadBackupIntoWorkbench(characterId, filename, backUpFirst) {
+    try {
+      const res = await api.flistWorkbenchLoadBackup(
+        characterId,
+        filename,
+        backUpFirst
+      )
+      const meta = _setMetaFromWire(res.workbench)
+      // Re-activating is what reloads the payload into the editor —
+      // the bench id has not changed, but its contents just did.
+      await get().flistActivateSet(characterId, meta.id)
+      // A save-first run produced a new backup; refresh the list so the
+      // user can see the rescue it just made for them.
+      if (res.backed_up_first) await get().flistLoadArchive(characterId)
+      return true
+    } catch {
+      return false
     }
   },
 
@@ -2717,6 +2795,99 @@ export const useStore = create<State>((set, get) => ({
       }
       return patch
     })
+  },
+
+  flistNoteExternalChange(characterId, change) {
+    set((s) => {
+      const slot = s.flistWorking[characterId]
+      // A change we made ourselves arrives with the etag we already
+      // hold; there is nothing to tell the user about.
+      if (slot && change.etag && slot.etag === change.etag) return {}
+      return {
+        flistExternalChange: {
+          ...s.flistExternalChange,
+          [characterId]: { ...change, at: Date.now() }
+        }
+      }
+    })
+  },
+
+  async flistReloadAfterExternalChange(characterId) {
+    const change = get().flistExternalChange[characterId]
+    if (!change) return
+    _cancelFlush(characterId)
+    try {
+      const res = await api.flistSetPayloadRead(characterId, change.setId)
+      const payload = res.payload as WorkingPayload
+      const overlay = Array.isArray(payload._overlay) ? payload._overlay : []
+      const slot: FlistWorkingSlot = {
+        payload,
+        overlay,
+        etag: res.etag,
+        unsavedDirty: false,
+        saveStatus: 'idle',
+        saveError: null,
+        lastSavedAt: Date.now(),
+        materialised: true
+      }
+      set((s) => {
+        const patch: Partial<State> = {
+          flistWorking: { ...s.flistWorking, [characterId]: slot },
+          flistSetWorking: { ...s.flistSetWorking, [change.setId]: slot },
+          flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+        }
+        if (s.flistActiveCharacterId === characterId) {
+          patch.editorContent = descriptionOf(payload)
+          patch.editorDirty = false
+        }
+        return patch
+      })
+    } catch {
+      // Leave the banner up — the user can retry or keep theirs.
+    }
+  },
+
+  async flistOverwriteAfterExternalChange(characterId) {
+    const change = get().flistExternalChange[characterId]
+    const slot = get().flistWorking[characterId]
+    if (!change || !slot) return
+    _cancelFlush(characterId)
+    try {
+      // Write against the etag the other writer left, which is what
+      // makes this an overwrite rather than another conflict.
+      const { etag } = await api.flistSetPayloadPut(
+        characterId,
+        change.setId,
+        slot.payload,
+        change.etag
+      )
+      set((s) => {
+        const existing = s.flistWorking[characterId]
+        if (!existing) return {}
+        const next: FlistWorkingSlot = {
+          ...existing,
+          etag,
+          unsavedDirty: false,
+          saveStatus: 'saved',
+          saveError: null,
+          lastSavedAt: Date.now(),
+          materialised: true
+        }
+        return {
+          flistWorking: { ...s.flistWorking, [characterId]: next },
+          flistSetWorking: { ...s.flistSetWorking, [change.setId]: next },
+          flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+        }
+      })
+    } catch {
+      // Still conflicting — a third write landed. The banner stays.
+    }
+  },
+
+  flistDismissExternalChange(characterId) {
+    set((s) => ({
+      flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+    }))
   },
 
   async flistActivateFromFlist(characterId) {
@@ -2949,7 +3120,7 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async flistBackupCharacter(name) {
+  async flistBackupCharacter(name, opts) {
     if (get().flistBackupAllStatus.phase === 'running') return
     set({
       flistBackupAllStatus: {
@@ -2998,30 +3169,33 @@ export const useStore = create<State>((set, get) => ({
       }
     }
 
-    try {
-      // Full pull (JSON + images + avatar) so the ZIP that follows
-      // can include every byte the userscript would need to restore
-      // the profile. Reuses the existing per-character pull endpoint
-      // — that flow already handles ticket refresh, dedup of cached
-      // images, and snapshot side-effect.
-      await get().flistPullCharacter(name)
-    } catch (err) {
-      finalise(
-        {
-          phase: 'error',
-          done: 1,
-          failed: 1,
-          errorMessage:
-            err instanceof Error ? err.message : 'pull failed'
-        },
-        false
-      )
-      return
+    const pullFirst = opts?.pull !== false
+    if (pullFirst) {
+      try {
+        // Full pull (JSON + images + avatar) so the ZIP that follows
+        // can include every byte the userscript would need to restore
+        // the profile. Reuses the existing per-character pull endpoint
+        // — that flow already handles ticket refresh, dedup of cached
+        // images, and snapshot side-effect.
+        await get().flistPullCharacter(name)
+      } catch (err) {
+        finalise(
+          {
+            phase: 'error',
+            done: 1,
+            failed: 1,
+            errorMessage:
+              err instanceof Error ? err.message : 'pull failed'
+          },
+          false
+        )
+        return
+      }
     }
 
-    // Resolve the character id post-pull — `flistRoster` is keyed by
-    // name, and `flistArchive` by id; the pull writes the id into the
-    // roster (live.fetched_at) so this lookup is safe right after it.
+    // Resolve the character id — `flistRoster` is keyed by name, and
+    // `flistArchive` by id; a pull writes the id into the roster
+    // (live.fetched_at), and without one the roster already holds it.
     const roster = get().flistRoster
     const match = roster.find(
       (r) => r.name.toLowerCase() === name.toLowerCase()
@@ -4405,20 +4579,6 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
-  openAiSetup() {
-    set({ aiSetupOpen: true })
-  },
-  closeAiSetup() {
-    set({ aiSetupOpen: false })
-  },
-  openClassify(scope, label) {
-    set({ classifyTarget: { scope, label } })
-  },
-
-  closeClassify() {
-    set({ classifyTarget: null })
-  },
-
   openIngest(scope, label, opts) {
     set({
       ingestTarget: { scope, label, forceRewipe: opts?.forceRewipe ?? false }
@@ -4427,28 +4587,6 @@ export const useStore = create<State>((set, get) => ({
 
   closeIngest() {
     set({ ingestTarget: null })
-  },
-
-  toggleChatPanel(force) {
-    set((s) => ({
-      chatPanelOpen: typeof force === 'boolean' ? force : !s.chatPanelOpen
-    }))
-  },
-
-  requestChatFocus() {
-    set((s) => ({ chatFocusNonce: s.chatFocusNonce + 1 }))
-  },
-
-  requestLogJump(character, partner, ts_start, ts_end) {
-    // nonce guarantees a fresh value even if the user clicks the same
-    // citation twice — useEffect dependencies see a new reference.
-    set({
-      logJump: { character, partner, ts_start, ts_end, nonce: Date.now() }
-    })
-  },
-
-  clearLogJump() {
-    set({ logJump: null })
   },
 
   // Patches a single message's label fields in place. `patch === null`

@@ -74,9 +74,9 @@ test('Auto-refresh on sign-in pulls every roster character in the background', a
   // time is null → infinitely-old → 24h threshold is satisfied for all.
   await window.evaluate(() => {
     try {
-      window.localStorage.clear()
-      window.localStorage.setItem('workbench.flistAutoRefreshEnabled', 'true')
-      window.localStorage.setItem('workbench.flistAutoRefreshHours', '24')
+      globalThis.localStorage.clear()
+      globalThis.localStorage.setItem('workbench.flistAutoRefreshEnabled', 'true')
+      globalThis.localStorage.setItem('workbench.flistAutoRefreshHours', '24')
     } catch {
       /* best-effort */
     }

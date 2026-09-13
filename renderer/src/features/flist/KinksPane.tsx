@@ -56,7 +56,7 @@ export function KinksPane({ characterId }: { characterId: string }) {
     }
   }, [mappingStatus, loadMapping])
 
-  // In read-only views (From F-list / Backup) drive the bucket
+  // In read-only views (Live on F-List / Backup) drive the bucket
   // columns from the live archive so the user sees what's actually
   // on F-list, not their staged edits.
   const sourceSlot = useMemo(
@@ -148,7 +148,7 @@ export function KinksPane({ characterId }: { characterId: string }) {
         />
         <span className="kinks-pane-hint">
           {readOnly ? (
-            <>Read-only — switch to <b>My edits</b> to assign or change.</>
+            <>Read-only — switch to the <b>Workbench</b> to assign or change.</>
           ) : (
             <>
               Drag, or focus a row + <kbd>F</kbd>/<kbd>Y</kbd>/<kbd>M</kbd>/<kbd>N</kbd>/<kbd>U</kbd>

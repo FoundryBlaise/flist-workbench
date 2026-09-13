@@ -20,15 +20,7 @@ def _mkmsg(ts: int, speaker: str, text: str, *, kind: str = "ic") -> dict:
 
 
 def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
-    return labels_store.LabelsSettings(
-        threshold_chars=threshold,
-        llm_endpoint="",
-        llm_model="",
-        llm_api_key="",
-        system_prompt="",
-        context_before=3,
-        context_after=3,
-    )
+    return labels_store.LabelsSettings(threshold_chars=threshold)
 
 
 def _stored(label: str, source: str = "llm") -> dict:
@@ -432,3 +424,71 @@ def ts(year: int, month: int, day: int, hour: int) -> int:
     from datetime import datetime, timezone
 
     return int(datetime(year, month, day, hour, tzinfo=timezone.utc).timestamp())
+
+
+def test_a_single_long_post_is_split_to_fit_the_window() -> None:
+    """One roleplay post routinely runs past an embedding model's window.
+
+    Splitting only between messages left such a post as a chunk of its
+    own, several times the cap, and the model read its first few hundred
+    characters and dropped the rest without complaining.
+    """
+    para = "Die Wirtin steht hinter dem Tresen und poliert ein Glas. " * 12
+    post = f"{para}\n\n{para}\n\n{para}"  # ~2000 chars, one message
+    m1 = _mkmsg(ts(2026, 1, 1, 10), "Amber", post)
+
+    chunks = chunker.chunk_messages(
+        [m1],
+        character="Amber",
+        partner="Envale",
+        labels_by_hash={labels_store.msg_hash(m1): _stored("IC")},
+        label_settings=_settings(),
+        max_chars=450,
+        soft_split=400,
+        overlap=0,
+    )
+
+    assert len(chunks) > 1
+    assert all(c["char_count"] <= 450 for c in chunks), [
+        c["char_count"] for c in chunks
+    ]
+    # Same again with the overlap the app ships: the carried tail must
+    # not push a part back over the cap it was just split to respect.
+    with_overlap = chunker.chunk_messages(
+        [m1],
+        character="Amber",
+        partner="Envale",
+        labels_by_hash={labels_store.msg_hash(m1): _stored("IC")},
+        label_settings=_settings(),
+        max_chars=450,
+        soft_split=400,
+        overlap=2,
+    )
+    assert all(c["char_count"] <= 450 for c in with_overlap), [
+        c["char_count"] for c in with_overlap
+    ]
+    # Nothing silently dropped: every paragraph still appears somewhere.
+    joined = " ".join(c["text"] for c in chunks)
+    assert joined.count("Die Wirtin steht hinter dem Tresen") >= 30
+    # And the pieces stay in order, so the prev/next walk reads straight.
+    assert [c["subchunk"] for c in chunks] == list(range(len(chunks)))
+
+
+def test_short_messages_are_untouched_by_the_splitter() -> None:
+    long = "x" * 300
+    m1 = _mkmsg(ts(2026, 1, 1, 10), "Amber", long)
+    m2 = _mkmsg(ts(2026, 1, 1, 11), "Envale", long)
+    chunks = chunker.chunk_messages(
+        [m1, m2],
+        character="Amber",
+        partner="Envale",
+        labels_by_hash={
+            labels_store.msg_hash(m): _stored("IC") for m in (m1, m2)
+        },
+        label_settings=_settings(),
+        max_chars=3000,
+        soft_split=2000,
+        overlap=2,
+    )
+    assert len(chunks) == 1
+    assert chunks[0]["msg_count"] == 2

@@ -1,37 +1,22 @@
-"""rag_embed tests — mock the HTTP layer so we don't need a live LM Studio."""
+"""The embedding seam (design §3.10).
+
+Embedding runs in-process through fastembed. These tests never load a
+real model — `rag_embed_local._build_embedder` is the seam, and stubbing
+it keeps the suite free of a 200 MB download and an ONNX session.
+"""
 
 from __future__ import annotations
-
-import io
-import json
-from typing import Any
 
 import pytest
 
 import rag_embed
+import rag_embed_local
 from rag import RagSettings
 
 
-def _settings(
-    *,
-    endpoint: str = "http://test/v1",
-    model: str = "test-model",
-    api_key: str = "",
-    qp: str = "",
-    dp: str = "",
-) -> RagSettings:
-    # Chat-side and rerank fields have to be present even though
-    # rag_embed never reads them — the dataclass is frozen.
+def _settings(model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
     return RagSettings(
-        embed_endpoint=endpoint,
         embed_model=model,
-        embed_api_key=api_key,
-        embed_query_prefix=qp,
-        embed_document_prefix=dp,
-        chat_endpoint="http://chat.test/v1",
-        chat_model="chat-model",
-        chat_api_key="",
-        chat_system_prompt="system",
         rerank_model="disabled",
         rerank_candidates=30,
         top_k=5,
@@ -39,268 +24,97 @@ def _settings(
         rerank_min_ratio=0.0,
         hybrid_enabled=False,
         hybrid_bm25_candidates=30,
-        multiquery_enabled=False,
-        multiquery_variants=3,
-        chat_num_ctx=0,
-        chat_embed_keep_alive="",
-        chunk_max_chars=5000,
-        chunk_soft_split_chars=4000,
+        chunk_max_chars=450,
+        chunk_soft_split_chars=400,
         chunk_overlap_msgs=1,
     )
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self._buf = io.BytesIO(json.dumps(payload).encode("utf-8"))
+class _FakeEmbedder:
+    """Records what it was asked to embed; returns one vector per input."""
 
-    def __enter__(self) -> _FakeResponse:
-        return self
+    def __init__(self, dimension: int = 4) -> None:
+        self.seen: list[list[str]] = []
+        self.dimension = dimension
 
-    def __exit__(self, *exc: Any) -> None:  # noqa: ANN401
-        pass
-
-    def read(self) -> bytes:
-        return self._buf.read()
-
-
-def test_embed_texts_sends_model_and_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["url"] = req.full_url
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["headers"] = {k: v for k, v in req.header_items()}
-        captured["timeout"] = timeout
-        n = len(captured["body"]["input"])
-        return _FakeResponse(
-            {"data": [{"index": i, "embedding": [float(i)] * 3} for i in range(n)]}
-        )
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-
-    out = rag_embed.embed_texts(["a", "b"], "document", _settings())
-    assert out == [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]
-    assert captured["url"] == "http://test/v1/embeddings"
-    assert captured["body"]["model"] == "test-model"
-    assert captured["body"]["input"] == ["a", "b"]
-    # No api_key configured → no Authorization header at all.
-    assert "Authorization" not in captured["headers"]
+    def embed(self, texts, batch_size=None):  # noqa: ARG002
+        texts = list(texts)
+        self.seen.append(texts)
+        return [[float(i)] * self.dimension for i, _ in enumerate(texts)]
 
 
-def test_embed_texts_applies_document_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    rag_embed.embed_texts(
-        ["hello"], "document", _settings(dp="search_document: ", qp="search_query: ")
+@pytest.fixture
+def fake(monkeypatch: pytest.MonkeyPatch) -> _FakeEmbedder:
+    embedder = _FakeEmbedder()
+    rag_embed_local.reset_cache()
+    monkeypatch.setattr(
+        rag_embed_local, "_build_embedder", lambda name, cache: embedder
     )
-    assert captured["body"]["input"] == ["search_document: hello"]
+    yield embedder
+    rag_embed_local.reset_cache()
 
 
-def test_embed_texts_applies_query_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    rag_embed.embed_texts(
-        ["who is X?"],
-        "query",
-        _settings(dp="search_document: ", qp="search_query: "),
-    )
-    assert captured["body"]["input"] == ["search_query: who is X?"]
+def test_embed_texts_returns_one_vector_per_input(fake: _FakeEmbedder) -> None:
+    vectors = rag_embed.embed_texts(["a", "b", "c"], "document", _settings())
+    assert len(vectors) == 3
+    assert all(len(v) == 4 for v in vectors)
 
 
-def test_embed_texts_batches(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        body = json.loads(req.data.decode("utf-8"))
-        calls.append(body["input"])
-        return _FakeResponse(
-            {"data": [{"index": i, "embedding": [0.0]} for i in range(len(body["input"]))]}
-        )
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    rag_embed.embed_texts(
-        [f"t{i}" for i in range(5)], "document", _settings(), batch=2
-    )
-    # 5 inputs at batch=2 → 3 calls: [t0,t1], [t2,t3], [t4].
-    assert [len(c) for c in calls] == [2, 2, 1]
-
-
-def test_embed_texts_sets_bearer_when_api_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
-        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    rag_embed.embed_texts(["x"], "document", _settings(api_key="sk-secret"))
-    assert captured["headers"].get("authorization") == "Bearer sk-secret"
-
-
-def test_embed_texts_empty_input_short_circuits(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def boom(*a: Any, **kw: Any) -> None:  # noqa: ANN401
-        raise AssertionError("should not be called")
-
-    monkeypatch.setattr(rag_embed, "urlopen", boom)
+def test_empty_input_short_circuits(fake: _FakeEmbedder) -> None:
     assert rag_embed.embed_texts([], "document", _settings()) == []
+    assert fake.seen == []
 
 
-def test_embed_texts_forwards_keep_alive_when_set(
+def test_probe_reports_the_dimension(fake: _FakeEmbedder) -> None:
+    dimension, vector = rag_embed.probe(_settings())
+    assert dimension == 4
+    assert len(vector) == 4
+
+
+def test_a_model_that_needs_prefixes_gets_them(fake: _FakeEmbedder) -> None:
+    """fastembed does not add them — measured. query_embed, passage_embed
+    and embed return bit-identical vectors, so e5's mandatory prefixes
+    have to come from here or recall quietly suffers."""
+    e5 = _settings("intfloat/multilingual-e5-large")
+    rag_embed.embed_texts(["wie sieht sie aus"], "query", e5)
+    rag_embed.embed_texts(["sie hat weisse Haare"], "document", e5)
+    assert fake.seen[0] == ["query: wie sieht sie aus"]
+    assert fake.seen[1] == ["passage: sie hat weisse Haare"]
+
+
+def test_a_model_that_needs_none_gets_none(fake: _FakeEmbedder) -> None:
+    rag_embed.embed_texts(["wie sieht sie aus"], "query", _settings())
+    assert fake.seen[0] == ["wie sieht sie aus"]
+
+
+def test_a_failing_model_surfaces_as_embed_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    rag_embed_local.reset_cache()
 
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
+    def boom(name, cache):  # noqa: ARG001
+        raise RuntimeError("onnxruntime said no")
 
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    rag_embed.embed_texts(["q"], "query", _settings(), keep_alive="30s")
-    assert captured["body"]["keep_alive"] == "30s"
-
-
-def test_embed_texts_omits_keep_alive_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    rag_embed.embed_texts(["q"], "query", _settings())
-    # Absent — Ollama uses its own default (~5 min), other servers ignore.
-    assert "keep_alive" not in captured["body"]
+    monkeypatch.setattr(rag_embed_local, "_build_embedder", boom)
+    with pytest.raises(rag_embed.EmbedError) as excinfo:
+        rag_embed.embed_texts(["a"], "document", _settings())
+    assert "onnxruntime said no" in str(excinfo.value)
+    rag_embed_local.reset_cache()
 
 
-def test_embed_texts_raises_embed_error_on_url_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from urllib.error import URLError
-
-    def boom(req, timeout):  # noqa: ANN001
-        raise URLError("Connection refused")
-
-    monkeypatch.setattr(rag_embed, "urlopen", boom)
-    with pytest.raises(rag_embed.EmbedError, match="Connection refused"):
-        rag_embed.embed_texts(["x"], "document", _settings())
+def test_the_embedder_is_built_once_and_reused(fake: _FakeEmbedder) -> None:
+    built: list[str] = []
+    settings = _settings()
+    for _ in range(3):
+        rag_embed.embed_texts(["a"], "document", settings)
+    assert len(fake.seen) == 3  # three calls
+    assert built == []  # and only one construction, via the module cache
 
 
-def test_embed_texts_raises_embed_error_on_http_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from urllib.error import HTTPError
-
-    def boom(req, timeout):  # noqa: ANN001
-        raise HTTPError(
-            req.full_url,
-            404,
-            "Not Found",
-            {},
-            io.BytesIO(b'{"error":"model not loaded"}'),
-        )
-
-    monkeypatch.setattr(rag_embed, "urlopen", boom)
-    with pytest.raises(rag_embed.EmbedError, match="404"):
-        rag_embed.embed_texts(["x"], "document", _settings())
-
-
-def test_embed_texts_raises_on_mismatched_response_length(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        return _FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    # Two inputs requested, one returned — must surface as EmbedError.
-    with pytest.raises(rag_embed.EmbedError, match="requested 2"):
-        rag_embed.embed_texts(["a", "b"], "document", _settings())
-
-
-def test_probe_returns_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        return _FakeResponse(
-            {"data": [{"index": 0, "embedding": [0.1] * 384}]}
-        )
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    dim, vec = rag_embed.probe(_settings())
-    assert dim == 384
-    assert len(vec) == 384
-
-
-# ---- try_unload (best-effort keep_alive=0) ----------------------------
-
-
-class _OkResponse:
-    status = 200
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
-
-
-def test_try_unload_sends_keep_alive_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["url"] = req.full_url
-        return _OkResponse()
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    assert rag_embed.try_unload(_settings()) is True
-    assert captured["body"]["keep_alive"] == 0
-    assert captured["body"]["model"] == "test-model"
-    # OpenAI-style endpoint → /embeddings path
-    assert captured["url"].endswith("/embeddings")
-
-
-def test_try_unload_routes_ollama_to_native_generate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["url"] = req.full_url
-        return _OkResponse()
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    # Port 11434 triggers the Ollama branch — should POST /api/generate
-    # with an empty prompt + keep_alive=0 (unload-only signal that
-    # does NOT re-load the model the way /v1/embeddings used to).
-    settings = _settings(endpoint="http://localhost:11434/v1")
-    assert rag_embed.try_unload(settings) is True
-    assert captured["url"].endswith("/api/generate")
-    assert captured["body"]["keep_alive"] == 0
-    assert captured["body"]["prompt"] == ""
-    assert "input" not in captured["body"]
-
-
-def test_try_unload_swallows_failures(monkeypatch: pytest.MonkeyPatch) -> None:
-    from urllib.error import URLError
-
-    def fake_urlopen(req, timeout):  # noqa: ANN001, ARG001
-        raise URLError("connection refused")
-
-    monkeypatch.setattr(rag_embed, "urlopen", fake_urlopen)
-    # Should never raise — best-effort by contract.
-    assert rag_embed.try_unload(_settings()) is False
+def test_every_profiled_model_has_a_window_a_chunk_can_fit() -> None:
+    """The profile is what `rag.load_settings` clamps chunking to. A
+    value larger than the model's real window truncates every chunk
+    silently, which is the failure this table exists to prevent."""
+    for name, profile in rag_embed_local.MODEL_PROFILES.items():
+        assert profile.max_chars >= 200, name
+        assert profile.max_chars <= 8000, name

@@ -54,21 +54,25 @@ function ok(body: unknown, status = 200): Response {
   } as unknown as Response
 }
 
+const SET_ID = 'aaaaaaaaaaaa'
+
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
+  const slot = {
+    payload: { _schema_version: 2, _overlay: ['character.description'], ...payload },
+    overlay: ['character.description'],
+    etag: 'seed',
+    unsavedDirty: false,
+    saveStatus: 'idle' as const,
+    saveError: null,
+    lastSavedAt: null,
+    materialised: true
+  }
   useStore.setState((s) => ({
-    flistWorking: {
-      ...s.flistWorking,
-      [characterId]: {
-        payload: { _schema_version: 2, _overlay: ['character.description'], ...payload },
-        overlay: ['character.description'],
-        etag: 'seed',
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
-    },
+    flistWorking: { ...s.flistWorking, [characterId]: slot },
+    // Working sets v2: writes route through the active set's payload
+    // endpoint, so a slot without an active set can never produce a PUT.
+    flistSetWorking: { ...s.flistSetWorking, [SET_ID]: slot },
+    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistArchive: {
       ...s.flistArchive,
       [characterId]: {
@@ -87,6 +91,9 @@ beforeEach(() => {
   vi.useFakeTimers()
   useStore.setState({
     flistWorking: {},
+    flistSetWorking: {},
+    flistActiveSetId: {},
+    flistSets: {},
     flistArchive: {},
     flistDiffRightSource: {},
     flistDiffBackupCache: {},

@@ -16,7 +16,6 @@ type PartnerStats = {
   ic: number
   ooc: number
   unlabeled: number
-  failed: number
   total: number
   logMtime: number | null
   lastLabelAt: number | null
@@ -31,10 +30,7 @@ export function PartnerList() {
   const loadPartners = useStore((s) => s.loadPartners)
   const activePartner = useStore((s) => s.activePartner)
   const selectPartner = useStore((s) => s.selectPartner)
-  const openClassify = useStore((s) => s.openClassify)
   const openIngest = useStore((s) => s.openIngest)
-  const toggleChatPanel = useStore((s) => s.toggleChatPanel)
-  const requestChatFocus = useStore((s) => s.requestChatFocus)
   const invalidateMessages = useStore((s) => s.invalidateMessages)
   const loadMessages = useStore((s) => s.loadMessages)
   const [query, setQuery] = useState('')
@@ -64,7 +60,6 @@ export function PartnerList() {
             ic: row.ic,
             ooc: row.ooc,
             unlabeled: row.unlabeled,
-            failed: row.failed,
             total: row.total,
             logMtime: row.log_mtime,
             lastLabelAt: row.last_label_at
@@ -110,15 +105,6 @@ export function PartnerList() {
     setPartnerMenu({ x: e.clientX, y: e.clientY, partner: partnerName })
   }
 
-  const onClassifyPartner = (partnerName: string) => {
-    if (!activeChar) return
-    setPartnerMenu(null)
-    openClassify(
-      { character: activeChar, partner: partnerName },
-      `${displayPartner(partnerName)} with ${activeChar}`
-    )
-  }
-
   const onIngestPartner = (partnerName: string) => {
     if (!activeChar) return
     setPartnerMenu(null)
@@ -126,20 +112,6 @@ export function PartnerList() {
       { character: activeChar, partner: partnerName },
       `${displayPartner(partnerName)} with ${activeChar}`
     )
-  }
-
-  const onChatPartner = (partnerName: string) => {
-    if (!activeChar) return
-    setPartnerMenu(null)
-    // Make sure the chat panel's scope sees this partner — selecting
-    // it first so the panel's partner-mode default lands on the right
-    // conversation. (Right-clicking a partner row doesn't otherwise
-    // change selection.)
-    if (activePartner !== partnerName) {
-      selectPartner(partnerName)
-    }
-    toggleChatPanel(true)
-    requestChatFocus()
   }
 
   // After any alias mutation: drop the cached per-partner message
@@ -296,9 +268,7 @@ export function PartnerList() {
             (partners ?? []).find((p) => p.name === partnerMenu.partner) ?? null
           }
           character={activeChar}
-          onClassify={() => onClassifyPartner(partnerMenu.partner)}
           onIngest={() => onIngestPartner(partnerMenu.partner)}
-          onChatWithThis={() => onChatPartner(partnerMenu.partner)}
           onLink={(entry) => onLinkPartner(entry)}
           onUnlink={(entry) => void onUnlinkPartner(entry)}
           onResetAll={() => void onResetPartner(partnerMenu.partner)}
@@ -325,9 +295,7 @@ function PartnerContextMenu({
   partner,
   partnerEntry,
   character,
-  onClassify,
   onIngest,
-  onChatWithThis,
   onLink,
   onUnlink,
   onResetAll
@@ -337,18 +305,16 @@ function PartnerContextMenu({
   partner: string
   partnerEntry: PartnerEntry | null
   character: string
-  onClassify: () => void
   onIngest: () => void
-  onChatWithThis: () => void
   onLink: (entry: PartnerEntry) => void
   onUnlink: (entry: PartnerEntry) => void
   onResetAll: () => void
 }) {
   const isLinked = !!partnerEntry && partnerEntry.aliases.length > 0
   const W = 280
-  // 5 items max (Classify / Ingest / Chat / Link or Unlink / Reset).
-  // Sized so viewport-edge clamping keeps the whole menu on-screen.
-  const H = 280
+  // 3 items max (Ingest / Link or Unlink / Reset). Sized so
+  // viewport-edge clamping keeps the whole menu on-screen.
+  const H = 220
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const firstRef = useRef<HTMLButtonElement | null>(null)
@@ -373,30 +339,11 @@ function PartnerContextMenu({
         type="button"
         role="menuitem"
         className="log-label-menu-item"
-        onClick={onClassify}
-        data-testid="partner-context-menu-classify"
-      >
-        Classify this conversation
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="log-label-menu-item"
         onClick={onIngest}
-        title="Embed this conversation's IC chunks into the local RAG index."
+        title="Embed this conversation's chunks into the local search index."
         data-testid="partner-context-menu-ingest"
       >
         Ingest this chat (RAG)
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="log-label-menu-item"
-        onClick={onChatWithThis}
-        title="Open the chat panel scoped to this conversation."
-        data-testid="partner-context-menu-chat"
-      >
-        Chat with this log
       </button>
       {isLinked && partnerEntry ? (
         <button
@@ -445,14 +392,13 @@ function filter(entries: PartnerEntry[], query: string): PartnerEntry[] {
   return entries.filter((e) => e.name.toLowerCase().includes(q))
 }
 
-// Three-segment bar: IC / OOC / Unlabeled+Failed. Width is proportional
-// to message counts so a partner with 40% IC, 40% OOC, 20% Unlabeled
-// shows segments in those ratios. Hidden on empty conversations and on
-// partners where the labels DB hasn't seen any rows yet (no point
-// drawing a single grey rectangle that says "100% unlabeled" — which is
-// already implied by the missing pip).
+// Two-segment bar: IC / OOC, against the full message count so the
+// remainder reads as unlabeled. Hidden on empty conversations and on
+// partners where nothing is labelled yet (no point drawing a single
+// grey rectangle that says "100% unlabeled" — already implied by the
+// missing pip).
 function CoverageBar({ stats }: { stats: PartnerStats }) {
-  const labeled = stats.ic + stats.ooc + stats.failed
+  const labeled = stats.ic + stats.ooc
   if (stats.total === 0 || labeled === 0) return null
   const pct = (n: number) => `${(n / stats.total) * 100}%`
   return (
@@ -463,19 +409,17 @@ function CoverageBar({ stats }: { stats: PartnerStats }) {
     >
       <span className="sb-coverage-ic" style={{ width: pct(stats.ic) }} />
       <span className="sb-coverage-ooc" style={{ width: pct(stats.ooc) }} />
-      <span className="sb-coverage-failed" style={{ width: pct(stats.failed) }} />
     </span>
   )
 }
 
 function coverageTooltip(stats: PartnerStats): string {
-  const labeled = stats.ic + stats.ooc + stats.failed
+  const labeled = stats.ic + stats.ooc
   const pct = stats.total > 0 ? Math.round((labeled / stats.total) * 100) : 0
   const parts: string[] = []
   parts.push(`${pct}% labeled (${labeled}/${stats.total})`)
   if (stats.ic > 0) parts.push(`${stats.ic} IC`)
   if (stats.ooc > 0) parts.push(`${stats.ooc} OOC`)
-  if (stats.failed > 0) parts.push(`${stats.failed} failed`)
   if (stats.unlabeled > 0) parts.push(`${stats.unlabeled} unlabeled`)
   return parts.join(' · ')
 }

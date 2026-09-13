@@ -1,20 +1,23 @@
 """IC/OOC labels store + read-time resolver.
 
-Persists only **explicit** labels (LLM + manual). Rules are recomputed
-at every read against the current settings, so changing the threshold
-is instant — no DB rebuild needed. See `docs/RAG_DESIGN.md` for the
-full design contract.
+Persists only **explicit** verdicts — written either by the model the
+user connected over MCP or by the user's own right-click override.
+Rules are recomputed at every read against the current settings, so
+changing the threshold is instant; no DB rebuild needed.
 
 Resolver precedence:
-    1. DB label (LLM or manual)             -> stored row's label
+    1. DB label (model or manual)           -> stored row's label
     2. empty body                           -> OOC  (rule:empty)
     3. text_len < settings.threshold_chars  -> OOC  (rule:short)
     4. body starts with "((" (LRP convention) -> OOC (rule:parens)
     5. otherwise                            -> Unlabeled
 
+Case 5 is what `services.classification` hands to the connected model,
+and what `chunker` refuses to index.
+
 Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
-so users can wipe it without losing their drafts and the LLM ingest
-job can safely WAL the file under load.
+so users can wipe it without losing their drafts and the ingest job can
+safely WAL the file under load.
 """
 
 from __future__ import annotations
@@ -30,38 +33,26 @@ from typing import Iterable
 import paths
 import settings as settings_store
 
-# Four-state result the resolver returns. The labels table only ever
+# Three-state result the resolver returns. The labels table only ever
 # stores IC or OOC; "Unlabeled" is what the resolver returns when no
-# explicit label exists and no rule matched; "Failed" surfaces a row
-# in the parallel label_failures table — the LLM was asked but didn't
-# produce a usable answer (HTTP/JSON/parse error). The user can fix it
-# manually from the message context menu; manual overrides clear the
-# failure row.
+# explicit label exists and no rule matched — those are the messages
+# handed to the connected MCP client to judge.
+#
+# A fourth state, "Failed", used to exist for messages the in-app
+# classifier couldn't get a usable answer about. With no in-app
+# classifier there is nothing to fail: a message the model declines to
+# label simply stays Unlabeled and comes back in the next batch.
 LABEL_IC = "IC"
 LABEL_OOC = "OOC"
 LABEL_UNLABELED = "Unlabeled"
-LABEL_FAILED = "Failed"
 
 DEFAULT_THRESHOLD_CHARS = 200
-DEFAULT_LLM_ENDPOINT = "http://localhost:1234/v1"
-DEFAULT_LLM_MODEL = "gemma-4-26b-a4b-it-uncensored-heretic"
-DEFAULT_LLM_API_KEY = ""
-# Default surrounding-context window size for classify calls. RAG_DESIGN
-# originally picked 3 + 3; in practice that bleeds — the model latches
-# onto the surrounding cluster (e.g. mid-RP banter) and mislabels the
-# target. 1 + 1 holds the IC/OOC boundary much better.
-#
-# WARNING: if you tune this UP and start seeing messages at the *start*
-# or *end* of IC/OOC blocks classified wrongly (the target is IC but
-# all visible context is OOC, or vice versa), the bleed is back —
-# reduce, don't increase. Set to 0 for no surroundings at all when
-# debugging the prompt in isolation.
-DEFAULT_CONTEXT_BEFORE = 1
-DEFAULT_CONTEXT_AFTER = 1
 
-# Default classifier prompt. Lifted from Chat_RAG/classify.py (German
-# RP). Users can edit this in Settings → Labels; a blank stored value
-# falls back to this default, so "reset to default" is just "save blank".
+# Classifier prompt, lifted from Chat_RAG/classify.py (German RP).
+# Workbench no longer runs a classifier itself; this and the two
+# presets below are handed to the connected MCP client through
+# `get_classification_guidelines` so its verdicts stay comparable with
+# everything labelled before the migration.
 DEFAULT_SYSTEM_PROMPT = """Du bist ein Klassifikator für deutschsprachige Roleplay-Chat-Logs aus F-Chat.
 Klassifiziere die ZIELNACHRICHT zwingend als "IC" (in-character) oder "OOC" (out-of-character).
 
@@ -83,6 +74,14 @@ Charakternamen als Subjekt einer Handlung nutzt (Indikativ, Präsens/Präteritum
 ist das IC — auch bei alltäglichen Aktivitäten wie Schlafen, Essen, Lesen,
 Gehen, Putzen. Die Banalität der Handlung sagt NICHTS über IC vs OOC; die
 Perspektive (dritte Person über den Charakter) ist der entscheidende Marker.
+Der Sprechername muss NICHT der erzählte Charakter sein — Spieler führen oft
+mehrere Figuren unter einem Account. Dritte-Person-Narration über IRGENDEINE
+Figur ist IC.
+
+UMGEBUNGS- / SZENEN-NARRATION: Ein Sprecher darf auch Umgebung, NPCs und
+Ereignisse erzählen, ohne den eigenen Charakter zu nennen. Beschreibt der Text,
+was in der Spielwelt geschieht oder was das Gegenüber dort vorfindet, ist es IC
+— auch ohne eigenen Charakternamen als Subjekt.
 
 DIALOGE: Direkte Rede in Anführungszeichen mit Dialog-Tag (sagte, murmelte, etc.)
 ist IC.
@@ -104,7 +103,13 @@ Sobald das Geschehen hypothetisch ist oder vorgeschlagen wird, ist es OOC.
 
 Signalwörter: "Zum Beispiel...", "Stell dir vor...", "Wir könnten...", "Idee:..."
 
-Nutzung des Konjunktivs: "Sie würde / könnte..." -> OOC (da nicht real geschehend).
+KONJUNKTIV ALLEIN ENTSCHEIDET NICHT. Die Frage ist: Wird dem MITSPIELER etwas
+vorgeschlagen, oder wird der SPIELWELT etwas erzählt?
+- Vorschlag an den Mitspieler ("wir könnten...", "sie würde dann vielleicht ...
+  was meinst du?") -> OOC
+- Erzählte Handlung, die dem Gegenüber Reaktionsraum lässt ("Sie würde die Tür
+  öffnen und eintreten", "Sollte er sich umdrehen, sieht er...") -> IC. Das ist
+  in F-Chat die übliche Höflichkeitsform, kein Vorschlag.
 
 REALE WELT-ANEKDOTEN (OOC) — NUR bei IRL-Themen:
 
@@ -129,25 +134,31 @@ In F-Chat sind Spieler-Meta-Kommentare oft in (...) Klammern oder beginnen mit
 "OOC:" / "//". Würfelwürfe, Regelfragen, Sichtbarkeits-Absprachen ("willst du den
 Wurf sehen?"), Pausenansagen ("kurz AFK") sind OOC.
 
+GEMISCHTE NACHRICHTEN:
+
+Enthält eine Nachricht IC-Erzählung UND einen Spieler-Einschub in (…),
+entscheidet der Hauptteil. Ein angehängter Klammerkommentar macht einen
+IC-Post nicht zu OOC.
+
 BEISPIELE ZUR MUSTERERKENNUNG:
 
 NACHRICHT: "Galadriel legte sanft ihre seidige Hand auf das kühle Metall des
 Türgriffs und zog die Tür langsam auf."
-ANTWORT: {"label":"IC","reason":"Szenenerzählung in dritter Person, passiert jetzt"}
+URTEIL: {"label":"IC","reason":"Szenenerzählung in dritter Person, passiert jetzt"}
 
 NACHRICHT: "[03-12 21:08 | 92 chars] Yennefer: Yennefer kommt durch die Tür,
 trägt einen langen Mantel und schaut sich suchend um."
-ANTWORT: {"label":"IC","reason":"Sprecher Yennefer beschreibt sich selbst in dritter Person"}
+URTEIL: {"label":"IC","reason":"Sprecher Yennefer beschreibt sich selbst in dritter Person"}
 
 NACHRICHT: "\\"Das ist eine wirklich schlechte Idee\\", murmelte sie und schüttelte
 den Kopf, ohne ihn anzusehen."
-ANTWORT: {"label":"IC","reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
+URTEIL: {"label":"IC","reason":"Direkte Rede in Anführungszeichen + Dialogtag + Begleitaktion"}
 
 NACHRICHT: "Éowyn von Rohan verzieht spöttisch den Mund. \\"Dann schlaft ihr
 eben in der Scheune, dieses Zimmer nehme ich.\\"
 Sie rührt sich nicht, als man sie beiseiteschieben will. \\"Ihr seht mir
 ganz nach einer Straßenelfe aus. Packt eure Sachen und verschwindet.\\""
-ANTWORT: {"label":"IC","reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
+URTEIL: {"label":"IC","reason":"Sprecher narriert sich selbst in Fantasy-Setting (Scheune, Straßenelfe), IC-Dialog mit Spott"}
 
 NACHRICHT: "[04-15 22:30 | 1240 chars | action] Galadriel: Galadriel hat sich aufs
 Bett gelegt, einen Kopfhörer im Ohr, und blättert in ihrem Buch, während ihre
@@ -155,30 +166,44 @@ Gedanken auf Reisen gehen. Kurzzeitig versucht sie zu schlafen, gibt es dann abe
 auf und widmet sich wieder dem Buch. Sie merkt dass ihr Magen knurrt und verlässt
 ihr Zimmer, um die Küche anzusteuern. \\"Sag, gibt es irgendwelche Schränke an die
 ich nicht ran darf?\\", fragt sie."
-ANTWORT: {"label":"IC","reason":"Dritte-Person-Selbstnarration mit | action-Marker; mundane Aktivitäten zählen trotzdem als IC"}
+URTEIL: {"label":"IC","reason":"Dritte-Person-Selbstnarration mit | action-Marker; mundane Aktivitäten zählen trotzdem als IC"}
 
 NACHRICHT: "Zum Beispiel, ja. Wir könnten auch sagen, dass sie sich
 in einer Schmugglerkneipe nach Informanten umhört."
-ANTWORT: {"label":"OOC","reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
+URTEIL: {"label":"OOC","reason":"Plot-Brainstorming: 'Zum Beispiel' + hypothetisches Szenario"}
 
 NACHRICHT: "Kenn ich von meinem alten Job. Bei uns in der Familie war das,
 ehrlich gesagt, auch nie anders"
-ANTWORT: {"label":"OOC","reason":"Spieler-Anekdote aus echtem Leben (Job, Familie), erste Person"}
+URTEIL: {"label":"OOC","reason":"Spieler-Anekdote aus echtem Leben (Job, Familie), erste Person"}
 
-NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt."
-ANTWORT: {"label":"OOC","reason":"Konjunktiv 'würde' beschreibt Möglichkeit, nicht Geschehen"}
+NACHRICHT: "Sie würde ihn vielleicht erst mal mustern, bevor sie etwas sagt.
+Wäre das so okay für dich?"
+URTEIL: {"label":"OOC","reason":"Vorschlag an den Mitspieler, nicht erzählte Handlung"}
+
+NACHRICHT: "Sie würde den Rest des Tages nicht mehr stören. Sollte Amber die Tür
+öffnen, findet sie eine Flasche Wasser und zwei Kekse davor."
+URTEIL: {"label":"IC","reason":"Erzählte Handlung im Konjunktiv, kein Vorschlag"}
+
+NACHRICHT: "[08-31 09:32 | 3735 chars | action] Asmira: Am nächsten Morgen
+wartet ein Wagen vor dem Tor. Auf der Rückbank liegt ein versiegelter Umschlag,
+daneben eine Karte mit dem Ziel der Reise."
+URTEIL: {"label":"IC","reason":"Szenen- und Umgebungsnarration ohne eigenen Charakternamen"}
 
 NACHRICHT: "(Ich werde jetzt würfeln für den Magieffekt. Willst du den Wurf sehen
 oder soll ich das eher heimlich machen?)"
-ANTWORT: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
+URTEIL: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klammern"}
 
-FORMAT (STRIKTE PFLICHT):
-Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt.
-KEINE Code-Fences (kein ```json). KEINE Markdown-Blöcke. KEINE Arrays (kein [ ]).
-KEINE Vor-Überlegung, kein Chain-of-Thought, KEIN Text vor oder nach dem JSON.
-Das "reason"-Feld MAX 60 Zeichen. Verwende KEINE wörtlichen Zitate aus dem Text
-und KEINE Anführungszeichen im Reason — beschreibe das Muster, nicht den Inhalt.
-{"label":"IC"|"OOC","reason":"kurze Begründung max 60 Zeichen"}"""
+FORMAT:
+Gib die Urteile über das Tool `set_message_labels` zurück — ein Eintrag pro
+Nachricht: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
+Der Hash muss exakt der aus `get_messages_to_classify` sein; ein falscher
+Hash beschriftet eine fremde Nachricht.
+Beurteile jede Nachricht des Batches, lass keine aus.
+
+Nachdenken vor dem Tool-Aufruf ist erlaubt und erwünscht — es landet nicht in
+den Daten. Gespeichert wird nur `reason`: MAX 60 Zeichen, KEINE wörtlichen
+Zitate aus dem Text und KEINE Anführungszeichen — beschreibe das Muster,
+nicht den Inhalt."""
 
 # English equivalent of the default German prompt. Same heuristics,
 # same JSON output contract — keeps users on a non-German chat model
@@ -204,6 +229,13 @@ as the subject of an action in indicative mood (present/past tense), it is IC �
 even for mundane activities like sleeping, eating, reading, walking, cleaning.
 The mundanity of the action says NOTHING about IC vs OOC; the perspective
 (third person about the character) is the decisive marker.
+The speaker name need NOT be the narrated character — players often run several
+figures from one account. Third-person narration about ANY figure is IC.
+
+SCENE / ENVIRONMENT NARRATION: a speaker may also narrate surroundings, NPCs and
+events without naming their own character. If the text describes what happens in
+the game world, or what the other character finds there, it is IC — even with no
+own character name as the subject.
 
 DIALOGUE: Direct speech in quotation marks with a dialog tag (said, murmured,
 etc.) is IC.
@@ -225,7 +257,13 @@ As soon as the event is hypothetical or being proposed, it is OOC.
 
 Signal words: "for example…", "imagine…", "we could…", "idea:…"
 
-Subjunctive / conditional: "she would / could…" → OOC (not actually happening).
+SUBJUNCTIVE ALONE DOES NOT DECIDE. The question is: is something being proposed
+to the PLAYER, or narrated to the GAME WORLD?
+- a proposal to the other player ("we could…", "she would maybe … what do you
+  think?") → OOC
+- a narrated action that leaves the other side room to react ("She would open the
+  door and step inside", "Should he turn around, he sees…") → IC. In F-Chat this
+  is the customary polite form, not a proposal.
 
 REAL-WORLD ANECDOTES (OOC) — ONLY for IRL topics:
 
@@ -249,13 +287,21 @@ In F-Chat, player meta-comments are often in (...) parentheses or begin with
 "OOC:" / "//". Dice rolls, rule questions, visibility checks ("want to see
 the roll?"), away announcements ("brb afk") are OOC.
 
-FORMAT (STRICT):
-Respond ONLY with a single JSON object.
-NO code fences (no ```json). NO markdown blocks. NO arrays (no [ ]).
-NO preamble, no chain-of-thought, NO text before or after the JSON.
-The "reason" field MAX 60 characters. Do NOT quote text verbatim and do NOT
-use quotation marks in reason — describe the pattern, not the content.
-{"label":"IC"|"OOC","reason":"short reason max 60 chars"}"""
+MIXED MESSAGES:
+
+When a message contains IC narration AND a player aside in (…), the main body
+decides. A trailing parenthetical does not turn an IC post into OOC.
+
+FORMAT:
+Return the verdicts through the `set_message_labels` tool — one entry per
+message: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
+The hash must be exactly the one from `get_messages_to_classify`; a wrong
+hash labels someone else's message.
+Judge every message in the batch, skip none.
+
+Thinking before the tool call is allowed and welcome — it does not reach the
+data. Only `reason` is stored: MAX 60 characters, no verbatim quotes from the
+text and no quotation marks — describe the pattern, not the content."""
 
 # Language-agnostic minimal prompt. Use this when the corpus mixes
 # multiple languages or when the chat model is small and tends to
@@ -269,10 +315,14 @@ Rules of thumb:
 - Third-person narration about the speaker's own character, in indicative mood, is IC — even for mundane actions.
 - Direct speech in quotation marks with a dialog tag is IC.
 - Player parentheses (...), brackets ((...)), explicit "OOC:" / "//" prefixes, dice rolls, and planning ("we could…", "imagine…") are OOC.
-- Hypothetical / conditional / subjunctive ("would", "could") about a character is OOC.
+- Conditional / subjunctive alone does not decide: a proposal to the other PLAYER ("we could…", "what do you think?") is OOC, but a narrated action phrased politely ("She would open the door", "Should he look, he sees…") is IC.
+- Narration of surroundings, NPCs or events without the speaker's own character name is still IC.
+- One account may voice several characters; third-person narration about any of them is IC.
 
-Respond with one JSON object, no code fences, no preamble:
-{"label":"IC"|"OOC","reason":"short reason, max 60 chars"}"""
+Return verdicts through the `set_message_labels` tool: one entry per message,
+{"hash": ..., "label": "IC"|"OOC", "reason": ...}, reusing the hash exactly as
+given. Think first if it helps; only `reason` is stored, max 60 chars, no
+verbatim quotes."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -339,32 +389,17 @@ CREATE TABLE IF NOT EXISTS labels (
     label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
     confidence   REAL NOT NULL,
     reason       TEXT,
-    source       TEXT NOT NULL CHECK (source IN ('llm','manual')),
+    -- 'mcp': a verdict from the model the user connected over MCP.
+    -- 'manual': the user's own right-click override.
+    -- 'llm': written by the in-app classifier that existed before the
+    -- MCP migration; kept so old rows stay readable.
+    source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
     prior_label  TEXT,
     prior_source TEXT,
     updated_at   REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner);
 CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
-
--- Persistent classify-job history. JobRegistry retains in-memory jobs
--- for ~300s; this table survives sidecar restarts so users can see
--- "last classified Auldren Nazr yesterday at 23:14" weeks later.
--- Manual classify runs append on completion; nothing here is
--- consulted by the resolver — purely for UI display.
-CREATE TABLE IF NOT EXISTS label_jobs (
-    id            TEXT PRIMARY KEY,
-    scope         TEXT NOT NULL,    -- JSON: {"character"?: X, "partner"?: Y}
-    state         TEXT NOT NULL,    -- 'done' | 'cancelled' | 'failed'
-    classified    INTEGER NOT NULL,
-    failed        INTEGER NOT NULL,
-    total         INTEGER NOT NULL,
-    started_at    REAL NOT NULL,
-    finished_at   REAL NOT NULL,
-    error         TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_label_jobs_finished
-    ON label_jobs(finished_at DESC);
 
 -- Partner aliases share this DB so every labels.connect() is
 -- automatically alias-aware. aliases.py owns the read/write logic;
@@ -381,21 +416,6 @@ CREATE TABLE IF NOT EXISTS partner_aliases (
 CREATE INDEX IF NOT EXISTS idx_aliases_primary
     ON partner_aliases(character, primary_name);
 
--- Parallel to `labels`, but tracks messages whose classify attempt
--- failed (HTTP/JSON/parse error). The resolver returns "Failed" when
--- a hash exists here AND no labels row + no rule hit. Cleared on
--- successful re-classify and on any manual override.
-CREATE TABLE IF NOT EXISTS label_failures (
-    hash         TEXT PRIMARY KEY,
-    character    TEXT NOT NULL,
-    partner      TEXT NOT NULL,
-    ts           INTEGER NOT NULL,
-    speaker      TEXT NOT NULL,
-    error        TEXT NOT NULL,
-    updated_at   REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_label_failures_partner
-    ON label_failures(character, partner);
 """
 
 
@@ -415,7 +435,97 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path(root), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _drop_retired_tables(conn)
+    _widen_source_check(conn)
     return conn
+
+
+#: Tables that belonged to the in-app classifier: failed classify
+#: attempts, and the history of classify jobs. Nothing writes either
+#: since classification moved to the connected MCP client, so they are
+#: dropped rather than left to sit in every existing labels.db. The
+#: `labels` table itself — the actual verdicts — is untouched.
+_RETIRED_TABLES = ("label_failures", "label_jobs")
+
+
+def _drop_retired_tables(conn: sqlite3.Connection) -> None:
+    try:
+        for table in _RETIRED_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.commit()
+    except sqlite3.DatabaseError:
+        # Never let cleanup stop the sidecar from serving labels.
+        pass
+
+
+def _widen_source_check(conn: sqlite3.Connection) -> None:
+    """Let existing databases accept `source = 'mcp'`.
+
+    The CHECK constraint predates the MCP migration and only allowed
+    'llm' and 'manual', so the first verdict written by a connected
+    model would fail with an IntegrityError on any install created
+    before this version. SQLite cannot alter a constraint in place, so
+    the table is rebuilt — rows and all — the one time it is needed.
+    """
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'labels'"
+        ).fetchone()
+        if row is None or "'mcp'" in (row["sql"] or ""):
+            return
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = off;
+            BEGIN;
+            CREATE TABLE labels_migrated (
+                hash         TEXT PRIMARY KEY,
+                character    TEXT NOT NULL,
+                partner      TEXT NOT NULL,
+                ts           INTEGER NOT NULL,
+                speaker      TEXT NOT NULL,
+                label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+                confidence   REAL NOT NULL,
+                reason       TEXT,
+                source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
+                prior_label  TEXT,
+                prior_source TEXT,
+                updated_at   REAL NOT NULL
+            );
+            INSERT INTO labels_migrated SELECT
+                hash, character, partner, ts, speaker, label, confidence,
+                reason, source, prior_label, prior_source, updated_at
+            FROM labels;
+            DROP TABLE labels;
+            ALTER TABLE labels_migrated RENAME TO labels;
+            CREATE INDEX IF NOT EXISTS idx_labels_partner
+                ON labels(character, partner);
+            CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
+            COMMIT;
+            PRAGMA foreign_keys = on;
+            """
+        )
+    except sqlite3.DatabaseError:
+        # A failed widening leaves the old table intact: MCP writes will
+        # error visibly, which beats losing the user's curated verdicts.
+        try:
+            conn.rollback()
+        except sqlite3.DatabaseError:
+            pass
+
+
+def _publish(event: str, **data) -> None:
+    """Announce a label change on the event bus, if one is running.
+
+    Here rather than in the callers so the manual override from the
+    log viewer and a model's verdict through MCP both reach the
+    window. Never fails a write.
+    """
+    try:
+        from services import events
+
+        events.publish(event, **data)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def msg_hash(msg: dict) -> str:
@@ -425,13 +535,12 @@ def msg_hash(msg: dict) -> str:
 
 @dataclass(slots=True, frozen=True)
 class LabelsSettings:
+    """What the rule resolver needs. Nothing else survives: the
+    classifier's endpoint, model, key, prompt and context window went
+    away with the in-app LLM — the connected MCP client decides those
+    now (see services/classification.py)."""
+
     threshold_chars: int
-    llm_endpoint: str
-    llm_model: str
-    llm_api_key: str
-    system_prompt: str
-    context_before: int
-    context_after: int
 
 
 def _coerce_int(raw: str | None, default: int) -> int:
@@ -456,22 +565,8 @@ def load_settings(conn: sqlite3.Connection | None = None) -> LabelsSettings:
         own_conn = True
     try:
         threshold_raw = settings_store.get(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS)
-        endpoint = settings_store.get(conn, settings_store.KEY_LABELS_LLM_ENDPOINT) or DEFAULT_LLM_ENDPOINT
-        model = settings_store.get(conn, settings_store.KEY_LABELS_LLM_MODEL) or DEFAULT_LLM_MODEL
-        api_key = settings_store.get(conn, settings_store.KEY_LABELS_LLM_API_KEY) or DEFAULT_LLM_API_KEY
-        prompt = settings_store.get(conn, settings_store.KEY_LABELS_SYSTEM_PROMPT) or DEFAULT_SYSTEM_PROMPT
-        ctx_before_raw = settings_store.get(conn, settings_store.KEY_LABELS_CONTEXT_BEFORE)
-        ctx_after_raw = settings_store.get(conn, settings_store.KEY_LABELS_CONTEXT_AFTER)
         return LabelsSettings(
             threshold_chars=_coerce_int(threshold_raw, DEFAULT_THRESHOLD_CHARS),
-            llm_endpoint=endpoint,
-            llm_model=model,
-            llm_api_key=api_key,
-            system_prompt=prompt,
-            # Clamp to a sane range — context that's too wide blows the
-            # model's window; negative or zero is fine (no surroundings).
-            context_before=max(0, min(10, _coerce_int(ctx_before_raw, DEFAULT_CONTEXT_BEFORE))),
-            context_after=max(0, min(10, _coerce_int(ctx_after_raw, DEFAULT_CONTEXT_AFTER))),
         )
     finally:
         if own_conn:
@@ -485,20 +580,15 @@ def resolve(
     msg: dict,
     db_label: sqlite3.Row | dict | None,
     settings: LabelsSettings,
-    *,
-    failed: bool = False,
 ) -> str:
     """Return the effective label for a message.
 
     `db_label` is the explicit-labels row keyed by `msg_hash(msg)`, or
-    None. `failed` is True when a label_failures row exists for the
-    same hash (a prior classify call couldn't produce a usable answer).
-    `msg` must have `text` (BBCode-stripped) and `raw` keys — matching
-    what `parser.parse_log` yields.
+    None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
+    matching what `parser.parse_log` yields.
 
     Precedence: explicit DB label wins; otherwise rules (empty / short /
-    `((` prefix) decide; otherwise a recorded failure surfaces as
-    "Failed"; otherwise "Unlabeled".
+    `((` prefix) decide; otherwise "Unlabeled".
     """
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
@@ -511,8 +601,6 @@ def resolve(
     raw = msg.get("raw") or ""
     if _PARENS_PREFIX.match(raw):
         return LABEL_OOC
-    if failed:
-        return LABEL_FAILED
     return LABEL_UNLABELED
 
 
@@ -568,7 +656,10 @@ def upsert_label(
 ) -> None:
     """Insert or replace a label, snapshotting any prior label.
 
-    `source` is 'llm' or 'manual'.
+    `source` is 'mcp' (a verdict from the connected model), 'manual'
+    (the user's right-click override) or 'llm' (written by the in-app
+    classifier that existed before the MCP migration — still accepted
+    so old rows round-trip).
 
     Note: the schema still carries a `confidence REAL NOT NULL` column
     for backwards compatibility with on-disk DBs from earlier versions.
@@ -579,7 +670,7 @@ def upsert_label(
     """
     if label not in (LABEL_IC, LABEL_OOC):
         raise ValueError(f"invalid label: {label!r}")
-    if source not in ("llm", "manual"):
+    if source not in ("mcp", "manual", "llm"):
         raise ValueError(f"invalid source: {source!r}")
     existing = conn.execute(
         "SELECT label, source FROM labels WHERE hash = ?", (hash,)
@@ -606,78 +697,18 @@ def upsert_label(
             1.0, reason, source, prior_label, prior_source, time.time(),
         ),
     )
-    # Any explicit label clears a prior failure — the user fixed it
-    # (manual override) or a re-classify finally got an answer.
-    conn.execute("DELETE FROM label_failures WHERE hash = ?", (hash,))
     conn.commit()
-
-
-def record_failure(
-    conn: sqlite3.Connection,
-    *,
-    hash: str,
-    character: str,
-    partner: str,
-    ts: int,
-    speaker: str,
-    error: str,
-) -> None:
-    """Mark a message as classify-failed.
-
-    No-op if an explicit label already exists for this hash — a
-    successful prior classify shouldn't be downgraded to "Failed" just
-    because a re-classify attempt errored. The error string is
-    truncated; the JSONL log file is the full debug surface.
-    """
-    has_label = conn.execute(
-        "SELECT 1 FROM labels WHERE hash = ?", (hash,)
-    ).fetchone()
-    if has_label is not None:
-        return
-    conn.execute(
-        """
-        INSERT INTO label_failures (
-            hash, character, partner, ts, speaker, error, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET
-            error = excluded.error,
-            updated_at = excluded.updated_at
-        """,
-        (hash, character, partner, ts, speaker, error[:500], time.time()),
+    _publish(
+        "labels-changed", character=character, partner=partner, hashes=1
     )
-    conn.commit()
-
-
-def clear_failure(conn: sqlite3.Connection, hash: str) -> bool:
-    cur = conn.execute("DELETE FROM label_failures WHERE hash = ?", (hash,))
-    conn.commit()
-    return cur.rowcount > 0
-
-
-def failures_for_partner(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
-) -> dict[str, sqlite3.Row]:
-    """All failure rows for one conversation, keyed by message hash.
-
-    Same alias-aware lookup shape as `labels_for_partner`.
-    """
-    names = _partner_query_set(partner, partner_aliases)
-    placeholders = ",".join("?" * len(names))
-    rows = conn.execute(
-        f"SELECT * FROM label_failures WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    ).fetchall()
-    return {row["hash"]: row for row in rows}
 
 
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     """Remove an explicit label, reverting the message to rule-or-Unlabeled."""
     cur = conn.execute("DELETE FROM labels WHERE hash = ?", (hash,))
     conn.commit()
+    if cur.rowcount:
+        _publish("labels-changed", hashes=cur.rowcount)
     return cur.rowcount > 0
 
 
@@ -688,122 +719,148 @@ def delete_labels_for_partner(
     *,
     partner_aliases: list[str] | None = None,
 ) -> int:
-    """Drop every explicit label for one (character, partner) pair.
-
-    Also drops any recorded failure rows — "Reset all labels" should
-    reset every classifier-side state, not just the success rows.
-    Returns the count of deleted label rows (failure rows aren't
-    counted; they're an implementation detail of the chip strip).
-    """
+    """Drop every explicit label for one (character, partner) pair,
+    reverting each message to rule-or-Unlabeled. Returns the number of
+    rows removed."""
     names = _partner_query_set(partner, partner_aliases)
     placeholders = ",".join("?" * len(names))
     cur = conn.execute(
         f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
         (character, *names),
     )
-    conn.execute(
-        f"DELETE FROM label_failures WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    )
     conn.commit()
+    _publish(
+        "labels-changed",
+        character=character,
+        partner=partner,
+        deleted=cur.rowcount,
+    )
     return cur.rowcount
 
 
-def record_job_history(
+def fill_unlabeled(
     conn: sqlite3.Connection,
+    character: str,
+    partner: str,
+    messages: Iterable[dict],
+    settings: LabelsSettings,
+    label: str,
     *,
-    id: str,
-    scope: dict,
-    state: str,
-    classified: int,
-    failed: int,
-    total: int,
-    started_at: float,
-    finished_at: float,
-    error: str | None,
-    keep: int = 200,
-) -> None:
-    """Persist one finished classify run for the Settings job-history view.
+    partner_aliases: list[str] | None = None,
+    source: str = "manual",
+    reason: str = "bulk: all unlabeled",
+) -> dict:
+    """Give every still-Unlabeled message in one conversation the same
+    verdict.
 
-    Inserts the row, then trims to the most recent `keep` entries to
-    keep the file bounded — even an aggressive user running 1 classify
-    per minute stays under 200 rows for a couple of hours of history,
-    which is the use-case the table exists for.
+    For the case the user actually has: a conversation they know is
+    pure IC end to end, where asking a model to judge two thousand
+    messages one batch at a time buys nothing. They know the answer.
+
+    Only the Unlabeled ones are touched. A message that already has a
+    stored verdict keeps it — this is not a way to overwrite a model's
+    work, and it never widens into one. Messages the rules already
+    decided (empty, shorter than the threshold, `((` prefix) keep
+    resolving through the rules, so a one-word IC line stays OOC here;
+    that is what the rules are for, and the user can still override a
+    single row by hand.
+
+    Returns the counts plus every hash written, so the caller can offer
+    to undo exactly this write and nothing else.
     """
-    import json
-
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO label_jobs
-            (id, scope, state, classified, failed, total,
-             started_at, finished_at, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            id,
-            json.dumps(scope, sort_keys=True),
-            state,
-            classified,
-            failed,
-            total,
-            started_at,
-            finished_at,
-            error,
-        ),
+    if label not in (LABEL_IC, LABEL_OOC):
+        raise ValueError(f"invalid label: {label!r}")
+    by_hash = labels_for_partner(
+        conn, character, partner, partner_aliases=partner_aliases
     )
-    conn.execute(
+    targets: list[tuple[str, dict]] = []
+    already_labelled = 0
+    decided_by_rules = 0
+    total = 0
+    for msg in messages:
+        total += 1
+        h = msg_hash(msg)
+        if h in by_hash:
+            already_labelled += 1
+            continue
+        if resolve(msg, None, settings) != LABEL_UNLABELED:
+            decided_by_rules += 1
+            continue
+        targets.append((h, msg))
+
+    now = time.time()
+    conn.executemany(
         """
-        DELETE FROM label_jobs
-         WHERE id NOT IN (
-            SELECT id FROM label_jobs ORDER BY finished_at DESC LIMIT ?
-         )
+        INSERT INTO labels (
+            hash, character, partner, ts, speaker, label,
+            confidence, reason, source, prior_label, prior_source, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+        ON CONFLICT(hash) DO NOTHING
         """,
-        (keep,),
+        [
+            (
+                h,
+                character,
+                partner,
+                int(msg.get("ts") or 0),
+                msg.get("speaker") or "",
+                label,
+                1.0,
+                reason,
+                source,
+                now,
+            )
+            for h, msg in targets
+        ],
     )
     conn.commit()
-
-
-def list_job_history(
-    conn: sqlite3.Connection, *, limit: int = 50
-) -> list[dict]:
-    """Return the most recent finished classify runs, newest first.
-
-    Each row is the shape the renderer expects on the
-    Settings → Labels jobs panel: scope decoded back to a dict,
-    timestamps as epoch seconds.
-    """
-    import json
-
-    rows = conn.execute(
-        """
-        SELECT id, scope, state, classified, failed, total,
-               started_at, finished_at, error
-          FROM label_jobs
-      ORDER BY finished_at DESC
-         LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-    out: list[dict] = []
-    for r in rows:
-        try:
-            scope = json.loads(r[1])
-        except (TypeError, ValueError):
-            scope = {}
-        out.append(
-            {
-                "id": r[0],
-                "scope": scope,
-                "state": r[2],
-                "classified": r[3],
-                "failed": r[4],
-                "total": r[5],
-                "started_at": r[6],
-                "finished_at": r[7],
-                "error": r[8],
-            }
+    if targets:
+        _publish(
+            "labels-changed",
+            character=character,
+            partner=partner,
+            hashes=len(targets),
         )
-    return out
+    return {
+        "label": label,
+        "labeled": len(targets),
+        "hashes": [h for h, _ in targets],
+        "already_labeled": already_labelled,
+        "decided_by_rules": decided_by_rules,
+        "total_messages": total,
+    }
+
+
+def delete_labels_by_hash(
+    conn: sqlite3.Connection,
+    hashes: Iterable[str],
+    *,
+    character: str | None = None,
+    partner: str | None = None,
+) -> int:
+    """Remove specific labels, reverting those messages to
+    rule-or-Unlabeled. Undoes one `fill_unlabeled` without touching
+    anything else in the conversation."""
+    ids = [h for h in hashes if h]
+    if not ids:
+        return 0
+    removed = 0
+    for start in range(0, len(ids), 500):
+        batch = ids[start : start + 500]
+        placeholders = ",".join("?" * len(batch))
+        cur = conn.execute(
+            f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
+        )
+        removed += cur.rowcount
+    conn.commit()
+    if removed:
+        _publish(
+            "labels-changed",
+            character=character,
+            partner=partner,
+            deleted=removed,
+        )
+    return removed
 
 
 def max_label_time(
@@ -855,14 +912,56 @@ def stats(
     by_hash = labels_for_partner(
         conn, character, partner, partner_aliases=partner_aliases
     )
-    failed_hashes = failures_for_partner(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
-    counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0, LABEL_FAILED: 0}
+    counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
-        h = msg_hash(msg)
-        lab = resolve(
-            msg, by_hash.get(h), settings, failed=h in failed_hashes,
-        )
+        lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
         counts[lab] = counts.get(lab, 0) + 1
     return counts
+
+
+# Condensed decision rule, shipped with every batch of messages to
+# classify. The full prompt above is ~4 KB and lives in the caller's
+# system prompt, which is exactly what a client evicts first when a long
+# classification loop fills its context: a rolling window drops the
+# oldest turns, and the oldest turn is the rulebook. The instruction to
+# re-fetch it lives there too, so by the time it would help it is gone.
+#
+# This is the part that has to survive. It goes in the batch response
+# instead, where it is always the most recent context, so a model can
+# keep judging correctly with no memory of how it started.
+COMPACT_RULES: dict[str, str] = {
+    "de": (
+        "Kernfrage: Passiert das Beschriebene JETZT in der Spielwelt (IC), "
+        "oder reden Spieler darüber (OOC)?\n"
+        "IC: Erzählung in dritter Person über irgendeine Figur, auch bei "
+        "banalen Handlungen; direkte Rede mit Dialog-Tag; Umgebung, NPCs "
+        "und Ereignisse erzählt, auch ohne eigenen Charakternamen; "
+        "Konjunktiv als erzählte Handlung ('Sie würde die Tür öffnen', "
+        "'Sollte er sich umdrehen, sieht er...').\n"
+        "OOC: Vorschläge an den Mitspieler ('wir könnten', 'zum Beispiel', "
+        "'was meinst du?'); Anekdoten aus dem echten Leben in erster "
+        "Person; Würfel, Regelfragen, AFK; Text in (…) oder nach "
+        "'OOC:' / '//'.\n"
+        "Gemischt: der Hauptteil entscheidet — ein angehängter "
+        "Klammerkommentar macht einen IC-Post nicht zu OOC.\n"
+        "Ein Account kann mehrere Figuren sprechen; der Sprechername muss "
+        "nicht die erzählte Figur sein."
+    ),
+    "en": (
+        "Core question: is this happening NOW in the game world (IC), or "
+        "are players talking about it (OOC)?\n"
+        "IC: third-person narration about any figure, however mundane; "
+        "direct speech with a dialogue tag; surroundings, NPCs and events "
+        "narrated, even with no own character name; conditional phrasing "
+        "as narrated action ('She would open the door', 'Should he turn "
+        "around, he sees...').\n"
+        "OOC: proposals to the other player ('we could', 'for example', "
+        "'what do you think?'); first-person real-life anecdotes; dice, "
+        "rule questions, afk; text in (…) or after 'OOC:' / '//'.\n"
+        "Mixed: the main body decides — a trailing parenthetical does not "
+        "turn an IC post into OOC.\n"
+        "One account may voice several characters; the speaker name need "
+        "not be the narrated figure."
+    ),
+}
+COMPACT_RULES["minimal"] = COMPACT_RULES["en"]

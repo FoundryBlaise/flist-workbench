@@ -97,7 +97,7 @@ test('Backup all — fresh sweep saves every character, second sweep dedups', as
   // auto-refresh spec covers the sign-in-pulls path.
   await window.evaluate(() => {
     try {
-      window.localStorage.clear()
+      globalThis.localStorage.clear()
     } catch {
       /* best-effort */
     }

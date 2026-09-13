@@ -82,6 +82,62 @@ def _utc_date(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _split_long_message(m: dict, *, max_chars: int) -> list[dict]:
+    """Break one over-long message into several, on text boundaries.
+
+    `_split_oversize` only ever splits *between* messages, which is fine
+    while the cap is large. It is not fine once the cap follows an
+    embedding model's token window: a single roleplay post routinely runs
+    to three thousand characters, so it became one chunk of its own and
+    the model silently read the first few hundred characters of it. This
+    splits within the post — paragraphs first, then sentences, then a
+    hard cut — so every piece actually fits.
+
+    The pieces keep the original timestamp and speaker; they differ only
+    in text. Ordering is preserved, so the prev/next chain a query walks
+    for context still reads as one continuous post.
+    """
+    text = (m.get("text") or "").strip()
+    # The rendered line carries "[date time] speaker: " in front of the
+    # text, and that prefix counts against the window too.
+    overhead = len(_fmt_line({**m, "text": ""}))
+    budget = max(80, max_chars - overhead)
+    if len(text) <= budget:
+        return [m]
+
+    pieces: list[str] = []
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= budget:
+            pieces.append(para)
+            continue
+        # Sentence-ish boundaries, keeping the delimiter with the
+        # sentence. BBCode and roleplay punctuation make a real sentence
+        # splitter pointless here; this is about not cutting mid-word.
+        current = ""
+        for sentence in re.split(r"(?<=[.!?…])\s+", para):
+            if not sentence:
+                continue
+            if len(sentence) > budget:
+                if current:
+                    pieces.append(current)
+                    current = ""
+                for i in range(0, len(sentence), budget):
+                    pieces.append(sentence[i : i + budget])
+                continue
+            if len(current) + 1 + len(sentence) > budget and current:
+                pieces.append(current)
+                current = sentence
+            else:
+                current = f"{current} {sentence}".strip()
+        if current:
+            pieces.append(current)
+
+    return [{**m, "text": piece} for piece in pieces] or [m]
+
+
 def _split_oversize(
     msgs: list[dict],
     *,
@@ -96,9 +152,41 @@ def _split_oversize(
     if _total_chars(msgs, speaker_map) <= max_chars:
         return [msgs]
 
+    # Expand any single message that cannot fit on its own before
+    # grouping — otherwise it lands in a part of its own and blows the
+    # cap no matter how the parts are arranged.
+    expanded: list[dict] = []
+    for m in msgs:
+        expanded.extend(_split_long_message(m, max_chars=max_chars))
+    msgs = expanded
+
     def line_len(m: dict) -> int:
         speaker = (speaker_map or {}).get(m["speaker"])
         return len(_fmt_line(m, speaker_override=speaker)) + 1
+
+    def carry(part: list[dict], incoming: int) -> list[dict]:
+        """Messages to repeat at the head of the next part.
+
+        Bounded by characters, not only by `overlap`. The count was
+        chosen when a chunk held 3000 characters, where repeating two
+        messages is a rounding error. Against a cap that follows an
+        embedding model's window it becomes the dominant term — two
+        400-character tails plus the new message put every part near
+        1200, three times the cap it was just split to respect. Keep as
+        much of the tail as still leaves the next part under max_chars,
+        which is a no-op at the large caps the endpoint backend uses.
+        """
+        if overlap <= 0:
+            return []
+        kept: list[dict] = []
+        acc = incoming
+        for m in reversed(part[-overlap:]):
+            c = line_len(m)
+            if acc + c > max_chars:
+                break
+            kept.insert(0, m)
+            acc += c
+        return kept
 
     parts: list[list[dict]] = []
     current: list[dict] = []
@@ -107,8 +195,7 @@ def _split_oversize(
         line_chars = line_len(m)
         if cur_chars + line_chars > soft_split and current:
             parts.append(current)
-            tail = current[-overlap:] if overlap > 0 else []
-            current = list(tail) + [m]
+            current = carry(current, line_chars) + [m]
             cur_chars = _total_chars(current, speaker_map)
         else:
             current.append(m)
@@ -130,12 +217,19 @@ def chunk_messages(
     soft_split: int = DEFAULT_SOFT_SPLIT_CHARS,
     overlap: int = DEFAULT_OVERLAP_MSGS,
     speaker_aliases: list[str] | None = None,
+    skipped_unlabeled: list[int] | None = None,
 ) -> list[Chunk]:
     """Group an in-memory conversation into retrieval chunks.
 
     `labels_by_hash` is what `labels.labels_for_partner` returns (just
     the DB rows). The resolver fills in rule-driven IC/OOC outcomes
     on the fly — we never trust a Unlabeled message into the corpus.
+
+    `skipped_unlabeled` — pass a one-element list to receive the count
+    of messages dropped for lack of a verdict. Callers surface it so a
+    user whose log is mostly unjudged is told to run the MCP
+    classification flow rather than left wondering why the index is
+    empty.
 
     `speaker_aliases` — pass the partner's alias group when this
     conversation is a merged rename. Any message whose `speaker`
@@ -155,6 +249,9 @@ def chunk_messages(
         if aliased:
             speaker_map = {n: partner for n in aliased}
 
+    if skipped_unlabeled is None:
+        skipped_unlabeled = [0]
+
     groups: dict[tuple[str, str], list[dict]] = {}
     for m in messages:
         # F-Chat 'system' (warn/event/etc) is never useful for RP
@@ -165,6 +262,12 @@ def chunk_messages(
         h = msg_hash(m)
         label = labels_store.resolve(m, labels_by_hash.get(h), label_settings)
         if label == labels_store.LABEL_UNLABELED:
+            # Not indexed: an unjudged message could be either IC prose
+            # or OOC chatter, and mixing OOC into the index poisons
+            # retrieval. Counted so the caller can tell the user to run
+            # the classification flow first — silently dropping half a
+            # log and reporting "0 chunks" is the confusing alternative.
+            skipped_unlabeled[0] += 1
             continue
         if label == labels_store.LABEL_OOC and not include_ooc:
             continue

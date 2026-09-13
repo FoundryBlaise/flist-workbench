@@ -1,5 +1,19 @@
 # Working sets v2 — UI-only design
 
+> **Superseded (2026-09-12).** The UI this doc signs off on was built
+> and then taken back out: testers could not say what a working set
+> was, how it related to `From F-list`, or why backups were a third
+> thing beside both. What shipped instead is two rows — **Live on
+> F-List** (read-only) and one **Workbench** per character, always
+> there, seeded from Live when first needed. There is no create, name,
+> copy or delete. `+ New working set`, the naming dialog and the
+> per-set context menu described below no longer exist.
+>
+> The storage half of this design is untouched and still accurate:
+> `sets/<12hex>/{payload,meta}.json`, `active_set.json`, etags,
+> `_overlay`. Read the sections below for the on-disk format; read
+> `docs/OVERVIEW.md` for what the window does with it.
+
 Scope-locked design pass. Owner-aligned via chat 2026-06-02 (post-Tier 7
 revert). All changes live inside **area 2 — Character Working area**
 (the `FlistCharacterZone` component). Areas 1 and 3 unchanged.

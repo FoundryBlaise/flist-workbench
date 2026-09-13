@@ -6,16 +6,12 @@ export type MenuAction =
   | 'find-contacts'
   | 'search-all-partners'
   | 'settings'
-  | 'classify-current'
-  | 'classify-character'
-  | 'classify-all'
   | 'ingest-current'
   | 'ingest-character'
   | 'ingest-all'
-  | 'chat-toggle'
-  | 'ai-setup'
   | 'flist-activity'
   | 'restore-userscript-help'
+  | 'backup-all'
 
 declare global {
   interface Window {
@@ -39,12 +35,10 @@ declare global {
       writeFile?: (filePath: string, bytes: Uint8Array) => Promise<boolean>
       onMenuAction?: (listener: (action: MenuAction) => void) => () => void
       setMenuState?: (flags: {
-        classifyCurrent: boolean
-        classifyCharacter: boolean
+        ingestCurrent: boolean
+        ingestCharacter: boolean
         flistSessionActive: boolean
       }) => void
-      openExternal?: (url: string) => void
-      spawnPowerShell?: (command: string) => void
       openSettings?: () => void
       creds?: {
         getMeta: () => Promise<{

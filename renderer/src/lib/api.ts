@@ -196,13 +196,13 @@ export type PartnerEntry = {
 
 export type AliasGroups = Record<string, string[]>
 
-export type Label = 'IC' | 'OOC' | 'Unlabeled' | 'Failed'
-// 'failed' is a synthetic source the sidecar attaches when a
-// label_failures row exists but no labels row does — there's nothing
-// in the labels table proper, just a record that the classifier tried
-// and couldn't produce a usable answer.
-export type LabelSource = 'llm' | 'manual' | 'failed'
-export type PriorSource = 'llm' | 'manual' | null
+export type Label = 'IC' | 'OOC' | 'Unlabeled'
+/** Who decided a stored verdict. 'mcp' is the model the user connected
+ *  over MCP; 'manual' is their own right-click override; 'llm' only
+ *  appears on rows written by the in-app classifier that existed
+ *  before the MCP migration. */
+export type LabelSource = 'mcp' | 'manual' | 'llm'
+export type PriorSource = LabelSource | null
 
 export type LogMessage = {
   ts: number
@@ -224,15 +224,14 @@ export type LogMessage = {
   // (no explicit DB row).
   label?: Label
   label_source?: LabelSource
-  // Free-text reason the model gave for the verdict (LLM source) or
-  // "manual override" / similar (manual source). Surfaced in the
-  // badge tooltip so users can audit why a label was chosen.
+  // Free-text reason the labeller gave for the verdict. Surfaced in
+  // the badge tooltip so users can audit why a label was chosen.
   label_reason?: string
   // Snapshot of what the label was before the most recent change.
-  // Present only on manual overrides; lets the UI surface "LLM had
+  // Present only on manual overrides; lets the UI surface "the model
   // said IC; you changed it to OOC" without a separate lookup.
   prior_label?: 'IC' | 'OOC'
-  prior_source?: 'llm' | 'manual'
+  prior_source?: LabelSource
   // Present when label === 'Failed'. Holds the classifier's error
   // message (truncated) so the badge tooltip can explain why the
   // message couldn't be classified — e.g. "bad json: '<garbage>'" or
@@ -241,35 +240,14 @@ export type LogMessage = {
   label_error?: string
 }
 
-export type PromptPreset = {
-  id: string
-  label: string
-  language: string
-  description: string
-  body: string
-}
-
 export type LabelsSettings = {
+  /** Messages shorter than this are OOC without asking anyone. The
+   *  only labels setting left — everything the rules cannot settle now
+   *  goes to the model the user connected over MCP. */
   threshold_chars: number
-  llm_endpoint: string
-  llm_model: string
-  llm_api_key: string
-  system_prompt: string
-  context_before: number
-  context_after: number
   defaults: {
     threshold_chars: number
-    llm_endpoint: string
-    llm_model: string
-    llm_api_key: string
-    system_prompt: string
-    context_before: number
-    context_after: number
   }
-  // Bundled system-prompt presets the user can pick from. First entry's
-  // body matches `defaults.system_prompt` and is therefore the
-  // "Reset to default" target.
-  prompt_presets: PromptPreset[]
 }
 
 export type BackupsSettings = {
@@ -303,15 +281,7 @@ export type BackupsSettings = {
 }
 
 export type RagSettings = {
-  embed_endpoint: string
   embed_model: string
-  embed_api_key: string
-  embed_query_prefix: string
-  embed_document_prefix: string
-  chat_endpoint: string
-  chat_model: string
-  chat_api_key: string
-  chat_system_prompt: string
   rerank_model: string
   rerank_candidates: number
   top_k: number
@@ -319,76 +289,22 @@ export type RagSettings = {
   rerank_min_ratio: number
   hybrid_enabled: boolean
   hybrid_bm25_candidates: number
-  multiquery_enabled: boolean
-  multiquery_variants: number
-  chat_num_ctx: number
-  chat_embed_keep_alive: string
   chunk_max_chars: number
   chunk_soft_split_chars: number
   chunk_overlap_msgs: number
   defaults: {
-    embed_endpoint: string
-    embed_model: string
-    embed_api_key: string
-    embed_query_prefix: string
-    embed_document_prefix: string
-    chat_endpoint: string
-    chat_model: string
-    chat_api_key: string
-    chat_system_prompt: string
-    rerank_model: string
+      embed_model: string
+          rerank_model: string
     rerank_candidates: number
     top_k: number
     neighbors: number
     rerank_min_ratio: number
     hybrid_enabled: boolean
     hybrid_bm25_candidates: number
-    multiquery_enabled: boolean
-    multiquery_variants: number
-    chat_num_ctx: number
-    chat_embed_keep_alive: string
-    chunk_max_chars: number
+      chunk_max_chars: number
     chunk_soft_split_chars: number
     chunk_overlap_msgs: number
   }
-}
-
-export type RagCitation = {
-  chunk_id: string | null
-  char_owner: string | null
-  partner: string | null
-  date: string | null
-  label: string | null
-  ts_start: number | null
-  ts_end: number | null
-  speakers: string[]
-  score: number
-  rerank_score?: number | null
-  expanded: boolean
-}
-
-export type RagQueryScope = {
-  character?: string | null
-  partner?: string | null
-  partners?: string[] | null
-}
-
-export type RagQueryHandlers = {
-  onRetrieved?: (info: {
-    hit_count: number
-    rerank_applied: boolean
-    rerank_model: string | null
-    embed_model: string
-    hybrid_applied?: boolean
-    hybrid_lexical_hits?: number
-  }) => void
-  // Emitted between the optional multi-query expansion step and the
-  // first dense retrieval round. `variants` lists the extra queries
-  // the LLM generated — the original question is NOT included.
-  onExpanded?: (info: { variants: string[] }) => void
-  onToken?: (content: string) => void
-  onDone?: (citations: RagCitation[]) => void
-  onError?: (info: { stage: string; message: string }) => void
 }
 
 export type LabelsStats = {
@@ -397,34 +313,13 @@ export type LabelsStats = {
   ic: number
   ooc: number
   unlabeled: number
-  failed: number
   total: number
 }
 
-export type ClassifyJobScope = {
+export type IngestJobScope = {
   character?: string | null
   partner?: string | null
 }
-
-export type ClassifyJob = {
-  id: string
-  scope: { character?: string; partner?: string }
-  overwrite: boolean
-  state: 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
-  classified: number
-  failed: number
-  total: number
-  skipped_existing: number
-  skipped_rule: number
-  last_label?: string | null
-  last_error?: string | null
-  current_partner?: string | null
-  error?: string | null
-  created_at: number
-  finished_at?: number | null
-}
-
-export type IngestJobScope = ClassifyJobScope
 
 export type IngestJob = {
   id: string
@@ -436,6 +331,11 @@ export type IngestJob = {
   embedded: number
   upserted: number
   skipped_existing: number
+  /** Messages dropped for lack of an IC/OOC verdict. A high count
+   *  means the classification flow should run first — an unjudged
+   *  message could be either IC prose or OOC chatter, and indexing OOC
+   *  poisons retrieval. */
+  skipped_unlabeled: number
   failed: number
   total_chunks: number
   current_partner?: string | null
@@ -455,37 +355,28 @@ export type RagStatus = {
   chunk_count: number
 }
 
-function base(): string {
-  return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
+/** One MCP endpoint the sidecar serves. `all` carries every tool; the
+ *  narrow ones exist because small local models choke on long tool
+ *  lists. */
+export type McpEndpoint = {
+  id: 'all' | 'character' | 'logs'
+  label: string
+  path: string
+  url: string
+  tool_count: number
 }
 
-function dispatchSseBlock(block: string, handlers: RagQueryHandlers): void {
-  let event: string | null = null
-  const dataLines: string[] = []
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
-    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
-  }
-  if (!event) return
-  const data = dataLines.join('\n')
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(data)
-  } catch {
-    // Sidecar always emits JSON; a malformed payload is a bug, drop it.
-    return
-  }
-  if (event === 'retrieved' && handlers.onRetrieved) {
-    handlers.onRetrieved(parsed as Parameters<NonNullable<RagQueryHandlers['onRetrieved']>>[0])
-  } else if (event === 'expanded' && handlers.onExpanded) {
-    handlers.onExpanded(parsed as { variants: string[] })
-  } else if (event === 'token' && handlers.onToken) {
-    handlers.onToken((parsed as { content: string }).content)
-  } else if (event === 'done' && handlers.onDone) {
-    handlers.onDone((parsed as { citations: RagCitation[] }).citations)
-  } else if (event === 'error' && handlers.onError) {
-    handlers.onError(parsed as { stage: string; message: string })
-  }
+export type McpInfo = {
+  port: number
+  endpoints: McpEndpoint[]
+  /** The optional bearer token. Off by default — the endpoints are
+   *  loopback-only, so requiring one buys nothing against an attacker
+   *  already running code as this user. */
+  auth: { required: boolean; token: string | null }
+}
+
+function base(): string {
+  return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
 }
 
 // Mid-session ticket recovery. The sidecar holds the F-list password
@@ -696,7 +587,6 @@ export const api = {
         ic: number
         ooc: number
         unlabeled: number
-        failed: number
         total: number
         // Epoch seconds. `log_mtime > last_label_at` means the
         // conversation grew since the last classify run — surfaced as
@@ -714,35 +604,54 @@ export const api = {
       }
     ),
   labelsClearAll: () =>
-    request<{ labels_deleted: number; failures_deleted: number }>(
-      '/labels/clear-all',
-      { method: 'POST' }
+    request<{ labels_deleted: number }>('/labels/clear-all', {
+      method: 'POST'
+    }),
+  /** Give every still-Unlabeled message in one conversation the same
+   *  verdict. Adds labels only: an existing verdict is kept, and the
+   *  rules keep deciding what they decide. `hashes` is exactly what
+   *  was written, which is what `labelsDeleteHashes` undoes. */
+  labelsFillUnlabeled: (body: {
+    character: string
+    partner: string
+    label: 'IC' | 'OOC'
+  }) =>
+    request<{
+      character: string
+      partner: string
+      label: 'IC' | 'OOC'
+      labeled: number
+      hashes: string[]
+      already_labeled: number
+      decided_by_rules: number
+      total_messages: number
+    }>('/labels/fill-unlabeled', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  /** Undo for the above — removes named labels and nothing else.
+   *  `labelsClear` would take the model's verdicts with it. */
+  labelsDeleteHashes: (body: {
+    character: string
+    partner: string
+    hashes: string[]
+  }) =>
+    request<{ character: string; partner: string; deleted: number }>(
+      '/labels/delete-hashes',
+      {
+        method: 'POST',
+        body: JSON.stringify(body)
+      }
     ),
   labelsRollup: () =>
     get<{
       ic: number
       ooc: number
       unlabeled: number
-      failed: number
       manual: number
       total: number
       character_count: number
     }>('/labels/rollup'),
-  labelsJobHistory: (limit = 20) =>
-    get<{
-      jobs: Array<{
-        id: string
-        scope: { character?: string; partner?: string }
-        state: 'done' | 'cancelled' | 'failed'
-        classified: number
-        failed: number
-        total: number
-        started_at: number
-        finished_at: number
-        error: string | null
-      }>
-      limit: number
-    }>(`/labels/job-history?limit=${limit}`),
   labelsOverride: (body: {
     character: string
     partner: string
@@ -762,36 +671,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
-  labelsClassifyStart: (
-    scope: ClassifyJobScope,
-    opts: { overwrite?: boolean } = {}
-  ) =>
-    request<ClassifyJob>('/labels/classify', {
-      method: 'POST',
-      body: JSON.stringify({ ...scope, overwrite: opts.overwrite ?? false })
-    }),
-  labelsTestConnection: (body: {
-    llm_endpoint?: string
-    llm_model?: string
-    llm_api_key?: string
-    system_prompt?: string
-  }) =>
-    request<{
-      ok: boolean
-      elapsed_ms: number
-      error?: string | null
-      raw?: string
-      parsed?: { label: 'IC' | 'OOC'; reason: string } | null
-    }>('/labels/test-connection', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
   ragTestEmbedding: (body: {
-    embed_endpoint?: string
     embed_model?: string
-    embed_api_key?: string
-    embed_query_prefix?: string
-    embed_document_prefix?: string
   }) =>
     request<{
       ok: boolean
@@ -803,33 +684,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
-  ragTestChat: (body: {
-    chat_endpoint?: string
-    chat_model?: string
-    chat_api_key?: string
-    chat_system_prompt?: string
-  }) =>
-    request<{
-      ok: boolean
-      elapsed_ms: number
-      raw?: string
-      error: string | null
-    }>('/rag/test-chat', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
   // Probe an OpenAI-compatible or Ollama endpoint for the list of
   // loaded/installed models. Returns sorted+deduped IDs. Failure is
   // signalled by an empty `models` + populated `error`.
-  discoverModels: (endpoint: string) =>
+  /** The embedding models that can be selected — fastembed's catalogue,
+   *  with the numbers the choice actually turns on. Licence is in there
+   *  because the catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0. */
+  discoverModels: () =>
     request<{
-      models: string[]
-      source: 'openai' | 'ollama' | 'unknown'
+      models: Array<{
+        model: string
+        dimension: number
+        size_gb: number | null
+        license: string | null
+      }>
+      source: 'local'
       error: string | null
-      elapsed_ms?: number
     }>('/settings/discover-models', {
       method: 'POST',
-      body: JSON.stringify({ endpoint })
+      body: JSON.stringify({})
     }),
   ragIngestStart: (
     scope: IngestJobScope,
@@ -851,115 +724,21 @@ export const api = {
       { method: 'DELETE' }
     ),
   ragStatus: () => get<RagStatus>('/rag/status'),
+  /** Which MCP endpoints the sidecar serves and how many tools each
+   *  carries. Powers Settings → MCP. */
+  mcpInfo: () => get<McpInfo>('/mcp-info'),
+  /** Issue a bearer token for /mcp, replacing any existing one. */
+  mcpCreateToken: () =>
+    request<{ token: string }>('/mcp-info/token', { method: 'POST' }),
+  /** Turn the bearer requirement back off. */
+  mcpRevokeToken: () =>
+    request<{ required: boolean }>('/mcp-info/token', { method: 'DELETE' }),
   ragWipe: () =>
     request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.
   // Cheaper than a full re-ingest — no LLM calls, no embeddings.
   ragLexicalRebuild: () =>
     request<{ indexed: number }>('/rag/lexical/rebuild', { method: 'POST' }),
-  ragQuery: async (
-    body: {
-      question: string
-      scope?: RagQueryScope | null
-      top_k?: number
-      neighbors?: number
-    },
-    handlers: RagQueryHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    // SSE consumer using fetch streaming. ReadableStream is available
-    // in Electron's chromium renderer; no EventSource because we want
-    // POST with a JSON body which EventSource doesn't support.
-    const res = await fetch(`${base()}/rag/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(body),
-      signal: opts?.signal
-    })
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        // SSE events are separated by a blank line.
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchSseBlock(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) {
-        // Tail event without trailing blank line — still dispatch.
-        dispatchSseBlock(buffer, handlers)
-      }
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
-  },
-  ragTalk: async (
-    body: {
-      messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
-      system?: string
-    },
-    handlers: RagQueryHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    // Free-form chat counterpart to ragQuery. Same SSE wire format
-    // minus the `retrieved` / `expanded` events; reuses dispatchSseBlock
-    // so the renderer code path stays identical to the grounded mode.
-    const res = await fetch(`${base()}/rag/talk`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(body),
-      signal: opts?.signal
-    })
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchSseBlock(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) dispatchSseBlock(buffer, handlers)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
-  },
-  labelsJobGet: (id: string, opts?: ApiOptions) =>
-    get<ClassifyJob>(`/labels/jobs/${encodeURIComponent(id)}`, opts),
-  labelsJobCancel: (id: string) =>
-    request<{ id: string; cancel_requested: boolean }>(
-      `/labels/jobs/${encodeURIComponent(id)}`,
-      { method: 'DELETE' }
-    ),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // ---- F-list character archive ----
@@ -1139,6 +918,63 @@ export const api = {
     request<{ deleted: boolean }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/working`,
       { method: 'DELETE' }
+    ),
+  // ---- The workbench --------------------------------------------
+  // A character has one editable copy of its profile, always present,
+  // seeded from Live when first needed. "Working sets" — several named
+  // drafts with one active — stayed on disk and left the vocabulary:
+  // testers could not say what one was or how it related to the
+  // read-only F-list row above it.
+  /** Resolve the character's workbench, creating it from Live if it
+   *  does not exist. `create: false` asks without making one, which is
+   *  what a read-only render wants — merely looking at a character
+   *  should not bring a bench into being. */
+  flistWorkbench: (characterId: string | number, create = true) =>
+    get<{
+      workbench: SetMetaWire | null
+      active_set_id?: string | null
+      reason?: string
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
+        + (create ? '' : '?create=false')
+    ),
+  /** What the confirm dialog needs before overwriting the bench:
+   *  whether it holds unpublished edits, and whether F-list has moved
+   *  on since this backup was taken. */
+  flistWorkbenchLoadPreflight: (
+    characterId: string | number,
+    filename: string
+  ) =>
+    get<{
+      filename: string
+      backup_created_at: number | null
+      live_pulled_at: number | null
+      live_diverged: boolean
+      workbench_has_edits: boolean
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}`
+        + `/workbench/load-backup/preflight?filename=`
+        + encodeURIComponent(filename)
+    ),
+  /** Replace the workbench contents with a backup's. `backUpFirst` is
+   *  the dialog's third button — the safety net is offered, never
+   *  imposed. */
+  flistWorkbenchLoadBackup: (
+    characterId: string | number,
+    filename: string,
+    backUpFirst: boolean
+  ) =>
+    request<{
+      workbench: SetMetaWire
+      loaded: string
+      backed_up_first: { filename: string; created_at: number } | null
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}`
+        + `/workbench/load-backup`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ filename, back_up_first: backUpFirst })
+      }
     ),
   // ---- F-list working sets v2 (sets list + per-set payload) ----
   flistSetsList: (characterId: string | number) =>
@@ -1384,11 +1220,19 @@ export const api = {
    *  renders. */
   flistBackupAll: async (
     handlers: FlistBackupAllHandlers,
-    opts?: ApiOptions & { kind?: 'manual_bulk' | 'scheduled' }
+    // `source` tags the sweep in the last-run telemetry Settings →
+    // Backups reads back: 'post_login' for the automatic sweep after
+    // sign-in, 'manual' for the Trigger button.
+    opts?: ApiOptions & {
+      kind?: 'manual_bulk' | 'scheduled'
+      source?: 'manual' | 'post_login'
+    }
   ): Promise<void> => {
     const kind = opts?.kind ?? 'manual_bulk'
+    const source = opts?.source ?? 'manual'
     const res = await fetch(
-      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}`,
+      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}` +
+        `&source=${encodeURIComponent(source)}`,
       {
         method: 'POST',
         headers: { Accept: 'text/event-stream' },
@@ -1462,64 +1306,6 @@ export const api = {
     }
   },
 
-  // ---- AI Setup wizard surface ------------------------------------------
-  systemOllamaStatus: () =>
-    get<{
-      running: boolean
-      installed: boolean
-      version: string | null
-      models: string[] | null
-      error: string | null
-    }>('/system/ollama-status'),
-  systemOllamaPull: async (
-    name: string,
-    handlers: {
-      onProgress?: (p: OllamaPullProgress) => void
-      onDone?: (model: string) => void
-      onError?: (info: { message: string }) => void
-    },
-    opts?: ApiOptions
-  ): Promise<void> => {
-    // Same fetch-streaming pattern as ragQuery — POST with JSON body
-    // rules out EventSource. AbortController.signal stops the upstream
-    // pull; partial Ollama blob files stay on disk and resume on retry.
-    const res = await fetch(`${base()}/system/ollama-pull`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ name }),
-      signal: opts?.signal
-    })
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchPullBlock(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) {
-        dispatchPullBlock(buffer, handlers)
-      }
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
-  },
-
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () =>
     get<{ pending: { handshake_id: string; fingerprint: string; created_at: number }[] }>(
@@ -1537,13 +1323,6 @@ export const api = {
     }),
   restoreRevokeToken: () =>
     request<{ ok: boolean }>('/restore/token', { method: 'DELETE' })
-}
-
-export type OllamaPullProgress = {
-  status: string
-  digest: string | null
-  completed: number | null
-  total: number | null
 }
 
 function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
@@ -1624,32 +1403,3 @@ function dispatchBackupAllStream(
   }
 }
 
-function dispatchPullBlock(
-  block: string,
-  handlers: {
-    onProgress?: (p: OllamaPullProgress) => void
-    onDone?: (model: string) => void
-    onError?: (info: { message: string }) => void
-  }
-): void {
-  let event: string | null = null
-  const dataLines: string[] = []
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
-    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
-  }
-  if (!event) return
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(dataLines.join('\n'))
-  } catch {
-    return
-  }
-  if (event === 'progress' && handlers.onProgress) {
-    handlers.onProgress(parsed as OllamaPullProgress)
-  } else if (event === 'done' && handlers.onDone) {
-    handlers.onDone((parsed as { model: string }).model)
-  } else if (event === 'error' && handlers.onError) {
-    handlers.onError(parsed as { message: string })
-  }
-}

@@ -1,8 +1,8 @@
 {
   "name": "flist-workbench",
-  "version": "0.0.7",
+  "version": "0.1.0",
   "private": true,
-  "description": "BBCode editor, log browser, and RAG chat over your own F-Chat logs.",
+  "description": "Offline editor for F-list character profiles, with an F-Chat log browser and an MCP server so a local model can drive it.",
   "author": "Foundry Blaise <251771510+FoundryBlaise@users.noreply.github.com>",
   "license": "UNLICENSED",
   "main": "out/main/main.js",

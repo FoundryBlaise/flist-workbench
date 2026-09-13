@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -552,6 +553,23 @@ def maybe_run_scheduled_backup(
 # ---- live + snapshot read/write ---------------------------------------
 
 
+def _publish(event: str, **data: Any) -> None:
+    """Announce a change on the event bus, if one is running.
+
+    Publishing lives here rather than in the callers so *every* writer
+    is covered — the REST routes the window calls and the MCP tools a
+    model calls alike. Imported lazily and failure-swallowing: a
+    notification is never worth failing a write for, and the archive
+    must stay importable in tests that don't run a loop.
+    """
+    try:
+        from services import events
+
+        events.publish(event, **data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Atomic JSON write. Retries `Path.replace` once on OSError with a
     short jittered backoff — OneDrive / Dropbox-synced directories can
@@ -598,6 +616,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
     _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+    _publish("live-changed", character_id=str(character_id))
 
 
 def read_live(character_id: int | str) -> dict[str, Any] | None:
@@ -954,7 +973,17 @@ def save_zip_backup(
     if live is None:
         return {"saved": False, "reason": "no_live"}
 
-    working = _live_to_zip_payload(live)
+    # What a backup is for: Live can be fetched from F-list again at any
+    # time, the workbench cannot. So the ZIP carries the bench — the
+    # user's unpublished work — and falls back to Live only when there
+    # is no bench yet. Live's own history is not lost by this; it has
+    # always lived separately under snapshots/.
+    working = None
+    bench = resolve_workbench(character_id, create=False)
+    if bench is not None:
+        working = read_set_payload(character_id, bench.id)
+    if working is None:
+        working = _live_to_zip_payload(live)
     image_extensions: dict[str, str] = {}
     img_dir = images_dir(character_id)
     if img_dir.exists():
@@ -1347,6 +1376,12 @@ def write_set_meta(
         updated_at=int(updated_at),
     )
     _atomic_write_json(set_meta_path(character_id, set_id), meta.to_dict())
+    _publish(
+        "sets-changed",
+        character_id=str(character_id),
+        set_id=set_id,
+        name=clean,
+    )
     return meta
 
 
@@ -1419,6 +1454,12 @@ def write_set_payload(
     )
     new_etag = _file_sha256(p)
     assert new_etag is not None
+    _publish(
+        "set-payload-changed",
+        character_id=str(character_id),
+        set_id=set_id,
+        etag=new_etag,
+    )
     return new_etag
 
 
@@ -1444,10 +1485,18 @@ def set_active_set_id(character_id: int | str, set_id: str) -> None:
     if not _is_valid_set_id(set_id):
         raise ValueError(f"invalid set_id: {set_id!r}")
     _atomic_write_json(active_set_path(character_id), {"active_set_id": set_id})
+    _publish(
+        "active-set-changed",
+        character_id=str(character_id),
+        set_id=set_id,
+    )
 
 
 def clear_active_set_id(character_id: int | str) -> None:
     _atomic_write_json(active_set_path(character_id), {"active_set_id": None})
+    _publish(
+        "active-set-changed", character_id=str(character_id), set_id=None
+    )
 
 
 def list_sets(character_id: int | str) -> list[SetMeta]:
@@ -1486,6 +1535,112 @@ def create_set_from_live(character_id: int | str, name: str) -> SetMeta:
         raise ValueError("no live snapshot to seed from")
     payload = _seed_payload_from_live(live)
     return _materialise_set(character_id, clean, payload)
+
+
+#: The one working set a character has. Named after the app, because
+#: that is what it is: the bench you work on, as opposed to the
+#: read-only copy of what is live on F-list.
+#:
+#: Working sets used to be a user-facing concept — create, name, keep
+#: several, pick an active one. Testers could not explain what a
+#: working set was, how it related to Live, or why backups were a third
+#: thing. So the concept stays on disk and leaves the vocabulary: one
+#: bench per character, always present, seeded from Live the first time
+#: it is needed.
+WORKBENCH_SET_NAME = "Workbench"
+
+
+def resolve_workbench(
+    character_id: int | str, *, create: bool = True
+) -> SetMeta | None:
+    """The character's workbench, creating it from Live if absent.
+
+    This is the definition, not a migration: "the workbench" has to
+    resolve to a stored set, and the rule is
+
+        the active set, else the most recently changed, else a new one
+        seeded from Live.
+
+    Which means an archive from before the rename needs no conversion.
+    A character with one set keeps working on it under a new label; one
+    with several keeps working on whichever was active, and the rest sit
+    untouched on disk, reachable through the MCP tools and invisible in
+    the window. Nothing is renamed behind the user's back and nothing is
+    deleted.
+
+    `create=False` answers "is there one yet" without making it so —
+    what a read-only caller wants.
+    """
+    active_id = read_active_set_id(character_id)
+    if active_id is not None:
+        meta = read_set_meta(character_id, active_id)
+        if meta is not None:
+            return meta
+
+    existing = list_sets(character_id)
+    if existing:
+        if len(existing) > 1:
+            # Deliberately a log line and not a dialog: the extra sets
+            # are only reachable by people who made them with the old
+            # UI or through MCP, and asking them to make a decision is
+            # the confusion this change exists to remove. Remove the
+            # warning once no archive can have more than one set.
+            print(
+                f"legacy: character {character_id} has {len(existing)}"
+                f" working sets; using {existing[0].name!r} as the"
+                " workbench",
+                file=sys.stderr,
+            )
+        chosen = existing[0]
+        set_active_set_id(character_id, chosen.id)
+        return chosen
+
+    if not create:
+        return None
+    if read_live(character_id) is None:
+        return None
+    meta = create_set_from_live(character_id, WORKBENCH_SET_NAME)
+    set_active_set_id(character_id, meta.id)
+    return meta
+
+
+def load_zip_backup_into_workbench(
+    character_id: int | str, backup_filename: str
+) -> SetMeta:
+    """Replace the workbench's payload with a backup's contents.
+
+    The old path for this made a *new* set from the backup, which is
+    how the user ended up with several and stopped knowing which one
+    they were editing. Now it overwrites the one bench, in place, so
+    "load this backup" means what it says.
+
+    Backing up the current contents first is the caller's decision and
+    the caller's call — see the three-way prompt in the window. This
+    function only loads.
+    """
+    import zipfile
+
+    _migrate_working_v2(character_id)
+    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
+        raise ValueError("invalid backup filename")
+    target = backups_dir(character_id) / backup_filename
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(str(target))
+    try:
+        with zipfile.ZipFile(target, "r") as zf:
+            raw = zf.read("working.json").decode("utf-8")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"corrupt backup file: {exc}") from exc
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("backup working.json is not an object")
+
+    bench = resolve_workbench(character_id)
+    if bench is None:
+        raise ValueError("no live snapshot to seed a workbench from")
+    write_set_payload(character_id, bench.id, payload, expected_etag=None)
+    meta = read_set_meta(character_id, bench.id)
+    return meta if meta is not None else bench
 
 
 def create_set_from_zip_backup(
@@ -1581,6 +1736,7 @@ def delete_set(character_id: int | str, set_id: str) -> None:
     import shutil
 
     shutil.rmtree(d, ignore_errors=True)
+    _publish("sets-changed", character_id=str(character_id), set_id=set_id)
     if read_active_set_id(character_id) == set_id:
         clear_active_set_id(character_id)
 
@@ -1607,9 +1763,14 @@ def _materialise_set(
 
 
 def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    """Build a fresh working payload from a Live snapshot. Mirrors the
-    renderer's `seedWorkingFromLive` so a sidecar-only create still hands
-    the editor something structurally complete."""
+    """Build a fresh working payload from a Live snapshot.
+
+    The one implementation on the Python side — `services.payload_ops`
+    re-exports it as `seed_from_live`, and both the set-create path and
+    the export fallback go through that. It mirrors the renderer's
+    `seedWorkingFromLive`; the two have to stay in step, because a set
+    created in the sidecar and one created in the UI must be the same
+    shape."""
     out: dict[str, Any] = {
         "_schema_version": WORKING_SCHEMA_VERSION,
         "_overlay": [],

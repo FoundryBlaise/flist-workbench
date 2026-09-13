@@ -255,17 +255,23 @@ def _character_id_for_name(name: str) -> str | None:
 
 
 def list_snapshots(character_name: str) -> list[dict[str, Any]]:
-    """Expose every importable source for `character_name`:
+    """Everything the extension can push into the F-list form:
 
-    1. **Live** — `live.json`, the canonical "From F-list" state.
-    2. **Working sets** — each named set under `sets/`. Working sets are
-       the user's saved drafts; the active one is reflected in
-       `working.json` but the persisted entity is the set itself.
-    3. **Backups** — full ZIP archives under `backups/`. Includes the
-       auto pre-restore snapshots written by `/restore/snapshot/fresh`.
+    1. **Live on F-List** — `live.json`, what the website currently has.
+       Pushing this reverts the profile to the last pull.
+    2. **The Workbench** — the character's one editable copy. This is
+       what a user means when they say "put my changes up".
+    3. **Backups** — full ZIP archives under `backups/`, including the
+       pre-restore snapshots written by `/restore/snapshot/fresh`.
 
-    Order: Live first (highest semantic priority — reverts edits),
-    then sets newest-first, then backups newest-first.
+    Drafts the user never sees are not offered. A character used to be
+    able to hold several named working sets, and the extension listed
+    them all — which meant choosing between things the window did not
+    show and the user could not name. Extra drafts left behind by an
+    older version stay on disk and stay out of this list.
+
+    Order: Live first (it reverts), then the bench, then backups
+    newest-first.
     """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
@@ -279,25 +285,28 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
         out.append({
             "id": "live",
             "kind": "live",
-            "label": "From F-list (current live state)",
+            "label": "Live on F-List (what the website has now)",
             "created_at": _iso_from_path(
                 character_archive.character_dir(character_id) / "live.json"
             ),
             "image_count": len(live_images),
         })
 
-    for meta in character_archive.list_sets(character_id):
-        payload = character_archive.read_set_payload(character_id, meta.id)
+    # `create=False`: listing what can be pushed must not bring a
+    # workbench into existence as a side effect.
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    if bench is not None:
+        payload = character_archive.read_set_payload(character_id, bench.id)
         image_count = 0
         if isinstance(payload, dict):
             images = payload.get("images")
             if isinstance(images, list):
                 image_count = len(images)
         out.append({
-            "id": f"set:{meta.id}",
+            "id": f"set:{bench.id}",
             "kind": "set",
-            "label": meta.name,
-            "created_at": _iso_from_unix(meta.updated_at),
+            "label": "Workbench (your edits)",
+            "created_at": _iso_from_unix(bench.updated_at),
             "image_count": image_count,
         })
 
