@@ -528,6 +528,30 @@ ipcMain.handle('workbench:updater:get-status', (event): UpdaterStatus => {
   return updaterStatus
 })
 
+// The startup check runs once per launch, when the renderer says the
+// character list has landed. That is the moment the window stops
+// working: the roster is the last thing the app fetches before it sits
+// still, so an update prompt arriving then interrupts nothing. A fixed
+// delay was the previous answer and it could only be wrong in one
+// direction or the other — 30 seconds felt broken, and anything short
+// enough to feel responsive could land while the list was still
+// painting.
+let startupCheckDone = false
+
+function runStartupUpdateCheck(reason: string): void {
+  if (isDev || startupCheckDone) return
+  startupCheckDone = true
+  appendDiagLog('updater', `startup check (${reason})`)
+  autoUpdater.checkForUpdates().catch((err) => {
+    appendDiagLog('updater-check-failed', err)
+  })
+}
+
+ipcMain.on('workbench:updater:startup-check', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
+  runStartupUpdateCheck('character list ready')
+})
+
 ipcMain.handle('workbench:updater:check', async (event): Promise<boolean> => {
   if (event.sender !== mainWindow?.webContents) return false
   if (isDev) return false
@@ -663,19 +687,14 @@ app.whenReady().then(async () => {
   }
 
   // Wire the updater after the window exists so its `update-available`
-  // event has a target to push to. The delay lets the sign-in modal
-  // land first — an update prompt stacking on top of it would be
-  // jarring. It used to be 30 seconds, which also covered a first-run
-  // setup wizard that no longer exists; long enough that someone who
-  // launches the app expecting an update concludes the check is
-  // broken and goes looking. 8 seconds still lets the window settle.
+  // event has a target to push to. The renderer fires the check when
+  // the character list is ready; this timer is only the safety net for
+  // a launch where that never happens — signed out, offline, or the
+  // sign-in modal left sitting open. Whichever comes first wins, and
+  // the check runs once either way.
   configureAutoUpdater()
   if (!isDev) {
-    setTimeout(() => {
-      autoUpdater.checkForUpdates().catch((err) => {
-        appendDiagLog('updater-check-failed', err)
-      })
-    }, 8_000)
+    setTimeout(() => runStartupUpdateCheck('fallback timer'), 45_000)
   }
 
   app.on('activate', () => {

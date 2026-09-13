@@ -120,6 +120,11 @@ contextBridge.exposeInMainWorld('workbench', {
       ipcRenderer.invoke('workbench:updater:get-status') as Promise<unknown>,
     check: () =>
       ipcRenderer.invoke('workbench:updater:check') as Promise<boolean>,
+    /** "The window has gone quiet, now is a good moment." Main runs the
+     *  check once per launch however often this is called. */
+    startupCheck: () => {
+      ipcRenderer.send('workbench:updater:startup-check')
+    },
     download: () =>
       ipcRenderer.invoke('workbench:updater:download') as Promise<boolean>,
     install: () => {

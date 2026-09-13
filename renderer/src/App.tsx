@@ -67,6 +67,7 @@ declare global {
       updater?: {
         getStatus: () => Promise<unknown>
         check: () => Promise<boolean>
+        startupCheck: () => void
         download: () => Promise<boolean>
         install: () => void
         onStatus: (listener: (status: unknown) => void) => () => void

@@ -77,6 +77,18 @@ export function AppLayout() {
     })
     return off
   }, [])
+  // Ask main to look for an update once the character list has
+  // landed. The roster is the last thing the app fetches on startup,
+  // so that is the moment the window stops working and a prompt
+  // interrupts nothing. Main ignores every call after the first, and
+  // has its own fallback for a launch where the list never arrives.
+  const rosterStatus = useStore((s) => s.flistRosterStatus)
+  const startupCheckFired = useRef(false)
+  useEffect(() => {
+    if (rosterStatus !== 'ready' || startupCheckFired.current) return
+    startupCheckFired.current = true
+    window.workbench?.updater?.startupCheck?.()
+  }, [rosterStatus])
   const [flistHintDismissed, setFlistHintDismissed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('workbench.flistHintDismissed') === '1'
