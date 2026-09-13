@@ -77,7 +77,13 @@ jobs:
           $setupPath = "dist-electron/$setupName"
           $portablePath = "dist-electron/$portableName"
           $latestPath = "dist-electron/latest.yml"
-          foreach ($p in @($setupPath, $portablePath, $latestPath)) {
+          # electron-updater fetches this to work out which parts of the
+          # installer actually changed and downloads only those. Without
+          # it in the release the fetch 404s and every update pulls the
+          # full 155 MB — it still works, it is just wasteful, and the
+          # 404 lands in the log looking like a fault.
+          $blockmapPath = "$setupPath.blockmap"
+          foreach ($p in @($setupPath, $portablePath, $latestPath, $blockmapPath)) {
             if (-not (Test-Path $p)) {
               Write-Error "Expected artifact not found at $p"
               Get-ChildItem dist-electron -Recurse | ForEach-Object { Write-Host $_.FullName }
@@ -89,6 +95,7 @@ jobs:
           "portableName=$portableName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "portablePath=$portablePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "latestPath=$latestPath"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "blockmapPath=$blockmapPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "version=$version"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Generate SHA256SUMS
@@ -116,6 +123,7 @@ jobs:
             ${{ steps.artifact.outputs.setupPath }}
             ${{ steps.artifact.outputs.portablePath }}
             ${{ steps.artifact.outputs.latestPath }}
+            ${{ steps.artifact.outputs.blockmapPath }}
             dist-electron/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -149,4 +157,5 @@ jobs:
             ${{ steps.artifact.outputs.setupPath }}
             ${{ steps.artifact.outputs.portablePath }}
             ${{ steps.artifact.outputs.latestPath }}
+            ${{ steps.artifact.outputs.blockmapPath }}
             dist-electron/SHA256SUMS.txt

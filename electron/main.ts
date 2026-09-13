@@ -663,16 +663,19 @@ app.whenReady().then(async () => {
   }
 
   // Wire the updater after the window exists so its `update-available`
-  // event has a target to push to. 30s delay before the first check
-  // gives the first-run wizard + sign-in modal time to land first;
-  // an update prompt stacking on top of those would be jarring.
+  // event has a target to push to. The delay lets the sign-in modal
+  // land first — an update prompt stacking on top of it would be
+  // jarring. It used to be 30 seconds, which also covered a first-run
+  // setup wizard that no longer exists; long enough that someone who
+  // launches the app expecting an update concludes the check is
+  // broken and goes looking. 8 seconds still lets the window settle.
   configureAutoUpdater()
   if (!isDev) {
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch((err) => {
         appendDiagLog('updater-check-failed', err)
       })
-    }, 30_000)
+    }, 8_000)
   }
 
   app.on('activate', () => {
