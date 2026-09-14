@@ -1563,6 +1563,21 @@ body {
 /* Shown when a model editing through MCP changed the working set the
    user has open. Sits at the top, not the bottom: this is a decision
    the user has to make, not a notice they can scroll past. */
+/* The harmless half of an external change: the working set moved, the
+   user had nothing unsaved, and the window has already caught up. A
+   note, not a decision — it says which tool ran, because that is the
+   part they cannot see, and then it goes away. */
+.external-change-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: rgba(90, 170, 110, 0.14);
+  border-bottom: 1px solid rgba(90, 170, 110, 0.35);
+  color: var(--text);
+  font-size: var(--font-meta);
+}
+
 .external-change-banner {
   position: fixed;
   top: 48px;
