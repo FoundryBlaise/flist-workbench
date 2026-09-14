@@ -1,6 +1,6 @@
 {
   "name": "flist-workbench",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Offline editor for F-list character profiles, with an F-Chat log browser and an MCP server so a local model can drive it.",
   "author": "Foundry Blaise <251771510+FoundryBlaise@users.noreply.github.com>",

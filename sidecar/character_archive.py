@@ -978,6 +978,16 @@ def save_zip_backup(
     # user's unpublished work — and falls back to Live only when there
     # is no bench yet. Live's own history is not lost by this; it has
     # always lived separately under snapshots/.
+    # Heal before packing. `build_zip` drops gallery rows whose file is
+    # missing, so a backup taken over a broken gallery silently lacks
+    # the images — and the extension then deletes them from the profile
+    # for not being in the backup. That chain cost a user their gallery
+    # once; a backup must never be the weak link in it.
+    try:
+        repair_gallery(character_id)
+    except Exception as exc:  # noqa: BLE001 - never block a backup
+        print(f"gallery repair before backup failed: {exc}", file=sys.stderr)
+
     working = None
     bench = resolve_workbench(character_id, create=False)
     if bench is not None:
@@ -2118,110 +2128,45 @@ def _find_image_with_sha(
 
 
 def collapse_local_duplicates(character_id: int | str) -> int:
-    """Walk `images/` and remove any `local-<sha8>.<ext>` whose bytes
-    are byte-identical to a real-id (digits-only) file in the same
-    directory. Patches working.json so any gallery slot that referenced
-    the doomed local id now points at the real id, then unlinks the
-    local file. Returns the number of locals collapsed.
+    """Fold every `local-<sha8>` image whose bytes match a real-id file
+    into that real id, across the character's working sets.
 
-    This is the cure for stuck archives where the user has the same
-    image visible twice in the Pool — once as `id <digits>` (the file
-    they originally pulled) and once as `Local · <sha8>` (a re-upload
-    of the same bytes that pre-dates the `add_uploaded_image` dedup
-    fix). Idempotent — re-runs are no-ops once all locals are unique.
-    Best-effort — any OSError on a single entry is skipped, not raised."""
+    The cure for an archive where the same picture sits in the pool
+    twice — once as the file that came from F-list, once as the local
+    upload it was made from. Returns how many locals were folded in.
+
+    Idempotent, and best-effort: a single unreadable file is skipped
+    rather than failing the sweep.
+    """
     d = images_dir(character_id)
     if not d.exists():
         return 0
-    locals_: list[Path] = []
-    reals: list[Path] = []
-    for entry in d.iterdir():
+
+    by_sha: dict[str, str] = {}
+    locals_: list[tuple[str, str]] = []
+    for entry in sorted(d.iterdir()):
         if not entry.is_file():
             continue
         m = _IMAGE_FILE_RE.match(entry.name)
         if not m:
             continue
-        iid = m.group(1)
-        if iid.startswith("local-"):
-            locals_.append(entry)
-        elif iid.isdigit():
-            reals.append(entry)
-    if not locals_ or not reals:
+        image_id = m.group(1)
+        try:
+            sha = _hash_bytes(entry.read_bytes())
+        except OSError:
+            continue
+        if image_id.startswith("local-"):
+            locals_.append((image_id, sha))
+        else:
+            by_sha.setdefault(sha, image_id)
+
+    mapping = {
+        local_id: by_sha[sha] for local_id, sha in locals_ if sha in by_sha
+    }
+    if not mapping:
         return 0
-    real_shas: dict[str, str] = {}
-    for r in reals:
-        try:
-            real_shas[r.name] = _hash_bytes(r.read_bytes())
-        except OSError:
-            continue
-    collapsed = 0
-    for lp in locals_:
-        try:
-            l_sha = _hash_bytes(lp.read_bytes())
-        except OSError:
-            continue
-        match: str | None = None
-        for rname, rsha in real_shas.items():
-            if rsha == l_sha:
-                rm = _IMAGE_FILE_RE.match(rname)
-                if rm:
-                    match = rm.group(1)
-                    break
-        if match is None:
-            continue
-        lm = _IMAGE_FILE_RE.match(lp.name)
-        if lm is None:
-            continue
-        local_id = lm.group(1)
-        for _ in range(3):
-            payload = read_working(character_id)
-            if payload is None:
-                break
-            images = payload.get("images")
-            if not isinstance(images, list):
-                break
-            changed = False
-            kept: list[Any] = []
-            seen_real = False
-            for entry in images:
-                if not isinstance(entry, dict):
-                    kept.append(entry)
-                    continue
-                eid = entry.get("image_id")
-                if eid == local_id:
-                    if seen_real:
-                        changed = True
-                        continue
-                    entry["image_id"] = match
-                    seen_real = True
-                    changed = True
-                    kept.append(entry)
-                elif eid == match:
-                    if seen_real:
-                        changed = True
-                        continue
-                    seen_real = True
-                    kept.append(entry)
-                else:
-                    kept.append(entry)
-            if changed:
-                payload["images"] = kept
-                try:
-                    etag = _file_sha256(working_path(character_id))
-                    write_working(character_id, payload, expected_etag=etag)
-                    break
-                except EtagMismatch:
-                    continue
-                except (ValueError, OSError):
-                    break
-            else:
-                break
-        try:
-            lp.unlink()
-            collapsed += 1
-        except OSError:
-            continue
-    return collapsed
+    result = adopt_flist_image_ids(character_id, mapping)
+    return len(result["renamed"]) + len(result["dropped_duplicate"])
 
 
 def dedupe_local_after_pull(
@@ -2229,25 +2174,29 @@ def dedupe_local_after_pull(
     pulled_image_id: str,
     pulled_bytes: bytes,
 ) -> str | None:
-    """If a freshly-downloaded image's bytes match a `local-<sha8>` file
-    on disk (the same bytes the user uploaded locally, now coming back
-    from F-list under a real id), remove the local copy and rewrite any
-    working.json gallery slot that pointed at it so the user doesn't end
-    up with the image visible twice (once in the pool, once on profile).
+    """A freshly-pulled image turns out to be bytes the user uploaded
+    here first. Hand the gallery over to the real F-list id and drop the
+    local copy, so the picture stops appearing in the pool and on the
+    profile at once.
 
-    Best-effort — failures here never block the pull. Returns the
-    local-id that was removed, or None.
+    This used to patch the legacy `working.json` and then unlink the
+    local file regardless of whether the patch had landed. Under
+    working sets there is no `working.json` — the gallery lives in
+    `sets/<id>/payload.json` — so the patch never landed and the unlink
+    always ran. Every pull after an upload therefore cut a gallery
+    entry loose from its bytes, and the image turned into a black
+    placeholder on the profile. The file removal was called a cure for
+    "image shows in both panes"; it was, and it caused something worse.
+
+    Returns the local id that was folded in, or None.
     """
     if pulled_image_id.startswith("local-"):
         return None
     full = _hash_bytes(pulled_bytes)
     sha8 = full[:8]
     d = images_dir(character_id)
-    candidates = sorted(d.glob(f"local-{sha8}.*"))
-    if not candidates:
-        return None
     matched: Path | None = None
-    for c in candidates:
+    for c in sorted(d.glob(f"local-{sha8}.*")):
         if not c.is_file():
             continue
         try:
@@ -2258,39 +2207,12 @@ def dedupe_local_after_pull(
             continue
     if matched is None:
         return None
+
     local_id = f"local-{sha8}"
-    # Patch working.json so any gallery slot that referenced the local
-    # id now points at the real F-list id — preserves slot order and
-    # whatever description the user already typed. Stale ref left in
-    # place if the swap fails; the file removal below still cures the
-    # visible "image shows in both panes" bug.
-    for _ in range(3):
-        payload = read_working(character_id)
-        if payload is None:
-            break
-        images = payload.get("images")
-        if not isinstance(images, list):
-            break
-        changed = False
-        for entry in images:
-            if isinstance(entry, dict) and entry.get("image_id") == local_id:
-                entry["image_id"] = pulled_image_id
-                changed = True
-        if not changed:
-            break
-        try:
-            etag = _file_sha256(working_path(character_id))
-            write_working(character_id, payload, expected_etag=etag)
-            break
-        except EtagMismatch:
-            continue
-        except (ValueError, OSError):
-            break
-    try:
-        matched.unlink()
-    except OSError:
-        return None
-    return local_id
+    result = adopt_flist_image_ids(character_id, {local_id: pulled_image_id})
+    if result["renamed"] or result["dropped_duplicate"]:
+        return local_id
+    return None
 
 
 def add_uploaded_image(
@@ -2344,6 +2266,104 @@ def add_uploaded_image(
         "extension": ext,
         "size": size,
         "added_at": added_at,
+    }
+
+
+def repair_gallery(character_id: int | str) -> dict[str, Any]:
+    """Put a character's gallery back together when its entries have
+    lost their bytes.
+
+    Three things go wrong, and all three show the same way — a black
+    placeholder where a picture should be:
+
+    1. An entry points at `local-<sha8>` whose file is gone. That id is
+       not arbitrary: it is the first eight hex of the sha256 of the
+       bytes. So the same picture, sitting on disk under the id F-list
+       gave it, can be found by hashing what is there — no guessing and
+       no download.
+    2. The same image id appears in several slots. One picture cannot
+       be in three places on a profile; the extras are dropped and the
+       first keeps its position.
+    3. An entry points at an id with no file and no hash to match. It
+       cannot be resolved here and is reported, not deleted — throwing
+       away the user's slot order on a hunch is worse than a gap they
+       can see.
+
+    Idempotent and cheap enough to run whenever the Images tab opens:
+    it hashes the character's own image files, nothing else.
+    """
+    images = images_dir(character_id)
+    sha8_to_id: dict[str, str] = {}
+    present: set[str] = set()
+    if images.exists():
+        for entry in sorted(images.iterdir()):
+            if not entry.is_file():
+                continue
+            m = _IMAGE_FILE_RE.match(entry.name)
+            if not m:
+                continue
+            image_id = m.group(1)
+            present.add(image_id)
+            if image_id.startswith("local-"):
+                continue
+            try:
+                sha8_to_id.setdefault(
+                    _hash_bytes(entry.read_bytes())[:8], image_id
+                )
+            except OSError:
+                continue
+
+    relinked: list[dict[str, str]] = []
+    duplicates_removed: list[str] = []
+    unresolved: list[str] = []
+    sets_rewritten = 0
+
+    for meta in list_sets(character_id):
+        payload = read_set_payload(character_id, meta.id)
+        if not isinstance(payload, dict):
+            continue
+        gallery = payload.get("images")
+        if not isinstance(gallery, list):
+            continue
+
+        kept: list[Any] = []
+        seen: set[str] = set()
+        touched = False
+        for row in gallery:
+            if not isinstance(row, dict):
+                kept.append(row)
+                continue
+            image_id = str(row.get("image_id") or "")
+
+            if image_id not in present and image_id.startswith("local-"):
+                match = sha8_to_id.get(image_id[len("local-"):])
+                if match is not None:
+                    relinked.append({"from": image_id, "to": match})
+                    row["image_id"] = match
+                    image_id = match
+                    touched = True
+
+            if image_id in seen:
+                duplicates_removed.append(image_id)
+                touched = True
+                continue
+            seen.add(image_id)
+
+            if image_id not in present:
+                unresolved.append(image_id)
+            kept.append(row)
+
+        if touched:
+            payload["images"] = kept
+            write_set_payload(character_id, meta.id, payload, expected_etag=None)
+            sets_rewritten += 1
+
+    return {
+        "relinked": relinked,
+        "duplicates_removed": duplicates_removed,
+        "unresolved": sorted(set(unresolved)),
+        "sets_rewritten": sets_rewritten,
+        "repaired": bool(relinked or duplicates_removed),
     }
 
 

@@ -476,37 +476,50 @@ def test_add_uploaded_image_reuses_existing_real_id_file():
 def test_list_collapses_existing_local_duplicate_of_real_id():
     """Cure pass for archives that already have a `local-<sha8>` next to
     a byte-identical real-id file (state created by older builds). The
-    first list_character_images must drop the local and rewrite any
-    working.json gallery slot that pointed at it."""
-    import json as _json
+    first list_character_images must drop the local and move any
+    gallery slot that pointed at it onto the real id — leaving the slot
+    pointing at bytes that are gone is what turns a profile image into
+    a black placeholder."""
     cid = "509c"
     # Pre-existing dupe state on disk: same bytes under two ids.
     character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
     character_archive.write_character_image(
         cid, "local-deadbeef", "png", _PNG_HEADER
     )
-    # working.json gallery still points at the local id (the slot the
-    # user was looking at before the dupe was created).
-    wpath = character_archive.working_path(cid)
-    wpath.parent.mkdir(parents=True, exist_ok=True)
-    wpath.write_text(
-        _json.dumps(
-            {
-                "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
-                "_overlay": [],
-                "character": {"id": cid, "name": "X"},
-                "images": [
-                    {"image_id": "local-deadbeef", "description": "mine"},
-                ],
-            }
-        ),
-        encoding="utf-8",
+    # The gallery lives in the character's working set — the legacy
+    # working.json is deleted on sight by the M3 migration, so pointing
+    # this at it would test a world that no longer exists.
+    character_archive.write_live(
+        cid,
+        {
+            "character": {"id": cid, "name": "X", "description": ""},
+            "infotags": {},
+            "kinks": {},
+            "custom_kinks": {},
+            "inlines": {},
+            "images": [],
+            "fetched_at": 1000,
+        },
     )
+    bench = character_archive.resolve_workbench(cid)
+    character_archive.write_set_payload(
+        cid,
+        bench.id,
+        {
+            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+            "_overlay": ["images"],
+            "character": {"id": cid, "name": "X"},
+            "images": [{"image_id": "local-deadbeef", "description": "mine"}],
+        },
+        expected_etag=None,
+    )
+
     rows = character_archive.list_character_images(cid)
     ids = sorted(r["image_id"] for r in rows)
     assert ids == ["45755545"]
-    payload = character_archive.read_working(cid)
+    payload = character_archive.read_set_payload(cid, bench.id)
     assert payload is not None
+    # The slot keeps its place and its description; only the id moves.
     assert payload["images"] == [
         {"image_id": "45755545", "description": "mine"}
     ]

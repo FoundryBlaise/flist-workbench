@@ -96,6 +96,49 @@ export function ImagesTab({
     }
   }, [characterId, characterImages, loadCharacterImages])
 
+  // Heal the gallery when the tab opens. An entry whose file is gone
+  // renders as a black placeholder and — worse — drops out of the
+  // restore ZIP, which the extension reads as "delete this from the
+  // profile". The repair needs nothing from the user: the local id
+  // carries the hash of the bytes, so the same picture sitting under
+  // the id F-list gave it can be found by hashing what is on disk.
+  const [repairNote, setRepairNote] = useState<string | null>(null)
+  const repairedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!characterId || repairedFor.current === characterId) return
+    repairedFor.current = characterId
+    let cancelled = false
+    void api
+      .flistRepairGallery(characterId)
+      .then((res) => {
+        if (cancelled || !res.repaired) return
+        const parts: string[] = []
+        if (res.relinked.length > 0) {
+          parts.push(
+            `${res.relinked.length} image${res.relinked.length === 1 ? '' : 's'} reconnected`
+          )
+        }
+        if (res.duplicates_removed.length > 0) {
+          parts.push(`${res.duplicates_removed.length} duplicate slot(s) removed`)
+        }
+        setRepairNote(`Image mapping repaired — ${parts.join(', ')}.`)
+        void loadCharacterImages(characterId)
+        void useStore.getState().flistOpenWorking(characterId)
+      })
+      .catch(() => {
+        // Nothing to tell the user: the gallery is no worse than before.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [characterId, loadCharacterImages])
+
+  useEffect(() => {
+    if (!repairNote) return
+    const id = window.setTimeout(() => setRepairNote(null), 8000)
+    return () => window.clearTimeout(id)
+  }, [repairNote])
+
   const characterName = useMemo(() => {
     const entry = roster.find((r) => String(r.id ?? '') === characterId)
     return entry?.name ?? null
@@ -483,6 +526,15 @@ export function ImagesTab({
         </section>
       </div>
 
+      {repairNote && (
+        <div
+          className="flist-images-repair-note"
+          role="status"
+          data-testid="images-repair-note"
+        >
+          <span aria-hidden>✓</span> {repairNote}
+        </div>
+      )}
       {!readOnly && (
         <footer className="flist-images-tab__footer">
           <span className="flist-images-tab__footer-hint">

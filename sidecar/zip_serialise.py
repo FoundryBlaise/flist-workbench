@@ -298,6 +298,7 @@ def _reshape_images(
     order so the userscript's display matches the user's curation.
     """
     out_list: list[dict[str, Any]] = []
+    missing_ids: list[str] = []
     if isinstance(images, list):
         ordered: list[dict[str, Any]] = []
         for index, entry in enumerate(images):
@@ -317,6 +318,13 @@ def _reshape_images(
             else:
                 sort_val = index
             ext = entry.get("extension")
+            known = bool(image_extensions and str(image_id) in image_extensions)
+            if not known and not (isinstance(ext, str) and ext):
+                # No file for this row. Recorded below rather than
+                # dropped in silence: an entry that vanishes from the
+                # backup is read by the extension as "delete it from
+                # the profile", and that cost a user their gallery.
+                missing_ids.append(str(image_id))
             if not isinstance(ext, str) or not ext:
                 ext = (
                     image_extensions.get(str(image_id))
@@ -342,6 +350,10 @@ def _reshape_images(
             )
     return {
         "list": out_list,
+        # Gallery rows with no bytes behind them. A consumer seeing a
+        # non-empty list here knows the backup is a partial view of the
+        # profile and must not read a missing image as "remove it".
+        "missing": missing_ids,
         "avatar": {"filename": "avatar.png"},
     }
 

@@ -1175,6 +1175,21 @@ export const api = {
   flistImageByIdUrl: (characterId: string | number, imageId: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/image/${encodeURIComponent(imageId)}`,
   // ---- F-list per-character images/ (unified store, v5) ----------------
+  /** Put the gallery back together when entries have lost their bytes.
+   *  Run when the Images tab opens — a slot pointing at a missing file
+   *  shows as a black placeholder and drops out of the restore ZIP,
+   *  which the extension reads as "delete this from the profile". */
+  flistRepairGallery: (characterId: string | number) =>
+    request<{
+      relinked: { from: string; to: string }[]
+      duplicates_removed: string[]
+      unresolved: string[]
+      sets_rewritten: number
+      repaired: boolean
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images/repair`,
+      { method: 'POST' }
+    ),
   flistCharacterImages: (characterId: string | number) =>
     get<{ character_id: string; images: FlistCharacterImage[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images`

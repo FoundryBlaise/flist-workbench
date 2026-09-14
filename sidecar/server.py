@@ -1449,6 +1449,21 @@ async def flist_character_image_upload(
     return row
 
 
+@app.post("/flist/character/{character_id}/images/repair")
+async def flist_character_images_repair(character_id: str) -> dict:
+    """Put the gallery back together when entries have lost their bytes.
+
+    Called when the Images tab opens. A slot pointing at a file that is
+    gone renders as a black placeholder, and — worse — drops out of the
+    restore ZIP, which the extension reads as "delete this from the
+    profile". Users lost images on f-list.net that way, so this runs on
+    its own rather than waiting to be found in a menu.
+
+    Cheap: it hashes the character's own image files and nothing else.
+    """
+    return character_archive.repair_gallery(character_id)
+
+
 @app.delete("/flist/character/{character_id}/images/{image_id}")
 async def flist_character_image_remove(
     character_id: str, image_id: str

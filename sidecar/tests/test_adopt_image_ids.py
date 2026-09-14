@@ -136,3 +136,74 @@ def test_it_leaves_images_it_was_not_told_about_alone(archive) -> None:
     archive.adopt_flist_image_ids("42", {keep: "47000849"})
 
     assert _gallery(archive, set_id) == ["47000849", other]
+
+
+# ---- the pull must not cut a gallery entry loose -------------------------
+
+
+def test_a_pull_hands_the_slot_over_instead_of_orphaning_it(archive) -> None:
+    """Reported from the field: images turned into black placeholders on
+    the profile after an upload, and the extension then deleted them from
+    F-list because the backup no longer contained them.
+
+    `dedupe_local_after_pull` used to patch the legacy working.json and
+    unlink the local file regardless of whether that patch had landed.
+    Under working sets there is no working.json, so the patch never
+    landed and the unlink always ran: every pull after an upload cut a
+    gallery entry loose from its bytes.
+    """
+    local_id = archive.add_uploaded_image("42", PNG)["image_id"]
+    set_id = _with_gallery(archive, local_id)
+    # The pull writes the same bytes under the id F-list minted.
+    archive.write_character_image("42", "47000849", "png", PNG)
+
+    removed = archive.dedupe_local_after_pull("42", "47000849", PNG)
+
+    assert removed == local_id
+    assert _gallery(archive, set_id) == ["47000849"], (
+        "the slot must follow the bytes, not be left pointing at nothing"
+    )
+    images = archive.images_dir("42")
+    assert not (images / f"{local_id}.png").exists()
+    assert (images / "47000849.png").exists()
+
+
+def test_the_slot_keeps_its_place_and_description(archive) -> None:
+    first = archive.add_uploaded_image("42", PNG)["image_id"]
+    second = archive.add_uploaded_image("42", PNG + b"other")["image_id"]
+    bench = archive.resolve_workbench("42")
+    archive.write_set_payload(
+        "42",
+        bench.id,
+        {
+            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_overlay": ["images"],
+            "character": {"description": "x"},
+            "images": [
+                {"image_id": first, "description": "the good one", "sort_order": 0},
+                {"image_id": second, "description": "", "sort_order": 1},
+            ],
+        },
+        expected_etag=None,
+    )
+    archive.write_character_image("42", "47000849", "png", PNG)
+
+    archive.dedupe_local_after_pull("42", "47000849", PNG)
+
+    rows = (archive.read_set_payload("42", bench.id) or {})["images"]
+    assert rows[0] == {
+        "image_id": "47000849",
+        "description": "the good one",
+        "sort_order": 0,
+    }
+    assert rows[1]["image_id"] == second, "untouched images stay put"
+
+
+def test_a_pull_of_something_we_never_had_changes_nothing(archive) -> None:
+    local_id = archive.add_uploaded_image("42", PNG)["image_id"]
+    set_id = _with_gallery(archive, local_id)
+
+    assert archive.dedupe_local_after_pull("42", "47000849", PNG + b"else") is None
+
+    assert _gallery(archive, set_id) == [local_id]
+    assert (archive.images_dir("42") / f"{local_id}.png").exists()

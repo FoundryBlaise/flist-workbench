@@ -4797,6 +4797,22 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 .flist-images-tab { position: relative; }
+/* Quiet confirmation that the gallery healed itself. Not a dialog:
+   nothing was asked of the user and nothing needs deciding — but they
+   should know their profile changed under them. Fades after 8s. */
+.flist-images-repair-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(90, 170, 110, 0.14);
+  border-left: 3px solid var(--green, #5a5);
+  color: var(--text);
+  font-size: var(--font-meta);
+}
+
 .flist-images-tab__footer {
   display: flex;
   align-items: center;
