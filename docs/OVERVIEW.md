@@ -16,11 +16,19 @@ out of date.
    files. When a profile is ready the user reviews it and uploads it
    themselves in the browser, via the `flistcharexporter` userscript or
    the paired browser extension. The last step is always a human one.
+   The extension does report that step back: when the user presses
+   Save on f-list.net it calls `/restore/saved`, and the app re-pulls
+   so its read-only Live copy matches the site again. That pull writes
+   Live, images and a snapshot — never a working set. The Workbench
+   may well have moved on while the upload happened, and overwriting
+   the user's draft with what they just published is not something
+   "the upload finished" should ever mean.
 2. **Workbench runs no language model.** It has no chat, no classifier,
    no model to configure. A model the user connects over MCP does that
-   work; the app provides the data and the tools. The only inference
-   server it talks to is an embedding endpoint, and the only model it
-   loads locally is a small ONNX reranker.
+   work; the app provides the data and the tools. It talks to no
+   inference server at all: embedding runs in-process on the CPU
+   (fastembed / onnxruntime), and the only other model it loads is a
+   small ONNX reranker.
 
 ## Shape
 

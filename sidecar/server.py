@@ -1,6 +1,8 @@
+import asyncio
 import dataclasses
 import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Any, AsyncIterator, Literal
@@ -2788,6 +2790,53 @@ def restore_snapshot_fresh(
     _auth: str = Depends(_require_restore_auth),
 ) -> dict[str, Any]:
     return restore_svc.write_pre_restore_snapshot(body.character, body.payload)
+
+
+class _RestoreSavedBody(BaseModel):
+    character: str
+    #: Seconds to wait before pulling. The extension reports the click
+    #: on F-list's save button, which is a moment before the POST has
+    #: been processed; pulling instantly would fetch the profile as it
+    #: was.
+    delay_seconds: float = 5.0
+
+
+@app.post("/restore/saved")
+async def restore_saved(
+    body: _RestoreSavedBody,
+    _auth: str = Depends(_require_restore_auth),
+) -> dict[str, Any]:
+    """The user pressed Save on f-list.net — re-pull so Live matches
+    what is published again.
+
+    Live is the only thing this touches. The pull writes live.json, the
+    images and a snapshot; working sets are never written by it, and
+    the Workbench in particular must come through untouched: the user
+    may well have gone on editing it while the upload happened, and
+    quietly replacing their draft with what they just published would
+    be the rudest possible interpretation of "restore finished".
+
+    Returns immediately. A pull takes seconds and the extension has a
+    page to get on with; it is fire-and-forget by design, and the
+    renderer hears about the result over the event stream like any
+    other pull.
+    """
+    name = body.character.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="character is required")
+    delay = max(0.0, min(60.0, float(body.delay_seconds)))
+
+    async def pull_later() -> None:
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            async for _event, _data in pull_service.run(name):
+                pass
+        except Exception as exc:  # noqa: BLE001 - background task
+            print(f"post-save pull failed for {name}: {exc}", file=sys.stderr)
+
+    asyncio.get_running_loop().create_task(pull_later())
+    return {"scheduled": True, "character": name, "delay_seconds": delay}
 
 
 @app.post("/restore/done")
