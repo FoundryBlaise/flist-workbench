@@ -2347,6 +2347,109 @@ def add_uploaded_image(
     }
 
 
+def adopt_flist_image_ids(
+    character_id: int | str,
+    mapping: dict[str, str],
+) -> dict[str, Any]:
+    """Rename `local-<sha8>` images to the ids F-list gave them.
+
+    An image the user uploads here is keyed by a hash of its bytes,
+    because it has no F-list id yet — it exists nowhere but this
+    machine. After the extension uploads it, F-list mints a real id,
+    and until the archive learns it the two sides cannot recognise the
+    same picture: every restore deletes the whole gallery and uploads
+    it again, and every pull leaves a byte-identical twin on disk under
+    the other name.
+
+    The extension knows the pairing the moment it uploads, so it tells
+    us, and this is where the archive takes it on:
+
+    - every working set's gallery row moves to the new id;
+    - `images/local-<sha8>.<ext>` becomes `images/<new id>.<ext>`, or
+      is simply dropped when a pull already fetched the same bytes
+      under that name.
+
+    Backups are untouched: they are self-contained ZIPs carrying their
+    own copy of the bytes, and rewriting history inside them would make
+    a backup no longer a record of what was.
+
+    Idempotent. Ids that aren't `local-`, aren't on disk, or don't
+    appear in any gallery are reported back rather than silently
+    skipped, so a caller can tell the difference between "nothing to do"
+    and "that didn't work".
+    """
+    renamed: list[dict[str, str]] = []
+    dropped_duplicate: list[str] = []
+    unknown: list[str] = []
+
+    images = images_dir(character_id)
+    on_disk: dict[str, str] = {}
+    if images.exists():
+        for entry in images.iterdir():
+            if not entry.is_file():
+                continue
+            m = _IMAGE_FILE_RE.match(entry.name)
+            if m:
+                on_disk[m.group(1)] = m.group(2).lower()
+
+    resolved: dict[str, str] = {}
+    for old_id, new_id in mapping.items():
+        old_id, new_id = str(old_id).strip(), str(new_id).strip()
+        if not old_id.startswith("local-") or not new_id:
+            unknown.append(old_id)
+            continue
+        if not _SAFE_NAME_RE.match(new_id) or not _SAFE_NAME_RE.match(old_id):
+            unknown.append(old_id)
+            continue
+        ext = on_disk.get(old_id)
+        if ext is None:
+            # Already adopted on an earlier run, or never here.
+            unknown.append(old_id)
+            continue
+        resolved[old_id] = new_id
+
+        src = image_path(character_id, old_id, ext)
+        dst = image_path(character_id, new_id, on_disk.get(new_id, ext))
+        if dst.exists():
+            # A pull fetched the same picture under its F-list name.
+            # One copy is enough.
+            src.unlink(missing_ok=True)
+            dropped_duplicate.append(old_id)
+        else:
+            src.replace(dst)
+            renamed.append({"from": old_id, "to": new_id})
+
+    rewritten_sets = 0
+    if resolved:
+        for meta in list_sets(character_id):
+            payload = read_set_payload(character_id, meta.id)
+            if not isinstance(payload, dict):
+                continue
+            gallery = payload.get("images")
+            if not isinstance(gallery, list):
+                continue
+            touched = False
+            for row in gallery:
+                if not isinstance(row, dict):
+                    continue
+                current = str(row.get("image_id") or "")
+                if current in resolved:
+                    row["image_id"] = resolved[current]
+                    touched = True
+            if touched:
+                write_set_payload(
+                    character_id, meta.id, payload, expected_etag=None
+                )
+                rewritten_sets += 1
+
+    return {
+        "renamed": renamed,
+        "dropped_duplicate": dropped_duplicate,
+        "unknown": unknown,
+        "sets_rewritten": rewritten_sets,
+    }
+
+
 def remove_character_image(character_id: int | str, image_id: str) -> bool:
     """Delete `images/<image_id>.<ext>`. Permanent — there's no
     secondary pool to fall back on under the v5 model, which is why the

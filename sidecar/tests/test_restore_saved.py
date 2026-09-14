@@ -47,6 +47,10 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     character_archive.write_live(
         "42",
         {
+            # live.json is the raw F-list payload: the name sits at the
+            # top level, which is where restore._character_id_for_name
+            # looks for it.
+            "name": "Lady Amber Blaise",
             "character": {
                 "id": 42,
                 "name": "Lady Amber Blaise",
@@ -140,3 +144,56 @@ def test_a_nameless_save_is_refused(paired) -> None:
     client, _archive, _server = paired
     res = client.post("/restore/saved", json={"character": "   "})
     assert res.status_code == 422
+
+
+# ---- the ids F-list gave our uploads ------------------------------------
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+def test_the_extension_can_hand_over_the_real_ids(paired) -> None:
+    client, archive, _server = paired
+    local_id = archive.add_uploaded_image("42", PNG)["image_id"]
+    bench = archive.resolve_workbench("42")
+    archive.write_set_payload(
+        "42",
+        bench.id,
+        {
+            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_overlay": ["images"],
+            "character": {"description": "x"},
+            "images": [{"image_id": local_id, "description": "", "sort_order": 0}],
+        },
+        expected_etag=None,
+    )
+
+    res = client.post(
+        "/restore/image-ids",
+        json={"character": "Lady Amber Blaise", "mapping": {local_id: "47000849"}},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["sets_rewritten"] == 1
+    payload = archive.read_set_payload("42", bench.id)
+    assert [r["image_id"] for r in payload["images"]] == ["47000849"]
+    assert (archive.images_dir("42") / "47000849.png").exists()
+
+
+def test_reporting_ids_needs_the_pairing_token(paired) -> None:
+    client, _archive, _server = paired
+    res = client.post(
+        "/restore/image-ids",
+        json={"character": "Lady Amber Blaise", "mapping": {}},
+        headers={"X-Workbench-Auth": "not-the-token"},
+    )
+    assert res.status_code in (401, 403)
+
+
+def test_an_unknown_character_is_a_404(paired) -> None:
+    client, _archive, _server = paired
+    res = client.post(
+        "/restore/image-ids",
+        json={"character": "Nobody At All", "mapping": {}},
+    )
+    assert res.status_code == 404

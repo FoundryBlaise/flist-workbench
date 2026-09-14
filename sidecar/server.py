@@ -2801,6 +2801,41 @@ class _RestoreSavedBody(BaseModel):
     delay_seconds: float = 5.0
 
 
+class _RestoreImageIdsBody(BaseModel):
+    character: str
+    #: `local-<sha8>` -> the id F-list minted for it on upload.
+    mapping: dict[str, str]
+
+
+@app.post("/restore/image-ids")
+def restore_image_ids(
+    body: _RestoreImageIdsBody,
+    _auth: str = Depends(_require_restore_auth),
+) -> dict[str, Any]:
+    """The extension reporting what F-list called our uploads.
+
+    An image uploaded in the app is keyed by a hash of its bytes,
+    because it has no F-list id until someone uploads it. The extension
+    learns the real id at that moment and is the only party that ever
+    sees both — so it says so here, and the archive takes it on: the
+    gallery rows move to the new id and the file is renamed, or dropped
+    when a pull already fetched the same bytes under that name.
+
+    Without this the two sides can never recognise the same picture. A
+    restore then deletes the whole gallery and uploads it again to
+    change one image, and every pull leaves a byte-identical twin on
+    disk.
+    """
+    name = body.character.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="character is required")
+    character_id = restore_svc._character_id_for_name(name)
+    if character_id is None:
+        raise HTTPException(status_code=404, detail="unknown character")
+    result = character_archive.adopt_flist_image_ids(character_id, body.mapping)
+    return {"character": name, **result}
+
+
 @app.post("/restore/saved")
 async def restore_saved(
     body: _RestoreSavedBody,
