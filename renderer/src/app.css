@@ -679,6 +679,25 @@ body {
   text-transform: lowercase;
   letter-spacing: 0.3px;
 }
+/* F-list would refuse this text. A strip rather than a toast: it has to
+   stay visible while the user fixes the markup, and it goes away by
+   itself the moment the markup is valid. */
+.preview-bbcode-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(180, 60, 60, 0.16);
+  border-bottom: 1px solid rgba(220, 90, 90, 0.5);
+  border-left: 4px solid var(--accent-2, #d45);
+  color: var(--text);
+  font-size: var(--font-body);
+  line-height: 1.45;
+}
+.preview-bbcode-warning-icon { flex-shrink: 0; font-size: 15px; }
+.preview-bbcode-warning-text { min-width: 0; word-break: break-word; }
+.preview-bbcode-warning b { color: #ffb4b4; }
+
 .preview-edit-banner {
   display: flex;
   align-items: center;

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import bbcode_rules
 import character_archive
 
 from ._context import ToolError, audit, load_payload, resolve_character, resolve_set
@@ -27,6 +28,28 @@ def _writable(character: str, set_ref: str | None):  # noqa: ANN202
     target = resolve_character(character)
     resolved = resolve_set(target, set_ref, for_write=True)
     return target, resolved
+
+
+def _guard_bbcode(updated: str) -> None:
+    """Stop a description F-list's own parser would reject.
+
+    The check lives inside the write because a separate "validate
+    this" tool is a step a model can skip, and the cost of skipping it
+    lands on the user: they find out when the site refuses the upload,
+    with the text already pasted into F-list's form and the app closed
+    behind them.
+
+    Only MCP writes are held to this. The window's editor stays free to
+    hold anything, which is what keeps a broken description fixable by
+    hand rather than a dead end.
+    """
+    warnings = bbcode_rules.validate(updated)
+    if warnings:
+        raise ToolError(
+            "bbcode_rejected",
+            bbcode_rules.explain(warnings),
+            tags=[w.tag for w in warnings[:10]],
+        )
 
 
 def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
@@ -262,6 +285,8 @@ def set_description(
     target, resolved = _writable(character, working_set)
     body = payload_ops.normalise_newlines(str(text))
 
+    _guard_bbcode(body)
+
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         previous = payload_ops.get_description(payload)
         payload_ops.set_description(payload, body)
@@ -330,6 +355,7 @@ def edit_description(
             if replace_all
             else current.replace(needle, replacement, 1)
         )
+        _guard_bbcode(updated)
         payload_ops.set_description(payload, updated)
         return payload_ops.EditResult(
             etag="",
@@ -363,6 +389,7 @@ def append_description(
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         current = payload_ops.get_description(payload)
         joined = f"{current}\n{addition}" if current else addition
+        _guard_bbcode(joined)
         payload_ops.set_description(payload, joined)
         return payload_ops.EditResult(
             etag="",

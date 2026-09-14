@@ -102,17 +102,20 @@ function inlineImageUrl(inline: InlineImage): string {
   return `${CDN_INLINE}${p1}/${p2}/${encodeURIComponent(inline.hash)}.${encodeURIComponent(inline.extension)}`
 }
 
-type Token =
+// `start` is the offset of the opening bracket. Tag tokens carry it so
+// a caller can quote the source around a tag — the validator reports
+// the same excerpt F-list does.
+export type Token =
   | { type: 'text'; value: string; start: number; end: number }
-  | { type: 'open'; name: string; attr: string | null; raw: string }
-  | { type: 'close'; name: string; raw: string }
-  | { type: 'self'; name: string; attr: string | null; raw: string }
+  | { type: 'open'; name: string; attr: string | null; raw: string; start: number }
+  | { type: 'close'; name: string; raw: string; start: number }
+  | { type: 'self'; name: string; attr: string | null; raw: string; start: number }
 
 const TAG_RE = /\[(\/?)([a-zA-Z][a-zA-Z0-9]*)(?:=([^\]]*))?\]/g
 
 const SELF_CLOSING = new Set(['hr', 'br'])
 
-function tokenize(source: string): Token[] {
+export function tokenize(source: string): Token[] {
   const tokens: Token[] = []
   let lastIndex = 0
   for (const match of source.matchAll(TAG_RE)) {
@@ -128,11 +131,11 @@ function tokenize(source: string): Token[] {
     const [raw, slash, rawName, attr] = match
     const name = rawName.toLowerCase()
     if (SELF_CLOSING.has(name)) {
-      tokens.push({ type: 'self', name, attr: attr ?? null, raw })
+      tokens.push({ type: 'self', name, attr: attr ?? null, raw, start })
     } else if (slash) {
-      tokens.push({ type: 'close', name, raw })
+      tokens.push({ type: 'close', name, raw, start })
     } else {
-      tokens.push({ type: 'open', name, attr: attr ?? null, raw })
+      tokens.push({ type: 'open', name, attr: attr ?? null, raw, start })
     }
     lastIndex = start + raw.length
   }

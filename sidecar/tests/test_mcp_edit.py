@@ -963,3 +963,81 @@ async def test_write_tools_say_workbench_does_not_publish(workbench) -> None:
             session, "set_description", character="Lady Amber Blaise", text="x"
         )
     assert "never writes to f-list.net" in body["note"]
+
+
+# ---- BBCode F-list would refuse -----------------------------------------
+#
+# The site parses BBCode in the browser and rejects some nestings; a
+# profile that trips it cannot be uploaded. A model finding that out
+# from the site, after the user has already left the app, is the
+# failure this prevents — so the write itself refuses, and says what to
+# write instead.
+
+
+async def test_a_description_f_list_would_reject_is_refused(workbench) -> None:
+    async with mcp_client("character") as session:
+        await make_draft(session)
+        result, _ = await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="[big][b][color=cyan]Athali[/color][/b][/big]",
+        )
+    text = tool_error_text(result)
+    assert "bbcode_rejected" in text
+    assert "The [color] tag is not allowed here" in text
+    # The refusal has to carry the fix, or the model just tries again.
+    assert "[color=cyan][big][b]" in text
+
+
+async def test_the_refused_text_was_not_written(workbench) -> None:
+    async with mcp_client("character") as session:
+        await make_draft(session)
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="a perfectly ordinary description",
+        )
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="[sub][color=gray]nope[/color][/sub]",
+        )
+        _, body = await call_tool(
+            session, "get_description", character="Lady Amber Blaise"
+        )
+    assert body["description"] == "a perfectly ordinary description"
+
+
+async def test_the_same_markup_with_the_colour_outside_goes_through(
+    workbench,
+) -> None:
+    async with mcp_client("character") as session:
+        await make_draft(session)
+        _, body = await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="[color=cyan][big][b]Athali[/b][/big][/color]",
+        )
+    assert body["length"] == len("[color=cyan][big][b]Athali[/b][/big][/color]")
+
+
+async def test_appending_something_invalid_is_refused_too(workbench) -> None:
+    async with mcp_client("character") as session:
+        await make_draft(session)
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="An opening paragraph.",
+        )
+        result, _ = await call_tool(
+            session,
+            "append_description",
+            character="Lady Amber Blaise",
+            text="[big][i][color=red]and this[/color][/i][/big]",
+        )
+    assert "not allowed here" in tool_error_text(result)
