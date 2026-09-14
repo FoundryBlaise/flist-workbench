@@ -141,3 +141,34 @@ it('pulls first when backing up the read-only F-list row', () => {
 
   expect(backup).toHaveBeenCalledWith('Lady Amber Blaise')
 })
+
+it('offers a way to the character on f-list.net', () => {
+  // Workbench never publishes, so every finished profile ends with a
+  // trip to the site — and finding that page meant copying a character
+  // id out of a URL by hand.
+  seed({ sets: [{ id: 'bench1', name: 'Workbench' }] })
+  const openExternal = vi.fn()
+  ;(window as unknown as { workbench: unknown }).workbench = { openExternal }
+  render(<FlistCharacterZone />)
+
+  fireEvent.click(screen.getByTestId('flist-zone-openflist'))
+
+  expect(openExternal).toHaveBeenCalledWith(
+    'https://www.f-list.net/character_edit.php?id=42'
+  )
+})
+
+it('falls back to a plain window open outside Electron', () => {
+  seed({ sets: [{ id: 'bench1', name: 'Workbench' }] })
+  ;(window as unknown as { workbench?: unknown }).workbench = undefined
+  const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+  render(<FlistCharacterZone />)
+
+  fireEvent.click(screen.getByTestId('flist-zone-openflist'))
+
+  expect(open).toHaveBeenCalledWith(
+    'https://www.f-list.net/character_edit.php?id=42',
+    '_blank',
+    'noreferrer'
+  )
+})

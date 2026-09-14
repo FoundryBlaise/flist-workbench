@@ -285,6 +285,26 @@ export function FlistCharacterZone() {
         >
           {importBusy ? 'Importing…' : 'Import…'}
         </button>
+        {/* The one thing that cannot happen in here: publishing.
+            Workbench never writes to f-list.net, so every finished
+            profile ends with a trip to the site — and finding that
+            page meant copying a character id out of a URL. */}
+        <button
+          type="button"
+          className="flist-zone-openflist"
+          onClick={() => {
+            const url = `https://www.f-list.net/character_edit.php?id=${encodeURIComponent(activeId)}`
+            if (window.workbench?.openExternal) {
+              window.workbench.openExternal(url)
+            } else {
+              window.open(url, '_blank', 'noreferrer')
+            }
+          }}
+          title="Open this character's edit page on f-list.net in your browser"
+          data-testid="flist-zone-openflist"
+        >
+          Open on F-list ↗
+        </button>
       </div>
       {importMessage && (
         <div

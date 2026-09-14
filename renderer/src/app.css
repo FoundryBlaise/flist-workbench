@@ -5185,6 +5185,23 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Sits beside Import in the same row and matches it — the only
+   difference is where it leads. */
+.flist-zone-openflist {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: var(--font-meta);
+  cursor: pointer;
+}
+.flist-zone-openflist:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .flist-zone-import-msg {
   margin: 0 8px 6px;
   padding: 6px 8px;
