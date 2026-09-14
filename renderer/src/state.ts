@@ -2035,6 +2035,16 @@ export const useStore = create<State>((set, get) => ({
   },
 
   flistSetGalleryImages(characterId, images) {
+    // Every other mutation schedules the autosave; this one did not,
+    // and it is the one behind "Add to profile", "Move to pool",
+    // reordering and their undo. Moving three images onto a profile
+    // therefore left the set at "unsaved edits" forever: the change
+    // was on screen, the restore ZIP still held the version from
+    // before, and the extension uploaded a profile without them. The
+    // only way to get it written was to touch the description.
+    //
+    // Debounced like the rest rather than written on the spot, so
+    // clicking the reorder arrows four times sends one PUT, not four.
     set((s) => {
       const slot = s.flistWorking[characterId]
       if (!slot) return {}
@@ -2056,6 +2066,9 @@ export const useStore = create<State>((set, get) => ({
           }
         }
       }
+    })
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
     })
   },
 

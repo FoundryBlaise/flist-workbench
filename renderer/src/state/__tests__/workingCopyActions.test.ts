@@ -515,3 +515,63 @@ describe('coming back to a character shows the Workbench, not Live', () => {
     ).toBe('what I typed earlier')
   })
 })
+
+describe('gallery changes save themselves', () => {
+  // Reported from the field: three images moved from the pool onto the
+  // profile, the view updated, and the set sat at "unsaved edits"
+  // indefinitely. The restore ZIP still held the version from twenty
+  // minutes earlier, so the extension uploaded a profile without them.
+  // Every other mutation schedules a flush; this one did not.
+  it('adding an image to the profile writes it to disk', async () => {
+    seedSlot('99', { character: { description: 'x' }, images: [] })
+    const calls = mockFetch([async () => ok({ etag: 'saved' })])
+
+    useStore.getState().flistMoveImageToProfile('99', 'local-abc12345')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts.length).toBe(1)
+    const body = puts[0].body as { images: { image_id: string }[] }
+    expect(body.images.map((i) => i.image_id)).toEqual(['local-abc12345'])
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
+  })
+
+  it('moving one back to the pool saves too', async () => {
+    seedSlot('99', {
+      character: { description: 'x' },
+      images: [{ image_id: '47002195', description: '', sort_order: 0 }]
+    })
+    const calls = mockFetch([async () => ok({ etag: 'saved' })])
+
+    useStore.getState().flistMoveImageToPool('99', '47002195')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts.length).toBe(1)
+    expect((puts[0].body as { images: unknown[] }).images).toEqual([])
+  })
+
+  it('reordering coalesces into one write', async () => {
+    // Clicking ↑ four times should not send four PUTs.
+    seedSlot('99', {
+      character: { description: 'x' },
+      images: [
+        { image_id: 'a', description: '', sort_order: 0 },
+        { image_id: 'b', description: '', sort_order: 1 }
+      ]
+    })
+    const calls = mockFetch([async () => ok({ etag: 'saved' })])
+
+    const setGallery = useStore.getState().flistSetGalleryImages
+    for (let i = 0; i < 4; i++) {
+      const rows = (useStore.getState().flistWorking['99'].payload as {
+        images: { image_id: string; description: string; sort_order: number }[]
+      }).images
+      setGallery('99', [...rows].reverse().map((r, n) => ({ ...r, sort_order: n })))
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(calls.filter((c) => c.method === 'PUT').length).toBe(1)
+  })
+})
