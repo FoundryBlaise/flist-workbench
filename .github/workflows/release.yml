@@ -27,7 +27,7 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -59,8 +59,34 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      # electron-builder fetches winCodeSign, nsis and nsis-resources
+      # from GitHub at pack time. A cold runner downloads all three on
+      # every run, and v0.2.8 died on a 504 for the last of them. The
+      # cache turns three network round-trips into zero once it is
+      # warm; the retry below covers the first run and cache misses.
+      - name: Cache electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/electron-builder/Cache
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-builder-${{ runner.os }}-
+
+      # Nothing here is retried by npm or electron-builder itself, so a
+      # transient 5xx from github.com fails the release outright. Three
+      # attempts, because the failure we have seen is a gateway blip
+      # that clears in seconds. A real build error fails all three and
+      # costs a few minutes of runner time, which is the cheaper trade.
       - name: Pack Windows (installer + portable)
-        run: npm run pack:win
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npm run pack:win
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "::warning::pack:win failed on attempt $attempt"
+            Start-Sleep -Seconds 20
+          }
+          Write-Error "pack:win failed three times"
+          exit 1
 
       # Capture both artifact paths so later steps don't repeat the
       # pattern. electron-builder emits:
