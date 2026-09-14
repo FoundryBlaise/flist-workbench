@@ -1183,6 +1183,7 @@ export const api = {
     request<{
       relinked: { from: string; to: string }[]
       duplicates_removed: string[]
+      stale_removed: string[]
       unresolved: string[]
       sets_rewritten: number
       repaired: boolean

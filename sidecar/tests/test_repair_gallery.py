@@ -164,3 +164,92 @@ def test_a_local_image_that_still_has_its_file_is_untouched(archive) -> None:
 
     assert gallery(archive, set_id) == [row["image_id"]]
     assert result["repaired"] is False
+
+
+# ---- ids that a re-upload replaced --------------------------------------
+
+
+def live_with(archive, *image_ids: str) -> None:
+    archive.write_live(
+        "42",
+        {
+            "character": {"id": 42, "name": "Lady Amber Blaise", "description": "x"},
+            "infotags": {},
+            "kinks": {},
+            "custom_kinks": {},
+            "inlines": {},
+            "images": [{"image_id": i} for i in image_ids],
+            "fetched_at": 1000,
+        },
+    )
+
+
+def test_a_slot_follows_its_bytes_to_the_new_id(archive) -> None:
+    """Reported from the field: after synchronising, the same picture
+    was in the pool and on the profile at once.
+
+    The extension deletes and re-uploads a gallery, and F-list mints a
+    new id for each image. The working set still names the old ones —
+    which the site no longer has — while the bytes it pulled back sit
+    in the pool under the new id. Both ids have files here, so the
+    "entry lost its bytes" rule does not see it; what marks the old id
+    as dead is that Live no longer lists it.
+    """
+    data = png(b"a")
+    archive.write_character_image("42", "46992661", "png", data)
+    archive.write_character_image("42", "47002719", "png", data)
+    live_with(archive, "47002719")
+    set_id = set_gallery(archive, "46992661")
+
+    result = archive.repair_gallery("42")
+
+    assert gallery(archive, set_id) == ["47002719"]
+    assert result["relinked"] == [{"from": "46992661", "to": "47002719"}]
+    # The leftover file would otherwise sit in the pool for good.
+    assert result["stale_removed"] == ["46992661"]
+    assert not (archive.images_dir("42") / "46992661.png").exists()
+
+
+def test_an_id_live_still_lists_is_left_alone(archive) -> None:
+    # F-list can hold the same picture twice. When it still knows the
+    # id in the gallery, that slot is correct and nothing is stale.
+    data = png(b"a")
+    archive.write_character_image("42", "47002195", "png", data)
+    archive.write_character_image("42", "47002721", "png", data)
+    live_with(archive, "47002195", "47002721")
+    set_id = set_gallery(archive, "47002195")
+
+    result = archive.repair_gallery("42")
+
+    assert gallery(archive, set_id) == ["47002195"]
+    assert result["repaired"] is False
+    assert (archive.images_dir("42") / "47002195.png").exists()
+
+
+def test_without_a_pull_nothing_is_assumed(archive) -> None:
+    # An empty Live means "we have not looked", not "the profile is
+    # empty". Treating it as evidence would delete the user's images.
+    data = png(b"a")
+    archive.write_character_image("42", "46992661", "png", data)
+    archive.write_character_image("42", "47002719", "png", data)
+    set_id = set_gallery(archive, "46992661")
+
+    result = archive.repair_gallery("42")
+
+    assert gallery(archive, set_id) == ["46992661"]
+    assert result["repaired"] is False
+    assert (archive.images_dir("42") / "46992661.png").exists()
+
+
+def test_a_local_upload_not_yet_on_f_list_survives(archive) -> None:
+    # Not in Live and no twin that is — perfectly normal for something
+    # the user has not pushed yet.
+    row = archive.add_uploaded_image("42", png(b"fresh"))
+    live_with(archive, "47002719")
+    archive.write_character_image("42", "47002719", "png", png(b"other"))
+    set_id = set_gallery(archive, row["image_id"])
+
+    result = archive.repair_gallery("42")
+
+    assert gallery(archive, set_id) == [row["image_id"]]
+    assert result["repaired"] is False

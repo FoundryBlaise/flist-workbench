@@ -2295,6 +2295,7 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
     images = images_dir(character_id)
     sha8_to_id: dict[str, str] = {}
     present: set[str] = set()
+    full_hash: dict[str, str] = {}
     if images.exists():
         for entry in sorted(images.iterdir()):
             if not entry.is_file():
@@ -2307,11 +2308,40 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
             if image_id.startswith("local-"):
                 continue
             try:
-                sha8_to_id.setdefault(
-                    _hash_bytes(entry.read_bytes())[:8], image_id
-                )
+                digest = _hash_bytes(entry.read_bytes())
             except OSError:
                 continue
+            full_hash[image_id] = digest
+            sha8_to_id.setdefault(digest[:8], image_id)
+
+    # What F-list actually has. An upload gives a picture a new id, so
+    # after the extension deletes and re-uploads a gallery, the ids the
+    # working set holds are dead: the same bytes now live under a new
+    # id, which shows up in the pool while the profile pane still lists
+    # the old one. The same image, on both sides at once.
+    live = read_live(character_id)
+    live_ids: set[str] = set()
+    if isinstance(live, dict):
+        for row in live.get("images") or []:
+            if isinstance(row, dict):
+                rid = row.get("image_id") or row.get("id")
+                if rid:
+                    live_ids.add(str(rid))
+    # Only usable as evidence when we have actually pulled: an empty
+    # Live means "we don't know", not "nothing is on the profile".
+    superseded: dict[str, str] = {}
+    if live_ids:
+        by_digest_live = {
+            digest: image_id
+            for image_id, digest in full_hash.items()
+            if image_id in live_ids
+        }
+        for image_id, digest in full_hash.items():
+            if image_id in live_ids:
+                continue
+            replacement = by_digest_live.get(digest)
+            if replacement is not None:
+                superseded[image_id] = replacement
 
     relinked: list[dict[str, str]] = []
     duplicates_removed: list[str] = []
@@ -2342,6 +2372,14 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
                     row["image_id"] = match
                     image_id = match
                     touched = True
+            elif image_id in superseded:
+                # The bytes are still on the profile, under the id the
+                # re-upload gave them. Follow them.
+                match = superseded[image_id]
+                relinked.append({"from": image_id, "to": match})
+                row["image_id"] = match
+                image_id = match
+                touched = True
 
             if image_id in seen:
                 duplicates_removed.append(image_id)
@@ -2358,12 +2396,26 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
             write_set_payload(character_id, meta.id, payload, expected_etag=None)
             sets_rewritten += 1
 
+    # The files left behind by the re-upload: byte-identical to one
+    # F-list has, under an id it no longer knows. Keeping them would
+    # leave the picture sitting in the pool for good.
+    stale_removed: list[str] = []
+    for old_id in superseded:
+        try:
+            for entry in images.glob(f"{old_id}.*"):
+                if entry.is_file():
+                    entry.unlink()
+                    stale_removed.append(old_id)
+        except OSError:
+            continue
+
     return {
         "relinked": relinked,
         "duplicates_removed": duplicates_removed,
+        "stale_removed": stale_removed,
         "unresolved": sorted(set(unresolved)),
         "sets_rewritten": sets_rewritten,
-        "repaired": bool(relinked or duplicates_removed),
+        "repaired": bool(relinked or duplicates_removed or stale_removed),
     }
 
 

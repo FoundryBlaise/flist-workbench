@@ -16,6 +16,7 @@ static image GETs.
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any, AsyncIterator
 
 import character_archive
@@ -288,6 +289,18 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # "in the pool"). The working copy's gallery is the only
             # source of truth for what shows on-profile, and only
             # the explicit pool-delete UI removes bytes.
+
+            # A pull is exactly when image ids change under us: the
+            # extension deletes and re-uploads a gallery, F-list mints
+            # new ids, and what we just downloaded is byte-identical to
+            # files we already hold under ids the site has forgotten.
+            # Left alone, the working set keeps naming the dead ones
+            # and the same picture shows in the pool and on the profile
+            # at once. Repair compares bytes, so it recognises them.
+            try:
+                character_archive.repair_gallery(cid)
+            except Exception as exc:  # noqa: BLE001 — never fail a pull
+                print(f"gallery repair after pull failed: {exc}", file=sys.stderr)
 
             # Seal the manifest: finished_at marks the loop ran to
             # completion (success or with per-image failures). The

@@ -121,6 +121,13 @@ export function ImagesTab({
         if (res.duplicates_removed.length > 0) {
           parts.push(`${res.duplicates_removed.length} duplicate slot(s) removed`)
         }
+        if (res.stale_removed.length > 0) {
+          // Files left behind when F-list re-minted an id for the same
+          // picture — the copy the site knows is kept.
+          parts.push(
+            `${res.stale_removed.length} superseded cop${res.stale_removed.length === 1 ? 'y' : 'ies'} cleaned up`
+          )
+        }
         setRepairNote(`Image mapping repaired — ${parts.join(', ')}.`)
         void loadCharacterImages(characterId)
         void useStore.getState().flistOpenWorking(characterId)
