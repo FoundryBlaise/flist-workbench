@@ -48,3 +48,6 @@ pip-wheel-metadata/
 tests/screenshots/*.txt
 tests/uxtest/artifacts/
 .claude/worktrees/
+
+# Claude Code session config — machine-local, never shared
+.claude/
