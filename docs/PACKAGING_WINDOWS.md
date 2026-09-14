@@ -315,8 +315,9 @@ nsis:
 A few things to call out:
 
 - `appId` is a reverse-DNS identifier — set to
-  `io.github.foundryblaise.flist-workbench` (matches the persona's email
-  domain). Don't change without checking with the maintainer.
+  `io.github.foundryblaise.flist-workbench`. The NSIS `guid` is pinned
+  separately, so the installer identity survives an appId change. Don't
+  change either without checking with the maintainer.
 - `copyright` and any UI strings should say **Foundry Blaise**, never
   any other name. See the identity rule below.
 - `oneClick: false` — gives the user the "where to install" dialog.

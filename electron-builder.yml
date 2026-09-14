@@ -41,6 +41,11 @@ win:
   # local artifact, latest.yml entry, uploaded asset.
   artifactName: F-list-Workbench-${version}-${arch}.${ext}
 nsis:
+  # electron-builder derives this from appId when unset, and it keys the
+  # uninstall entry and the upgrade path. Pinned to the value the previous
+  # appId produced, so changing appId does not make Windows treat the
+  # app as a different one.
+  guid: 8ac01dd4-0ee8-53c2-be70-4da4baf20d8a
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
