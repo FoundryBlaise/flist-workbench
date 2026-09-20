@@ -8,6 +8,7 @@ import {
   type FlistCharacterImage,
   type FlistRosterEntry,
   type FlistSessionStatus,
+  type ForeignProfilePayload,
   type InlineImage,
   type LogMessage,
   type PartnerEntry,
@@ -90,6 +91,27 @@ type State = {
   mode: Mode
   /** When true, the logs main pane shows the cross-conversation search view. */
   crossSearchOpen: boolean
+
+  /** The "Foreign profile" slot: a stand-in character the picker
+   *  offers alongside the real ones. Selecting it puts the editor
+   *  panel into a read-only state showing somebody else's profile.
+   *
+   *  It is a slot, not a character. It has no id, no archive entry, no
+   *  working set and no `flistActiveCharacterId` — which is exactly
+   *  what stops every edit, pull, backup and export path from finding
+   *  anything to act on. Nothing here is persisted: the profile lives
+   *  in memory for as long as the app runs and is never written to the
+   *  character archive. */
+  foreignActive: boolean
+  foreignName: string | null
+  foreignProfile: ForeignProfilePayload | null
+  foreignFromCache: boolean
+  foreignAgeSec: number | null
+  /** Set when a refresh failed and the cached copy is being shown. */
+  foreignStale: boolean
+  foreignRefreshError: string | null
+  foreignStatus: 'idle' | 'loading' | 'ready' | 'error'
+  foreignError: string | null
 
   partners: Record<string, PartnerEntry[]>
   partnersStatus: Record<string, 'loading' | 'ready' | 'error'>
@@ -399,6 +421,15 @@ type State = {
   markCharacterSeen: (name: string) => void
   setMode: (mode: Mode) => void
   setCrossSearchOpen: (open: boolean) => void
+  /** Select the Foreign slot. Leaves the real active character alone
+   *  so going back to it restores exactly what was open. */
+  foreignOpenSlot: () => void
+  /** Leave the Foreign slot without clearing what it holds. */
+  foreignLeaveSlot: () => void
+  /** Fetch (or re-fetch) a foreign profile into the slot. */
+  foreignLoad: (name: string, refresh?: boolean) => Promise<void>
+  /** Drop the loaded profile, back to the lookup form. */
+  foreignUnload: () => void
   loadPartners: (char: string) => Promise<void>
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
@@ -1187,6 +1218,15 @@ export const useStore = create<State>((set, get) => ({
   activeCharacter: null,
   mode: 'editor',
   crossSearchOpen: false,
+  foreignActive: false,
+  foreignName: null,
+  foreignProfile: null,
+  foreignFromCache: false,
+  foreignAgeSec: null,
+  foreignStale: false,
+  foreignRefreshError: null,
+  foreignStatus: 'idle',
+  foreignError: null,
 
   partners: {},
   partnersStatus: {},
@@ -4572,7 +4612,10 @@ export const useStore = create<State>((set, get) => ({
   },
 
   selectCharacter(name) {
-    set({ activeCharacter: name, activePartner: null })
+    // Picking a real character leaves the Foreign slot. What the slot
+    // holds is kept, so going back to it shows the same profile again
+    // without another F-list call.
+    set({ activeCharacter: name, activePartner: null, foreignActive: false })
     // Close any open Browse-Backup view on a character pick — the
     // sidebar Backups list is now showing a different character's
     // archive, and the viewer body would otherwise still be on the
@@ -4660,6 +4703,67 @@ export const useStore = create<State>((set, get) => ({
 
   setCrossSearchOpen(open) {
     set({ crossSearchOpen: open })
+  },
+
+  // ---- foreign profile slot ----
+  //
+  // Read-only, in-memory, and pointedly not a character. None of these
+  // actions touch flistActiveCharacterId, flistWorking or flistArchive,
+  // which is what keeps every copy/backup/export path from having
+  // anything to act on.
+
+  foreignOpenSlot() {
+    set({ foreignActive: true, mode: 'editor', crossSearchOpen: false })
+  },
+
+  foreignLeaveSlot() {
+    set({ foreignActive: false })
+  },
+
+  foreignUnload() {
+    set({
+      foreignName: null,
+      foreignProfile: null,
+      foreignFromCache: false,
+      foreignAgeSec: null,
+      foreignStale: false,
+      foreignRefreshError: null,
+      foreignStatus: 'idle',
+      foreignError: null
+    })
+  },
+
+  async foreignLoad(name, refresh = false) {
+    const clean = name.trim()
+    if (!clean) return
+    set({ foreignStatus: 'loading', foreignError: null, foreignActive: true })
+    try {
+      const res = await api.foreignProfile(clean, refresh)
+      set({
+        foreignName: res.name,
+        foreignProfile: res.profile,
+        foreignFromCache: res.from_cache,
+        foreignAgeSec: res.age_sec,
+        foreignStale: res.stale === true,
+        foreignRefreshError: res.refresh_error ?? null,
+        foreignStatus: 'ready',
+        foreignError: null
+      })
+    } catch (err) {
+      // The sidecar answers these with a code so the window can say
+      // something useful instead of echoing an HTTP status at someone
+      // who mistyped a name.
+      const coded = err as { code?: string; message?: string }
+      const message =
+        coded?.code === 'not_found'
+          ? `F-list has no character called "${clean}".`
+          : coded?.code === 'rate_limited'
+            ? 'F-list is rate-limiting us. Give it a minute and try again.'
+            : coded?.code === 'not_signed_in'
+              ? 'Your F-list session expired. Sign in again to look up profiles.'
+              : (coded?.message ?? String(err))
+      set({ foreignStatus: 'error', foreignError: message })
+    }
   },
 
   async loadPartners(char) {

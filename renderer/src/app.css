@@ -5385,3 +5385,307 @@ body {
   border: 1px solid rgba(201, 112, 112, 0.45);
 }
 .btn-danger:hover { background: rgba(201, 112, 112, 0.32); }
+
+/* ---- Foreign profile: the editor panel's read-only state ----------
+   Not an overlay. This occupies the same box as .editor-workspace and
+   borrows its shape — tab strip on top, split row underneath — so a
+   profile reads the same here as the user's own does. Most of the
+   look comes from the editor's own classes (.pane, .kinks-pane,
+   .profile-fields-*, .infotag-field-*); what is below is the frame
+   around them. */
+
+.foreign-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---- header bar (sits where the editor's toolbar row does) ---- */
+
+.foreign-bar {
+  align-items: center;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+  padding: 6px 12px;
+}
+.foreign-spacer { flex: 1; }
+.foreign-avatar {
+  border-radius: 3px;
+  height: 26px;
+  object-fit: cover;
+  width: 26px;
+}
+.foreign-bar-name {
+  color: var(--text);
+  font-size: var(--font-heading);
+  font-weight: 600;
+}
+.foreign-custom-title {
+  color: var(--text-dim-2);
+  font-size: var(--font-body);
+  font-style: italic;
+}
+/* Says the quiet part out loud. The panel looks like the editor, and
+   the one thing that must never be ambiguous is that it is not. */
+.foreign-readonly-badge {
+  background: var(--tag-bg);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  letter-spacing: 0.04em;
+  padding: 1px 8px;
+  text-transform: uppercase;
+}
+.foreign-age {
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+}
+.foreign-age-stale { color: var(--state-cancelled); }
+.foreign-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--font-body);
+  padding: var(--btn-pad-y-sm) 10px;
+  white-space: nowrap;
+}
+.foreign-btn:hover:not(:disabled) { background: var(--hover-soft); color: var(--text); }
+.foreign-btn:disabled { cursor: default; opacity: 0.5; }
+.foreign-error {
+  color: var(--accent-2);
+  font-size: var(--font-body);
+  margin: 0;
+  padding: 6px 12px 0;
+}
+
+/* ---- the split row, mirroring .editor-workspace-row ----
+   Sized on `> *`, not `> .foreign-pane`. The earlier rule was
+   `.foreign-row > .foreign-pane { display: flex }`, and at specificity
+   0-2-0 it beat `.foreign-images { display: grid }` at 0-1-0 — so the
+   gallery grid never applied and every image stretched to the full
+   pane width, one per row. Sizing the child generically lets each
+   pane keep whatever display it needs. */
+
+.foreign-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.foreign-row > * {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+.foreign-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---- description ---- */
+
+/* The code side scrolls itself; the rendered side rides in the
+   editor's .pane-body, which already scrolls and carries the
+   F-list theme colours. */
+.foreign-bbcode-source {
+  color: var(--text);
+  flex: 1 1 auto;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: var(--font-body);
+  line-height: 1.45;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.foreign-description {
+  word-break: break-word;
+}
+
+/* ---- profile fields ---- */
+
+/* Same section + field markup as the editor's tab; only the grid is
+   overridden. The editor's responsive columns wrap labels mid-word
+   inside a pane that is half the window wide. */
+.foreign-fields-vertical .profile-fields-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.profile-fields-section-toggle-static {
+  color: var(--text);
+  font-size: var(--font-heading);
+  font-weight: 600;
+  padding: 6px 0;
+}
+.foreign-pane-fields .infotag-field-input { cursor: text; }
+/* The Info preview on the right is the editor's own component, so it
+   only needs the scroll frame around it. */
+.foreign-pane-info .pane-body { padding: 0; }
+
+/* ---- kinks ----
+   The editor's four-column layout wholesale (.kinks-pane,
+   .kinks-pane-columns, .kink-column, .kink-row). Only the read-only
+   trimmings differ. */
+
+.foreign-kinks-pane .kink-row-readonly {
+  cursor: default;
+}
+
+/* ---- images ---- */
+
+.foreign-images-pane {
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+}
+.foreign-images {
+  align-content: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+.foreign-image { margin: 0; }
+.foreign-image img {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  display: block;
+  /* A profile can mix portrait and landscape art. A fixed box with
+     `contain` keeps the grid on a rhythm instead of letting one tall
+     image set the row height for everything beside it. */
+  height: 190px;
+  object-fit: contain;
+  width: 100%;
+}
+.foreign-image figcaption {
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+.foreign-empty {
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  font-style: italic;
+  padding: 12px 14px;
+}
+
+/* ---- lookup form (the slot holds nothing yet) ---- */
+
+.foreign-lookup {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  margin: 0 auto;
+  max-width: 680px;
+  min-height: 0;
+  padding: 28px 24px 0;
+  width: 100%;
+}
+.foreign-lookup-head { margin-bottom: 18px; }
+.foreign-lookup-title {
+  color: var(--text);
+  font-size: var(--font-title);
+  font-weight: 600;
+  margin: 0;
+}
+.foreign-lookup-sub {
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  line-height: 1.5;
+  margin: 6px 0 0;
+}
+.foreign-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.foreign-source {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--font-body);
+  padding: var(--btn-pad-y-sm) 12px;
+}
+.foreign-source:hover { background: var(--hover-soft); color: var(--text); }
+.foreign-source-active {
+  background: var(--select);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.foreign-search-form { margin: 0; }
+.foreign-search-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  color: var(--text);
+  font-size: var(--font-row);
+  padding: 7px 10px;
+  width: 100%;
+}
+.foreign-search-input:focus { border-color: var(--accent); outline: none; }
+.foreign-source-hint {
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  margin: 6px 0 10px;
+}
+.foreign-results {
+  border-top: 1px solid var(--border);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 6px;
+}
+.foreign-placeholder {
+  color: var(--text-dim);
+  font-size: var(--font-body);
+  margin: 8px 0;
+}
+.foreign-placeholder.error { color: var(--accent-2); }
+.foreign-result-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.foreign-result {
+  background: transparent;
+  border: none;
+  border-radius: var(--btn-radius);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--font-row);
+  padding: 6px 8px;
+  text-align: left;
+  width: 100%;
+}
+.foreign-result:hover:not(:disabled) { background: var(--hover-soft); }
+.foreign-result:disabled { color: var(--text-dim); cursor: default; }
+
+/* ---- the picker's stand-in row ---- */
+
+.char-avatar-foreign {
+  align-items: center;
+  background: var(--tag-bg);
+  border-radius: 3px;
+  color: var(--text-dim);
+  display: inline-flex;
+  justify-content: center;
+}

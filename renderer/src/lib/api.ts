@@ -96,6 +96,58 @@ export type FlistCharacterImage = {
   added_at?: number
 }
 
+
+// ---- foreign profiles (read-only viewer) ----------------------------
+//
+// Somebody else's profile. The payload shape is the same
+// character-data.php response the archive stores as live.json, so the
+// panes that render a Live profile read this without a translation
+// layer. Nothing here writes: there is no endpoint that turns one of
+// these into a working set, and that is deliberate.
+
+/** Where the viewer's candidate names come from. `name` is free text
+ *  taken as an exact character name — F-list has no search endpoint. */
+export type ForeignSource = 'bookmarks' | 'friends' | 'logs' | 'name'
+
+export type ForeignSearchResult = {
+  source: ForeignSource
+  query: string
+  results: string[]
+  truncated: boolean
+  /** True for the free-text source: the row is what the user typed,
+   *  not something known to exist. */
+  exact: boolean
+}
+
+/** A character-data.php payload plus the cache's `fetched_at` stamp.
+ *  Indexed because F-list may add fields and the viewer passes
+ *  anything it doesn't recognise straight through. */
+export type ForeignProfilePayload = Record<string, unknown> & {
+  name?: string
+  id?: number | string
+  description?: string
+  custom_title?: string | null
+  created_at?: number
+  updated_at?: number
+  views?: number
+  infotags?: Record<string, unknown>
+  kinks?: Record<string, unknown>
+  custom_kinks?: Record<string, unknown>
+  images?: Record<string, unknown>[]
+  fetched_at?: number
+}
+
+export type ForeignProfileResult = {
+  name: string
+  profile: ForeignProfilePayload
+  from_cache: boolean
+  age_sec: number | null
+  fetched_at: number | null
+  /** Set when a refresh failed and the cached copy was served anyway. */
+  stale?: boolean
+  refresh_error?: string
+}
+
 // ---- Working-sets v2 wire types -------------------------------------
 //
 // Snake_case at the wire layer matches the sidecar contract; the store
@@ -460,7 +512,7 @@ async function request<T>(
   if (
     res.status === 401 &&
     !_retried &&
-    path.startsWith('/flist/') &&
+    (path.startsWith('/flist/') || path.startsWith('/foreign/')) &&
     path !== '/flist/session'
   ) {
     if (await tryFlistRecovery()) {
@@ -476,9 +528,29 @@ async function request<T>(
   if (!res.ok) {
     let detail: string | undefined
     try {
-      detail = ((await res.json()) as { detail?: string })?.detail
-    } catch {
-      // not JSON
+      const raw = ((await res.json()) as { detail?: unknown })?.detail
+      // Most routes answer with a plain string. The /foreign/ ones
+      // carry `{code, message}` so the caller can tell "not signed in"
+      // from "no such character" without matching on prose; without
+      // this branch that object stringified to "[object Object]".
+      if (typeof raw === 'string') {
+        detail = raw
+      } else if (raw && typeof raw === 'object') {
+        const obj = raw as { message?: unknown; code?: unknown }
+        if (typeof obj.message === 'string') detail = obj.message
+        if (typeof obj.code === 'string') {
+          const err = new Error(
+            `HTTP ${res.status}: ${detail ?? res.statusText}`
+          ) as Error & { code?: string; status?: number }
+          err.code = obj.code
+          err.status = res.status
+          throw err
+        }
+      }
+    } catch (e) {
+      // A thrown coded error above is the real failure — re-raise it.
+      // Anything else means the body simply wasn't JSON.
+      if (e instanceof Error && 'code' in e) throw e
     }
     throw new Error(`HTTP ${res.status}: ${detail ?? res.statusText}`)
   }
@@ -492,6 +564,26 @@ async function get<T>(path: string, opts?: ApiOptions): Promise<T> {
 
 export const api = {
   base,
+  // ---- foreign profiles (read-only viewer) ----
+  foreignSearch: (source: ForeignSource, q: string, opts?: ApiOptions) =>
+    get<ForeignSearchResult>(
+      `/foreign/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
+      opts
+    ),
+  foreignProfile: (name: string, refresh = false, opts?: ApiOptions) =>
+    get<ForeignProfileResult>(
+      `/foreign/character/${encodeURIComponent(name)}${refresh ? '?refresh=true' : ''}`,
+      opts
+    ),
+  /** Avatar for a foreign profile. Cached in the profile's own folder,
+   *  not in `<userdata>/avatars/` — that directory is the account
+   *  picker's, and a looked-up stranger does not belong in it. */
+  foreignAvatarUrl: (name: string) =>
+    `${base()}/foreign/character/${encodeURIComponent(name)}/avatar`,
+  /** Gallery image. Downloaded on first request and cached after, so
+   *  scrolling a gallery twice costs one fetch per image, not two. */
+  foreignImageUrl: (name: string, imageId: string) =>
+    `${base()}/foreign/character/${encodeURIComponent(name)}/image/${encodeURIComponent(imageId)}`,
   health: () => get<{ status: string; version: string }>('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
     get<{

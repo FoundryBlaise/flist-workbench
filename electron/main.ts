@@ -595,6 +595,8 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   if (ingestCharacter) ingestCharacter.enabled = !!flags.ingestCharacter
   const backupAll = menu.getMenuItemById('backup-all')
   if (backupAll) backupAll.enabled = !!flags.flistSessionActive
+  const foreignSearch = menu.getMenuItemById('foreign-search')
+  if (foreignSearch) foreignSearch.enabled = !!flags.flistSessionActive
 })
 
 async function createWindow(): Promise<void> {

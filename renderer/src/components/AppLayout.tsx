@@ -19,6 +19,7 @@ import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExternalChangeBanner } from './ExternalChangeBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal } from '../features/settings/SettingsModal'
+import { ForeignWorkspace } from '../features/foreign/ForeignWorkspace'
 import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
 import { AppContextMenu } from './AppContextMenu'
 import { runUndoRedo } from '../lib/undoRedo'
@@ -49,6 +50,9 @@ export function AppLayout() {
   const flistOpenSignIn = useStore((s) => s.flistOpenSignIn)
   const flistSession = useStore((s) => s.flistSession)
   const flistRoster = useStore((s) => s.flistRoster)
+  const foreignActive = useStore((s) => s.foreignActive)
+  const foreignName = useStore((s) => s.foreignName)
+  const foreignOpenSlot = useStore((s) => s.foreignOpenSlot)
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -385,6 +389,9 @@ export function AppLayout() {
         case 'backup-all':
           void useStore.getState().flistBackupAll()
           break
+        case 'foreign-search':
+          foreignOpenSlot()
+          break
         case 'check-updates': {
           const updater = window.workbench?.updater
           if (!updater) break
@@ -406,7 +413,8 @@ export function AppLayout() {
     setCrossSearchOpen,
     activeChar,
     activePartner,
-    openIngest
+    openIngest,
+    foreignOpenSlot
   ])
 
   // The header centre piece identifies what the user is currently
@@ -416,7 +424,11 @@ export function AppLayout() {
   // window switcher (taskbar reads "Auldren Nadir" while the user is
   // editing "Lady Amber Blaise.bbcode").
   const titleDoc =
-    mode === 'editor'
+    mode === 'editor' && foreignActive
+      ? foreignName
+        ? `${displayName(foreignName)} — read-only`
+        : 'Look at another character'
+      : mode === 'editor'
       ? browseBackup
         ? `${activeChar ? displayName(activeChar) + ' — ' : ''}Viewing backup`
         : `${dirty ? '● ' : ''}${editorTitle}`
@@ -560,7 +572,11 @@ export function AppLayout() {
       <main className={`main main-${mode}`}>
         <Sidebar />
         {mode === 'editor' ? (
-          <EditorWorkspace />
+          foreignActive ? (
+            <ForeignWorkspace />
+          ) : (
+            <EditorWorkspace />
+          )
         ) : crossSearchOpen ? (
           <CrossSearch onClose={() => setCrossSearchOpen(false)} />
         ) : (

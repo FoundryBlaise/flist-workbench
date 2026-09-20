@@ -68,19 +68,19 @@ Ollama model.
 
 ### Smaller endpoints
 
-A small local model handling 73 tools tends to pick badly. Two narrower
+A small local model handling 76 tools tends to pick badly. Two narrower
 endpoints serve the same implementations:
 
 | URL | What it carries |
 |---|---|
-| `.../mcp` | everything (73 tools) |
-| `.../mcp/character` | profile editing (55) |
+| `.../mcp` | everything (76 tools) |
+| `.../mcp/character` | profile editing (58) |
 | `.../mcp/logs` | logs, labels, search (30) |
 | `.../mcp/classify` | the IC/OOC labelling loop only (9) |
 
 Tool schemas are not free. Every tool an endpoint carries is
 described in the model's context before it does any work: the 30 on
-`/mcp/logs` cost roughly 5800 tokens, the 73 on `/mcp` roughly 13700.
+`/mcp/logs` cost roughly 5800 tokens, the 76 on `/mcp` roughly 14500.
 A client with a 12k window could not fit one batch of messages to
 classify alongside them. Point a long labelling run at
 `/mcp/classify` and that drops to about 1500.
@@ -106,7 +106,7 @@ ends up in a transcript.
 
 ## What it can do
 
-73 tools. The ones worth knowing about:
+76 tools. The ones worth knowing about:
 
 **Finding your way around** — `get_workbench_status` first, then
 `list_characters`, `list_working_sets`, `explain_set_addressing` if an
@@ -114,6 +114,15 @@ addressing error is puzzling.
 
 **Reading a profile** — `get_description` (pages through a long one),
 `list_profile_fields`, `list_kinks`, `list_images`, `get_live_profile`.
+
+**Reading somebody else's profile** — `search_foreign_characters`
+finds a name in the user's bookmarks, friends list or chat logs;
+`get_foreign_profile` and `get_foreign_kinks` then read it. Strictly
+read-only, and there is no tool that copies one of these into the
+user's own characters — if asked to, say Workbench does not do that.
+Results cache for 24 hours, and fetching spends a quarter-share of
+the hourly F-list budget so a model browsing profiles cannot leave
+the user unable to pull their own.
 
 **Looking at the result** — `render_profile_image` returns the profile
 as a picture, rendered by the app's own preview: same BBCode renderer,
@@ -236,7 +245,7 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (73 tools) | ~13700 | does not fit in 24k |
+| `/mcp` (76 tools) | ~14500 | does not fit in 24k |
 | `/mcp/logs` (30 tools) | ~5800 | ~14900 |
 | `/mcp/classify` (9 tools) | ~1500 | ~10600 |
 

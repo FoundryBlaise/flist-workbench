@@ -49,11 +49,17 @@ function colourFor(name: string): string {
 function Avatar({
   name,
   size,
-  variant = 'avatar'
+  variant = 'avatar',
+  foreign = false
 }: {
   name: string
   size: number
   variant?: 'avatar' | 'archive'
+  /** Route the image through the foreign-profile cache instead of
+   *  `<userdata>/avatars/`. That directory is the account picker's —
+   *  a looked-up stranger must not end up filed among the user's own
+   *  characters, even as a cached PNG. */
+  foreign?: boolean
 }) {
   const [errored, setErrored] = useState(false)
   // Reset on name change so the active-character chip rebinds to a
@@ -119,7 +125,7 @@ function Avatar({
   return (
     <img
       className="char-avatar"
-      src={api.flistAvatarUrl(name)}
+      src={foreign ? api.foreignAvatarUrl(name) : api.flistAvatarUrl(name)}
       alt=""
       width={size}
       height={size}
@@ -140,6 +146,9 @@ export function UnifiedCharacterPicker() {
   const archive = useStore((s) => s.flistArchive)
   const activeCharacterId = useStore((s) => s.flistActiveCharacterId)
   const charactersStatus = useStore((s) => s.charactersStatus)
+  const foreignActive = useStore((s) => s.foreignActive)
+  const foreignName = useStore((s) => s.foreignName)
+  const foreignOpenSlot = useStore((s) => s.foreignOpenSlot)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -294,8 +303,18 @@ export function UnifiedCharacterPicker() {
   const activeEntry = activeName
     ? roster.find((r) => r.name.toLowerCase() === activeName.toLowerCase()) ?? null
     : null
-  const activeDisplay = activeName ? displayName(activeName) : null
-  const activeIsLogsOnly = activeEntry !== null && !activeEntry.on_account
+  // While the Foreign slot is selected the chip names who is on
+  // screen, not the character the editor will return to. The chip is
+  // the one thing telling the user what the panel is showing, and
+  // leaving it on the real character made the panel look like it had
+  // silently replaced that character's profile.
+  const activeDisplay = foreignActive
+    ? (foreignName ? displayName(foreignName) : 'Foreign profile')
+    : activeName
+      ? displayName(activeName)
+      : null
+  const activeIsLogsOnly =
+    !foreignActive && activeEntry !== null && !activeEntry.on_account
 
   return (
     <div className="char-picker-wrap" data-testid="char-picker" ref={wrapRef}>
@@ -307,9 +326,10 @@ export function UnifiedCharacterPicker() {
         title={activeName ?? undefined}
       >
         <Avatar
-          name={activeName ?? ''}
+          name={(foreignActive ? foreignName : activeName) ?? ''}
           size={32}
           variant={activeIsLogsOnly ? 'archive' : 'avatar'}
+          foreign={foreignActive}
         />
         <span className="info">
           <span className="name">{activeDisplay ?? 'Pick a character'}</span>
@@ -529,6 +549,56 @@ export function UnifiedCharacterPicker() {
               </ul>
             </>
           )}
+          <div className="char-picker-section-h" title="A stand-in slot for reading somebody else's profile. It is not one of your characters: no working set, no pull, no backup.">
+            Other people
+          </div>
+          <ul className="char-picker-unified-list">
+            <li
+              className={
+                foreignActive
+                  ? 'char-picker-row char-picker-row-active'
+                  : 'char-picker-row'
+              }
+            >
+              <button
+                type="button"
+                className="char-picker-row-pick"
+                onClick={() => {
+                  foreignOpenSlot()
+                  setOpen(false)
+                }}
+                disabled={!session.active}
+                title={
+                  session.active
+                    ? 'Read another character\u2019s profile, read-only'
+                    : 'Sign in to F-list first \u2014 reading a profile needs a ticket'
+                }
+                data-testid="char-picker-foreign"
+              >
+                <span
+                  className="char-avatar char-avatar-foreign"
+                  aria-hidden
+                  style={{ width: 26, height: 26 }}
+                >
+                  <svg
+                    width={16}
+                    height={16}
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.25"
+                  >
+                    <circle cx="7" cy="7" r="4.5" />
+                    <line x1="10.5" y1="10.5" x2="14" y2="14" />
+                  </svg>
+                </span>
+                <span className="char-picker-row-name">
+                  {foreignName ? displayName(foreignName) : 'Foreign profile'}
+                </span>
+                <span className="char-picker-row-age">read-only</span>
+              </button>
+            </li>
+          </ul>
           </div>
           {session.active && (
             <div className="char-picker-foot">

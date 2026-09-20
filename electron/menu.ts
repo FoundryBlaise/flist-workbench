@@ -15,6 +15,7 @@ export type MenuAction =
   | 'flist-activity'
   | 'restore-userscript-help'
   | 'backup-all'
+  | 'foreign-search'
   | 'check-updates'
   | 'edit-undo'
   | 'edit-redo'
@@ -152,6 +153,15 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           label: 'Back up all characters',
           enabled: false,
           click: () => send(getWindow(), 'backup-all')
+        },
+        {
+          // Needs a ticket: character-data.php is not public. Greyed
+          // out rather than hidden so the feature is discoverable
+          // before sign-in finishes.
+          id: 'foreign-search',
+          label: 'Search Foreign Character…',
+          enabled: false,
+          click: () => send(getWindow(), 'foreign-search')
         },
         { type: 'separator' },
         {

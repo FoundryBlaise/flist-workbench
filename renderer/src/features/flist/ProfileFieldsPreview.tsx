@@ -15,7 +15,16 @@ import {
 // are hidden, and groups with no filled rows drop out — matching how
 // F-list itself collapses empty sections.
 
-export function ProfileFieldsPreview() {
+export function ProfileFieldsPreview({
+  payload
+}: {
+  /** Render this payload instead of the active character's working
+   *  copy. The foreign-profile panel passes a character-data payload
+   *  it fetched itself — same shape, no working set behind it — so
+   *  both sides of the app render the Info preview from one
+   *  implementation rather than two that drift. */
+  payload?: Record<string, unknown> | null
+} = {}) {
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   const slot = useStore((s) => (flistActiveId ? selectWorkingSlot(s, flistActiveId) : undefined))
   const liveArchive = useStore((s) =>
@@ -28,7 +37,11 @@ export function ProfileFieldsPreview() {
   // payload directly; otherwise we follow the working copy. Either
   // way the data shape is the same (the F-list character payload).
   const effectivePayload: Record<string, unknown> | null =
-    readOnly && liveArchive ? (liveArchive as Record<string, unknown>) : slot?.payload ?? null
+    payload !== undefined
+      ? payload
+      : readOnly && liveArchive
+        ? (liveArchive as Record<string, unknown>)
+        : (slot?.payload ?? null)
 
   const model = useMemo(() => {
     const infotagsPayload =
@@ -36,12 +49,14 @@ export function ProfileFieldsPreview() {
         ? ((effectivePayload.infotags as Record<string, unknown>) ?? {})
         : {}
     return resolveInfotagDescriptors(mapping, {
-      overlay: slot?.overlay ?? [],
+      // A supplied payload has no working copy, so no overlay: nothing
+      // there was authored by this user.
+      overlay: payload !== undefined ? [] : (slot?.overlay ?? []),
       infotagsPayload
     })
-  }, [mapping, slot?.overlay, effectivePayload])
+  }, [mapping, slot?.overlay, effectivePayload, payload])
 
-  if (!flistActiveId || !effectivePayload) {
+  if (!effectivePayload || (payload === undefined && !flistActiveId)) {
     return (
       <div className="profile-preview profile-preview-empty">
         <p>No data to show yet.</p>
@@ -64,7 +79,11 @@ export function ProfileFieldsPreview() {
   if (rendered.length === 0) {
     return (
       <div className="profile-preview profile-preview-empty">
-        <p>No filled-in profile fields yet — edit a row on the left and it'll appear here.</p>
+        <p>
+          {payload !== undefined
+            ? 'This profile fills in no info fields.'
+            : "No filled-in profile fields yet — edit a row on the left and it'll appear here."}
+        </p>
       </div>
     )
   }

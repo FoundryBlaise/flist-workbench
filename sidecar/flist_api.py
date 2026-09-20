@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,14 @@ TICKET_REFRESH_AT_SEC = 23 * 60
 HARD_PER_SECOND = 1.0
 HARD_PER_HOUR = 200
 SOFT_PER_HOUR_WARN = 160
+
+# A model driving the foreign-profile viewer over MCP shares the same
+# 200/hour ceiling as the user's own pulls, and a model that decides to
+# walk someone's friend list can empty it in three minutes. It gets a
+# quarter of the budget: enough to look things up, not enough to leave
+# the user unable to pull their own character.
+MCP_HOURLY_SHARE = 0.25
+MCP_PER_HOUR = int(HARD_PER_HOUR * MCP_HOURLY_SHARE)
 
 
 class FlistApiError(Exception):
@@ -258,6 +267,56 @@ _LIMITER = RateLimiter()
 # flood. Same 1 req/s ceiling, no hourly cap.
 _CDN_LIMITER = RateLimiter(per_second=2.0, per_hour_cap=10_000)
 
+# The foreign-profile viewer loads a gallery the way a chat client
+# does, and the prior art is unambiguous about what that costs.
+# F-Chat 3.0 renders a character's gallery as plain <img> tags with no
+# pacing whatsoever (site/character_page/images.vue), and Horizon
+# throttles only the JSON API — `throat(2)` in chat/profile_api.ts, a
+# *concurrency* cap of two on character-data.php — while never
+# touching CDN images at all. Nobody rate-limits static.f-list.net,
+# because the developer policy's budget is about the API.
+#
+# So the viewer is not paced per second. It is capped on concurrency,
+# which is the shape Horizon uses and the shape a browser would have
+# imposed by itself. Workbench only needs a cap at all because its
+# images go through the sidecar to be cached on disk: that turns what
+# a browser would run as six parallel connections into a queue behind
+# one gate, and without a cap a fifty-image profile would open fifty
+# sockets at once.
+#
+# The 2/s lane above stays where it belongs — on the *sweep* paths
+# (a pull, the backup-all run walking forty characters), where nothing
+# is waiting on any single image and being a good neighbour costs the
+# user nothing.
+FOREIGN_IMAGE_CONCURRENCY = 6
+
+#: Effectively no pacing: the foreign image gate below does the
+#: limiting, and `download_to` insists on some limiter or other.
+_UNPACED_LIMITER = RateLimiter(per_second=1000.0, per_hour_cap=10_000_000)
+
+#: One semaphore per event loop. asyncio primitives bind to the loop
+#: that first awaits them, and the test suite runs a fresh loop per
+#: case; a single module-level semaphore would be bound to a dead one.
+#: Loops are weak-referenceable, so finished loops drop out by
+#: themselves.
+_FOREIGN_IMAGE_GATES: "weakref.WeakKeyDictionary[Any, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def unpaced_limiter() -> RateLimiter:
+    return _UNPACED_LIMITER
+
+
+def foreign_image_gate() -> asyncio.Semaphore:
+    """Concurrency cap for foreign gallery downloads."""
+    loop = asyncio.get_event_loop()
+    gate = _FOREIGN_IMAGE_GATES.get(loop)
+    if gate is None:
+        gate = asyncio.Semaphore(FOREIGN_IMAGE_CONCURRENCY)
+        _FOREIGN_IMAGE_GATES[loop] = gate
+    return gate
+
 
 def api_rate_limiter() -> RateLimiter:
     return _LIMITER
@@ -265,6 +324,64 @@ def api_rate_limiter() -> RateLimiter:
 
 def cdn_rate_limiter() -> RateLimiter:
     return _CDN_LIMITER
+
+
+@dataclass
+class HourlyBudget:
+    """A rolling 1-hour counter with no pacing of its own.
+
+    Sits *in front of* the shared `RateLimiter` rather than beside it:
+    a second limiter would impose a second per-second sleep and pace
+    MCP calls at half speed for no reason. This only answers "has this
+    caller had its share this hour", and the real limiter still does
+    the pacing and still enforces the hard 200.
+    """
+
+    cap: int
+    label: str = "caller"
+    _calls: list[float] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - 3600.0
+        while self._calls and self._calls[0] < cutoff:
+            self._calls.pop(0)
+
+    def charge(self) -> None:
+        """Record one call, or raise `RateLimited` if the share is
+        spent. Callers charge *before* the request so a burst of
+        concurrent calls can't all pass the check."""
+        with self._lock:
+            now = time.monotonic()
+            self._prune(now)
+            if len(self._calls) >= self.cap:
+                raise RateLimited(
+                    f"{self.label} has used its hourly share of the F-list "
+                    f"API ({self.cap} requests). The Workbench window is "
+                    "not affected; this budget refills as the hour rolls on."
+                )
+            self._calls.append(now)
+
+    def refund(self) -> None:
+        """Give back the most recent charge — for a call that never
+        reached F-list (a cache hit decided late, a validation error)."""
+        with self._lock:
+            if self._calls:
+                self._calls.pop()
+
+    def remaining(self) -> int:
+        with self._lock:
+            self._prune(time.monotonic())
+            return max(0, self.cap - len(self._calls))
+
+
+_MCP_CHARACTER_BUDGET = HourlyBudget(cap=MCP_PER_HOUR, label="MCP")
+
+
+def mcp_character_budget() -> HourlyBudget:
+    """The share of `character-data.php` calls an MCP client may spend
+    per hour. The Workbench window charges nothing against it."""
+    return _MCP_CHARACTER_BUDGET
 
 
 _PULL_LOCK = asyncio.Lock()
@@ -378,6 +495,100 @@ async def acquire_ticket(
         "expires_in_sec": TICKET_EFFECTIVE_TTL_SEC,
         "account": account,
     }
+
+
+def _social_names(raw: Any, keys: tuple[str, ...]) -> list[str]:
+    """Pull character names out of one of `getApiTicket.php`'s social
+    lists. Tries `keys` in order on each row and accepts a bare string
+    too — the endpoint has changed these shapes before (see the
+    `new_character_list` note above) and a viewer that silently shows
+    an empty list is worse than one that copes."""
+    out: list[str] = []
+    seen: set[str] = set()
+    rows: list[Any]
+    if isinstance(raw, list):
+        rows = raw
+    elif isinstance(raw, dict):
+        rows = list(raw.values())
+    else:
+        return out
+    for row in rows:
+        name: Any = None
+        if isinstance(row, str):
+            name = row
+        elif isinstance(row, dict):
+            for key in keys:
+                if isinstance(row.get(key), str) and row[key].strip():
+                    name = row[key]
+                    break
+        if not isinstance(name, str):
+            continue
+        name = name.strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        out.append(name)
+    out.sort(key=str.lower)
+    return out
+
+
+async def fetch_social_lists(
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, list[str]]:
+    """The signed-in account's bookmarks and friends.
+
+    F-list has no standalone endpoint for these — they ride along on
+    `getApiTicket.php`, which the sign-in path deliberately asks to
+    leave them off (`no_friends` / `no_bookmarks`) because nothing
+    needed them and they make every ticket refresh heavier. The
+    foreign-profile viewer needs them, so it mints one ticket that
+    carries them and skips the character list instead.
+
+    The fresh ticket replaces the stored one rather than being thrown
+    away: it is strictly newer, and if F-list ever invalidates older
+    tickets on issue, keeping the newest is the safe direction. The
+    cached character list is left alone — `no_characters` means this
+    response has none, and `set(characters=None)` preserves it.
+
+    Costs one call against the hourly API budget.
+    """
+    store = ticket_store()
+    current = store.get()
+    if current is None or not current.password:
+        raise TicketRequired(
+            "No F-list session with a cached password — sign in again "
+            "to read your bookmarks and friends."
+        )
+    payload = await _post_json(
+        TICKET_URL,
+        {
+            "account": current.account,
+            "password": current.password,
+            "no_characters": "true",
+        },
+        client=client,
+    )
+    ticket_value = payload.get("ticket")
+    if isinstance(ticket_value, str) and ticket_value:
+        store.set(
+            Ticket(
+                account=current.account,
+                value=ticket_value,
+                password=current.password,
+                acquired_at=time.monotonic(),
+            )
+        )
+    bookmarks = _social_names(payload.get("bookmarks"), ("name", "character"))
+    # A friendship row names both ends; the far end is the one the
+    # user might want to look at. `source_name` is kept as a fallback
+    # for a shape that only carries one side.
+    friends = _social_names(
+        payload.get("friends"), ("dest_name", "name", "source_name")
+    )
+    own = {c.get("name", "").lower() for c in store.characters()}
+    friends = [f for f in friends if f.lower() not in own]
+    return {"bookmarks": bookmarks, "friends": friends}
 
 
 async def ensure_fresh_ticket(

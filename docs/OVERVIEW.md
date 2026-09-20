@@ -59,6 +59,7 @@ it rather than beside it.
 | `sidecar/services/render.py` | parks a render request until the app draws it |
 | `electron/renderProfile.ts` | offscreen capture of a profile, for `render_profile_image` |
 | `sidecar/character_archive.py` | on-disk character archive (working sets, snapshots, backups) |
+| `sidecar/foreign_cache.py` | read-only cache of *other people's* profiles, under its own root |
 | `sidecar/labels.py` | IC/OOC verdicts + the read-time rule resolver |
 | `sidecar/rag_*.py`, `chunker.py` | chunking, embedding, Qdrant, BM25, reranking |
 | `docs/MCP_DESIGN.md` | the design this architecture came from |
@@ -87,6 +88,77 @@ no migration step to remove later.
 The working payload (schema v6) carries `_overlay` — the dotted paths
 the user has touched — so a later pull can refresh untouched fields
 without clobbering edits.
+
+## Other people's profiles
+
+The character picker carries a stand-in row, **Foreign profile**, next
+to the real characters; Tools → Search Foreign Character selects the
+same one. Picking it puts the editor panel into a read-only state:
+find somebody in your bookmarks, your friends list or your chat logs,
+or type a name, and their profile fills the panel — Description,
+Profile fields, Kinks, Images, no Diff. It answers one question: how
+is this profile written.
+
+It is the editor's own panel rather than a dialog on purpose, and it
+borrows the editor's markup rather than imitating it. Description
+splits code left / rendered right and carries the same
+`.pane.preview[data-flist-theme]` shell, so the Dark / Default / Light
+switch and the F-list theme mimics work here unchanged. Profile fields
+use the editor's `infotag-field` rows down the left and the editor's
+own `ProfileFieldsPreview` on the right — that component takes an
+optional payload now, so both sides render the Info preview from one
+implementation. Kinks use the editor's four-column layout
+(`kinks-pane`, `kink-column`, `kink-row`); an earlier version listed
+them in one flowing grid with descriptions inline, which on a profile
+with a long favourites list was unreadable. Images take the full width
+as a thumbnail grid.
+
+A profile needs the window's height for a long description and its
+width for a gallery; a modal sized for a form gave it neither.
+
+Two things are paced differently from the rest of the app. The
+candidate list for a source is fetched once and filtered in the
+window — a round trip per keystroke put the eight-second log sweep on
+the critical path of typing. And that sweep now reads names with
+`os.scandir` instead of `logs.list_partners()`, whose `stat()` per log
+file was the eight seconds; it is cached for two minutes on top.
+Gallery images load all at once, capped on concurrency rather than
+paced per second. That follows the prior art: F-Chat 3.0 renders a
+gallery as plain `<img>` tags with no pacing at all, and Horizon
+throttles only the JSON API — `throat(2)`, a concurrency cap on
+`character-data.php` — while leaving `static.f-list.net` untouched.
+Workbench needs a cap only because its images go through the sidecar
+to be cached on disk, which funnels what a browser would run as six
+parallel connections into one queue. The 2/s lane stays on the sweep
+paths (a pull, the backup-all run), where nothing waits on any single
+image.
+
+The slot is not a character. It has no id, no archive entry, no
+working set and never sets `flistActiveCharacterId` — which is what
+leaves every edit, pull, backup and export path with nothing to act
+on. The sidebar hides the per-character zones while it is selected,
+and a `read-only` badge sits in the panel's header, because the panel
+otherwise looks exactly like the editor.
+
+Nothing is remembered about who you looked at. The slot holds one
+profile in memory, picking a real character leaves it without clearing
+it, and closing the app forgets it. There is no list of viewed
+profiles anywhere in the window.
+
+The payloads cache under `%APPDATA%\flist-workbench\foreign\<name>\`
+in the same shape `live.json` uses, with a 24-hour TTL and a manual ↻.
+That root is deliberately not `characters/`: every path that can copy,
+back up, export or edit a character resolves through
+`character_archive.character_dir()`, and nothing under `foreign/` is
+reachable that way. Copying a profile by hand in a file manager is of
+course still possible — what the app must not offer is a button that
+does it, and it offers none, in the window or over MCP.
+
+The three MCP tools (`search_foreign_characters`, `get_foreign_profile`,
+`get_foreign_kinks`) spend a quarter of the hourly F-list budget at
+most. The user's own pulls and a model's browsing share one
+200-requests-per-hour ceiling, and a model walking a friend list would
+otherwise empty it in three minutes.
 
 ## Logs and search
 

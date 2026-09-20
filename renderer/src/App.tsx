@@ -12,6 +12,7 @@ export type MenuAction =
   | 'flist-activity'
   | 'restore-userscript-help'
   | 'backup-all'
+  | 'foreign-search'
   | 'check-updates'
   | 'edit-undo'
   | 'edit-redo'

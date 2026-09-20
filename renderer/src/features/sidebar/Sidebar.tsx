@@ -11,6 +11,7 @@ export function Sidebar() {
   const loadCharacters = useStore((s) => s.loadCharacters)
   const mode = useStore((s) => s.mode)
   const refreshSession = useStore((s) => s.flistRefreshSession)
+  const foreignActive = useStore((s) => s.foreignActive)
 
   useEffect(() => {
     if (status === 'idle') void loadCharacters()
@@ -29,10 +30,16 @@ export function Sidebar() {
       <UnifiedCharacterPicker />
       <ModeToggle />
       {mode === 'editor' ? (
-        <>
-          <FlistCharacterZone />
-          <BackupsList />
-        </>
+        // The Foreign slot is not a character: no working set, no
+        // archive, no backups. Rendering these against it would mean
+        // showing the previously-selected character's Pull and Back up
+        // actions next to somebody else's profile.
+        foreignActive ? null : (
+          <>
+            <FlistCharacterZone />
+            <BackupsList />
+          </>
+        )
       ) : (
         <>
           <div className="sb-section-h">Partners</div>
