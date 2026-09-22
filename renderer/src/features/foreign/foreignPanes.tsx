@@ -13,9 +13,13 @@
  */
 
 import { useMemo, useState } from 'react'
+import CodeMirror from '@uiw/react-codemirror'
+import { EditorState } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import type { ForeignProfilePayload } from '../../lib/api'
 import { api } from '../../lib/api'
 import { bbcodeToHtml, type InlinesManifest } from '../../lib/bbcode'
+import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { useStore } from '../../state'
 import { resolveInfotagDescriptors } from '../flist/infotagsResolver'
 import { buildUnifiedKinks, sortUnifiedKinks } from '../flist/kinksUnified'
@@ -34,24 +38,50 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 // ---- Description: code left, rendered right ---------------------------
 
-/** The BBCode source, in the pane where the editor puts CodeMirror.
+/** The BBCode source, in the pane where the editor puts CodeMirror —
+ *  and in the same CodeMirror, with the same BBCode language.
  *
- *  A plain `<pre>` rather than a disabled editor instance: there is
- *  nothing to edit, and mounting CodeMirror for a document that can
- *  never change would bind an editor to a foreign payload — exactly
- *  the coupling this feature avoids. */
+ *  This started as a plain `<pre>`, on the reasoning that a document
+ *  which can never change does not need an editor. That was the wrong
+ *  trade: the highlighting is most of what makes nested BBCode
+ *  readable, and reading how a profile is built is the whole point of
+ *  the panel. `bbcodeExtensions` plus the editor's two read-only
+ *  locks give the colours without giving anyone a way to type. */
 export function ForeignDescriptionCode({
   profile
 }: {
   profile: ForeignProfilePayload
 }) {
   const source = typeof profile.description === 'string' ? profile.description : ''
+  const extensions = useMemo(
+    () => [
+      ...bbcodeExtensions,
+      EditorView.editable.of(false),
+      EditorState.readOnly.of(true)
+    ],
+    []
+  )
   return (
     <section className="pane foreign-pane foreign-pane-code">
       <header className="pane-head">BBCode · read-only</header>
-      <pre className="foreign-bbcode-source" data-testid="foreign-bbcode-source">
-        {source || '(no description)'}
-      </pre>
+      <div className="editor-cm-row">
+        <div className="editor-cm" data-testid="foreign-bbcode-source">
+          <CodeMirror
+            value={source}
+            theme="dark"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            extensions={extensions as any}
+            editable={false}
+            basicSetup={{
+              lineNumbers: false,
+              foldGutter: false,
+              highlightActiveLine: false,
+              highlightActiveLineGutter: false,
+              indentOnInput: false
+            }}
+          />
+        </div>
+      </div>
     </section>
   )
 }

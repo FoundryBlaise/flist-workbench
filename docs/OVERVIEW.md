@@ -103,7 +103,10 @@ It is the editor's own panel rather than a dialog on purpose, and it
 borrows the editor's markup rather than imitating it. Description
 splits code left / rendered right and carries the same
 `.pane.preview[data-flist-theme]` shell, so the Dark / Default / Light
-switch and the F-list theme mimics work here unchanged. Profile fields
+switch and the F-list theme mimics work here unchanged; the source
+side is the editor's own CodeMirror with the BBCode language, both
+read-only locks on, because the highlighting is most of what makes
+nested tags legible. Profile fields
 use the editor's `infotag-field` rows down the left and the editor's
 own `ProfileFieldsPreview` on the right — that component takes an
 optional payload now, so both sides render the Info preview from one
@@ -122,16 +125,22 @@ window — a round trip per keystroke put the eight-second log sweep on
 the critical path of typing. And that sweep now reads names with
 `os.scandir` instead of `logs.list_partners()`, whose `stat()` per log
 file was the eight seconds; it is cached for two minutes on top.
-Gallery images load all at once, capped on concurrency rather than
-paced per second. That follows the prior art: F-Chat 3.0 renders a
-gallery as plain `<img>` tags with no pacing at all, and Horizon
-throttles only the JSON API — `throat(2)`, a concurrency cap on
-`character-data.php` — while leaving `static.f-list.net` untouched.
-Workbench needs a cap only because its images go through the sidecar
-to be cached on disk, which funnels what a browser would run as six
-parallel connections into one queue. The 2/s lane stays on the sweep
-paths (a pull, the backup-all run), where nothing waits on any single
-image.
+Gallery images load all at once, down a pooled connection and
+capped on concurrency rather than paced per second. That follows
+the prior art: F-Chat 3.0 renders a gallery as plain `<img>` tags
+with no pacing at all, and Horizon throttles only the JSON API —
+`throat(2)`, a concurrency cap on `character-data.php` — while
+leaving `static.f-list.net` untouched. Workbench needs a cap only
+because its images go through the sidecar to be cached on disk,
+which funnels what a browser would run as parallel connections
+into one queue.
+
+The pooling matters more than the cap. `download_to` builds a
+throwaway client when handed none, so every image was paying for
+its own TLS handshake; measured cold on a real eight-image gallery
+that was 1.9 s, against 0.07-0.14 s through one
+`foreign_cdn_client()`. The 2/s lane stays on the sweep paths (a
+pull, the backup-all run), where nothing waits on any single image.
 
 The slot is not a character. It has no id, no archive entry, no
 working set and never sets `flistActiveCharacterId` — which is what

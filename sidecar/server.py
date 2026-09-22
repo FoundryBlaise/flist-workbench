@@ -1798,10 +1798,14 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     url = f"{flist_api.STATIC_BASE}/images/charimage/{image_id}.{ext}"
     dest = foreign_cache.image_path(name, image_id, ext)
     try:
-        # Concurrency-capped, not paced. See FOREIGN_IMAGE_CONCURRENCY.
+        # Concurrency-capped, not paced, and down a pooled connection
+        # that stays open between images. See FOREIGN_IMAGE_CONCURRENCY.
         async with flist_api.foreign_image_gate():
             await flist_api.download_to(
-                url, dest, rate_limiter=flist_api.unpaced_limiter()
+                url,
+                dest,
+                client=flist_api.foreign_cdn_client(),
+                rate_limiter=flist_api.unpaced_limiter(),
             )
     except flist_api.FlistApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -178,11 +178,25 @@ it('shows BBCode and the rendered result side by side', async () => {
   seedLoaded()
   render(<ForeignWorkspace />)
 
-  expect(screen.getByTestId('foreign-bbcode-source').textContent).toBe(
-    '[b]Bold[/b] and plain.'
-  )
+  const code = screen.getByTestId('foreign-bbcode-source')
+  expect(code.textContent).toContain('[b]Bold[/b] and plain.')
   expect(screen.getByTestId('foreign-description').textContent).toContain('Bold')
   expect(screen.getByTestId('foreign-row').getAttribute('data-split')).toBe('split')
+})
+
+it('highlights the BBCode, and still refuses to be typed in', async () => {
+  // The source pane was a plain <pre> to begin with, on the reasoning
+  // that an unchangeable document needs no editor. The highlighting
+  // is most of what makes nested BBCode readable, so it is the
+  // editor's CodeMirror and the editor's BBCode language — with both
+  // read-only locks on.
+  seedLoaded()
+  render(<ForeignWorkspace />)
+
+  const code = screen.getByTestId('foreign-bbcode-source')
+  expect(code.querySelector('.cm-editor')).not.toBeNull()
+  const content = code.querySelector('.cm-content')
+  expect(content?.getAttribute('contenteditable')).toBe('false')
 })
 
 it('lays the profile fields out as a vertical list', async () => {

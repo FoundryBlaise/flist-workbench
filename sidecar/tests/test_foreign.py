@@ -521,6 +521,50 @@ async def test_the_image_gate_is_shared_within_one_loop() -> None:
     assert flist_api.foreign_image_gate() is flist_api.foreign_image_gate()
 
 
+@pytest.mark.anyio
+async def test_gallery_images_share_one_pooled_connection() -> None:
+    """A client per image means a TLS handshake per image. Measured
+    against the CDN that was the difference between 3.5 s and 0.7 s
+    for a dozen images, which is what made a gallery crawl."""
+    import flist_api
+
+    first = flist_api.foreign_cdn_client()
+    assert first is flist_api.foreign_cdn_client()
+    assert not first.is_closed
+    # Keep-alive headroom has to match the gate, or the pool becomes
+    # the narrower of the two limits and the extra concurrency buys
+    # nothing. Reaching into httpx internals is the only way to see
+    # the configured pool; if a future httpx moves them, this test
+    # failing is the intended signal to re-check the wiring.
+    pool = first._transport._pool  # type: ignore[attr-defined]
+    assert pool._max_connections == flist_api.FOREIGN_IMAGE_CONCURRENCY
+    assert pool._max_keepalive_connections == flist_api.FOREIGN_IMAGE_CONCURRENCY
+
+
+def test_image_route_reuses_the_pooled_client(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import flist_api
+
+    _stub_fetch(monkeypatch, _profile())
+    client.get("/foreign/character/Anexample Person")
+
+    seen: list[Any] = []
+
+    async def _capture(url, dest, *, client=None, rate_limiter=None):
+        seen.append(client)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"PNGDATA")
+        return 7
+
+    monkeypatch.setattr(flist_api, "download_to", _capture)
+    res = client.get("/foreign/character/Anexample Person/image/900")
+    assert res.status_code == 200
+    # A client was handed in, so download_to must not close it.
+    assert seen[0] is not None
+    assert not seen[0].is_closed
+
+
 def test_image_route_downloads_through_the_gate_unpaced(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
