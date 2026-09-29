@@ -13,7 +13,7 @@ export type MenuAction =
   | 'ingest-character'
   | 'ingest-all'
   | 'flist-activity'
-  | 'restore-userscript-help'
+  | 'install-browser-extension'
   | 'backup-all'
   | 'foreign-search'
   | 'check-updates'
@@ -181,9 +181,9 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           click: () => send(getWindow(), 'flist-activity')
         },
         {
-          id: 'restore-userscript-help',
-          label: 'Install Restore Userscript…',
-          click: () => send(getWindow(), 'restore-userscript-help')
+          id: 'install-browser-extension',
+          label: 'Install Browser Extension…',
+          click: () => send(getWindow(), 'install-browser-extension')
         },
         { type: 'separator' },
         {

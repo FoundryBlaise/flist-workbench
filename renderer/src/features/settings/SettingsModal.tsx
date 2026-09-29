@@ -33,7 +33,7 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 // Nomic-family embed models need these task prefixes; one-click apply
 // keeps the magic strings out of user-facing copy.
 
-type SectionId =
+export type SectionId =
   | 'general'
   | 'flist'
   | 'backups'
@@ -207,11 +207,18 @@ const discoverCache = new Map<
   { models: string[]; error: string | null }
 >()
 
-export function SettingsModal({ onClose }: { onClose: () => void }) {
+export function SettingsModal({
+  onClose,
+  initialSection = 'general'
+}: {
+  onClose: () => void
+  /** Section to open on, for callers that link to one directly. */
+  initialSection?: SectionId
+}) {
   const loadCharacters = useStore((s) => s.loadCharacters)
   const [state, setState] = useState<SettingsState | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [activeSection, setActiveSection] = useState<SectionId>('general')
+  const [activeSection, setActiveSection] = useState<SectionId>(initialSection)
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'error'>(
     'loading'
   )

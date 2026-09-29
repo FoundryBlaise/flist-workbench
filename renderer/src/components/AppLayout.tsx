@@ -18,7 +18,7 @@ import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExternalChangeBanner } from './ExternalChangeBanner'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
-import { SettingsModal } from '../features/settings/SettingsModal'
+import { SettingsModal, type SectionId } from '../features/settings/SettingsModal'
 import { ForeignWorkspace } from '../features/foreign/ForeignWorkspace'
 import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
 import { AppContextMenu } from './AppContextMenu'
@@ -56,6 +56,7 @@ export function AppLayout() {
   const [health, setHealth] = useState<HealthStatus>('checking')
   const [contactsOpen, setContactsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SectionId>('general')
   const [activityOpen, setActivityOpen] = useState(false)
   const [userscriptHelpOpen, setUserscriptHelpOpen] = useState(false)
   const exportRestoreOpen = useStore((s) => s.flistExportRestoreCharacterId)
@@ -383,8 +384,11 @@ export function AppLayout() {
         case 'flist-activity':
           setActivityOpen(true)
           break
-        case 'restore-userscript-help':
-          setUserscriptHelpOpen(true)
+        case 'install-browser-extension':
+          // The extension ships with the app; its folder and install
+          // steps live on the Security page.
+          setSettingsSection('security')
+          setSettingsOpen(true)
           break
         case 'backup-all':
           void useStore.getState().flistBackupAll()
@@ -545,7 +549,15 @@ export function AppLayout() {
       <ExtensionPairWatcher />
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
       {flistSignInOpen && <SignInModal onClose={flistCloseSignIn} />}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsModal
+          initialSection={settingsSection}
+          onClose={() => {
+            setSettingsOpen(false)
+            setSettingsSection('general')
+          }}
+        />
+      )}
       {activityOpen && <ActivityLogModal onClose={() => setActivityOpen(false)} />}
       {userscriptHelpOpen && (
         <UserscriptHelpModal onClose={() => setUserscriptHelpOpen(false)} />

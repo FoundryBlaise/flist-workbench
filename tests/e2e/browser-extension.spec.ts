@@ -29,10 +29,13 @@ test('Settings hands over the bundled browser extension', async () => {
       if (!w.url().startsWith('devtools://')) window = w
     }
     await expect(window.getByTestId('sidecar-status')).toContainText('ok')
+    // Help -> Install Browser Extension lands straight on Security.
     await app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.send('menu:action', 'settings')
+      BrowserWindow.getAllWindows()[0]?.webContents.send(
+        'menu:action',
+        'install-browser-extension'
+      )
     })
-    await window.getByTestId('settings-rail-security').click()
 
     await expect(window.getByTestId('settings-extension-version')).toContainText(
       `Version ${version} included with this app`

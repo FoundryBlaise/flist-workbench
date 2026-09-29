@@ -10,7 +10,7 @@ export type MenuAction =
   | 'ingest-character'
   | 'ingest-all'
   | 'flist-activity'
-  | 'restore-userscript-help'
+  | 'install-browser-extension'
   | 'backup-all'
   | 'foreign-search'
   | 'check-updates'
