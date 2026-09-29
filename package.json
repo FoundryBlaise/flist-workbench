@@ -18,7 +18,8 @@
     "pack:sidecar": "cd sidecar && .venv\\Scripts\\pyinstaller.exe --onefile --windowed --name sidecar --noconfirm --collect-data certifi --hidden-import uvicorn.logging --hidden-import uvicorn.loops --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols --hidden-import uvicorn.protocols.http --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan --hidden-import uvicorn.lifespan.on server.py && node -e \"require('node:fs').mkdirSync('../resources',{recursive:true});require('node:fs').copyFileSync('dist/sidecar.exe','../resources/sidecar.exe')\"",
     "rebuild:native": "electron-rebuild -f -w keytar",
     "postinstall": "electron-rebuild -f -w keytar",
-    "pack:win": "npm run rebuild:native && npm run build && npm run pack:sidecar && electron-builder --win --publish never"
+    "fetch:extension": "node scripts/fetch-extension.mjs",
+    "pack:win": "npm run rebuild:native && npm run build && npm run fetch:extension && npm run pack:sidecar && electron-builder --win --publish never"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
@@ -32,6 +33,7 @@
     "electron-builder": "^26.8.1",
     "electron-vite": "^2.3.0",
     "eslint": "^9.17.0",
+    "extract-zip": "^2.0.1",
     "jsdom": "^25.0.1",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",

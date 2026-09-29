@@ -1430,7 +1430,12 @@ export const api = {
       body: JSON.stringify({ handshake_id: handshakeId })
     }),
   restoreRevokeToken: () =>
-    request<{ ok: boolean }>('/restore/token', { method: 'DELETE' })
+    request<{ ok: boolean }>('/restore/token', { method: 'DELETE' }),
+
+  /** The extension version the browser runs, as of its last paired
+   *  call. Null until the extension has made one since the app started. */
+  restoreExtensionSeen: () =>
+    request<{ version: string | null; seen_at: number | null }>('/restore/extension')
 }
 
 function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {

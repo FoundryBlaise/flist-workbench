@@ -193,6 +193,30 @@ def auth_token_valid(token: str | None) -> bool:
         )
 
 
+# ---- extension version ------------------------------------------------
+
+# The version the paired extension last reported, RAM only. Workbench
+# ships the extension as an unpacked folder that Chrome reads once per
+# browser start, so after an app update the files on disk can be newer
+# than what the browser is running. Comparing the two is the only way
+# to tell the user to reload it.
+_EXTENSION_SEEN: dict[str, Any] | None = None
+
+
+def note_extension_version(version: str | None) -> None:
+    """Record the version an authenticated request carried. Called only
+    after the token checked out, so an arbitrary local page cannot
+    plant a version."""
+    global _EXTENSION_SEEN
+    if not version:
+        return
+    _EXTENSION_SEEN = {"version": version[:32], "seen_at": time.time()}
+
+
+def extension_seen() -> dict[str, Any]:
+    return _EXTENSION_SEEN or {"version": None, "seen_at": None}
+
+
 # ---- snapshot listing + serving ---------------------------------------
 
 

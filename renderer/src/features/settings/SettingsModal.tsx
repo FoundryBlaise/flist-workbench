@@ -51,7 +51,7 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
   { id: 'retrieval', label: 'Retrieval', subtitle: 'How log search ranks results' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
   { id: 'mcp', label: 'MCP', subtitle: 'Let a model drive Workbench' },
-  { id: 'security', label: 'Security', subtitle: 'Browser-extension pairing' }
+  { id: 'security', label: 'Security', subtitle: 'Browser extension and pairing' }
 ]
 
 /** Whether the sign-in auto-refresh sweep runs at all. Default off — the
@@ -1299,6 +1299,129 @@ function McpSnippet({
   )
 }
 
+// Until the extension is in the stores, it ships inside the app and
+// the user loads it into Chrome as an unpacked extension. Chrome does
+// not let another program install it, nor open chrome:// pages for
+// it, so the best the app can do is hand over the folder and the steps.
+function BrowserExtensionInstall() {
+  type Status = { bundled: string | null; installed: string | null; path: string }
+  const bridge = window.workbench?.browserExtension
+  const [status, setStatus] = useState<Status | null>(null)
+  const [running, setRunning] = useState<string | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!bridge) return
+    void bridge.status().then(setStatus, () => setStatus(null))
+    void api.restoreExtensionSeen().then(
+      (r) => setRunning(r.version),
+      () => setRunning(null)
+    )
+  }, [bridge])
+
+  if (!bridge) return null
+
+  const reveal = async () => {
+    const err = await bridge.reveal()
+    setMsg(err || null)
+  }
+
+  const copyPath = async () => {
+    if (!status) return
+    try {
+      await navigator.clipboard.writeText(status.path)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setMsg('Could not copy. Select the path above and copy it by hand.')
+    }
+  }
+
+  const version = status?.installed ?? null
+  const outdated = running !== null && version !== null && running !== version
+
+  return (
+    <>
+      <h3 className="settings-section-h">Browser extension</h3>
+      <div className="settings-section">
+        <div className="settings-field">
+          <span className="settings-label" data-testid="settings-extension-version">
+            {version ? `Version ${version} included with this app` : 'Not included in this build'}
+          </span>
+          {running && (
+            <p className="settings-help" data-testid="settings-extension-running">
+              {outdated ? (
+                <strong>
+                  Your browser is still running {running}. Reload the extension on{' '}
+                  <code>chrome://extensions</code>, or restart the browser, to use {version}.
+                </strong>
+              ) : (
+                <>Your browser is running {running}.</>
+              )}
+            </p>
+          )}
+        </div>
+        {version && status && (
+          <div className="settings-field">
+            <label className="settings-label" htmlFor="settings-extension-path">
+              Install in Chrome or Edge
+            </label>
+            <div className="settings-row">
+              <input
+                id="settings-extension-path"
+                type="text"
+                className="settings-input"
+                value={status.path}
+                readOnly
+                onFocus={(e) => e.target.select()}
+                data-testid="settings-extension-path"
+              />
+              <button
+                type="button"
+                className="settings-pick"
+                onClick={copyPath}
+                data-testid="settings-extension-copy-path"
+              >
+                {copied ? 'Copied' : 'Copy path'}
+              </button>
+              <button
+                type="button"
+                className="settings-clear"
+                onClick={reveal}
+                data-testid="settings-extension-reveal"
+              >
+                Open folder
+              </button>
+            </div>
+            <ol className="settings-help settings-steps">
+              <li>
+                Type <code>chrome://extensions</code> into the address bar
+                (<code>edge://extensions</code> in Edge).
+              </li>
+              <li>Turn on <strong>Developer mode</strong>, top right.</li>
+              <li>
+                Click <strong>Load unpacked</strong> and choose the folder above. Pasting the
+                copied path into the folder dialog is quickest.
+              </li>
+              <li>
+                Pin the extension, click its icon and choose <strong>Pair with Workbench</strong>.
+                Accept the prompt that appears here.
+              </li>
+            </ol>
+            <p className="settings-help">
+              Leave the folder where it is: the browser loads the extension from it on every
+              start. App updates replace its contents, and the next browser restart picks
+              them up.
+            </p>
+            {msg && <p className="settings-help"><strong>{msg}</strong></p>}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
 function SecurityPane() {
   // Tracks whether a token has been issued + accepted. We can't read
   // the token itself (sidecar never returns it after pairing) so this
@@ -1344,6 +1467,7 @@ function SecurityPane() {
 
   return (
     <>
+      <BrowserExtensionInstall />
       <h3 className="settings-section-h">Browser-extension pairing</h3>
       <div className="settings-row settings-row-grid">
         <span className="settings-label">Status</span>

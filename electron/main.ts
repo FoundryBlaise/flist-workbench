@@ -5,6 +5,7 @@ import { autoUpdater } from 'electron-updater'
 import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
 import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
+import { syncBrowserExtension } from './browserExtension'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -228,6 +229,24 @@ ipcMain.on('workbench:open-external', (event, url: unknown) => {
   if (parsed.protocol !== 'https:') return
   if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
   void shell.openExternal(parsed.toString())
+})
+
+// Settings → Security: where the bundled browser extension lives and
+// which version is there. Syncs first, so the answer is never about a
+// copy the app has already replaced.
+ipcMain.handle('workbench:extension:status', async (event) => {
+  if (event.sender !== mainWindow?.webContents) return null
+  return syncBrowserExtension()
+})
+
+// Opens the extension folder in Explorer, so the user can see what
+// Chrome's "Load unpacked" wants. Resolves to shell.openPath's error
+// string: empty on success.
+ipcMain.handle('workbench:extension:reveal', async (event) => {
+  if (event.sender !== mainWindow?.webContents) return 'not allowed'
+  const status = await syncBrowserExtension()
+  if (!status.installed) return 'This build has no browser extension bundled.'
+  return shell.openPath(status.path)
 })
 
 // Fetch arbitrary image bytes for the right-click "Copy image"
@@ -695,6 +714,12 @@ app.whenReady().then(async () => {
   // sign-in modal left sitting open. Whichever comes first wins, and
   // the check runs once either way.
   configureAutoUpdater()
+  // After an app update, put the matching extension where Chrome loads
+  // it from, so a browser restart is all it takes to pick it up.
+  syncBrowserExtension().then(
+    (status) => appendDiagLog('browser-extension', status),
+    (err) => appendDiagLog('browser-extension-sync-failed', err)
+  )
   if (!isDev) {
     setTimeout(() => runStartupUpdateCheck('fallback timer'), 45_000)
   }

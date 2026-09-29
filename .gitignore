@@ -26,6 +26,9 @@ dist-electron/
 # regenerated from source on every pack — never check it in.
 resources/sidecar.exe
 resources/sidecar
+# Unpacked browser extension from `npm run fetch:extension`. The pin in
+# browser-extension.json is the source of truth, not this folder.
+resources/browser-extension/
 # PyInstaller intermediate output (the dist/ entry above also covers
 # sidecar/dist/ from running PyInstaller directly).
 sidecar/build/

@@ -12,6 +12,11 @@ files:
 extraResources:
   - from: resources/sidecar.exe
     to: sidecar.exe
+  # Unpacked browser extension, fetched from its pinned release by
+  # `npm run fetch:extension`. Main copies it to userData on start,
+  # because Chrome needs a folder that stays put between launches.
+  - from: resources/browser-extension
+    to: browser-extension
 asar: true
 # Native modules can't be dlopen()ed from inside an asar archive — the
 # OS loader has no way to mmap a `.node` file out of a zip. Unpack

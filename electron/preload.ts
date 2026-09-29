@@ -77,6 +77,17 @@ contextBridge.exposeInMainWorld('workbench', {
   openExternal: (url: string) => {
     ipcRenderer.send('workbench:open-external', url)
   },
+  // The browser extension bundled with this build. Main copies it to a
+  // folder under userData and reports that folder plus both versions.
+  browserExtension: {
+    status: () =>
+      ipcRenderer.invoke('workbench:extension:status') as Promise<{
+        bundled: string | null
+        installed: string | null
+        path: string
+      } | null>,
+    reveal: () => ipcRenderer.invoke('workbench:extension:reveal') as Promise<string>
+  },
   // Fetch raw image bytes for the right-click "Copy image" action.
   // Main has a host allowlist + https-only filter; nulls back on
   // anything else.

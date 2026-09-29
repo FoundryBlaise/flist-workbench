@@ -45,6 +45,14 @@ declare global {
         flistSessionActive: boolean
       }) => void
       openExternal?: (url: string) => void
+      browserExtension?: {
+        status: () => Promise<{
+          bundled: string | null
+          installed: string | null
+          path: string
+        } | null>
+        reveal: () => Promise<string>
+      }
       fetchImageBytes?: (
         url: string
       ) => Promise<{ bytes: Uint8Array; mime: string } | null>

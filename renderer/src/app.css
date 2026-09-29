@@ -2201,6 +2201,8 @@ body {
   color: white;
 }
 .settings-section { padding: 0; }
+.settings-steps { margin-top: 10px; padding-left: 20px; }
+.settings-steps li + li { margin-top: 4px; }
 .settings-section + .settings-section {
   margin-top: 24px;
   padding-top: 24px;

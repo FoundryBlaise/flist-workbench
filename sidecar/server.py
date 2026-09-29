@@ -2865,9 +2865,11 @@ class _RestoreDoneBody(BaseModel):
 
 def _require_restore_auth(
     x_workbench_auth: str | None = Header(default=None),
+    x_workbench_extension_version: str | None = Header(default=None),
 ) -> str:
     if not restore_svc.auth_token_valid(x_workbench_auth):
         raise HTTPException(status_code=401, detail="not_paired")
+    restore_svc.note_extension_version(x_workbench_extension_version)
     return x_workbench_auth  # type: ignore[return-value]
 
 
@@ -2900,6 +2902,13 @@ def restore_handshake_reject(body: _PairAcceptBody) -> dict[str, Any]:
 def restore_token_revoke() -> dict[str, bool]:
     restore_svc.revoke_token()
     return {"ok": True}
+
+
+@app.get("/restore/extension")
+def restore_extension_seen() -> dict[str, Any]:
+    """Which extension version the browser is running, as of its last
+    authenticated call. `version` is null until it has made one."""
+    return restore_svc.extension_seen()
 
 
 @app.get("/restore/characters")
