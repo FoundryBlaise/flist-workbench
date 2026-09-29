@@ -33,6 +33,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The artifacts and latest.yml are named after package.json, not
+      # after the tag. A tag pushed without the version bump publishes
+      # the previous version again under a new tag, and the updater,
+      # comparing against latest.yml, offers nobody the new build. That
+      # is how v0.2.10 went out as 0.2.9. Stop it before the packing.
+      - name: Tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'
+          if ($tag -ne "v$version") {
+            Write-Error "Tag $tag does not match package.json version $version. Bump package.json first."
+            exit 1
+          }
+
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
