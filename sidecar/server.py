@@ -2250,6 +2250,20 @@ class LabelOverride(BaseModel):
     label: str | None = None
 
 
+class LabelOverrideItem(BaseModel):
+    hash: str
+    ts: int
+    speaker: str
+
+
+class LabelOverrideMany(BaseModel):
+    character: str
+    partner: str
+    items: list[LabelOverrideItem]
+    # label=None deletes the rows (revert to rule / Unlabeled).
+    label: str | None = None
+
+
 class LabelsClearRequest(BaseModel):
     character: str
     partner: str
@@ -2442,6 +2456,47 @@ def labels_override(body: LabelOverride) -> dict:
         }
     finally:
         conn.close()
+
+
+@app.post("/labels/override-many")
+def labels_override_many(body: LabelOverrideMany) -> dict:
+    """`/labels/override` for the log view's multi-select: one verdict,
+    or a reset, for any set of messages in one conversation."""
+    if body.label is not None and body.label not in (
+        labels_store.LABEL_IC,
+        labels_store.LABEL_OOC,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"label must be IC or OOC, got {body.label!r}",
+        )
+    conn = labels_store.connect()
+    try:
+        if body.label is None:
+            changed = labels_store.delete_labels_by_hash(
+                conn,
+                [i.hash for i in body.items],
+                character=body.character,
+                partner=body.partner,
+            )
+        else:
+            # Canonical alias primary, as in /labels/override.
+            primary = aliases_store.primary_for(conn, body.character, body.partner)
+            changed = labels_store.upsert_labels_many(
+                conn,
+                [(i.hash, i.ts, i.speaker) for i in body.items],
+                character=body.character,
+                partner=primary,
+                label=body.label,
+            )
+    finally:
+        conn.close()
+    return {
+        "character": body.character,
+        "partner": body.partner,
+        "label": body.label,
+        "changed": changed,
+    }
 
 
 # ---- aliases ------------------------------------------------------------

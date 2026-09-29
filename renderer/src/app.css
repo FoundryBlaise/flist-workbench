@@ -1753,7 +1753,19 @@ body {
 }
 .log-undo-action:hover { background: var(--hover-soft); }
 
-.log-msg-selectable { cursor: pointer; }
+.log-msg-selectable {
+  cursor: pointer;
+  user-select: none;
+}
+/* Leading checkbox column; the rest matches .log-msg, which is defined
+   further down and would win at equal specificity. */
+.log-msg.log-msg-selectable { grid-template-columns: 16px 70px 180px 48px 1fr; }
+.log-msg-check {
+  margin: 0;
+  align-self: center;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
 .log-msg-selectable:hover {
   background: #1e3050;
 }

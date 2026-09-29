@@ -703,6 +703,71 @@ def upsert_label(
     )
 
 
+def upsert_labels_many(
+    conn: sqlite3.Connection,
+    items: Iterable[tuple[str, int, str]],
+    *,
+    character: str,
+    partner: str,
+    label: str,
+    source: str = "manual",
+    reason: str | None = "manual override",
+) -> int:
+    """`upsert_label` for a batch of `(hash, ts, speaker)`, in one
+    transaction and one `labels-changed` event. For the log view's
+    multi-select: the user picks rows scattered through a conversation
+    and gives them all the same verdict. Each row still keeps its own
+    prior label for the badge tooltip."""
+    if label not in (LABEL_IC, LABEL_OOC):
+        raise ValueError(f"invalid label: {label!r}")
+    if source not in ("mcp", "manual", "llm"):
+        raise ValueError(f"invalid source: {source!r}")
+    # One row per hash, the last mention winning, so a doubled entry
+    # cannot snapshot its own new label as the prior one.
+    rows = {h: (ts, speaker) for h, ts, speaker in items if h}
+    if not rows:
+        return 0
+    prior: dict[str, tuple[str | None, str | None]] = {}
+    ids = list(rows)
+    for start in range(0, len(ids), 500):
+        batch = ids[start : start + 500]
+        placeholders = ",".join("?" * len(batch))
+        for r in conn.execute(
+            f"SELECT hash, label, source FROM labels WHERE hash IN ({placeholders})",
+            batch,
+        ):
+            prior[r["hash"]] = (r["label"], r["source"])
+    now = time.time()
+    conn.executemany(
+        """
+        INSERT INTO labels (
+            hash, character, partner, ts, speaker, label,
+            confidence, reason, source, prior_label, prior_source, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(hash) DO UPDATE SET
+            label = excluded.label,
+            confidence = excluded.confidence,
+            reason = excluded.reason,
+            source = excluded.source,
+            prior_label = excluded.prior_label,
+            prior_source = excluded.prior_source,
+            updated_at = excluded.updated_at
+        """,
+        [
+            (
+                h, character, partner, ts, speaker, label,
+                1.0, reason, source, *prior.get(h, (None, None)), now,
+            )
+            for h, (ts, speaker) in rows.items()
+        ],
+    )
+    conn.commit()
+    _publish(
+        "labels-changed", character=character, partner=partner, hashes=len(rows)
+    )
+    return len(rows)
+
+
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     """Remove an explicit label, reverting the message to rule-or-Unlabeled."""
     cur = conn.execute("DELETE FROM labels WHERE hash = ?", (hash,))

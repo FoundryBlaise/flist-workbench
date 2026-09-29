@@ -440,10 +440,11 @@ type State = {
     opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
+  /** One message by hash, or every message in a set of hashes. */
   applyLabelOverride: (
     char: string,
     partner: string,
-    hash: string,
+    hash: string | ReadonlySet<string>,
     patch: {
       label?: 'IC' | 'OOC'
       label_source?: 'llm' | 'manual'
@@ -4833,7 +4834,9 @@ export const useStore = create<State>((set, get) => ({
     set({ ingestTarget: null })
   },
 
-  // Patches a single message's label fields in place. `patch === null`
+  // Patches one message's label fields in place, or those of every
+  // message in a set of hashes (the log view's multi-select) in the same
+  // single pass over the conversation. `patch === null`
   // clears label fields back to rule/Unlabeled resolution — but since
   // the resolver runs server-side, we approximate locally by removing
   // label_source and falling back to the rule the renderer can compute
@@ -4841,11 +4844,13 @@ export const useStore = create<State>((set, get) => ({
   // re-resolves from the sidecar authoritatively.
   applyLabelOverride(char, partner, hash, patch) {
     const key = partnerKey(char, partner)
+    const hit =
+      typeof hash === 'string' ? (h: string) => h === hash : (h: string) => hash.has(h)
     set((s) => {
       const list = s.messagesByPartner[key]
       if (!list) return s
       const next = list.map((m) => {
-        if (m.hash !== hash) return m
+        if (!hit(m.hash)) return m
         if (patch === null) {
           const { label_source, ...rest } = m
           void label_source

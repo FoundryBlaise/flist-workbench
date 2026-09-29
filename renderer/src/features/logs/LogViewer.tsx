@@ -5,7 +5,9 @@ import { api, type Label, type LabelSource, type LogMessage } from '../../lib/ap
 import { displayPartner } from '../../lib/partnerName'
 import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
 
-type LabelMenuState = { x: number; y: number; msg: LogMessage } | null
+// `bulk`: opened on a row that is part of a multi-selection, so the
+// choice applies to every selected message rather than just this one.
+type LabelMenuState = { x: number; y: number; msg: LogMessage; bulk: boolean } | null
 
 // Semantic chips for resolved IC / OOC / Unlabeled / Failed + one for
 // the F-Chat "System" type bucket (ads/rolls/warns/events) which is
@@ -121,11 +123,18 @@ export function LogViewer() {
   const [filter, setFilter] = useState<Filter>(DEFAULT_FILTER)
   const [search, setSearch] = useState('')
   const [activeHit, setActiveHit] = useState(0)
-  // Scene-export selection: when on, clicking a row marks one end of
-  // the range. The next click marks the other end (or extends if
-  // shift-clicked). The range is inclusive of both endpoints.
+  // Multi-select, for labelling or exporting several messages at once.
+  // Held as message hashes rather than a range, so a selection can
+  // skip rows and survives filter / search toggles. A click ticks or
+  // unticks one row; a shift-click adds every shown row between the
+  // anchor (the last row clicked) and this one.
   const [selectMode, setSelectMode] = useState(false)
-  const [selRange, setSelRange] = useState<[number, number] | null>(null)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  const anchorRef = useRef<string | null>(null)
+  const clearSelection = () => {
+    setSelected(new Set())
+    anchorRef.current = null
+  }
   const [labelMenu, setLabelMenu] = useState<LabelMenuState>(null)
   // Per-action undo affordance for manual label changes — a single
   // override or a batch one. Auto-clears after 5 seconds; replacing the
@@ -171,7 +180,7 @@ export function LogViewer() {
   useEffect(() => {
     setSearch('')
     setActiveHit(0)
-    setSelRange(null)
+    clearSelection()
     setSelectMode(false)
     setLabelMenu(null)
     setConvMenu(null)
@@ -252,9 +261,16 @@ export function LogViewer() {
       )
     } catch (err) {
       console.error('[labels] override failed', err)
-      // Soft-reset by refetching — cheap for a paged conversation.
-      void useStore.getState().loadMessages(activeChar, partner)
+      reloadConversation()
     }
+  }
+
+  // Get the sidecar's view back after a failed write. loadMessages on
+  // its own returns early for a conversation that is already loaded.
+  const reloadConversation = () => {
+    if (!activeChar || !partner) return
+    useStore.getState().invalidateMessages(activeChar, partner)
+    void useStore.getState().loadMessages(activeChar, partner, { force: true })
   }
 
   const filtered = useMemo<LogMessage[]>(() => {
@@ -264,6 +280,12 @@ export function LogViewer() {
     const q = search.toLowerCase()
     return byBucket.filter((m) => m.text.toLowerCase().includes(q))
   }, [messages, filter, search])
+
+  // The selection in log order: what labelling and export act on.
+  const selectedMessages = useMemo<LogMessage[]>(
+    () => (messages && selected.size ? messages.filter((m) => selected.has(m.hash)) : []),
+    [messages, selected]
+  )
 
   const stats = useMemo(() => {
     if (!messages)
@@ -397,32 +419,45 @@ export function LogViewer() {
   const systemTooltip =
     'Ads, dice rolls, warnings and channel events. Not roleplay content.'
 
-  // Map the currently-visible filtered list back into the underlying
-  // `messages` array via its own array index. This is what `selRange`
-  // points at, so toggling filters mid-selection doesn't accidentally
-  // move the bounds.
-  const handleRowClick = (idx: number, shiftKey: boolean) => {
+  const handleRowClick = (hash: string, shiftKey: boolean) => {
     if (!selectMode) return
-    setSelRange((prev) => {
-      if (!prev || !shiftKey) return [idx, idx]
-      // Shift-click extends the range from whichever bound is closer
-      // — feels like a normal multi-select.
-      const [a, b] = prev
-      const distA = Math.abs(idx - a)
-      const distB = Math.abs(idx - b)
-      return distA <= distB ? [idx, b] : [a, idx]
+    const anchor = anchorRef.current
+    if (shiftKey && anchor !== null && anchor !== hash) {
+      // The range runs over the rows on screen, not the whole log: with
+      // OOC filtered out, shift-clicking across a scene picks its IC
+      // lines and leaves the hidden OOC chatter between them alone.
+      const shown = filtered.map((m) => m.hash)
+      const a = shown.indexOf(anchor)
+      const b = shown.indexOf(hash)
+      if (a !== -1 && b !== -1) {
+        setSelected((prev) => {
+          const next = new Set(prev)
+          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(shown[i])
+          return next
+        })
+        return
+      }
+    }
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(hash)) next.delete(hash)
+      else next.add(hash)
+      return next
+    })
+    anchorRef.current = hash
+  }
+
+  const selectAllShown = () => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const m of filtered) next.add(m.hash)
+      return next
     })
   }
 
   const exportRange = (format: ExportFormat) => {
     if (!messages || !partner || !activeChar) return
-    const slice =
-      selRange === null
-        ? filtered
-        : messages.slice(
-            Math.min(selRange[0], selRange[1]),
-            Math.max(selRange[0], selRange[1]) + 1
-          )
+    const slice = selectedMessages
     if (slice.length === 0) return
     const text = exportMessages(slice, displayPartner(partner), activeChar, format)
     // Clipboard is the integration surface per project policy — paste
@@ -434,94 +469,73 @@ export function LogViewer() {
     })
   }
 
-  // Apply a manual label (or reset) to every row in the current
-  // export selection. Targets only chat/action rows — system / ad /
-  // roll / warn lines aren't part of the IC/OOC classifier scope and
-  // would fail server-side anyway, so we filter them out client-side.
+  // Apply a manual label (or reset) to every selected message, in one
+  // request. Targets only chat/action rows: system / ad / roll / warn
+  // lines aren't part of the IC/OOC scope, and a label on them would
+  // never show.
   const overrideSelection = async (label: 'IC' | 'OOC' | null) => {
-    if (!messages || !partner || !activeChar || selRange === null) return
-    const slice = messages.slice(
-      Math.min(selRange[0], selRange[1]),
-      Math.max(selRange[0], selRange[1]) + 1
-    )
-    const targets = slice.filter((m) => m.kind === 'ic' || m.kind === 'ooc')
+    setLabelMenu(null)
+    if (!partner || !activeChar) return
+    const targets = selectedMessages.filter((m) => m.kind === 'ic' || m.kind === 'ooc')
     if (targets.length === 0) return
-    if (label !== null && targets.length > 200) {
-      // Cheap guard — accidental "Set IC for 8,000 rows" wouldn't
-      // corrupt anything (labels are idempotent) but it would saturate
-      // the sidecar for several seconds. Make the user confirm.
-      const ok = window.confirm(
-        `Apply ${label} to ${targets.length.toLocaleString()} rows? This many manual overrides is unusual — confirm to proceed.`
-      )
-      if (!ok) return
-    }
-    // Snapshot prior labels so the Undo toast can restore them. Each
-    // entry holds (hash, ts, speaker) plus the label that was there
-    // before this call — `null` covers Unlabeled / rule-derived rows.
-    const undoPlan = targets.map((m) => ({
-      hash: m.hash,
-      ts: m.ts,
-      speaker: m.speaker,
-      label:
-        m.label === 'IC' || m.label === 'OOC' ? (m.label as 'IC' | 'OOC') : null
-    }))
-    // Optimistic: stamp each row locally first so the UI reflects the
-    // change immediately, then fire requests. On failure for any one
-    // row, reload the whole conversation to reconcile.
+    const item = (m: LogMessage) => ({ hash: m.hash, ts: m.ts, speaker: m.speaker })
+    // Undo puts back what each row had: a stored verdict is written
+    // again, anything else (rule-decided or Unlabeled) is reset.
+    const undoGroups = new Map<'IC' | 'OOC' | null, LogMessage[]>()
     for (const m of targets) {
-      applyLabelOverride(
-        activeChar,
-        partner,
-        m.hash,
-        label === null ? null : { label, label_source: 'manual' }
-      )
+      const prior: 'IC' | 'OOC' | null =
+        m.label_source && (m.label === 'IC' || m.label === 'OOC') ? m.label : null
+      undoGroups.set(prior, [...(undoGroups.get(prior) ?? []), m])
     }
+    applyLabelOverride(
+      activeChar,
+      partner,
+      new Set(targets.map((m) => m.hash)),
+      label === null ? null : { label, label_source: 'manual' }
+    )
     try {
-      // Sequential rather than parallel — labels DB connection is
-      // single-threaded inside the sidecar and the chat scope is
-      // small enough that latency stays sub-second.
-      for (const m of targets) {
-        await api.labelsOverride({
-          character: activeChar,
-          partner,
-          hash: m.hash,
-          ts: m.ts,
-          speaker: m.speaker,
-          label
-        })
-      }
-      const undoText =
-        label === null
-          ? `Reset ${targets.length.toLocaleString()} label${targets.length === 1 ? '' : 's'}`
-          : `Set ${targets.length.toLocaleString()} row${targets.length === 1 ? '' : 's'} → ${label}`
-      showUndoToast(undoText, () => {
-        void (async () => {
-          for (const e of undoPlan) {
-            applyLabelOverride(
-              activeChar,
-              partner,
-              e.hash,
-              e.label === null ? null : { label: e.label, label_source: 'manual' }
-            )
-            try {
-              await api.labelsOverride({
-                character: activeChar,
-                partner,
-                hash: e.hash,
-                ts: e.ts,
-                speaker: e.speaker,
-                label: e.label
-              })
-            } catch (err) {
-              console.error('[labels] undo failed', err)
-            }
-          }
-        })()
+      await api.labelsOverrideMany({
+        character: activeChar,
+        partner,
+        items: targets.map(item),
+        label
       })
     } catch (err) {
       console.error('[labels] batch override failed', err)
-      void useStore.getState().loadMessages(activeChar, partner)
+      reloadConversation()
+      return
     }
+    // Done with these: the next batch starts from a clean slate, and
+    // Undo is there for a slip.
+    clearSelection()
+    const n = targets.length.toLocaleString()
+    const plural = targets.length === 1 ? '' : 's'
+    showUndoToast(
+      label === null ? `Reset ${n} label${plural}` : `${n} message${plural} → ${label}`,
+      () => {
+        void (async () => {
+          try {
+            for (const [prior, group] of undoGroups) {
+              applyLabelOverride(
+                activeChar,
+                partner,
+                new Set(group.map((m) => m.hash)),
+                prior === null ? null : { label: prior, label_source: 'manual' }
+              )
+              await api.labelsOverrideMany({
+                character: activeChar,
+                partner,
+                items: group.map(item),
+                label: prior
+              })
+            }
+          } catch (err) {
+            console.error('[labels] undo failed', err)
+            reloadConversation()
+          }
+        })()
+      }
+    )
   }
 
   // Give every still-unlabeled message in this conversation the same
@@ -586,13 +600,22 @@ export function LogViewer() {
     }
   }
 
-  const selBounds =
-    selRange === null
-      ? null
-      : ([Math.min(selRange[0], selRange[1]), Math.max(selRange[0], selRange[1])] as [number, number])
-  const selectionCount = selBounds ? selBounds[1] - selBounds[0] + 1 : 0
-  const isInSelection = (idx: number): boolean =>
-    selBounds !== null && idx >= selBounds[0] && idx <= selBounds[1]
+  const selectionCount = selectedMessages.length
+  const labelableCount = selectedMessages.filter(
+    (m) => m.kind === 'ic' || m.kind === 'ooc'
+  ).length
+  const selectionHasVerdict = selectedMessages.some((m) => m.label_source)
+
+  // Right-click on a ticked row labels the whole selection; on any
+  // other row, just that row. System rows have no menu of their own:
+  // their bucket is pinned, so a label would never show.
+  const openLabelMenu = (x: number, y: number, msg: LogMessage): boolean => {
+    const bulk = selectMode && selected.has(msg.hash) && selectionCount > 1
+    if (!bulk && msg.kind === 'system') return false
+    if (bulk && labelableCount === 0) return false
+    setLabelMenu({ x, y, msg, bulk })
+    return true
+  }
 
   const unlabeledCount = stats.unlabeled
 
@@ -753,47 +776,28 @@ export function LogViewer() {
           type="button"
           className={`log-export-toggle ${selectMode ? 'on' : 'off'}`}
           onClick={() => {
-            setSelectMode((v) => {
-              if (v) setSelRange(null)
-              return !v
-            })
+            if (selectMode) clearSelection()
+            setSelectMode(!selectMode)
           }}
-          title="Toggle scene selection — click a row to start, shift-click to extend, then Export."
+          title="Pick several messages to label or export: click to tick, shift-click to add a range."
           data-testid="log-export-toggle"
           aria-pressed={selectMode}
         >
-          {selectMode ? 'Cancel select' : 'Select for export'}
+          {selectMode ? 'Done' : 'Multiselect'}
         </button>
       </div>
       {selectMode && (
         <div className="log-export-bar" data-testid="log-export-bar">
-          <span className="log-export-status">
-            {selBounds
-              ? `${selectionCount.toLocaleString()} message${selectionCount === 1 ? '' : 's'} selected`
-              : 'Click a row to begin · shift-click to extend'}
+          <span className="log-export-status" data-testid="log-export-status">
+            {selectionCount > 0
+              ? `${selectionCount.toLocaleString()} selected`
+              : 'Click to tick · shift-click adds a range'}
           </span>
           <button
             type="button"
-            onClick={() => exportRange('markdown')}
-            disabled={selBounds === null}
-            title="Copy the selection as Markdown to the clipboard"
-          >
-            Copy Markdown
-          </button>
-          <button
-            type="button"
-            onClick={() => exportRange('text')}
-            disabled={selBounds === null}
-            title="Copy the selection as plain text to the clipboard"
-          >
-            Copy Text
-          </button>
-          <span className="log-export-divider" aria-hidden />
-          <button
-            type="button"
             onClick={() => void overrideSelection('IC')}
-            disabled={selBounds === null}
-            title="Set every chat/action row in the selection to IC"
+            disabled={labelableCount === 0}
+            title="Label every selected chat/action message IC"
             data-testid="log-export-set-ic"
           >
             Set IC
@@ -801,8 +805,8 @@ export function LogViewer() {
           <button
             type="button"
             onClick={() => void overrideSelection('OOC')}
-            disabled={selBounds === null}
-            title="Set every chat/action row in the selection to OOC"
+            disabled={labelableCount === 0}
+            title="Label every selected chat/action message OOC"
             data-testid="log-export-set-ooc"
           >
             Set OOC
@@ -810,18 +814,46 @@ export function LogViewer() {
           <button
             type="button"
             onClick={() => void overrideSelection(null)}
-            disabled={selBounds === null}
-            title="Clear manual / LLM labels for the selection (rule + Unlabeled fall back)"
+            disabled={!selectionHasVerdict}
+            title="Remove your or the model's labels from the selection; the rules and Unlabeled take over again"
             data-testid="log-export-reset"
           >
             Reset
           </button>
-          {selBounds !== null && (
+          <span className="log-export-divider" aria-hidden />
+          <button
+            type="button"
+            onClick={() => exportRange('markdown')}
+            disabled={selectionCount === 0}
+            title="Copy the selection as Markdown to the clipboard"
+          >
+            Copy Markdown
+          </button>
+          <button
+            type="button"
+            onClick={() => exportRange('text')}
+            disabled={selectionCount === 0}
+            title="Copy the selection as plain text to the clipboard"
+          >
+            Copy Text
+          </button>
+          <span className="log-export-divider" aria-hidden />
+          <button
+            type="button"
+            onClick={selectAllShown}
+            disabled={filtered.length === 0}
+            title="Tick every message the current filter and search show"
+            data-testid="log-export-select-all"
+          >
+            All shown
+          </button>
+          {selectionCount > 0 && (
             <button
               type="button"
               className="log-export-clear"
-              onClick={() => setSelRange(null)}
-              title="Clear selection"
+              onClick={clearSelection}
+              title="Untick everything"
+              data-testid="log-export-clear"
             >
               clear
             </button>
@@ -833,7 +865,13 @@ export function LogViewer() {
           x={labelMenu.x}
           y={labelMenu.y}
           msg={labelMenu.msg}
-          onChoose={(label) => void submitOverride(labelMenu.msg, label)}
+          count={labelMenu.bulk ? labelableCount : 1}
+          canReset={labelMenu.bulk ? selectionHasVerdict : labelMenu.msg.label_source !== undefined}
+          onChoose={(label) =>
+            void (labelMenu.bulk
+              ? overrideSelection(label)
+              : submitOverride(labelMenu.msg, label))
+          }
         />
       )}
       <div className="pane-body log-body" data-testid="log-body">
@@ -851,9 +889,6 @@ export function LogViewer() {
             computeItemKey={(_, item) => item.key}
             itemContent={(_, item) => {
               if (item.kind === 'day') return <div className="day-sep">{item.label}</div>
-              // Resolve the underlying messages-array index for this
-              // row so selection survives filter/search toggles.
-              const sourceIdx = messages ? messages.indexOf(item.msg) : -1
               return (
                 <MessageRow
                   msg={item.msg}
@@ -862,27 +897,20 @@ export function LogViewer() {
                   activeHit={activeHit}
                   isOwn={item.msg.speaker === activeChar}
                   selectMode={selectMode}
-                  selected={sourceIdx !== -1 && isInSelection(sourceIdx)}
-                  isMenuTarget={labelMenu?.msg.hash === item.msg.hash}
-                  onSelectClick={(shift) => {
-                    if (sourceIdx !== -1) handleRowClick(sourceIdx, shift)
-                  }}
+                  selected={selected.has(item.msg.hash)}
+                  isMenuTarget={
+                    labelMenu !== null &&
+                    (labelMenu.bulk
+                      ? selected.has(item.msg.hash)
+                      : labelMenu.msg.hash === item.msg.hash)
+                  }
+                  onSelectClick={(shift) => handleRowClick(item.msg.hash, shift)}
                   onContextMenu={(e) => {
-                    if (selectMode) return
-                    // No override for System-typed rows — the bucket
-                    // is hard-pinned in effectiveBucket() so a manual
-                    // IC/OOC label would persist to DB but never
-                    // change the visible badge. Silent no-op was the
-                    // worst possible UX; offer no menu at all instead.
-                    if (item.msg.kind === 'system') return
-                    e.preventDefault()
-                    setLabelMenu({ x: e.clientX, y: e.clientY, msg: item.msg })
+                    if (openLabelMenu(e.clientX, e.clientY, item.msg)) e.preventDefault()
                   }}
                   onLabelKeyboardOpen={(anchor) => {
-                    if (selectMode) return
-                    if (item.msg.kind === 'system') return
                     const r = anchor.getBoundingClientRect()
-                    setLabelMenu({ x: r.left + 16, y: r.bottom, msg: item.msg })
+                    openLabelMenu(r.left + 16, r.bottom, item.msg)
                   }}
                 />
               )
@@ -1036,6 +1064,15 @@ function MessageRow({
     <div
       className={klass}
       tabIndex={selectMode ? -1 : 0}
+      onMouseDown={
+        // Keep shift-click from also dragging a text selection across
+        // the rows it spans.
+        selectMode
+          ? (e) => {
+              if (e.shiftKey) e.preventDefault()
+            }
+          : undefined
+      }
       onClick={
         selectMode
           ? (e) => {
@@ -1053,6 +1090,19 @@ function MessageRow({
         }
       }}
     >
+      {selectMode && (
+        // The row's click handler does the toggling; the box only shows
+        // the state, and clicks on it bubble up to the row.
+        <input
+          type="checkbox"
+          className="log-msg-check"
+          checked={selected}
+          readOnly
+          tabIndex={-1}
+          aria-label="Select message"
+          data-testid="log-msg-check"
+        />
+      )}
       <span className="log-ts" title={msg.iso}>
         {timeLabel(msg.ts)}
       </span>
@@ -1228,11 +1278,17 @@ function LabelContextMenu({
   x,
   y,
   msg,
+  count,
+  canReset,
   onChoose
 }: {
   x: number
   y: number
   msg: LogMessage
+  /** How many messages the choice applies to; above 1 the menu is
+   *  acting for a multi-selection. */
+  count: number
+  canReset: boolean
   onChoose: (label: 'IC' | 'OOC' | null) => void
 }) {
   // Nudge the menu so it stays inside the viewport on right-clicks
@@ -1241,8 +1297,10 @@ function LabelContextMenu({
   const H = 140
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
+  const bulk = count > 1
   const currentLabel = msg.label
-  const currentSource = msg.label_source
+  const currentSource = bulk ? undefined : msg.label_source
+  const heading = bulk ? `Label ${count.toLocaleString()} messages` : 'Label this message'
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   useEffect(() => {
@@ -1289,11 +1347,11 @@ function LabelContextMenu({
       style={{ left, top }}
       data-testid="log-label-menu"
       role="menu"
-      aria-label="Label this message"
+      aria-label={heading}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="log-label-menu-head">
-        Label this message
+      <div className="log-label-menu-head" data-testid="log-label-menu-head">
+        {heading}
         {currentSource && (
           <span className="log-label-menu-current">
             {currentLabel} · {currentSource}
@@ -1335,9 +1393,9 @@ function LabelContextMenu({
         className="log-label-menu-item log-label-menu-reset"
         onClick={() => onChoose(null)}
         onKeyDown={onItemKeyDown(2)}
-        disabled={currentSource === undefined}
+        disabled={!canReset}
         title={
-          currentSource === undefined
+          !canReset
             ? 'No manual or LLM label to reset'
             : 'Remove the manual/LLM label and fall back to the rules / Unlabeled'
         }

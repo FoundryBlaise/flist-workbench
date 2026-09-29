@@ -405,6 +405,73 @@ def test_override_rejects_invalid_label(api_client: TestClient) -> None:
     assert "IC or OOC" in res.json()["detail"]
 
 
+# ---- /labels/override-many ----------------------------------------------
+#
+# The log view's multi-select: rows picked anywhere in a conversation,
+# not just one contiguous run, all given the same verdict at once.
+
+
+def _many_body(label: str | None, *hashes: str) -> dict:
+    return {
+        "character": "Char",
+        "partner": "Partner",
+        "label": label,
+        "items": [
+            {"hash": h, "ts": 1700000000 + i, "speaker": "Partner"}
+            for i, h in enumerate(hashes)
+        ],
+    }
+
+
+def _label_rows(api_client: TestClient) -> dict[str, tuple[str, str, str | None]]:
+    conn = labels_store.connect()
+    try:
+        return {
+            r["hash"]: (r["label"], r["source"], r["prior_label"])
+            for r in conn.execute("SELECT hash, label, source, prior_label FROM labels")
+        }
+    finally:
+        conn.close()
+
+
+def test_override_many_labels_every_row(api_client: TestClient) -> None:
+    res = api_client.post("/labels/override-many", json=_many_body("OOC", "a1", "b2", "c3"))
+    assert res.json()["changed"] == 3
+    rows = _label_rows(api_client)
+    assert {h: rows[h][:2] for h in ("a1", "b2", "c3")} == {
+        "a1": ("OOC", "manual"),
+        "b2": ("OOC", "manual"),
+        "c3": ("OOC", "manual"),
+    }
+
+
+def test_override_many_keeps_each_rows_own_prior(api_client: TestClient) -> None:
+    api_client.post("/labels/override", json=_override_body("IC", hash="a1"))
+    api_client.post("/labels/override-many", json=_many_body("OOC", "a1", "b2"))
+    rows = _label_rows(api_client)
+    assert rows["a1"] == ("OOC", "manual", "IC")
+    assert rows["b2"] == ("OOC", "manual", None)
+
+
+def test_override_many_counts_a_doubled_row_once(api_client: TestClient) -> None:
+    res = api_client.post("/labels/override-many", json=_many_body("IC", "a1", "a1"))
+    assert res.json()["changed"] == 1
+    assert _label_rows(api_client)["a1"] == ("IC", "manual", None)
+
+
+def test_override_many_reset_removes_only_the_named_rows(api_client: TestClient) -> None:
+    api_client.post("/labels/override-many", json=_many_body("IC", "a1", "b2", "c3"))
+    res = api_client.post("/labels/override-many", json=_many_body(None, "a1", "c3"))
+    assert res.json()["changed"] == 2
+    assert set(_label_rows(api_client)) == {"b2"}
+
+
+def test_override_many_rejects_invalid_label(api_client: TestClient) -> None:
+    res = api_client.post("/labels/override-many", json=_many_body("MAYBE", "a1"))
+    assert res.status_code == 400
+    assert _label_rows(api_client) == {}
+
+
 # ---- bulk fill ----------------------------------------------------------
 #
 # For the conversation a user knows is pure IC end to end: they have the

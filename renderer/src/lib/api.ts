@@ -763,6 +763,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body)
     }),
+  /** One verdict (or a reset, with `label: null`) for any set of
+   *  messages in a conversation — the log view's multi-select. */
+  labelsOverrideMany: (body: {
+    character: string
+    partner: string
+    items: { hash: string; ts: number; speaker: string }[]
+    label: Label | null
+  }) =>
+    request<{ character: string; partner: string; label: Label | null; changed: number }>(
+      '/labels/override-many',
+      {
+        method: 'POST',
+        body: JSON.stringify(body)
+      }
+    ),
   ragTestEmbedding: (body: {
     embed_model?: string
   }) =>
