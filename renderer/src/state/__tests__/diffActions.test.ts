@@ -130,6 +130,40 @@ describe('flistDiffLoadBackup', () => {
   })
 })
 
+describe('flistDiffLoadWorkbench', () => {
+  it(
+    'resolves the bench set, reads its payload, caches under __workbench__',
+    async () => {
+      seedSlot('99', { character: { description: 'edited' } })
+      // call 1 = resolve bench (create=false); call 2 = read that set.
+      mockFetch([
+        async () => ok({ workbench: { id: SET_ID } }),
+        async () =>
+          ok({
+            payload: {
+              _overlay: ['character.description'],
+              character: { description: 'edited' }
+            },
+            etag: 'p'
+          })
+      ])
+      await useStore.getState().flistDiffLoadWorkbench('99')
+      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toBeDefined()
+      // Idempotent on second call — fetch is not re-invoked.
+      await useStore.getState().flistDiffLoadWorkbench('99')
+    }
+  )
+  it('marks error (not a spinner) when there is no bench', async () => {
+    seedSlot('99', { character: { description: 'edited' } })
+    mockFetch([async () => ok({ workbench: null, active_set_id: null })])
+    await useStore.getState().flistDiffLoadWorkbench('99')
+    expect(useStore.getState().flistDiffBackupStatus['99:__workbench__']).toBe('error')
+    expect(
+      useStore.getState().flistDiffBackupCache['99:__workbench__']
+    ).toBeUndefined()
+  })
+})
+
 describe('flistResetWorkingToBackup', () => {
   it('DELETEs working and seeds from backup, with undo snapshot stashed', async () => {
     seedSlot('99', { character: { description: 'edited' } })

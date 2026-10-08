@@ -28,10 +28,19 @@ describe('bbcodeToHtml — simple inline tags', () => {
 
 describe('bbcodeToHtml — block tags and structure', () => {
   it('renders headings, quotes, center, indent', () => {
-    expect(bbcodeToHtml('[heading]H[/heading]')).toBe('<div class="bb-heading">H</div>')
-    expect(bbcodeToHtml('[quote]Q[/quote]')).toBe('<div class="bb-quote"><b>Quote:</b><br />Q</div>')
+    expect(bbcodeToHtml('[heading]H[/heading]')).toBe('<h2 class="bb-heading">H</h2>')
+    expect(bbcodeToHtml('[quote]Q[/quote]')).toBe(
+      '<blockquote class="bb-quote"><div class="bb-quote-header">Quote:</div>Q</blockquote>'
+    )
     expect(bbcodeToHtml('[center]C[/center]')).toBe('<div class="bb-center">C</div>')
     expect(bbcodeToHtml('[indent]I[/indent]')).toBe('<div class="bb-indent">I</div>')
+  })
+
+  it('renders [row]/[col=n] as a grid; unknown col params share the space', () => {
+    expect(bbcodeToHtml('[row][col=2]a[/col][col=2]b[/col][/row]')).toBe(
+      '<div class="bb-row"><div class="bb-col-2">a</div><div class="bb-col-2">b</div></div>'
+    )
+    expect(bbcodeToHtml('[col=9]x[/col]')).toBe('<div class="bb-col">x</div>')
   })
 
   it('renders left, right, and justify alignment blocks', () => {

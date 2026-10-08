@@ -18,11 +18,15 @@ export type DiffCategory =
 
 /** Shape carried in workingValue / rightValue for `image` rows. Lets
  *  the DiffRow renderer reach the thumbnail (via image_id from the row
- *  path) plus the caption + position without re-walking the payload. */
+ *  path) plus the caption + position without re-walking the payload.
+ *  `position` is the raw gallery slot for display only; `orderRank` is
+ *  the rank among ids both sides carry and is what classifying/summarising
+ *  a "moved" image compares — absolute slots shift on any deletion. */
 export interface ImageDiffSide {
   present: boolean
   description: string
   position: number
+  orderRank: number
 }
 
 export interface DiffRow {
@@ -133,6 +137,14 @@ function isDeepEqual(a: unknown, b: unknown): boolean {
   return true
 }
 
+// Mirror of state/flist.ts + descriptionDiff.ts: the working payload is
+// seeded with CRLF normalised to LF, but a raw Live payload still carries
+// CRLF. Classifying on the raw strings makes a newline-only difference a
+// phantom "modified" (the renderer shows "matches"), so compare normalised.
+function descNormalise(v: unknown): unknown {
+  return typeof v === 'string' ? (v as string).replace(/\r\n?/g, '\n') : v
+}
+
 function classify(workingVal: unknown, rightVal: unknown): DiffKind {
   const wHas = workingVal !== undefined
   const rHas = rightVal !== undefined
@@ -162,13 +174,17 @@ export function computeDiff(
   //    counts include it.
   {
     const path = 'character.description'
+    // Compare normalised so a re-pull with different line endings does
+    // not read as "modified" while the renderer shows "matches Live".
+    const wDesc = descNormalise(workingChar.description)
+    const rDesc = descNormalise(rightChar.description)
     rows.push({
       path,
       category: 'character',
       label: 'Description',
-      workingValue: workingChar.description,
-      rightValue: rightChar.description,
-      kind: classify(workingChar.description, rightChar.description),
+      workingValue: wDesc,
+      rightValue: rDesc,
+      kind: classify(wDesc, rDesc),
       inOverlay: overlay.has(path),
       order: order++
     })
@@ -330,12 +346,24 @@ export function computeDiff(
   }
 
   // 7) images.<image_id> — union of the gallery on either side. A row
-  //    is `modified` when caption or position changed; `added` when
-  //    working has the image but right doesn't (or vice versa for
+  //    is `modified` when caption or *relative order* changed; `added`
+  //    when working has the image but right doesn't (or vice versa for
   //    `removed`). The whole `images` array is one overlay path so
   //    every image row shares the same inOverlay flag.
+  //
+  // Deleting an image renumbers every absolute index after the gap —
+  // comparing raw slots calls all survivors "moved into a different
+  // slot" even though nothing reordered (the user deleted picture 1,
+  // pictures 2+3 became 1+2). What actually differs is ordering, so
+  // rank each side's ids against the ids both sides carry and compare
+  // ranks. Raw positions still travel in the row for display (#N).
   const workingImages = pickGallery(workingPayload)
   const rightImages = pickGallery(rightPayload)
+  const sharedIds = new Set(
+    Array.from(workingImages.keys()).filter((id) => rightImages.has(id))
+  )
+  const workingRanks = orderRanks(workingImages, sharedIds)
+  const rightRanks = orderRanks(rightImages, sharedIds)
   const imageIds = new Set<string>([
     ...workingImages.keys(),
     ...rightImages.keys()
@@ -345,10 +373,20 @@ export function computeDiff(
     const w = workingImages.get(id)
     const r = rightImages.get(id)
     const workingValue: ImageDiffSide | undefined = w
-      ? { present: true, description: w.description, position: w.position }
+      ? {
+          present: true,
+          description: w.description,
+          position: w.position,
+          orderRank: workingRanks.get(id) ?? -1
+        }
       : undefined
     const rightValue: ImageDiffSide | undefined = r
-      ? { present: true, description: r.description, position: r.position }
+      ? {
+          present: true,
+          description: r.description,
+          position: r.position,
+          orderRank: rightRanks.get(id) ?? -1
+        }
       : undefined
     rows.push({
       path: `images.${id}`,
@@ -356,7 +394,7 @@ export function computeDiff(
       label: id.startsWith('local-') ? `Local · ${id.slice(6)}` : `Image ${id}`,
       workingValue,
       rightValue,
-      kind: classify(workingValue, rightValue),
+      kind: classifyImages(id, w, r, workingRanks, rightRanks),
       inOverlay: imagesInOverlay,
       order: order++
     })
@@ -409,6 +447,42 @@ function pickGallery(
     position++
   }
   return out
+}
+
+// Ranks over the ids both sides carry, in each side's own order. A
+// deletion renumbers every absolute index behind the gap; raw slots
+// would report the survivors as moved even though their ordering is
+// identical. Ranks only change when an image truly reordered — a
+// deleted neighbour shifts nothing.
+function orderRanks(
+  gallery: Map<string, { description: string; position: number }>,
+  sharedIds: Set<string>
+): Map<string, number> {
+  const out = new Map<string, number>()
+  let rank = 0
+  for (const id of gallery.keys()) {
+    if (!sharedIds.has(id)) continue
+    out.set(id, rank++)
+  }
+  return out
+}
+
+// Image rows compare on caption + relative order, never on absolute
+// slots: deleting or adding a neighbour shifts every index after it
+// without reordering anything. `imageId` is on both sides whenever
+// both values exist, so its rank always resolves.
+function classifyImages(
+  imageId: string,
+  w: { description: string; position: number } | undefined,
+  r: { description: string; position: number } | undefined,
+  workingRanks: Map<string, number>,
+  rightRanks: Map<string, number>
+): DiffKind {
+  if (!w && r) return 'removed'
+  if (w && !r) return 'added'
+  if (!w || !r) return 'unchanged'
+  const reordered = workingRanks.get(imageId) !== rightRanks.get(imageId)
+  return w.description === r.description && !reordered ? 'unchanged' : 'modified'
 }
 
 function imageIdComparator(

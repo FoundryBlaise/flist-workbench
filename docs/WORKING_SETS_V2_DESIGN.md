@@ -207,7 +207,12 @@ The `From F-list` row has **no right-click menu** in this round.
 
 5. **The current header (name + Refresh) is unchanged.** Refresh still
    pulls the live profile; the result lands in `live.json` exactly as
-   today and is shown in the `From F-list` row.
+   today and is shown in the `From F-list` row. When the pulled
+   character is also the one open in the editor, the window is
+   re-read from disk afterwards: a saved set is authoritative on
+   disk, so what the tabs show matches the persisted payload instead
+   of an in-memory snapshot from the last open (a set that was never
+   written gets seeded from the fresh pull; unsaved keystrokes stay).
 
 ---
 

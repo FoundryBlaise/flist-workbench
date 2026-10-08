@@ -46,6 +46,18 @@ describe('computeDiff — character.description', () => {
     expect(row.kind).toBe('unchanged')
   })
 
+  it(
+    'treats a newline-only difference as unchanged (no phantom modified)',
+    () => {
+      const w = working({ character: { description: 'line1\nline2' } })
+      const r = { character: { description: 'line1\r\nline2' } }
+      const out = computeDiff(w, r, model(), [])
+      const row = out.rows.find((r) => r.path === 'character.description')!
+      expect(row.kind).toBe('unchanged')
+      expect(out.changedRowCount).toBe(0)
+    }
+  )
+
   it('handles right=null (no live yet) as added-everywhere', () => {
     const w = working({ character: { description: 'mine' } })
     const out = computeDiff(w, null, model(), [])
@@ -277,6 +289,45 @@ describe('computeDiff — images', () => {
     const rowB = out.rows.find((r) => r.path === 'images.b')
     expect(rowA?.kind).toBe('modified')
     expect(rowB?.kind).toBe('modified')
+  })
+
+  it('leaves the survivors unchanged when an image is deleted', () => {
+    // The gallery renumbers every absolute index behind a deletion.
+    // Relative order of what stays is identical, so only the removed
+    // image may be reported.
+    const wp = w([
+      { image_id: 'y', description: '', sort_order: 0 },
+      { image_id: 'z', description: '', sort_order: 1 }
+    ])
+    const rp = {
+      images: [
+        { image_id: 'x', description: '', sort_order: 0 },
+        { image_id: 'y', description: '', sort_order: 1 },
+        { image_id: 'z', description: '', sort_order: 2 }
+      ]
+    }
+    const out = computeDiff(wp, rp, model(), [])
+    expect(out.rows.find((r) => r.path === 'images.x')?.kind).toBe('removed')
+    expect(out.rows.find((r) => r.path === 'images.y')?.kind).toBe('unchanged')
+    expect(out.rows.find((r) => r.path === 'images.z')?.kind).toBe('unchanged')
+  })
+
+  it('leaves the others unchanged when an image is inserted', () => {
+    const wp = w([
+      { image_id: 'x', description: '', sort_order: 0 },
+      { image_id: 'a', description: '', sort_order: 1 },
+      { image_id: 'b', description: '', sort_order: 2 }
+    ])
+    const rp = {
+      images: [
+        { image_id: 'a', description: '', sort_order: 0 },
+        { image_id: 'b', description: '', sort_order: 1 }
+      ]
+    }
+    const out = computeDiff(wp, rp, model(), [])
+    expect(out.rows.find((r) => r.path === 'images.x')?.kind).toBe('added')
+    expect(out.rows.find((r) => r.path === 'images.a')?.kind).toBe('unchanged')
+    expect(out.rows.find((r) => r.path === 'images.b')?.kind).toBe('unchanged')
   })
 
   it('unchanged when caption + position match', () => {

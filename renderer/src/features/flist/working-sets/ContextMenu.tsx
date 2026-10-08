@@ -6,6 +6,7 @@ export interface ContextMenuItem {
   disabled?: boolean
   danger?: boolean
   divider?: boolean
+  hint?: string
 }
 
 export interface ContextMenuProps {
@@ -53,6 +54,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
             }
             role="menuitem"
             aria-disabled={item.disabled || undefined}
+            title={item.hint}
             onClick={() => {
               if (item.disabled) return
               item.onSelect()

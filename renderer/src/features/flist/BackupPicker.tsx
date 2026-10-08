@@ -31,11 +31,17 @@ export function BackupPicker({ characterId }: { characterId: string }) {
   )
   const setSource = useStore((s) => s.flistDiffSetRightSource)
   const loadBackup = useStore((s) => s.flistDiffLoadBackup)
+  const loadWorkbench = useStore((s) => s.flistDiffLoadWorkbench)
   const archive = useStore((s) => s.flistArchive[characterId])
   const lastPullAt = archive?.lastPullAt
   // Backup picker sort: newest first; Live always pinned at top.
   const backups: FlistSnapshotEntry[] = archive?.snapshots ?? []
-  const value = source.kind === 'live' ? '__live__' : `b:${source.filename}`
+  const value =
+    source.kind === 'live'
+      ? '__live__'
+      : source.kind === 'workbench'
+        ? '__workbench__'
+        : `b:${source.filename}`
   return (
     <label className="diff-backup-picker">
       <span className="diff-backup-picker-label">Compare Working against</span>
@@ -54,6 +60,11 @@ export function BackupPicker({ characterId }: { characterId: string }) {
             setSource(characterId, { kind: 'live' })
             return
           }
+          if (v === '__workbench__') {
+            void loadWorkbench(characterId)
+            setSource(characterId, { kind: 'workbench' })
+            return
+          }
           if (v.startsWith('b:')) {
             const filename = v.slice(2)
             void loadBackup(characterId, filename)
@@ -62,6 +73,7 @@ export function BackupPicker({ characterId }: { characterId: string }) {
         }}
       >
         <option value="__live__">Live (pulled {relTime(lastPullAt)})</option>
+        <option value="__workbench__">the Workbench (your edits)</option>
         {backups.map((b) => (
           <option key={b.filename} value={`b:${b.filename}`}>
             Backup · {isoDate(b.created_at)}

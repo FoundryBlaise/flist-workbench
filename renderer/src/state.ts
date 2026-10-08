@@ -356,7 +356,7 @@ type State = {
    *  Ephemeral (no disk persistence — default = Live each session). */
   flistDiffRightSource: Record<
     string,
-    { kind: 'live' } | { kind: 'backup'; filename: string }
+    { kind: 'live' } | { kind: 'backup'; filename: string } | { kind: 'workbench' }
   >
   /** Tier 4 — lazy-loaded backup payloads. Keyed by
    *  `${characterId}:${filename}`. Read-only and rarely re-opened, so
@@ -705,10 +705,14 @@ type State = {
   /** Tier 4 — set the Diff tab's right-hand source. */
   flistDiffSetRightSource: (
     characterId: string,
-    source: { kind: 'live' } | { kind: 'backup'; filename: string }
+    source: { kind: 'live' } | { kind: 'backup'; filename: string } | { kind: 'workbench' }
   ) => void
   /** Tier 4 — fetch + cache a backup payload (idempotent). */
   flistDiffLoadBackup: (characterId: string, filename: string) => Promise<void>
+  /** Tier 4 — fetch + cache the current Workbench payload as a Diff
+   *  right-hand source, so the read-only Live row can be compared against
+   *  the edits actually in the bench (not only against backups). */
+  flistDiffLoadWorkbench: (characterId: string) => Promise<void>
   /** Tier 4 — reset working copy to a chosen backup payload.
    *  Re-uses Tier 2's reset-undo banner so the 5-second undo flow is
    *  consistent across reset sources. */
@@ -1905,6 +1909,16 @@ export const useStore = create<State>((set, get) => ({
                 }
               }))
             }
+            // A saved workbench stays user-authoritative, but the slot
+            // still in memory is a snapshot from whenever it was last
+            // opened — after an external change (another session wrote
+            // the file, a bundle import) the window showed a gallery or
+            // fields that no longer matched what is on disk, and only
+            // clicking back into the character fixed it. Re-reading the
+            // persisted set is what "Refresh" should mean for the open
+            // window: disk is the truth for a saved copy. flistOpenWorking
+            // keeps unsaved keystrokes and refuses to reseed over them.
+            void get().flistOpenWorking(info.character_id)
           }
         },
         onError: ({ message }) => {
@@ -3707,6 +3721,63 @@ export const useStore = create<State>((set, get) => ({
       // DiffPane reads `flistDiffBackupStatus` to distinguish "still
       // loading" from "404 / disk error" — gives the user a real
       // signal vs the previous indefinite spinner (UX P1-3).
+      set((s) => ({
+        flistDiffBackupStatus: {
+          ...s.flistDiffBackupStatus,
+          [cacheKey]: 'error'
+        }
+      }))
+    }
+  },
+
+  async flistDiffLoadWorkbench(characterId) {
+    const cacheKey = `${characterId}:__workbench__`
+    if (get().flistDiffBackupCache[cacheKey]) return
+    if (get().flistDiffBackupStatus[cacheKey] === 'loading') return
+    set((s) => ({
+      flistDiffBackupStatus: {
+        ...s.flistDiffBackupStatus,
+        [cacheKey]: 'loading'
+      }
+    }))
+    try {
+      // Resolve which set is the bench — the active one, else the most
+      // recently changed. create=false so merely opening the Diff never
+      // brings a bench into being under a read-only Live view.
+      const bench = await api.flistWorkbench(characterId, false)
+      const setId = bench?.workbench?.id ?? bench?.active_set_id ?? null
+      if (!setId) {
+        // No bench on disk: it is Live by definition → nothing to diff.
+        set((s) => ({
+          flistDiffBackupStatus: {
+            ...s.flistDiffBackupStatus,
+            [cacheKey]: 'error'
+          }
+        }))
+        return
+      }
+      const res = await api.flistSetPayloadRead(characterId, setId)
+      const payload = res?.payload ?? null
+      if (!payload) {
+        set((s) => ({
+          flistDiffBackupStatus: {
+            ...s.flistDiffBackupStatus,
+            [cacheKey]: 'error'
+          }
+        }))
+        return
+      }
+      set((s) => ({
+        flistDiffBackupCache: {
+          ...s.flistDiffBackupCache,
+          [cacheKey]: payload
+        },
+        flistDiffBackupStatus: {
+          ...s.flistDiffBackupStatus,
+          [cacheKey]: 'loaded'
+        }
+      }))
+    } catch {
       set((s) => ({
         flistDiffBackupStatus: {
           ...s.flistDiffBackupStatus,

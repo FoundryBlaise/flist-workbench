@@ -604,9 +604,11 @@ body {
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: var(--font-heading);
   line-height: 1.5;
-  /* F-list preserves the source whitespace verbatim — the spacers and
-     long dash lines users put in profiles count on that. */
-  white-space: pre-wrap;
+  /* Horizon's profile override: character descriptions keep line breaks
+     but collapse runs of spaces (pre-line), which is what the client
+     users compare against. Newlines still come from source text, not
+     <br> — the source mapping in bbcodeToHtml relies on that. */
+  white-space: pre-line;
   word-wrap: break-word;
   outline: none;
 }
@@ -838,34 +840,40 @@ body {
   gap: 24px 28px;
   align-items: start;
 }
+/* Horizon's Info-tab treatment: group title with a rule under it, the
+   label as small muted text *above* a bold block value. */
 .profile-preview-group-title {
-  margin: 0 0 8px;
-  font-size: 1.05em;
-  font-weight: 700;
+  margin: 0 0 4px;
+  font-size: 0.95em;
+  font-weight: 600;
   color: #e8d6a8;
   text-transform: none;
   letter-spacing: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  padding-bottom: 3px;
 }
 .profile-preview-rows {
-  margin: 0;
+  margin: 6px 0 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
 }
 .profile-preview-row {
   display: block;
   margin: 0;
 }
 .profile-preview-row dt {
-  display: inline;
-  font-weight: 700;
-  color: #c9b58a;
-  margin-right: 4px;
+  display: block;
+  font-weight: 400;
+  font-size: 85%;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.7);
 }
 .profile-preview-row dd {
-  display: inline;
-  margin: 0;
-  color: #d4d4d4;
+  display: block;
+  margin-bottom: 16px;
+  font-weight: bold;
+  line-height: 1.2;
 }
 
 .editor-error {
@@ -1245,9 +1253,10 @@ body {
    F-Chat reader sees a profile. */
 .preview-body { padding: 16px 20px; }
 .preview-body p { margin: 0 0 10px; }
+/* Horizon treats [heading] as a bare <h2> and only sets its weight/size. */
 .preview-body .bb-heading {
-  font-weight: 500;
-  font-size: 1.5em;
+  font-weight: bold;
+  font-size: 1.17em;
   line-height: 1.2;
   margin: 0.5em 0;
 }
@@ -1257,19 +1266,29 @@ body {
   margin: 14px 0;
 }
 .preview-body .bb-quote {
-  padding: 10px;
-  margin: 4px 2px;
-  font-style: italic;
-  border: 1px solid #555;
+  margin: 0;
+  padding: 1em;
   border-radius: 3px;
-  box-shadow: 0 0 1px #111;
+  background: rgba(255, 255, 255, 0.04);
 }
-.preview-body .bb-quote > b { font-style: normal; }
+.preview-body .bb-quote > .bb-quote-header {
+  text-transform: uppercase;
+  font-weight: bold;
+  font-size: 80%;
+  opacity: 0.7;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+}
 .preview-body .bb-center { text-align: center; }
 .preview-body .bb-left { text-align: left; }
 .preview-body .bb-right { text-align: right; }
 .preview-body .bb-justify { text-align: justify; }
 .preview-body .bb-indent { padding-left: 5%; }
+.preview-body .bb-row { display: flex; flex-wrap: wrap; align-items: flex-start; }
+.preview-body .bb-row > * { margin-bottom: 5px; }
+.preview-body .bb-col-1 { flex: 0 0 25%; }
+.preview-body .bb-col-2 { flex: 0 0 33.3%; }
+.preview-body .bb-col-3 { flex: 0 0 50%; }
+.preview-body .bb-col { flex: 1 1 0; min-width: 0; }
 /* Colour palette mirrors F-list's dark theme (text-shadow lifts them
    off the editor's dark background the way F-Chat does). */
 .preview-body [class*="bb-color-"] { text-shadow: 0 1px 2px #000; }
@@ -3897,6 +3916,13 @@ body {
   font-weight: 400;
   font-size: var(--font-meta);
 }
+/* Horizon puts a 3px semantic-colour rule under each bucket header
+   (fave=info, yes=success, maybe=warning, no=danger) rather than
+   relying on text colour alone. */
+.kink-column-fave .kink-column-header { border-bottom: 3px solid var(--accent); }
+.kink-column-yes .kink-column-header { border-bottom: 3px solid var(--green); }
+.kink-column-maybe .kink-column-header { border-bottom: 3px solid #d4a04a; }
+.kink-column-no .kink-column-header { border-bottom: 3px solid var(--accent-2); }
 .kink-column-empty {
   padding: 12px;
   text-align: center;
@@ -3935,8 +3961,22 @@ body {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 .kink-row:active { cursor: grabbing; }
-.kink-row-pip { color: #f0c060; font-size: 0.85em; flex: 0 0 auto; }
-.kink-row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Horizon marks customs with a floating indicator and bolds the name;
+   names wrap instead of being truncated. */
+.kink-row-custom { position: relative; }
+.kink-row-pip {
+  position: absolute;
+  right: 6px;
+  top: 2px;
+  color: #f0c060;
+  font-size: 0.85em;
+}
+.kink-row-custom .kink-row-name { font-weight: bold; }
+.kink-row-name {
+  flex: 1 1 auto;
+  white-space: pre-line;
+  overflow-wrap: break-word;
+}
 
 /* Right-pane Undecided pool — replaces the BBCode preview while the
    Kinks tab is active. Single scrolling list of every kink with

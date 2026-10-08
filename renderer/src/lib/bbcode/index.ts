@@ -12,6 +12,12 @@
  * piece of user text gets escaped, attribute values are validated
  * against allowlists, and URLs must start with `http(s):` or be one of
  * the inline image forms.
+ *
+ * The tag handling here follows the Horizon Client — the community F-Chat
+ * 3.0 client (https://github.com/Fchat-Horizon/Horizon, Mozilla Public
+ * License 2.0). Only the decisions are ported (tag behaviour, element
+ * shapes), not their source code; matching values and CSS live on in
+ * app.css under the same intent.
  */
 
 const NAMED_COLORS = new Set([
@@ -38,7 +44,7 @@ const SIMPLE_INLINE: Record<string, string> = {
   sup: 'span class="bb-sup"',
   big: 'span class="bb-big"',
   small: 'span class="bb-small"',
-  heading: 'div class="bb-heading"',
+  heading: 'h2 class="bb-heading"',
   center: 'div class="bb-center"',
   left: 'div class="bb-left"',
   right: 'div class="bb-right"',
@@ -173,8 +179,9 @@ function emit(frame: Frame, opts: BbcodeOptions = {}): string {
       return `<a class="bb-url" href="${escapeAttr(target)}" target="_blank" rel="noreferrer noopener">${body}</a>`
     }
     case 'quote':
-      // F-list renders [quote] as a bordered block with a "Quote:" label.
-      return `<div class="bb-quote"><b>Quote:</b><br />${body}</div>`
+      // Horizon-style: a blockquote carrying a "Quote:" header strip that
+      // is styled (bordered, uppercased) rather than an inline bold label.
+      return `<blockquote class="bb-quote"><div class="bb-quote-header">Quote:</div>${body}</blockquote>`
     case 'user': {
       const name = stripTags(body).trim()
       if (!name) return ''
@@ -216,6 +223,15 @@ function emit(frame: Frame, opts: BbcodeOptions = {}): string {
       const alt = stripTags(body).trim() || `inline ${id}`
       return `<img class="bb-img" src="${escapeAttr(inlineImageUrl(inline))}" alt="${escapeHtml(alt)}" />`
     }
+    case 'row':
+      return `<div class="bb-row">${body}</div>`
+    case 'col': {
+      // Horizon's [col=n] widths: 1 → narrowest, 3 → widest; an
+      // unrecognised parameter shares the row space instead of failing.
+      const n = (frame.attr ?? '').trim()
+      if (n === '1' || n === '2' || n === '3') return `<div class="bb-col-${n}">${body}</div>`
+      return `<div class="bb-col">${body}</div>`
+    }
     default: {
       const wrap = SIMPLE_INLINE[frame.name]
       if (!wrap) {
@@ -250,7 +266,9 @@ const ALL_KNOWN_NAMES = new Set<string>([
   'eicon',
   'img',
   'hr',
-  'br'
+  'br',
+  'row',
+  'col'
 ])
 
 /**

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { selectWorkingSlot, useStore } from '../../state'
 import type { SetMeta } from '../../state/flist'
 import { ContextMenu } from './working-sets/ContextMenu'
+import { ConfirmModal } from './working-sets/ConfirmModal'
 import { CrossCharacterImportModal } from './working-sets/CrossCharacterImportModal'
 
 function relativeTime(epoch: number | null | undefined): string {
@@ -56,6 +57,7 @@ export function FlistCharacterZone() {
   const exportSet = useStore((s) => s.flistExportSet)
   const importSet = useStore((s) => s.flistImportSet)
   const backupCharacter = useStore((s) => s.flistBackupCharacter)
+  const resetWorkingToLive = useStore((s) => s.flistResetWorkingToLive)
   const confirmCrossCharacterImport = useStore(
     (s) => s.flistConfirmCrossCharacterImport
   )
@@ -79,6 +81,10 @@ export function FlistCharacterZone() {
     x: number
     y: number
   } | null>(null)
+  // Armed by a right-click "Discard local changes" selection, then shown
+  // as a ConfirmModal before the reset runs — the bench only reaches here
+  // when it actually differs from Live, so confirming is never a no-op.
+  const [confirmReset, setConfirmReset] = useState(false)
   const [crossCharImport, setCrossCharImport] = useState<{
     characterName: string
     setName: string
@@ -94,6 +100,7 @@ export function FlistCharacterZone() {
   useEffect(() => {
     setCrossCharImport(null)
     setImportMessage(null)
+    setConfirmReset(false)
     cancelPendingImport()
   }, [activeId, cancelPendingImport])
   // Auto-clear import banners after 6s so they don't accumulate.
@@ -147,6 +154,10 @@ export function FlistCharacterZone() {
   // recreates it from Live.
   const ctxItems = (setId: string) => {
     const s = sets.find((x) => x.id === setId)
+    // The bench is the only editable copy, so local changes are exactly
+    // the paths the user has touched — same guard the Profile-fields tab
+    // uses for its "Reset to Live" affordance.
+    const hasLocalChanges = Boolean(workingSlot && workingSlot.overlay.length > 0)
     return [
       {
         // What this saves is the bench, not the website — so no pull.
@@ -164,6 +175,22 @@ export function FlistCharacterZone() {
               label: 'Export as ZIP…',
               onSelect: () => {
                 void exportSet(activeId, s.id)
+              }
+            }
+          ]
+        : []),
+      ...(hasLocalChanges
+        ? [
+            {
+              divider: true,
+              label: '',
+              onSelect: () => {}
+            },
+            {
+              label: 'Discard local changes',
+              hint: 'Returns the Workbench to Live on F-List.',
+              onSelect: () => {
+                setConfirmReset(true)
               }
             }
           ]
@@ -431,6 +458,19 @@ export function FlistCharacterZone() {
           }}
           onConfirm={() => {
             void handleCrossCharConfirm()
+          }}
+        />
+      )}
+      {confirmReset && (
+        <ConfirmModal
+          title="Discard local changes?"
+          danger
+          body="Your Workbench differs from Live on F-List. This throws away your unpublished edits and replaces the Workbench with what is on the website. You'll have 5 seconds to undo."
+          confirmLabel="Discard changes"
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => {
+            setConfirmReset(false)
+            void resetWorkingToLive(activeId)
           }}
         />
       )}

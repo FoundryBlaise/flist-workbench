@@ -47,6 +47,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const backupCache = useStore((s) => s.flistDiffBackupCache)
   const backupStatus = useStore((s) => s.flistDiffBackupStatus)
   const loadBackup = useStore((s) => s.flistDiffLoadBackup)
+  const loadWorkbench = useStore((s) => s.flistDiffLoadWorkbench)
   const setSource = useStore((s) => s.flistDiffSetRightSource)
   const resetField = useStore((s) => s.flistResetWorkingField)
   const resetCustomKink = useStore((s) => s.flistCustomKinksResetField)
@@ -91,13 +92,18 @@ export function DiffPane({ characterId }: { characterId: string }) {
   useEffect(() => {
     if (source.kind === 'backup') {
       void loadBackup(characterId, source.filename)
+    } else if (source.kind === 'workbench') {
+      void loadWorkbench(characterId)
     }
-  }, [source, characterId, loadBackup])
+  }, [source, characterId, loadBackup, loadWorkbench])
 
   const right: Record<string, unknown> | null = useMemo(() => {
     if (source.kind === 'live') {
       const live = archive?.live
       return live ? (live as Record<string, unknown>) : null
+    }
+    if (source.kind === 'workbench') {
+      return backupCache[`${characterId}:__workbench__`] ?? null
     }
     return backupCache[`${characterId}:${source.filename}`] ?? null
   }, [source, archive, backupCache, characterId])
@@ -147,6 +153,22 @@ export function DiffPane({ characterId }: { characterId: string }) {
       </div>
     )
   }
+  if (!right && source.kind === 'workbench') {
+    const status = backupStatus[`${characterId}:__workbench__`] ?? 'loading'
+    return (
+      <div className="diff-pane-empty" data-testid="diff-pane-empty">
+        {status === 'error' ? (
+          <p>
+            This character has no separate Workbench yet — it matches Live,
+            so there is nothing to compare against.
+          </p>
+        ) : (
+          <p>Loading the Workbench…</p>
+        )}
+        <BackupPicker characterId={characterId} />
+      </div>
+    )
+  }
   if (!right && source.kind === 'backup') {
     const cacheKey = `${characterId}:${source.filename}`
     const status = backupStatus[cacheKey] ?? 'loading'
@@ -174,7 +196,9 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const rightLabel =
     source.kind === 'live'
       ? 'Live'
-      : `Snapshot · ${formatBackupDate(archive?.snapshots ?? [], source.filename)}`
+      : source.kind === 'workbench'
+        ? 'the Workbench'
+        : `Snapshot · ${formatBackupDate(archive?.snapshots ?? [], source.filename)}`
 
   const descriptionRow = model.rows.find(
     (r) => r.path === 'character.description'
@@ -188,19 +212,23 @@ export function DiffPane({ characterId }: { characterId: string }) {
       (showUnchanged || r.kind !== 'unchanged')
   )
 
-  // Split image rows: position-only changes get collapsed under a
-  // single "Image order: N moved" summary so the diff doesn't drown
-  // in 22 rows of shuffle noise. A row is "order-only" when both
-  // sides are present, descriptions match, and only `position`
-  // differs — i.e. the image stays on profile, just in a different
-  // gallery slot. (Added/removed rows and caption diffs stay inline
-  // as real changes.)
+  // Split image rows: order-only changes get collapsed under a single
+  // "Order of images differs" summary so the diff doesn't drown in
+  // shuffle noise. A row is "order-only" when both sides are present,
+  // descriptions match, and only the *relative order* differs — the
+  // image stays on the profile and nobody it sits next to swapped with
+  // it. Raw gallery slots renumber themselves around deletions, so
+  // they must not decide this (the engine flags such rows unchanged in
+  // the first place; `orderRank` mirrors its comparison for the rare
+  // case where a relative move hides an equal raw slot).
+  // (Added/removed rows and caption diffs stay inline as real changes.)
   const isOrderOnly = (r: DiffRowModel) => {
     if (r.category !== 'image' || r.kind !== 'modified') return false
     const w = r.workingValue as ImageDiffSide | undefined
     const rv = r.rightValue as ImageDiffSide | undefined
     if (!w || !rv || !w.present || !rv.present) return false
-    return w.description === rv.description && w.position !== rv.position
+    if (w.description !== rv.description) return false
+    return w.orderRank !== rv.orderRank
   }
   const orderOnlyRows = visibleRows.filter(isOrderOnly)
   const inlineRows = visibleRows.filter((r) => !isOrderOnly(r))
@@ -263,7 +291,9 @@ export function DiffPane({ characterId }: { characterId: string }) {
           className="diff-pane-reset-all"
           data-testid="diff-pane-reset-all"
           disabled={
-            slot.overlay.length === 0 || model.changedRowCount === 0
+            source.kind === 'workbench' ||
+            slot.overlay.length === 0 ||
+            model.changedRowCount === 0
           }
           onClick={() => setResetAllConfirm(true)}
         >
@@ -432,9 +462,13 @@ export function DiffPane({ characterId }: { characterId: string }) {
               </button>
             </div>
             <p>
-              Discard {slot.overlay.length} change
-              {slot.overlay.length === 1 ? '' : 's'} and replace Working copy
-              with {rightLabel}? You'll have 5 seconds to undo.
+              Discard {model.counts.added + model.counts.removed +
+                model.counts.modified} change
+              {model.counts.added + model.counts.removed +
+              model.counts.modified === 1
+                ? ''
+                : 's'} and replace Working copy with {rightLabel}? You'll have 5
+              seconds to undo.
             </p>
             {source.kind === 'backup' && (
               <p className="profile-fields-modal-warn">
@@ -457,7 +491,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
                   setResetAllConfirm(false)
                   if (source.kind === 'live') {
                     void resetToLive(characterId)
-                  } else {
+                  } else if (source.kind === 'backup') {
                     void resetToBackup(characterId, source.filename)
                   }
                 }}
