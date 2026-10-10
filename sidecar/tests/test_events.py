@@ -170,6 +170,45 @@ async def test_an_mcp_write_names_the_tool_that_made_it(workbench) -> None:
     assert changes[-1]["origin"] == "mcp:set_description"
 
 
+async def test_a_repair_says_so_instead_of_becoming_a_phantom_conflict(
+    workbench, capsys
+) -> None:
+    """A gallery repair rewrites sets after pulls and before backups —
+    nobody in a window asked for it. Unattributed it carried the
+    default `ui` origin, every open window's event filter dropped it as
+    "my own write", the window kept an etag that was already dead, and
+    its next save 409'd with "Someone else changed this set" — a
+    conflict whose cause nothing had ever named. Both evidence paths
+    must exist: the attribution in the event, and the caller in the
+    diagnostics stream."""
+    from services import events
+
+    events.bind_loop(asyncio.get_running_loop())
+    meta = workbench.create_set_from_live("42", "Draft")
+    payload = workbench.read_set_payload("42", meta.id)
+    payload["images"] = [
+        {"image_id": "47001", "description": "", "sort_order": 0},
+        {"image_id": "47001", "description": "", "sort_order": 1},
+    ]
+    workbench.write_set_payload("42", meta.id, payload, expected_etag=None)
+    capsys.readouterr()  # keep only what the repair itself prints
+
+    async def repair() -> None:
+        await asyncio.sleep(0.05)
+        workbench.repair_gallery("42")
+
+    collector = asyncio.create_task(collect())
+    await repair()
+    received = await collector
+
+    changes = [e for e in received if e["event"] == "set-payload-changed"]
+    assert changes, received
+    assert changes[-1]["origin"] == "internal:gallery-repair"
+    diag = capsys.readouterr().err
+    assert "_repair_gallery" in diag
+    assert "without an etag check" in diag
+
+
 async def test_label_writes_are_announced(workbench) -> None:
     from services import events
     import labels as labels_store

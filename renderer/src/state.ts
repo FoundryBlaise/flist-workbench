@@ -2206,7 +2206,26 @@ export const useStore = create<State>((set, get) => ({
     // When a set is active, its payload is the truth and the legacy
     // `working.json` endpoint is not written at all — asking it would
     // 404 on every character switch. Read the set instead.
-    const activeSetId = get().flistActiveSetId[characterId] ?? null
+    let activeSetId = get().flistActiveSetId[characterId] ?? null
+    // The client-side pointer can lag the server: pull-completion and
+    // browse-restore call this before anything has hydrated
+    // flistActiveSetId. An unhydrated pointer used to fall through to
+    // the legacy `working.json`, and a slot seeded from that stale file
+    // carries an etag that can never match the character's real bench
+    // (sets/<id>/payload.json) — so the first edit 409'd against a file
+    // nobody had touched. Ask the server where the Workbench is before
+    // choosing legacy storage; `create: false` keeps a mere open from
+    // materialising a bench.
+    if (!activeSetId) {
+      const resolved = await api.flistWorkbench(characterId, false).catch(() => null)
+      const benchId = resolved?.workbench?.id ?? null
+      if (benchId) {
+        activeSetId = benchId
+        set((s) => ({
+          flistActiveSetId: { ...s.flistActiveSetId, [characterId]: benchId }
+        }))
+      }
+    }
     // Never reseed over unsaved edits. Autosave waits 500 ms for quiet
     // time, and the picker calls this on every click — including a
     // click on the character already open, which is how a user gets

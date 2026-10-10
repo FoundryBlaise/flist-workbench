@@ -3021,19 +3021,27 @@ def restore_image_ids(
     body: _RestoreImageIdsBody,
     _auth: str = Depends(_require_restore_auth),
 ) -> dict[str, Any]:
-    """The extension reporting what F-list called our uploads.
+    """The extension reporting what F-list called our uploads — noted, not applied.
 
-    An image uploaded in the app is keyed by a hash of its bytes,
-    because it has no F-list id until someone uploads it. The extension
-    learns the real id at that moment and is the only party that ever
-    sees both — so it says so here, and the archive takes it on: the
-    gallery rows move to the new id and the file is renamed, or dropped
-    when a pull already fetched the same bytes under that name.
+    An image uploaded in the app is keyed by a hash of its bytes, because
+    it has no F-list id until someone uploads it. The extension learns
+    the real id at that moment and used to hand it over here, with the
+    archive renaming files and rewriting set payloads on the spot.
 
-    Without this the two sides can never recognise the same picture. A
-    restore then deletes the whole gallery and uploads it again to
-    change one image, and every pull leaves a byte-identical twin on
-    disk.
+    It no longer acts on that report. The upload happens during Import —
+    before the user has pressed Save, before F-list's profile actually
+    contains the picture. Renaming local files for an id the profile may
+    never get turned uploads into dangling gallery rows and vanished
+    images: the rename had already destroyed the only copy of the bytes,
+    and a subsequent pull (which reflects the real profile) had nothing
+    left to fold back in.
+
+    The same folding still happens — at the moment it is true. A saved
+    profile re-pulls; `dedupe_local_after_pull` matches each pulled
+    image's bytes against the local upload and moves the gallery over to
+    the real id then, and `collapse_local_duplicates` catches any pair
+    that ended up side by side on disk when the Images tab lists them.
+    Same cure, applied when the diagnosis holds.
     """
     name = body.character.strip()
     if not name:
@@ -3041,8 +3049,7 @@ def restore_image_ids(
     character_id = restore_svc._character_id_for_name(name)
     if character_id is None:
         raise HTTPException(status_code=404, detail="unknown character")
-    result = character_archive.adopt_flist_image_ids(character_id, body.mapping)
-    return {"character": name, **result}
+    return {"character": name, "deferred": True}
 
 
 @app.post("/restore/saved")

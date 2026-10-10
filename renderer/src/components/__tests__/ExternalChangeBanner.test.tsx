@@ -71,6 +71,20 @@ it('still asks when both sides have changes', () => {
   expect(useStore.getState().flistReloadAfterExternalChange).not.toHaveBeenCalled()
 })
 
+it('names the app\'s own maintenance pass as the writer', async () => {
+  // The silent set-rewrites a pull or an Images-tab listing can trigger
+  // (gallery repair, image-id folding) now arrive attributed instead of
+  // looking like the window's own write — which is what turns a later
+  // "Someone else changed this set" into a plain explanation.
+  seed({ dirty: true, origin: 'internal:gallery-repair' })
+  render(<ExternalChangeBanner />)
+
+  const banner = screen.getByTestId('external-change-banner')
+  expect(banner.textContent).toContain(
+    'maintenance pass in the app (gallery repair)'
+  )
+})
+
 it('reloads once, not once per render', async () => {
   seed({ dirty: false })
   const { rerender } = render(<ExternalChangeBanner />)

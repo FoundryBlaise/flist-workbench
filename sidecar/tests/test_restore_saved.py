@@ -152,7 +152,11 @@ def test_a_nameless_save_is_refused(paired) -> None:
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 
-def test_the_extension_can_hand_over_the_real_ids(paired) -> None:
+def test_the_extensions_early_id_report_defers(paired) -> None:
+    """The extension learns real ids at upload time — before the profile
+    is saved — so the report must not rewrite anything. The fold-over to
+    F-list's id happens at the pull that proves the picture is really on
+    the profile (see test_dedupe_local_after_pull_*)."""
     client, archive, _server = paired
     local_id = archive.add_uploaded_image("42", PNG)["image_id"]
     bench = archive.resolve_workbench("42")
@@ -174,10 +178,12 @@ def test_the_extension_can_hand_over_the_real_ids(paired) -> None:
     )
 
     assert res.status_code == 200
-    assert res.json()["sets_rewritten"] == 1
+    assert res.json()["deferred"] is True
     payload = archive.read_set_payload("42", bench.id)
-    assert [r["image_id"] for r in payload["images"]] == ["47000849"]
-    assert (archive.images_dir("42") / "47000849.png").exists()
+    assert [r["image_id"] for r in payload["images"]] == [local_id]
+    local_file = next(archive.images_dir("42").glob(f"{local_id}.*"))
+    assert local_file.exists()
+    assert not (archive.images_dir("42") / "47000849.png").exists()
 
 
 def test_reporting_ids_needs_the_pairing_token(paired) -> None:

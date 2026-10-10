@@ -1433,6 +1433,22 @@ def write_set_payload(
     strings; at least one recognised top-level content key must be
     present; schema version is stamped to v6.
     """
+    if expected_etag is None:
+        # Diagnostic only. A write that skips the If-Match check is
+        # exactly what silently invalidates an open window's etag, and
+        # nothing showed it happening: a "someone else changed this set"
+        # report had no source to trace. This names the caller in
+        # main-diag.log (the Electron main tees sidecar stderr there).
+        try:
+            caller = sys._getframe(1).f_code.co_name
+        except Exception:  # noqa: BLE001 - diagnostics never break a write
+            caller = "unknown"
+        print(
+            f"[set-rewrite] '{caller}' rewrote char={character_id} "
+            f"set={set_id} without an etag check",
+            file=sys.stderr,
+            flush=True,
+        )
     if not _is_valid_set_id(set_id):
         raise ValueError(f"invalid set_id: {set_id!r}")
     if not isinstance(payload, dict):
@@ -2165,7 +2181,13 @@ def collapse_local_duplicates(character_id: int | str) -> int:
     }
     if not mapping:
         return 0
-    result = adopt_flist_image_ids(character_id, mapping)
+    # Maintenance triggered by a read (the Images tab listing), which is
+    # still not the window writing: attribute it like the repair, or the
+    # listing itself silently invalidates open windows' etags.
+    from services import events  # lazy, same reason as _publish
+
+    with events.origin("internal:image-dedupe"):
+        result = adopt_flist_image_ids(character_id, mapping)
     return len(result["renamed"]) + len(result["dropped_duplicate"])
 
 
@@ -2209,7 +2231,10 @@ def dedupe_local_after_pull(
         return None
 
     local_id = f"local-{sha8}"
-    result = adopt_flist_image_ids(character_id, {local_id: pulled_image_id})
+    from services import events  # lazy, same reason as _publish
+
+    with events.origin("internal:dedupe-after-pull"):
+        result = adopt_flist_image_ids(character_id, {local_id: pulled_image_id})
     if result["renamed"] or result["dropped_duplicate"]:
         return local_id
     return None
@@ -2270,6 +2295,23 @@ def add_uploaded_image(
 
 
 def repair_gallery(character_id: int | str) -> dict[str, Any]:
+    """Public entry: run the repair with its writes attributed.
+
+    A repair runs after pulls and before backups — nobody clicked
+    anything in a window, so a repair's set-rewrite is a second party's
+    write as far as every open window is concerned. Unattributed it
+    carried the default `ui` origin and was dropped by exactly the
+    filter meant for echoes of the window's own writes; each window
+    kept a dead etag and the next save looked like a conflict with
+    "someone else". The name here is what tells those apart.
+    """
+    from services import events  # lazy, same reason as _publish
+
+    with events.origin("internal:gallery-repair"):
+        return _repair_gallery(character_id)
+
+
+def _repair_gallery(character_id: int | str) -> dict[str, Any]:
     """Put a character's gallery back together when its entries have
     lost their bytes.
 

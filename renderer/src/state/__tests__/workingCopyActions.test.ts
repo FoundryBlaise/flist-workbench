@@ -283,6 +283,76 @@ describe('flistOpenWorking archive race (QA P1-3)', () => {
   })
 })
 
+describe('flistOpenWorking asks the server before legacy storage (working.json 409)', () => {
+  it('hydrates the real bench and reads its payload instead of working.json', async () => {
+    useStore.setState({
+      flistArchive: {
+        '99': {
+          live: { character: { description: 'live-desc' } },
+          snapshots: [],
+          pullStatus: 'idle'
+        }
+      },
+      flistRoster: []
+    })
+    const calls = mockFetch([
+      async () =>
+        ok({
+          workbench: { id: 'bbbbbbbbbbbb', kind: 'bench', name: 'Workbench' },
+          active_set_id: 'bbbbbbbbbbbb'
+        }),
+      async () =>
+        ok({
+          payload: {
+            _schema_version: 2,
+            _overlay: [],
+            character: { description: 'bench-desc' }
+          },
+          etag: 'disk-etag'
+        })
+    ])
+    await useStore.getState().flistOpenWorking('99')
+    expect(
+      calls.some((c) => c.url.includes('/flist/character/99/workbench?create=false'))
+    ).toBe(true)
+    expect(calls.some((c) => c.url.includes('/working') && c.method === 'GET')).toBe(false)
+    expect(useStore.getState().flistActiveSetId['99']).toBe('bbbbbbbbbbbb')
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.etag).toBe('disk-etag')
+    expect(slot.materialised).toBe(true)
+    expect((slot.payload.character as { description?: string }).description).toBe('bench-desc')
+  })
+
+  it('a character with no bench yet still falls through to the legacy read', async () => {
+    useStore.setState({
+      flistArchive: {
+        '99': {
+          live: { character: { description: 'live-desc' } },
+          snapshots: [],
+          pullStatus: 'idle'
+        }
+      },
+      flistRoster: []
+    })
+    const calls = mockFetch([
+      async () => ok({ workbench: null, reason: 'no_workbench' }),
+      async () =>
+        ({
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: 'no working copy' }),
+          text: async () => '{}'
+        }) as unknown as Response
+    ])
+    await useStore.getState().flistOpenWorking('99')
+    expect(calls.some((c) => c.url.includes('/workbench?create=false'))).toBe(true)
+    expect(calls.some((c) => c.url.includes('/working') && c.method === 'GET')).toBe(true)
+    const slot = useStore.getState().flistWorking['99']
+    expect((slot.payload.character as { description?: string }).description).toBe('live-desc')
+    expect(slot.materialised).toBe(false)
+  })
+})
+
 describe('flistResetWorkingToLive cancels armed follow-up flush', () => {
   it('a follow-up flush scheduled by a prior PUT success does not race the DELETE', async () => {
     useStore.setState({

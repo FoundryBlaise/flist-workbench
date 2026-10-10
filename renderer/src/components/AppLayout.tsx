@@ -227,8 +227,12 @@ export function AppLayout() {
 
   // Watch the sidecar for changes this window didn't make. A model
   // connected over MCP writes the same working sets, labels the same
-  // logs and changes the same settings; without this the window shows
-  // a stale draft and then autosaves it back over the model's work.
+  // logs and changes the same settings — and so do the app's own
+  // maintenance passes (gallery repair after a pull, image-id folding
+  // when the Images tab lists files), which the sidecar now marks
+  // internal:* instead of leaving them as 'ui'. Without this the window
+  // shows a stale draft and then autosaves it back over the other
+  // writer's work.
   useEffect(() => {
     const base = window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
     return subscribeToWorkbenchEvents(base, (event) => {
