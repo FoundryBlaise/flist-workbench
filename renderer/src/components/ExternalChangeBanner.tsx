@@ -39,8 +39,14 @@ export function ExternalChangeBanner() {
     const token = `${characterId}:${change.at}:${change.origin}`
     if (handled.current === token) return
     handled.current = token
-    const by = describeOrigin(change.origin)
-    setNote(by ? `Updated by ${by}.` : 'Updated outside the editor.')
+    // The app's own maintenance passes (dedupe after a pull, gallery
+    // repair) are not news when nothing was at stake: they run after
+    // most pulls, and a note each time is noise. They still name
+    // themselves in the banner above when there are unsaved edits.
+    if (!change.origin.startsWith('internal:')) {
+      const by = describeOrigin(change.origin)
+      setNote(by ? `Updated by ${by}.` : 'Updated outside the editor.')
+    }
     void reload(characterId)
   }, [characterId, change, dirty, reload])
 

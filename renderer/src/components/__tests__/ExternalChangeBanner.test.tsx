@@ -85,6 +85,17 @@ it('names the app\'s own maintenance pass as the writer', async () => {
   )
 })
 
+it('catches up on a maintenance pass without a note when nothing was at stake', async () => {
+  seed({ dirty: false, origin: 'internal:dedupe-after-pull' })
+  const { container } = render(<ExternalChangeBanner />)
+
+  await waitFor(() => {
+    expect(useStore.getState().flistReloadAfterExternalChange).toHaveBeenCalledWith(CID)
+  })
+  expect(screen.queryByTestId('external-change-note')).toBeNull()
+  expect(container.firstChild).toBeNull()
+})
+
 it('reloads once, not once per render', async () => {
   seed({ dirty: false })
   const { rerender } = render(<ExternalChangeBanner />)
