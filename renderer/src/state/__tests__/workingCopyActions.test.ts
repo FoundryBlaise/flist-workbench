@@ -353,77 +353,128 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   })
 })
 
-describe('flistResetWorkingToLive cancels armed follow-up flush', () => {
-  it('a follow-up flush scheduled by a prior PUT success does not race the DELETE', async () => {
-    useStore.setState({
-      flistArchive: {
-        '99': {
-          live: { character: { description: 'live' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      }
+const BENCH_URL = `/flist/character/99/sets/${SET_ID}/payload`
+const descOf = (body: unknown) =>
+  ((body as { character?: { description?: string } }).character ?? {}).description
+
+function seedLive(live: Record<string, unknown>) {
+  useStore.setState({
+    flistArchive: { '99': { live, snapshots: [], pullStatus: 'idle' } }
+  })
+}
+
+describe('flistResetWorkingToLive writes the bench, not working.json', () => {
+  it('replaces the bench on disk with Live, against the etag the window holds', async () => {
+    seedLive({
+      character: { description: 'live' },
+      images: [
+        { image_id: '1', description: '', sort_order: 0 },
+        { image_id: '2', description: '', sort_order: 1 }
+      ]
     })
+    seedSlot('99', {
+      character: { description: 'edited' },
+      images: [
+        { image_id: '2', description: '', sort_order: 0 },
+        { image_id: '1', description: '', sort_order: 1 },
+        { image_id: 'local-abc', description: '', sort_order: 2 }
+      ],
+      _overlay: ['character.description', 'images']
+    })
+    const calls = mockFetch([async () => ok({ etag: 'after-reset' })])
+
+    await useStore.getState().flistResetWorkingToLive('99')
+
+    expect(calls.length).toBe(1)
+    const [put] = calls
+    expect(put.method).toBe('PUT')
+    expect(put.url).toContain(BENCH_URL)
+    expect(put.headers?.['If-Match']).toBe('seed-etag')
+    expect(descOf(put.body)).toBe('live')
+    const images = (put.body as { images: { image_id: string }[] }).images
+    expect(images.map((i) => i.image_id)).toEqual(['1', '2'])
+    expect((put.body as { _overlay: string[] })._overlay).toEqual([])
+
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.etag).toBe('after-reset')
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.materialised).toBe(true)
+    expect(slot.overlay).toEqual([])
+  })
+
+  it('a follow-up flush armed before the reset never ships the pre-reset payload', async () => {
+    seedLive({ character: { description: 'live' } })
     seedSlot('99', { character: { description: 'edited' } })
     const calls = mockFetch([
-      // First PUT succeeds. flistFlushWorking's success branch may
-      // arm a follow-up timer when newer payload is waiting; we keep
-      // the slot 'dirty' across the await by editing immediately
-      // after the PUT body is sent.
       async () => ok({ etag: 'next' }),
-      async () => ok({ deleted: true }),
-      async () => ok({ etag: 'restored' })
+      async () => ok({ etag: 'after-reset' }),
+      async () => ok({ etag: 'unexpected' })
     ])
-    // Arm an initial flush.
+    // A save lands, then a newer edit arms the success branch's
+    // follow-up flush; the reset arrives before that timer fires.
     useStore.getState().flistSetWorkingField('99', 'character.description', 'edited+')
     await vi.advanceTimersByTimeAsync(500)
-    // Now edit again — this would schedule another flush in the success
-    // branch via `_scheduleFlush`. Then reset before that timer fires.
     useStore.getState().flistSetWorkingField('99', 'character.description', 'edited++')
     await useStore.getState().flistResetWorkingToLive('99')
-    // Let any potentially-stranded timers fire.
     await vi.advanceTimersByTimeAsync(1000)
-    // Expect exactly one DELETE and no PUT *after* it (no resurrection
-    // of the pre-reset payload).
-    const idxDelete = calls.findIndex((c) => c.method === 'DELETE')
-    expect(idxDelete).toBeGreaterThanOrEqual(0)
-    const putsAfterDelete = calls
-      .slice(idxDelete + 1)
-      .filter((c) => c.method === 'PUT')
-    expect(putsAfterDelete.length).toBe(0)
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts.map((p) => descOf(p.body))).toEqual(['edited+', 'live'])
+    // The reset writes over the etag the landed save left, not the
+    // one the slot carried before it.
+    expect(puts[1].headers?.['If-Match']).toBe('next')
+    expect(calls.some((c) => c.url.includes('/working'))).toBe(false)
+    expect(useStore.getState().flistWorking['99'].etag).toBe('after-reset')
+  })
+
+  it('a slot that was never materialised is reseeded in memory only', async () => {
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', { character: { description: 'live' } })
+    useStore.setState((s) => ({
+      flistWorking: {
+        ...s.flistWorking,
+        '99': { ...s.flistWorking['99'], materialised: false, etag: null }
+      }
+    }))
+    const calls = mockFetch([async () => ok({ etag: 'unexpected' })])
+
+    await useStore.getState().flistResetWorkingToLive('99')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(calls).toEqual([])
+    expect(useStore.getState().flistWorking['99'].materialised).toBe(false)
   })
 })
 
 describe('flistResetWorkingToLive + undo round-trip', () => {
-  it('DELETEs, seeds from Live, then undo PUTs the original snapshot back', async () => {
-    useStore.setState({
-      flistArchive: {
-        '99': {
-          live: { character: { description: 'live' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      }
-    })
+  it('undo writes the snapshot back into the bench over the reset\'s etag', async () => {
+    seedLive({ character: { description: 'live' } })
     seedSlot('99', {
       character: { description: 'edited' },
       _overlay: ['character.description']
     })
     const calls = mockFetch([
-      async () => ok({ deleted: true }),
-      async () => ok({ etag: 'restored' })
+      async () => ok({ etag: 'after-reset' }),
+      async () => ok({ etag: 'after-undo' })
     ])
+
     await useStore.getState().flistResetWorkingToLive('99')
-    const after = useStore.getState().flistWorking['99']
-    const afterChar = after.payload.character as { description?: string } | undefined
-    expect(afterChar?.description).toBe('live')
     expect(useStore.getState().flistResetUndo).not.toBeNull()
     await useStore.getState().flistUndoResetWorking()
+
+    expect(calls.length).toBe(2)
+    const undoPut = calls[1]
+    expect(undoPut.method).toBe('PUT')
+    expect(undoPut.url).toContain(BENCH_URL)
+    expect(undoPut.headers?.['If-Match']).toBe('after-reset')
+    expect(descOf(undoPut.body)).toBe('edited')
+
     const restored = useStore.getState().flistWorking['99']
-    const restoredChar = restored.payload.character as { description?: string } | undefined
-    expect(restoredChar?.description).toBe('edited')
-    expect(calls.some((c) => c.method === 'DELETE')).toBe(true)
-    expect(calls.some((c) => c.method === 'PUT')).toBe(true)
+    expect(descOf(restored.payload)).toBe('edited')
+    expect(restored.overlay).toEqual(['character.description'])
+    expect(restored.etag).toBe('after-undo')
+    expect(restored.unsavedDirty).toBe(false)
+    expect(useStore.getState().flistResetUndo).toBeNull()
   })
 })
 

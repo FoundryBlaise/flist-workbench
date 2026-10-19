@@ -2703,28 +2703,33 @@ export const useStore = create<State>((set, get) => ({
     }
     // A still-newer-payload follow-up flush may have armed itself via
     // _scheduleFlush in the success branch of the drained PUT; cancel
-    // that too or it would race ahead of our DELETE (Round 1 verifier).
+    // that too or it would race ahead of the reset's own write (Round 1
+    // verifier).
     _cancelFlush(characterId)
-    try {
-      await api.flistWorkingDelete(characterId)
-    } catch {
-      // Best-effort — even if delete failed (race with another window),
-      // dropping the in-memory slot still gives the user a recovery
-      // path. Next flush will reconcile via If-Match.
-    }
-    // Stash the pre-delete snapshot for the 5s undo banner.
+    // Re-read after the drain: a save that just landed moved the etag.
+    const current = get().flistWorking[characterId] ?? slot
+    // The Workbench is the active set's payload.json. This used to
+    // DELETE the legacy working.json, which never touched the bench, so
+    // the discard held only until the next reload read the old bench
+    // back in. Write the Live seed into the bench instead, against the
+    // etag the window holds. A slot that was never materialised has
+    // nothing on disk to replace and stays in memory.
     const expiresAt = Date.now() + RESET_UNDO_MS
     set((s) => {
       const live = s.flistArchive[characterId]?.live ?? null
       const seeded = live ? seedWorkingFromLive(live) : emptyWorkingSlot().payload
-      const fresh: FlistWorkingSlot = {
-        ...emptyWorkingSlot(),
-        payload: seeded,
-        materialised: false
-      }
+      const fresh: FlistWorkingSlot = current.materialised
+        ? {
+            ...emptyWorkingSlot(),
+            payload: seeded,
+            etag: current.etag,
+            materialised: true,
+            unsavedDirty: true
+          }
+        : { ...emptyWorkingSlot(), payload: seeded, materialised: false }
       return {
         flistWorking: { ...s.flistWorking, [characterId]: fresh },
-        flistResetUndo: { characterId, snapshot: slot, expiresAt }
+        flistResetUndo: { characterId, snapshot: current, expiresAt }
       }
     })
     // Mirror the seeded description into the editor so the panel
@@ -2750,6 +2755,9 @@ export const useStore = create<State>((set, get) => ({
       }
     }, RESET_UNDO_MS + 50)
     _resetUndoTimers.set(characterId, t)
+    if (current.materialised) {
+      await get().flistFlushWorking(characterId)
+    }
   },
 
   // ---- Working sets v2 ----------------------------------------------
@@ -4219,48 +4227,34 @@ export const useStore = create<State>((set, get) => ({
       clearTimeout(timer)
       _resetUndoTimers.delete(characterId)
     }
-    // Re-PUT the pre-delete snapshot. Try `If-Match: null` first (delete
-    // left disk empty); on 409 the file was touched by another window
-    // during the 5s undo window — read the current etag and retry with
-    // it so we explicitly overwrite rather than silently clobbering
-    // unknown bytes (QA P2-5).
-    const writeWith = async (etag: string | null) =>
-      api.flistWorkingWrite(characterId, snapshot.payload, { etag })
-    try {
-      let result
-      try {
-        result = await writeWith(null)
-      } catch (err) {
-        if (err instanceof Error && err.message === 'etag_mismatch') {
-          const errWith = err as Error & { currentEtag?: string | null }
-          const currentEtag = errWith.currentEtag ?? null
-          result = await writeWith(currentEtag)
-        } else {
-          throw err
-        }
-      }
-      const { etag } = result
+    // Put the snapshot back into the bench the reset wrote, against the
+    // etag that write left. Wait for the reset's own save first, or the
+    // two PUTs would race. A 409 here means another writer touched the
+    // bench inside the undo window, and the flush surfaces it like any
+    // other conflict instead of overwriting their bytes.
+    _cancelFlush(characterId)
+    const inflight = _flushInflight.get(characterId)
+    if (inflight) await inflight.catch(() => {})
+    const current = get().flistWorking[characterId]
+    if (current?.materialised) {
       set((s) => ({
         flistWorking: {
           ...s.flistWorking,
           [characterId]: {
             ...snapshot,
-            etag,
-            unsavedDirty: false,
-            saveStatus: 'saved',
-            saveError: null,
-            lastSavedAt: Date.now(),
-            materialised: true
+            etag: current.etag,
+            materialised: true,
+            unsavedDirty: true,
+            saveStatus: 'idle',
+            saveError: null
           }
         }
       }))
-    } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err)
+      await get().flistFlushWorking(characterId)
+    } else {
+      // The reset wrote nothing, so there is nothing on disk to undo.
       set((s) => ({
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: { ...snapshot, saveStatus: 'error', saveError: raw }
-        }
+        flistWorking: { ...s.flistWorking, [characterId]: snapshot }
       }))
     }
     // Refresh the editor surface against the restored slot.
