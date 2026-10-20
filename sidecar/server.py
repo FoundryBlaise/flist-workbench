@@ -44,6 +44,7 @@ from services import backup_all as backup_all_service
 from services import events as event_bus
 from services import foreign as foreign_service
 from services import image_import as image_import_service
+from services import image_trash as image_trash_service
 from services import pull as pull_service
 from logs import (
     LogDirError,
@@ -1475,16 +1476,69 @@ async def flist_character_images_repair(character_id: str) -> dict:
 async def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> dict:
-    """Permanently delete `images/<image_id>.<ext>`. There's no
-    secondary store under v5; once the file is gone the bytes are
-    gone. The renderer is responsible for wrapping every call in an
-    explicit confirm dialog (the Images tab's only destructive path)
-    and for dropping the matching gallery row from working.json
-    before/after this call."""
-    ok = character_archive.remove_character_image(character_id, image_id)
-    if not ok:
+    """Move `images/<image_id>.<ext>` into the character's trash, where
+    it can be restored until the trash is emptied. The renderer drops
+    any gallery row pointing at it."""
+    _require_valid_character_id(character_id)
+    result = image_trash_service.trash_images(character_id, [image_id])
+    if not result["trashed"]:
         raise HTTPException(status_code=404, detail="image not found")
-    return {"deleted": True, "image_id": image_id}
+    return {"trashed": True, "image_id": image_id}
+
+
+class _ImageIdsBody(BaseModel):
+    image_ids: list[str]
+
+
+@app.post("/flist/character/{character_id}/images/trash")
+async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
+    """Move several pool files into the trash at once."""
+    _require_valid_character_id(character_id)
+    return image_trash_service.trash_images(character_id, body.image_ids)
+
+
+@app.get("/flist/character/{character_id}/trash")
+async def flist_character_trash_list(character_id: str) -> dict:
+    _require_valid_character_id(character_id)
+    return {
+        "character_id": character_id,
+        "items": image_trash_service.list_trash(character_id),
+    }
+
+
+@app.get("/flist/character/{character_id}/trash/{filename}")
+async def flist_character_trash_file(character_id: str, filename: str) -> FileResponse:
+    """Serve a trashed file, for the trash view's thumbnails."""
+    _require_valid_character_id(character_id)
+    import re as _re
+
+    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename) or filename.endswith(".json"):
+        raise HTTPException(status_code=400, detail="invalid image filename")
+    path = image_trash_service.trash_dir(character_id) / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="image not found")
+    return FileResponse(path)
+
+
+@app.post("/flist/character/{character_id}/trash/restore")
+async def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) -> dict:
+    """Put trashed files back into the pool (not onto the profile)."""
+    _require_valid_character_id(character_id)
+    return image_trash_service.restore_images(character_id, body.image_ids)
+
+
+# Deleting for good is the window's alone: the MCP layer has no tool for
+# it, so a model can never make a picture unrecoverable.
+@app.post("/flist/character/{character_id}/trash/purge")
+async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
+    _require_valid_character_id(character_id)
+    return image_trash_service.purge_images(character_id, body.image_ids)
+
+
+@app.delete("/flist/character/{character_id}/trash")
+async def flist_character_trash_empty(character_id: str) -> dict:
+    _require_valid_character_id(character_id)
+    return {"purged": image_trash_service.empty_trash(character_id)}
 
 
 @app.get("/flist/character/{character_id}/export.zip")

@@ -2116,7 +2116,7 @@ def write_character_image(
     tmp.replace(target)
 
 
-def _find_image_with_sha(
+def find_image_with_sha(
     character_id: int | str, sha: str
 ) -> Path | None:
     """Return the first file in `images/` whose bytes hash to `sha`, or
@@ -2281,7 +2281,7 @@ def add_uploaded_image(
     if ext is None:
         return None
     sha = _hash_bytes(data)
-    existing = _find_image_with_sha(character_id, sha)
+    existing = find_image_with_sha(character_id, sha)
     if existing is not None:
         try:
             stat = existing.stat()
@@ -2588,10 +2588,9 @@ def adopt_flist_image_ids(
 
 
 def remove_character_image(character_id: int | str, image_id: str) -> bool:
-    """Delete `images/<image_id>.<ext>`. Permanent — there's no
-    secondary pool to fall back on under the v5 model, which is why the
-    renderer wraps every call to this in an explicit confirm dialog.
-    Returns True iff a file was removed."""
+    """Delete `images/<image_id>.<ext>` for good. No user-facing path
+    calls this: the window and `remove_image` go through the trash
+    (`services/image_trash.py`). Returns True iff a file was removed."""
     if not _SAFE_NAME_RE.match(image_id):
         return False
     d = images_dir(character_id)

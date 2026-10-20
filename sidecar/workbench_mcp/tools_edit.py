@@ -945,8 +945,9 @@ def remove_image(
 ) -> dict[str, Any]:
     """Take an image off the profile.
 
-    The file stays on disk and can be put back with add_image unless
-    `delete_file=true`, which removes it permanently.
+    The file stays in the pool and can be put back with add_image.
+    `delete_file=true` moves it to the character's trash instead, where
+    `restore_image` can bring it back; only the user can empty the trash.
     """
     from services import payload_ops
 
@@ -964,29 +965,76 @@ def remove_image(
         )
 
     _apply(target, resolved, mutate)
-    file_deleted = False
+    file_trashed = False
     if delete_file:
-        file_deleted = character_archive.remove_character_image(
-            target.id, str(image_id)
+        from services import image_trash
+
+        file_trashed = bool(
+            image_trash.trash_images(target.id, [str(image_id)])["trashed"]
         )
     audit(
         "remove_image",
         character=target.name,
         set=resolved.name,
         image_id=image_id,
-        file_deleted=file_deleted,
+        file_trashed=file_trashed,
     )
     return {
         "character": target.name,
         "set": resolved.name,
         "image_id": image_id,
-        "file_deleted": file_deleted,
+        "file_trashed": file_trashed,
         "note": (
-            "The file is gone."
-            if file_deleted
-            else "The file is still on disk; add_image can put it back."
+            "The file is in the trash; restore_image puts it back in the pool."
+            if file_trashed
+            else "The file is still in the pool; add_image can put it back."
         ),
     }
+
+
+@tool(tags=TAG_CHARACTER, title="List the image trash", read_only=True)
+def list_trash(character: str) -> dict[str, Any]:
+    """Images deleted from the character's pool, newest first, with when
+    and by whom (`ui` or `mcp`). `restore_image` puts them back into the
+    pool. Emptying the trash is the user's job, in the window."""
+    from services import image_trash
+
+    target = resolve_character(character)
+    return {"character": target.name, "items": image_trash.list_trash(target.id)}
+
+
+@tool(tags=TAG_CHARACTER, title="Restore images from the trash")
+def restore_image(
+    character: str,
+    image_id: str | None = None,
+    image_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Move images from the trash back into the pool — not onto the
+    profile; use add_image for that. Give one `image_id` or several
+    `image_ids`. If the pool already holds the same bytes, the trash
+    entry is dropped and the existing id is reported instead.
+    """
+    from services import image_trash
+
+    ids = [str(i) for i in (image_ids or [])]
+    if image_id:
+        ids.insert(0, str(image_id))
+    if not ids:
+        raise ToolError("validation_failed", "Give image_id or image_ids.")
+    target = resolve_character(character)
+    result = image_trash.restore_images(target.id, ids)
+    if not result["restored"] and result["not_found"]:
+        raise ToolError(
+            "image_not_found",
+            f"Not in {target.name}'s trash: {result['not_found']}. "
+            "list_trash shows what is there.",
+        )
+    audit(
+        "restore_image",
+        character=target.name,
+        image_ids=[r["image_id"] for r in result["restored"]],
+    )
+    return {"character": target.name, **result}
 
 
 @tool(tags=TAG_CHARACTER, title="Put an image on the profile")

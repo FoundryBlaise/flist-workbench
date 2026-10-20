@@ -269,7 +269,7 @@ export function ImagesTab({
     )
   }
 
-  // ---- permanent delete (modal confirm) --------------------------------
+  // ---- delete to trash (modal confirm) ---------------------------------
   const [confirmDelete, setConfirmDelete] = useState<PoolEntry | null>(null)
 
   const handleDelete = async () => {
@@ -594,7 +594,7 @@ export function ImagesTab({
         </div>
       )}
 
-      {/* ---- Delete-confirmation modal (only destructive path) ---- */}
+      {/* ---- Delete-confirmation modal: moves the file to the trash ---- */}
       {confirmDelete && (
         <DeleteConfirmModal
           entry={confirmDelete}
@@ -658,7 +658,7 @@ function PoolRow({
               type="button"
               className="flist-images-pool-item__btn"
               onClick={onDelete}
-              title="Delete permanently"
+              title="Move to trash"
             >
               ×
             </button>
@@ -709,7 +709,7 @@ function DeleteConfirmModal({
         data-testid="flist-images-delete-confirm"
       >
         <h3 id="flist-images-delete-title" className="flist-images-modal__title">
-          Delete this image permanently?
+          Move this image to the trash?
         </h3>
         <div className="flist-images-modal__body">
           <CharacterImageThumb
@@ -717,8 +717,8 @@ function DeleteConfirmModal({
             imageId={entry.image_id}
           />
           <p>
-            You’re about to permanently delete this picture. The bytes are
-            removed from disk — there’s no other copy. Are you sure?
+            The picture leaves the pool and goes to this character’s trash,
+            where you can restore it until you empty the trash.
           </p>
         </div>
         <div className="flist-images-modal__actions">
@@ -736,7 +736,7 @@ function DeleteConfirmModal({
             onClick={onConfirm}
             data-testid="flist-images-delete-confirm-btn"
           >
-            Delete permanently
+            Move to trash
           </button>
         </div>
       </div>

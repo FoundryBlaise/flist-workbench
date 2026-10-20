@@ -770,7 +770,7 @@ async def test_removing_an_image_closes_the_gap_in_sort_order(
         _, body = await call_tool(
             session, "remove_image", character="Lady Amber Blaise", image_id="2"
         )
-        assert body["file_deleted"] is False
+        assert body["file_trashed"] is False
     rows = payload_of(workbench)["images"]
     assert [(r["image_id"], r["sort_order"]) for r in rows] == [("1", 0), ("3", 1)]
 
