@@ -992,6 +992,52 @@ def remove_image(
     }
 
 
+@tool(tags=TAG_CHARACTER, title="Move pool images to the trash")
+def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
+    """Move images that are in the pool — on disk, not on the profile —
+    to the character's trash. `restore_image` brings them back; only the
+    user can empty the trash, in the window.
+
+    An image still in a working set's gallery is refused (take it off
+    with `remove_image` first), so no gallery is left pointing at a file
+    that is gone. An image on the live profile can be trashed, but the
+    next pull fetches it again; the result says which.
+    """
+    from services import image_import, image_trash
+
+    ids = list(dict.fromkeys(str(i) for i in image_ids))
+    if not ids:
+        raise ToolError("validation_failed", "Give at least one image id.")
+    target = resolve_character(character)
+    refs = image_import.references(target.id)
+    in_gallery = {
+        i: refs[i]["working_sets"] for i in ids if refs.get(i, {}).get("working_sets")
+    }
+    if in_gallery:
+        raise ToolError(
+            "image_on_profile",
+            "Still in a gallery, so not trashed: "
+            + ", ".join(f"{i} ({', '.join(sets)})" for i, sets in in_gallery.items())
+            + ". Take them off with remove_image first. Nothing was moved.",
+        )
+    result = image_trash.trash_images(target.id, ids)
+    moved = [t["image_id"] for t in result["trashed"]]
+    on_live = [i for i in moved if refs.get(i, {}).get("live")]
+    audit("trash_images", character=target.name, image_ids=moved)
+    out: dict[str, Any] = {
+        "character": target.name,
+        "trashed": moved,
+        "not_found": result["not_found"],
+    }
+    if on_live:
+        out["on_live_profile"] = on_live
+        out["note"] = (
+            "These are on the live profile, so the next pull downloads "
+            "them into the pool again."
+        )
+    return out
+
+
 @tool(tags=TAG_CHARACTER, title="List the image trash", read_only=True)
 def list_trash(character: str) -> dict[str, Any]:
     """Images deleted from the character's pool, newest first, with when

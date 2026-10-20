@@ -326,6 +326,7 @@ Names below are proposals; ~75 tools in total.
 | `get_avatar(name)` | image |
 | `add_image(character, set, path \| base64, description?)` | magic-byte sniffing as today; appends to gallery |
 | `remove_image(character, set, image_id, delete_file=false)` | `delete_file=true` moves the file to `<character>/trash/`, not off the disk |
+| `trash_images(character, image_ids)` | moves pool files to the trash; refuses anything still in a working set's gallery (nothing moves), and names the ones on the live profile, which the next pull fetches again |
 | `list_trash(character)`, `restore_image(character, image_id \| image_ids)` | restore puts files back in the pool, not on the profile; identical bytes already in the pool just drop the trash entry. Deleting for good (purge one / empty) is window-only — no MCP tool, so a model can never make a picture unrecoverable |
 | `set_image_description`, `reorder_images(character, set, image_ids)` | renumbers `sort_order` 0..n-1 |
 

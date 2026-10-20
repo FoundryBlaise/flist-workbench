@@ -167,6 +167,36 @@ async def test_remove_image_with_delete_file_trashes_and_restore_brings_it_back(
     assert "image_not_found" in tool_error_text(missing)
 
 
+async def test_a_model_can_trash_pool_images_but_not_gallery_ones(
+    workbench, client  # noqa: F811
+) -> None:
+    on_profile = upload(client, 20)
+    loose = upload(client, 21)
+    pulled = upload(client, 22)
+    live = workbench.read_live("42")
+    live["images"] = [{"image_id": pulled, "description": "", "sort_order": 0}]
+    workbench.write_live("42", live)
+
+    async with mcp_client("character") as session:
+        await make_draft(session)
+        seed_gallery(workbench, [on_profile])
+        refused, _ = await call_tool(
+            session, "trash_images", character=CHAR, image_ids=[loose, on_profile]
+        )
+        _, body = await call_tool(
+            session, "trash_images", character=CHAR, image_ids=[loose, pulled, "ghost"]
+        )
+
+    text = tool_error_text(refused)
+    assert "image_on_profile" in text and on_profile in text
+    assert body["trashed"] == [loose, pulled]
+    assert body["not_found"] == ["ghost"]
+    assert body["on_live_profile"] == [pulled]
+    assert set(trash_ids(client)) == {loose, pulled}
+    assert pool_ids(client) == {on_profile}
+    assert [r["image_id"] for r in payload_of(workbench)["images"]] == [on_profile]
+
+
 def test_the_trash_remembers_where_an_import_came_from(
     client, workbench, tmp_path: Path  # noqa: F811
 ) -> None:
