@@ -4757,6 +4757,87 @@ body {
 .flist-images-modal__btn:hover { background: var(--row-hover, rgba(255, 255, 255, 0.04)); }
 .flist-images-modal__btn--danger { border-color: #d04a4a; color: #d04a4a; }
 
+/* Batch confirm: a strip of what is about to go, then where it's used. */
+.flist-images-modal--batch { max-width: 520px; }
+.flist-images-modal__thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.flist-images-modal__thumbs img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  background: #0d0d10;
+  border: 1px solid var(--border, #2c2c30);
+  border-radius: 4px;
+}
+.flist-images-modal__more { font-size: 12px; color: var(--text-dim); }
+.flist-images-modal__text { margin: 0; font-size: 12px; color: var(--text-dim); }
+.flist-images-modal__notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #d4a04a;
+}
+
+/* Pool / trash: selection, filters, the bar that appears with a selection. */
+.flist-images-toolbar,
+.flist-images-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #2c2c30);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.flist-images-actionbar { background: var(--select, rgba(106, 163, 255, 0.08)); }
+.flist-images-actionbar > span { flex: 1; }
+.flist-images-toolbar__spacer { flex: 1; }
+.flist-images-toolbar__btn,
+.flist-images-filter {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border, #2c2c30);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.flist-images-toolbar__btn:hover,
+.flist-images-filter:hover { background: var(--row-hover, rgba(255, 255, 255, 0.04)); }
+.flist-images-toolbar__btn--add { border-color: #84c97a; color: #84c97a; }
+.flist-images-toolbar__btn--danger { border-color: #d04a4a; color: #d04a4a; }
+.flist-images-filter { color: var(--text-dim); border-radius: 10px; }
+.flist-images-filter--on {
+  color: var(--text);
+  border-color: var(--accent, #6aa3ff);
+  background: rgba(106, 163, 255, 0.12);
+}
+.flist-images-select { align-self: center; margin: 0; cursor: pointer; }
+.flist-images-pool-item--selected { background: rgba(106, 163, 255, 0.1); }
+.flist-images-pool-item__size { font-size: 11px; color: var(--text-dim); }
+.flist-images-pool-item__size--over { color: #d4a04a; }
+.flist-images-trash {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.flist-images-trash__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.flist-images-trash__meta > span:first-child { color: var(--text); }
+
 .flist-images-gallery-item__btn {
   background: transparent;
   color: var(--text);

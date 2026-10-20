@@ -1,6 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../../lib/api'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { api, type FlistImageReferences } from '../../lib/api'
 import { selectWorkingSlot, useStore } from '../../state'
+import {
+  EMPTY_SELECTION,
+  pruneSelection,
+  selectAll,
+  selectRange,
+  toggleSelected,
+  type Selection
+} from './imageSelection'
+import { FLIST_MAX_UPLOAD_BYTES, formatBytes, usageNotes } from './imageUsage'
+import { ImagesConfirmModal, ImagesTrash } from './ImagesTrash'
 
 type GalleryEntry = { image_id: string; description: string; sort_order: number }
 
@@ -83,7 +93,7 @@ export function ImagesTab({
   const roster = useStore((s) => s.flistRoster)
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)
   const uploadImage = useStore((s) => s.flistUploadImage)
-  const deleteImage = useStore((s) => s.flistDeleteImage)
+  const trashImages = useStore((s) => s.flistTrashImages)
   const moveToProfile = useStore((s) => s.flistMoveImageToProfile)
   const moveToPool = useStore((s) => s.flistMoveImageToPool)
   const setGallery = useStore((s) => s.flistSetGalleryImages)
@@ -180,6 +190,58 @@ export function ImagesTab({
     return out
   }, [characterImages, galleryImageIds])
 
+  // ---- pool vs. trash, filters, multi-select ---------------------------
+  const [view, setView] = useState<'pool' | 'trash'>('pool')
+  const [filters, setFilters] = useState({ unused: false, over2mb: false, png: false })
+  const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
+  // Where each image is still used, for the trash warning and the
+  // "not in a working set" filter; and how full the trash is. Both
+  // follow the pool listing, which reloads after every change to it.
+  const [refs, setRefs] = useState<Record<string, FlistImageReferences>>({})
+  const [trashCount, setTrashCount] = useState<number | null>(null)
+  useEffect(() => {
+    if (!characterId) return
+    let cancelled = false
+    api
+      .flistImageReferences(characterId)
+      .then((r) => {
+        if (!cancelled) setRefs(r)
+      })
+      .catch(() => {})
+    api
+      .flistTrashList(characterId)
+      .then((r) => {
+        if (!cancelled) setTrashCount(r.items.length)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [characterId, characterImages])
+  useEffect(() => {
+    setView('pool')
+    setSel(EMPTY_SELECTION)
+  }, [characterId])
+
+  const visiblePool = useMemo(
+    () =>
+      poolEntries.filter((e) => {
+        if (filters.unused && (refs[e.image_id]?.working_sets.length ?? 0) > 0) return false
+        if (filters.over2mb && e.size < FLIST_MAX_UPLOAD_BYTES) return false
+        if (filters.png && e.extension !== 'png') return false
+        return true
+      }),
+    [poolEntries, filters, refs]
+  )
+  const visibleIds = useMemo(() => visiblePool.map((e) => e.image_id), [visiblePool])
+  useEffect(() => {
+    setSel((s) => pruneSelection(s, visibleIds))
+  }, [visibleIds])
+
+  const pick = (imageId: string, e: MouseEvent) => {
+    setSel((s) => (e.shiftKey ? selectRange(s, imageId, visibleIds) : toggleSelected(s, imageId)))
+  }
+
   // ---- file drop / picker + upload error toast ------------------------
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -269,19 +331,32 @@ export function ImagesTab({
     )
   }
 
-  // ---- delete to trash (modal confirm) ---------------------------------
-  const [confirmDelete, setConfirmDelete] = useState<PoolEntry | null>(null)
+  // ---- to the trash (modal confirm), one image or the selection -------
+  const [confirmTrash, setConfirmTrash] = useState<string[] | null>(null)
 
-  const handleDelete = async () => {
-    if (!confirmDelete) return
-    const entry = confirmDelete
-    setConfirmDelete(null)
+  const handleTrash = async () => {
+    if (!confirmTrash) return
+    const ids = confirmTrash
+    setConfirmTrash(null)
     try {
-      await deleteImage(characterId, entry.image_id)
+      await trashImages(characterId, ids)
+      setSel(EMPTY_SELECTION)
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err)
-      setUploadError(`Couldn’t delete: ${raw}`)
+      setUploadError(`Couldn’t move to the trash: ${raw}`)
     }
+  }
+
+  // Appends in the order the images were picked, under one undo.
+  const addSelectedToGallery = () => {
+    const ids = sel.ids
+    if (!ids.length) return
+    setMoveUndo({
+      previous: gallery,
+      message: `${ids.length} added to the profile.`
+    })
+    for (const id of ids) moveToProfile(characterId, id)
+    setSel(EMPTY_SELECTION)
   }
 
   if (!slot) {
@@ -326,19 +401,38 @@ export function ImagesTab({
               void uploadFiles(e.dataTransfer.files)
             }
           }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Delete' || readOnly || view !== 'pool') return
+            if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
+            if (!sel.ids.length) return
+            e.preventDefault()
+            setConfirmTrash(sel.ids)
+          }}
         >
           <header className="flist-images-pane__header">
-            <h3>Pool</h3>
+            <h3>{view === 'trash' ? 'Trash' : 'Pool'}</h3>
             <span className="flist-images-pane__count">
-              {poolEntries.length} image{poolEntries.length === 1 ? '' : 's'}
+              {view === 'pool' &&
+                `${poolEntries.length} image${poolEntries.length === 1 ? '' : 's'}`}
             </span>
-            {!readOnly && (
+            {!readOnly && view === 'pool' && (
               <button
                 type="button"
                 className="flist-images-pane__add"
                 onClick={() => fileInputRef.current?.click()}
               >
                 + Add image
+              </button>
+            )}
+            {view === 'pool' && (
+              <button
+                type="button"
+                className="flist-images-pane__add"
+                onClick={() => setView('trash')}
+                data-testid="flist-images-trash-toggle"
+                title="Images moved out of the pool. Restore them, or delete them for good."
+              >
+                Trash{trashCount ? ` (${trashCount})` : ''}
               </button>
             )}
             <input
@@ -355,28 +449,102 @@ export function ImagesTab({
               }}
             />
           </header>
-          {characterImages?.status === 'loading' && (
-            <div className="flist-images-pane__loading">Loading images…</div>
+          {view === 'trash' ? (
+            <ImagesTrash
+              characterId={characterId}
+              readOnly={readOnly}
+              refreshKey={characterImages}
+              onBack={() => setView('pool')}
+              onCountChange={setTrashCount}
+            />
+          ) : (
+            <>
+              {characterImages?.status === 'loading' && (
+                <div className="flist-images-pane__loading">Loading images…</div>
+              )}
+              {poolEntries.length > 0 && (
+                <div className="flist-images-toolbar">
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      className="flist-images-toolbar__btn"
+                      onClick={() =>
+                        setSel(sel.ids.length ? EMPTY_SELECTION : selectAll(visibleIds))
+                      }
+                      data-testid="flist-images-select-all"
+                    >
+                      {sel.ids.length ? 'Clear selection' : 'Select all'}
+                    </button>
+                  )}
+                  <span className="flist-images-toolbar__spacer" />
+                  {(
+                    [
+                      ['unused', 'Not in a working set'],
+                      ['over2mb', 'Over 2 MB'],
+                      ['png', 'PNG']
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`flist-images-filter${filters[key] ? ' flist-images-filter--on' : ''}`}
+                      aria-pressed={filters[key]}
+                      onClick={() => setFilters((f) => ({ ...f, [key]: !f[key] }))}
+                      data-testid={`flist-images-filter-${key}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!readOnly && sel.ids.length > 0 && (
+                <div className="flist-images-actionbar" data-testid="flist-images-actionbar">
+                  <span>{sel.ids.length} selected</span>
+                  <button
+                    type="button"
+                    className="flist-images-toolbar__btn flist-images-toolbar__btn--add"
+                    onClick={addSelectedToGallery}
+                    data-testid="flist-images-add-selected"
+                  >
+                    Add to gallery
+                  </button>
+                  <button
+                    type="button"
+                    className="flist-images-toolbar__btn flist-images-toolbar__btn--danger"
+                    onClick={() => setConfirmTrash(sel.ids)}
+                    title="Move to trash (Del)"
+                    data-testid="flist-images-trash-selected"
+                  >
+                    Move to trash
+                  </button>
+                </div>
+              )}
+              <ul className="flist-images-pool-list">
+                {visiblePool.map((entry) => (
+                  <PoolRow
+                    key={entry.image_id}
+                    characterId={characterId}
+                    entry={entry}
+                    readOnly={readOnly}
+                    selected={sel.ids.includes(entry.image_id)}
+                    onPick={(e) => pick(entry.image_id, e)}
+                    onAdd={() => handleMoveToProfile(entry.image_id)}
+                    onDelete={() => setConfirmTrash([entry.image_id])}
+                  />
+                ))}
+                {!visiblePool.length && poolEntries.length > 0 && (
+                  <li className="flist-images-pool-empty">Nothing matches the filters.</li>
+                )}
+                {!poolEntries.length && characterImages?.status === 'ready' && (
+                  <li className="flist-images-pool-empty">
+                    {readOnly
+                      ? 'Pool is empty.'
+                      : 'Nothing here. Drop PNG / JPG / GIF files to add one, or drag an image off the profile.'}
+                  </li>
+                )}
+              </ul>
+            </>
           )}
-          <ul className="flist-images-pool-list">
-            {poolEntries.map((entry) => (
-              <PoolRow
-                key={entry.image_id}
-                characterId={characterId}
-                entry={entry}
-                readOnly={readOnly}
-                onAdd={() => handleMoveToProfile(entry.image_id)}
-                onDelete={() => setConfirmDelete(entry)}
-              />
-            ))}
-            {!poolEntries.length && characterImages?.status === 'ready' && (
-              <li className="flist-images-pool-empty">
-                {readOnly
-                  ? 'Pool is empty.'
-                  : 'Nothing here. Drop PNG / JPG / GIF files to add one, or drag an image off the profile.'}
-              </li>
-            )}
-          </ul>
         </section>
 
         {/* ---- Profile pane (right) ---- */}
@@ -594,13 +762,21 @@ export function ImagesTab({
         </div>
       )}
 
-      {/* ---- Delete-confirmation modal: moves the file to the trash ---- */}
-      {confirmDelete && (
-        <DeleteConfirmModal
-          entry={confirmDelete}
-          characterId={characterId}
-          onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => void handleDelete()}
+      {/* ---- Trash confirmation: what goes, and where it's still used ---- */}
+      {confirmTrash && (
+        <ImagesConfirmModal
+          title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the trash?`}
+          body="They leave the pool and can be restored from the trash until you empty it."
+          notes={usageNotes(confirmTrash, refs)}
+          thumbs={poolEntries
+            .filter((e) => confirmTrash.includes(e.image_id))
+            .map((e) => ({
+              key: e.image_id,
+              url: api.flistImageUrl(characterId, `${e.image_id}.${e.extension}`)
+            }))}
+          confirmLabel="Move to trash"
+          onCancel={() => setConfirmTrash(null)}
+          onConfirm={() => void handleTrash()}
         />
       )}
     </div>
@@ -611,26 +787,51 @@ function PoolRow({
   characterId,
   entry,
   readOnly,
+  selected,
+  onPick,
   onAdd,
   onDelete
 }: {
   characterId: string
   entry: PoolEntry
   readOnly: boolean
+  selected: boolean
+  /** Checkbox, Ctrl-click or Shift-click on the thumbnail. */
+  onPick: (e: MouseEvent) => void
   onAdd: () => void
   onDelete: () => void
 }) {
   return (
     <li
-      className="flist-images-pool-item"
+      className={`flist-images-pool-item${selected ? ' flist-images-pool-item--selected' : ''}`}
       draggable={!readOnly}
       onDragStart={(e) => {
         if (readOnly) return
         e.dataTransfer.setData(DRAG_MIME_POOL_TO_PROFILE, entry.image_id)
         e.dataTransfer.effectAllowed = 'move'
       }}
+      data-testid="flist-images-pool-item"
     >
-      <PoolThumb characterId={characterId} entry={entry} onClick={onAdd} />
+      {!readOnly && (
+        <input
+          type="checkbox"
+          className="flist-images-select"
+          checked={selected}
+          onClick={onPick}
+          onChange={() => {}}
+          aria-label={`Select ${entry.image_id}`}
+        />
+      )}
+      <PoolThumb
+        characterId={characterId}
+        entry={entry}
+        onClick={(e) => {
+          // A plain click still puts the image on the profile, as it
+          // always has; with a modifier it selects instead.
+          if (!readOnly && (e.ctrlKey || e.metaKey || e.shiftKey)) onPick(e)
+          else onAdd()
+        }}
+      />
       <div className="flist-images-pool-item__meta">
         <span
           className="flist-images-pool-item__source"
@@ -643,6 +844,16 @@ function PoolRow({
           {entry.image_id.startsWith('local-')
             ? `Local · ${entry.image_id.slice(6)}`
             : `id ${entry.image_id}`}
+        </span>
+        <span
+          className={`flist-images-pool-item__size${
+            entry.size >= FLIST_MAX_UPLOAD_BYTES ? ' flist-images-pool-item__size--over' : ''
+          }`}
+          title={
+            entry.size >= FLIST_MAX_UPLOAD_BYTES ? 'Over F-list’s 2 MB upload limit' : undefined
+          }
+        >
+          {formatBytes(entry.size)}
         </span>
         {!readOnly && (
           <>
@@ -669,81 +880,6 @@ function PoolRow({
   )
 }
 
-function DeleteConfirmModal({
-  entry,
-  characterId,
-  onCancel,
-  onConfirm
-}: {
-  entry: PoolEntry
-  characterId: string
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  const dialogRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    dialogRef.current?.querySelector<HTMLButtonElement>(
-      'button[data-autofocus]'
-    )?.focus()
-    return () => window.removeEventListener('keydown', handler)
-  }, [onCancel])
-
-  return (
-    <div
-      className="flist-images-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="flist-images-delete-title"
-    >
-      <div
-        ref={dialogRef}
-        className="flist-images-modal"
-        data-testid="flist-images-delete-confirm"
-      >
-        <h3 id="flist-images-delete-title" className="flist-images-modal__title">
-          Move this image to the trash?
-        </h3>
-        <div className="flist-images-modal__body">
-          <CharacterImageThumb
-            characterId={characterId}
-            imageId={entry.image_id}
-          />
-          <p>
-            The picture leaves the pool and goes to this character’s trash,
-            where you can restore it until you empty the trash.
-          </p>
-        </div>
-        <div className="flist-images-modal__actions">
-          <button
-            type="button"
-            className="flist-images-modal__btn"
-            onClick={onCancel}
-            data-autofocus
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="flist-images-modal__btn flist-images-modal__btn--danger"
-            onClick={onConfirm}
-            data-testid="flist-images-delete-confirm-btn"
-          >
-            Move to trash
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function PoolThumb({
   characterId,
   entry,
@@ -751,7 +887,7 @@ function PoolThumb({
 }: {
   characterId: string
   entry: PoolEntry
-  onClick?: () => void
+  onClick?: (e: MouseEvent) => void
 }) {
   const url = api.flistImageUrl(
     characterId,

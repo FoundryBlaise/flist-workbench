@@ -96,6 +96,26 @@ export type FlistCharacterImage = {
   added_at?: number
 }
 
+/** A file in a character's image trash (`<character>/trash/`). */
+export type FlistTrashItem = {
+  image_id: string
+  extension: string
+  filename: string
+  size: number
+  deleted_at: number
+  /** 'ui' or 'mcp'; null for a file that got there without an index entry. */
+  deleted_by: string | null
+  source_name: string | null
+}
+
+/** Where an image id is still used, beyond the pool. */
+export type FlistImageReferences = {
+  working_sets: string[]
+  live: boolean
+  snapshots: number
+  newest_snapshot: string | null
+}
+
 
 // ---- foreign profiles (read-only viewer) ----------------------------
 //
@@ -1328,12 +1348,48 @@ export const api = {
     }
     return (await res.json()) as FlistCharacterImage
   },
-  /** Permanently remove `images/<image_id>.<ext>` from disk. There's no
-   *  secondary store, so the renderer wraps every call in an explicit
-   *  confirm dialog (the Images tab's only destructive path). */
+  /** Move `images/<image_id>.<ext>` into the character's trash. */
   flistImageRemove: (characterId: string | number, imageId: string) =>
-    request<{ deleted: boolean; image_id: string }>(
+    request<{ trashed: boolean; image_id: string }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(imageId)}`,
+      { method: 'DELETE' }
+    ),
+  /** Move several pool files into the trash in one call. */
+  flistImagesTrash: (characterId: string | number, imageIds: string[]) =>
+    request<{ trashed: FlistTrashItem[]; not_found: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
+      { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
+    ),
+  /** Where each image id is still used: working sets, live, snapshots. */
+  flistImageReferences: (characterId: string | number) =>
+    get<Record<string, FlistImageReferences>>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
+    ),
+  flistTrashList: (characterId: string | number) =>
+    get<{ character_id: string; items: FlistTrashItem[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash`
+    ),
+  flistTrashFileUrl: (characterId: string | number, filename: string) =>
+    `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
+  /** Back into the pool, not onto the profile. */
+  flistTrashRestore: (characterId: string | number, imageIds: string[]) =>
+    request<{
+      restored: { image_id: string; deduplicated: boolean; from: string }[]
+      not_found: string[]
+      conflicts: string[]
+    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ image_ids: imageIds })
+    }),
+  /** Delete trashed files for good. */
+  flistTrashPurge: (characterId: string | number, imageIds: string[]) =>
+    request<{ purged: string[]; not_found: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
+      { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
+    ),
+  flistTrashEmpty: (characterId: string | number) =>
+    request<{ purged: number }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash`,
       { method: 'DELETE' }
     ),
   flistExportZipUrl: (characterId: string | number) =>

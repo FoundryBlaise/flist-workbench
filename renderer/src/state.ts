@@ -504,15 +504,20 @@ type State = {
     characterId: string,
     file: File | Blob
   ) => Promise<FlistCharacterImage>
-  /** Permanently remove `images/<image_id>.<ext>` from disk. The only
-   *  destructive action under v5; the renderer must wrap this in an
-   *  explicit confirm dialog (the pool-delete affordance). Also drops
-   *  the gallery row if the image happened to still be on-profile, so
-   *  callers don't have to coordinate. */
+  /** Move one image to the character's trash. Also drops the gallery
+   *  row if the image happened to still be on-profile, so callers don't
+   *  have to coordinate. */
   flistDeleteImage: (
     characterId: string,
     imageId: string
   ) => Promise<void>
+  /** Move several pool images to the trash in one request. Only the ids
+   *  the sidecar actually moved leave the pool listing; a failed request
+   *  throws instead of pretending. */
+  flistTrashImages: (
+    characterId: string,
+    imageIds: string[]
+  ) => Promise<string[]>
   /** Append `imageId` to working.json's gallery (move pool→profile).
    *  No-op if the id is already in the gallery. */
   flistMoveImageToProfile: (
@@ -520,7 +525,7 @@ type State = {
     imageId: string
   ) => void
   /** Drop `imageId` from working.json's gallery (move profile→pool).
-   *  The file on disk stays — only flistDeleteImage removes bytes. */
+   *  The file stays in the pool — flistDeleteImage moves it to the trash. */
   flistMoveImageToPool: (
     characterId: string,
     imageId: string
@@ -2033,13 +2038,15 @@ export const useStore = create<State>((set, get) => ({
     return entry
   },
 
-  async flistDeleteImage(characterId, imageId) {
-    await api.flistImageRemove(characterId, imageId).catch(() => null)
+  async flistTrashImages(characterId, imageIds) {
+    if (imageIds.length === 0) return []
+    const res = await api.flistImagesTrash(characterId, imageIds)
+    const moved = res.trashed.map((t) => t.image_id)
     set((s) => {
       const prev = s.flistCharacterImages[characterId]
       if (!prev) return {}
       const nextById = { ...prev.byId }
-      delete nextById[imageId]
+      for (const id of moved) delete nextById[id]
       return {
         flistCharacterImages: {
           ...s.flistCharacterImages,
@@ -2047,6 +2054,11 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     })
+    return moved
+  },
+
+  async flistDeleteImage(characterId, imageId) {
+    await get().flistTrashImages(characterId, [imageId])
     const slot = get().flistWorking[characterId]
     if (!slot) return
     const images = Array.isArray((slot.payload as { images?: unknown }).images)

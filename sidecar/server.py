@@ -1497,6 +1497,15 @@ async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -
     return image_trash_service.trash_images(character_id, body.image_ids)
 
 
+# Not under /images/: that prefix is taken by the `{filename}` route.
+@app.get("/flist/character/{character_id}/image-references")
+async def flist_character_image_references(character_id: str) -> dict:
+    """Where each image id is still used — working sets, live, pull
+    snapshots — so the window can warn before trashing one."""
+    _require_valid_character_id(character_id)
+    return image_import_service.references(character_id)
+
+
 @app.get("/flist/character/{character_id}/trash")
 async def flist_character_trash_list(character_id: str) -> dict:
     _require_valid_character_id(character_id)

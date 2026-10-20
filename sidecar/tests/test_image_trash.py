@@ -89,6 +89,18 @@ def test_restoring_bytes_the_pool_already_has_makes_no_duplicate(client, workben
     assert trash_ids(client) == []
 
 
+def test_the_window_can_ask_where_an_image_is_used(client, workbench) -> None:  # noqa: F811
+    iid = upload(client, 13)
+    live = workbench.read_live("42")
+    live["images"] = [{"image_id": iid, "description": "", "sort_order": 0}]
+    workbench.write_live("42", live)
+
+    refs = client.get("/flist/character/42/image-references").json()
+
+    assert refs[iid]["live"] is True
+    assert refs[iid]["working_sets"] == []
+
+
 def test_unknown_ids_are_reported_not_fatal(client) -> None:
     iid = upload(client, 4)
     res = client.post(
