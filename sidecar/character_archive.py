@@ -2045,7 +2045,7 @@ def _hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _detect_image_ext_from_bytes(data: bytes) -> str | None:
+def detect_image_ext(data: bytes) -> str | None:
     """Sniff PNG/JPEG/GIF magic bytes and return the canonical extension
     ('png'/'jpg'/'gif'). Returns None when the bytes don't match any
     supported format — callers should reject the upload."""
@@ -2136,11 +2136,31 @@ def _find_image_with_sha(
         try:
             if entry.stat().st_size == 0:
                 continue
-            if _hash_bytes(entry.read_bytes()) == sha:
+            if file_sha256(entry) == sha:
                 return entry
         except OSError:
             continue
     return None
+
+
+#: (path, size, mtime_ns) -> sha256. A batch import checks every new
+#: file against the whole folder; without this each check re-reads and
+#: re-hashes every image on disk. Keyed on size and mtime so a file
+#: rewritten in place is hashed again.
+_sha_cache: dict[tuple[str, int, int], str] = {}
+
+
+def file_sha256(path: Path) -> str:
+    """sha256 of a file's bytes, cached per (path, size, mtime). Raises
+    OSError like `read_bytes` would."""
+    stat = path.stat()
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    cached = _sha_cache.get(key)
+    if cached is not None:
+        return cached
+    digest = _hash_bytes(path.read_bytes())
+    _sha_cache[key] = digest
+    return digest
 
 
 def collapse_local_duplicates(character_id: int | str) -> int:
@@ -2247,7 +2267,8 @@ def add_uploaded_image(
     """Save user-uploaded bytes under `images/local-<sha8>.<ext>`.
     Extension is sniffed from magic bytes — Content-Type is never
     trusted. Returns the metadata row (`{image_id, extension, size,
-    added_at}`) or None when the bytes don't match a supported format.
+    added_at, deduplicated}`) or None when the bytes don't match a
+    supported format. `deduplicated` says no new file was written.
     Idempotent — identical bytes always produce the same `local-<sha8>`
     and the file is written only when missing.
 
@@ -2256,7 +2277,7 @@ def add_uploaded_image(
     return that file's row instead of minting a parallel copy. Prevents
     the "same image shows twice in pool" symptom when a user re-uploads
     bytes that came from an earlier F-list pull."""
-    ext = _detect_image_ext_from_bytes(data)
+    ext = detect_image_ext(data)
     if ext is None:
         return None
     sha = _hash_bytes(data)
@@ -2270,6 +2291,7 @@ def add_uploaded_image(
                 "extension": (m.group(2).lower() if m else ext),
                 "size": stat.st_size,
                 "added_at": int(stat.st_mtime),
+                "deduplicated": True,
             }
         except OSError:
             pass
@@ -2291,6 +2313,7 @@ def add_uploaded_image(
         "extension": ext,
         "size": size,
         "added_at": added_at,
+        "deduplicated": False,
     }
 
 

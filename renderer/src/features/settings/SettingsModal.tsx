@@ -1517,6 +1517,96 @@ function SecurityPane() {
         </p>
         {msg && <p className="settings-help"><strong>{msg}</strong></p>}
       </div>
+      <ImageImportFolders />
+    </>
+  )
+}
+
+/** Folders a connected model may import images from (MCP
+ *  `import_images`). Saved on every change, like the token rotation
+ *  above: there is no draft to lose. Only this pane can set them — the
+ *  MCP settings tool can read the list but not change it. */
+function ImageImportFolders() {
+  const [roots, setRoots] = useState<string[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .settingsGet()
+      .then((s) => {
+        if (!cancelled) setRoots(s.image_import_roots ?? [])
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const save = async (next: string[]) => {
+    setError(null)
+    try {
+      const s = await api.settingsUpdate({ image_import_roots: next })
+      setRoots(s.image_import_roots)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const add = async () => {
+    const picker = window.workbench?.selectDirectory
+    if (!picker || !roots) return
+    const chosen = await picker({ title: 'Allow importing images from this folder' })
+    if (chosen) await save([...roots, chosen])
+  }
+
+  return (
+    <>
+      <h3 className="settings-section-h">Image import folders</h3>
+      <div className="settings-import-roots" data-testid="settings-import-roots">
+        <p className="settings-help">
+          A model connected over MCP can copy images from these folders, and
+          their subfolders, into a character&apos;s pool with{' '}
+          <code>import_images</code>. Nothing outside them can be read, and
+          only you can change this list. The source files are copied, never
+          moved or changed.
+        </p>
+        {roots === null && !error && <p className="settings-meta">… Loading</p>}
+        {roots?.length === 0 && (
+          <p className="settings-meta">None yet — a model cannot import any files.</p>
+        )}
+        {roots?.map((root) => (
+          <div key={root} className="settings-row">
+            <code className="settings-import-root">{root}</code>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() => void save(roots.filter((r) => r !== root))}
+              data-testid="settings-import-root-remove"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <div className="settings-row">
+          <button
+            type="button"
+            className="settings-pick"
+            onClick={() => void add()}
+            disabled={roots === null || !window.workbench?.selectDirectory}
+            data-testid="settings-import-root-add"
+          >
+            Add folder…
+          </button>
+        </div>
+        {error && (
+          <p className="settings-help">
+            <strong>{error}</strong>
+          </p>
+        )}
+      </div>
     </>
   )
 }

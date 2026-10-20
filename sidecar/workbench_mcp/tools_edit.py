@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 import bbcode_rules
 import character_archive
 
@@ -1036,6 +1038,274 @@ def add_image(
         "character": target.name,
         "set": resolved.name,
         "image_id": image_id,
+        "note": NO_PUSH_NOTE,
+    }
+
+
+# --------------------------------------------------------------------
+# Importing files from elsewhere on the machine
+#
+# The pool is the character's image folder. Getting a picture edited
+# outside the Workbench into it used to take the user copying files by
+# hand, a model matching hashes to find the new ids, and an add, a
+# remove and a full reorder per swapped image. One batch call does it
+# now, with every source checked before anything is written.
+# --------------------------------------------------------------------
+
+MAX_IMPORT_ITEMS = 200
+
+
+class ImportItem(BaseModel):
+    """One file for `import_images`."""
+
+    source_path: str
+    replace_image_id: str | None = None
+    description: str | None = None
+
+
+def _import_batch(
+    character: str,
+    items: list[ImportItem],
+    *,
+    add_to_gallery: bool,
+    working_set: str | None,
+    convert_to_jpeg: bool,
+) -> dict[str, Any]:
+    from services import events, image_import, payload_ops
+
+    if not items:
+        raise ToolError("validation_failed", "No items to import.")
+    if len(items) > MAX_IMPORT_ITEMS:
+        raise ToolError(
+            "validation_failed",
+            f"{len(items)} items; one call takes at most {MAX_IMPORT_ITEMS}.",
+        )
+    target = resolve_character(character)
+    targets = [str(i.replace_image_id) for i in items if i.replace_image_id]
+    touches_gallery = add_to_gallery or bool(targets)
+
+    # Everything that can be refused is refused before the first file is
+    # copied: a half-done batch leaves the model guessing what landed.
+    if touches_gallery:
+        target, resolved = _writable(character, working_set)
+        on_profile = {r["image_id"] for r in payload_ops.gallery(load_payload(resolved))}
+        missing = [t for t in targets if t not in on_profile]
+        if missing:
+            raise ToolError(
+                "validation_failed",
+                f"Not on this profile, so nothing to replace: {missing}. "
+                "list_images shows the gallery. Nothing was imported.",
+            )
+        twice = sorted({t for t in targets if targets.count(t) > 1})
+        if twice:
+            raise ToolError(
+                "validation_failed",
+                f"Replaced more than once in one call: {twice}. "
+                "Nothing was imported.",
+            )
+    else:
+        resolved = _set_for_reporting(target, working_set)
+
+    roots = image_import.import_roots()
+    prepared: list[image_import.PreparedImage] = []
+    for index, item in enumerate(items):
+        try:
+            prepared.append(
+                image_import.prepare(
+                    item.source_path, roots=roots, convert_to_jpeg=convert_to_jpeg
+                )
+            )
+        except image_import.ImportRefused as exc:
+            raise ToolError(
+                exc.code,
+                f"Item {index}: {exc.message} Nothing was imported.",
+                **exc.details,
+            ) from exc
+
+    try:
+        stored = [image_import.store(target.id, p) for p in prepared]
+    except image_import.ImportRefused as exc:
+        raise ToolError(exc.code, exc.message, **exc.details) from exc
+    if any(not row["deduplicated"] for row in stored):
+        events.publish(events.IMAGES_CHANGED, character_id=str(target.id))
+
+    replaced: dict[int, str] = {}
+    if touches_gallery:
+
+        def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
+            replaced.clear()
+            rows = payload_ops.gallery(payload)
+            for index, (item, row) in enumerate(zip(items, stored)):
+                new_id = str(row["image_id"])
+                old_id = str(item.replace_image_id) if item.replace_image_id else None
+                if old_id:
+                    slot = next(
+                        (i for i, r in enumerate(rows) if r["image_id"] == old_id),
+                        None,
+                    )
+                    if slot is None:
+                        raise payload_ops.PayloadError(
+                            f"{old_id!r} is not on this profile."
+                        )
+                    if new_id == old_id:
+                        continue
+                    if any(r["image_id"] == new_id for r in rows):
+                        raise payload_ops.PayloadError(
+                            f"{prepared[index].source_name} is the same picture "
+                            f"as {new_id!r}, which is already on this profile, "
+                            f"so it can't also take {old_id!r}'s place. The "
+                            "files were imported into the pool."
+                        )
+                    description = (
+                        item.description
+                        if item.description is not None
+                        else rows[slot]["description"]
+                    )
+                    rows[slot] = {
+                        "image_id": new_id,
+                        "description": description,
+                        "sort_order": rows[slot]["sort_order"],
+                    }
+                    replaced[index] = old_id
+                elif add_to_gallery and not any(r["image_id"] == new_id for r in rows):
+                    rows.append(
+                        {
+                            "image_id": new_id,
+                            "description": item.description or "",
+                            "sort_order": len(rows),
+                        }
+                    )
+            return payload_ops.EditResult(
+                etag="", changed=payload_ops.set_gallery(payload, rows)
+            )
+
+        _apply(target, resolved, mutate)
+
+    positions: dict[str, int] = {}
+    if resolved is not None:
+        for row in payload_ops.gallery(load_payload(resolved)):
+            positions[row["image_id"]] = row["sort_order"]
+
+    results = []
+    for index, (item, p, row) in enumerate(zip(items, prepared, stored)):
+        image_id = str(row["image_id"])
+        warnings = list(p.warnings)
+        if item.replace_image_id and str(item.replace_image_id) == image_id:
+            warnings.append("same_as_replaced")
+        results.append(
+            {
+                "image_id": image_id,
+                "deduplicated": row["deduplicated"],
+                "extension": row["extension"],
+                "bytes": row["size"],
+                "width": p.width,
+                "height": p.height,
+                "sha256": row["sha256"],
+                "source_name": p.source_name,
+                "converted": p.converted,
+                "on_profile": image_id in positions,
+                "sort_order": positions.get(image_id),
+                "replaced": replaced.get(index),
+                "warnings": warnings,
+            }
+        )
+    audit(
+        "import_images",
+        character=target.name,
+        set=resolved.name if resolved else None,
+        image_ids=[r["image_id"] for r in results],
+        replaced=[r["replaced"] for r in results if r["replaced"]],
+    )
+    return {
+        "character": target.name,
+        "set": resolved.name if resolved else None,
+        "results": results,
+    }
+
+
+def _set_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
+    """The set whose gallery a pool-only import reports against. Never
+    creates a bench: importing into the pool is not editing."""
+    if working_set is not None:
+        return resolve_set(target, working_set)
+    meta = character_archive.resolve_workbench(target.id, create=False)
+    if meta is None:
+        return None
+    return resolve_set(target, meta.id)
+
+
+@tool(tags=TAG_CHARACTER, title="Import images into the pool")
+def import_images(
+    character: str,
+    items: list[ImportItem],
+    add_to_gallery: bool = False,
+    working_set: str | None = None,
+    convert_to_jpeg: bool = False,
+) -> dict[str, Any]:
+    """Copy image files from this machine into the character's image
+    folder (the pool), and optionally onto the profile.
+
+    Each item names an absolute `source_path`. Only folders the user has
+    cleared under Settings → Security can be read; there is no tool to
+    change that list. The source file is copied, never moved or changed.
+
+    - `replace_image_id`: the new picture takes exactly that image's
+      place in the gallery, keeping its description unless `description`
+      is given. The old image leaves the gallery and stays in the pool.
+    - `add_to_gallery`: items without `replace_image_id` are appended to
+      the end of the gallery, in the order given.
+    - Identical bytes are stored once: the result then says
+      `deduplicated: true` and gives the existing id.
+    - Files at or over F-list's limits (2.0 MB, 4000 px a side) are
+      imported with a warning (`over_2mb`, `over_4000px`).
+      `convert_to_jpeg=true` re-encodes such files as JPEG quality 95
+      when that makes them smaller; animations and images with visible
+      transparency are left as they are, with a warning saying why.
+
+    Every source is checked before anything is written, so a refused
+    item means nothing was imported. Results come back in item order.
+    """
+    out = _import_batch(
+        character,
+        items,
+        add_to_gallery=add_to_gallery,
+        working_set=working_set,
+        convert_to_jpeg=convert_to_jpeg,
+    )
+    out["note"] = NO_PUSH_NOTE
+    return out
+
+
+@tool(tags=TAG_CHARACTER, title="Import an image into the pool")
+def import_image(
+    character: str,
+    source_path: str,
+    add_to_gallery: bool = False,
+    replace_image_id: str | None = None,
+    description: str | None = None,
+    working_set: str | None = None,
+    convert_to_jpeg: bool = False,
+) -> dict[str, Any]:
+    """One-file form of `import_images`, which has the details. Prefer
+    `import_images` for more than one file: it is one call, and a
+    gallery change from it is one write."""
+    out = _import_batch(
+        character,
+        [
+            ImportItem(
+                source_path=source_path,
+                replace_image_id=replace_image_id,
+                description=description,
+            )
+        ],
+        add_to_gallery=add_to_gallery,
+        working_set=working_set,
+        convert_to_jpeg=convert_to_jpeg,
+    )
+    return {
+        "character": out["character"],
+        "set": out["set"],
+        **out["results"][0],
         "note": NO_PUSH_NOTE,
     }
 

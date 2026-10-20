@@ -33,6 +33,9 @@ LIVE_CHANGED = "live-changed"
 LABELS_CHANGED = "labels-changed"
 SETTINGS_CHANGED = "settings-changed"
 INDEX_CHANGED = "index-changed"
+#: Files were added to (or taken from) a character's image folder, so
+#: the window's pool listing is stale even if no payload changed.
+IMAGES_CHANGED = "images-changed"
 
 #: Who caused the change. The renderer ignores its own writes — it
 #: already has that state — and reacts to everything else. Set by the

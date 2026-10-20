@@ -60,7 +60,8 @@ export function subscribeToWorkbenchEvents(
     'live-changed',
     'labels-changed',
     'settings-changed',
-    'index-changed'
+    'index-changed',
+    'images-changed'
   ]
   for (const name of NAMES) source.addEventListener(name, handle)
 

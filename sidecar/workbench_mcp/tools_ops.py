@@ -598,16 +598,20 @@ def get_extension_pairing_status() -> dict[str, Any]:
 @tool(tags=TAG_CORE, title="Settings", read_only=True)
 def get_settings() -> dict[str, Any]:
     """Workbench's settings: the F-Chat log directory, the IC/OOC rule
-    threshold, the embedding model and the retrieval tuning.
+    threshold, the embedding model and the retrieval tuning, and the
+    folders `import_images` may read from (which only the user can
+    change, in Settings → Security).
     """
     import logs as log_store
     import rag as rag_settings
     import labels as labels_store
+    from services import image_import
 
     rag = rag_settings.load_settings()
     labels = labels_store.load_settings()
     return {
         "log_directory": str(log_store.data_dir()),
+        "image_import_folders": [str(p) for p in image_import.import_roots()],
         "labels": {"ooc_threshold_chars": labels.threshold_chars},
         "embedding": {
             "model": rag.embed_model,

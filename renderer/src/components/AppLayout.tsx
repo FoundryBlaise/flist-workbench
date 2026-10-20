@@ -256,6 +256,11 @@ export function AppLayout() {
         case 'live-changed':
           if (event.character_id) void store.flistLoadArchive(event.character_id)
           break
+        case 'images-changed':
+          // A model imported files into the pool; no payload changed,
+          // so nothing else would make the Images tab list them.
+          if (event.character_id) void store.flistLoadCharacterImages(event.character_id)
+          break
         case 'labels-changed': {
           // Label chips are rendered from the cached message list, so
           // the cache has to go before they can refresh.

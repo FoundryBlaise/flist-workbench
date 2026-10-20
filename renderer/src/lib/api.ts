@@ -646,12 +646,14 @@ export const api = {
       labels: LabelsSettings
       rag: RagSettings
       backups: BackupsSettings
+      image_import_roots: string[]
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
     rag?: Partial<Omit<RagSettings, 'defaults'>>
     backups?: Partial<Omit<BackupsSettings, 'defaults'>>
+    image_import_roots?: string[]
   }) =>
     request<{
       fchat_data_dir: string | null
@@ -660,6 +662,7 @@ export const api = {
       labels: LabelsSettings
       rag: RagSettings
       backups: BackupsSettings
+      image_import_roots: string[]
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)

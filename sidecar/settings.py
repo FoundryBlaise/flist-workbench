@@ -95,6 +95,11 @@ KEY_BACKUPS_LAST_SWEEP_FAILED = "backups.last_sweep_failed"
 # "ran on app launch" vs "you ran it from Settings".
 KEY_BACKUPS_LAST_SWEEP_SOURCE = "backups.last_sweep_source"
 
+# Folders the MCP `import_image` tool may read from, as a JSON list of
+# absolute paths. Set only from Settings → Security: a tool call that
+# could widen its own reach would make the allow-list pointless.
+KEY_IMAGE_IMPORT_ROOTS = "images.import_roots"
+
 def db_path(root: Path | None = None) -> Path:
     base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)

@@ -35,6 +35,10 @@ dependencies = [
   # streamable_http_app(), prompts, resources and
   # TransportSecuritySettings for DNS-rebinding protection.
   "mcp>=1.18,<2",
+  # Pillow reads image dimensions and re-encodes oversized imports as
+  # JPEG (import_image's convert_to_jpeg). fastembed already pulls it
+  # in; naming it here keeps that working if fastembed ever drops it.
+  "pillow>=10",
 ]
 
 [dependency-groups]

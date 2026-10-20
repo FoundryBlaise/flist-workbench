@@ -226,6 +226,9 @@ copy buttons (replaces the wizard as the "getting started" surface).
 - File-path tools (`add_image`, bundle export/import,
   `export_restore_zip`) read/write anywhere the sidecar's user can
   (D9) — same posture as Electron's `workbench:write-file` IPC.
+  `import_images` is the exception: it reads only from folders the user
+  cleared under Settings → Security, after resolving symlinks and `..`,
+  and no tool can change that list (`get_settings` shows it).
 - Every MCP write is recorded in the existing activity log
   (`flist_activity.py`) with `source: "mcp"` + tool name.
 
@@ -317,7 +320,8 @@ Names below are proposals; ~75 tools in total.
 
 | Tool | Notes |
 |---|---|
-| `list_images(character, set?)` | gallery rows + on-disk pool, sizes, which are on profile |
+| `list_images(character, set?)` | gallery rows + on-disk pool, sizes, which are on profile; pool rows also carry `width`/`height`, `sha256`, `source_name` (when imported) and `referenced_by` (working sets, live, snapshot count) |
+| `import_images(character, items[{source_path, replace_image_id?, description?}], add_to_gallery=false, set?, convert_to_jpeg=false)` / `import_image(…)` | copies files into the pool from folders cleared in Settings → Security only; dedupes by bytes; warns `over_2mb` / `over_4000px`; `replace_image_id` swaps in place and leaves the old image in the pool; every item is checked before anything is written; gallery changes are one payload write |
 | `get_image(character, image_id, max_px=512)` | returns MCP `ImageContent` (downscaled) — vision-capable models can *see* the gallery |
 | `get_avatar(name)` | image |
 | `add_image(character, set, path \| base64, description?)` | magic-byte sniffing as today; appends to gallery |

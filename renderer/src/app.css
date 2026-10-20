@@ -2372,6 +2372,13 @@ body {
   font-size: var(--font-meta);
 }
 .settings-row { display: flex; gap: 8px; }
+.settings-import-roots .settings-row + .settings-row { margin-top: 6px; }
+.settings-import-root {
+  flex: 1;
+  align-self: center;
+  overflow-wrap: anywhere;
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
 .settings-input {
   flex: 1;
   background: var(--bg);

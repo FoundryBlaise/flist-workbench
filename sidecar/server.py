@@ -43,6 +43,7 @@ from services import render as render_service
 from services import backup_all as backup_all_service
 from services import events as event_bus
 from services import foreign as foreign_service
+from services import image_import as image_import_service
 from services import pull as pull_service
 from logs import (
     LogDirError,
@@ -2623,6 +2624,9 @@ class SettingsUpdate(BaseModel):
     labels: LabelsSettingsUpdate | None = None
     rag: RagSettingsUpdate | None = None
     backups: BackupsSettingsUpdate | None = None
+    # Folders MCP's import_image may read from. Only this endpoint — the
+    # window — sets them; the MCP settings tool can read but not change.
+    image_import_roots: list[str] | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -2677,6 +2681,9 @@ def _settings_dict(conn) -> dict:
             },
         },
         "backups": _backups_settings_dict(conn),
+        "image_import_roots": [
+            str(p) for p in image_import_service.import_roots(conn)
+        ],
     }
 
 
@@ -2822,6 +2829,12 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
                 settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N,
                 str(n),
             )
+
+    if body.image_import_roots is not None:
+        try:
+            image_import_service.save_import_roots(conn, body.image_import_roots)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return _settings_dict(conn)
 

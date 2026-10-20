@@ -143,6 +143,12 @@ profile), `set_profile_field`, `set_kink`, `add_custom_kink`,
 `reorder_images`. `diff_working_set` says what would change if you
 published.
 
+**Images from elsewhere** — `import_images` copies files from folders
+you cleared under Settings → Security into a character's pool, and can
+swap each one into the place of an existing gallery image
+(`replace_image_id`) in the same call. Files over F-list's limits come
+with a warning; `convert_to_jpeg` re-encodes them where that helps.
+
 **Logs** — `list_partners`, `read_log_messages`, `search_logs`,
 `find_contacts` ("have I ever talked to this person, on any of my
 characters?"), and `search_logs_semantic`, which finds passages that

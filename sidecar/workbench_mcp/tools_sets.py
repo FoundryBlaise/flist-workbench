@@ -611,7 +611,13 @@ def list_images(
     currently on the profile.
 
     `sort_order` is the position on the profile page, counting from 0.
+    Each `not_on_profile` entry also carries `width`, `height`, `sha256`,
+    `source_name` (the file name it was imported under, when known) and
+    `referenced_by`: the working sets that still use it, whether the
+    live profile does, and in how many pull snapshots it appears.
     """
+    from services import image_import
+
     target = resolve_character(character)
     resolved = resolve_set(target, working_set)
     payload = load_payload(resolved)
@@ -628,16 +634,35 @@ def list_images(
     ]
     on_profile = {row["image_id"] for row in gallery}
 
+    meta = image_import.read_meta(target.id)
+    refs = image_import.references(target.id)
+    images_dir = character_archive.images_dir(target.id)
     pool = []
     for row in character_archive.list_character_images(target.id):
         image_id = str(row.get("image_id") or row.get("id") or "")
         if not image_id or image_id in on_profile:
             continue
+        path = images_dir / f"{image_id}.{row.get('extension')}"
+        try:
+            sha = character_archive.file_sha256(path)
+            width, height = image_import.dimensions(path)
+        except OSError:
+            sha, width, height = None, None, None
+        ref = refs.get(image_id, {})
         pool.append(
             {
                 "image_id": image_id,
                 "extension": row.get("extension"),
                 "bytes": row.get("bytes") or row.get("size"),
+                "width": width,
+                "height": height,
+                "sha256": sha,
+                "source_name": (meta.get(sha or "") or {}).get("source_name"),
+                "referenced_by": {
+                    "working_sets": ref.get("working_sets", []),
+                    "live": ref.get("live", False),
+                    "snapshots": ref.get("snapshots", 0),
+                },
                 "on_profile": False,
             }
         )
