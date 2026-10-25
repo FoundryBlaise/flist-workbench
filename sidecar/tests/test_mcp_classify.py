@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
-from test_mcp_logs import write_log
+from fchat_logs import chat, write_log
 
 LONG_A = "She set the lantern down and listened to the rain. " * 6
 LONG_B = "Honestly my commute today was a nightmare, took two hours. " * 6
@@ -31,9 +31,9 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     write_log(
         root / "Lady Amber Blaise" / "logs" / "Daelan Envale",
         [
-            (1700000000, "Lady Amber Blaise", LONG_A),
-            (1700000060, "Daelan Envale", SHORT),
-            (1700000120, "Daelan Envale", LONG_B),
+            chat("Lady Amber Blaise", LONG_A, at=1700000000),
+            chat("Daelan Envale", SHORT, at=1700000060),
+            chat("Daelan Envale", LONG_B, at=1700000120),
         ],
     )
 

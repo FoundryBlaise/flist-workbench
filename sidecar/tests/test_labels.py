@@ -582,7 +582,7 @@ def conversation_api(
 ) -> TestClient:
     """One conversation on disk: two long messages with no verdict, one
     short one the rules already call OOC."""
-    from test_mcp_logs import write_log
+    from fchat_logs import chat, write_log
 
     root = tmp_path / "fchat"
     monkeypatch.setenv("FCHAT_DATA_DIR", str(root))
@@ -593,9 +593,9 @@ def conversation_api(
     write_log(
         root / "Lady Amber Blaise" / "logs" / "Daelan Envale",
         [
-            (1700000000, "Lady Amber Blaise", long_a),
-            (1700000060, "Daelan Envale", "mhm"),
-            (1700000120, "Daelan Envale", long_b),
+            chat("Lady Amber Blaise", long_a, at=1700000000),
+            chat("Daelan Envale", "mhm", at=1700000060),
+            chat("Daelan Envale", long_b, at=1700000120),
         ],
     )
 
