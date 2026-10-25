@@ -6,67 +6,27 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
+import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
+import {
+  archiveEntry,
+  livePayload,
+  payloadRead,
+  workbenchPayload,
+  workbenchRead,
+  workingSlot
+} from '../../test/payloads'
 
-interface Capture {
-  url: string
-  method: string
-  body?: unknown
-  headers?: Record<string, string>
-}
-
-function mockFetch(responses: ((c: Capture) => Promise<Response>)[]): Capture[] {
-  const calls: Capture[] = []
-  let idx = 0
-  ;(globalThis as { fetch?: unknown }).fetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : (input as URL).toString()
-      const method = (init?.method ?? 'GET').toUpperCase()
-      let body: unknown
-      try {
-        body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
-      } catch {
-        body = init?.body
-      }
-      const headers: Record<string, string> = {}
-      if (init?.headers) {
-        for (const [k, v] of Object.entries(
-          init.headers as Record<string, string>
-        )) {
-          headers[k] = String(v)
-        }
-      }
-      const capture: Capture = { url, method, body, headers }
-      calls.push(capture)
-      const responder = responses[Math.min(idx, responses.length - 1)]
-      idx++
-      return responder(capture)
-    }
-  )
-  return calls
-}
-
-function ok(body: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => body,
-    text: async () => JSON.stringify(body)
-  } as unknown as Response
-}
+let fake: FakeApi
 
 const SET_ID = 'aaaaaaaaaaaa'
+const SAVE = `PUT /flist/character/99/sets/${SET_ID}/payload`
+const SNAPSHOT_111 = 'GET /flist/character/99/snapshots/111.json'
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
-  const slot = {
-    payload: { _schema_version: 2, _overlay: ['character.description'], ...payload },
-    overlay: ['character.description'],
-    etag: 'seed',
-    unsavedDirty: false,
-    saveStatus: 'idle' as const,
-    saveError: null,
-    lastSavedAt: null,
-    materialised: true
-  }
+  const slot = workingSlot(
+    workbenchPayload({ _overlay: ['character.description'], ...payload }),
+    { etag: 'seed' }
+  )
   useStore.setState((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     // Working sets v2: writes route through the active set's payload
@@ -75,11 +35,9 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
     flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistArchive: {
       ...s.flistArchive,
-      [characterId]: {
-        live: { character: { description: 'live' } },
-        snapshots: [{ filename: '111.json', created_at: 111, size: 200 }],
-        pullStatus: 'idle'
-      }
+      [characterId]: archiveEntry(livePayload({ character: { description: 'live' } }), {
+        snapshots: [{ filename: '111.json', created_at: 111, size: 200 }]
+      })
     },
     flistActiveCharacterId: characterId,
     flistDiffRightSource: {},
@@ -89,6 +47,7 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.useFakeTimers()
+  fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
     flistSetWorking: {},
@@ -102,6 +61,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  fake.restore()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
@@ -122,11 +82,19 @@ describe('flistDiffSetRightSource', () => {
 describe('flistDiffLoadBackup', () => {
   it('caches the fetched backup payload under (characterId, filename)', async () => {
     seedSlot('99', { character: { description: 'edited' } })
-    mockFetch([async () => ok({ character: { description: 'snapshot' } })])
+    fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
     await useStore.getState().flistDiffLoadBackup('99', '111.json')
-    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toBeDefined()
-    // Idempotent on second call — fetch is not re-invoked.
+    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toEqual({
+      character: { description: 'snapshot' }
+    })
+    // Idempotent on second call: fetch is not re-invoked, and the
+    // cached Backup is still the one that was read.
+    fake.on(SNAPSHOT_111, json({ character: { description: 'changed' } }))
     await useStore.getState().flistDiffLoadBackup('99', '111.json')
+    expect(fake.requestsTo(SNAPSHOT_111)).toHaveLength(1)
+    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toEqual({
+      character: { description: 'snapshot' }
+    })
   })
 })
 
@@ -135,27 +103,27 @@ describe('flistDiffLoadWorkbench', () => {
     'resolves the bench set, reads its payload, caches under __workbench__',
     async () => {
       seedSlot('99', { character: { description: 'edited' } })
-      // call 1 = resolve bench (create=false); call 2 = read that set.
-      mockFetch([
-        async () => ok({ workbench: { id: SET_ID } }),
-        async () =>
-          ok({
-            payload: {
-              _overlay: ['character.description'],
-              character: { description: 'edited' }
-            },
-            etag: 'p'
-          })
-      ])
+      const onDisk = workbenchPayload({
+        _overlay: ['character.description'],
+        character: { description: 'on disk' }
+      })
+      fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead(SET_ID)))
+      fake.on(`GET /flist/character/99/sets/${SET_ID}/payload`, json(payloadRead(onDisk, 'p')))
       await useStore.getState().flistDiffLoadWorkbench('99')
-      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toBeDefined()
-      // Idempotent on second call — fetch is not re-invoked.
+      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
+      // Idempotent on second call: fetch is not re-invoked, and the
+      // cached Workbench is still the one that was read.
       await useStore.getState().flistDiffLoadWorkbench('99')
+      expect(fake.requests).toHaveLength(2)
+      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
     }
   )
   it('marks error (not a spinner) when there is no bench', async () => {
     seedSlot('99', { character: { description: 'edited' } })
-    mockFetch([async () => ok({ workbench: null, active_set_id: null })])
+    fake.on(
+      'GET /flist/character/99/workbench?create=false',
+      json({ workbench: null, active_set_id: null })
+    )
     await useStore.getState().flistDiffLoadWorkbench('99')
     expect(useStore.getState().flistDiffBackupStatus['99:__workbench__']).toBe('error')
     expect(
@@ -167,19 +135,14 @@ describe('flistDiffLoadWorkbench', () => {
 describe('flistResetWorkingToBackup', () => {
   it('DELETEs working and seeds from backup, with undo snapshot stashed', async () => {
     seedSlot('99', { character: { description: 'edited' } })
-    const calls = mockFetch([
-      // backup read
-      async () => ok({ character: { description: 'snapshot' } }),
-      // delete
-      async () => ok({ deleted: true }),
-      // PUT after seed
-      async () => ok({ etag: 'restored' })
-    ])
+    fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
+    fake.on('DELETE /flist/character/99/working', json({ deleted: true }))
+    // The PUT after the seed.
+    fake.on(SAVE, json({ etag: 'restored' }))
     await useStore.getState().flistResetWorkingToBackup('99', '111.json')
     // Let the scheduled flush fire so the eager-PUT lands.
     await vi.advanceTimersByTimeAsync(1000)
-    const methods = calls.map((c) => c.method)
-    expect(methods).toContain('DELETE')
+    expect(fake.requestsTo('DELETE /flist/character/99/working')).toHaveLength(1)
     const slot = useStore.getState().flistWorking['99']
     const charDesc = (slot.payload.character as { description?: string } | undefined)
       ?.description
@@ -189,49 +152,38 @@ describe('flistResetWorkingToBackup', () => {
 
   it('survives DELETE failure: eager PUT carries the prior etag so on-disk file is overwritten cleanly (QA P1-1)', async () => {
     seedSlot('99', { character: { description: 'edited' } })
-    const calls = mockFetch([
-      // backup read
-      async () => ok({ character: { description: 'snapshot' } }),
-      // delete fails (server transient error)
-      async () =>
-        ({
-          ok: false,
-          status: 500,
-          json: async () => ({ detail: 'transient' }),
-          text: async () => '{}'
-        } as unknown as Response),
-      // PUT with If-Match: 'seed' succeeds because the file is still there
-      async () => ok({ etag: 'overwritten' })
-    ])
+    fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
+    // The DELETE fails (server transient error).
+    fake.on('DELETE /flist/character/99/working', json({ detail: 'transient' }, 500))
+    // PUT with If-Match: 'seed' succeeds because the file is still there.
+    fake.on(SAVE, json({ etag: 'overwritten' }))
     await useStore.getState().flistResetWorkingToBackup('99', '111.json')
     await vi.advanceTimersByTimeAsync(1000)
-    const put = calls.find((c) => c.method === 'PUT')
+    const [put] = fake.requestsTo(SAVE)
     expect(put).toBeDefined()
     // The eager PUT must carry If-Match against the pre-reset etag so
     // an unsuccessful DELETE doesn't leave disk out-of-sync with local.
-    expect(put?.headers?.['If-Match']).toBe('seed')
+    expect(put?.headers['If-Match']).toBe('seed')
   })
 })
 
 describe('flistDiffLoadBackup status tracking', () => {
   it('records error status on api failure so the view can distinguish loading from 404 (UX P1-3)', async () => {
     seedSlot('99', {})
-    mockFetch([
-      async () =>
-        ({
-          ok: false,
-          status: 404,
-          json: async () => ({ detail: 'not found' }),
-          text: async () => '{}'
-        } as unknown as Response)
-    ])
+    fake.on(
+      'GET /flist/character/99/snapshots/999.json',
+      json({ detail: 'not found' }, 404)
+    )
     await useStore.getState().flistDiffLoadBackup('99', '999.json')
     expect(useStore.getState().flistDiffBackupStatus['99:999.json']).toBe('error')
   })
 
   it('marks loaded after a successful read', async () => {
     seedSlot('99', {})
-    mockFetch([async () => ok({ character: { description: 'snap' } })])
+    fake.on(
+      'GET /flist/character/99/snapshots/888.json',
+      json({ character: { description: 'snap' } })
+    )
     await useStore.getState().flistDiffLoadBackup('99', '888.json')
     expect(useStore.getState().flistDiffBackupStatus['99:888.json']).toBe('loaded')
   })

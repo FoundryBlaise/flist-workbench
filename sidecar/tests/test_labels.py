@@ -5,24 +5,16 @@ from fastapi.testclient import TestClient
 
 import labels as labels_store
 import settings as settings_store
+from fchat_logs import chat, parsed
 
 
 # ---- helpers ------------------------------------------------------------
 
 
-def _msg(ts: int = 1_700_000_000, speaker: str = "Alice", raw: str = "hello world",
-         text: str | None = None) -> dict:
-    return {
-        "ts": ts,
-        "iso": "2023-11-14T22:13:20+00:00",
-        "type": 0,
-        "type_name": "chat",
-        "speaker": speaker,
-        "raw": raw,
-        "text": text if text is not None else raw,
-        "mentions": [],
-        "kind": "ic",
-    }
+def _msg(ts: int = 1_700_000_000, speaker: str = "Alice", text: str = "hello world") -> dict:
+    """One chat line as the parser reads it from a Log."""
+    [msg] = parsed(chat(speaker, text, at=ts))
+    return msg
 
 
 def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
@@ -34,21 +26,21 @@ def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
 
 def test_resolve_unlabeled_when_long_chat_and_no_db_row() -> None:
     long_text = "A" * 250
-    assert labels_store.resolve(_msg(text=long_text, raw=long_text), None, _settings()) == "Unlabeled"
+    assert labels_store.resolve(_msg(text=long_text), None, _settings()) == "Unlabeled"
 
 
 def test_resolve_short_text_is_ooc() -> None:
     short = "ok thanks"
-    assert labels_store.resolve(_msg(text=short, raw=short), None, _settings()) == "OOC"
+    assert labels_store.resolve(_msg(text=short), None, _settings()) == "OOC"
 
 
 def test_resolve_empty_text_is_ooc() -> None:
-    assert labels_store.resolve(_msg(text="   ", raw="   "), None, _settings()) == "OOC"
+    assert labels_store.resolve(_msg(text="   "), None, _settings()) == "OOC"
 
 
 def test_resolve_parens_prefix_is_ooc_even_when_long() -> None:
     long_parens = "(( " + ("brb sorry " * 30) + "))"
-    assert labels_store.resolve(_msg(text=long_parens, raw=long_parens), None, _settings()) == "OOC"
+    assert labels_store.resolve(_msg(text=long_parens), None, _settings()) == "OOC"
 
 
 def test_resolve_db_row_overrides_rules() -> None:
@@ -56,7 +48,7 @@ def test_resolve_db_row_overrides_rules() -> None:
     # forced to IC by an explicit DB row.
     long_text = "A" * 250
     fake_row = {"label": "IC", "source": "llm", "confidence": 0.9}
-    assert labels_store.resolve(_msg(text=long_text, raw=long_text), fake_row, _settings()) == "IC"
+    assert labels_store.resolve(_msg(text=long_text), fake_row, _settings()) == "IC"
 
 
 def test_resolve_db_row_wins_even_over_short_rule() -> None:
@@ -64,13 +56,13 @@ def test_resolve_db_row_wins_even_over_short_rule() -> None:
     # forces it back to IC.
     short = "ok"
     fake_row = {"label": "IC", "source": "manual", "confidence": 1.0}
-    assert labels_store.resolve(_msg(text=short, raw=short), fake_row, _settings()) == "IC"
+    assert labels_store.resolve(_msg(text=short), fake_row, _settings()) == "IC"
 
 
 def test_resolve_threshold_is_live() -> None:
     # 250-char text: Unlabeled at threshold=200, OOC at threshold=300.
     text = "A" * 250
-    msg = _msg(text=text, raw=text)
+    msg = _msg(text=text)
     assert labels_store.resolve(msg, None, _settings(threshold=200)) == "Unlabeled"
     assert labels_store.resolve(msg, None, _settings(threshold=300)) == "OOC"
 
@@ -79,14 +71,14 @@ def test_resolve_threshold_is_live() -> None:
 
 
 def test_msg_hash_is_deterministic_and_short() -> None:
-    a = labels_store.msg_hash(_msg(ts=42, speaker="A", raw="x"))
-    b = labels_store.msg_hash(_msg(ts=42, speaker="A", raw="x"))
+    a = labels_store.msg_hash(_msg(ts=42, speaker="A", text="x"))
+    b = labels_store.msg_hash(_msg(ts=42, speaker="A", text="x"))
     assert a == b
     assert len(a) == 16
 
 
 def test_msg_hash_differs_on_any_input_change() -> None:
-    base = _msg(ts=42, speaker="A", raw="x")
+    base = _msg(ts=42, speaker="A", text="x")
     assert labels_store.msg_hash(base) != labels_store.msg_hash({**base, "ts": 43})
     assert labels_store.msg_hash(base) != labels_store.msg_hash({**base, "speaker": "B"})
     assert labels_store.msg_hash(base) != labels_store.msg_hash({**base, "raw": "y"})
@@ -194,9 +186,9 @@ def test_stats_counts_three_buckets(tmp_path: Path) -> None:
     try:
         # One long unlabeled, one short (OOC), one with an IC DB row.
         long_text = "A" * 250
-        m_long = _msg(ts=10, speaker="A", raw=long_text, text=long_text)
-        m_short = _msg(ts=20, speaker="A", raw="ok", text="ok")
-        m_db_ic = _msg(ts=30, speaker="A", raw=long_text, text=long_text)
+        m_long = _msg(ts=10, speaker="A", text=long_text)
+        m_short = _msg(ts=20, speaker="A", text="ok")
+        m_db_ic = _msg(ts=30, speaker="A", text=long_text)
         labels_store.upsert_label(
             conn, hash=labels_store.msg_hash(m_db_ic),
             character="C", partner="P", ts=30, speaker="A",
@@ -481,13 +473,13 @@ def test_override_many_rejects_invalid_label(api_client: TestClient) -> None:
 
 def _long(n: int, ts: int) -> dict:
     body = f"{n} " + ("Sie trat durch das Tor und sah sich um. " * 8)
-    return _msg(ts=ts, raw=body, text=body)
+    return _msg(ts=ts, text=body)
 
 
 def test_fill_unlabeled_labels_only_the_unlabeled(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     try:
-        msgs = [_long(1, 100), _long(2, 200), _msg(ts=300, raw="ok", text="ok")]
+        msgs = [_long(1, 100), _long(2, 200), _msg(ts=300, text="ok")]
         # A verdict already in the DB must survive untouched.
         labels_store.upsert_label(
             conn, hash=labels_store.msg_hash(msgs[0]), character="C",
@@ -582,7 +574,7 @@ def conversation_api(
 ) -> TestClient:
     """One conversation on disk: two long messages with no verdict, one
     short one the rules already call OOC."""
-    from test_mcp_logs import write_log
+    from fchat_logs import write_log
 
     root = tmp_path / "fchat"
     monkeypatch.setenv("FCHAT_DATA_DIR", str(root))
@@ -593,9 +585,9 @@ def conversation_api(
     write_log(
         root / "Lady Amber Blaise" / "logs" / "Daelan Envale",
         [
-            (1700000000, "Lady Amber Blaise", long_a),
-            (1700000060, "Daelan Envale", "mhm"),
-            (1700000120, "Daelan Envale", long_b),
+            chat("Lady Amber Blaise", long_a, at=1700000000),
+            chat("Daelan Envale", "mhm", at=1700000060),
+            chat("Daelan Envale", long_b, at=1700000120),
         ],
     )
 

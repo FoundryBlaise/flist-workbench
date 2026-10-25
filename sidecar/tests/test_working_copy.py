@@ -98,6 +98,11 @@ def test_write_with_expected_etag_none_on_existing_file_raises(archive_module) -
     archive_module.write_working("123", payload, expected_etag=None)
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=2,
+    reason="deleting the legacy working copy is final; the spec deletes this test",
+)
 def test_delete_removes_file_returns_true(archive_module) -> None:
     archive_module.write_working("123", _seed_payload())
     assert archive_module.delete_working("123") is True
@@ -210,6 +215,11 @@ def test_put_with_matching_if_match_succeeds(client: TestClient) -> None:
     assert res.json()["etag"] != first
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=2,
+    reason="deleting the legacy working copy is final; the spec deletes this test",
+)
 def test_delete_endpoint_idempotent(client: TestClient) -> None:
     client.put("/flist/character/123/working", json=_seed_payload())
     res = client.delete("/flist/character/123/working")
@@ -316,27 +326,30 @@ def test_local_uuid_id_round_trip(archive_module) -> None:
     assert out["_custom_kinks_order"][0] == key
 
 
-def test_atomic_write_unlinks_tmp_when_both_replaces_fail(
+def test_an_interrupted_write_leaves_the_old_file_intact(
     archive_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the OneDrive-style retry also raises OSError, the leftover
-    .tmp file must be cleaned up so the archive directory doesn't
-    accumulate orphan temps. Round 1 verifier follow-up to QA P3-6."""
-    fail_count = {"n": 0}
-    orig_replace = Path.replace
+    """A write that cannot be moved into place (a sync agent holding the
+    file, say) fails loudly and leaves what was on disk exactly as it
+    was, with no half-written temp file beside it."""
+    archive_module.write_working("123", _seed_payload())
+    path = archive_module.working_path("123")
+    before = path.read_bytes()
 
-    def fail_replace(self, target):  # type: ignore[override]
-        fail_count["n"] += 1
+    def locked(self, target):  # type: ignore[override]
         raise OSError("simulated lock")
 
-    monkeypatch.setattr(Path, "replace", fail_replace)
-    payload = _seed_payload()
-    with pytest.raises(OSError):
-        archive_module.write_working("123", payload)
-    monkeypatch.setattr(Path, "replace", orig_replace)
-    tmp = archive_module.working_path("123").with_suffix(".json.tmp")
-    assert not tmp.exists()
-    assert fail_count["n"] >= 2  # initial + at least one retry
+    with monkeypatch.context() as m:
+        m.setattr(Path, "replace", locked)
+        with pytest.raises(OSError):
+            archive_module.write_working(
+                "123",
+                _seed_payload(character={"id": "123", "name": "Probe", "description": "new"}),
+            )
+
+    assert path.read_bytes() == before
+    assert archive_module.read_working("123")["character"]["description"] == "[b]hi[/b]"
+    assert list(path.parent.glob("*.tmp")) == []
 
 
 def test_overlay_path_with_local_uuid_round_trips(archive_module) -> None:

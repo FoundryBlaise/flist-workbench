@@ -8,6 +8,7 @@ import {
   pathSet,
   seedWorkingFromLive
 } from '../flist'
+import { livePayload } from '../../test/payloads'
 
 const slot = () => ({ ...emptyWorkingSlot(), saveError: null })
 
@@ -58,7 +59,7 @@ describe('applyEdit', () => {
 describe('applyReset', () => {
   it('strips the overlay path and restores Live value', () => {
     const dirty = applyEdit(slot(), 'character.description', 'edit')
-    const live = { character: { description: 'original' } } as Record<string, unknown>
+    const live = livePayload({ character: { description: 'original' } })
     const out = applyReset(dirty, live, 'character.description')
     expect(out.overlay).not.toContain('character.description')
     expect(pathLookup(out.payload, 'character.description')).toBe('original')
@@ -73,60 +74,55 @@ describe('applyReset', () => {
 
 describe('seedWorkingFromLive', () => {
   it('normalises CRLF + carries inlines verbatim', () => {
-    const live = {
+    const live = livePayload({
       character: { description: 'a\r\nb', id: '1', name: 'A' },
       inlines: { '5': { hash: 'x', extension: 'png', nsfw: false } }
-    }
+    })
     const seeded = seedWorkingFromLive(live)
     const desc = (seeded.character as Record<string, unknown>).description as string
     expect(desc).toBe('a\nb')
     expect(seeded.inlines).toEqual(live.inlines)
   })
-  it('seeds image_id-keyed gallery from live.images', () => {
+  it('seeds image_id-keyed gallery from live.images, in sort_order', () => {
     // v4: working.images carries image_id + description + sort_order.
     // The actual bytes live on disk at images/<image_id>.<ext>, fetched
-    // separately by the renderer when rendering thumbnails.
-    const live = {
-      character: { description: 'x' },
+    // separately by the renderer when rendering thumbnails. Live lists
+    // them in whatever order F-list sent; the gallery follows sort_order.
+    const live = livePayload({
       images: [
-        { image_id: '1', extension: 'jpg', description: 'first', sort_order: '2' },
-        { image_id: '2', extension: 'png', sort_order: '8' }
+        { image_id: '2', extension: 'png', sort_order: '8' },
+        { image_id: '3', extension: 'gif', description: 'last', sort_order: '10' },
+        { image_id: '1', extension: 'jpg', description: 'first', sort_order: '2' }
       ]
-    } as Record<string, unknown>
+    })
     const seeded = seedWorkingFromLive(live)
     expect(seeded.images).toEqual([
       { image_id: '1', description: 'first', sort_order: 2 },
-      { image_id: '2', description: '', sort_order: 8 }
+      { image_id: '2', description: '', sort_order: 8 },
+      { image_id: '3', description: 'last', sort_order: 10 }
     ])
   })
   it('drops live.images entries without an image_id', () => {
-    const live = {
-      character: { description: 'x' },
-      images: [{ extension: 'jpg' }]
-    } as Record<string, unknown>
+    const live = livePayload({ images: [{ extension: 'jpg' }] })
     const seeded = seedWorkingFromLive(live)
     expect(seeded.images).toEqual([])
   })
-  it('preserves unknown top-level keys (forward-compat round-trip)', () => {
-    const live = {
-      character: { description: 'a' },
-      _future: { tier: 5 }
-    } as Record<string, unknown>
+  it('seeds only the recognised containers, leaving unknown Live keys out', () => {
+    // Forward-compat round-trips unknown keys of a Workbench already on
+    // disk (see workingCopyActions); a fresh seed is "from Live", and
+    // only the containers the Workbench knows come across.
+    const live = livePayload({ character: { description: 'a' }, _future: { tier: 5 } })
     const seeded = seedWorkingFromLive(live)
-    // Forward-compat is enforced by the disk reader, not the seed helper —
-    // seedWorkingFromLive only copies recognised containers. Document the
-    // invariant: anything outside WORKING_CONTAINER_KEYS lives only on
-    // disk after first flush; the seed itself is "from Live + overlay".
-    expect(seeded.character).toBeDefined()
+    expect(seeded.character).toEqual({ description: 'a' })
+    expect(seeded).not.toHaveProperty('_future')
   })
   it('derives _custom_kinks_order on Live with custom_kinks dict', () => {
-    const live = {
-      character: { description: '' },
+    const live = livePayload({
       custom_kinks: {
         '31712021': { name: 'A', choice: 'fave', children: [] },
         '31712022': { name: 'B', choice: 'yes', children: [] }
       }
-    }
+    })
     const seeded = seedWorkingFromLive(live)
     expect(seeded._custom_kinks_order).toEqual(['31712021', '31712022'])
   })
@@ -134,14 +130,14 @@ describe('seedWorkingFromLive', () => {
 
 describe('detectLiveDrift', () => {
   it('flags paths where the value changed, excluding ignore list', () => {
-    const oldLive = {
+    const oldLive = livePayload({
       character: { description: 'old' },
       infotags: { '9': 'Human' }
-    }
-    const newLive = {
+    })
+    const newLive = livePayload({
       character: { description: 'new' },
       infotags: { '9': 'Elf', '15': '8' }
-    }
+    })
     const drift = detectLiveDrift(
       oldLive,
       newLive,

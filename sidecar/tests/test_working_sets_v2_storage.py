@@ -106,6 +106,11 @@ def test_set_dir_rejects_invalid_set_id(isolated_userdata) -> None:
 # ---- M3 migration -----------------------------------------------------
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="the legacy working.json migration (_migrate_working_v2) unlinks it; the spec's migration keeps it in a Backup",
+)
 def test_list_sets_unlinks_legacy_working_json(isolated_userdata) -> None:
     archive = isolated_userdata
     cdir = archive.character_dir("123")
@@ -354,6 +359,11 @@ def test_rename_missing_set_raises(isolated_userdata) -> None:
         archive.rename_set("123", "abcdef012345", "Whatever")
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="character_archive.delete_set removes the folder for good; the spec removes it",
+)
 def test_delete_set_removes_directory_and_clears_active(
     isolated_userdata,
 ) -> None:
@@ -368,6 +378,11 @@ def test_delete_set_removes_directory_and_clears_active(
     assert archive.read_active_set_id("123") is None
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="character_archive.delete_set removes the folder for good; the spec removes it",
+)
 def test_delete_other_set_leaves_active_alone(isolated_userdata) -> None:
     archive = isolated_userdata
     _seed_live(archive)
