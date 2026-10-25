@@ -8,31 +8,15 @@ test nothing that matters.
 
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 
 import pytest
 
+from fchat_logs import chat, write_log
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 
 LONG = "A" * 260  # above the 200-char rule threshold, so: Unlabeled
 SHORT = "ok"  # below it, so: OOC by rule
-
-
-def write_log(path: Path, records: list[tuple[int, str, str]]) -> None:
-    """Minimal F-Chat 3.0 log writer — see parser.py for the layout."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as f:
-        for ts, speaker, body in records:
-            sb = speaker.encode("utf-8")
-            bb = body.encode("utf-8")
-            record = (
-                struct.pack("<IBB", ts, 0, len(sb))
-                + sb
-                + struct.pack("<H", len(bb))
-                + bb
-            )
-            f.write(record + struct.pack("<H", len(record)))
 
 
 @pytest.fixture
@@ -46,18 +30,18 @@ def corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     write_log(
         root / "Lady Amber Blaise" / "logs" / "Daelan Envale",
         [
-            (1700000000, "Lady Amber Blaise", LONG),
-            (1700000060, "Daelan Envale", SHORT),
-            (1700000120, "Daelan Envale", "The tavern smells of woodsmoke. " + LONG),
+            chat("Lady Amber Blaise", LONG, at=1700000000),
+            chat("Daelan Envale", SHORT, at=1700000060),
+            chat("Daelan Envale", "The tavern smells of woodsmoke. " + LONG, at=1700000120),
         ],
     )
     write_log(
         root / "Lady Amber Blaise" / "logs" / "#german ooc",
-        [(1700000200, "Someone", LONG)],
+        [chat("Someone", LONG, at=1700000200)],
     )
     write_log(
         root / "Vanessa Arlington" / "logs" / "Daelan Envale",
-        [(1700000300, "Vanessa Arlington", LONG)],
+        [chat("Vanessa Arlington", LONG, at=1700000300)],
     )
 
     import importlib
@@ -324,7 +308,7 @@ async def test_alias_group_folds_in_whatever_case_the_caller_uses(
     """
     write_log(
         tmp_path / "fchat" / "Lady Amber Blaise" / "logs" / "Asmira",
-        [(1700000400, "Asmira", LONG), (1700000460, "Asmira", SHORT)],
+        [chat("Asmira", LONG, at=1700000400), chat("Asmira", SHORT, at=1700000460)],
     )
     async with mcp_client("logs") as session:
         await call_tool(

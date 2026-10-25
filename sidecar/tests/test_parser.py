@@ -1,10 +1,10 @@
 import os
-import struct
 from pathlib import Path
 
 import pytest
 
 import parser
+from fchat_logs import chat, encode
 from parser import classify_kind, extract_mentions, parse_log, strip_bbcode
 
 
@@ -75,26 +75,14 @@ def test_parse_real_log_smoke() -> None:
     assert "speaker" in first and first["speaker"]
 
 
-def _record(ts: int, speaker: str, body: str, type_byte: int = 0) -> bytes:
-    sb = speaker.encode("utf-8")
-    bb = body.encode("utf-8")
-    rec = (
-        struct.pack("<IBB", ts, type_byte, len(sb))
-        + sb
-        + struct.pack("<H", len(bb))
-        + bb
-    )
-    return rec + struct.pack("<H", len(rec))
-
-
 def test_a_damaged_record_no_longer_ends_the_file(tmp_path: Path) -> None:
     """F-Chat can leave a half-written record behind — observed as 44
     bytes of nulls mid-file. The reader used to stop there, silently
     discarding everything after it: on one real log that was 10 MB of 16,
     154451 messages that parse perfectly once the damage is stepped over.
     """
-    good_before = [_record(1700000000 + i, "A", "x" * 40) for i in range(3)]
-    good_after = [_record(1700001000 + i, "B", "y" * 40) for i in range(5)]
+    good_before = [encode(chat("A", "x" * 40, at=1700000000 + i)) for i in range(3)]
+    good_after = [encode(chat("B", "y" * 40, at=1700001000 + i)) for i in range(5)]
     path = tmp_path / "damaged"
     path.write_bytes(b"".join(good_before) + b"\x00" * 44 + b"".join(good_after))
 
@@ -107,8 +95,8 @@ def test_a_damaged_record_no_longer_ends_the_file(tmp_path: Path) -> None:
 def test_garbage_in_the_middle_is_stepped_over(tmp_path: Path) -> None:
     """The other shape seen in the wild: a few hundred bytes of unrelated
     bytes rather than nulls."""
-    before = [_record(1700000000 + i, "A", "x" * 40) for i in range(2)]
-    after = [_record(1700002000 + i, "B", "y" * 40) for i in range(6)]
+    before = [encode(chat("A", "x" * 40, at=1700000000 + i)) for i in range(2)]
+    after = [encode(chat("B", "y" * 40, at=1700002000 + i)) for i in range(6)]
     path = tmp_path / "garbage"
     path.write_bytes(
         b"".join(before) + bytes(range(256)) * 3 + b"".join(after)
@@ -122,7 +110,7 @@ def test_a_file_that_is_only_damage_still_stops(tmp_path: Path) -> None:
     must not invent messages out of noise."""
     path = tmp_path / "ruined"
     path.write_bytes(
-        b"".join(_record(1700000000, "A", "x" * 40) for _ in range(1))
+        b"".join(encode(chat("A", "x" * 40, at=1700000000)) for _ in range(1))
         + b"\xff" * 5000
     )
     messages = list(parser.parse_log(path))
@@ -134,8 +122,8 @@ def test_resync_needs_several_records_before_it_believes_a_position(
 ) -> None:
     """A single record can line up by chance in binary data. One valid-
     looking record after the damage is not enough to resume on."""
-    before = [_record(1700000000, "A", "x" * 40)]
-    lone = _record(1700003000, "C", "z" * 40)
+    before = [encode(chat("A", "x" * 40, at=1700000000))]
+    lone = encode(chat("C", "z" * 40, at=1700003000))
     path = tmp_path / "one-lucky-record"
     path.write_bytes(b"".join(before) + b"\x00" * 30 + lone + b"\xff" * 400)
     messages = list(parser.parse_log(path))

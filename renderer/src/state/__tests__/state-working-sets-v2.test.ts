@@ -6,56 +6,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { selectWorkingSlot, useStore } from '../../state'
+import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 
-interface Capture {
-  url: string
-  method: string
-  body?: unknown
-  headers?: Record<string, string>
-}
+const SETS = '/flist/character/99/sets'
 
-function mockFetch(routes: ((c: Capture) => Promise<Response>)[]): Capture[] {
-  const calls: Capture[] = []
-  let idx = 0
-  ;(globalThis as { fetch?: unknown }).fetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : (input as URL).toString()
-      const method = (init?.method ?? 'GET').toUpperCase()
-      const headers: Record<string, string> = {}
-      if (init?.headers) {
-        for (const [k, v] of Object.entries(
-          init.headers as Record<string, string>
-        )) {
-          headers[k] = String(v)
-        }
-      }
-      let body: unknown = undefined
-      try {
-        body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
-      } catch {
-        body = init?.body
-      }
-      const capture: Capture = { url, method, body, headers }
-      calls.push(capture)
-      const route = routes[Math.min(idx, routes.length - 1)]
-      idx++
-      return route(capture)
-    }
-  )
-  return calls
-}
-
-function ok(body: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => body,
-    text: async () => JSON.stringify(body)
-  } as unknown as Response
-}
+let fake: FakeApi
 
 beforeEach(() => {
   vi.useFakeTimers()
+  fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
     flistSets: {},
@@ -68,6 +27,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  fake.restore()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
@@ -143,17 +103,21 @@ describe('selectWorkingSlot', () => {
 
 describe('flistLoadSets', () => {
   it('lists sets + loads the active payload + sorts by updatedAt desc', async () => {
-    const calls = mockFetch([
-      async () =>
-        ok({
-          sets: [
-            { id: 'one', name: 'Main', created_at: 10, updated_at: 100 },
-            { id: 'two', name: 'AU', created_at: 5, updated_at: 200 }
-          ],
-          active_set_id: 'two'
-        }),
-      async () => ok({ payload: { character: { description: 'au' } }, etag: 'e1' })
-    ])
+    fake.on(
+      `GET ${SETS}`,
+      json({
+        sets: [
+          { id: 'one', name: 'Main', created_at: 10, updated_at: 100 },
+          { id: 'two', name: 'AU', created_at: 5, updated_at: 200 }
+        ],
+        active_set_id: 'two'
+      })
+    )
+    fake.on(`POST ${SETS}/two/activate`, json({ active_set_id: 'two' }))
+    fake.on(
+      `GET ${SETS}/two/payload`,
+      json({ payload: { character: { description: 'au' } }, etag: 'e1' })
+    )
     await useStore.getState().flistLoadSets('99')
     const s = useStore.getState()
     expect(s.flistSetsStatus['99']).toBe('ready')
@@ -163,21 +127,15 @@ describe('flistLoadSets', () => {
     // Loading routes through the activate flow so the editor's view
     // slot lands in sync with the server's active_set.json: list →
     // activate → read that set's payload.
-    expect(calls[0].url).toMatch(/\/flist\/character\/99\/sets$/)
-    expect(calls[1].url).toMatch(/\/sets\/two\/activate$/)
-    expect(calls[2].url).toMatch(/\/sets\/two\/payload$/)
+    expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      `GET ${SETS}`,
+      `POST ${SETS}/two/activate`,
+      `GET ${SETS}/two/payload`
+    ])
   })
 
   it('marks status error when the list call fails', async () => {
-    mockFetch([
-      async () =>
-        ({
-          ok: false,
-          status: 500,
-          json: async () => ({ detail: 'boom' }),
-          text: async () => '{}'
-        }) as unknown as Response
-    ])
+    fake.on(`GET ${SETS}`, json({ detail: 'boom' }, 500))
     await useStore.getState().flistLoadSets('99')
     expect(useStore.getState().flistSetsStatus['99']).toBe('error')
   })
@@ -185,18 +143,22 @@ describe('flistLoadSets', () => {
 
 describe('flistCreateSet', () => {
   it('POSTs, prepends to list, activates, and materialises the new slot', async () => {
-    const calls = mockFetch([
-      async () => ok({ set: { id: 'new1', name: 'Working set 1', created_at: 1, updated_at: 1 } }),
-      async () => ok({ payload: { character: { description: 'seed' } }, etag: 'e-new' })
-    ])
+    fake.on(
+      `POST ${SETS}`,
+      json({ set: { id: 'new1', name: 'Working set 1', created_at: 1, updated_at: 1 } })
+    )
+    fake.on(`POST ${SETS}/new1/activate`, json({ active_set_id: 'new1' }))
+    fake.on(
+      `GET ${SETS}/new1/payload`,
+      json({ payload: { character: { description: 'seed' } }, etag: 'e-new' })
+    )
     const meta = await useStore.getState().flistCreateSet('99', 'Working set 1')
     expect(meta?.id).toBe('new1')
     const s = useStore.getState()
     expect(s.flistSets['99']?.[0].id).toBe('new1')
     expect(s.flistActiveSetId['99']).toBe('new1')
     expect(s.flistSetWorking['new1']?.etag).toBe('e-new')
-    expect(calls[0].method).toBe('POST')
-    expect(calls[0].body).toEqual({ name: 'Working set 1' })
+    expect(fake.requestsTo(`POST ${SETS}`)[0].body).toEqual({ name: 'Working set 1' })
   })
 })
 
@@ -210,9 +172,10 @@ describe('flistRenameSet', () => {
         ]
       }
     })
-    mockFetch([
-      async () => ok({ set: { id: 'a', name: 'New', created_at: 1, updated_at: 3 } })
-    ])
+    fake.on(
+      `PATCH ${SETS}/a`,
+      json({ set: { id: 'a', name: 'New', created_at: 1, updated_at: 3 } })
+    )
     await useStore.getState().flistRenameSet('99', 'a', 'New')
     const list = useStore.getState().flistSets['99']
     expect(list?.map((m) => `${m.id}:${m.name}`)).toEqual(['a:New', 'b:Other'])
@@ -225,9 +188,10 @@ describe('flistDuplicateSet', () => {
       flistSets: { '99': [{ id: 'src', name: 'Source', createdAt: 1, updatedAt: 1 }] },
       flistActiveSetId: { '99': 'src' }
     })
-    mockFetch([
-      async () => ok({ set: { id: 'dup', name: 'Source (copy)', created_at: 2, updated_at: 2 } })
-    ])
+    fake.on(
+      `POST ${SETS}/src/duplicate`,
+      json({ set: { id: 'dup', name: 'Source (copy)', created_at: 2, updated_at: 2 } })
+    )
     const meta = await useStore.getState().flistDuplicateSet('99', 'src', 'Source (copy)')
     expect(meta?.id).toBe('dup')
     const s = useStore.getState()
@@ -259,10 +223,12 @@ describe('flistDeleteSet', () => {
         }
       }
     })
-    mockFetch([
-      async () => ok({ active_set_id: 'b' }),
-      async () => ok({ payload: { character: { description: 'b' } }, etag: 'e-b' })
-    ])
+    fake.on(`DELETE ${SETS}/a`, json({ active_set_id: 'b' }))
+    fake.on(`POST ${SETS}/b/activate`, json({ active_set_id: 'b' }))
+    fake.on(
+      `GET ${SETS}/b/payload`,
+      json({ payload: { character: { description: 'b' } }, etag: 'e-b' })
+    )
     await useStore.getState().flistDeleteSet('99', 'a')
     const s = useStore.getState()
     expect(s.flistSets['99']?.map((m) => m.id)).toEqual(['b'])
@@ -276,7 +242,7 @@ describe('flistDeleteSet', () => {
       flistSets: { '99': [{ id: 'only', name: 'Only', createdAt: 1, updatedAt: 1 }] },
       flistActiveSetId: { '99': 'only' }
     })
-    mockFetch([async () => ok({ active_set_id: null })])
+    fake.on(`DELETE ${SETS}/only`, json({ active_set_id: null }))
     await useStore.getState().flistDeleteSet('99', 'only')
     const s = useStore.getState()
     expect(s.flistSets['99']).toEqual([])
@@ -308,20 +274,20 @@ describe('flistActivateSet', () => {
       flistSetWorking: { 'old': outgoingSlot },
       flistWorking: { '99': outgoingSlot }
     })
-    const calls = mockFetch([
-      // 1. flush of the outgoing set fires a PUT to /sets/old/payload
-      async () => ok({ etag: 'flushed' }),
-      // 2. activate the new set
-      async () => ok({ active_set_id: 'new' }),
-      // 3. materialise the new set's payload
-      async () => ok({ payload: { character: { description: 'newly' } }, etag: 'e-new' })
-    ])
+    // 1. flush of the outgoing set fires a PUT to /sets/old/payload
+    fake.on(`PUT ${SETS}/old/payload`, json({ etag: 'flushed' }))
+    // 2. activate the new set
+    fake.on(`POST ${SETS}/new/activate`, json({ active_set_id: 'new' }))
+    // 3. materialise the new set's payload
+    fake.on(
+      `GET ${SETS}/new/payload`,
+      json({ payload: { character: { description: 'newly' } }, etag: 'e-new' })
+    )
     await useStore.getState().flistActivateSet('99', 'new')
-    const puts = calls.filter((c) => c.method === 'PUT')
-    expect(puts.length).toBe(1)
-    expect(puts[0].url).toMatch(/\/sets\/old\/payload$/)
-    expect(calls.findIndex((c) => c.url.includes('/sets/new/activate'))).toBeGreaterThan(
-      calls.findIndex((c) => c.method === 'PUT')
+    const order = fake.requests.map((r) => `${r.method} ${r.path}`)
+    expect(order.filter((r) => r.startsWith('PUT'))).toEqual([`PUT ${SETS}/old/payload`])
+    expect(order.indexOf(`POST ${SETS}/new/activate`)).toBeGreaterThan(
+      order.indexOf(`PUT ${SETS}/old/payload`)
     )
     expect(useStore.getState().flistActiveSetId['99']).toBe('new')
     expect(useStore.getState().flistSetWorking['new']?.etag).toBe('e-new')
@@ -348,15 +314,12 @@ describe('flistActivateFromFlist', () => {
       flistSetWorking: { 'cur': currentSlot },
       flistWorking: { '99': currentSlot }
     })
-    const calls = mockFetch([
-      async () => ok({ etag: 'flushed' }),
-      async () => ok({ active_set_id: null })
-    ])
+    fake.on(`PUT ${SETS}/cur/payload`, json({ etag: 'flushed' }))
+    fake.on('POST /flist/character/99/from-flist/activate', json({ active_set_id: null }))
     await useStore.getState().flistActivateFromFlist('99')
     expect(useStore.getState().flistActiveSetId['99']).toBeNull()
-    const puts = calls.filter((c) => c.method === 'PUT')
-    expect(puts.length).toBe(1)
-    expect(puts[0].url).toMatch(/\/sets\/cur\/payload$/)
+    const puts = fake.requests.filter((r) => r.method === 'PUT')
+    expect(puts.map((r) => r.path)).toEqual([`${SETS}/cur/payload`])
   })
 })
 
@@ -377,11 +340,10 @@ describe('autosave keyed on set id', () => {
         }
       }
     })
-    const calls = mockFetch([async () => ok({ etag: 'after' })])
+    fake.on(`PUT ${SETS}/aaa/payload`, json({ etag: 'after' }))
     await useStore.getState().flistSetWorkingFlushPending('99', 'aaa')
-    const puts = calls.filter((c) => c.method === 'PUT')
-    expect(puts.length).toBe(1)
-    expect(puts[0].url).toMatch(/\/sets\/aaa\/payload$/)
+    const puts = fake.requests.filter((r) => r.method === 'PUT')
+    expect(puts.map((r) => r.path)).toEqual([`${SETS}/aaa/payload`])
     expect(useStore.getState().flistSetWorking['aaa']?.saveStatus).toBe('saved')
     expect(useStore.getState().flistSetWorking['aaa']?.etag).toBe('after')
   })
@@ -401,17 +363,10 @@ describe('autosave keyed on set id', () => {
         }
       }
     })
-    mockFetch([
-      async () =>
-        ({
-          ok: false,
-          status: 409,
-          json: async () => ({
-            detail: { detail: 'etag_mismatch', current_etag: 'server' }
-          }),
-          text: async () => '{}'
-        }) as unknown as Response
-    ])
+    fake.on(
+      `PUT ${SETS}/aaa/payload`,
+      json({ detail: { detail: 'etag_mismatch', current_etag: 'server' } }, 409)
+    )
     await useStore.getState().flistSetWorkingFlushPending('99', 'aaa')
     const slot = useStore.getState().flistSetWorking['aaa']
     expect(slot?.unsavedDirty).toBe(true)
