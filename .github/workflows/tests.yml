@@ -1,0 +1,89 @@
+# Runs the sidecar's pytest suite and the renderer's vitest suite on
+# every branch push and pull request, on Windows because that is the
+# only platform the app ships for. release.yml calls this same file
+# (workflow_call) before it packs anything, so a tag build runs the
+# tests on the tagged commit and a red suite never becomes a release.
+#
+# Installs mirror release.yml step for step (setup-node 22, setup-python
+# 3.12, uv, `uv sync --project sidecar`, `npm ci`), so a dependency that
+# only breaks the release build breaks here first.
+#
+# Nothing in either suite needs the network or a downloaded model:
+# fastembed is mocked in the rag tests, outbound HTTP is mocked with
+# pytest-httpx, and app routes are exercised in-process. Two tests need
+# files that only exist on a developer machine and skip with a reason:
+#   test_parser.py::test_parse_real_log_smoke   "F-Chat data dir not mounted"
+#   test_zip_serialise.py (OOC Hub sample)       "no flistcharexporter OOC Hub sample available"
+# `-rs` prints those reasons in the log, so a skip is never silent.
+# Checked locally by running the suite with APPDATA, LOCALAPPDATA and
+# USERPROFILE pointed at an empty folder, which is what a runner has.
+#
+# Run time: measured locally (Windows 11, warm caches) at about 2 min
+# for pytest and 5 s for vitest. On a cold windows-latest runner add
+# roughly 2-3 min of npm ci (keytar rebuild against Electron) and
+# 1 min of uv sync. Update this line with the first real runner timing.
+name: Tests
+
+on:
+  push:
+    # Branches only. Tag pushes reach these tests through release.yml,
+    # which calls this workflow; listing tags here would run them twice.
+    branches: ['**']
+  pull_request: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    name: Sidecar (pytest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      # Same command release.yml runs; the dev group (pytest,
+      # pytest-asyncio, pytest-httpx) comes with it by default.
+      - name: uv sync (sidecar)
+        run: uv sync --project sidecar
+
+      # --no-sync: test exactly the environment the step above built.
+      # -rs: print the reason for every skipped test.
+      - name: pytest
+        working-directory: sidecar
+        run: uv run --no-sync pytest -q -rs
+
+  renderer:
+    name: Renderer (vitest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Same command release.yml runs, postinstall keytar rebuild included.
+      - name: npm ci
+        run: npm ci
+
+      - name: vitest
+        run: npx vitest run
