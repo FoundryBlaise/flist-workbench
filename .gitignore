@@ -49,7 +49,6 @@ desktop.ini
 # for the sidecar IS tracked. Anything pip generates ad-hoc isn't.
 pip-wheel-metadata/
 tests/screenshots/*.txt
-tests/uxtest/artifacts/
 .claude/worktrees/
 
 # Claude Code session config — machine-local, never shared
