@@ -6,6 +6,9 @@
 # Unsigned builds. See docs/INSTALL_WINDOWS.md for the SmartScreen
 # click-through users will see; code-signing is a separate decision.
 #
+# Packing starts only after tests.yml (pytest + vitest) has passed on
+# the same commit; see the `tests` job below.
+#
 # Trigger:
 #   git tag v0.0.1 && git push origin v0.0.1
 #
@@ -25,7 +28,14 @@ permissions:
   contents: write
 
 jobs:
+  # Both test suites, on the commit being released. build-windows waits
+  # for them, so a red suite stops the run before anything is packed
+  # or published. The called workflow drops to contents: read.
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   build-windows:
+    needs: tests
     runs-on: windows-latest
     timeout-minutes: 45
 

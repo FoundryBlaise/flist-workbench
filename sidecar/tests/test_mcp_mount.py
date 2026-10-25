@@ -174,6 +174,13 @@ async def test_status_tool_reports_the_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
+    # Pin an empty F-Chat folder. Left unset, the tool reads the
+    # machine's real %APPDATA%\fchat\data: the test then depends on
+    # whether the developer has F-Chat installed, and on a clean CI
+    # runner it took the missing-folder path instead.
+    fchat = tmp_path / "fchat-data"
+    fchat.mkdir()
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(fchat))
     import importlib
 
     import character_archive
