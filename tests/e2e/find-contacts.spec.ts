@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test'
-import { launchApp, menuAction } from './launch'
+import { menuAction, withApp } from './launch'
 
 // The fixture F-Chat folder (fixtures/build_fchat_dir.py) has DM Logs
 // with Antiquill under both Azure Viper and Lady Amber Blaise, and an
 // Antiquill line in a channel that must not count as a DM.
 test('Find Contacts lists every character with a DM Log and opens it', async () => {
-  const { app, window } = await launchApp()
-  try {
+  await withApp(async ({ app, window }) => {
     // A fresh data folder has no Workbench, so there is no editor to
     // hold focus first; the modal must still take focus on its own.
     await menuAction(app, 'find-contacts')
@@ -31,7 +30,5 @@ test('Find Contacts lists every character with a DM Log and opens it', async () 
     await expect(window.getByTestId('log-body')).toContainText(
       'slides the torn page across the counter.'
     )
-  } finally {
-    await app.close()
-  }
+  })
 })
