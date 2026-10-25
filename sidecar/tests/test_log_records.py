@@ -60,10 +60,11 @@ def test_records_can_sit_either_side_of_a_utc_midnight(tmp_path: Path) -> None:
 
 # ---- the short-message rule at its edge -----------------------------------
 #
-# Under the threshold (default 200 characters of the text as the parser
-# presents it) a message is OOC by rule, unconditionally: a `/me` action
-# included, by product decision. At the threshold the rule no longer
-# decides, so the message waits for a Label.
+# Under the threshold (default 200 characters of what the user wrote; for
+# a `/me` action, without the speaker name the parser puts in front) a
+# message is OOC by rule, unconditionally: a `/me` action included, by
+# product decision. At the threshold the rule no longer decides, so the
+# message waits for a Label.
 
 THRESHOLD = 200
 ME = "Azure Viper"
@@ -103,19 +104,25 @@ def test_chat_just_under_the_threshold_is_ooc_and_at_it_is_unlabeled(window) -> 
     assert got == [(199, "OOC"), (200, "Unlabeled")]
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="a /me action is measured with the speaker-name prefix today #5",
+)
 def test_an_action_just_under_the_threshold_is_ooc_and_at_it_is_unlabeled(
     window,
 ) -> None:
+    """A `/me` action is measured like chat, by what the user typed: the
+    speaker's name the parser puts in front does not count, so a long
+    name does not reach the threshold earlier (decided on #5)."""
     client, log = window
-    # The presented text is "Azure Viper " (12 characters) plus the body.
     write_log(log, [
-        action(ME, "a" * 187, at=1700000000),
-        action(ME, "b" * 188, at=1700000060),
+        action(ME, "a" * (THRESHOLD - 1), at=1700000000),
+        action(ME, "b" * THRESHOLD, at=1700000060),
     ])
 
-    got = [(len(m["text"]), m["label"]) for m in _messages(client)]
+    got = [m["label"] for m in _messages(client)]
 
-    assert got == [(199, "OOC"), (200, "Unlabeled")]
+    assert got == ["OOC", "Unlabeled"]
 
 
 # ---- actions and system lines downstream of the parser -------------------
