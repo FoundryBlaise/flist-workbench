@@ -82,21 +82,24 @@ describe('seedWorkingFromLive', () => {
     expect(desc).toBe('a\nb')
     expect(seeded.inlines).toEqual(live.inlines)
   })
-  it('seeds image_id-keyed gallery from live.images', () => {
+  it('seeds image_id-keyed gallery from live.images, in sort_order', () => {
     // v4: working.images carries image_id + description + sort_order.
     // The actual bytes live on disk at images/<image_id>.<ext>, fetched
-    // separately by the renderer when rendering thumbnails.
+    // separately by the renderer when rendering thumbnails. Live lists
+    // them in whatever order F-list sent; the gallery follows sort_order.
     const live = {
       character: { description: 'x' },
       images: [
-        { image_id: '1', extension: 'jpg', description: 'first', sort_order: '2' },
-        { image_id: '2', extension: 'png', sort_order: '8' }
+        { image_id: '2', extension: 'png', sort_order: '8' },
+        { image_id: '3', extension: 'gif', description: 'last', sort_order: '10' },
+        { image_id: '1', extension: 'jpg', description: 'first', sort_order: '2' }
       ]
     } as Record<string, unknown>
     const seeded = seedWorkingFromLive(live)
     expect(seeded.images).toEqual([
       { image_id: '1', description: 'first', sort_order: 2 },
-      { image_id: '2', description: '', sort_order: 8 }
+      { image_id: '2', description: '', sort_order: 8 },
+      { image_id: '3', description: 'last', sort_order: 10 }
     ])
   })
   it('drops live.images entries without an image_id', () => {
@@ -107,17 +110,17 @@ describe('seedWorkingFromLive', () => {
     const seeded = seedWorkingFromLive(live)
     expect(seeded.images).toEqual([])
   })
-  it('preserves unknown top-level keys (forward-compat round-trip)', () => {
+  it('seeds only the recognised containers, leaving unknown Live keys out', () => {
+    // Forward-compat round-trips unknown keys of a Workbench already on
+    // disk (see workingCopyActions); a fresh seed is "from Live", and
+    // only the containers the Workbench knows come across.
     const live = {
       character: { description: 'a' },
       _future: { tier: 5 }
     } as Record<string, unknown>
     const seeded = seedWorkingFromLive(live)
-    // Forward-compat is enforced by the disk reader, not the seed helper —
-    // seedWorkingFromLive only copies recognised containers. Document the
-    // invariant: anything outside WORKING_CONTAINER_KEYS lives only on
-    // disk after first flush; the seed itself is "from Live + overlay".
-    expect(seeded.character).toBeDefined()
+    expect(seeded.character).toEqual({ description: 'a' })
+    expect(seeded).not.toHaveProperty('_future')
   })
   it('derives _custom_kinks_order on Live with custom_kinks dict', () => {
     const live = {

@@ -84,10 +84,17 @@ describe('flistDiffLoadBackup', () => {
     seedSlot('99', { character: { description: 'edited' } })
     fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
     await useStore.getState().flistDiffLoadBackup('99', '111.json')
-    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toBeDefined()
-    // Idempotent on second call — fetch is not re-invoked.
+    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toEqual({
+      character: { description: 'snapshot' }
+    })
+    // Idempotent on second call: fetch is not re-invoked, and the
+    // cached Backup is still the one that was read.
+    fake.on(SNAPSHOT_111, json({ character: { description: 'changed' } }))
     await useStore.getState().flistDiffLoadBackup('99', '111.json')
     expect(fake.requestsTo(SNAPSHOT_111)).toHaveLength(1)
+    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toEqual({
+      character: { description: 'snapshot' }
+    })
   })
 })
 
@@ -105,16 +112,22 @@ describe('flistDiffLoadWorkbench', () => {
         json({
           payload: {
             _overlay: ['character.description'],
-            character: { description: 'edited' }
+            character: { description: 'on disk' }
           },
           etag: 'p'
         })
       )
+      const onDisk = {
+        _overlay: ['character.description'],
+        character: { description: 'on disk' }
+      }
       await useStore.getState().flistDiffLoadWorkbench('99')
-      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toBeDefined()
-      // Idempotent on second call — fetch is not re-invoked.
+      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
+      // Idempotent on second call: fetch is not re-invoked, and the
+      // cached Workbench is still the one that was read.
       await useStore.getState().flistDiffLoadWorkbench('99')
       expect(fake.requests).toHaveLength(2)
+      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
     }
   )
   it('marks error (not a spinner) when there is no bench', async () => {
