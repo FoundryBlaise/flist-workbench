@@ -7,25 +7,18 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useStore } from '../../../state'
 import { ImagesTab } from '../ImagesTab'
+import { installFakeApi, json, type FakeApi } from '../../../test/fakeApi'
 
 const CID = '42'
 const IDS = Array.from({ length: 12 }, (_, i) => `local-0000000${i.toString(16)}`)
 
-type Call = { url: string; method: string; body: unknown }
-let calls: Call[] = []
+const IMAGES = `/flist/character/${CID}/images`
+const TRASH = `/flist/character/${CID}/trash`
+
+let fake: FakeApi
 let trash: { image_id: string; extension: string; filename: string; size: number; deleted_at: number; deleted_by: string; source_name: null }[] = []
 
-function json(body: unknown): Response {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => body,
-    text: async () => JSON.stringify(body)
-  } as unknown as Response
-}
-
 beforeEach(() => {
-  calls = []
   trash = []
   const slot = {
     payload: { _schema_version: 2, _overlay: [], images: [] },
@@ -48,52 +41,44 @@ beforeEach(() => {
     flistCharacterImages: { [CID]: { byId, status: 'ready' } },
     flistRoster: []
   } as never)
-  ;(globalThis as { fetch?: unknown }).fetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
-      const method = (init?.method ?? 'GET').toUpperCase()
-      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
-      calls.push({ url, method, body })
-      if (url.endsWith('/images/repair')) return json({ repaired: false })
-      if (url.endsWith('/image-references')) {
-        return json({
-          [IDS[0]]: { working_sets: [], live: true, snapshots: 1, newest_snapshot: '1.json' },
-          [IDS[1]]: { working_sets: [], live: true, snapshots: 1, newest_snapshot: '1.json' }
-        })
-      }
-      if (url.endsWith('/images/trash') && method === 'POST') {
-        const ids = (body as { image_ids: string[] }).image_ids
-        trash = ids.map((id) => ({
-          image_id: id,
-          extension: 'png',
-          filename: `${id}.png`,
-          size: 1000,
-          deleted_at: 1,
-          deleted_by: 'ui',
-          source_name: null
-        }))
-        return json({ trashed: trash, not_found: [] })
-      }
-      if (url.endsWith('/trash/restore')) {
-        const ids = (body as { image_ids: string[] }).image_ids
-        trash = trash.filter((t) => !ids.includes(t.image_id))
-        return json({
-          restored: ids.map((id) => ({ image_id: id, deduplicated: false, from: id })),
-          not_found: [],
-          conflicts: []
-        })
-      }
-      if (url.endsWith('/trash')) return json({ character_id: CID, items: trash })
-      if (url.includes('/images')) {
-        return json({ character_id: CID, images: [] })
-      }
-      return json({})
-    }
-  )
+  fake = installFakeApi()
+    .on(`POST ${IMAGES}/repair`, json({ repaired: false }))
+    .on(`GET ${IMAGES}`, json({ character_id: CID, images: [] }))
+    .on(
+      `GET /flist/character/${CID}/image-references`,
+      json({
+        [IDS[0]]: { working_sets: [], live: true, snapshots: 1, newest_snapshot: '1.json' },
+        [IDS[1]]: { working_sets: [], live: true, snapshots: 1, newest_snapshot: '1.json' }
+      })
+    )
+    .on(`POST ${IMAGES}/trash`, (req) => {
+      const ids = (req.body as { image_ids: string[] }).image_ids
+      trash = ids.map((id) => ({
+        image_id: id,
+        extension: 'png',
+        filename: `${id}.png`,
+        size: 1000,
+        deleted_at: 1,
+        deleted_by: 'ui',
+        source_name: null
+      }))
+      return json({ trashed: trash, not_found: [] })
+    })
+    .on(`POST ${TRASH}/restore`, (req) => {
+      const ids = (req.body as { image_ids: string[] }).image_ids
+      trash = trash.filter((t) => !ids.includes(t.image_id))
+      return json({
+        restored: ids.map((id) => ({ image_id: id, deduplicated: false, from: id })),
+        not_found: [],
+        conflicts: []
+      })
+    })
+    .on(`GET ${TRASH}`, () => json({ character_id: CID, items: trash }))
 })
 
 afterEach(() => {
   cleanup()
+  fake.restore()
   vi.restoreAllMocks()
 })
 
@@ -111,7 +96,7 @@ it('shift-click selects ten, Delete asks once, and the confirm says what is stil
   expect(screen.getByTestId('flist-images-actionbar').textContent).toContain('10 selected')
 
   // The references arrive asynchronously; the warning needs them.
-  await waitFor(() => expect(calls.some((c) => c.url.endsWith('/image-references'))).toBe(true))
+  await waitFor(() => expect(fake.requestsTo(`GET /flist/character/${CID}/image-references`).length > 0).toBe(true))
   fireEvent.keyDown(rows[0], { key: 'Delete' })
 
   const confirm = await screen.findByTestId('flist-images-delete-confirm')
@@ -122,9 +107,9 @@ it('shift-click selects ten, Delete asks once, and the confirm says what is stil
   fireEvent.click(within(confirm).getByTestId('flist-images-delete-confirm-btn'))
 
   await waitFor(() =>
-    expect(calls.some((c) => c.url.endsWith('/images/trash') && c.method === 'POST')).toBe(true)
+    expect(fake.requestsTo(`POST ${IMAGES}/trash`).length > 0).toBe(true)
   )
-  const sent = calls.find((c) => c.url.endsWith('/images/trash'))!.body as { image_ids: string[] }
+  const sent = fake.requestsTo(`POST ${IMAGES}/trash`)[0].body as { image_ids: string[] }
   expect(sent.image_ids).toEqual(IDS.slice(0, 10))
   await waitFor(() => expect(screen.getAllByTestId('flist-images-pool-item')).toHaveLength(2))
 })
@@ -203,8 +188,8 @@ it('the trash view restores what was trashed', async () => {
   fireEvent.click(checkbox(items[0]))
   fireEvent.click(screen.getByTestId('flist-images-trash-restore'))
 
-  await waitFor(() => expect(calls.some((c) => c.url.endsWith('/trash/restore'))).toBe(true))
-  expect(calls.find((c) => c.url.endsWith('/trash/restore'))!.body).toEqual({
+  await waitFor(() => expect(fake.requestsTo(`POST ${TRASH}/restore`).length > 0).toBe(true))
+  expect(fake.requestsTo(`POST ${TRASH}/restore`)[0].body).toEqual({
     image_ids: ['gone1']
   })
   await waitFor(() => expect(screen.getByText('The trash is empty.')).toBeTruthy())
