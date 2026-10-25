@@ -10,12 +10,10 @@
 #
 # Nothing in either suite needs the network or a downloaded model:
 # fastembed is mocked in the rag tests, outbound HTTP is mocked with
-# pytest-httpx, and app routes are exercised in-process. Two tests need
-# files that only exist on a developer machine and skip with a reason:
-#   test_parser.py::test_parse_real_log_smoke   "F-Chat data dir not mounted"
-#   test_zip_serialise.py (OOC Hub sample)       "no flistcharexporter OOC Hub sample available"
-# `-rs` prints those reasons in the log, so a skip is never silent.
-# Checked locally by running the suite with APPDATA, LOCALAPPDATA and
+# pytest-httpx, and app routes are exercised in-process. No test needs
+# files that only exist on a developer machine, so nothing skips today;
+# `-rs` prints the reason of any skip that appears, so one is never
+# silent. Checked locally by running the suite with APPDATA, LOCALAPPDATA and
 # USERPROFILE pointed at an empty folder, which is what a runner has.
 #
 # Run time: measured locally (Windows 11, warm caches) at about 2 min

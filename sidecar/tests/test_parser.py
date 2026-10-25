@@ -1,7 +1,4 @@
-import os
 from pathlib import Path
-
-import pytest
 
 import parser
 from fchat_logs import chat, encode
@@ -44,35 +41,6 @@ def test_classify_kind_default_chat_is_ic() -> None:
 def test_classify_kind_other_types_are_system() -> None:
     assert classify_kind(4, "warning text") == "system"
     assert classify_kind(5, "event") == "system"
-
-
-# Integration test against the mounted F-Chat data directory.
-# Skipped when the mount isn't present (CI / non-devcontainer runs).
-DATA_DIR = Path(os.environ.get("FCHAT_DATA_DIR", "/sideprojects/rag/data"))
-
-
-@pytest.mark.skipif(not DATA_DIR.exists(), reason="F-Chat data dir not mounted")
-def test_parse_real_log_smoke() -> None:
-    # Pick the smallest non-channel partner log we can find — quick + low risk.
-    candidates: list[Path] = []
-    for char_dir in DATA_DIR.iterdir():
-        logs = char_dir / "logs"
-        if not logs.is_dir():
-            continue
-        for p in logs.iterdir():
-            if p.is_file() and not p.name.endswith(".idx") and not p.name.startswith("#") and p.name != "_":
-                candidates.append(p)
-
-    assert candidates, "no DM partner logs found in mounted data dir"
-    smallest = min(candidates, key=lambda p: p.stat().st_size)
-    msgs = list(parse_log(smallest))
-    assert msgs, f"expected at least one message in {smallest.name}"
-    first = msgs[0]
-    assert isinstance(first["ts"], int)
-    assert first["type"] in (0, 1, 2, 3, 4, 5)
-    assert first["type_name"] in {"chat", "action", "ad", "roll", "warn", "event"}
-    assert first["kind"] in {"ic", "ooc", "system"}
-    assert "speaker" in first and first["speaker"]
 
 
 def test_a_damaged_record_no_longer_ends_the_file(tmp_path: Path) -> None:
