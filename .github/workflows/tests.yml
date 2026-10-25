@@ -19,10 +19,9 @@
 # LOCALAPPDATA and USERPROFILE pointed at an empty folder, which is
 # what a runner has.
 #
-# Run time: measured locally (Windows 11, warm caches) at about 2 min
-# for pytest and 5 s for vitest. On a cold windows-latest runner add
-# roughly 2-3 min of npm ci (keytar rebuild against Electron) and
-# 1 min of uv sync. Update this line with the first real runner timing.
+# Run time on windows-latest (first run, 2026-10-25, jobs in parallel):
+# sidecar about 3.5 min (pytest itself 3 min), renderer about 1 min,
+# e2e about 1.5 min including the build; about 4 min wall clock.
 name: Tests
 
 on:
