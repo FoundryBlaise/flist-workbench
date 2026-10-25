@@ -188,7 +188,7 @@ def test_rename_empty_name_returns_422(
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="deleting a working set removes its files for good; the spec removes set deletion",
+    reason="character_archive.delete_set removes the folder for good; the spec removes it",
 )
 def test_delete_clears_active_when_target_was_active(
     client: TestClient, archive
@@ -208,7 +208,7 @@ def test_delete_clears_active_when_target_was_active(
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="deleting a working set removes its files for good; the spec removes set deletion",
+    reason="character_archive.delete_set removes the folder for good; the spec removes it",
 )
 def test_delete_leaves_other_active_alone(
     client: TestClient, archive
@@ -478,7 +478,7 @@ def test_a_write_that_read_first_goes_through(
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="the working-set migration unlinks working.json; the spec's migration keeps it in a Backup",
+    reason="the legacy working.json migration (_migrate_working_v2) unlinks it; the spec's migration keeps it in a Backup",
 )
 def test_list_sets_call_unlinks_legacy_working_json(
     client: TestClient, archive

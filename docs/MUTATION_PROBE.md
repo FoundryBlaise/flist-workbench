@@ -82,7 +82,7 @@ the spec expected to kill it. The file header documents every field.
 
 When code moves and `--check` reports an entry stale, re-anchor it on the
 same behaviour; do not drop it. When a spec deletes the code a mutation
-targets (e.g. the working-set modules), move the mutation to the code that
+targets (e.g. the v2 sets code in character_archive.py), move the mutation to the code that
 now does the job. New mutations get the next free id in their area; ids
 are never reused, so results stay comparable across runs.
 
