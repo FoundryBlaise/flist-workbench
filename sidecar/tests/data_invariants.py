@@ -7,8 +7,12 @@
   the Trash or a Backup. The user owns every file under the data
   directory's `characters/` and `avatars/`. Each one that is gone after
   the test, and each one the app deleted along the way, must still be
-  in the archive: its bytes in some file there (the Trash, or a move),
-  or a member of a zip there (a Backup, possibly itself in the Trash).
+  kept: its bytes in a file in some character's Trash, a member of a
+  Backup zip (in a character's `backups/` or Trash), or a file still
+  under the same character's folder (a move or rename within one
+  character; for an avatar, still under `avatars/`). The same bytes in
+  another character's folder do not count: that copy can be deleted
+  on its own.
 
 The `data_invariants` fixture is autouse. It applies to every test whose
 `FLIST_WORKBENCH_DATA_DIR` or `FCHAT_DATA_DIR` points into pytest's temp
@@ -66,6 +70,10 @@ RULES = (LOG_UNCHANGED, NOTHING_VANISHES)
 #: Workbench, Backups, images, inlines and Trash, and the avatars.
 ARCHIVE_DIRS = ("characters", "avatars")
 
+#: A character's Trash and Backups, as `characters/<name>/<dir>/`.
+TRASH_DIR = "trash"
+BACKUPS_DIR = "backups"
+
 #: Half-written files of an atomic write, never something the user owns.
 _SCRATCH_SUFFIXES = (".tmp",)
 
@@ -88,10 +96,13 @@ _LIB_ROOTS = tuple(
 _THIS_FILE = _norm(__file__)
 
 
-def _under(path: str, roots: list[Path]) -> bool:
+def _is_within(path: str | Path, *roots: str | Path) -> bool:
+    """Whether `path` is one of `roots` or lies below one, compared after
+    resolving links and (on Windows) case."""
+    p = _norm(path)
     for root in roots:
         r = _norm(root)
-        if path == r or path.startswith(r.rstrip(os.sep) + os.sep):
+        if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
             return True
     return False
 
@@ -104,7 +115,7 @@ def _by_the_app(frame) -> bool:
         if not name.startswith("<"):
             f = _norm(name)
             if f != _THIS_FILE and not f.startswith(_LIB_ROOTS):
-                return _under(f, APP_ROOTS) and not _under(f, [TESTS_DIR])
+                return _is_within(f, *APP_ROOTS) and not _is_within(f, TESTS_DIR)
         frame = frame.f_back
     return False
 
@@ -114,14 +125,6 @@ def _sha256(path: Path) -> str | None:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return None
-
-
-def _is_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
 
 
 def _walk(root: Path, *, skip: Path | None = None) -> dict[Path, str]:
@@ -159,23 +162,65 @@ def _log_files(fchat_root: Path, *, skip: Path | None) -> dict[str, str]:
     return out
 
 
-def _bytes_still_held(roots: list[Path]) -> set[str]:
-    """sha256 of every file under `roots`, and of every member of every
-    zip among them."""
-    held: set[str] = set()
+def _home(path: str | Path, roots: list[Path]) -> str | None:
+    """The folder a file may move or be renamed within and still count
+    as kept: its character's folder under `characters/`, or `avatars/`
+    itself. None for a file lying loose in `characters/`."""
+    p = _norm(path)
+    for root in roots:
+        r = _norm(root)
+        if not _is_within(p, r):
+            continue
+        if root.name != "characters":
+            return r
+        parts = Path(p).relative_to(r).parts
+        return os.path.join(r, parts[0]) if len(parts) > 1 else None
+    return None
+
+
+def _zip_members(path: Path) -> set[str]:
+    try:
+        with zipfile.ZipFile(path) as z:
+            return {
+                hashlib.sha256(z.read(info)).hexdigest()
+                for info in z.infolist()
+                if not info.is_dir()
+            }
+    except (OSError, zipfile.BadZipFile):
+        return set()
+
+
+@dataclass
+class _Kept:
+    """Where the archive still holds a file's bytes after the test."""
+
+    #: In any character's Trash, or a member of any Backup zip.
+    anywhere: set[str] = field(default_factory=set)
+    #: Home folder (see `_home`) -> the bytes of every file in it.
+    by_home: dict[str, set[str]] = field(default_factory=dict)
+
+    def holds(self, path: Path, digest: str, roots: list[Path]) -> bool:
+        if digest in self.anywhere:
+            return True
+        home = _home(path, roots)
+        return home is not None and digest in self.by_home.get(home, set())
+
+
+def _kept(roots: list[Path]) -> _Kept:
+    kept = _Kept()
     for root in roots:
         for path, digest in _walk(root).items():
-            held.add(digest)
-            if path.suffix.lower() != ".zip":
-                continue
-            try:
-                with zipfile.ZipFile(path) as z:
-                    for info in z.infolist():
-                        if not info.is_dir():
-                            held.add(hashlib.sha256(z.read(info)).hexdigest())
-            except (OSError, zipfile.BadZipFile):
-                continue
-    return held
+            home = _home(path, roots)
+            if home is not None:
+                kept.by_home.setdefault(home, set()).add(digest)
+            parts = path.relative_to(root).parts
+            # characters/<name>/trash/... or characters/<name>/backups/...
+            folder = parts[1] if root.name == "characters" and len(parts) > 2 else None
+            if folder == TRASH_DIR:
+                kept.anywhere.add(digest)
+            if folder in (TRASH_DIR, BACKUPS_DIR) and path.suffix.lower() == ".zip":
+                kept.anywhere |= _zip_members(path)
+    return kept
 
 
 @dataclass
@@ -308,8 +353,10 @@ class DataInvariants:
         gone.update(self._deleted_by_app)
         if not gone:
             return []
-        held = _bytes_still_held(self.archive_roots)
-        return sorted(self._rel(p) for p, d in gone.items() if d not in held)
+        kept = _kept(self.archive_roots)
+        return sorted(
+            self._rel(p) for p, d in gone.items() if not kept.holds(p, d, self.archive_roots)
+        )
 
     def finish(self) -> None:
         global _recording
