@@ -29,7 +29,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     restore_svc.accept_handshake(hs["handshake_id"])
     c = TestClient(server.app)
     c.token = hs["token"]  # type: ignore[attr-defined]
-    return c
+    yield c
+    # The pairing lives in module state; leave the next test unpaired.
+    restore_svc.revoke_token()
 
 
 def test_nothing_reported_before_the_extension_calls(client: TestClient) -> None:

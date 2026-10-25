@@ -70,7 +70,9 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     restore_svc.accept_handshake(hs["handshake_id"])
     client = TestClient(server.app)
     client.headers.update({"X-Workbench-Auth": hs["token"]})
-    return client, character_archive, server
+    yield client, character_archive, server
+    # The pairing lives in module state; leave the next test unpaired.
+    restore_svc.revoke_token()
 
 
 @pytest.fixture
