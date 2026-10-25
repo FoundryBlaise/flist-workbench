@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
 import { installFakeApi, type FakeApi } from '../../test/fakeApi'
+import { workbenchPayload, workingSlot } from '../../test/payloads'
 
 // No test here waits out the autosave debounce, so none should reach
 // the sidecar; afterEach checks that none did.
@@ -15,18 +16,7 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
   useStore.setState({
     flistWorking: {
       ...useStore.getState().flistWorking,
-      [characterId]: {
-        payload: { _schema_version: 2, _overlay: [], ...payload },
-        overlay: Array.isArray(payload._overlay)
-          ? (payload._overlay as string[])
-          : [],
-        etag: 'seed',
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
+      [characterId]: workingSlot(workbenchPayload(payload), { etag: 'seed' })
     },
     flistActiveCharacterId: characterId,
     editorReadOnly: false

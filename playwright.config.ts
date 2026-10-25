@@ -4,7 +4,9 @@ import { defineConfig } from '@playwright/test'
 // Global setup builds a fixture F-Chat folder in a fresh temp root;
 // every spec launches through tests/e2e/launch.ts, which gives the app
 // fresh temp data folders there. No run reads or writes the user's own
-// data.
+// data. Screenshots are taken only when a test fails (see withApp in
+// launch.ts; Playwright's own `screenshot` option does not reach
+// Electron windows), and land in test-results/ with the trace.
 export default defineConfig({
   testDir: './tests/e2e',
   globalSetup: './tests/e2e/global-setup.ts',

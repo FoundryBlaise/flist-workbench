@@ -1,22 +1,23 @@
 # Runs the sidecar's pytest suite, the renderer's vitest suite and the
-# Playwright e2e suite (own job, see `e2e` below) on every branch push and pull request, on Windows because that is the
-# only platform the app ships for. release.yml calls this same file
-# (workflow_call) before it packs anything, so a tag build runs the
-# tests on the tagged commit and a red suite never becomes a release.
+# Playwright e2e suite (own job, see `e2e` below) on every branch push
+# and pull request, on Windows because that is the only platform the
+# app ships for. release.yml calls this same file (workflow_call)
+# before it packs anything, so a tag build runs the tests on the tagged
+# commit and a red suite never becomes a release.
 #
-# Installs mirror release.yml step for step (setup-node 22, setup-python
-# 3.12, uv, `uv sync --project sidecar`, `npm ci`), so a dependency that
-# only breaks the release build breaks here first.
+# Every job installs through the same local action release.yml uses
+# (.github/actions/setup-toolchain: Python 3.12, uv, `uv sync --project
+# sidecar`; Node 22, `npm ci`), so a dependency that only breaks the
+# release build breaks here first.
 #
 # Nothing in either suite needs the network or a downloaded model:
 # fastembed is mocked in the rag tests, outbound HTTP is mocked with
-# pytest-httpx, and app routes are exercised in-process. Two tests need
-# files that only exist on a developer machine and skip with a reason:
-#   test_parser.py::test_parse_real_log_smoke   "F-Chat data dir not mounted"
-#   test_zip_serialise.py (OOC Hub sample)       "no flistcharexporter OOC Hub sample available"
-# `-rs` prints those reasons in the log, so a skip is never silent.
-# Checked locally by running the suite with APPDATA, LOCALAPPDATA and
-# USERPROFILE pointed at an empty folder, which is what a runner has.
+# pytest-httpx, and app routes are exercised in-process. No test needs
+# files that only exist on a developer machine, so nothing skips today;
+# `-rs` prints the reason of any skip that appears, so one is never
+# silent. Checked locally by running the suite with APPDATA,
+# LOCALAPPDATA and USERPROFILE pointed at an empty folder, which is
+# what a runner has.
 #
 # Run time: measured locally (Windows 11, warm caches) at about 2 min
 # for pytest and 5 s for vitest. On a cold windows-latest runner add
@@ -45,20 +46,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Set up Python and the sidecar venv
+        uses: ./.github/actions/setup-toolchain
         with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: latest
-
-      # Same command release.yml runs; the dev group (pytest,
-      # pytest-asyncio, pytest-httpx) comes with it by default.
-      - name: uv sync (sidecar)
-        run: uv sync --project sidecar
+          python: 'true'
 
       # --no-sync: test exactly the environment the step above built.
       # -rs: print the reason for every skipped test.
@@ -81,15 +72,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
+      - name: Set up Node and node_modules
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version: '22'
-          cache: npm
-
-      # Same command release.yml runs, postinstall keytar rebuild included.
-      - name: npm ci
-        run: npm ci
+          node: 'true'
 
       - name: vitest
         run: npx vitest run
@@ -112,27 +98,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Set up Python, Node and both installs
+        uses: ./.github/actions/setup-toolchain
         with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: latest
-
-      - name: uv sync (sidecar)
-        run: uv sync --project sidecar
-
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: npm ci
-        run: npm ci
+          python: 'true'
+          node: 'true'
 
       - name: Build the app
         run: npm run build

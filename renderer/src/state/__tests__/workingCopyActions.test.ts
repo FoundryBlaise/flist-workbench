@@ -10,6 +10,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
 import { installFakeApi, json, networkError, type FakeApi } from '../../test/fakeApi'
+import {
+  archiveEntry,
+  livePayload,
+  payloadRead,
+  workbenchPayload,
+  workbenchRead,
+  workingSlot
+} from '../../test/payloads'
 
 let fake: FakeApi
 
@@ -54,18 +62,7 @@ const conflict = json(
 )
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
-  const slot = {
-    payload: { _schema_version: 2, _overlay: [], ...payload },
-    overlay: Array.isArray(payload._overlay)
-      ? (payload._overlay as string[])
-      : [],
-    etag: 'seed-etag',
-    unsavedDirty: false,
-    saveStatus: 'idle' as const,
-    saveError: null,
-    lastSavedAt: null,
-    materialised: true
-  }
+  const slot = workingSlot(workbenchPayload(payload))
   useStore.setState((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     // Working sets v2: a flush routes through the *active set's*
@@ -80,7 +77,7 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
 
 function seedLive(live: Record<string, unknown>) {
   useStore.setState({
-    flistArchive: { '99': { live, snapshots: [], pullStatus: 'idle' } }
+    flistArchive: { '99': archiveEntry(livePayload(live)) }
   })
 }
 
@@ -181,41 +178,55 @@ describe('typing while a save is in flight', () => {
     expect(fake.requestsTo(SAVE)).toHaveLength(2)
   })
 
-  // Real bug, see #2: two flushes queued behind the same in-flight save
-  // both wake when it lands and each sends a PUT. The two leave
-  // together with the same text and the same If-Match, so against the
-  // real sidecar the second gets a 409 and raises a conflict banner
-  // for a conflict the window had with itself. Drop `.fails` once the
-  // fix lands.
-  it.fails('only one save is in flight at a time, however many queue behind it', async () => {
+  // A slow sidecar: the first save stays open while two more pauses
+  // pass, so two flushes queue behind it; then every save lands.
+  async function burstBehindASlowSave() {
     seedSlot('99', { character: { description: '' } })
     fake.hold(SAVE)
-    let mostInFlight = 0
-    const settle = async (ms: number) => {
-      await vi.advanceTimersByTimeAsync(ms)
-      mostInFlight = Math.max(mostInFlight, fake.pending(SAVE).length)
-    }
 
     useStore.getState().setEditorContent('one')
-    await settle(AUTOSAVE_MS)
-    // A slow sidecar: two more pauses pass while the first save is open.
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     useStore.getState().setEditorContent('one two')
-    await settle(AUTOSAVE_MS)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     useStore.getState().setEditorContent('one two three')
-    await settle(AUTOSAVE_MS)
-    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const sentWhileOpen = fake.requestsTo(SAVE).length
 
     fake.pending(SAVE)[0].resolve(json({ etag: 'e1' }))
-    await settle(0)
-    await settle(AUTOSAVE_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     for (const p of fake.pending(SAVE)) p.resolve(json({ etag: 'e2' }))
-    await settle(AUTOSAVE_MS)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
 
-    expect(mostInFlight).toBe(1)
-    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual([
-      'one',
-      'one two three'
-    ])
+    return { sentWhileOpen, puts: fake.requestsTo(SAVE) }
+  }
+
+  it('edits behind a slow save wait for it, then the newest text is saved over its etag', async () => {
+    const { sentWhileOpen, puts } = await burstBehindASlowSave()
+
+    expect(sentWhileOpen).toBe(1)
+    expect(descOf(puts[0].body)).toBe('one')
+    expect(puts[0].headers['If-Match']).toBe('seed-etag')
+    const after = puts.slice(1)
+    expect(after.length).toBeGreaterThan(0)
+    for (const put of after) {
+      expect(descOf(put.body)).toBe('one two three')
+      expect(put.headers['If-Match']).toBe('e1')
+    }
+    expect(fake.pending(SAVE)).toEqual([])
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
+  })
+
+  // Real bug, see #2: the two flushes queued behind the in-flight save
+  // both wake when it lands and each sends a PUT over the same etag, so
+  // against the real sidecar the second gets a 409 and raises a
+  // conflict banner for a conflict the window had with itself. Drop
+  // `.fails` once the fix lands; the test above checks everything else.
+  it.fails('no two saves leave over the same etag', async () => {
+    const { puts } = await burstBehindASlowSave()
+
+    const etags = puts.map((r) => r.headers['If-Match'])
+    expect(etags).toEqual([...new Set(etags)])
   })
 })
 
@@ -279,14 +290,7 @@ describe('external-change resolution', () => {
     })
     fake.on(
       `GET ${BENCH_URL}`,
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: [],
-          character: { description: 'theirs' }
-        },
-        etag: 'theirs'
-      })
+      json(payloadRead(workbenchPayload({ character: { description: 'theirs' } }), 'theirs'))
     )
     await useStore.getState().flistReloadAfterExternalChange('99')
     const slot = useStore.getState().flistWorking['99']
@@ -309,14 +313,15 @@ describe('external-change resolution', () => {
     })
     fake.on(
       `GET ${BENCH_URL}`,
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: ['character.description'],
-          character: { description: 'Lady Amber Blaise, as the model wrote her' }
-        },
-        etag: 'theirs'
-      })
+      json(
+        payloadRead(
+          workbenchPayload({
+            _overlay: ['character.description'],
+            character: { description: 'Lady Amber Blaise, as the model wrote her' }
+          }),
+          'theirs'
+        )
+      )
     )
 
     await useStore.getState().flistReloadAfterExternalChange('99')
@@ -381,31 +386,17 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   it('hydrates the real bench and reads its payload instead of working.json', async () => {
     useStore.setState({
       flistArchive: {
-        '99': {
-          live: { character: { description: 'live-desc' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
+        '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
       },
       flistRoster: []
     })
     fake.on(
       'GET /flist/character/99/workbench?create=false',
-      json({
-        workbench: { id: 'bbbbbbbbbbbb', kind: 'bench', name: 'Workbench' },
-        active_set_id: 'bbbbbbbbbbbb'
-      })
+      json(workbenchRead('bbbbbbbbbbbb'))
     )
     fake.on(
       'GET /flist/character/99/sets/bbbbbbbbbbbb/payload',
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: [],
-          character: { description: 'bench-desc' }
-        },
-        etag: 'disk-etag'
-      })
+      json(payloadRead(workbenchPayload({ character: { description: 'bench-desc' } }), 'disk-etag'))
     )
     await useStore.getState().flistOpenWorking('99')
     expect(fake.requestsTo('GET /flist/character/99/workbench?create=false')).toHaveLength(1)
@@ -420,11 +411,7 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   it('a character with no bench yet still falls through to the legacy read', async () => {
     useStore.setState({
       flistArchive: {
-        '99': {
-          live: { character: { description: 'live-desc' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
+        '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
       },
       flistRoster: []
     })
@@ -639,12 +626,10 @@ describe('reopening a character must not discard what was typed', () => {
     useStore.setState({
       flistRoster: [{ id: 99, name: 'Amber' }] as never,
       flistArchive: {
-        '99': {
-          live: { character: { name: 'Amber', description: 'live text' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      } as never,
+        '99': archiveEntry(
+          livePayload({ character: { name: 'Amber', description: 'live text' } })
+        )
+      },
       editorReadOnly: false
     })
     fake.on(SAVE, json({ etag: 'x' }))
@@ -680,7 +665,7 @@ describe('reopening a character must not discard what was typed', () => {
     fake.on(`POST ${NEW_BENCH}/activate`, json({ ok: true }))
     fake.on(
       `GET ${NEW_BENCH}/payload`,
-      json({ payload: { character: { description: 'typed' } }, etag: 'e1' })
+      json(payloadRead(workbenchPayload({ character: { description: 'typed' } }), 'e1'))
     )
     fake.on(`PUT ${NEW_BENCH}/payload`, json({ etag: 'saved' }))
 
@@ -703,25 +688,24 @@ describe('coming back to a character shows the Workbench, not Live', () => {
     useStore.setState((s) => ({
       flistWorking: {},
       flistArchive: {
-        '99': {
-          live: { character: { name: 'Amber', description: 'what the site has' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      } as never,
+        '99': archiveEntry(
+          livePayload({ character: { name: 'Amber', description: 'what the site has' } })
+        )
+      },
       flistActiveSetId: { ...s.flistActiveSetId, '99': SET_ID },
       flistActiveCharacterId: '99'
     }))
     fake.on(
       `GET ${BENCH_URL}`,
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: ['character.description'],
-          character: { description: 'what I typed earlier' }
-        },
-        etag: 'e1'
-      })
+      json(
+        payloadRead(
+          workbenchPayload({
+            _overlay: ['character.description'],
+            character: { description: 'what I typed earlier' }
+          }),
+          'e1'
+        )
+      )
     )
 
     await useStore.getState().flistOpenWorking('99')

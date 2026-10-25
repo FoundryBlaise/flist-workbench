@@ -184,7 +184,7 @@ async def test_the_old_source_argument_cannot_branch_a_second_draft(
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="deleting a working set over MCP removes its files for good; the spec removes set deletion",
+    reason="the delete_working_set tool (character_archive.delete_set) removes the folder for good; the spec removes it",
 )
 async def test_deleting_a_set_needs_confirmation(workbench) -> None:
     """Kept for the drafts an older version left behind — deleting a

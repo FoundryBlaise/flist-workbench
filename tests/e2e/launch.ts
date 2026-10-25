@@ -1,4 +1,10 @@
-import { _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test'
+import {
+  _electron as electron,
+  expect,
+  test,
+  type ElectronApplication,
+  type Page
+} from '@playwright/test'
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
@@ -53,7 +59,7 @@ async function freePort(): Promise<number> {
  * value drives the F-Chat folder; it then defaults into the empty
  * temp APPDATA.
  */
-export async function launchApp(
+async function launchApp(
   opts: { pinFchatDir?: boolean } = {}
 ): Promise<LaunchedApp> {
   const root = resolve(__dirname, '../..')
@@ -87,10 +93,10 @@ export async function launchApp(
   })
 
   // Dev builds open a detached DevTools window too; skip past it.
-  let window = app.windows().find((w) => !w.url().startsWith('devtools://'))
+  let window = app.windows().find(isAppWindow)
   while (!window) {
     const w = await app.waitForEvent('window')
-    if (!w.url().startsWith('devtools://')) window = w
+    if (isAppWindow(w)) window = w
   }
   window.on('dialog', (d) => void d.accept())
   await expect(window.getByTestId('sidecar-status')).toContainText('ok')
@@ -105,11 +111,48 @@ export async function launchApp(
   return { app, window, dataDir, userData, appData, fchatDir }
 }
 
+/**
+ * Launches the app as `launchApp` does, runs `body` against it and
+ * closes it. When `body` fails, a screenshot of the window is attached
+ * to the test (saved in its test-results folder) before the error is
+ * passed on; a passing run writes no screenshots.
+ */
+export async function withApp(
+  body: (launched: LaunchedApp) => Promise<void>,
+  opts: { pinFchatDir?: boolean } = {}
+): Promise<void> {
+  const launched = await launchApp(opts)
+  try {
+    await body(launched)
+  } catch (error) {
+    await attachScreenshot(launched.window)
+    throw error
+  } finally {
+    await launched.app.close()
+  }
+}
+
+async function attachScreenshot(window: Page): Promise<void> {
+  try {
+    // Written to disk, not attached as a body: the list reporter keeps
+    // a body in memory only, and CI uploads test-results/ on failure.
+    const path = test.info().outputPath('failure.png')
+    await window.screenshot({ path })
+    await test.info().attach('window at failure', { path, contentType: 'image/png' })
+  } catch {
+    // A window too broken to photograph must not hide the real error.
+  }
+}
+
+/** Whether a window is the app's own, not the dev build's DevTools. */
+function isAppWindow(window: Page): boolean {
+  return !window.url().startsWith('devtools://')
+}
+
 /** Sends a native-menu action the way the menu item does. */
 export async function menuAction(app: ElectronApplication, action: string): Promise<void> {
-  await app.evaluate(({ BrowserWindow }, a) => {
-    BrowserWindow.getAllWindows()
-      .find((w) => !w.webContents.getURL().startsWith('devtools://'))
-      ?.webContents.send('menu:action', a)
-  }, action)
+  const window = app.windows().find(isAppWindow)
+  if (!window) throw new Error('the app has no window open')
+  const browserWindow = await app.browserWindow(window)
+  await browserWindow.evaluate((w, a) => w.webContents.send('menu:action', a), action)
 }

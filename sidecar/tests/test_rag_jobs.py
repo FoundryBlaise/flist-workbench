@@ -18,24 +18,16 @@ import labels as labels_store
 import rag_embed
 import rag_jobs
 import rag_store
-from fchat_logs import chat, utc, write_log
+from fchat_logs import chat, parsed, utc, write_log
 
 
 # ---- helpers ------------------------------------------------------------
 
 
-def _msg(ts: int, text: str, speaker: str = "Bob", kind: str = "ic") -> dict:
-    return {
-        "ts": ts,
-        "iso": "2026-01-01T00:00:00+00:00",
-        "type": 0,
-        "type_name": "chat",
-        "speaker": speaker,
-        "raw": text,
-        "text": text,
-        "mentions": [],
-        "kind": kind,
-    }
+def _msg(ts: int, text: str, speaker: str = "Bob") -> dict:
+    """One chat line as the parser reads it from a Log."""
+    [msg] = parsed(chat(speaker, text, at=ts))
+    return msg
 
 
 def _wait_until(predicate, timeout: float = 5.0) -> None:

@@ -109,7 +109,7 @@ def test_set_dir_rejects_invalid_set_id(isolated_userdata) -> None:
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="the working-set migration unlinks working.json; the spec's migration keeps it in a Backup",
+    reason="the legacy working.json migration (_migrate_working_v2) unlinks it; the spec's migration keeps it in a Backup",
 )
 def test_list_sets_unlinks_legacy_working_json(isolated_userdata) -> None:
     archive = isolated_userdata
@@ -362,7 +362,7 @@ def test_rename_missing_set_raises(isolated_userdata) -> None:
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="deleting a working set removes its files for good; the spec removes set deletion",
+    reason="character_archive.delete_set removes the folder for good; the spec removes it",
 )
 def test_delete_set_removes_directory_and_clears_active(
     isolated_userdata,
@@ -381,7 +381,7 @@ def test_delete_set_removes_directory_and_clears_active(
 @pytest.mark.known_violation(
     "nothing_vanishes",
     spec=3,
-    reason="deleting a working set removes its files for good; the spec removes set deletion",
+    reason="character_archive.delete_set removes the folder for good; the spec removes it",
 )
 def test_delete_other_set_leaves_active_alone(isolated_userdata) -> None:
     archive = isolated_userdata

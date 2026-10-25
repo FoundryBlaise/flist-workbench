@@ -260,6 +260,86 @@ def test_a_file_kept_inside_a_backup_passes(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
 
 
+def test_a_copy_in_another_characters_folder_does_not_count(
+    pytester: pytest.Pytester,
+) -> None:
+    # The same picture in Lady Amber Blaise's pool does not keep Azure
+    # Viper's: hers can be deleted on its own, and then it is gone.
+    result = run(
+        pytester,
+        """
+        def test_it(home):
+            other = home.data / "characters" / "Lady Amber Blaise" / "images" / "456.png"
+            other.parent.mkdir(parents=True)
+            other.write_bytes(home.image.read_bytes())
+            home.image.unlink()
+        """,
+    )
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*nothing_vanishes*", "*Azure Viper/images/123.png*"])
+
+
+def test_a_rename_within_the_same_character_passes(pytester: pytest.Pytester) -> None:
+    result = run(
+        pytester,
+        """
+        def test_it(home):
+            home.image.replace(home.image.with_name("local-1.png"))
+        """,
+    )
+    result.assert_outcomes(passed=1)
+
+
+def test_a_move_into_another_characters_folder_does_not_count(
+    pytester: pytest.Pytester,
+) -> None:
+    result = run(
+        pytester,
+        """
+        def test_it(home):
+            other = home.data / "characters" / "Lady Amber Blaise" / "images"
+            other.mkdir(parents=True)
+            home.image.replace(other / home.image.name)
+        """,
+    )
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*Azure Viper/images/123.png*"])
+
+
+def test_a_zip_outside_backups_and_trash_does_not_count(pytester: pytest.Pytester) -> None:
+    # Only a Backup keeps a file: a zip lying elsewhere in the archive is
+    # not one.
+    result = run(
+        pytester,
+        """
+        def test_it(home):
+            other = home.data / "characters" / "Lady Amber Blaise" / "exports"
+            other.mkdir(parents=True)
+            with zipfile.ZipFile(other / "pictures.zip", "w") as z:
+                z.writestr("images/123.png", home.image.read_bytes())
+            home.image.unlink()
+        """,
+    )
+    result.assert_outcomes(passed=1, errors=1)
+
+
+def test_a_file_inside_another_characters_backup_passes(
+    pytester: pytest.Pytester,
+) -> None:
+    result = run(
+        pytester,
+        """
+        def test_it(home):
+            backups = home.data / "characters" / "Lady Amber Blaise" / "backups"
+            backups.mkdir(parents=True)
+            with zipfile.ZipFile(backups / "2026-10-25T130000Z.zip", "w") as z:
+                z.writestr("images/123.png", home.image.read_bytes())
+            home.image.unlink()
+        """,
+    )
+    result.assert_outcomes(passed=1)
+
+
 def test_a_backup_with_other_bytes_does_not_count(pytester: pytest.Pytester) -> None:
     result = run(
         pytester,
