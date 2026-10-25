@@ -10,6 +10,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
 import { installFakeApi, json, networkError, type FakeApi } from '../../test/fakeApi'
+import {
+  archiveEntry,
+  livePayload,
+  payloadRead,
+  workbenchPayload,
+  workbenchRead,
+  workingSlot
+} from '../../test/payloads'
 
 let fake: FakeApi
 
@@ -54,18 +62,7 @@ const conflict = json(
 )
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
-  const slot = {
-    payload: { _schema_version: 2, _overlay: [], ...payload },
-    overlay: Array.isArray(payload._overlay)
-      ? (payload._overlay as string[])
-      : [],
-    etag: 'seed-etag',
-    unsavedDirty: false,
-    saveStatus: 'idle' as const,
-    saveError: null,
-    lastSavedAt: null,
-    materialised: true
-  }
+  const slot = workingSlot(workbenchPayload(payload))
   useStore.setState((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     // Working sets v2: a flush routes through the *active set's*
@@ -80,7 +77,7 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
 
 function seedLive(live: Record<string, unknown>) {
   useStore.setState({
-    flistArchive: { '99': { live, snapshots: [], pullStatus: 'idle' } }
+    flistArchive: { '99': archiveEntry(livePayload(live)) }
   })
 }
 
@@ -279,14 +276,7 @@ describe('external-change resolution', () => {
     })
     fake.on(
       `GET ${BENCH_URL}`,
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: [],
-          character: { description: 'theirs' }
-        },
-        etag: 'theirs'
-      })
+      json(payloadRead(workbenchPayload({ character: { description: 'theirs' } }), 'theirs'))
     )
     await useStore.getState().flistReloadAfterExternalChange('99')
     const slot = useStore.getState().flistWorking['99']
@@ -309,14 +299,15 @@ describe('external-change resolution', () => {
     })
     fake.on(
       `GET ${BENCH_URL}`,
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: ['character.description'],
-          character: { description: 'Lady Amber Blaise, as the model wrote her' }
-        },
-        etag: 'theirs'
-      })
+      json(
+        payloadRead(
+          workbenchPayload({
+            _overlay: ['character.description'],
+            character: { description: 'Lady Amber Blaise, as the model wrote her' }
+          }),
+          'theirs'
+        )
+      )
     )
 
     await useStore.getState().flistReloadAfterExternalChange('99')
@@ -381,31 +372,17 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   it('hydrates the real bench and reads its payload instead of working.json', async () => {
     useStore.setState({
       flistArchive: {
-        '99': {
-          live: { character: { description: 'live-desc' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
+        '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
       },
       flistRoster: []
     })
     fake.on(
       'GET /flist/character/99/workbench?create=false',
-      json({
-        workbench: { id: 'bbbbbbbbbbbb', kind: 'bench', name: 'Workbench' },
-        active_set_id: 'bbbbbbbbbbbb'
-      })
+      json(workbenchRead('bbbbbbbbbbbb'))
     )
     fake.on(
       'GET /flist/character/99/sets/bbbbbbbbbbbb/payload',
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: [],
-          character: { description: 'bench-desc' }
-        },
-        etag: 'disk-etag'
-      })
+      json(payloadRead(workbenchPayload({ character: { description: 'bench-desc' } }), 'disk-etag'))
     )
     await useStore.getState().flistOpenWorking('99')
     expect(fake.requestsTo('GET /flist/character/99/workbench?create=false')).toHaveLength(1)
@@ -420,11 +397,7 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   it('a character with no bench yet still falls through to the legacy read', async () => {
     useStore.setState({
       flistArchive: {
-        '99': {
-          live: { character: { description: 'live-desc' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
+        '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
       },
       flistRoster: []
     })
@@ -639,12 +612,10 @@ describe('reopening a character must not discard what was typed', () => {
     useStore.setState({
       flistRoster: [{ id: 99, name: 'Amber' }] as never,
       flistArchive: {
-        '99': {
-          live: { character: { name: 'Amber', description: 'live text' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      } as never,
+        '99': archiveEntry(
+          livePayload({ character: { name: 'Amber', description: 'live text' } })
+        )
+      },
       editorReadOnly: false
     })
     fake.on(SAVE, json({ etag: 'x' }))
@@ -680,7 +651,7 @@ describe('reopening a character must not discard what was typed', () => {
     fake.on(`POST ${NEW_BENCH}/activate`, json({ ok: true }))
     fake.on(
       `GET ${NEW_BENCH}/payload`,
-      json({ payload: { character: { description: 'typed' } }, etag: 'e1' })
+      json(payloadRead(workbenchPayload({ character: { description: 'typed' } }), 'e1'))
     )
     fake.on(`PUT ${NEW_BENCH}/payload`, json({ etag: 'saved' }))
 
@@ -703,25 +674,24 @@ describe('coming back to a character shows the Workbench, not Live', () => {
     useStore.setState((s) => ({
       flistWorking: {},
       flistArchive: {
-        '99': {
-          live: { character: { name: 'Amber', description: 'what the site has' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      } as never,
+        '99': archiveEntry(
+          livePayload({ character: { name: 'Amber', description: 'what the site has' } })
+        )
+      },
       flistActiveSetId: { ...s.flistActiveSetId, '99': SET_ID },
       flistActiveCharacterId: '99'
     }))
     fake.on(
       `GET ${BENCH_URL}`,
-      json({
-        payload: {
-          _schema_version: 2,
-          _overlay: ['character.description'],
-          character: { description: 'what I typed earlier' }
-        },
-        etag: 'e1'
-      })
+      json(
+        payloadRead(
+          workbenchPayload({
+            _overlay: ['character.description'],
+            character: { description: 'what I typed earlier' }
+          }),
+          'e1'
+        )
+      )
     )
 
     await useStore.getState().flistOpenWorking('99')
