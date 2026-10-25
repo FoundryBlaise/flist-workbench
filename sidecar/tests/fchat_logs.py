@@ -97,7 +97,13 @@ def encode(record: Record) -> bytes:
 
 def write_log(path: Path, records: Iterable[Record]) -> Path:
     """Write `records`, in order, as the F-Chat Log at `path` (parent
-    folders are created). Returns `path`."""
+    folders are created). Returns `path`.
+
+    This is F-Chat writing, so the `log_unchanged` check (see
+    `data_invariants`) takes these bytes as the Log's from now on."""
+    import data_invariants
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"".join(encode(r) for r in records))
+    data_invariants.fchat_wrote(path)
     return path

@@ -185,6 +185,11 @@ def test_rename_empty_name_returns_422(
 # ---- delete -----------------------------------------------------------
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="deleting a working set removes its files for good; the spec removes set deletion",
+)
 def test_delete_clears_active_when_target_was_active(
     client: TestClient, archive
 ) -> None:
@@ -200,6 +205,11 @@ def test_delete_clears_active_when_target_was_active(
     assert body["active_set_id"] is None
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="deleting a working set removes its files for good; the spec removes set deletion",
+)
 def test_delete_leaves_other_active_alone(
     client: TestClient, archive
 ) -> None:
@@ -465,6 +475,11 @@ def test_a_write_that_read_first_goes_through(
 # ---- M3 migration via API ---------------------------------------------
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="the working-set migration unlinks working.json; the spec's migration keeps it in a Backup",
+)
 def test_list_sets_call_unlinks_legacy_working_json(
     client: TestClient, archive
 ) -> None:
