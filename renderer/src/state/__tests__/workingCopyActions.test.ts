@@ -178,41 +178,55 @@ describe('typing while a save is in flight', () => {
     expect(fake.requestsTo(SAVE)).toHaveLength(2)
   })
 
-  // Real bug, see #2: two flushes queued behind the same in-flight save
-  // both wake when it lands and each sends a PUT. The two leave
-  // together with the same text and the same If-Match, so against the
-  // real sidecar the second gets a 409 and raises a conflict banner
-  // for a conflict the window had with itself. Drop `.fails` once the
-  // fix lands.
-  it.fails('only one save is in flight at a time, however many queue behind it', async () => {
+  // A slow sidecar: the first save stays open while two more pauses
+  // pass, so two flushes queue behind it; then every save lands.
+  async function burstBehindASlowSave() {
     seedSlot('99', { character: { description: '' } })
     fake.hold(SAVE)
-    let mostInFlight = 0
-    const settle = async (ms: number) => {
-      await vi.advanceTimersByTimeAsync(ms)
-      mostInFlight = Math.max(mostInFlight, fake.pending(SAVE).length)
-    }
 
     useStore.getState().setEditorContent('one')
-    await settle(AUTOSAVE_MS)
-    // A slow sidecar: two more pauses pass while the first save is open.
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     useStore.getState().setEditorContent('one two')
-    await settle(AUTOSAVE_MS)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     useStore.getState().setEditorContent('one two three')
-    await settle(AUTOSAVE_MS)
-    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const sentWhileOpen = fake.requestsTo(SAVE).length
 
     fake.pending(SAVE)[0].resolve(json({ etag: 'e1' }))
-    await settle(0)
-    await settle(AUTOSAVE_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     for (const p of fake.pending(SAVE)) p.resolve(json({ etag: 'e2' }))
-    await settle(AUTOSAVE_MS)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
 
-    expect(mostInFlight).toBe(1)
-    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual([
-      'one',
-      'one two three'
-    ])
+    return { sentWhileOpen, puts: fake.requestsTo(SAVE) }
+  }
+
+  it('edits behind a slow save wait for it, then the newest text is saved over its etag', async () => {
+    const { sentWhileOpen, puts } = await burstBehindASlowSave()
+
+    expect(sentWhileOpen).toBe(1)
+    expect(descOf(puts[0].body)).toBe('one')
+    expect(puts[0].headers['If-Match']).toBe('seed-etag')
+    const after = puts.slice(1)
+    expect(after.length).toBeGreaterThan(0)
+    for (const put of after) {
+      expect(descOf(put.body)).toBe('one two three')
+      expect(put.headers['If-Match']).toBe('e1')
+    }
+    expect(fake.pending(SAVE)).toEqual([])
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
+  })
+
+  // Real bug, see #2: the two flushes queued behind the in-flight save
+  // both wake when it lands and each sends a PUT over the same etag, so
+  // against the real sidecar the second gets a 409 and raises a
+  // conflict banner for a conflict the window had with itself. Drop
+  // `.fails` once the fix lands; the test above checks everything else.
+  it.fails('no two saves leave over the same etag', async () => {
+    const { puts } = await burstBehindASlowSave()
+
+    const etags = puts.map((r) => r.headers['If-Match'])
+    expect(etags).toEqual([...new Set(etags)])
   })
 })
 
