@@ -28,6 +28,7 @@ suite, the `data_invariants` plugin registers a hook with
 from __future__ import annotations
 
 import struct
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
@@ -120,3 +121,13 @@ def write_log(path: Path, records: Iterable[Record]) -> Path:
     for hook in _write_hooks:
         hook(path)
     return path
+
+
+def parsed(*records: Record) -> list[dict]:
+    """`records` as the real parser reads them back from a Log on disk:
+    the message dicts the labels, the chunker and the Index get. For
+    tests that hand messages to a library function directly."""
+    from parser import parse_log  # the sidecar's; scripts outside it never call this
+
+    with tempfile.TemporaryDirectory() as tmp:
+        return list(parse_log(write_log(Path(tmp) / "log", records)))
