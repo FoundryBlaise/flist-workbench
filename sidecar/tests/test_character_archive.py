@@ -607,9 +607,10 @@ def test_migrate_v4_pool_promotes_orphan_to_local():
     ).exists()
 
 
-@pytest.mark.invariant_exempt(
+@pytest.mark.known_violation(
     "nothing_vanishes",
-    reason="the v4 pool migration drops pool/manifest.json, an index of bytes it moves into images/, not user content",
+    spec=3,
+    reason="the v4 pool migration deletes pool/ outright, including files it failed to copy; the spec removes this migration",
 )
 def test_migrate_v4_pool_skips_already_preserved_bytes():
     """If a pool sha's image_ids[] already names a file on disk under
@@ -644,9 +645,10 @@ def test_migrate_v4_pool_skips_already_preserved_bytes():
     assert files == ["42.png"]
 
 
-@pytest.mark.invariant_exempt(
+@pytest.mark.known_violation(
     "nothing_vanishes",
-    reason="the v4 pool migration drops pool/manifest.json, an index of bytes it moves into images/, not user content",
+    spec=3,
+    reason="the v4 pool migration deletes pool/ outright, including files it failed to copy; the spec removes this migration",
 )
 def test_migrate_v4_pool_uses_first_free_image_id():
     """When the pool entry has image_ids[] and none of those files are
