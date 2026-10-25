@@ -149,6 +149,119 @@ def test_zip_serialise_standard_kinks_passthrough():
     assert len(out["kinks"]) == 559
 
 
+# ---- Tier 6 format-drift canary -------------------------------------
+
+
+def _real_export_fixture() -> Path:
+    """The user's own OOC Hub profile exported by flistcharexporter,
+    committed as a fixture. It holds a profile text, settings, kinks and
+    an avatar; no Logs and no other people's data."""
+    matches = sorted(FIXTURE_DIR.glob("flist_OOC_Hub_*.zip"))
+    assert matches, "real-export fixture missing from tests/fixtures/working/"
+    return matches[0]
+
+
+def _derive_working_from_character_json(character_json: dict) -> tuple[dict, dict]:
+    """Invert the flistcharexporter shape into a working.json + pool
+    manifest so the round-trip canary can re-serialise and compare.
+    Implemented as the test fixture, not production code — the production
+    inverse (loading a Tier 6 ZIP back into the editor for Diff) is a
+    follow-up after the userscript-side restore lands."""
+    import zip_serialise as zs
+
+    # Invert the settings rename map.
+    reverse_rename = {v: k for k, v in zs._SETTINGS_RENAME.items()}
+    settings = {
+        reverse_rename.get(k, k): v
+        for k, v in character_json.get("settings", {}).items()
+    }
+    # Reshape custom kinks back to a dict + order.
+    custom_kinks: dict = {}
+    order: list = []
+    for entry in character_json.get("customKinks", []):
+        key = (
+            entry["id"]
+            if entry.get("id") is not None
+            else f"local:{entry['name'][:8]}"
+        )
+        custom_kinks[key] = {
+            "name": entry["name"],
+            "description": entry.get("description", ""),
+            "choice": entry.get("choice", "undecided"),
+            "children": [],
+        }
+        order.append(key)
+    # Reshape images: working refs are image_id + description + sort_order;
+    # extensions are looked up from the per-image_id map (image_extensions).
+    image_extensions: dict[str, str] = {}
+    working_images: list = []
+    for index, entry in enumerate(character_json.get("images", {}).get("list", [])):
+        filename = entry["filename"]
+        stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)
+        image_id, ext = stem[0], stem[1]
+        image_extensions[image_id] = ext
+        working_images.append(
+            {
+                "image_id": image_id,
+                "description": entry.get("description", ""),
+                "sort_order": entry.get("position", index),
+            }
+        )
+    char = character_json.get("character", {})
+    working = {
+        "_schema_version": 4,
+        "_overlay": [],
+        "character": {
+            "id": char.get("id"),
+            "name": char.get("name"),
+            "description": char.get("description", ""),
+            "custom_title": char.get("customTitle", ""),
+        },
+        "settings": settings,
+        "infotags": character_json.get("infotags", {}),
+        "kinks": character_json.get("kinks", {}),
+        "custom_kinks": custom_kinks,
+        "_custom_kinks_order": order,
+        "images": working_images,
+        "inlines": {
+            sid: {"hash": "x", "extension": "png", "nsfw": False}
+            for sid in character_json.get("inlines", [])
+        },
+    }
+    return working, image_extensions
+
+
+def test_round_trip_against_real_export_fixture():
+    """Canary against a real flistcharexporter export. Builds an
+    equivalent working.json from the captured character.json, runs the
+    serialiser, and asserts shape-equivalence modulo `meta`. Catches
+    F-list form-field renames that would otherwise ship a corrupt
+    restore bundle (QA feedback BLOCK #11)."""
+    import zipfile
+
+    fixture = _real_export_fixture()
+    serialiser = _load_serialiser()
+    with zipfile.ZipFile(fixture) as z:
+        original = json.loads(z.read("character.json"))
+    working, image_extensions = _derive_working_from_character_json(original)
+    reproduced = serialiser.to_zip_character_json(
+        working, image_extensions=image_extensions
+    )
+
+    # `images.missing` is Workbench's own addition (gallery rows with no
+    # bytes); the extension reads it, the userscript's export predates it.
+    # A complete export has none.
+    assert reproduced["images"].pop("missing") == []
+
+    # Compare modulo meta (exportedAt + version are emitter-specific).
+    original_no_meta = {k: v for k, v in original.items() if k != "meta"}
+    reproduced_no_meta = {k: v for k, v in reproduced.items() if k != "meta"}
+    assert reproduced_no_meta == original_no_meta, (
+        "round-trip diverged from original export: "
+        "the userscript's reader will fail to consume the Workbench ZIP"
+    )
+
+
 # ---- synthetic local-<sha8> filename round-trip ----------------------
 
 
