@@ -1,0 +1,49 @@
+# The installs every job needs, in one place so tests.yml and
+# release.yml cannot drift apart: Python 3.12 + uv + the sidecar's venv,
+# and/or Node 22 + node_modules. Run after actions/checkout.
+name: Set up toolchain
+description: Install the sidecar's Python venv and/or the app's node_modules.
+
+inputs:
+  python:
+    description: Set up Python 3.12 and uv, then `uv sync --project sidecar`.
+    default: 'false'
+  node:
+    description: Set up Node 22, then `npm ci`.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python 3.12
+      if: inputs.python == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      if: inputs.python == 'true'
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: latest
+
+    # The dev group (pytest, pytest-asyncio, pytest-httpx, PyInstaller)
+    # comes with it by default.
+    - name: uv sync (sidecar)
+      if: inputs.python == 'true'
+      shell: pwsh
+      run: uv sync --project sidecar
+
+    - name: Set up Node 22
+      if: inputs.node == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+
+    # npm ci wipes node_modules and rebuilds native deps (keytar)
+    # against the Electron ABI. build-win.ps1 does the same.
+    - name: npm ci
+      if: inputs.node == 'true'
+      shell: pwsh
+      run: npm ci
