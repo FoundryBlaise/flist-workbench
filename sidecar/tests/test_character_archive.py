@@ -534,6 +534,11 @@ def test_add_uploaded_image_rejects_non_image_bytes():
     )
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=2,
+    reason="remove_character_image deletes an image for good instead of moving it to the Trash",
+)
 def test_remove_character_image_is_permanent():
     cid = "512"
     character_archive.write_character_image(cid, "999", "png", _PNG_HEADER)
@@ -602,6 +607,10 @@ def test_migrate_v4_pool_promotes_orphan_to_local():
     ).exists()
 
 
+@pytest.mark.invariant_exempt(
+    "nothing_vanishes",
+    reason="the v4 pool migration drops pool/manifest.json, an index of bytes it moves into images/, not user content",
+)
 def test_migrate_v4_pool_skips_already_preserved_bytes():
     """If a pool sha's image_ids[] already names a file on disk under
     images/, the bytes are already preserved — migration must not mint
@@ -635,6 +644,10 @@ def test_migrate_v4_pool_skips_already_preserved_bytes():
     assert files == ["42.png"]
 
 
+@pytest.mark.invariant_exempt(
+    "nothing_vanishes",
+    reason="the v4 pool migration drops pool/manifest.json, an index of bytes it moves into images/, not user content",
+)
 def test_migrate_v4_pool_uses_first_free_image_id():
     """When the pool entry has image_ids[] and none of those files are
     on disk, migration adopts the first id rather than minting a
@@ -890,6 +903,11 @@ def test_maybe_run_scheduled_backup_skips_when_recent(tmp_path):
     assert len(rows) == 1
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="scheduled-backup pruning deletes Backups for good; the spec removes scheduled backups",
+)
 def test_maybe_run_scheduled_backup_prunes_old_scheduled(tmp_path):
     cid = "8003"
     character_archive.write_live(

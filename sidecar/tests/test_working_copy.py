@@ -98,6 +98,11 @@ def test_write_with_expected_etag_none_on_existing_file_raises(archive_module) -
     archive_module.write_working("123", payload, expected_etag=None)
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=2,
+    reason="deleting the legacy working copy is final; the spec deletes this test",
+)
 def test_delete_removes_file_returns_true(archive_module) -> None:
     archive_module.write_working("123", _seed_payload())
     assert archive_module.delete_working("123") is True
@@ -210,6 +215,11 @@ def test_put_with_matching_if_match_succeeds(client: TestClient) -> None:
     assert res.json()["etag"] != first
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=2,
+    reason="deleting the legacy working copy is final; the spec deletes this test",
+)
 def test_delete_endpoint_idempotent(client: TestClient) -> None:
     client.put("/flist/character/123/working", json=_seed_payload())
     res = client.delete("/flist/character/123/working")

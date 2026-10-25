@@ -181,6 +181,11 @@ async def test_the_old_source_argument_cannot_branch_a_second_draft(
     assert desc["description"] == "edited on the bench"
 
 
+@pytest.mark.known_violation(
+    "nothing_vanishes",
+    spec=3,
+    reason="deleting a working set over MCP removes its files for good; the spec removes set deletion",
+)
 async def test_deleting_a_set_needs_confirmation(workbench) -> None:
     """Kept for the drafts an older version left behind — deleting a
     character's only bench discards unpublished edits and gains nothing,
