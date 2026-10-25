@@ -66,6 +66,12 @@ jobs:
         working-directory: sidecar
         run: uv run --no-sync pytest -q -rs
 
+      # The mutation probe's own tests (docs/MUTATION_PROBE.md): dirty-tree
+      # refusal and restore-on-failure, on throwaway git repos. Not the
+      # probe itself, which takes half an hour.
+      - name: pytest (mutation probe)
+        run: uv run --project sidecar --no-sync python -m pytest -q -p no:cacheprovider scripts/mutation_probe
+
   renderer:
     name: Renderer (vitest)
     runs-on: windows-latest
