@@ -494,99 +494,86 @@ def test_image_route_serves_a_cached_file_without_downloading(
     assert res.content == b"PNGDATA"
 
 
+def test_image_route_downloads_on_first_request_and_serves_the_bytes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, httpx_mock
+) -> None:
+    import flist_api
+
+    _stub_fetch(monkeypatch, _profile())
+    client.get("/foreign/character/Anexample Person")
+    # One response, used once: a second download would find nothing.
+    httpx_mock.add_response(
+        url=f"{flist_api.STATIC_BASE}/images/charimage/900.png", content=b"PNGDATA"
+    )
+
+    first = client.get("/foreign/character/Anexample Person/image/900")
+    again = client.get("/foreign/character/Anexample Person/image/900")
+
+    assert (first.status_code, first.content) == (200, b"PNGDATA")
+    assert (again.status_code, again.content) == (200, b"PNGDATA")
+
+
 @pytest.mark.anyio
-async def test_gallery_images_are_capped_on_concurrency_not_paced() -> None:
+async def test_a_gallery_loads_several_images_at_once_but_never_more_than_the_cap(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock
+) -> None:
     """Matches the prior art. F-Chat 3.0 renders a gallery as plain
     <img> tags with no pacing, and Horizon caps concurrency on the
     JSON API (`throat(2)`) while leaving CDN images alone. Workbench
     needs a cap only because its images go through the sidecar to be
-    cached, which funnels the browser's parallelism into one queue."""
+    cached, which funnels the browser's parallelism into one queue.
+    A gallery paced like the Pull's image sweep (2/s) would load one
+    image at a time here."""
+    import re
+
+    import httpx
+
     import flist_api
+    from server import app
 
-    gate = flist_api.foreign_image_gate()
-    assert isinstance(gate, asyncio.Semaphore)
-    assert flist_api.FOREIGN_IMAGE_CONCURRENCY > 1
-    # Not a per-second lane: the sweep's pacing must not follow the
-    # viewer, and the viewer's cap must not loosen the sweep.
-    assert flist_api.cdn_rate_limiter().per_second == 2.0
-    # And nothing here touches the budget that limits how many
-    # profiles can be opened in an hour.
-    assert flist_api.unpaced_limiter().per_hour_cap > flist_api.HARD_PER_HOUR
+    # Fresh limiters: their locks bind to the event loop that first
+    # waits on them, and this test is the one that makes them wait.
+    for name in ("_UNPACED_LIMITER", "_CDN_LIMITER"):
+        old = getattr(flist_api, name)
+        monkeypatch.setattr(
+            flist_api,
+            name,
+            flist_api.RateLimiter(per_second=old.per_second, per_hour_cap=old.per_hour_cap),
+        )
 
+    cap = flist_api.FOREIGN_IMAGE_CONCURRENCY
+    ids = [str(900 + i) for i in range(cap + 4)]
+    _stub_fetch(
+        monkeypatch,
+        _profile(images=[{"image_id": i, "extension": "png"} for i in ids]),
+    )
+    in_flight = 0
+    peak = 0
 
-@pytest.mark.anyio
-async def test_the_image_gate_is_shared_within_one_loop() -> None:
-    import flist_api
+    async def cdn(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.2)
+        in_flight -= 1
+        return httpx.Response(200, content=request.url.path.encode())
 
-    assert flist_api.foreign_image_gate() is flist_api.foreign_image_gate()
+    httpx_mock.add_callback(
+        cdn, url=re.compile(r".*/images/charimage/.*"), is_reusable=True
+    )
 
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://sidecar") as c:
+        assert (await c.get("/foreign/character/Anexample Person")).status_code == 200
+        results = await asyncio.gather(
+            *(c.get(f"/foreign/character/Anexample Person/image/{i}") for i in ids)
+        )
 
-@pytest.mark.anyio
-async def test_gallery_images_share_one_pooled_connection() -> None:
-    """A client per image means a TLS handshake per image. Measured
-    against the CDN that was the difference between 3.5 s and 0.7 s
-    for a dozen images, which is what made a gallery crawl."""
-    import flist_api
-
-    first = flist_api.foreign_cdn_client()
-    assert first is flist_api.foreign_cdn_client()
-    assert not first.is_closed
-    # Keep-alive headroom has to match the gate, or the pool becomes
-    # the narrower of the two limits and the extra concurrency buys
-    # nothing. Reaching into httpx internals is the only way to see
-    # the configured pool; if a future httpx moves them, this test
-    # failing is the intended signal to re-check the wiring.
-    pool = first._transport._pool  # type: ignore[attr-defined]
-    assert pool._max_connections == flist_api.FOREIGN_IMAGE_CONCURRENCY
-    assert pool._max_keepalive_connections == flist_api.FOREIGN_IMAGE_CONCURRENCY
-
-
-def test_image_route_reuses_the_pooled_client(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import flist_api
-
-    _stub_fetch(monkeypatch, _profile())
-    client.get("/foreign/character/Anexample Person")
-
-    seen: list[Any] = []
-
-    async def _capture(url, dest, *, client=None, rate_limiter=None):
-        seen.append(client)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"PNGDATA")
-        return 7
-
-    monkeypatch.setattr(flist_api, "download_to", _capture)
-    res = client.get("/foreign/character/Anexample Person/image/900")
-    assert res.status_code == 200
-    # A client was handed in, so download_to must not close it.
-    assert seen[0] is not None
-    assert not seen[0].is_closed
-
-
-def test_image_route_downloads_through_the_gate_unpaced(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import flist_api
-
-    _stub_fetch(monkeypatch, _profile())
-    client.get("/foreign/character/Anexample Person")
-
-    seen: list[Any] = []
-
-    async def _capture(url, dest, *, client=None, rate_limiter=None):
-        seen.append(rate_limiter)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"PNGDATA")
-        return 7
-
-    monkeypatch.setattr(flist_api, "download_to", _capture)
-    res = client.get("/foreign/character/Anexample Person/image/900")
-    assert res.status_code == 200
-    # The sweep's 2/s limiter must not be what a gallery queues behind.
-    assert seen == [flist_api.unpaced_limiter()]
-    assert seen[0] is not flist_api.cdn_rate_limiter()
+    assert [r.status_code for r in results] == [200] * len(ids)
+    assert [r.content for r in results] == [
+        f"/images/charimage/{i}.png".encode() for i in ids
+    ]
+    assert 1 < peak <= cap
 
 
 def test_image_route_404s_when_the_profile_was_never_opened(

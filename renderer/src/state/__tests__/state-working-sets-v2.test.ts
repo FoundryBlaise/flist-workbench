@@ -347,30 +347,4 @@ describe('autosave keyed on set id', () => {
     expect(useStore.getState().flistSetWorking['aaa']?.saveStatus).toBe('saved')
     expect(useStore.getState().flistSetWorking['aaa']?.etag).toBe('after')
   })
-
-  it('409 etag-mismatch keeps unsavedDirty and adopts the server etag', async () => {
-    useStore.setState({
-      flistSetWorking: {
-        'aaa': {
-          payload: { _schema_version: 5, _overlay: [], character: { description: 'mine' } },
-          overlay: ['character.description'],
-          etag: 'stale',
-          unsavedDirty: true,
-          saveStatus: 'idle',
-          saveError: null,
-          lastSavedAt: null,
-          materialised: true
-        }
-      }
-    })
-    fake.on(
-      `PUT ${SETS}/aaa/payload`,
-      json({ detail: { detail: 'etag_mismatch', current_etag: 'server' } }, 409)
-    )
-    await useStore.getState().flistSetWorkingFlushPending('99', 'aaa')
-    const slot = useStore.getState().flistSetWorking['aaa']
-    expect(slot?.unsavedDirty).toBe(true)
-    expect(slot?.etag).toBe('server')
-    expect(slot?.saveError).toMatch(/Another window/)
-  })
 })

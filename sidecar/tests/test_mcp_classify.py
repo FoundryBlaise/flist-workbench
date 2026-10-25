@@ -40,13 +40,11 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import importlib
 
     import labels
-    import logs
     import paths
     import server
     import settings
 
     importlib.reload(paths)
-    importlib.reload(logs)
     importlib.reload(settings)
     importlib.reload(labels)
     importlib.reload(server)

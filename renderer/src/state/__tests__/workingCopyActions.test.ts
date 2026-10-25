@@ -133,6 +133,20 @@ describe('autosave debouncer', () => {
     expect(puts.length).toBe(1)
     expect(descOf(puts[0].body)).toBe('after')
   })
+
+  it('an edit saves the Workbench with its unknown top-level keys intact (forward-compat)', async () => {
+    // A newer version may have written keys this one does not know;
+    // saving an edit must carry them back to disk, not drop them.
+    seedSlot('99', { character: { description: 'before' }, _future: { tier: 5 } })
+    fake.on(SAVE, json({ etag: 'saved' }))
+
+    useStore.getState().flistSetWorkingField('99', 'character.description', 'after')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+
+    const puts = fake.requestsTo(SAVE)
+    expect(puts.map((r) => descOf(r.body))).toEqual(['after'])
+    expect((puts[0].body as Record<string, unknown>)._future).toEqual({ tier: 5 })
+  })
 })
 
 describe('typing while a save is in flight', () => {

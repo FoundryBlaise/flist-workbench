@@ -46,12 +46,10 @@ def corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     import importlib
 
-    import logs
     import paths
     import server
 
     importlib.reload(paths)
-    importlib.reload(logs)
     importlib.reload(server)
     return root
 
@@ -144,10 +142,8 @@ async def test_a_missing_log_directory_says_where_to_set_it(
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
     import importlib
 
-    import logs
     import server
 
-    importlib.reload(logs)
     importlib.reload(server)
 
     async with mcp_client("logs") as session:

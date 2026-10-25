@@ -9,6 +9,8 @@ What must not happen is the Workbench being touched. The user may have
 carried on editing their draft while the upload was going on, and
 replacing it with what they just published would throw away work they
 never asked to lose.
+
+The Pull here is the real one; only F-list is faked, at the HTTP seam.
 """
 
 from __future__ import annotations
@@ -71,63 +73,81 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return client, character_archive, server
 
 
-def test_saving_schedules_a_pull(paired, monkeypatch) -> None:
-    client, _archive, server = paired
-    pulled: list[str] = []
+@pytest.fixture
+def fake_flist(httpx_mock):
+    """F-list at the HTTP seam, as the extension leaves it: the profile
+    now carries what the user just saved on f-list.net. A session is
+    open, so the Pull needs no sign-in."""
+    import flist_api
 
-    async def fake_run(name: str):
-        pulled.append(name)
-        if False:  # pragma: no cover - generator shape only
-            yield ("", {})
+    flist_api.ticket_store().set(
+        flist_api.Ticket(
+            account="azure-viper-account",
+            value="test-ticket",
+            password="test-password",
+            acquired_at=time.monotonic(),
+        )
+    )
+    httpx_mock.add_response(
+        url=flist_api.CHARACTER_DATA_URL,
+        method="POST",
+        json={
+            "error": "",
+            "id": 42,
+            "name": "Lady Amber Blaise",
+            "description": "[b]Just saved on f-list.net.[/b]",
+            "infotags": {},
+            "kinks": {},
+            "custom_kinks": {},
+            "inlines": {},
+            "images": [],
+        },
+    )
+    httpx_mock.add_response(
+        url=flist_api.avatar_url("Lady Amber Blaise"),
+        method="GET",
+        content=PNG,
+        is_optional=True,
+    )
+    yield httpx_mock
+    flist_api.ticket_store().clear()
 
-    monkeypatch.setattr(server.pull_service, "run", fake_run)
+
+def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) -> None:
+    client, _archive, _server = paired
+    bench = client.get("/flist/character/42/workbench").json()["workbench"]
+    payload_url = f"/flist/character/42/sets/{bench['id']}/payload"
+    current = client.get(payload_url).json()
+    draft = current["payload"]
+    draft["_overlay"] = ["character.description"]
+    draft["character"] = {"description": "a draft I am still writing"}
+    res = client.put(payload_url, json=draft, headers={"If-Match": current["etag"]})
+    assert res.status_code == 200, res.text
+    before = client.get(payload_url).json()
+    asked_at = time.time()
 
     res = client.post(
         "/restore/saved",
         json={"character": "Lady Amber Blaise", "delay_seconds": 0},
     )
-
     assert res.status_code == 200
     assert res.json()["scheduled"] is True
-    # Fire-and-forget: the answer comes back before the pull runs. The
-    # app's loop lives in the TestClient's own thread, so wait in real
-    # time rather than trying to drive it from here.
-    _wait_until(lambda: pulled == ["Lady Amber Blaise"])
-    assert pulled == ["Lady Amber Blaise"]
 
+    def pull_finished() -> bool:
+        events = client.get("/flist/activity").json()["events"]
+        return any(
+            e["kind"] in ("pull-done", "pull-error") and e["t"] >= asked_at
+            for e in events
+        )
 
-def test_the_workbench_is_not_touched(paired, monkeypatch) -> None:
-    client, archive, server = paired
-    bench = archive.resolve_workbench("42")
-    archive.write_set_payload(
-        "42",
-        bench.id,
-        {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
-            "_overlay": ["character.description"],
-            "character": {"description": "a draft I am still writing"},
-        },
-        expected_etag=None,
-    )
-    before = archive.read_set_payload("42", bench.id)
-
-    ran = {"done": False}
-
-    async def fake_run(name: str):
-        ran["done"] = True
-        if False:  # pragma: no cover
-            yield ("", {})
-
-    monkeypatch.setattr(server.pull_service, "run", fake_run)
-    client.post(
-        "/restore/saved",
-        json={"character": "Lady Amber Blaise", "delay_seconds": 0},
-    )
-    _wait_until(lambda: ran["done"])
-
-    assert ran["done"], "the pull never ran, so this proves nothing"
-    assert archive.read_set_payload("42", bench.id) == before
-    assert len(archive.list_sets("42")) == 1
+    # Fire-and-forget: wait for the Pull to finish in the app's thread.
+    _wait_until(pull_finished, timeout=10.0)
+    assert pull_finished(), "the Pull never finished, so this proves nothing"
+    live = client.get("/flist/character/42/live").json()
+    assert live["description"] == "[b]Just saved on f-list.net.[/b]"
+    assert client.get(payload_url).json() == before
+    sets = client.get("/flist/character/42/sets").json()
+    assert [s["id"] for s in sets["sets"]] == [bench["id"]]
 
 
 def test_it_needs_the_pairing_token(paired) -> None:
