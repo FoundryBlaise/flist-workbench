@@ -54,6 +54,8 @@ from pathlib import Path
 
 import pytest
 
+import fchat_logs
+
 __all__ = [
     "LOG_UNCHANGED",
     "NOTHING_VANISHES",
@@ -432,8 +434,9 @@ _recording: DataInvariants | None = None
 
 def fchat_wrote(path: Path) -> None:
     """Tell the running test's guard that F-Chat wrote the Log at `path`.
-    The shared Log writer calls this, so a Log a test arranges in its
-    body, or an F-Chat append it simulates, is not the app's doing."""
+    Installed as the shared Log writer's `on_write` hook, so a Log a test
+    arranges in its body, or an F-Chat append it simulates, is not the
+    app's doing."""
     if _recording is not None:
         _recording.fchat_wrote(path)
 
@@ -460,6 +463,7 @@ def pytest_runtest_call(item: pytest.Item):
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    fchat_logs.on_write(fchat_wrote)
     config.addinivalue_line(
         "markers",
         "invariant_exempt(rule, reason): do not check this data invariant "

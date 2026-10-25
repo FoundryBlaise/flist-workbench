@@ -18,6 +18,11 @@ footer holding the record's size without the footer.
 user typed after `/me`; the parser presents it with the speaker in
 front, so `action("Antiquill", "tips his hat.")` reads back as
 "Antiquill tips his hat.".
+
+This module imports nothing from pytest, so scripts outside the suite
+(tests/e2e/fixtures/build_fchat_dir.py) can use it too. Inside the
+suite, the `data_invariants` plugin registers a hook with
+`on_write` so it learns which Logs F-Chat (played by the test) wrote.
 """
 
 from __future__ import annotations
@@ -25,50 +30,49 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, Literal
+
+RecordType = Literal["chat", "action", "ad", "roll", "warn", "event"]
 
 #: F-Chat's record type byte, as parser.TYPE_NAMES names it. Type 0 and
 #: 1 are messages a person wrote; the rest are system lines.
-TYPE_BYTES = {"chat": 0, "action": 1, "ad": 2, "roll": 3, "warn": 4, "event": 5}
+TYPE_BYTES: dict[RecordType, int] = {
+    "chat": 0,
+    "action": 1,
+    "ad": 2,
+    "roll": 3,
+    "warn": 4,
+    "event": 5,
+}
 
 
 @dataclass(frozen=True, slots=True)
 class Record:
-    type: str
+    type: RecordType
     speaker: str
     text: str
     at: int
 
 
-def chat(speaker: str, text: str, *, at: int) -> Record:
-    """A plain chat message."""
-    return Record("chat", speaker, text, at)
+def record(type: RecordType, speaker: str, text: str, *, at: int) -> Record:
+    """One record of the given type."""
+    return Record(type, speaker, text, at)
 
 
-def action(speaker: str, text: str, *, at: int) -> Record:
-    """A `/me` action; `text` is what follows `/me`."""
-    return Record("action", speaker, text, at)
-
-
-def ad(speaker: str, text: str, *, at: int) -> Record:
-    """A channel ad (system line)."""
-    return Record("ad", speaker, text, at)
-
-
-def roll(speaker: str, text: str, *, at: int) -> Record:
-    """A dice roll or bottle spin (system line)."""
-    return Record("roll", speaker, text, at)
-
-
-def warn(speaker: str, text: str, *, at: int) -> Record:
-    """A moderator warning (system line)."""
-    return Record("warn", speaker, text, at)
-
-
-def event(speaker: str, text: str, *, at: int) -> Record:
-    """A status or presence event (system line)."""
-    return Record("event", speaker, text, at)
+#: A plain chat message.
+chat = partial(record, "chat")
+#: A `/me` action; `text` is what follows `/me`.
+action = partial(record, "action")
+#: A channel ad (system line).
+ad = partial(record, "ad")
+#: A dice roll or bottle spin (system line).
+roll = partial(record, "roll")
+#: A moderator warning (system line).
+warn = partial(record, "warn")
+#: A status or presence event (system line).
+event = partial(record, "event")
 
 
 def utc(
@@ -81,13 +85,13 @@ def utc(
     )
 
 
-def encode(record: Record) -> bytes:
+def encode(rec: Record) -> bytes:
     """One record as F-Chat writes it, footer included. For tests that
     splice damage between records; everyone else wants `write_log`."""
-    sb = record.speaker.encode("utf-8")
-    tb = record.text.encode("utf-8")
+    sb = rec.speaker.encode("utf-8")
+    tb = rec.text.encode("utf-8")
     body = (
-        struct.pack("<IBB", record.at, TYPE_BYTES[record.type], len(sb))
+        struct.pack("<IBB", rec.at, TYPE_BYTES[rec.type], len(sb))
         + sb
         + struct.pack("<H", len(tb))
         + tb
@@ -95,15 +99,24 @@ def encode(record: Record) -> bytes:
     return body + struct.pack("<H", len(body))
 
 
+_write_hooks: list[Callable[[Path], None]] = []
+
+
+def on_write(hook: Callable[[Path], None]) -> None:
+    """Call `hook(path)` after every `write_log`. Registering the same
+    hook twice keeps one."""
+    if hook not in _write_hooks:
+        _write_hooks.append(hook)
+
+
 def write_log(path: Path, records: Iterable[Record]) -> Path:
     """Write `records`, in order, as the F-Chat Log at `path` (parent
     folders are created). Returns `path`.
 
-    This is F-Chat writing, so the `log_unchanged` check (see
+    This is F-Chat writing; in the suite the `log_unchanged` check (see
     `data_invariants`) takes these bytes as the Log's from now on."""
-    import data_invariants
-
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"".join(encode(r) for r in records))
-    data_invariants.fchat_wrote(path)
+    for hook in _write_hooks:
+        hook(path)
     return path
