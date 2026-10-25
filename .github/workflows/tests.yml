@@ -1,5 +1,5 @@
-# Runs the sidecar's pytest suite and the renderer's vitest suite on
-# every branch push and pull request, on Windows because that is the
+# Runs the sidecar's pytest suite, the renderer's vitest suite and the
+# Playwright e2e suite (own job, see `e2e` below) on every branch push and pull request, on Windows because that is the
 # only platform the app ships for. release.yml calls this same file
 # (workflow_call) before it packs anything, so a tag build runs the
 # tests on the tagged commit and a red suite never becomes a release.
@@ -87,3 +87,62 @@ jobs:
 
       - name: vitest
         run: npx vitest run
+
+  # The Playwright suite against the built Electron app. It launches
+  # the dev build, which starts its sidecar from sidecar/.venv, so this
+  # job needs both installs plus `npm run build`. Every launch gets
+  # fresh temp data folders and the fixture F-Chat folder that global
+  # setup writes with the sidecar's shared Log writer
+  # (tests/e2e/fixtures/build_fchat_dir.py); see tests/e2e/launch.ts.
+  # fetch:extension downloads the pinned extension release so the
+  # browser-extension spec runs instead of skipping.
+  # Measured locally at about 25 s for the three specs.
+  e2e:
+    name: App (Playwright e2e)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      - name: uv sync (sidecar)
+        run: uv sync --project sidecar
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Build the app
+        run: npm run build
+
+      - name: Fetch the bundled browser extension
+        run: npm run fetch:extension
+
+      - name: Playwright
+        run: npx playwright test
+
+      # Traces and screenshots of a failed run, for
+      # `npx playwright show-trace`.
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: test-results/
+          retention-days: 7

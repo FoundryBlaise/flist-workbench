@@ -1,7 +1,13 @@
 import { defineConfig } from '@playwright/test'
 
+// The app under test is the built Electron app (`npm run build`).
+// Global setup builds a fixture F-Chat folder in a fresh temp root;
+// every spec launches through tests/e2e/launch.ts, which gives the app
+// fresh temp data folders there. No run reads or writes the user's own
+// data.
 export default defineConfig({
   testDir: './tests/e2e',
+  globalSetup: './tests/e2e/global-setup.ts',
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
