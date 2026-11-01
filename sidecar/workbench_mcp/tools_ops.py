@@ -549,13 +549,25 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
 
     A directory path gets a generated filename rather than an error —
     "put it in Downloads" is a reasonable thing for a user to say.
+
+    An existing file is never overwritten: the file is created
+    exclusively, so a model can't clobber something the user keeps
+    there, even if it appears between a check and the write.
     """
     target = Path(str(path)).expanduser()
     if target.is_dir():
         target = target / f"workbench-{int(time.time())}{suffix}"
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        with target.open("xb") as handle:
+            handle.write(data)
+    except FileExistsError as exc:
+        raise ToolError(
+            "exists",
+            f"{target} already exists and an export never overwrites a "
+            "file. Ask the user for another name, or give a folder to "
+            "get a fresh file name.",
+        ) from exc
     except OSError as exc:
         raise ToolError(
             "write_failed", f"Couldn't write {target}: {exc}"
