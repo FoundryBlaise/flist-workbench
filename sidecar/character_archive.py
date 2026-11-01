@@ -2666,29 +2666,6 @@ def adopt_flist_image_ids(
     }
 
 
-def remove_character_image(character_id: int | str, image_id: str) -> bool:
-    """Delete `images/<image_id>.<ext>` for good. No user-facing path
-    calls this: the window and `remove_image` go through the trash
-    (`services/image_trash.py`). Returns True iff a file was removed."""
-    if not _SAFE_NAME_RE.fullmatch(image_id):
-        return False
-    d = images_dir(character_id)
-    if not d.exists():
-        return False
-    for entry in d.iterdir():
-        if not entry.is_file():
-            continue
-        m = _IMAGE_FILE_RE.fullmatch(entry.name)
-        if not m or m.group(1) != image_id:
-            continue
-        try:
-            entry.unlink()
-            return True
-        except OSError:
-            return False
-    return False
-
-
 # ---- v4 → v5 pool migration ------------------------------------------
 
 # v4 stored bytes twice: once under `images/<image_id>.<ext>` and once
