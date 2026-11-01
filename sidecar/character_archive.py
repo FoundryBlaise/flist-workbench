@@ -32,6 +32,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -1915,6 +1916,88 @@ def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
     gallery.sort(key=lambda e: e["sort_order"])
     out["images"] = gallery
     return out
+
+
+#: F-list's edit-form setting names -> the Workbench's.
+_FORM_SETTING_NAMES = {
+    "customsfirst": "customs_first",
+    "showfriends": "show_friends",
+    "unbookmarkable": "prevent_bookmarks",
+}
+
+
+def _strip_form_prefix(fields: Any, prefix: str) -> dict[str, Any]:
+    if not isinstance(fields, dict):
+        return {}
+    return {
+        (str(k)[len(prefix):] if str(k).startswith(prefix) else str(k)): v
+        for k, v in fields.items()
+    }
+
+
+def payload_from_form_state(
+    form: dict[str, Any], live: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """A Workbench payload from what the extension read off F-list's edit
+    form just before an Upload.
+
+    The form speaks in its own field names: infotags as `info_<id>`,
+    kinks as `fetish_<id>`, settings as `customsfirst`, custom kinks as
+    a list, the title as `customTitle`. A Backup's `working.json` has to
+    be in the Workbench's terms, or Restore cannot load it and the
+    extension cannot put it back on the form. The form carries no
+    gallery; the images are the ones on the profile, i.e. Live's,
+    unless `form` brings its own.
+    """
+    character = form.get("character") if isinstance(form.get("character"), dict) else {}
+    settings = {
+        _FORM_SETTING_NAMES.get(str(k), str(k)): v
+        for k, v in (form.get("settings") or {}).items()
+    } if isinstance(form.get("settings"), dict) else {}
+
+    custom_rows = form.get("customKinks")
+    if custom_rows is None:
+        custom_rows = form.get("custom_kinks")
+    custom_kinks: dict[str, Any] = {}
+    order: list[str] = []
+    if isinstance(custom_rows, list):
+        for row in custom_rows:
+            if not isinstance(row, dict) or not row.get("name"):
+                continue
+            key = str(row["id"]) if row.get("id") else f"local:{uuid.uuid4()}"
+            custom_kinks[key] = {
+                "name": row.get("name") or "",
+                "description": row.get("description") or "",
+                "choice": row.get("choice") or "undecided",
+                "children": [],
+            }
+            order.append(key)
+    elif isinstance(custom_rows, dict):
+        custom_kinks = dict(custom_rows)
+        order = [str(k) for k in custom_rows]
+
+    source = live if isinstance(live, dict) else {}
+    images = form.get("images") if isinstance(form.get("images"), list) else source.get("images")
+    inlines = form.get("inlines") if "inlines" in form else source.get("inlines", {})
+    return {
+        "_schema_version": WORKING_SCHEMA_VERSION,
+        "_overlay": [],
+        "character": {
+            "id": character.get("id"),
+            "name": character.get("name"),
+            "description": character.get("description") or "",
+            "custom_title": character.get("customTitle")
+            or character.get("custom_title")
+            or "",
+        },
+        "settings": settings,
+        "infotags": _strip_form_prefix(form.get("infotags"), "info_"),
+        "kinks": _strip_form_prefix(form.get("kinks"), "fetish_"),
+        "custom_kinks": custom_kinks,
+        "_custom_kinks_order": order,
+        "images": _seed_payload_from_live({"images": images})["images"],
+        "inlines": inlines if inlines is not None else {},
+    }
 
 
 # ---- image storage ----------------------------------------------------

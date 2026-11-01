@@ -116,3 +116,45 @@ async def test_mcp_lists_the_backup_taken_before_an_upload(paired) -> None:
         _result, data = await call_tool(session, "list_backups", character=NAME)
 
     assert [b["filename"] for b in data["backups"]] == [taken]
+
+
+def _workbench_payload(client) -> dict:
+    bench = client.get("/flist/character/42/workbench").json()["workbench"]
+    return client.get(f"/flist/character/42/sets/{bench['id']}/payload").json()["payload"]
+
+
+def test_the_backup_taken_before_an_upload_restores_into_the_workbench(paired) -> None:
+    client, extension = paired
+    taken = _upload_starts(extension)
+
+    res = client.post(
+        "/flist/character/42/workbench/load-backup", json={"filename": taken}
+    )
+
+    assert res.status_code == 200, res.text
+    payload = _workbench_payload(client)
+    # What was on F-list's form, in the Workbench's own terms: field ids
+    # without the form's `info_` / `fetish_` prefixes, the settings under
+    # their Workbench names, custom kinks keyed by id.
+    assert payload["character"]["description"] == "[b]What F-list had before the Upload.[/b]"
+    assert payload["character"]["custom_title"] == "Keeper of Lanterns"
+    assert payload["infotags"] == {"2": "Human"}
+    assert payload["kinks"] == {"580": "fave", "581": "no"}
+    assert payload["settings"]["customs_first"] is True
+    assert payload["settings"]["show_friends"] is False
+    assert payload["custom_kinks"]["31712021"]["name"] == "Lantern lore"
+    assert payload["custom_kinks"]["31712021"]["choice"] == "yes"
+    assert [i["image_id"] for i in payload["images"]] == ["17924625"]
+
+
+async def test_mcp_restores_the_backup_taken_before_an_upload(paired) -> None:
+    client, extension = paired
+    taken = _upload_starts(extension)
+
+    async with mcp_client("character") as session:
+        result, data = await call_tool(
+            session, "load_backup_into_workbench", character=NAME, backup=taken, confirm=True
+        )
+
+    assert not result.isError, data
+    assert _workbench_payload(client)["kinks"] == {"580": "fave", "581": "no"}
