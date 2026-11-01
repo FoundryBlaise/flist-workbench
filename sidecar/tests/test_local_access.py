@@ -314,6 +314,43 @@ def test_a_foreign_page_cannot_start_a_handshake(stranger: TestClient) -> None:
     assert res.status_code == 403
 
 
+@pytest.mark.parametrize("caller", ["stranger", "app_window"])
+def test_origin_null_cannot_start_a_handshake(
+    request: pytest.FixtureRequest, app_window: TestClient, caller: str
+) -> None:
+    """Any sandboxed iframe sends `Origin: null`. Only the extension
+    starts a pairing, so not even the app window's null is let in here."""
+    client: TestClient = request.getfixturevalue(caller)
+    res = client.post("/restore/handshake", headers={"Origin": "null"})
+    assert res.status_code == 403
+    assert set(res.json()) == {"code", "message"}
+    assert res.json()["code"] == "forbidden_origin"
+    assert "access-control-allow-origin" not in res.headers
+    assert app_window.get("/restore/handshake/pending").json() == {"pending": []}
+
+
+def test_a_preflight_from_origin_null_gets_no_handshake_grant(
+    stranger: TestClient,
+) -> None:
+    res = stranger.options(
+        "/restore/handshake",
+        headers={"Origin": "null", "Access-Control-Request-Method": "POST"},
+    )
+    assert res.status_code == 403
+    assert "access-control-allow-origin" not in res.headers
+
+
+@pytest.mark.parametrize("origin", [FLIST, EXTENSION])
+def test_the_extension_starts_a_handshake_from_its_origins(
+    stranger: TestClient, app_window: TestClient, origin: str
+) -> None:
+    res = stranger.post("/restore/handshake", headers={"Origin": origin})
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == origin
+    pending = app_window.get("/restore/handshake/pending").json()["pending"]
+    assert [p["handshake_id"] for p in pending] == [res.json()["handshake_id"]]
+
+
 @pytest.mark.parametrize(("method", "path"), sorted(EXTENSION_ROUTES))
 def test_extension_routes_want_the_pairing_token_not_the_secret(
     app_window: TestClient, method: str, path: str
