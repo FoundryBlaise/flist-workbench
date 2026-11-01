@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sidecar_client import app_client
 
-from mcp_helpers import mcp_client
+from mcp_helpers import call_tool, mcp_client
 from test_mcp_edit import workbench  # noqa: F401
 
 CID = "42"
@@ -104,3 +104,24 @@ def test_only_the_window_deletes_a_trashed_backup_for_good(client, workbench) ->
     assert emptied["purged"] == 1
     assert trashed(client) == []
     assert listed(client) == {}
+
+
+async def test_no_mcp_tool_can_empty_the_trash_or_delete_from_it(
+    client, backup, workbench  # noqa: F811
+) -> None:
+    client.delete(f"{BACKUPS}/{backup['filename']}")
+
+    async with mcp_client() as session:
+        names = {t.name for t in (await session.list_tools()).tools}
+        _, listed_over_mcp = await call_tool(
+            session, "list_trash", character="Lady Amber Blaise"
+        )
+
+    destructive = ("purge", "empty", "delete", "remove", "wipe", "clear")
+    assert not [
+        n
+        for n in names
+        if ("trash" in n or "backup" in n) and any(word in n for word in destructive)
+    ], names
+    assert [b["name"] for b in listed_over_mcp["backups"]] == ["Before the big rewrite"]
+    assert [b["filename"] for b in trashed(client)] == [backup["filename"]]
