@@ -1024,7 +1024,7 @@ def _require_valid_character_id(character_id: str) -> None:
     `<userdata>/characters/`. Real F-list ids are digits but archived
     characters can also be keyed by name slug — the regex permits both.
     """
-    if not isinstance(character_id, str) or not _CHARACTER_ID_RE.match(
+    if not isinstance(character_id, str) or not _CHARACTER_ID_RE.fullmatch(
         character_id
     ):
         raise InvalidCharacterId(character_id)
@@ -1436,7 +1436,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
     against the safe-name regex so a hostile renderer call can't path-
     traverse out of the images directory."""
     import re as _re
-    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
+    if not _re.fullmatch(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
         raise InvalidFileName("invalid image filename")
     path = character_archive.images_dir(character_id) / filename
     if not path.exists():
@@ -1465,7 +1465,7 @@ async def flist_character_image_by_id(
     exists. Lets the gallery render thumbnails reliably without a
     separate round-trip to look up extensions."""
     import re as _re
-    if not _re.match(r"^[A-Za-z0-9_-]+$", image_id):
+    if not _re.fullmatch(r"^[A-Za-z0-9_-]+$", image_id):
         raise HTTPException(status_code=400, detail="invalid image_id")
     d = character_archive.images_dir(character_id)
     for ext in ("png", "jpg", "gif"):
@@ -1568,7 +1568,7 @@ async def flist_character_trash_file(character_id: str, filename: str) -> FileRe
     _require_valid_character_id(character_id)
     import re as _re
 
-    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename) or filename.endswith(".json"):
+    if not _re.fullmatch(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename) or filename.endswith(".json"):
         raise InvalidFileName("invalid image filename")
     path = image_trash_service.trash_dir(character_id) / filename
     if not path.exists():
@@ -1666,7 +1666,7 @@ def _safe_filename_part(name: str) -> str:
 @app.get("/flist/character/{character_id}/inlines/{filename}")
 async def flist_character_inline(character_id: str, filename: str) -> FileResponse:
     import re as _re
-    if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
+    if not _re.fullmatch(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
         raise InvalidFileName("invalid inline filename")
     path = character_archive.inlines_dir(character_id) / filename
     if not path.exists():
@@ -1888,7 +1888,7 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     """
     import re as _re
 
-    if not _re.match(r"^[A-Za-z0-9_-]+$", image_id):
+    if not _re.fullmatch(r"^[A-Za-z0-9_-]+$", image_id):
         raise HTTPException(status_code=400, detail="invalid image_id")
     profile = foreign_cache.read_profile(name)
     if profile is None:

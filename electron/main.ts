@@ -14,7 +14,7 @@ import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
 import { FileGrants } from './fileGrants'
-import { APP_PAGE_URL, isAppPage } from './appPage'
+import { APP_PAGE_URL, isAppPage, registerAppScheme, serveAppScheme } from './appPage'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -48,6 +48,9 @@ function loadKeytar(): Keytar | null {
 }
 
 const isDev = !app.isPackaged
+
+// The app's own scheme has to be known before the app is ready.
+registerAppScheme()
 
 let mainWindow: BrowserWindow | null = null
 
@@ -748,6 +751,7 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  serveAppScheme()
   appendDiagLog('whenReady', 'app ready, starting sidecar')
   try {
     await startSidecar()

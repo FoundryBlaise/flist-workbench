@@ -99,7 +99,7 @@ function sidecarEnv(): NodeJS.ProcessEnv {
     FLIST_WORKBENCH_VERSION: app.getVersion(),
     FLIST_WORKBENCH_LAUNCH_SECRET: launchSecret
   }
-  // In dev the window loads from Vite rather than file://, so the
+  // In dev the window loads from Vite rather than app://workbench, so the
   // sidecar has to grant that origin too. Never set when packaged.
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (!app.isPackaged && devUrl) {
