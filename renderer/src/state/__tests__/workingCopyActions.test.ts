@@ -217,16 +217,17 @@ describe('typing while a save is in flight', () => {
     expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
   })
 
-  // Real bug, see #2: the two flushes queued behind the in-flight save
-  // both wake when it lands and each sends a PUT over the same etag, so
-  // against the real sidecar the second gets a 409 and raises a
-  // conflict banner for a conflict the window had with itself. Drop
-  // `.fails` once the fix lands; the test above checks everything else.
-  it.fails('no two saves leave over the same etag', async () => {
+  // The flushes queued behind the in-flight save must not each send a
+  // PUT over the same etag: the real sidecar answers the second with a
+  // 409, and the window would raise a conflict banner for a conflict it
+  // had with itself (#2).
+  it('no two saves leave over the same etag', async () => {
     const { puts } = await burstBehindASlowSave()
 
     const etags = puts.map((r) => r.headers['If-Match'])
     expect(etags).toEqual([...new Set(etags)])
+    expect(puts.map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
   })
 })
 
