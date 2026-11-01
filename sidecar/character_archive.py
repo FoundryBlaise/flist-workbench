@@ -360,6 +360,12 @@ def _folder_for(character_id: int | str) -> tuple[Path, bool]:
     raise InvalidCharacterId(cid)
 
 
+def require_character_id(character_id: int | str) -> None:
+    """Refuse an id no character folder could have (`InvalidCharacterId`),
+    whether or not the archive holds the character."""
+    _folder_for(character_id)
+
+
 def character_dir(character_id: int | str) -> Path:
     """Find a character's folder. Never creates it.
 
@@ -376,8 +382,8 @@ def character_dir(character_id: int | str) -> Path:
 
 def create_character_dir(character_id: int | str) -> Path:
     """Create a character's folder: the moment a character comes into
-    the archive. Only a Pull calls this (`write_live`); every other
-    path finds the character with `character_dir`."""
+    the archive. A Pull (`write_live`) and a set-bundle import call
+    this; every other path finds the character with `character_dir`."""
     p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p

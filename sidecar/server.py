@@ -104,18 +104,30 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
 _MCP_SERVERS = workbench_mcp.build_mcp_servers()
 
 
+#: `{character_id}` routes that bring a character into the archive, so
+#: they may name one it does not hold yet. The Pull is keyed by name and
+#: needs no entry here.
+_CREATES_CHARACTER = {("POST", "/flist/character/{character_id}/sets/import")}
+
+
 def _known_character(request: Request) -> None:
     """Every route with a `{character_id}` names a character the archive
-    already holds.
+    already holds, except the few in `_CREATES_CHARACTER`.
 
     Checked before the route's own parameters and body, so an unknown
     id is refused the same way however complete the request is, and
-    before anything could create a folder for it. Only a Pull brings a
-    character into the archive, and its route is keyed by name.
+    before anything could create a folder for it. A creating route
+    still gets a malformed id refused here.
     """
     character_id = request.path_params.get("character_id")
-    if character_id is not None:
-        character_archive.character_dir(character_id)
+    if character_id is None:
+        return
+    route = request.scope.get("route")
+    if (request.method, getattr(route, "path", None)) in _CREATES_CHARACTER:
+        _require_valid_character_id(character_id)
+        character_archive.require_character_id(character_id)
+        return
+    character_archive.character_dir(character_id)
 
 
 app = FastAPI(

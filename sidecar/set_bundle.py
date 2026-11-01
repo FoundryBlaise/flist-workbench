@@ -214,6 +214,10 @@ def import_set_bundle(
         if cross_character:
             payload = _rewrite_character_identity(payload, target_character_id)
 
+        # A bundle carried over from another install brings the
+        # character with it, like a first Pull. Only a bundle that
+        # passed every check above gets this far.
+        character_archive.create_character_dir(target_character_id)
         added, skipped = _copy_images(zf, target_character_id)
 
     new_meta = character_archive._materialise_set(
