@@ -205,3 +205,79 @@ def test_the_avatar_is_inside_a_backup_made_in_the_window(paired) -> None:
 
     assert res.status_code == 200
     assert _zip(res.content).read("avatar.png") == AVATAR
+
+
+# ---- Backups taken before an Upload by an earlier version ------------------
+
+#: The name an earlier version gave the Backup before an Upload.
+OLD_NAME = "pre-restore-2026-03-05T12-30-45.zip"
+#: The same moment under the Backup file name the list recognises.
+ADOPTED_NAME = "2026-03-05T123045Z.zip"
+
+
+def _old_pre_upload_backup() -> bytes:
+    """A Backup as an earlier version wrote it: the form state packed
+    as-is, form field names and custom-kink list included, beside
+    Live's gallery and the avatar. No backup-meta.json."""
+    form_as_written = {
+        "character": FORM_STATE["character"],
+        "settings": FORM_STATE["settings"],
+        "infotags": FORM_STATE["infotags"],
+        "kinks": FORM_STATE["kinks"],
+        "custom_kinks": FORM_STATE["customKinks"],
+        "images": [
+            {"image_id": "17924625", "extension": "png", "description": "Lantern", "sort_order": 0}
+        ],
+        "inlines": {},
+    }
+    profile = {
+        "meta": {"exportedAt": "2026-03-05T12:30:45.000Z", "version": "0.0.0"},
+        "character": {
+            "id": "42",
+            "name": NAME,
+            "description": FORM_STATE["character"]["description"],
+            "customTitle": "Keeper of Lanterns",
+        },
+        "settings": FORM_STATE["settings"],
+        "infotags": FORM_STATE["infotags"],
+        "kinks": FORM_STATE["kinks"],
+        "customKinks": [],
+        "images": {
+            "list": [{"position": 0, "filename": "images/17924625.png", "description": "Lantern"}],
+            "missing": [],
+            "avatar": {"filename": "avatar.png"},
+        },
+        "inlines": [],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("character.json", json.dumps(profile))
+        zf.writestr("working.json", json.dumps(form_as_written))
+        zf.writestr("images/17924625.png", PNG)
+        zf.writestr("avatar.png", AVATAR)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def old_backup_on_disk(paired):
+    import character_archive
+
+    data = _old_pre_upload_backup()
+    (character_archive.backups_dir("42") / OLD_NAME).write_bytes(data)
+    return data
+
+
+def test_an_old_backup_taken_before_an_upload_is_listed_after_startup(
+    paired, old_backup_on_disk
+) -> None:
+    import character_archive
+    import server
+
+    with app_client(server.app) as client:
+        listed = client.get("/flist/character/42/zip-backups").json()["backups"]
+
+    assert [b["filename"] for b in listed] == [ADOPTED_NAME]
+    # Not a byte lost: the file is the one that was there, renamed.
+    adopted = character_archive.backups_dir("42") / ADOPTED_NAME
+    assert adopted.read_bytes() == old_backup_on_disk
+    assert not (character_archive.backups_dir("42") / OLD_NAME).exists()

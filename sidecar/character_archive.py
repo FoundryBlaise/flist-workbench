@@ -828,10 +828,9 @@ def _zip_backup_filename(now: float | None = None) -> str:
     return ts.strftime("%Y-%m-%dT%H%M%SZ") + ".zip"
 
 
-def _free_backup_path(character_id: int | str, stem: str) -> Path:
-    """`backups/<stem>.zip`, or `<stem>-N.zip` with the first N not on
+def _free_backup_path(folder: Path, stem: str) -> Path:
+    """`<folder>/<stem>.zip`, or `<stem>-N.zip` with the first N not on
     disk yet, so a same-second second Backup never overwrites the first."""
-    folder = backups_dir(character_id)
     target = folder / f"{stem}.zip"
     i = 1
     while target.exists():
@@ -845,12 +844,47 @@ def write_backup_zip(character_id: int | str, data: bytes) -> Path:
     file name the list recognises, and return where it went. Written
     through a temp file, so a crash leaves no half-written Backup."""
     target = _free_backup_path(
-        character_id, _zip_backup_filename().removesuffix(".zip")
+        backups_dir(character_id), _zip_backup_filename().removesuffix(".zip")
     )
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_bytes(data)
     tmp.replace(target)
     return target
+
+
+#: The name earlier versions gave the Backup before an Upload, which the
+#: Backup list never recognised: `pre-restore-YYYY-MM-DDTHH-MM-SS.zip`, UTC.
+_OLD_PRE_UPLOAD_FILE_RE = re.compile(
+    r"^pre-restore-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})\.zip$"
+)
+
+
+def adopt_old_pre_upload_backups() -> int:
+    """Give every Backup an earlier version took before an Upload the
+    Backup file name, so the list shows it. Run at startup.
+
+    A rename and nothing else: the file keeps every byte, and a name
+    already taken gets the same-second suffix rather than overwriting.
+    Returns how many were adopted.
+    """
+    adopted = 0
+    for folder in root().iterdir():
+        backups = folder / "backups"
+        if not backups.is_dir():
+            continue
+        for entry in list(backups.iterdir()):
+            m = _OLD_PRE_UPLOAD_FILE_RE.fullmatch(entry.name)
+            if not m or not entry.is_file():
+                continue
+            day, hh, mm, ss = m.groups()
+            target = _free_backup_path(backups, f"{day}T{hh}{mm}{ss}Z")
+            try:
+                entry.rename(target)
+            except OSError as exc:
+                print(f"could not adopt {entry}: {exc}", file=sys.stderr)
+                continue
+            adopted += 1
+    return adopted
 
 
 def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
