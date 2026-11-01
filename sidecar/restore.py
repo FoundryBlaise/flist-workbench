@@ -417,12 +417,17 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
             avatar_path=avatar,
         )
 
-    # Backup ZIP — already on disk; just return bytes.
-    backups = character_archive.backups_dir(character_id)
-    candidate = backups / snapshot_id
-    if not candidate.exists() or not candidate.is_file():
+    # Backup ZIP — already on disk; just return bytes. Only a name the
+    # listing above offered: the id comes from a request, and joined
+    # onto backups/ as given it could name any zip on the disk.
+    listed = {
+        entry.get("filename")
+        for entry in character_archive.list_zip_backups(character_id)
+    }
+    if snapshot_id not in listed:
         return None
-    if candidate.suffix.lower() != ".zip":
+    candidate = character_archive.backups_dir(character_id) / snapshot_id
+    if not candidate.is_file():
         return None
     return candidate.read_bytes()
 

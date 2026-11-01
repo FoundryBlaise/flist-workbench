@@ -18,7 +18,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import aliases as aliases_store
@@ -37,6 +37,7 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
+from archive_errors import InvalidCharacterId
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
@@ -156,6 +157,16 @@ async def _flist_touch_middleware(request, call_next):
 # Added last, so it is the outermost layer: a refused request touches
 # nothing above. CORS is answered there too, per caller.
 app.add_middleware(local_access.LocalAccessGuard, port=SIDECAR_PORT)
+
+
+@app.exception_handler(InvalidCharacterId)
+async def _invalid_character_id(_request: Request, _exc: InvalidCharacterId) -> JSONResponse:
+    """Wherever the archive refuses an id, the caller hears it the
+    same way rather than as a 500."""
+    return JSONResponse(
+        status_code=400,
+        content={"code": "invalid_character_id", "message": "invalid character_id"},
+    )
 
 
 @app.get("/health")
@@ -773,6 +784,8 @@ async def flist_character_zip_backup_payload(
     """
     import zipfile
 
+    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
+        raise HTTPException(status_code=400, detail="invalid backup filename")
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
@@ -950,7 +963,7 @@ def _require_valid_character_id(character_id: str) -> None:
     if not isinstance(character_id, str) or not _CHARACTER_ID_RE.match(
         character_id
     ):
-        raise HTTPException(status_code=400, detail="invalid character_id")
+        raise InvalidCharacterId(character_id)
 
 
 @app.get("/flist/character/{character_id}/workbench")

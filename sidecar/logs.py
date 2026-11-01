@@ -118,9 +118,29 @@ def list_characters(root: Path | None = None) -> list[CharacterEntry]:
     return out
 
 
+def _is_one_name(name: str) -> bool:
+    """True when `name` can only mean an entry inside its folder.
+
+    Character and partner names arrive from requests. F-Chat names its
+    folders and files after characters and channels, so the rule only
+    refuses what no such name contains: a separator (`\\` is one on
+    Windows), a drive colon, NUL, and the `.`/`..` entries.
+    """
+    return (
+        isinstance(name, str)
+        and name not in ("", ".", "..")
+        and not any(c in name for c in "/\\:\x00")
+    )
+
+
+def _logs_dir(character: str, root: Path | None) -> Path:
+    if not _is_one_name(character):
+        raise LogDirError(f"no logs for character: {character}")
+    return (root or data_dir()) / character / "logs"
+
+
 def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry]:
-    base = root or data_dir()
-    logs_dir = base / character / "logs"
+    logs_dir = _logs_dir(character, root)
     if not logs_dir.exists():
         raise LogDirError(f"no logs for character: {character}")
 
@@ -196,8 +216,9 @@ def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry
 
 
 def log_path(character: str, partner: str, root: Path | None = None) -> Path:
-    base = root or data_dir()
-    path = base / character / "logs" / partner
+    if not _is_one_name(partner):
+        raise LogDirError(f"log not found: {character}/{partner}")
+    path = _logs_dir(character, root) / partner
     if not path.exists() or not path.is_file():
         raise LogDirError(f"log not found: {character}/{partner}")
     return path
@@ -251,8 +272,7 @@ def read_messages(
 def _alias_paths(character: str, partner: str, root: Path | None) -> list[Path]:
     """Return every existing on-disk log path for `partner` and any of
     its aliases. Used by read_messages + alias-aware label queries."""
-    base = root or data_dir()
-    logs_dir = base / character / "logs"
+    logs_dir = _logs_dir(character, root)
 
     try:
         conn = aliases_store.connect()
@@ -269,6 +289,8 @@ def _alias_paths(character: str, partner: str, root: Path | None) -> list[Path]:
 
     paths: list[Path] = []
     for n in names:
+        if not _is_one_name(n):
+            continue
         p = logs_dir / n
         if p.exists() and p.is_file():
             paths.append(p)
