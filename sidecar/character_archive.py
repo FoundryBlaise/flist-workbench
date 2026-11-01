@@ -1984,11 +1984,15 @@ def payload_from_form_state(
     gallery; the images are the ones on the profile, i.e. Live's,
     unless `form` brings its own.
     """
-    character = form.get("character") if isinstance(form.get("character"), dict) else {}
-    settings = {
-        _FORM_SETTING_NAMES.get(str(k), str(k)): v
-        for k, v in (form.get("settings") or {}).items()
-    } if isinstance(form.get("settings"), dict) else {}
+    character = form.get("character")
+    if not isinstance(character, dict):
+        character = {}
+    raw_settings = form.get("settings")
+    settings = (
+        {_FORM_SETTING_NAMES.get(str(k), str(k)): v for k, v in raw_settings.items()}
+        if isinstance(raw_settings, dict)
+        else {}
+    )
 
     custom_rows = form.get("customKinks")
     if custom_rows is None:
