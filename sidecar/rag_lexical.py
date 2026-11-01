@@ -131,6 +131,19 @@ class LexicalStore:
             cur = self._conn.execute(f"DELETE FROM rag_fts{sql}", args)
             return cur.rowcount or 0
 
+    def delete_chunk_ids(self, chunk_ids: set[str]) -> None:
+        """Delete the named chunks. Ids not in the table are ignored."""
+        if not chunk_ids:
+            return
+        ids = list(chunk_ids)
+        with self._conn:
+            for i in range(0, len(ids), 500):
+                part = ids[i : i + 500]
+                self._conn.execute(
+                    f"DELETE FROM rag_fts WHERE chunk_id IN ({','.join('?' * len(part))})",
+                    part,
+                )
+
     def wipe(self) -> None:
         """Drop and recreate the virtual table. Mirrors RagStore.wipe so
         the chat path can't see lexical hits referencing dense-store
@@ -146,6 +159,12 @@ class LexicalStore:
         sql, args = _scope_clause(scope)
         cur = self._conn.execute(f"SELECT COUNT(*) FROM rag_fts{sql}", args)
         return int(cur.fetchone()[0])
+
+    def chunk_texts(self, scope: dict | None = None) -> dict[str, str]:
+        """Every stored chunk in scope as {chunk_id: text}."""
+        sql, args = _scope_clause(scope)
+        cur = self._conn.execute(f"SELECT chunk_id, text FROM rag_fts{sql}", args)
+        return {str(r[0]): str(r[1]) for r in cur.fetchall()}
 
     def search(
         self,
