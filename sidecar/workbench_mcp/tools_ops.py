@@ -30,8 +30,7 @@ from ._context import (
     ToolError,
     audit,
     resolve_character,
-    resolve_conversation,
-    resolve_log_character,
+    resolve_ingest_scope,
     resolve_set,
 )
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
@@ -251,21 +250,10 @@ async def ingest_logs(
     installed. `wait=false` returns a job id to poll with get_job
     instead of blocking.
     """
-    if partner and not character:
-        raise ToolError(
-            "validation_failed",
-            "partner needs a character too — logs are scoped per (your "
-            "character, their character) pair",
-        )
     # Resolve to the on-disk spelling like every other conversation
     # tool: the Labels and alias links are keyed on it, so a different
     # case or an alias would otherwise index nothing and report done.
-    scope: dict[str, Any] = {}
-    if character and partner:
-        conv = resolve_conversation(character, partner)
-        scope = {"character": conv.character, "partner": conv.partner}
-    elif character:
-        scope["character"] = resolve_log_character(character)
+    scope: dict[str, Any] = resolve_ingest_scope(character, partner)
     if include_channels:
         scope["include_channels"] = True
 

@@ -50,7 +50,16 @@ class LogNameRefused(Refusal, LookupError):
 
     code = "log_name_refused"
 
+    #: The resolver's codes and the status each answers with. A code not
+    #: listed here is a request the resolver could not act on: 400.
+    STATUS_BY_CODE = {
+        "log_character_not_found": 404,
+        "partner_not_found": 404,
+        "validation_failed": 400,
+        "log_dir_unavailable": 400,
+    }
+
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
-        self.status = 404 if code.endswith("_not_found") else 400
+        self.status = self.STATUS_BY_CODE.get(code, 400)

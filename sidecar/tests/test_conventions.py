@@ -180,7 +180,6 @@ HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "labels_rollup"): 1,
     ("sidecar/server.py", "logs_characters"): 1,
     ("sidecar/server.py", "profile"): 4,
-    ("sidecar/server.py", "rag_ingest_start"): 1,
     ("sidecar/server.py", "rag_job_cancel"): 1,
     ("sidecar/server.py", "rag_job_get"): 1,
     ("sidecar/server.py", "rag_lexical_rebuild"): 1,

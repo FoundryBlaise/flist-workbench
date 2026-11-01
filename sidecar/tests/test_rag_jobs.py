@@ -869,7 +869,8 @@ def test_ingest_endpoint_rejects_partner_without_character(
 ) -> None:
     res = api_client.post("/rag/ingest", json={"partner": "X"})
     assert res.status_code == 400
-    assert "character" in res.json()["detail"]
+    assert res.json()["code"] == "validation_failed"
+    assert "character" in res.json()["message"]
 
 
 def test_ingest_endpoint_returns_job_id(

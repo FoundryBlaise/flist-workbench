@@ -2975,6 +2975,25 @@ def avatar_path_for(name: str) -> Path:
 # ---- roster ----------------------------------------------------------
 
 
+def same_character_name(a: str | None, b: str | None) -> bool:
+    """Whether two spellings name the same character: F-list and the
+    Logs treat names case-insensitively, and stray spaces never count."""
+    return bool(a and b) and a.strip().lower() == b.strip().lower()
+
+
+def character_name(character_id: int | str) -> str | None:
+    """The name of a character the archive holds, which is also the name
+    its Logs are kept under. The registry's when a Pull recorded one,
+    else the one in its Live."""
+    entry = load_registry().get(str(character_id)) or {}
+    if entry.get("name"):
+        return str(entry["name"])
+    for row in list_archived_characters():
+        if str(row.get("id")) == str(character_id):
+            return str(row.get("name") or "") or None
+    return None
+
+
 def list_archived_characters() -> list[dict[str, Any]]:
     """Walk `<userdata>/characters/` and surface every directory that
     looks like a character archive. Each entry: `{id, name, last_pulled_at,

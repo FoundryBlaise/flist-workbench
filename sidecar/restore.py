@@ -273,7 +273,6 @@ def _character_id_for_name(name: str) -> str | None:
     root = character_archive.root()
     if not root.exists():
         return None
-    target = name.strip().lower()
     for entry in root.iterdir():
         if not entry.is_dir():
             continue
@@ -285,7 +284,9 @@ def _character_id_for_name(name: str) -> str | None:
         except (OSError, ValueError):
             continue
         char_name = payload.get("name")
-        if isinstance(char_name, str) and char_name.strip().lower() == target:
+        if isinstance(char_name, str) and character_archive.same_character_name(
+            char_name, name
+        ):
             return entry.name
     return None
 

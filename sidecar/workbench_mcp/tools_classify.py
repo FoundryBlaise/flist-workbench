@@ -555,16 +555,7 @@ def clear_labels(
             "again with confirm=true.",
         )
 
-    conn = labels_store.connect()
-    try:
-        alias_group = (
-            aliases_store.all_names_for(conn, character, partner) if partner else None
-        )
-        cleared = label_trash.clear(
-            conn, character, partner, partner_aliases=alias_group
-        )
-    finally:
-        conn.close()
+    cleared = label_trash.clear(character, partner)
 
     audit(
         "clear_labels",

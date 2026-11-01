@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import aliases as aliases_store
 import character_archive
 import labels as labels_store
 import paths
@@ -44,22 +45,6 @@ def _dir() -> Path:
     p = paths.user_data_dir() / "trash" / FOLDER
     p.mkdir(parents=True, exist_ok=True)
     return p
-
-
-def _same_name(a: str | None, b: str | None) -> bool:
-    return bool(a and b) and a.strip().lower() == b.strip().lower()
-
-
-def workbench_character_name(character_id: int | str) -> str | None:
-    """The name of a Workbench character, which is the name its Logs are
-    kept under."""
-    entry = character_archive.load_registry().get(str(character_id)) or {}
-    if entry.get("name"):
-        return str(entry["name"])
-    for row in character_archive.list_archived_characters():
-        if str(row.get("id")) == str(character_id):
-            return str(row.get("name") or "") or None
-    return None
 
 
 def _write_entry(character: str, partner: str | None, rows: list[dict]) -> dict[str, Any]:
@@ -106,7 +91,7 @@ def _read(trash_id: str) -> dict[str, Any] | None:
 def _owned(trash_id: str, character: str) -> dict[str, Any] | None:
     """The entry `trash_id` names, if it is in `character`'s Trash."""
     entry = _read(trash_id)
-    if entry is None or not _same_name(entry.get("character"), character):
+    if entry is None or not character_archive.same_character_name(entry.get("character"), character):
         return None
     return entry
 
@@ -126,36 +111,42 @@ def _clear_rows(
     return {"deleted": deleted, "trash_id": entry["id"]}
 
 
-def clear(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str | None = None,
-    *,
-    partner_aliases: list[str] | None = None,
-) -> dict[str, Any]:
-    """Clear the Labels of one conversation, or of every conversation of
-    `character` when `partner` is None, keeping them in the Trash as one
-    entry. Returns `{deleted, trash_id}`; `trash_id` is None when there
-    was nothing to clear."""
-    rows = labels_store.label_rows(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
-    return _clear_rows(conn, character, partner, rows)
+def clear(character: str, partner: str | None = None) -> dict[str, Any]:
+    """Clear the Labels of one conversation, under every name of the
+    partner's alias group, or of every conversation of `character` when
+    `partner` is None, keeping them in the Trash as one entry. The one
+    clear the window and MCP both call. Returns `{deleted, trash_id}`;
+    `trash_id` is None when there was nothing to clear."""
+    conn = labels_store.connect()
+    try:
+        alias_group = (
+            aliases_store.all_names_for(conn, character, partner) if partner else None
+        )
+        rows = labels_store.label_rows(
+            conn, character, partner, partner_aliases=alias_group
+        )
+        return _clear_rows(conn, character, partner, rows)
+    finally:
+        conn.close()
 
 
-def clear_all(conn: sqlite3.Connection) -> dict[str, Any]:
+def clear_all() -> dict[str, Any]:
     """Clear every Label there is: one Trash entry per character, so
     each character's Trash view shows and restores its own."""
-    by_character: dict[str, list[dict]] = {}
-    for row in labels_store.label_rows(conn):
-        by_character.setdefault(row["character"], []).append(row)
-    deleted = 0
-    trash_ids: list[str] = []
-    for character, rows in by_character.items():
-        res = _clear_rows(conn, character, None, rows)
-        deleted += res["deleted"]
-        trash_ids.append(res["trash_id"])
-    return {"deleted": deleted, "trash_ids": trash_ids}
+    conn = labels_store.connect()
+    try:
+        by_character: dict[str, list[dict]] = {}
+        for row in labels_store.label_rows(conn):
+            by_character.setdefault(row["character"], []).append(row)
+        deleted = 0
+        trash_ids: list[str] = []
+        for character, rows in by_character.items():
+            res = _clear_rows(conn, character, None, rows)
+            deleted += res["deleted"]
+            trash_ids.append(res["trash_id"])
+        return {"deleted": deleted, "trash_ids": trash_ids}
+    finally:
+        conn.close()
 
 
 def list_labels(character: str) -> list[dict[str, Any]]:
@@ -165,7 +156,7 @@ def list_labels(character: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in _dir().glob("*.json"):
         entry = _read(path.stem)
-        if entry and _same_name(entry.get("character"), character):
+        if entry and character_archive.same_character_name(entry.get("character"), character):
             rows.append(_summary(entry))
     rows.sort(key=lambda r: (r["deleted_at"] or 0, r["id"]), reverse=True)
     return rows

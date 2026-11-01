@@ -41,7 +41,7 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from archive_errors import CharacterNotFound, InvalidCharacterId
+from archive_errors import InvalidCharacterId
 from refusals import InvalidFileName, LogNameRefused, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
@@ -1565,9 +1565,7 @@ async def flist_character_trash_list(character_id: str) -> dict:
         "character_id": character_id,
         "items": image_trash_service.list_trash(character_id),
         "backups": backup_trash_service.list_backups(character_id),
-        "labels": label_trash_service.list_labels(
-            label_trash_service.workbench_character_name(character_id) or ""
-        ),
+        "labels": label_trash_service.list_labels(_trash_owner(character_id)),
     }
 
 
@@ -1603,12 +1601,14 @@ async def flist_character_trash_backups_restore(
 
 
 def _trash_owner(character_id: str) -> str:
-    """The name cleared Labels are kept under for this character."""
+    """The name this character's cleared Labels are kept under, for the
+    Trash routes. The id is checked first, as every Trash route checks
+    it: an unsafe one is refused with `invalid_character_id` (400), one
+    the archive does not hold with `character_not_found` (404). A
+    character without a name owns no cleared Labels: its listing shows
+    none and a restore or purge finds none (`""` matches no entry)."""
     character_archive.character_dir(character_id)
-    name = label_trash_service.workbench_character_name(character_id)
-    if not name:
-        raise CharacterNotFound(character_id)
-    return name
+    return character_archive.character_name(character_id) or ""
 
 
 @app.post("/flist/character/{character_id}/trash/labels/restore")
@@ -1645,11 +1645,11 @@ async def flist_character_trash_labels_purge(
 @app.delete("/flist/character/{character_id}/trash")
 async def flist_character_trash_empty(character_id: str) -> dict:
     """Empty the whole Trash: images, Backups and cleared Labels."""
-    name = label_trash_service.workbench_character_name(character_id)
+    owner = _trash_owner(character_id)
     return {
         "purged": image_trash_service.empty_trash(character_id)
         + backup_trash_service.empty(character_id)
-        + (label_trash_service.empty(name) if name else 0)
+        + label_trash_service.empty(owner)
     }
 
 
@@ -2279,33 +2279,17 @@ class RagIngestRequest(BaseModel):
     force_rewipe: bool = False
 
 
-def _resolve_ingest_scope(character: str | None, partner: str | None) -> dict:
-    """The ingest scope with its names spelled the way the Logs spell
-    them, through the same conversation resolver the MCP tools use: any
-    case, and a partner's alias reaches its conversation. An unknown
-    name is refused instead of indexing nothing."""
-    from workbench_mcp._context import (
-        ToolError,
-        resolve_conversation,
-        resolve_log_character,
-    )
-
-    try:
-        if character and partner:
-            conv = resolve_conversation(character, partner)
-            return {"character": conv.character, "partner": conv.partner}
-        if character:
-            return {"character": resolve_log_character(character)}
-    except ToolError as exc:
-        raise LogNameRefused(exc.message, code=exc.code) from exc
-    return {}
-
-
 @app.post("/rag/ingest", status_code=202)
 def rag_ingest_start(body: RagIngestRequest) -> dict:
-    if body.partner and not body.character:
-        raise HTTPException(status_code=400, detail="partner requires character")
-    scope = _resolve_ingest_scope(body.character, body.partner)
+    # The same resolver MCP ingest_logs uses: any case, and a partner's
+    # alias reaches its conversation. An unknown name is refused instead
+    # of indexing nothing.
+    from workbench_mcp._context import ToolError, resolve_ingest_scope
+
+    try:
+        scope = resolve_ingest_scope(body.character, body.partner)
+    except ToolError as exc:
+        raise LogNameRefused(exc.message, code=exc.code) from exc
     job = rag_jobs.start(
         scope, include_ooc=body.include_ooc, force_rewipe=body.force_rewipe
     )
@@ -2455,19 +2439,7 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     every message in that conversation. The cleared Labels go to the
     character's Trash first (`trash_id`), where Restore puts them back.
     """
-    conn = labels_store.connect()
-    try:
-        alias_group = aliases_store.all_names_for(
-            conn, body.character, body.partner
-        )
-        cleared = label_trash_service.clear(
-            conn,
-            body.character,
-            body.partner,
-            partner_aliases=alias_group,
-        )
-    finally:
-        conn.close()
+    cleared = label_trash_service.clear(body.character, body.partner)
     return {
         "character": body.character,
         "partner": body.partner,
@@ -2485,12 +2457,8 @@ def labels_clear_all() -> dict:
     cleared Labels go to its Trash first, as one entry per character;
     the renderer still confirms before invoking this.
     """
-    conn = labels_store.connect()
-    try:
-        cleared = label_trash_service.clear_all(conn)
-        return {"labels_deleted": cleared["deleted"], "trash_ids": cleared["trash_ids"]}
-    finally:
-        conn.close()
+    cleared = label_trash_service.clear_all()
+    return {"labels_deleted": cleared["deleted"], "trash_ids": cleared["trash_ids"]}
 
 
 @app.get("/labels/rollup")

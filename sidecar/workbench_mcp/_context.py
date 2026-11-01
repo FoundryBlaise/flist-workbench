@@ -313,6 +313,26 @@ def resolve_log_character(character: str, *, required: bool = True) -> str:
     )
 
 
+def resolve_ingest_scope(character: str | None, partner: str | None) -> dict[str, str]:
+    """An Index ingest scope with its names spelled the way the Logs
+    spell them: one conversation, every conversation of one character,
+    or `{}` for everything. The window's ingest and MCP `ingest_logs`
+    both resolve here, so the Labels and alias links, keyed on the
+    on-disk spelling, are found whichever case or alias was typed."""
+    if partner and not character:
+        raise ToolError(
+            "validation_failed",
+            "partner needs a character too — logs are scoped per (your "
+            "character, their character) pair",
+        )
+    if character and partner:
+        conv = resolve_conversation(character, partner)
+        return {"character": conv.character, "partner": conv.partner}
+    if character:
+        return {"character": resolve_log_character(character)}
+    return {}
+
+
 def resolve_conversation(character: str, partner: str) -> ResolvedConversation:
     """Resolve both halves of a conversation address to their on-disk
     spelling. Alias members resolve to their group's primary, so callers
