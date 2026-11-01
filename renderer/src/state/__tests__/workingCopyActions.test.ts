@@ -1159,4 +1159,40 @@ describe('opening a character never applies a stale read', () => {
     ])
     expect(fake.requestsTo(AMBER_SAVE)).toEqual([])
   })
+
+  it('a switch to a character not yet in memory shows a read-only loading state until the read lands', async () => {
+    // Birch has never been opened, so there is no Workbench in memory to
+    // show. The editor must neither keep showing Amber's text under
+    // Birch's name nor accept keystrokes the read would then overwrite.
+    useStore.setState({
+      flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT,
+      editorTitle: 'Amber — Workbench'
+    })
+    fake.hold(BIRCH_READ)
+
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+
+    let s = useStore.getState()
+    expect(s.editorContent).toBe('')
+    expect(s.editorReadOnly).toBe(true)
+    expect(s.editorTitle).toBe('Birch — Workbench (loading)')
+
+    fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    s = useStore.getState()
+    expect(s.editorReadOnly).toBe(false)
+    expect(s.editorContent).toBe(BIRCH_TEXT)
+    expect(s.editorTitle).toBe('Birch — Workbench')
+
+    useStore.getState().setEditorContent(`${BIRCH_TEXT} Twice.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(BIRCH_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${BIRCH_TEXT} Twice.`
+    ])
+    expect(fake.requestsTo(AMBER_SAVE)).toEqual([])
+  })
 })

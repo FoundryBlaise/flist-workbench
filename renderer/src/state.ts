@@ -859,6 +859,26 @@ function _workbenchInEditor(s: State, characterId: string): Partial<State> {
   }
 }
 
+/** The editor patch for a switch to a character whose Workbench is not
+ *  in memory yet: empty and read-only under the new character's name
+ *  until the read lands. Showing the character being left would save
+ *  its text into this one on the next keystroke, and a keystroke with
+ *  no slot to land in would be dropped when the read replaced it. */
+function _workbenchLoadingInEditor(s: State, characterId: string): Partial<State> {
+  const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
+  const name = entry?.name ?? 'Workbench'
+  return {
+    editorContent: '',
+    editorTitle: `${name} — Workbench (loading)`,
+    editorInlines: {},
+    editorReadOnly: true,
+    editorDirty: false,
+    saveStatus: 'idle',
+    saveError: null,
+    draftStatus: 'idle'
+  }
+}
+
 /** Reads a character's legacy working copy (`working.json`) into a
  *  slot without storing it. No copy on disk yet (payload null or a
  *  404) seeds the slot from Live, unmaterialised: the first edit then
@@ -4875,10 +4895,13 @@ export const useStore = create<State>((set, get) => ({
         // From here on a keystroke is saved into this character's
         // Workbench, so the editor must stop showing the one being left.
         // A Workbench already in memory is shown straight away; the
-        // read below refreshes it unless the user types first.
-        if (!get().editorReadOnly && get().flistWorking[id]) {
-          set(_workbenchInEditor(get(), id))
-        }
+        // read below refreshes it unless the user types first. Without
+        // one the editor waits, read-only, for the read to land.
+        set(
+          get().flistWorking[id]
+            ? _workbenchInEditor(get(), id)
+            : _workbenchLoadingInEditor(get(), id)
+        )
         void get().flistLoadArchive(id)
       }
       // Always reload the working copy on a picker click, even when
