@@ -94,6 +94,7 @@ def build_zip(
     avatar_path: Path | None = None,
     backup_kind: str | None = None,
     backup_note: str | None = None,
+    images_missing: bool = False,
 ) -> bytes:
     """Pack `character.json` + the gallery images + the avatar into a
     ZIP, returning the bytes. Skips entries whose `<image_id>.<ext>`
@@ -109,6 +110,9 @@ def build_zip(
     *why* this backup was created. `None` skips the file entirely —
     useful for round-trip tests that compare ZIP bytes against a
     known fixture and don't want a clock-dependent timestamp in there.
+
+    `images_missing` marks a Backup taken without its image files
+    (packing them failed), so it is refused as an Upload source.
     """
     del character_id  # not yet used; signature reserved for later
 
@@ -181,6 +185,10 @@ def build_zip(
             }
             if backup_note:
                 meta["note"] = backup_note
+            if images_missing:
+                # character.json lists no image, though the profile had
+                # some: an Upload would read it as "remove them all".
+                meta["images_missing"] = True
             zf.writestr(
                 "backup-meta.json",
                 json.dumps(meta, indent=2, ensure_ascii=False),

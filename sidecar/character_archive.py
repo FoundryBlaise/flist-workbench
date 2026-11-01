@@ -1021,6 +1021,20 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     return out
 
 
+def zip_backup_meta(character_id: int | str, filename: str) -> dict[str, Any]:
+    """A Backup's `backup-meta.json`; empty for one without it (older
+    Backups), and for a file that is not a readable Backup."""
+    import zipfile
+
+    require_backup_filename(filename)
+    try:
+        with zipfile.ZipFile(backups_dir(character_id) / filename, "r") as zf:
+            meta = json.loads(zf.read("backup-meta.json").decode("utf-8"))
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
 def latest_zip_backup_content_hash(character_id: int | str) -> str | None:
     """Hash of the most recent ZIP backup's `character.json`, in the same
     canonical-JSON shape used by `_live_content_hash`. Used by

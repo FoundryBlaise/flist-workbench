@@ -34,9 +34,33 @@ from typing import Any
 import character_archive
 import paths
 import zip_serialise
+from refusals import BackupNotUploadable
 
 #: `backup-meta.json` kind of the Backup taken before an Upload.
 PRE_UPLOAD_BACKUP_KIND = "pre_upload"
+
+#: How the note of a Backup taken without its images begins. Backups an
+#: earlier version took that way carry only this note, no mark.
+IMAGES_NOT_PACKED_NOTE = "Full backup failed"
+
+
+def upload_refusal(character_id: str, filename: str) -> str | None:
+    """Why a Backup must not be an Upload source, or None when it can
+    be. One taken without its image files lists no image in
+    character.json, which an Upload reads as "remove every image"."""
+    meta = character_archive.zip_backup_meta(character_id, filename)
+    note = meta.get("note")
+    if meta.get("images_missing") or (
+        meta.get("kind") == PRE_UPLOAD_BACKUP_KIND
+        and isinstance(note, str)
+        and note.startswith(IMAGES_NOT_PACKED_NOTE)
+    ):
+        return (
+            "This Backup was taken without its image files, so uploading it "
+            "would remove every image from the profile. Load it into the "
+            "Workbench instead, and upload the Workbench."
+        )
+    return None
 
 
 _STATE_FILENAME = "restore-state.json"
@@ -327,6 +351,7 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
                 character_archive.character_dir(character_id) / "live.json"
             ),
             "image_count": len(live_images),
+            "upload_refused": None,
         })
 
     # `create=False`: listing what can be pushed must not bring a
@@ -345,6 +370,7 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
             "label": "Workbench (your edits)",
             "created_at": _iso_from_unix(bench.updated_at),
             "image_count": image_count,
+            "upload_refused": None,
         })
 
     for entry in character_archive.list_zip_backups(character_id):
@@ -379,6 +405,9 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
             "image_count": entry.get("image_count", 0),
             "backup_kind": backup_kind,
             "name": backup_name,
+            # Listed, so the extension can say why it cannot be picked;
+            # fetching it for an Upload is refused with the same reason.
+            "upload_refused": upload_refusal(character_id, filename),
         })
 
     return out
@@ -444,6 +473,9 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     candidate = character_archive.backups_dir(character_id) / snapshot_id
     if not candidate.is_file():
         return None
+    refused = upload_refusal(character_id, snapshot_id)
+    if refused:
+        raise BackupNotUploadable(refused)
     return _with_form_state_translated(candidate.read_bytes())
 
 
@@ -512,14 +544,18 @@ def write_pre_restore_snapshot(
     except Exception as exc:  # pylint: disable=broad-except
         # Without the image files if packing them fails: a partial
         # Backup beats none when the user is about to overwrite the
-        # profile. working.json still lists the gallery.
+        # profile. working.json still lists the gallery, so it restores
+        # into the Workbench; character.json lists no image, so it is
+        # marked and refused as an Upload source, where it would read as
+        # "remove every image".
         with tempfile.TemporaryDirectory() as no_images:
             zip_bytes = zip_serialise.build_zip(
                 character_id,
                 working,
                 images_dir=Path(no_images),
                 backup_kind=PRE_UPLOAD_BACKUP_KIND,
-                backup_note=f"Full backup failed ({exc}); form fields only.",
+                backup_note=f"{IMAGES_NOT_PACKED_NOTE} ({exc}); form fields only.",
+                images_missing=True,
             )
 
     target = character_archive.write_backup_zip(character_id, zip_bytes)

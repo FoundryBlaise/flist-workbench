@@ -336,3 +336,49 @@ def test_an_old_backup_taken_before_an_upload_is_an_upload_source_that_keeps_the
     assert [k["name"] for k in profile["customKinks"]] == ["Lantern lore"]
     assert backup.read("avatar.png") == AVATAR
     assert backup.read("images/17924625.png") == PNG
+
+
+# ---- a Backup whose images could not be packed -------------------------
+
+
+@pytest.fixture
+def images_fail_to_pack(paired, monkeypatch: pytest.MonkeyPatch):
+    """Packing the gallery fails once (a locked file, say); the Backup is
+    then taken without the image files."""
+    import restore as restore_svc
+
+    real = restore_svc.zip_serialise.build_zip
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("the image file is locked")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(restore_svc.zip_serialise, "build_zip", flaky)
+    return paired
+
+
+def test_a_backup_without_its_images_is_refused_as_an_upload_source(
+    images_fail_to_pack,
+) -> None:
+    client, extension = images_fail_to_pack
+    taken = _upload_starts(extension)
+
+    # Still a Backup, and still the way back into the Workbench: its
+    # working.json lists the gallery, whose files are in the pool.
+    assert [b["filename"] for b in client.get("/flist/character/42/zip-backups").json()["backups"]] == [taken]
+    res = client.post("/flist/character/42/workbench/load-backup", json={"filename": taken})
+    assert res.status_code == 200, res.text
+    assert [i["image_id"] for i in _workbench_payload(client)["images"]] == ["17924625"]
+
+    # Uploaded, its empty gallery would read as "remove every image".
+    sources = extension.get("/restore/snapshots", params={"character": NAME}).json()
+    [offered] = [s for s in sources if s["id"] == taken]
+    assert "image" in offered["upload_refused"]
+    assert all(s.get("upload_refused") is None for s in sources if s["id"] != taken)
+    fetched = extension.get(f"/restore/snapshot/{taken}", params={"character": NAME})
+    assert fetched.status_code == 409
+    assert fetched.json()["code"] == "backup_not_uploadable"
+    assert "image" in fetched.json()["message"]

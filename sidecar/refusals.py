@@ -63,3 +63,12 @@ class LogNameRefused(Refusal, LookupError):
         super().__init__(message)
         self.code = code
         self.status = self.STATUS_BY_CODE.get(code, 400)
+
+
+class BackupNotUploadable(Refusal):
+    """A Backup that must not be an Upload source: one taken without its
+    image files would read as "remove every image". It still restores
+    into the Workbench."""
+
+    status = 409
+    code = "backup_not_uploadable"
