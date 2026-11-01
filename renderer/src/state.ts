@@ -1764,10 +1764,16 @@ export const useStore = create<State>((set, get) => ({
       api
         .flistZipBackups(characterId)
         .then((r) => ({ ok: true as const, backups: r.backups }))
-        .catch((err: unknown) => ({
-          ok: false as const,
-          error: err instanceof Error ? err.message : String(err)
-        }))
+        .catch((err: unknown) =>
+          // A character never pulled is not in the archive yet (404
+          // `character_not_found`): it simply has no backups.
+          (err as { code?: unknown } | null)?.code === 'character_not_found'
+            ? { ok: true as const, backups: [] }
+            : {
+                ok: false as const,
+                error: err instanceof Error ? err.message : String(err)
+              }
+        )
     ])
     set((s) => ({
       flistArchive: {

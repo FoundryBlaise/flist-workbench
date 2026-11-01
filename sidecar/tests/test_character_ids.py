@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from sidecar_client import app_client, character_routes, disk_tree, sweep
+from sidecar_client import app_client, character_routes, disk_tree, error_code, sweep
 
 #: Each is percent-encoded the way it would arrive in a URL path.
 HOSTILE_IDS = [
@@ -94,7 +94,8 @@ def test_the_archive_refuses_a_hostile_id_directly(archive) -> None:  # noqa: AN
             archive.character_dir(cid)
 
 
-def test_a_real_id_still_works(client: TestClient) -> None:
+def test_a_real_id_still_works(client: TestClient, archive) -> None:  # noqa: ANN001
+    archive.create_character_dir("123")
     assert client.get("/flist/character/123/zip-backups").status_code == 200
 
 
@@ -109,7 +110,7 @@ def test_the_backup_payload_route_checks_the_file_name(
     client: TestClient, archive  # noqa: ANN001
 ) -> None:
     """A zip next to backups/, not in it, must not be readable."""
-    char = archive.character_dir("123")
+    char = archive.create_character_dir("123")
     (char / "outside.zip").write_bytes(_zip_with_working({"secret": True}))
     res = client.get("/flist/character/123/zip-backups/..%5Coutside.zip/payload")
     assert res.status_code == 400
@@ -123,7 +124,7 @@ def _pair(client: TestClient) -> dict[str, str]:
 
 
 def _archive_character(archive, name: str = "Someone") -> Path:  # noqa: ANN001
-    char = archive.character_dir("123")
+    char = archive.create_character_dir("123")
     (char / "live.json").write_text(json.dumps({"id": 123, "name": name}), encoding="utf-8")
     return char
 
@@ -181,7 +182,8 @@ def test_a_log_character_outside_the_fchat_folder_is_refused(
     client: TestClient, fchat: Path, char: str
 ) -> None:
     res = client.get(f"/logs/partners?char={char}")
-    assert res.status_code == 404
+    assert res.status_code == 400
+    assert error_code(res) == "invalid_file_name"
     assert "victim" not in res.text
 
 
@@ -194,7 +196,8 @@ def test_a_log_outside_the_fchat_folder_is_not_read(
 ) -> None:
     for path in ("/logs/messages", "/logs/search"):
         res = client.get(f"{path}?char={char}&partner={partner}&q=private")
-        assert res.status_code == 404, f"{path}: {res.text}"
+        assert res.status_code == 400, f"{path}: {res.text}"
+        assert error_code(res) == "invalid_file_name"
         assert "private" not in res.text
 
 

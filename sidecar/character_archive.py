@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import paths
-from archive_errors import InvalidCharacterId
+from archive_errors import CharacterNotFound, InvalidCharacterId
+from refusals import InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -249,8 +250,8 @@ def register_character(character_id: int | str, name: str) -> str:
     elif old_slug:
         entry = {"name": name, "folder": old_slug}
     else:
-        # Brand-new character with no legacy folder. Lazy-create on
-        # first character_dir() call.
+        # Brand-new character with no legacy folder. `write_live`
+        # creates it right after registering.
         entry = {"name": name, "folder": new_slug}
     reg[cid] = entry
     save_registry(reg)
@@ -342,21 +343,42 @@ def _maybe_migrate_id_folders() -> None:
             pass
 
 
-def character_dir(character_id: int | str) -> Path:
+def _folder_for(character_id: int | str) -> tuple[Path, bool]:
+    """Where a character's folder is, and whether the registry names it."""
     cid = str(character_id)
     reg = load_registry()
     entry = reg.get(cid)
     if entry and entry.get("folder"):
-        p = root() / entry["folder"]
-    elif _is_folder_safe(cid) and not cid.startswith("_"):
+        return root() / entry["folder"], True
+    if _is_folder_safe(cid) and not cid.startswith("_"):
         # Unregistered id (no pull yet, or registry corruption) — fall
         # back to the legacy id-named folder so existing data keeps
         # working. Only a name that cannot leave `characters/` or hit
         # its reserved `_` entries gets here: on Windows a backslash
         # is a separator, so `..\..\x` would otherwise escape.
-        p = root() / cid
-    else:
-        raise InvalidCharacterId(cid)
+        return root() / cid, False
+    raise InvalidCharacterId(cid)
+
+
+def character_dir(character_id: int | str) -> Path:
+    """Find a character's folder. Never creates it.
+
+    A character the archive holds is one the registry names (a Pull
+    registered it) or one with a legacy id-named folder on disk. Any
+    other safe id raises `CharacterNotFound`; an unsafe one raises
+    `InvalidCharacterId`. Only `create_character_dir` makes a folder.
+    """
+    p, registered = _folder_for(character_id)
+    if not registered and not p.is_dir():
+        raise CharacterNotFound(str(character_id))
+    return p
+
+
+def create_character_dir(character_id: int | str) -> Path:
+    """Create a character's folder: the moment a character comes into
+    the archive. Only a Pull calls this (`write_live`); every other
+    path finds the character with `character_dir`."""
+    p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -467,8 +489,7 @@ def rename_zip_backup(
     untouched (renames don't need to rewrite the archive bytes); the
     name only lives in the sidecar `_names.json` map. Empty string
     clears the entry so the UI falls back to the timestamp default."""
-    if not _ZIP_BACKUP_FILE_RE.match(filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(filename)
     target = backups_dir(character_id) / filename
     if not target.exists():
         raise FileNotFoundError(str(target))
@@ -620,7 +641,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     name = payload.get("name")
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
-    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
     _publish("live-changed", character_id=str(character_id))
 
 
@@ -756,6 +777,14 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
 _ZIP_BACKUP_FILE_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-(\d+))?\.zip$"
 )
+
+
+def require_backup_filename(filename: str) -> None:
+    """Refuse a name that is not a Backup file name, before any path is
+    built from it, so a crafted `../` name reads or deletes nothing.
+    A caller hears 400 `invalid_file_name`."""
+    if not isinstance(filename, str) or not _ZIP_BACKUP_FILE_RE.match(filename):
+        raise InvalidFileName("invalid backup filename")
 
 
 def _zip_backup_filename(now: float | None = None) -> str:
@@ -1652,8 +1681,7 @@ def load_zip_backup_into_workbench(
     import zipfile
 
     _migrate_working_v2(character_id)
-    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(backup_filename)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(str(target))
@@ -1697,8 +1725,7 @@ def create_set_from_zip_backup(
     import zipfile
 
     _migrate_working_v2(character_id)
-    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(backup_filename)
     clean = validate_set_name(name)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
