@@ -67,7 +67,7 @@ def _files(directory: Path) -> dict[str, Path]:
     for entry in directory.iterdir():
         if not entry.is_file():
             continue
-        m = _FILE_RE.match(entry.name)
+        m = _FILE_RE.fullmatch(entry.name)
         if m and m.group(2).lower() != "json":
             out[m.group(1)] = entry
     return out

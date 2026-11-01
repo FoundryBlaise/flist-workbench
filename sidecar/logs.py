@@ -138,12 +138,13 @@ def _is_one_name(name: str) -> bool:
     Character and partner names arrive from requests. F-Chat names its
     folders and files after characters and channels, so the rule only
     refuses what no such name contains: a separator (`\\` is one on
-    Windows), a drive colon, NUL, and the `.`/`..` entries.
+    Windows), a drive colon, a control character (NUL, or the trailing
+    newline a `$`-anchored check lets through), and the `.`/`..` entries.
     """
     return (
         isinstance(name, str)
         and name not in ("", ".", "..")
-        and not any(c in name for c in "/\\:\x00")
+        and not any(c in "/\\:" or ord(c) < 0x20 or c == "\x7f" for c in name)
     )
 
 

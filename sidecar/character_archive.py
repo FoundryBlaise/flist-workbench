@@ -123,7 +123,7 @@ _WIN_RESERVED = {
 def _is_folder_safe(name: str) -> bool:
     if not isinstance(name, str) or not name:
         return False
-    if not _FOLDER_SAFE_RE.match(name):
+    if not _FOLDER_SAFE_RE.fullmatch(name):
         return False
     # Leading/trailing space or dot trips Windows.
     if name[0] in " ." or name[-1] in " .":
@@ -149,6 +149,19 @@ def _slug_for(name: str) -> str:
     import hashlib
     digest = hashlib.sha1(n.lower().encode("utf-8")).hexdigest()[:16]
     return f"c_{digest}"
+
+
+def require_character_id(character_id: int | str) -> None:
+    """Refuse an id that cannot name a character folder, without
+    touching the folder. The same rule `character_dir` applies: an id
+    the registry names, or a safe name that is not one of the archive's
+    own `_` entries. Raises `InvalidCharacterId`."""
+    cid = str(character_id)
+    entry = load_registry().get(cid)
+    if entry and entry.get("folder"):
+        return
+    if not (_is_folder_safe(cid) and not cid.startswith("_")):
+        raise InvalidCharacterId(cid)
 
 
 def _registry_path() -> Path:
@@ -731,7 +744,7 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
     for entry in p.iterdir():
         if not entry.is_file():
             continue
-        m = _SNAPSHOT_FILE_RE.match(entry.name)
+        m = _SNAPSHOT_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         try:
@@ -762,7 +775,7 @@ def require_backup_filename(filename: str) -> None:
     """Refuse a name that is not a Backup file name, before any path is
     built from it, so a crafted `../` name reads or deletes nothing.
     A caller hears 400 `invalid_file_name`."""
-    if not isinstance(filename, str) or not _ZIP_BACKUP_FILE_RE.match(filename):
+    if not isinstance(filename, str) or not _ZIP_BACKUP_FILE_RE.fullmatch(filename):
         raise InvalidFileName("invalid backup filename")
 
 
@@ -850,7 +863,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
         # isn't a backup of its own.
         if entry.name == _BACKUP_NAMES_FILENAME:
             continue
-        m = _ZIP_BACKUP_FILE_RE.match(entry.name)
+        m = _ZIP_BACKUP_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         try:
@@ -1074,7 +1087,7 @@ def save_zip_backup(
 
 
 def read_snapshot(character_id: int | str, filename: str) -> dict[str, Any] | None:
-    if not _SNAPSHOT_FILE_RE.match(filename):
+    if not _SNAPSHOT_FILE_RE.fullmatch(filename):
         # Reject anything that doesn't match the on-disk filename shape
         # so a caller can't path-traverse out of snapshots/.
         return None
@@ -1290,7 +1303,7 @@ class SetMeta:
 
 
 def _is_valid_set_id(set_id: str) -> bool:
-    return isinstance(set_id, str) and bool(_SET_ID_RE.match(set_id))
+    return isinstance(set_id, str) and bool(_SET_ID_RE.fullmatch(set_id))
 
 
 def _new_set_id() -> str:
@@ -1933,7 +1946,7 @@ def _images_present_ids(character_id: int | str) -> set[str]:
     for p in d.iterdir():
         if not p.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(p.name)
+        m = _IMAGE_FILE_RE.fullmatch(p.name)
         if not m:
             continue
         iid = m.group(1)
@@ -2015,9 +2028,9 @@ def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
     """`images/<image_id>.<ext>`. Both parts are validated against a
     conservative whitelist so a hostile filename in a payload can't
     escape the character's archive directory."""
-    if not _SAFE_NAME_RE.match(image_id):
+    if not _SAFE_NAME_RE.fullmatch(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
-    if not _SAFE_NAME_RE.match(ext):
+    if not _SAFE_NAME_RE.fullmatch(ext):
         raise ValueError(f"unsafe extension: {ext!r}")
     return images_dir(character_id) / f"{image_id}.{ext}"
 
@@ -2025,7 +2038,7 @@ def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
 def inline_path(character_id: int | str, basename: str) -> Path:
     """`inlines/<basename>`. The basename is the CDN URL's last segment
     (typically `<sha1>.<ext>`); validated against the safe-name regex."""
-    if not _SAFE_NAME_RE.match(basename):
+    if not _SAFE_NAME_RE.fullmatch(basename):
         raise ValueError(f"unsafe inline name: {basename!r}")
     return inlines_dir(character_id) / basename
 
@@ -2089,7 +2102,7 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     for entry in d.iterdir():
         if not entry.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(entry.name)
+        m = _IMAGE_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         try:
@@ -2118,7 +2131,7 @@ def write_character_image(
     — re-calling with the same id+ext overwrites in place (pull loop
     relies on this for re-pulls). `image_id` and `ext` are validated
     against the safe-name regex; `ext` is normalised (jpeg → jpg)."""
-    if not _SAFE_NAME_RE.match(image_id):
+    if not _SAFE_NAME_RE.fullmatch(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
     ext_n = normalise_image_ext(ext)
     target = images_dir(character_id) / f"{image_id}.{ext_n}"
@@ -2142,7 +2155,7 @@ def find_image_with_sha(
     for entry in d.iterdir():
         if not entry.is_file():
             continue
-        if not _IMAGE_FILE_RE.match(entry.name):
+        if not _IMAGE_FILE_RE.fullmatch(entry.name):
             continue
         try:
             if entry.stat().st_size == 0:
@@ -2194,7 +2207,7 @@ def collapse_local_duplicates(character_id: int | str) -> int:
     for entry in sorted(d.iterdir()):
         if not entry.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(entry.name)
+        m = _IMAGE_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         image_id = m.group(1)
@@ -2296,7 +2309,7 @@ def add_uploaded_image(
     if existing is not None:
         try:
             stat = existing.stat()
-            m = _IMAGE_FILE_RE.match(existing.name)
+            m = _IMAGE_FILE_RE.fullmatch(existing.name)
             return {
                 "image_id": m.group(1) if m else existing.stem,
                 "extension": (m.group(2).lower() if m else ext),
@@ -2376,7 +2389,7 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
         for entry in sorted(images.iterdir()):
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if not m:
                 continue
             image_id = m.group(1)
@@ -2536,7 +2549,7 @@ def adopt_flist_image_ids(
         for entry in images.iterdir():
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if m:
                 on_disk[m.group(1)] = m.group(2).lower()
 
@@ -2546,7 +2559,7 @@ def adopt_flist_image_ids(
         if not old_id.startswith("local-") or not new_id:
             unknown.append(old_id)
             continue
-        if not _SAFE_NAME_RE.match(new_id) or not _SAFE_NAME_RE.match(old_id):
+        if not _SAFE_NAME_RE.fullmatch(new_id) or not _SAFE_NAME_RE.fullmatch(old_id):
             unknown.append(old_id)
             continue
         ext = on_disk.get(old_id)
@@ -2602,7 +2615,7 @@ def remove_character_image(character_id: int | str, image_id: str) -> bool:
     """Delete `images/<image_id>.<ext>` for good. No user-facing path
     calls this: the window and `remove_image` go through the trash
     (`services/image_trash.py`). Returns True iff a file was removed."""
-    if not _SAFE_NAME_RE.match(image_id):
+    if not _SAFE_NAME_RE.fullmatch(image_id):
         return False
     d = images_dir(character_id)
     if not d.exists():
@@ -2610,7 +2623,7 @@ def remove_character_image(character_id: int | str, image_id: str) -> bool:
     for entry in d.iterdir():
         if not entry.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(entry.name)
+        m = _IMAGE_FILE_RE.fullmatch(entry.name)
         if not m or m.group(1) != image_id:
             continue
         try:
@@ -2680,20 +2693,20 @@ def migrate_v4_pool_to_images(character_id: int | str) -> int:
         # images/<id>.<ext>, the bytes are already preserved under that
         # id — skip rather than mint a redundant `local-<sha8>` copy.
         already_preserved = any(
-            _SAFE_NAME_RE.match(iid) and (images_d / f"{iid}.{ext}").exists()
+            _SAFE_NAME_RE.fullmatch(iid) and (images_d / f"{iid}.{ext}").exists()
             for iid in image_ids
         )
         if already_preserved:
             continue
         chosen: str | None = None
         for iid in image_ids:
-            if not _SAFE_NAME_RE.match(iid):
+            if not _SAFE_NAME_RE.fullmatch(iid):
                 continue
             chosen = iid
             break
         if chosen is None:
             chosen = f"local-{sha[:8]}"
-        if not _SAFE_NAME_RE.match(chosen):
+        if not _SAFE_NAME_RE.fullmatch(chosen):
             continue
         target = images_d / f"{chosen}.{ext}"
         if not target.exists():
@@ -2717,7 +2730,7 @@ def migrate_v4_pool_to_images(character_id: int | str) -> int:
             ext = normalise_image_ext(ext_part)
         except ValueError:
             continue
-        if len(stem) < 8 or not _SAFE_NAME_RE.match(stem):
+        if len(stem) < 8 or not _SAFE_NAME_RE.fullmatch(stem):
             continue
         chosen = f"local-{stem[:8]}"
         target = images_d / f"{chosen}.{ext}"
@@ -2754,7 +2767,7 @@ def avatar_path_for(name: str) -> Path:
     import hashlib
 
     slug = name.strip().lower().replace(" ", "_")
-    if _SAFE_NAME_RE.match(slug):
+    if _SAFE_NAME_RE.fullmatch(slug):
         return avatars_root() / f"{slug}.png"
     # Hash the original (case-preserving + space-preserving) name so
     # two characters that only differ in casing land on distinct paths

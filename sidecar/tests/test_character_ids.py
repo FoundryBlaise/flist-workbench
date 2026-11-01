@@ -19,7 +19,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from sidecar_client import app_client, character_routes, disk_tree, error_code, sweep
+from sidecar_client import (
+    api_routes,
+    app_client,
+    character_routes,
+    disk_tree,
+    error_code,
+    sweep,
+)
 
 #: Each is percent-encoded the way it would arrive in a URL path.
 HOSTILE_IDS = [
@@ -68,7 +75,7 @@ def test_no_character_route_accepts_a_hostile_id_or_touches_the_disk(
         accepted += sweep(
             client,
             routes,
-            lambda res: 400 <= res.status_code < 500,
+            lambda res: res.status_code == 400 and error_code(res) == "invalid_character_id",
             json={},
             character_id=cid,
         )
@@ -204,3 +211,110 @@ def test_a_real_log_still_reads(client: TestClient, fchat: Path) -> None:
     res = client.get("/logs/messages?char=me&partner=partner")
     assert res.status_code == 200
     assert "hello" in res.text
+
+
+# ---- Whole names -------------------------------------------------------------
+#
+# A pattern anchored with `$` also matches just before one trailing
+# newline, so `123\n` used to pass the id check: on Windows the folder
+# could not be made (500), elsewhere an oddly named one appeared. Every
+# name check matches the whole name instead.
+
+#: A good id or name with a newline after it, percent-encoded for a URL path.
+NEWLINE_IDS = ["123%0A", "Someone%0A"]
+BACKUP_NAME = "2026-10-01T120000Z.zip"
+
+
+def _pulled_character(archive) -> None:  # noqa: ANN001
+    """Character `123`, as a Pull leaves it, with one Backup."""
+    archive.write_live("123", {"id": 123, "name": "Someone"})
+    char = archive.character_dir("123")
+    archive.backups_dir("123")
+    (char / "backups" / BACKUP_NAME).write_bytes(_zip_with_working({"a": 1}))
+
+
+def _refused_as(code: str):  # noqa: ANN202
+    return lambda res: res.status_code == 400 and error_code(res) == code
+
+
+def test_a_character_id_ending_in_a_newline_is_refused_on_every_route(
+    client: TestClient, tmp_path: Path
+) -> None:
+    before = disk_tree(tmp_path)
+    failures = []
+    for cid in NEWLINE_IDS:
+        failures += sweep(
+            client,
+            character_routes(client.app),
+            _refused_as("invalid_character_id"),
+            json={},
+            character_id=cid,
+        )
+    assert failures == []
+    assert disk_tree(tmp_path) == before
+
+
+def test_the_archive_refuses_an_id_ending_in_a_newline_directly(archive) -> None:  # noqa: ANN001
+    with pytest.raises(archive.InvalidCharacterId):
+        archive.character_dir("123\n")
+
+
+def test_a_file_name_ending_in_a_newline_is_refused_on_every_route(
+    client: TestClient, archive, tmp_path: Path  # noqa: ANN001
+) -> None:
+    """Backup, image, trash and inline names alike: 400 `invalid_file_name`."""
+    _pulled_character(archive)
+    routes = [
+        r for r in api_routes(client.app, param="filename") if "/snapshots/" not in r.path
+    ]
+    assert any("/zip-backups/" in r.path for r in routes)
+    before = disk_tree(tmp_path)
+    failures = []
+    for name in (f"{BACKUP_NAME}%0A", "1.png%0A"):
+        failures += sweep(
+            client,
+            routes,
+            _refused_as("invalid_file_name"),
+            json={"name": "From backup"},
+            character_id="123",
+            filename=name,
+        )
+    assert failures == []
+    assert disk_tree(tmp_path) == before
+
+
+def test_a_backup_name_ending_in_a_newline_is_refused_by_the_archive(archive) -> None:  # noqa: ANN001
+    with pytest.raises(archive.InvalidFileName):
+        archive.require_backup_filename(f"{BACKUP_NAME}\n")
+
+
+def test_a_snapshot_name_ending_in_a_newline_is_not_found(
+    client: TestClient, archive  # noqa: ANN001
+) -> None:
+    _pulled_character(archive)
+    res = client.get("/flist/character/123/snapshots/1.json%0A")
+    assert res.status_code == 404
+
+
+def test_an_image_id_ending_in_a_newline_is_refused(client: TestClient, archive) -> None:  # noqa: ANN001
+    _pulled_character(archive)
+    res = client.get("/flist/character/123/image/1%0A")
+    assert res.status_code == 400, res.text
+
+
+@pytest.mark.parametrize(
+    ("char", "partner"), [("me%0A", "partner"), ("me", "partner%0A")]
+)
+def test_a_log_name_ending_in_a_newline_is_refused(
+    client: TestClient, fchat: Path, char: str, partner: str
+) -> None:
+    for path in ("/logs/messages", "/logs/search"):
+        res = client.get(f"{path}?char={char}&partner={partner}&q=hello")
+        assert res.status_code == 400, f"{path}: {res.text}"
+        assert error_code(res) == "invalid_file_name"
+
+
+def test_valid_names_still_work(client: TestClient, archive) -> None:  # noqa: ANN001
+    _pulled_character(archive)
+    assert client.get(f"/flist/character/123/zip-backups/{BACKUP_NAME}/payload").status_code == 200
+    assert client.get("/flist/character/123/zip-backups").status_code == 200
