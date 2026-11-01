@@ -159,7 +159,6 @@ export function AppLayout() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Silent ticket recovery fires from inside the api request helper
@@ -611,7 +610,6 @@ function EditorWorkspace() {
     }
     setHydrated(true)
     // re-run on character switch (tabKey change) only
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabKey])
 
   useEffect(() => {

@@ -39,6 +39,9 @@ function loadKeytar(): Keytar | null {
     return null
   }
   try {
+    // A lazy require on purpose (see above); an import would load the
+    // native binding at module evaluation.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     _keytar = require('keytar') as Keytar
     return _keytar
   } catch (err) {

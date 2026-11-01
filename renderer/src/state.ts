@@ -24,14 +24,8 @@ import {
   detectLiveDrift,
   emptyWorkingSlot,
   extractInlines as flistExtractInlines,
-  isInfotagPath,
-  normaliseNewlines as flistNormaliseNewlines,
-  pathLookup,
   seedWorkingFromLive,
-  selectWorkingSlot as flistSelectWorkingSlot,
-  WORKING_SCHEMA_VERSION,
   type FlistImportOutcome,
-  type FlistSaveStatus,
   type FlistWorkingSlot,
   type SetMeta,
   type WorkingPayload
@@ -4323,6 +4317,8 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({
       flistMapping: { ...s.flistMapping, status: 'loading', error: null }
     }))
+    // Assigned once, after the closure that reads it is created.
+    // eslint-disable-next-line prefer-const
     let resolvedPromise!: Promise<void>
     const work = (async () => {
       try {

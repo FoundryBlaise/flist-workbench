@@ -53,7 +53,6 @@ export function IngestDialog({
       if (pollTimer.current !== null) window.clearInterval(pollTimer.current)
       if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const startJob = ({ force_rewipe }: { force_rewipe: boolean }) => {
