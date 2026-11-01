@@ -183,3 +183,25 @@ def test_the_extension_offers_the_backup_as_an_upload_source(paired) -> None:
     assert profile["kinks"] == {"580": "fave", "581": "no"}
     assert profile["infotags"] == {"2": "Human"}
     assert [k["name"] for k in profile["customKinks"]] == ["Lantern lore"]
+
+
+def test_the_avatar_and_gallery_are_inside_the_backup_taken_before_an_upload(paired) -> None:
+    client, extension = paired
+    taken = _upload_starts(extension)
+
+    res = client.get(f"/flist/character/42/zip-backups/{taken}/download")
+
+    assert res.status_code == 200
+    backup = _zip(res.content)
+    assert backup.read("avatar.png") == AVATAR
+    assert backup.read("images/17924625.png") == PNG
+
+
+def test_the_avatar_is_inside_a_backup_made_in_the_window(paired) -> None:
+    client, _extension = paired
+    made = client.post("/flist/character/42/zip-backup").json()
+
+    res = client.get(f"/flist/character/42/zip-backups/{made['filename']}/download")
+
+    assert res.status_code == 200
+    assert _zip(res.content).read("avatar.png") == AVATAR
