@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 from mcp_helpers import initialize_params, json_rpc
 
@@ -29,7 +30,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     importlib.reload(settings_store)
     importlib.reload(server)
-    with TestClient(server.app, base_url="http://127.0.0.1:27384") as c:
+    with app_client(server.app) as c:
         yield c
 
 

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 
 @pytest.fixture
@@ -12,7 +13,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 def test_get_settings_returns_defaults(client: TestClient) -> None:
@@ -59,7 +60,7 @@ def test_env_var_locks_setting(
     import server as server_module
 
     importlib.reload(server_module)
-    client = TestClient(server_module.app)
+    client = app_client(server_module.app)
 
     # Set a different value via settings; effective should stay pinned
     # to the env var because that wins in data_dir().

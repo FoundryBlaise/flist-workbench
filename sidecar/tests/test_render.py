@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 from services import render as render_service
 
@@ -29,7 +30,7 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake"

@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 
 @pytest.fixture
@@ -11,7 +12,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 def test_rag_test_embedding_handles_embed_error(

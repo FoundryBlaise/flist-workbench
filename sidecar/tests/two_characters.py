@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 from fchat_logs import action, chat, utc, write_log
 
@@ -172,7 +173,7 @@ def two_characters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TwoCharac
     # a reload rebinds globals other test modules captured at import.
     from server import app
 
-    scenario = TwoCharacters(fchat_dir=fchat_dir, client=TestClient(app))
+    scenario = TwoCharacters(fchat_dir=fchat_dir, client=app_client(app))
     scenario.link_alias()
     return scenario
 

@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -68,7 +68,7 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     hs = restore_svc.begin_handshake()
     restore_svc.accept_handshake(hs["handshake_id"])
-    client = TestClient(server.app)
+    client = app_client(server.app)
     client.headers.update({"X-Workbench-Auth": hs["token"]})
     yield client, character_archive, server
     # The pairing lives in module state; leave the next test unpaired.

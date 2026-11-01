@@ -7,6 +7,7 @@ from typing import Iterable
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 import aliases as aliases_store
 import labels as labels_store
@@ -29,7 +30,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(rag_rerank, "_build_encoder", lambda *_a, **_k: _FakeEncoder())
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 # ---- CRUD --------------------------------------------------------------

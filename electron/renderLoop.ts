@@ -1,4 +1,4 @@
-import { sidecarUrl } from './sidecar'
+import { sidecarFetch } from './sidecar'
 import { renderProfileToPng, type RenderTheme } from './renderProfile'
 import type { InlinesManifest } from '../renderer/src/lib/bbcode'
 
@@ -32,7 +32,7 @@ let stopped = false
 const RETRY_MS = 3000
 
 async function pollOnce(): Promise<void> {
-  const res = await fetch(`${sidecarUrl}/render/requests?timeout=25`, {
+  const res = await sidecarFetch('/render/requests?timeout=25', {
     method: 'GET'
   })
   if (!res.ok) throw new Error(`poll failed: HTTP ${res.status}`)
@@ -47,7 +47,7 @@ async function pollOnce(): Promise<void> {
       theme: req.theme,
       width: req.width
     })
-    await fetch(`${sidecarUrl}/render/result/${encodeURIComponent(req.id)}`, {
+    await sidecarFetch(`/render/result/${encodeURIComponent(req.id)}`, {
       method: 'POST',
       headers: {
         'Content-Type': shot.mime,
@@ -58,8 +58,8 @@ async function pollOnce(): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('[render] failed:', message)
-    await fetch(
-      `${sidecarUrl}/render/failed/${encodeURIComponent(req.id)}`,
+    await sidecarFetch(
+      `/render/failed/${encodeURIComponent(req.id)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

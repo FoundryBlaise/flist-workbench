@@ -2,7 +2,14 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
-import { startSidecar, stopSidecar, sidecarUrl } from './sidecar'
+import {
+  sidecarFetch,
+  sidecarPort,
+  sidecarUrl,
+  startSidecar,
+  stopSidecar,
+  withLaunchSecret
+} from './sidecar'
 import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
@@ -653,6 +660,24 @@ async function createWindow(): Promise<void> {
     mainWindow = null
   })
 
+  // Every request this window makes to the sidecar gets the launch
+  // secret: fetch, but also <img> and the event stream, which cannot
+  // set headers themselves. Keyed to this window's id, captured now,
+  // so the close-time flush still qualifies while the window unloads
+  // and no other web contents ever does.
+  const windowContentsId = mainWindow.webContents.id
+  mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: [`${sidecarUrl}/*`, `http://localhost:${sidecarPort}/*`] },
+    (details, callback) => {
+      callback({
+        requestHeaders:
+          details.webContentsId === windowContentsId
+            ? withLaunchSecret(details.requestHeaders)
+            : details.requestHeaders
+      })
+    }
+  )
+
   // Renderer-side breakage is easy to miss when the only symptom is a
   // blank window. Surface render-process-gone + unresponsive events so
   // dev mode actually tells us when React crashed or the preload bridge
@@ -758,7 +783,7 @@ app.on('before-quit', async (event) => {
   quitInvalidationDone = true
   try {
     await Promise.race([
-      fetch(`${sidecarUrl}/flist/session`, { method: 'DELETE' }),
+      sidecarFetch('/flist/session', { method: 'DELETE' }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error('timeout')), 1500)
       )

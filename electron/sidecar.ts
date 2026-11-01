@@ -1,4 +1,5 @@
 import { spawn, spawnSync, ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { app } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -66,6 +67,48 @@ process.env['SIDECAR_PORT'] = String(PORT)
 // Exposed so the main-process menu handlers can call the sidecar
 // directly (e.g. resolving the failure-log path before shell.openPath).
 export const sidecarUrl = `http://127.0.0.1:${PORT}`
+export const sidecarPort = PORT
+
+// The sidecar answers only callers that carry this (ADR 0002): any web
+// page in the user's browser can reach the port, none can know a value
+// made fresh at every start. Main adds it to the window's requests
+// (see main.ts) and to its own; the renderer never holds it.
+export const SECRET_HEADER = 'X-Workbench-Secret'
+const launchSecret = randomBytes(32).toString('hex')
+
+export function withLaunchSecret(
+  headers: Record<string, string | string[]>
+): Record<string, string | string[]> {
+  return { ...headers, [SECRET_HEADER]: launchSecret }
+}
+
+/** fetch() against the sidecar from the main process. */
+export function sidecarFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers)
+  headers.set(SECRET_HEADER, launchSecret)
+  return fetch(`${sidecarUrl}${path}`, { ...init, headers })
+}
+
+function sidecarEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    SIDECAR_PORT: String(PORT),
+    // So /health reports the app's version rather than a
+    // hardcoded placeholder. The frozen sidecar has no
+    // package.json to read it from.
+    FLIST_WORKBENCH_VERSION: app.getVersion(),
+    FLIST_WORKBENCH_LAUNCH_SECRET: launchSecret
+  }
+  // In dev the window loads from Vite rather than file://, so the
+  // sidecar has to grant that origin too. Never set when packaged.
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+  if (!app.isPackaged && devUrl) {
+    env['FLIST_WORKBENCH_RENDERER_ORIGIN'] = new URL(devUrl).origin
+  } else {
+    delete env['FLIST_WORKBENCH_RENDERER_ORIGIN']
+  }
+  return env
+}
 
 export async function startSidecar(): Promise<void> {
   installExitHandlers()
@@ -83,14 +126,7 @@ export async function startSidecar(): Promise<void> {
     // to stderr, and we want that traceback in a place a user can
     // grep without attaching a debugger.
     proc = spawn(exe, [], {
-      env: {
-        ...process.env,
-        SIDECAR_PORT: String(PORT),
-        // So /health reports the app's version rather than a
-        // hardcoded placeholder. The frozen sidecar has no
-        // package.json to read it from.
-        FLIST_WORKBENCH_VERSION: app.getVersion()
-      },
+      env: sidecarEnv(),
       stdio: ['ignore', 'pipe', 'pipe']
     })
     proc.stdout?.on('data', (chunk: Buffer) =>
@@ -125,14 +161,7 @@ export async function startSidecar(): Promise<void> {
       ['-m', 'uvicorn', 'server:app', '--port', String(PORT)],
       {
         cwd: sidecarDir,
-        env: {
-        ...process.env,
-        SIDECAR_PORT: String(PORT),
-        // So /health reports the app's version rather than a
-        // hardcoded placeholder. The frozen sidecar has no
-        // package.json to read it from.
-        FLIST_WORKBENCH_VERSION: app.getVersion()
-      },
+        env: sidecarEnv(),
         stdio: ['ignore', 'inherit', 'inherit'],
         detached: process.platform !== 'win32'
       }
