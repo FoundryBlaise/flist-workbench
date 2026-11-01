@@ -96,4 +96,8 @@ it('a trashed Backup is listed under its name and restored to the Backup list', 
     expect(useStore.getState().flistArchive[CID]?.zipBackups).toEqual([BACKUP_ROW])
   )
   expect(screen.queryAllByTestId('flist-trash-backup-item')).toHaveLength(0)
+  // The list is empty now; what happened is still said.
+  expect(
+    await screen.findByText('Before the big rewrite is back in the Backup list.')
+  ).toBeTruthy()
 })

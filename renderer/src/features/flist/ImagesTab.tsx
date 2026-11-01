@@ -10,7 +10,8 @@ import {
   type Selection
 } from './imageSelection'
 import { FLIST_MAX_UPLOAD_BYTES, formatBytes, usageNotes } from './imageUsage'
-import { ImagesConfirmModal, ImagesTrash, trashEntryCount } from './ImagesTrash'
+import { ImagesConfirmModal } from './ImagesConfirmModal'
+import { ImagesTrash, trashEntryCount } from './ImagesTrash'
 
 type GalleryEntry = { image_id: string; description: string; sort_order: number }
 

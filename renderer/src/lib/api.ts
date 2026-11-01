@@ -788,6 +788,22 @@ export const api = {
     request<{ labels_deleted: number; trash_ids: string[] }>('/labels/clear-all', {
       method: 'POST'
     }),
+  /** Every cleared-Labels entry in the Trash, whichever character it
+   *  was cleared for: Settings → Labels lists them. */
+  labelsTrashList: () => get<{ labels: FlistTrashedLabels[] }>('/labels/trash'),
+  /** Put cleared Labels back. A message labelled again since keeps its
+   *  newer Label; its hash is listed under `skipped`. */
+  labelsTrashRestore: (ids: string[]) =>
+    request<{
+      restored: { id: string; restored: number; skipped: string[] }[]
+      not_found: string[]
+    }>('/labels/trash/restore', { method: 'POST', body: JSON.stringify({ ids }) }),
+  /** Delete cleared Labels for good. */
+  labelsTrashPurge: (ids: string[]) =>
+    request<{ purged: string[]; not_found: string[] }>('/labels/trash/purge', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
+    }),
   /** Give every still-Unlabeled message in one conversation the same
    *  verdict. Adds labels only: an existing verdict is kept, and the
    *  rules keep deciding what they decide. `hashes` is exactly what
