@@ -1,6 +1,6 @@
 import type { FlistImageReferences } from '../../lib/api'
 
-/** What to tell the user before images go to the trash: which of them
+/** What to tell the user before images go to the Trash: which of them
  *  are still used somewhere else. Trashing those is allowed — the files
  *  can come back — but nobody should find out afterwards. */
 export function usageNotes(

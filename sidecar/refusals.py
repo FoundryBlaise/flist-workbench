@@ -40,3 +40,35 @@ class InvalidFileName(Refusal, ValueError):
     a Backup, an image, a Log. Raised before any path is built from it."""
 
     code = "invalid_file_name"
+
+
+class LogNameRefused(Refusal, LookupError):
+    """A log character or partner name the Logs do not know (or cannot
+    be read for). Carries the conversation resolver's own code, such as
+    `log_character_not_found` or `partner_not_found`, so the window and
+    MCP refuse an unknown name the same way."""
+
+    code = "log_name_refused"
+
+    #: The resolver's codes and the status each answers with. A code not
+    #: listed here is a request the resolver could not act on: 400.
+    STATUS_BY_CODE = {
+        "log_character_not_found": 404,
+        "partner_not_found": 404,
+        "validation_failed": 400,
+        "log_dir_unavailable": 400,
+    }
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = self.STATUS_BY_CODE.get(code, 400)
+
+
+class BackupNotUploadable(Refusal):
+    """A Backup that must not be an Upload source: one taken without its
+    image files would read as "remove every image". It still restores
+    into the Workbench."""
+
+    status = 409
+    code = "backup_not_uploadable"

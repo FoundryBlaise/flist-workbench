@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { api, type FlistTrashItem } from '../../lib/api'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import {
+  api,
+  type FlistTrashItem,
+  type FlistTrashedBackup,
+  type FlistTrashedLabels
+} from '../../lib/api'
 import { useStore } from '../../state'
 import {
   EMPTY_SELECTION,
@@ -10,102 +15,23 @@ import {
   type Selection
 } from './imageSelection'
 import { formatBytes } from './imageUsage'
+import { ImagesConfirmModal } from './ImagesConfirmModal'
+import { TrashedBackups, TrashedLabels } from './TrashedEntries'
 
-const MAX_PREVIEW_THUMBS = 12
-
-/** Confirmation for moving images to the trash, or deleting them for
- *  good. Shows what is about to go and, for the trash, where those
- *  pictures are still used. */
-export function ImagesConfirmModal({
-  title,
-  body,
-  notes = [],
-  thumbs,
-  confirmLabel,
-  danger = false,
-  onCancel,
-  onConfirm
-}: {
-  title: string
-  body: string
-  notes?: string[]
-  thumbs: { key: string; url: string }[]
-  confirmLabel: string
-  danger?: boolean
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  const dialogRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    dialogRef.current?.querySelector<HTMLButtonElement>('button[data-autofocus]')?.focus()
-    return () => window.removeEventListener('keydown', handler)
-  }, [onCancel])
-
-  const shown = thumbs.slice(0, MAX_PREVIEW_THUMBS)
-  const more = thumbs.length - shown.length
-  return (
-    <div
-      className="flist-images-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="flist-images-confirm-title"
-    >
-      <div
-        ref={dialogRef}
-        className="flist-images-modal flist-images-modal--batch"
-        data-testid="flist-images-delete-confirm"
-      >
-        <h3 id="flist-images-confirm-title" className="flist-images-modal__title">
-          {title}
-        </h3>
-        <div className="flist-images-modal__thumbs">
-          {shown.map((t) => (
-            <img key={t.key} src={t.url} alt="" loading="lazy" />
-          ))}
-          {more > 0 && <span className="flist-images-modal__more">+{more} more</span>}
-        </div>
-        <p className="flist-images-modal__text">{body}</p>
-        {notes.length > 0 && (
-          <ul className="flist-images-modal__notes" data-testid="flist-images-usage-notes">
-            {notes.map((n) => (
-              <li key={n}>{n}</li>
-            ))}
-          </ul>
-        )}
-        <div className="flist-images-modal__actions">
-          <button
-            type="button"
-            className="flist-images-modal__btn"
-            onClick={onCancel}
-            data-autofocus
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={`flist-images-modal__btn${danger ? ' flist-images-modal__btn--danger' : ''}`}
-            onClick={onConfirm}
-            data-testid="flist-images-delete-confirm-btn"
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
+/** How many entries a Trash listing holds: images, Backups and
+ *  cleared Labels. */
+export function trashEntryCount(res: {
+  items: unknown[]
+  backups?: unknown[]
+  labels?: unknown[]
+}): number {
+  return res.items.length + (res.backups?.length ?? 0) + (res.labels?.length ?? 0)
 }
 
-/** The character's image trash, shown in place of the pool. Restore
- *  puts files back into the pool, never onto the profile. Deleting for
- *  good lives here and nowhere else — MCP has no tool for it. */
+/** The character's Trash, shown in place of the pool: its images, and
+ *  below them its Backups and cleared Labels. Restore puts files back
+ *  into the pool, never onto the profile. Deleting for good lives here
+ *  and nowhere else — MCP has no tool for it. */
 export function ImagesTrash({
   characterId,
   readOnly,
@@ -115,13 +41,15 @@ export function ImagesTrash({
 }: {
   characterId: string
   readOnly: boolean
-  /** Changes whenever the pool listing reloads, so the trash does too. */
+  /** Changes whenever the pool listing reloads, so the Trash does too. */
   refreshKey: unknown
   onBack: () => void
   onCountChange: (n: number) => void
 }) {
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)
   const [items, setItems] = useState<FlistTrashItem[] | null>(null)
+  const [backups, setBackups] = useState<FlistTrashedBackup[]>([])
+  const [labels, setLabels] = useState<FlistTrashedLabels[]>([])
   const [message, setMessage] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   const [confirm, setConfirm] = useState<null | 'purge' | 'empty'>(null)
@@ -130,9 +58,11 @@ export function ImagesTrash({
     try {
       const res = await api.flistTrashList(characterId)
       setItems(res.items)
-      onCountChange(res.items.length)
+      setBackups(res.backups ?? [])
+      setLabels(res.labels ?? [])
+      onCountChange(trashEntryCount(res))
     } catch (e) {
-      setMessage(`Couldn’t read the trash: ${e instanceof Error ? e.message : String(e)}`)
+      setMessage(`Couldn’t read the Trash: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -140,7 +70,7 @@ export function ImagesTrash({
     void load()
   }, [characterId, refreshKey])
 
-  const visible = useMemo(() => (items ?? []).map((i) => i.image_id), [items])
+  const visible = useMemo(() => (items ?? []).map((i) => i.trash_id), [items])
   useEffect(() => {
     setSel((s) => pruneSelection(s, visible))
   }, [visible])
@@ -181,14 +111,16 @@ export function ImagesTrash({
       return `Trash emptied — ${res.purged} deleted for good.`
     })
 
+  const entries = visible.length + backups.length + labels.length
+
   const click = (id: string, e: MouseEvent) => {
     setSel((s) => (e.shiftKey ? selectRange(s, id, visible) : toggleSelected(s, id)))
   }
 
   const thumbsFor = (ids: string[]) =>
     (items ?? [])
-      .filter((i) => ids.includes(i.image_id))
-      .map((i) => ({ key: i.image_id, url: api.flistTrashFileUrl(characterId, i.filename) }))
+      .filter((i) => ids.includes(i.trash_id))
+      .map((i) => ({ key: i.trash_id, url: api.flistTrashFileUrl(characterId, i.filename) }))
 
   return (
     <div className="flist-images-trash" data-testid="flist-images-trash">
@@ -196,7 +128,7 @@ export function ImagesTrash({
         <button type="button" className="flist-images-toolbar__btn" onClick={onBack}>
           ← Pool
         </button>
-        {!readOnly && visible.length > 0 && (
+        {!readOnly && entries > 0 && (
           <>
             <button
               type="button"
@@ -212,7 +144,7 @@ export function ImagesTrash({
               onClick={() => setConfirm('empty')}
               data-testid="flist-images-trash-empty"
             >
-              Empty trash
+              Empty Trash
             </button>
           </>
         )}
@@ -245,10 +177,10 @@ export function ImagesTrash({
       )}
       <ul className="flist-images-pool-list">
         {(items ?? []).map((item) => {
-          const selected = sel.ids.includes(item.image_id)
+          const selected = sel.ids.includes(item.trash_id)
           return (
             <li
-              key={item.image_id}
+              key={item.trash_id}
               className={`flist-images-pool-item${selected ? ' flist-images-pool-item--selected' : ''}`}
               data-testid="flist-images-trash-item"
             >
@@ -257,7 +189,7 @@ export function ImagesTrash({
                   type="checkbox"
                   className="flist-images-select"
                   checked={selected}
-                  onClick={(e) => click(item.image_id, e)}
+                  onClick={(e) => click(item.trash_id, e)}
                   onChange={() => {}}
                   aria-label={`Select ${item.image_id}`}
                 />
@@ -280,10 +212,23 @@ export function ImagesTrash({
             </li>
           )
         })}
-        {items !== null && items.length === 0 && (
-          <li className="flist-images-pool-empty">The trash is empty.</li>
+        {items !== null && entries === 0 && (
+          <li className="flist-images-pool-empty">The Trash is empty.</li>
         )}
       </ul>
+      <TrashedBackups
+        characterId={characterId}
+        items={backups}
+        readOnly={readOnly}
+        onChanged={load}
+      />
+      <TrashedLabels
+        items={labels}
+        readOnly={readOnly}
+        restore={(ids) => api.flistTrashLabelsRestore(characterId, ids)}
+        purge={(ids) => api.flistTrashLabelsPurge(characterId, ids)}
+        onChanged={load}
+      />
       {confirm === 'purge' && (
         <ImagesConfirmModal
           title={`Delete ${sel.ids.length} image${sel.ids.length === 1 ? '' : 's'} for good?`}
@@ -300,10 +245,10 @@ export function ImagesTrash({
       )}
       {confirm === 'empty' && (
         <ImagesConfirmModal
-          title="Empty the trash?"
-          body={`All ${visible.length} file${visible.length === 1 ? '' : 's'} in this character’s trash are removed from disk. This can’t be undone.`}
+          title="Empty the Trash?"
+          body={`Everything in this character’s Trash (${entries} entr${entries === 1 ? 'y' : 'ies'}) is deleted for good. This can’t be undone.`}
           thumbs={thumbsFor(visible)}
-          confirmLabel="Empty trash"
+          confirmLabel="Empty Trash"
           danger
           onCancel={() => setConfirm(null)}
           onConfirm={() => {

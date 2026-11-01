@@ -35,7 +35,7 @@ Two markers, both naming a rule and a reason:
         The rule is not checked for this test. Only for tests whose very
         subject is something the rule forbids, such as emptying the Trash.
 
-    @pytest.mark.known_violation("nothing_vanishes", spec=2, reason="deleting a Backup is final")
+    @pytest.mark.known_violation("nothing_vanishes", spec=3, reason="pruning deletes a Backup for good")
         The product breaks the rule today and the named spec fixes it.
         Strict: once the violation stops, the test fails until the
         marker is removed, so the list stays true.

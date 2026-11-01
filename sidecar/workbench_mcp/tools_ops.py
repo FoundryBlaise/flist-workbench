@@ -26,7 +26,13 @@ import character_archive
 import rag_jobs
 from mcp.server.fastmcp import Context
 
-from ._context import ToolError, audit, resolve_character, resolve_set
+from ._context import (
+    ToolError,
+    audit,
+    resolve_character,
+    resolve_ingest_scope,
+    resolve_set,
+)
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 from .tools_session import NO_PUSH_NOTE
 
@@ -224,32 +230,42 @@ async def ingest_logs(
     those skipped comes back as `skipped_unlabeled`, and a high number
     means the classification flow should run first. OOC is excluded
     unless `include_ooc=true`; it is usually noise in a search over
-    roleplay.
+    roleplay. Pass include_ooc=true on every ingest to keep OOC chunks;
+    one without it deletes them.
 
     Channel logs are excluded unless `include_channels=true`, matching
     list_partners. They are group chat rather than this character's
     roleplay, and they are large enough to bury everything else.
 
+    Re-running it is how new messages and Label changes reach search:
+    each conversation day is recomputed from the Logs and the current
+    Labels, only days whose messages or Labels changed are embedded
+    again (`chunks_already_present` counts the rest), and chunks for
+    messages that are no longer labelled for the Index are deleted
+    (`chunks_removed`).
+
+    `rebuild=true` first deletes only the scope's chunks (all of them
+    when unscoped; a character's channel chunks only with
+    include_channels).
+
     Embedding runs in-process by default, so nothing needs to be
     installed. `wait=false` returns a job id to poll with get_job
     instead of blocking.
     """
-    if partner and not character:
-        raise ToolError(
-            "validation_failed",
-            "partner needs a character too — logs are scoped per (your "
-            "character, their character) pair",
-        )
-    scope: dict[str, Any] = {}
-    if character:
-        scope["character"] = character
-    if partner:
-        scope["partner"] = partner
+    # Resolve to the on-disk spelling like every other conversation
+    # tool: the Labels and alias links are keyed on it, so a different
+    # case or an alias would otherwise index nothing and report done.
+    scope: dict[str, Any] = resolve_ingest_scope(character, partner)
     if include_channels:
         scope["include_channels"] = True
 
     job = rag_jobs.start(scope, include_ooc=include_ooc, force_rewipe=rebuild)
-    audit("ingest_logs", character=character, partner=partner, job=job.id)
+    audit(
+        "ingest_logs",
+        character=scope.get("character"),
+        partner=scope.get("partner"),
+        job=job.id,
+    )
     if not wait:
         return {
             "job_id": job.id,
@@ -292,6 +308,7 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         "state": snapshot.get("state"),
         "chunks_indexed": snapshot.get("upserted"),
         "chunks_already_present": snapshot.get("skipped_existing"),
+        "chunks_removed": snapshot.get("removed"),
         "skipped_unlabeled": snapshot.get("skipped_unlabeled"),
         "failed": snapshot.get("failed"),
         "error": snapshot.get("error") or snapshot.get("last_error"),
@@ -548,19 +565,55 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
     """Write bytes to a user-chosen path, creating parent directories.
 
     A directory path gets a generated filename rather than an error —
-    "put it in Downloads" is a reasonable thing for a user to say.
+    "put it in Downloads" is a reasonable thing for a user to say. If
+    that name is taken, a numbered one beside it is used instead.
+
+    An existing file is never overwritten: the file is created
+    exclusively, so a model can't clobber something the user keeps
+    there, even if it appears between a check and the write. A file
+    path that is taken gets an `exists` refusal.
     """
     target = Path(str(path)).expanduser()
     if target.is_dir():
-        target = target / f"workbench-{int(time.time())}{suffix}"
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    except OSError as exc:
-        raise ToolError(
-            "write_failed", f"Couldn't write {target}: {exc}"
-        ) from exc
-    return target
+        stem = f"workbench-{int(time.time())}"
+        candidates = [target / f"{stem}{suffix}"] + [
+            target / f"{stem}-{n}{suffix}" for n in range(2, _MAX_NAME_TRIES + 1)
+        ]
+    else:
+        candidates = [target]
+
+    for candidate in candidates:
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            handle = candidate.open("xb")
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise ToolError(
+                "write_failed", f"Couldn't write {candidate}: {exc}"
+            ) from exc
+        try:
+            with handle:
+                handle.write(data)
+        except OSError as exc:
+            # Only ever our own half-written file: it was created above.
+            candidate.unlink(missing_ok=True)
+            raise ToolError(
+                "write_failed", f"Couldn't write {candidate}: {exc}"
+            ) from exc
+        return candidate
+
+    raise ToolError(
+        "exists",
+        f"{candidates[0]} already exists and an export never overwrites "
+        "a file. Ask the user for another name, or give a folder to get "
+        "a fresh file name.",
+    )
+
+
+#: How many numbered names an export into a folder tries before giving
+#: up with an `exists` refusal.
+_MAX_NAME_TRIES = 100
 
 
 @tool(tags=TAG_CORE, title="Extension pairing status", read_only=True)

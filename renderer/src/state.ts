@@ -339,6 +339,16 @@ type State = {
     characterId: string
     snapshot: FlistWorkingSlot
     expiresAt: number
+    /** The etag the reset leaves on the Workbench: the one its write
+     *  goes over until that write lands, the one it returned after.
+     *  Undo writes over this etag and no other, so a change anything
+     *  else made since the reset is never silently reverted. */
+    etag: string | null
+    /** True until the reset's own write has landed. */
+    awaitingWrite: boolean
+    /** The Workbench changed since the reset; undo waits for the user
+     *  to choose between reverting that change and keeping it. */
+    conflict: boolean
   } | null
   /** 5-second undo banner shown after a custom-kink tombstone. Single
    *  banner across both surfaces (single + bulk tombstone). Tier 3 §Step 8. */
@@ -658,7 +668,12 @@ type State = {
    *  autosave's debounce and any save already on its way. */
   flistFlushAllWorking: () => Promise<void>
   flistResetWorkingToLive: (characterId: string) => Promise<void>
-  flistUndoResetWorking: () => Promise<void>
+  /** Puts back the Workbench the reset replaced. If the Workbench
+   *  changed since the reset, nothing is written and the undo is marked
+   *  `conflict` so the user can choose; `overwrite` is that choice. */
+  flistUndoResetWorking: (opts?: { overwrite?: boolean }) => Promise<void>
+  /** Drops the pending undo and keeps the Workbench as it is now. */
+  flistDismissResetUndo: () => void
   flistDismissDriftBanner: (characterId: string) => void
   // ---- mapping list ----
   flistLoadMapping: (opts?: { force?: boolean }) => Promise<void>
@@ -747,12 +762,11 @@ type State = {
     characterId: string,
     backupFilename: string
   ) => Promise<{ path: string; bytes: number } | null>
-  /** Right-click → Delete backup on a Backups row. Callers should
-   *  funnel through a confirm modal — there's no undo in the sidecar
-   *  (the bytes are gone). Refreshes the sidebar list on success.
-   *  If the deleted backup is currently being browsed, also closes
-   *  browse mode so the editor doesn't display data that no longer
-   *  exists on disk. */
+  /** Right-click → Delete backup on a Backups row. The sidecar moves
+   *  the ZIP to the character's Trash, where the Trash view can
+   *  restore it. Refreshes the sidebar list on success. If the deleted
+   *  backup is currently being browsed, also closes browse mode so the
+   *  editor doesn't display a Backup that has left the list. */
   flistDeleteZipBackup: (
     characterId: string,
     backupFilename: string
@@ -796,11 +810,133 @@ const RESET_UNDO_MS = 5_000
 // Per-character autosave debouncers (Tier 2 §1.5 — 500 ms quiet time).
 // Keyed by character id so per-character switches don't race.
 const _autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-// Per-character in-flight flush promise. Ensures overlapping calls to
-// flistFlushWorking serialise per character so a later flush can't
-// race a still-running PUT and "succeed" on a stale payload (QA P1-4).
+// Per-character tail of the flush chain: the last flistFlushWorking
+// call, which settles only after every flush queued before it has.
+// Overlapping calls run one after another, so a later flush can't race
+// a still-running PUT and "succeed" on a stale payload (QA P1-4), and
+// two queued flushes can't send PUTs over the same etag.
 const _flushInflight = new Map<string, Promise<void>>()
 const AUTOSAVE_DEBOUNCE_MS = 500
+
+// Per-character request token for flistOpenWorking: the number of the
+// newest open. Clicking quickly between characters leaves several
+// reads in flight, landing in any order; only the newest open of a
+// character may apply its read, so an older one can never put a stale
+// payload (or a stale etag) back over a newer one.
+const _openTokens = new Map<string, number>()
+
+function _beginOpen(characterId: string): number {
+  const token = (_openTokens.get(characterId) ?? 0) + 1
+  _openTokens.set(characterId, token)
+  return token
+}
+
+function _isNewestOpen(characterId: string, token: number): boolean {
+  return _openTokens.get(characterId) === token
+}
+
+/** The editor patch that shows a character's Workbench as the slot in
+ *  memory holds it, unsaved keystrokes included. */
+function _workbenchInEditor(s: State, characterId: string): Partial<State> {
+  const slot = s.flistWorking[characterId]
+  const live = s.flistArchive[characterId]?.live ?? null
+  const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
+  // "Workbench", not "My edits": the sidebar row, the window title
+  // and the read-only hints all name the same one thing now. Two
+  // names for it was half the reason testers could not say what they
+  // were editing.
+  const name = entry?.name ?? 'Workbench'
+  const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
+  return {
+    editorContent: slot ? descriptionOf(slot.payload) : '',
+    editorTitle: `${name} — Workbench${titleSuffix}`,
+    editorInlines: live ? flistExtractInlines(live) : {},
+    editorReadOnly: false,
+    editorDirty: !!slot?.unsavedDirty,
+    saveStatus: 'idle',
+    saveError: null,
+    draftStatus: 'idle'
+  }
+}
+
+/** The editor patch for a switch to a character whose Workbench is not
+ *  in memory yet: empty and read-only under the new character's name
+ *  until the read lands. Showing the character being left would save
+ *  its text into this one on the next keystroke, and a keystroke with
+ *  no slot to land in would be dropped when the read replaced it. */
+function _workbenchLoadingInEditor(s: State, characterId: string): Partial<State> {
+  const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
+  const name = entry?.name ?? 'Workbench'
+  return {
+    editorContent: '',
+    editorTitle: `${name} — Workbench (loading)`,
+    editorInlines: {},
+    editorReadOnly: true,
+    editorDirty: false,
+    saveStatus: 'idle',
+    saveError: null,
+    draftStatus: 'idle'
+  }
+}
+
+/** Reads a character's legacy working copy (`working.json`) into a
+ *  slot without storing it. No copy on disk yet (payload null or a
+ *  404) seeds the slot from Live, unmaterialised: the first edit then
+ *  writes it (Tier 2 §1.6 materialise-on-first-edit). Null when the
+ *  read failed for any other reason. */
+async function _readLegacyWorking(
+  getter: () => State,
+  characterId: string
+): Promise<FlistWorkingSlot | null> {
+  const seedFromLive = (): FlistWorkingSlot => {
+    const live = getter().flistArchive[characterId]?.live ?? null
+    return {
+      ...emptyWorkingSlot(),
+      payload: live ? seedWorkingFromLive(live) : { ...emptyWorkingSlot().payload },
+      materialised: false
+    }
+  }
+  let read: Awaited<ReturnType<typeof api.flistWorkingRead>>
+  try {
+    read = await api.flistWorkingRead(characterId)
+  } catch (err) {
+    // First-open: Live may itself be missing — the caller tolerates.
+    const isHttp404 = err instanceof Error && /HTTP 404/.test(err.message)
+    return isHttp404 ? seedFromLive() : null
+  }
+  const { payload, etag } = read
+  // payload: null is the sidecar's "no working copy yet" signal,
+  // handled identically to the 404.
+  if (payload === null) return seedFromLive()
+  const workingPayload = payload as WorkingPayload
+  const overlay = Array.isArray(workingPayload._overlay)
+    ? (workingPayload._overlay as string[])
+    : []
+  // A v3 file migrated to v4 has its sha-keyed `images` stripped
+  // (sidecar can't translate without re-querying F-list). Backfill
+  // the gallery from live.json so the user doesn't see an empty
+  // pane after upgrading.
+  const images = (workingPayload as { images?: unknown }).images
+  if (!Array.isArray(images) || images.length === 0) {
+    const live = getter().flistArchive[characterId]?.live ?? null
+    if (live) {
+      const seeded = seedWorkingFromLive(live)
+      if (Array.isArray(seeded.images) && seeded.images.length > 0) {
+        workingPayload.images = seeded.images
+      }
+    }
+  }
+  return {
+    payload: workingPayload,
+    overlay,
+    etag,
+    unsavedDirty: false,
+    saveStatus: 'idle',
+    saveError: null,
+    lastSavedAt: null,
+    materialised: true
+  }
+}
 
 // Working-sets v2: autosave debouncer + single-flight, keyed by **set id**
 // rather than character id. Multiple sets can be open simultaneously in
@@ -863,6 +999,177 @@ function _cancelSetFlush(setId: string): void {
 // so a second trigger while one is running is a no-op rather than
 // stacking two passes onto pull_lock.
 let _flistAccountSweepInFlight = false
+
+/** One save of a character's Workbench: the PUT itself, with no
+ *  queueing. Only flistFlushWorking calls this, as the last step of its
+ *  per-character chain, so two saves never leave for the same character
+ *  at once. */
+async function _flushWorkingNow(
+  characterId: string,
+  get: () => State,
+  set: (fn: (s: State) => Partial<State>) => void
+): Promise<void> {
+  const slot = get().flistWorking[characterId]
+  if (!slot || !slot.unsavedDirty) {
+    // Second cancel post-early-return — a scheduleFlush may have armed
+    // while this flush waited its turn; we'd otherwise leave a stranded
+    // timer (QA P3-3).
+    _cancelFlush(characterId)
+    return
+  }
+  // Every PUT routes through the active set's payload endpoint. If
+  // nothing is active yet but the user has typed, the Workbench has
+  // simply never been opened for this character — so open it now and
+  // save into it. Materialise-on-first-edit, the same doctrine the
+  // legacy working.json followed (Tier 2 §1.6): looking at a
+  // character creates nothing, the first edit does.
+  //
+  // This used to return early and drop the write. Nothing said so —
+  // saveStatus stayed 'idle' — and the edits died with the next
+  // character switch.
+  let activeSetId = get().flistActiveSetId[characterId]
+  if (!activeSetId) {
+    const bench = await get().flistOpenWorkbench(characterId)
+    activeSetId = bench?.id ?? get().flistActiveSetId[characterId] ?? null
+  }
+  if (!activeSetId) {
+    // No Live to seed a Workbench from — a character that was never
+    // pulled. Keep the edits in memory and say so, rather than
+    // pretending they were saved.
+    set((st) => {
+      const existing = st.flistWorking[characterId]
+      if (!existing) return {}
+      return {
+        flistWorking: {
+          ...st.flistWorking,
+          [characterId]: {
+            ...existing,
+            saveStatus: 'error',
+            saveError: 'No Workbench yet — pull this character first.'
+          }
+        }
+      }
+    })
+    _cancelFlush(characterId)
+    return
+  }
+  // Pin the exact payload we're shipping so the success branch can
+  // tell whether new edits arrived during the round-trip.
+  const sentPayload = slot.payload
+  set((s) => {
+    const existing = s.flistWorking[characterId]
+    if (!existing) return {}
+    return {
+      flistWorking: {
+        ...s.flistWorking,
+        [characterId]: { ...existing, saveStatus: 'saving', saveError: null }
+      }
+    }
+  })
+  try {
+    const { etag } = await api.flistSetPayloadPut(
+      characterId,
+      activeSetId,
+      sentPayload,
+      slot.materialised ? slot.etag : null
+    )
+    set((s) => {
+      const existing = s.flistWorking[characterId]
+      if (!existing) return {}
+      // If the user typed something newer while we were saving, the
+      // newer slot's `payload` won't match `sentPayload` — keep
+      // unsavedDirty=true so the next flush picks up the delta.
+      const isFresh = existing.payload === sentPayload
+      const nextSlot: FlistWorkingSlot = {
+        ...existing,
+        etag,
+        unsavedDirty: isFresh ? false : existing.unsavedDirty,
+        saveStatus: isFresh ? 'saved' : existing.saveStatus,
+        saveError: null,
+        lastSavedAt: Date.now(),
+        materialised: true
+      }
+      // Mirror into the per-set cache so any consumer reading
+      // flistSetWorking[setId] sees the freshest payload, and bump
+      // the set's updatedAt so the "last changed Xm ago" suffix refreshes.
+      const setsList = s.flistSets[characterId] ?? []
+      // The first save over the etag a pending reset-undo holds is the
+      // reset's own write; undo goes over the etag it returned. Later
+      // saves are changes made after the reset, which undo must not
+      // revert unasked.
+      const undo = s.flistResetUndo
+      const resetWrite =
+        undo &&
+        undo.characterId === characterId &&
+        undo.awaitingWrite &&
+        undo.etag === slot.etag
+      return {
+        ...(resetWrite ? { flistResetUndo: { ...undo, etag, awaitingWrite: false } } : {}),
+        flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
+        flistSetWorking: {
+          ...s.flistSetWorking,
+          [activeSetId]: nextSlot
+        },
+        flistSets: {
+          ...s.flistSets,
+          [characterId]: setsList.map((m) =>
+            m.id === activeSetId
+              ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
+              : m
+          )
+        }
+      }
+    })
+    // If a newer payload is waiting, schedule a follow-up flush so
+    // the user's most recent edits land without needing another
+    // keystroke.
+    const next = get().flistWorking[characterId]
+    if (next?.unsavedDirty) {
+      _scheduleFlush(characterId, () => {
+        void get().flistFlushWorking(characterId)
+      })
+    }
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
+    const conflict = err instanceof Error && err.message === 'etag_mismatch'
+    const errWith = err as Error & { currentEtag?: string | null }
+    set((s) => {
+      const existing = s.flistWorking[characterId]
+      if (!existing) return {}
+      const patch: Partial<State> = {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...existing,
+            saveStatus: 'error',
+            saveError: conflict
+              ? 'Someone else changed this set. Choose whose version to keep.'
+              : raw,
+            // The server etag is deliberately NOT adopted on a
+            // conflict. Adopting it would let the next keystroke's
+            // autosave succeed and silently overwrite the other
+            // writer; keeping the stale one makes every retry
+            // conflict until the user decides.
+            etag: existing.etag,
+            unsavedDirty: true
+          }
+        }
+      }
+      if (conflict) {
+        patch.flistExternalChange = {
+          ...s.flistExternalChange,
+          [characterId]: {
+            setId: activeSetId,
+            etag: errWith.currentEtag ?? null,
+            origin: 'unknown',
+            at: Date.now()
+          }
+        }
+      }
+      return patch
+    })
+  }
+}
 
 /** Pull every account character on the current roster.
  *  - `thresholdSec === null` → unconditional (manual Refresh all).
@@ -2191,12 +2498,13 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistOpenWorking(characterId) {
-    // Ensure Live is loaded into flistArchive BEFORE we ask
-    // flistLoadWorking to handle a 404 — its seed-from-Live branch
+    const token = _beginOpen(characterId)
+    // Ensure Live is loaded into flistArchive BEFORE the legacy read
+    // handles a 404 — its seed-from-Live branch
     // reads from flistArchive, so a race against the loader produces
     // an empty `character` block and the first edit ships a bare
     // payload (QA P1-3).
-    let archive = get().flistArchive[characterId]
+    const archive = get().flistArchive[characterId]
     if (!archive || archive.live === null) {
       const fetched = await api.flistLive(characterId).catch(() => null)
       if (fetched) {
@@ -2213,7 +2521,6 @@ export const useStore = create<State>((set, get) => ({
             }
           }
         }))
-        archive = get().flistArchive[characterId]
       }
     }
     // Load the persisted working copy. On 404 the slot is seeded from
@@ -2243,23 +2550,12 @@ export const useStore = create<State>((set, get) => ({
         }))
       }
     }
-    // Never reseed over unsaved edits. Autosave waits 500 ms for quiet
-    // time, and the picker calls this on every click — including a
-    // click on the character already open, which is how a user gets
-    // out of a read-only Live view. Reseeding then replaced the slot
-    // with a fresh copy of Live, and the armed flush, finding nothing
-    // dirty, dropped the write: what the user had just typed was gone
-    // with nothing said. The edits live in the slot; leave them there
-    // and let the pending flush do its job.
-    const pending = get().flistWorking[characterId]
-    if (pending?.unsavedDirty) {
-      set((s) => ({
-        flistWorkingLoadStatus: {
-          ...s.flistWorkingLoadStatus,
-          [characterId]: 'ready'
-        }
-      }))
-    } else if (activeSetId) {
+    // What the slot held when the read went out. Anything that replaces
+    // it meanwhile (a keystroke, a save landing with its new etag) is
+    // newer than what the read can bring back.
+    const before = get().flistWorking[characterId]
+    let read: FlistWorkingSlot | null
+    if (activeSetId) {
       // The set's own payload, fetched fresh — the same thing
       // flistActivateSet reads when the user clicks the row. This used
       // to seed from Live instead, on the theory that the slot was
@@ -2282,45 +2578,54 @@ export const useStore = create<State>((set, get) => ({
           ? seedWorkingFromLive(liveForSeed)
           : { ...emptyWorkingSlot().payload }
       }
-      const slot: FlistWorkingSlot = {
+      read = {
         ...emptyWorkingSlot(),
         payload,
         overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
         etag,
         materialised: etag !== null
       }
+    } else {
+      read = await _readLegacyWorking(get, characterId)
+    }
+    if (!_isNewestOpen(characterId, token)) return
+    // Never reseed over unsaved edits, and decide that only now, after
+    // the read, right before applying it. Autosave waits 500 ms for
+    // quiet time, and the picker calls this on every click — including
+    // a click on the character already open, which is how a user gets
+    // out of a read-only Live view. Reseeding then replaced the slot,
+    // and the armed flush, finding nothing dirty, dropped the write:
+    // what the user had just typed was gone with nothing said. Checked
+    // before the read, a slow read still overwrote whatever was typed
+    // while it was in flight. The edits live in the slot; leave them
+    // there and let the pending flush do its job.
+    const current = get().flistWorking[characterId]
+    const untouched = current === before && !current?.unsavedDirty
+    if (read && untouched) {
+      const slot = read
       set((s) => ({
         flistWorking: { ...s.flistWorking, [characterId]: slot },
-        flistSetWorking: { ...s.flistSetWorking, [activeSetId]: slot },
+        ...(activeSetId
+          ? { flistSetWorking: { ...s.flistSetWorking, [activeSetId]: slot } }
+          : {}),
         flistWorkingLoadStatus: {
           ...s.flistWorkingLoadStatus,
           [characterId]: 'ready'
         }
       }))
     } else {
-      await get().flistLoadWorking(characterId)
+      set((s) => ({
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: read || current ? 'ready' : 'error'
+        }
+      }))
     }
-    const slot = get().flistWorking[characterId]
-    const live = archive?.live ?? null
-    const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
-    const content = slot ? descriptionOf(slot.payload) : ''
-    const entry = get().flistRoster.find((r) => String(r.id ?? '') === characterId)
-    // "Workbench", not "My edits": the sidebar row, the window title
-    // and the read-only hints all name the same one thing now. Two
-    // names for it was half the reason testers could not say what they
-    // were editing.
-    const name = entry?.name ?? 'Workbench'
-    const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
-    set({
-      editorContent: content,
-      editorTitle: `${name} — Workbench${titleSuffix}`,
-      editorInlines: inlines,
-      editorReadOnly: false,
-      editorDirty: !!slot?.unsavedDirty,
-      saveStatus: 'idle',
-      saveError: null,
-      draftStatus: 'idle'
-    })
+    // The editor shows the active character. A read that lands after
+    // the user moved on to someone else leaves it alone; otherwise the
+    // next keystroke would save this character's text into theirs.
+    if (get().flistActiveCharacterId !== characterId) return
+    set(_workbenchInEditor(get(), characterId))
   },
 
   // ---- Tier 2 working-copy persistence ------------------------------
@@ -2329,94 +2634,14 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({
       flistWorkingLoadStatus: { ...s.flistWorkingLoadStatus, [characterId]: 'loading' }
     }))
-    try {
-      const { payload, etag } = await api.flistWorkingRead(characterId)
-      // payload: null is the sidecar's "no working copy yet" signal
-      // — handled identically to the legacy 404 path. Seeds the slot
-      // from Live for materialise-on-first-edit (Tier 2 §1.6).
-      if (payload === null) {
-        const live = get().flistArchive[characterId]?.live ?? null
-        const seeded = live
-          ? seedWorkingFromLive(live)
-          : { ...emptyWorkingSlot().payload }
-        const slot: FlistWorkingSlot = {
-          ...emptyWorkingSlot(),
-          payload: seeded,
-          materialised: false
-        }
-        set((s) => ({
-          flistWorking: { ...s.flistWorking, [characterId]: slot },
-          flistWorkingLoadStatus: {
-            ...s.flistWorkingLoadStatus,
-            [characterId]: 'ready'
-          }
-        }))
-        return
+    const slot = await _readLegacyWorking(get, characterId)
+    set((s) => ({
+      ...(slot ? { flistWorking: { ...s.flistWorking, [characterId]: slot } } : {}),
+      flistWorkingLoadStatus: {
+        ...s.flistWorkingLoadStatus,
+        [characterId]: slot ? 'ready' : 'error'
       }
-      const overlay = Array.isArray((payload as WorkingPayload)._overlay)
-        ? ((payload as WorkingPayload)._overlay as string[])
-        : []
-      // A v3 file migrated to v4 has its sha-keyed `images` stripped
-      // (sidecar can't translate without re-querying F-list). Backfill
-      // the gallery from live.json so the user doesn't see an empty
-      // pane after upgrading.
-      const workingPayload = payload as WorkingPayload
-      const images = (workingPayload as { images?: unknown }).images
-      if (!Array.isArray(images) || images.length === 0) {
-        const live = get().flistArchive[characterId]?.live ?? null
-        if (live) {
-          const seeded = seedWorkingFromLive(live)
-          if (Array.isArray(seeded.images) && seeded.images.length > 0) {
-            workingPayload.images = seeded.images
-          }
-        }
-      }
-      const slot: FlistWorkingSlot = {
-        payload: workingPayload,
-        overlay,
-        etag,
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
-      set((s) => ({
-        flistWorking: { ...s.flistWorking, [characterId]: slot },
-        flistWorkingLoadStatus: {
-          ...s.flistWorkingLoadStatus,
-          [characterId]: 'ready'
-        }
-      }))
-    } catch (err) {
-      const isHttp404 =
-        err instanceof Error && /HTTP 404/.test(err.message)
-      if (isHttp404) {
-        // First-open: seed from Live (materialise-on-first-edit). Live
-        // may itself be missing — caller (flistOpenWorking) tolerates.
-        const live = get().flistArchive[characterId]?.live ?? null
-        const seeded = live ? seedWorkingFromLive(live) : { ...emptyWorkingSlot().payload }
-        const slot: FlistWorkingSlot = {
-          ...emptyWorkingSlot(),
-          payload: seeded,
-          materialised: false
-        }
-        set((s) => ({
-          flistWorking: { ...s.flistWorking, [characterId]: slot },
-          flistWorkingLoadStatus: {
-            ...s.flistWorkingLoadStatus,
-            [characterId]: 'ready'
-          }
-        }))
-        return
-      }
-      set((s) => ({
-        flistWorkingLoadStatus: {
-          ...s.flistWorkingLoadStatus,
-          [characterId]: 'error'
-        }
-      }))
-    }
+    }))
   },
 
   flistSetWorkingField(characterId, path, value) {
@@ -2533,174 +2758,30 @@ export const useStore = create<State>((set, get) => ({
 
   async flistFlushWorking(characterId) {
     _cancelFlush(characterId)
-    // Per-character single-flight: if a flush is already in progress,
-    // chain after it. Otherwise the in-flight PUT could race a fresh
-    // one carrying a newer payload — the older PUT could win, leaving
-    // the user's later keystrokes unsaved while saveStatus shows 'saved'
-    // (QA P1-4).
+    // Per-character single-flight: every flush is a link in one chain
+    // and starts only once the flush before it has finished. Otherwise
+    // the in-flight PUT could race a fresh one carrying a newer payload
+    // — the older PUT could win, leaving the user's later keystrokes
+    // unsaved while saveStatus shows 'saved' (QA P1-4). Waiting on the
+    // previous link (not on the PUT in flight) is what keeps two
+    // flushes queued behind a slow save from both waking when it lands
+    // and sending two PUTs over the same etag: the second would 409 and
+    // raise a conflict banner for a conflict the window had with itself.
     const prior = _flushInflight.get(characterId)
-    if (prior) {
-      await prior.catch(() => {})
-      // Re-cancel any debounce that may have re-armed during the wait
-      // so we don't double-fire.
-      _cancelFlush(characterId)
-    }
-    const slot = get().flistWorking[characterId]
-    if (!slot || !slot.unsavedDirty) {
-      // Second cancel post-early-return — a scheduleFlush may have armed
-      // during the await above; we'd otherwise leave a stranded timer
-      // (QA P3-3).
-      _cancelFlush(characterId)
-      return
-    }
-    // Every PUT routes through the active set's payload endpoint. If
-    // nothing is active yet but the user has typed, the Workbench has
-    // simply never been opened for this character — so open it now and
-    // save into it. Materialise-on-first-edit, the same doctrine the
-    // legacy working.json followed (Tier 2 §1.6): looking at a
-    // character creates nothing, the first edit does.
-    //
-    // This used to return early and drop the write. Nothing said so —
-    // saveStatus stayed 'idle' — and the edits died with the next
-    // character switch.
-    let activeSetId = get().flistActiveSetId[characterId]
-    if (!activeSetId) {
-      const bench = await get().flistOpenWorkbench(characterId)
-      activeSetId = bench?.id ?? get().flistActiveSetId[characterId] ?? null
-    }
-    if (!activeSetId) {
-      // No Live to seed a Workbench from — a character that was never
-      // pulled. Keep the edits in memory and say so, rather than
-      // pretending they were saved.
-      set((st) => {
-        const existing = st.flistWorking[characterId]
-        if (!existing) return {}
-        return {
-          flistWorking: {
-            ...st.flistWorking,
-            [characterId]: {
-              ...existing,
-              saveStatus: 'error',
-              saveError: 'No Workbench yet — pull this character first.'
-            }
-          }
-        }
-      })
-      _cancelFlush(characterId)
-      return
-    }
-    const inflight = (async () => {
-      // Pin the exact payload we're shipping so the success branch can
-      // tell whether new edits arrived during the round-trip.
-      const sentPayload = slot.payload
-      set((s) => {
-        const existing = s.flistWorking[characterId]
-        if (!existing) return {}
-        return {
-          flistWorking: {
-            ...s.flistWorking,
-            [characterId]: { ...existing, saveStatus: 'saving', saveError: null }
-          }
-        }
-      })
-      try {
-        const { etag } = await api.flistSetPayloadPut(
-          characterId,
-          activeSetId,
-          sentPayload,
-          slot.materialised ? slot.etag : null
-        )
-        set((s) => {
-          const existing = s.flistWorking[characterId]
-          if (!existing) return {}
-          // If the user typed something newer while we were saving, the
-          // newer slot's `payload` won't match `sentPayload` — keep
-          // unsavedDirty=true so the next flush picks up the delta.
-          const isFresh = existing.payload === sentPayload
-          const nextSlot: FlistWorkingSlot = {
-            ...existing,
-            etag,
-            unsavedDirty: isFresh ? false : existing.unsavedDirty,
-            saveStatus: isFresh ? 'saved' : existing.saveStatus,
-            saveError: null,
-            lastSavedAt: Date.now(),
-            materialised: true
-          }
-          // Mirror into the per-set cache so any consumer reading
-          // flistSetWorking[setId] sees the freshest payload, and bump
-          // the set's updatedAt so the "last changed Xm ago" suffix refreshes.
-          const setsList = s.flistSets[characterId] ?? []
-          return {
-            flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
-            flistSetWorking: {
-              ...s.flistSetWorking,
-              [activeSetId]: nextSlot
-            },
-            flistSets: {
-              ...s.flistSets,
-              [characterId]: setsList.map((m) =>
-                m.id === activeSetId
-                  ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
-                  : m
-              )
-            }
-          }
-        })
-        // If a newer payload is waiting, schedule a follow-up flush so
-        // the user's most recent edits land without needing another
-        // keystroke.
-        const next = get().flistWorking[characterId]
-        if (next?.unsavedDirty) {
-          _scheduleFlush(characterId, () => {
-            void get().flistFlushWorking(characterId)
-          })
-        }
-      } catch (err) {
-        const raw = err instanceof Error ? err.message : String(err)
-        const conflict = err instanceof Error && err.message === 'etag_mismatch'
-        const errWith = err as Error & { currentEtag?: string | null }
-        set((s) => {
-          const existing = s.flistWorking[characterId]
-          if (!existing) return {}
-          const patch: Partial<State> = {
-            flistWorking: {
-              ...s.flistWorking,
-              [characterId]: {
-                ...existing,
-                saveStatus: 'error',
-                saveError: conflict
-                  ? 'Someone else changed this set. Choose whose version to keep.'
-                  : raw,
-                // The server etag is deliberately NOT adopted on a
-                // conflict. Adopting it would let the next keystroke's
-                // autosave succeed and silently overwrite the other
-                // writer; keeping the stale one makes every retry
-                // conflict until the user decides.
-                etag: existing.etag,
-                unsavedDirty: true
-              }
-            }
-          }
-          if (conflict) {
-            patch.flistExternalChange = {
-              ...s.flistExternalChange,
-              [characterId]: {
-                setId: activeSetId,
-                etag: errWith.currentEtag ?? null,
-                origin: 'unknown',
-                at: Date.now()
-              }
-            }
-          }
-          return patch
-        })
+    const link = (async () => {
+      if (prior) {
+        await prior.catch(() => {})
+        // Re-cancel any debounce that may have re-armed during the wait
+        // so we don't double-fire.
+        _cancelFlush(characterId)
       }
+      await _flushWorkingNow(characterId, get, set)
     })()
-    _flushInflight.set(characterId, inflight)
+    _flushInflight.set(characterId, link)
     try {
-      await inflight
+      await link
     } finally {
-      if (_flushInflight.get(characterId) === inflight) {
+      if (_flushInflight.get(characterId) === link) {
         _flushInflight.delete(characterId)
       }
     }
@@ -2757,7 +2838,14 @@ export const useStore = create<State>((set, get) => ({
         : { ...emptyWorkingSlot(), payload: seeded, materialised: false }
       return {
         flistWorking: { ...s.flistWorking, [characterId]: fresh },
-        flistResetUndo: { characterId, snapshot: current, expiresAt }
+        flistResetUndo: {
+          characterId,
+          snapshot: current,
+          expiresAt,
+          etag: current.materialised ? current.etag : null,
+          awaitingWrite: current.materialised,
+          conflict: false
+        }
       }
     })
     // Mirror the seeded description into the editor so the panel
@@ -3898,7 +3986,14 @@ export const useStore = create<State>((set, get) => ({
       }
       return {
         flistWorking: { ...s.flistWorking, [characterId]: fresh },
-        flistResetUndo: { characterId, snapshot: slot, expiresAt }
+        flistResetUndo: {
+          characterId,
+          snapshot: slot,
+          expiresAt,
+          etag: priorEtag,
+          awaitingWrite: true,
+          conflict: false
+        }
       }
     })
     const reloaded = get().flistWorking[characterId]
@@ -4241,11 +4336,10 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async flistUndoResetWorking() {
-    const undo = get().flistResetUndo
-    if (!undo) return
-    const { characterId, snapshot } = undo
-    set({ flistResetUndo: null })
+  async flistUndoResetWorking(opts) {
+    const pending = get().flistResetUndo
+    if (!pending) return
+    const { characterId, snapshot } = pending
     const timer = _resetUndoTimers.get(characterId)
     if (timer) {
       clearTimeout(timer)
@@ -4253,19 +4347,42 @@ export const useStore = create<State>((set, get) => ({
     }
     // Put the snapshot back into the bench the reset wrote, against the
     // etag that write left. Wait for the reset's own save first, or the
-    // two PUTs would race. A 409 here means another writer touched the
-    // bench inside the undo window, and the flush surfaces it like any
-    // other conflict instead of overwriting their bytes.
+    // two PUTs would race.
     _cancelFlush(characterId)
     const inflight = _flushInflight.get(characterId)
     if (inflight) await inflight.catch(() => {})
+    // Read the undo again after the drain: the reset's write may just
+    // have landed and recorded its etag, and a second click that
+    // finished first has already taken it.
+    const undo = get().flistResetUndo
+    if (!undo || undo.characterId !== characterId) return
     const current = get().flistWorking[characterId]
     if (current?.materialised) {
+      // Anything that moved the etag since the reset (a model, the
+      // window reloading a model's edit, an autosave of text typed
+      // after the reset) or edits still waiting to be saved are a
+      // change the undo would revert. Ask instead of writing.
+      const changed =
+        current.etag !== undo.etag || (current.unsavedDirty && !undo.awaitingWrite)
+      if (changed && !opts?.overwrite) {
+        set({ flistResetUndo: { ...undo, conflict: true } })
+        if (current.unsavedDirty) {
+          _scheduleFlush(characterId, () => {
+            void get().flistFlushWorking(characterId)
+          })
+        }
+        return
+      }
       set((s) => ({
+        flistResetUndo: null,
         flistWorking: {
           ...s.flistWorking,
           [characterId]: {
             ...snapshot,
+            // Without a change since the reset this is undo.etag; after
+            // the user chose to overwrite, it is the etag the window
+            // holds now. A 409 means yet another write landed, and the
+            // flush raises the conflict banner instead of overwriting.
             etag: current.etag,
             materialised: true,
             unsavedDirty: true,
@@ -4278,6 +4395,7 @@ export const useStore = create<State>((set, get) => ({
     } else {
       // The reset wrote nothing, so there is nothing on disk to undo.
       set((s) => ({
+        flistResetUndo: null,
         flistWorking: { ...s.flistWorking, [characterId]: snapshot }
       }))
     }
@@ -4293,6 +4411,17 @@ export const useStore = create<State>((set, get) => ({
         editorDirty: slot.unsavedDirty
       })
     }
+  },
+
+  flistDismissResetUndo() {
+    const undo = get().flistResetUndo
+    if (!undo) return
+    const timer = _resetUndoTimers.get(undo.characterId)
+    if (timer) {
+      clearTimeout(timer)
+      _resetUndoTimers.delete(undo.characterId)
+    }
+    set({ flistResetUndo: null })
   },
 
   flistDismissDriftBanner(characterId) {
@@ -4763,6 +4892,16 @@ export const useStore = create<State>((set, get) => ({
           // ignore
         }
         set({ flistActiveCharacterId: id })
+        // From here on a keystroke is saved into this character's
+        // Workbench, so the editor must stop showing the one being left.
+        // A Workbench already in memory is shown straight away; the
+        // read below refreshes it unless the user types first. Without
+        // one the editor waits, read-only, for the read to land.
+        set(
+          get().flistWorking[id]
+            ? _workbenchInEditor(get(), id)
+            : _workbenchLoadingInEditor(get(), id)
+        )
         void get().flistLoadArchive(id)
       }
       // Always reload the working copy on a picker click, even when

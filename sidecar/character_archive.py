@@ -32,6 +32,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -522,6 +523,11 @@ def rename_zip_backup(
     _write_backup_names(character_id, names)
 
 
+def backup_name(character_id: int | str, filename: str) -> str | None:
+    """The user-set name of one Backup, or None when it has none."""
+    return _read_backup_names(character_id).get(filename) or None
+
+
 def forget_backup_name(character_id: int | str, filename: str) -> None:
     """Drop the user-set name for a backup that's about to be deleted.
     Called by the DELETE endpoint so `_names.json` doesn't carry
@@ -827,6 +833,76 @@ def _zip_backup_filename(now: float | None = None) -> str:
     return ts.strftime("%Y-%m-%dT%H%M%SZ") + ".zip"
 
 
+def _free_backup_path(folder: Path, stem: str) -> Path:
+    """`<folder>/<stem>.zip`, or `<stem>-N.zip` with the first N not on
+    disk yet, so a same-second second Backup never overwrites the first."""
+    target = folder / f"{stem}.zip"
+    i = 1
+    while target.exists():
+        target = folder / f"{stem}-{i}.zip"
+        i += 1
+    return target
+
+
+def free_backup_filename(character_id: int | str, filename: str) -> str:
+    """A Backup file name like `filename` that nothing in the Backup list
+    holds yet: `filename` itself, or the next free `-N` one beside it."""
+    require_backup_filename(filename)
+    stem = re.sub(r"-\d+$", "", filename[: -len(".zip")])
+    target = backups_dir(character_id) / filename
+    if not target.exists():
+        return filename
+    return _free_backup_path(backups_dir(character_id), stem).name
+
+
+def write_backup_zip(character_id: int | str, data: bytes) -> Path:
+    """Store `data` as a new Backup of the character, under the Backup
+    file name the list recognises, and return where it went. Written
+    through a temp file, so a crash leaves no half-written Backup."""
+    target = _free_backup_path(
+        backups_dir(character_id), _zip_backup_filename().removesuffix(".zip")
+    )
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+    return target
+
+
+#: The name earlier versions gave the Backup before an Upload, which the
+#: Backup list never recognised: `pre-restore-YYYY-MM-DDTHH-MM-SS.zip`, UTC.
+_OLD_PRE_UPLOAD_FILE_RE = re.compile(
+    r"^pre-restore-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})\.zip$"
+)
+
+
+def adopt_old_pre_upload_backups() -> int:
+    """Give every Backup an earlier version took before an Upload the
+    Backup file name, so the list shows it. Run at startup.
+
+    A rename and nothing else: the file keeps every byte, and a name
+    already taken gets the same-second suffix rather than overwriting.
+    Returns how many were adopted.
+    """
+    adopted = 0
+    for folder in root().iterdir():
+        backups = folder / "backups"
+        if not backups.is_dir():
+            continue
+        for entry in list(backups.iterdir()):
+            m = _OLD_PRE_UPLOAD_FILE_RE.fullmatch(entry.name)
+            if not m or not entry.is_file():
+                continue
+            day, hh, mm, ss = m.groups()
+            target = _free_backup_path(backups, f"{day}T{hh}{mm}{ss}Z")
+            try:
+                entry.rename(target)
+            except OSError as exc:
+                print(f"could not adopt {entry}: {exc}", file=sys.stderr)
+                continue
+            adopted += 1
+    return adopted
+
+
 def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
     """Reshape Live JSON into the working-copy payload `zip_serialise.
     build_zip` expects. Mirrors the renderer's `seedWorkingFromLive` —
@@ -943,6 +1019,20 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     for row in out:
         row.pop("_suffix", None)
     return out
+
+
+def zip_backup_meta(character_id: int | str, filename: str) -> dict[str, Any]:
+    """A Backup's `backup-meta.json`; empty for one without it (older
+    Backups), and for a file that is not a readable Backup."""
+    import zipfile
+
+    require_backup_filename(filename)
+    try:
+        with zipfile.ZipFile(backups_dir(character_id) / filename, "r") as zf:
+            meta = json.loads(zf.read("backup-meta.json").decode("utf-8"))
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+        return {}
+    return meta if isinstance(meta, dict) else {}
 
 
 def latest_zip_backup_content_hash(character_id: int | str) -> str | None:
@@ -1097,21 +1187,7 @@ def save_zip_backup(
         backup_note=note,
     )
 
-    target = backups_dir(character_id) / _zip_backup_filename()
-    # Collision suffix in case a same-second second click occurs.
-    if target.exists():
-        i = 1
-        while True:
-            stem = target.stem  # e.g. "2026-06-04T233015Z"
-            candidate = backups_dir(character_id) / f"{stem}-{i}.zip"
-            if not candidate.exists():
-                target = candidate
-                break
-            i += 1
-
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(target)
+    target = write_backup_zip(character_id, data)
     return {
         "saved": True,
         "path": str(target),
@@ -1721,6 +1797,7 @@ def load_zip_backup_into_workbench(
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
+    payload = backup_payload(payload)
 
     bench = resolve_workbench(character_id)
     if bench is None:
@@ -1769,7 +1846,7 @@ def create_set_from_zip_backup(
         raise ValueError(f"backup working.json is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
-    return _materialise_set(character_id, clean, payload)
+    return _materialise_set(character_id, clean, backup_payload(payload))
 
 
 def duplicate_set(
@@ -1904,6 +1981,106 @@ def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
     gallery.sort(key=lambda e: e["sort_order"])
     out["images"] = gallery
     return out
+
+
+#: F-list's edit-form setting names -> the Workbench's.
+_FORM_SETTING_NAMES = {
+    "customsfirst": "customs_first",
+    "showfriends": "show_friends",
+    "unbookmarkable": "prevent_bookmarks",
+}
+
+
+def _strip_form_prefix(fields: Any, prefix: str) -> dict[str, Any]:
+    if not isinstance(fields, dict):
+        return {}
+    return {
+        (str(k)[len(prefix):] if str(k).startswith(prefix) else str(k)): v
+        for k, v in fields.items()
+    }
+
+
+def payload_from_form_state(
+    form: dict[str, Any], live: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """A Workbench payload from what the extension read off F-list's edit
+    form just before an Upload.
+
+    The form speaks in its own field names: infotags as `info_<id>`,
+    kinks as `fetish_<id>`, settings as `customsfirst`, custom kinks as
+    a list, the title as `customTitle`. A Backup's `working.json` has to
+    be in the Workbench's terms, or Restore cannot load it and the
+    extension cannot put it back on the form. The form carries no
+    gallery; the images are the ones on the profile, i.e. Live's,
+    unless `form` brings its own.
+    """
+    character = form.get("character")
+    if not isinstance(character, dict):
+        character = {}
+    raw_settings = form.get("settings")
+    settings = (
+        {_FORM_SETTING_NAMES.get(str(k), str(k)): v for k, v in raw_settings.items()}
+        if isinstance(raw_settings, dict)
+        else {}
+    )
+
+    custom_rows = form.get("customKinks")
+    if custom_rows is None:
+        custom_rows = form.get("custom_kinks")
+    custom_kinks: dict[str, Any] = {}
+    order: list[str] = []
+    if isinstance(custom_rows, list):
+        for row in custom_rows:
+            if not isinstance(row, dict) or not row.get("name"):
+                continue
+            key = str(row["id"]) if row.get("id") else f"local:{uuid.uuid4()}"
+            custom_kinks[key] = {
+                "name": row.get("name") or "",
+                "description": row.get("description") or "",
+                "choice": row.get("choice") or "undecided",
+                "children": [],
+            }
+            order.append(key)
+    elif isinstance(custom_rows, dict):
+        custom_kinks = dict(custom_rows)
+        order = [str(k) for k in custom_rows]
+
+    source = live if isinstance(live, dict) else {}
+    images = form.get("images") if isinstance(form.get("images"), list) else source.get("images")
+    inlines = form.get("inlines") if "inlines" in form else source.get("inlines", {})
+    return {
+        "_schema_version": WORKING_SCHEMA_VERSION,
+        "_overlay": [],
+        "character": {
+            "id": character.get("id"),
+            "name": character.get("name"),
+            "description": character.get("description") or "",
+            "custom_title": character.get("customTitle")
+            or character.get("custom_title")
+            or "",
+        },
+        "settings": settings,
+        "infotags": _strip_form_prefix(form.get("infotags"), "info_"),
+        "kinks": _strip_form_prefix(form.get("kinks"), "fetish_"),
+        "custom_kinks": custom_kinks,
+        "_custom_kinks_order": order,
+        "images": _seed_payload_from_live({"images": images})["images"],
+        "inlines": inlines if inlines is not None else {},
+    }
+
+
+def is_form_state(payload: dict[str, Any]) -> bool:
+    """Whether a Backup's `working.json` is the raw edit form an earlier
+    version packed before an Upload, rather than a Workbench payload.
+    Every Workbench payload carries `_schema_version` and `_overlay`."""
+    return "_schema_version" not in payload and "_overlay" not in payload
+
+
+def backup_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """A Backup's `working.json` as a Workbench payload. Backups taken
+    before an Upload by an earlier version hold the edit form as the
+    extension sent it; those are translated, the rest pass through."""
+    return payload_from_form_state(payload) if is_form_state(payload) else payload
 
 
 # ---- image storage ----------------------------------------------------
@@ -2540,13 +2717,15 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
 
     # The files left behind by the re-upload: byte-identical to one
     # F-list has, under an id it no longer knows. Keeping them would
-    # leave the picture sitting in the pool for good.
+    # leave the picture sitting in the pool for good, so they go to
+    # the Trash, where repair can never destroy them.
+    from services import image_trash  # lazy: image_trash imports this module
+
     stale_removed: list[str] = []
     for old_id in superseded:
         try:
             for entry in images.glob(f"{old_id}.*"):
-                if entry.is_file():
-                    entry.unlink()
+                if entry.is_file() and image_trash.trash_pool_file(character_id, entry):
                     stale_removed.append(old_id)
         except OSError:
             continue
@@ -2581,7 +2760,9 @@ def adopt_flist_image_ids(
     - every working set's gallery row moves to the new id;
     - `images/local-<sha8>.<ext>` becomes `images/<new id>.<ext>`, or
       is simply dropped when a pull already fetched the same bytes
-      under that name.
+      under that name. When that name holds other bytes, the local
+      file goes to the Trash (`trashed`) instead: only a byte-identical
+      twin is deleted.
 
     Backups are untouched: they are self-contained ZIPs carrying their
     own copy of the bytes, and rewriting history inside them would make
@@ -2594,6 +2775,7 @@ def adopt_flist_image_ids(
     """
     renamed: list[dict[str, str]] = []
     dropped_duplicate: list[str] = []
+    trashed: list[str] = []
     unknown: list[str] = []
 
     images = images_dir(character_id)
@@ -2624,11 +2806,19 @@ def adopt_flist_image_ids(
 
         src = image_path(character_id, old_id, ext)
         dst = image_path(character_id, new_id, on_disk.get(new_id, ext))
-        if dst.exists():
+        if dst.exists() and file_sha256(dst) == file_sha256(src):
             # A pull fetched the same picture under its F-list name.
             # One copy is enough.
             src.unlink(missing_ok=True)
             dropped_duplicate.append(old_id)
+        elif dst.exists():
+            # Other bytes under the F-list id (F-list re-encoded the
+            # upload, or the pairing is wrong): ours is no duplicate,
+            # so it goes to the Trash rather than away for good.
+            from services import image_trash
+
+            image_trash.trash_pool_file(character_id, src)
+            trashed.append(old_id)
         else:
             src.replace(dst)
             renamed.append({"from": old_id, "to": new_id})
@@ -2659,32 +2849,10 @@ def adopt_flist_image_ids(
     return {
         "renamed": renamed,
         "dropped_duplicate": dropped_duplicate,
+        "trashed": trashed,
         "unknown": unknown,
         "sets_rewritten": rewritten_sets,
     }
-
-
-def remove_character_image(character_id: int | str, image_id: str) -> bool:
-    """Delete `images/<image_id>.<ext>` for good. No user-facing path
-    calls this: the window and `remove_image` go through the trash
-    (`services/image_trash.py`). Returns True iff a file was removed."""
-    if not _SAFE_NAME_RE.fullmatch(image_id):
-        return False
-    d = images_dir(character_id)
-    if not d.exists():
-        return False
-    for entry in d.iterdir():
-        if not entry.is_file():
-            continue
-        m = _IMAGE_FILE_RE.fullmatch(entry.name)
-        if not m or m.group(1) != image_id:
-            continue
-        try:
-            entry.unlink()
-            return True
-        except OSError:
-            return False
-    return False
 
 
 # ---- v4 → v5 pool migration ------------------------------------------
@@ -2831,6 +2999,25 @@ def avatar_path_for(name: str) -> Path:
 
 
 # ---- roster ----------------------------------------------------------
+
+
+def same_character_name(a: str | None, b: str | None) -> bool:
+    """Whether two spellings name the same character: F-list and the
+    Logs treat names case-insensitively, and stray spaces never count."""
+    return bool(a and b) and a.strip().lower() == b.strip().lower()
+
+
+def character_name(character_id: int | str) -> str | None:
+    """The name of a character the archive holds, which is also the name
+    its Logs are kept under. The registry's when a Pull recorded one,
+    else the one in its Live."""
+    entry = load_registry().get(str(character_id)) or {}
+    if entry.get("name"):
+        return str(entry["name"])
+    for row in list_archived_characters():
+        if str(row.get("id")) == str(character_id):
+            return str(row.get("name") or "") or None
+    return None
 
 
 def list_archived_characters() -> list[dict[str, Any]]:

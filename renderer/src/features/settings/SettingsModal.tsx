@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
+  type FlistTrashedLabels,
   type LabelsSettings,
   type McpInfo,
   type RagSettings,
   type RagStatus
 } from '../../lib/api'
 import { useStore } from '../../state'
+import { TrashedLabels } from '../flist/TrashedEntries'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
 
@@ -1634,8 +1636,23 @@ function LabelsPane({
     }
   }
 
+  // Every cleared-Labels entry, whichever character it was cleared for:
+  // a Log character with no Workbench has no character Trash view, so
+  // this is the one place its cleared Labels can always be restored.
+  const [trashed, setTrashed] = useState<FlistTrashedLabels[]>([])
+  const [trashError, setTrashError] = useState<string | null>(null)
+  const loadTrash = async () => {
+    try {
+      setTrashed((await api.labelsTrashList()).labels)
+      setTrashError(null)
+    } catch (err) {
+      setTrashError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   useEffect(() => {
     void refreshRollup()
+    void loadTrash()
   }, [])
 
   const triggerResetAll = async () => {
@@ -1643,7 +1660,9 @@ function LabelsPane({
       'Reset ALL labels across every character?\n\n' +
         'Every stored IC/OOC verdict for every conversation reverts to ' +
         'Unlabeled. Rule-based hints (short messages, "((", etc.) keep ' +
-        'firing as OOC. This cannot be undone.'
+        'firing as OOC. A copy of each character’s labels goes to the ' +
+        'Trash, listed below under Cleared Labels, where Restore puts ' +
+        'them back.'
     )
     if (!confirmed) return
     setResetStatus('resetting')
@@ -1652,6 +1671,7 @@ function LabelsPane({
       await api.labelsClearAll()
       setResetStatus('done')
       void refreshRollup()
+      void loadTrash()
     } catch (err) {
       setResetStatus('error')
       setResetError(err instanceof Error ? err.message : String(err))
@@ -1712,6 +1732,27 @@ function LabelsPane({
             <span className="settings-meta classify-last-error">{resetError}</span>
           )}
         </div>
+      </div>
+
+      <div className="settings-section" data-testid="labels-trash">
+        <h3 className="settings-section-title">Cleared Labels</h3>
+        <p className="settings-help">
+          Labels you clear, here or in a Log, go to the Trash and wait
+          here for every character until you restore them or delete them
+          for good.
+        </p>
+        {trashError && <p className="settings-help">Couldn’t read the Trash: {trashError}</p>}
+        {!trashError && trashed.length === 0 && (
+          <p className="settings-meta">No cleared Labels in the Trash.</p>
+        )}
+        <TrashedLabels
+          heading="In the Trash"
+          items={trashed}
+          readOnly={false}
+          restore={(ids) => api.labelsTrashRestore(ids)}
+          purge={(ids) => api.labelsTrashPurge(ids)}
+          onChanged={loadTrash}
+        />
       </div>
 
       <div className="settings-section">

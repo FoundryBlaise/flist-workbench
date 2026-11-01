@@ -98,6 +98,9 @@ export type FlistCharacterImage = {
 
 /** A file in a character's image trash (`<character>/trash/`). */
 export type FlistTrashItem = {
+  /** Names this entry for restore and purge. The image id, unless the
+   *  Trash holds several files under that id (a Pull replaced one). */
+  trash_id: string
   image_id: string
   extension: string
   filename: string
@@ -106,6 +109,33 @@ export type FlistTrashItem = {
   /** 'ui' or 'mcp'; null for a file that got there without an index entry. */
   deleted_by: string | null
   source_name: string | null
+}
+
+/** A deleted Backup in a character's Trash (`<character>/trash/backups/`). */
+export type FlistTrashedBackup = {
+  /** Its file name in the Trash; what restore and purge take. */
+  id: string
+  /** The Backup's file name in the Backup list, where a restore puts it. */
+  filename: string
+  /** The user-set name it had, kept for the restore. */
+  name: string | null
+  size: number
+  deleted_at: number
+  deleted_by: string | null
+}
+
+/** Labels cleared in one go, kept in the character's Trash. */
+export type FlistTrashedLabels = {
+  /** What restore and purge take. */
+  id: string
+  /** The Log character they were cleared for. */
+  character: string
+  /** The conversation cleared; null when every conversation was. */
+  partner: string | null
+  /** How many Labels the entry holds. */
+  count: number
+  deleted_at: number
+  deleted_by: string | null
 }
 
 /** Where an image id is still used, beyond the pool. */
@@ -747,7 +777,7 @@ export const api = {
       }>
     }>(`/labels/stats-all?char=${encodeURIComponent(char)}`),
   labelsClear: (body: { character: string; partner: string }) =>
-    request<{ character: string; partner: string; deleted: number }>(
+    request<{ character: string; partner: string; deleted: number; trash_id: string | null }>(
       '/labels/clear',
       {
         method: 'POST',
@@ -755,8 +785,24 @@ export const api = {
       }
     ),
   labelsClearAll: () =>
-    request<{ labels_deleted: number }>('/labels/clear-all', {
+    request<{ labels_deleted: number; trash_ids: string[] }>('/labels/clear-all', {
       method: 'POST'
+    }),
+  /** Every cleared-Labels entry in the Trash, whichever character it
+   *  was cleared for: Settings → Labels lists them. */
+  labelsTrashList: () => get<{ labels: FlistTrashedLabels[] }>('/labels/trash'),
+  /** Put cleared Labels back. A message labelled again since keeps its
+   *  newer Label; its hash is listed under `skipped`. */
+  labelsTrashRestore: (ids: string[]) =>
+    request<{
+      restored: { id: string; restored: number; skipped: string[] }[]
+      not_found: string[]
+    }>('/labels/trash/restore', { method: 'POST', body: JSON.stringify({ ids }) }),
+  /** Delete cleared Labels for good. */
+  labelsTrashPurge: (ids: string[]) =>
+    request<{ purged: string[]; not_found: string[] }>('/labels/trash/purge', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
     }),
   /** Give every still-Unlabeled message in one conversation the same
    *  verdict. Adds labels only: an existing verdict is kept, and the
@@ -989,8 +1035,9 @@ export const api = {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
     return (await res.json()) as FlistZipBackupEntry
   },
-  /** Delete a single backup ZIP. Idempotent enough that the renderer
-   *  refreshes the list either way; surfaces error status to a toast.
+  /** Move a single backup ZIP to the character's Trash. Idempotent
+   *  enough that the renderer refreshes the list either way; surfaces
+   *  error status to a toast.
    */
   flistZipBackupDelete: async (
     characterId: string | number,
@@ -1390,27 +1437,61 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
     ),
   flistTrashList: (characterId: string | number) =>
-    get<{ character_id: string; items: FlistTrashItem[] }>(
+    get<{
+      character_id: string
+      items: FlistTrashItem[]
+      backups?: FlistTrashedBackup[]
+      labels?: FlistTrashedLabels[]
+    }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash`
     ),
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
-  /** Back into the pool, not onto the profile. */
-  flistTrashRestore: (characterId: string | number, imageIds: string[]) =>
+  /** Back into the pool, not onto the profile. Takes trash ids. */
+  flistTrashRestore: (characterId: string | number, trashIds: string[]) =>
     request<{
       restored: { image_id: string; deduplicated: boolean; from: string }[]
       not_found: string[]
       conflicts: string[]
     }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/restore`, {
       method: 'POST',
-      body: JSON.stringify({ image_ids: imageIds })
+      body: JSON.stringify({ image_ids: trashIds })
     }),
-  /** Delete trashed files for good. */
-  flistTrashPurge: (characterId: string | number, imageIds: string[]) =>
+  /** Delete trashed files for good. Takes trash ids. */
+  flistTrashPurge: (characterId: string | number, trashIds: string[]) =>
     request<{ purged: string[]; not_found: string[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
-      { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
+      { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
     ),
+  /** Back into the Backup list, under the name they had. */
+  flistTrashBackupsRestore: (characterId: string | number, ids: string[]) =>
+    request<{ restored: string[]; not_found: string[]; conflicts: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/restore`,
+      { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
+  /** Delete trashed Backups for good. */
+  flistTrashBackupsPurge: (characterId: string | number, ids: string[]) =>
+    request<{ purged: string[]; not_found: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/purge`,
+      { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
+  /** Put cleared Labels back. A message labelled again since keeps its
+   *  newer Label; its hash is listed under `skipped`. */
+  flistTrashLabelsRestore: (characterId: string | number, ids: string[]) =>
+    request<{
+      restored: { id: string; restored: number; skipped: string[] }[]
+      not_found: string[]
+    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ ids })
+    }),
+  /** Delete cleared Labels for good. */
+  flistTrashLabelsPurge: (characterId: string | number, ids: string[]) =>
+    request<{ purged: string[]; not_found: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/purge`,
+      { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
+  /** Empty the whole Trash: images, Backups and cleared Labels. */
   flistTrashEmpty: (characterId: string | number) =>
     request<{ purged: number }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash`,

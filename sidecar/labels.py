@@ -26,6 +26,7 @@ import hashlib
 import re
 import sqlite3
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -801,6 +802,76 @@ def delete_labels_for_partner(
         deleted=cur.rowcount,
     )
     return cur.rowcount
+
+
+#: Every column of a stored Label, in the order the Trash keeps them.
+LABEL_COLUMNS = (
+    "hash", "character", "partner", "ts", "speaker", "label",
+    "confidence", "reason", "source", "prior_label", "prior_source",
+    "updated_at",
+)
+
+
+def label_rows(
+    conn: sqlite3.Connection,
+    character: str | None = None,
+    partner: str | None = None,
+    *,
+    partner_aliases: list[str] | None = None,
+) -> list[dict]:
+    """The stored Labels of one conversation (`partner` given), of every
+    conversation of one character (`character` only), or all of them,
+    as plain dicts of `LABEL_COLUMNS`. What clearing them would take
+    away, so it can go to the Trash first."""
+    cols = ", ".join(LABEL_COLUMNS)
+    if character is None:
+        cur = conn.execute(f"SELECT {cols} FROM labels ORDER BY character, ts")
+    elif partner is None:
+        cur = conn.execute(
+            f"SELECT {cols} FROM labels WHERE character = ? ORDER BY ts", (character,)
+        )
+    else:
+        names = _partner_query_set(partner, partner_aliases)
+        placeholders = ",".join("?" * len(names))
+        cur = conn.execute(
+            f"SELECT {cols} FROM labels WHERE character = ? "
+            f"AND partner IN ({placeholders}) ORDER BY ts",
+            (character, *names),
+        )
+    return [dict(r) for r in cur]
+
+
+def restore_labels(
+    conn: sqlite3.Connection, rows: Iterable[dict]
+) -> tuple[int, list[str]]:
+    """Put Labels back as the Trash kept them. A message that holds a
+    Label again has a newer verdict than the kept one, so it keeps it:
+    its hash is returned as skipped. Returns (restored, skipped)."""
+    wanted = {r["hash"]: r for r in rows if r.get("hash")}
+    present: set[str] = set()
+    ids = list(wanted)
+    for start in range(0, len(ids), 500):
+        batch = ids[start : start + 500]
+        placeholders = ",".join("?" * len(batch))
+        present.update(
+            r["hash"]
+            for r in conn.execute(
+                f"SELECT hash FROM labels WHERE hash IN ({placeholders})", batch
+            )
+        )
+    todo = [r for h, r in wanted.items() if h not in present]
+    defaults = {c: None for c in LABEL_COLUMNS} | {"confidence": 1.0, "updated_at": time.time()}
+    cols = ", ".join(LABEL_COLUMNS)
+    conn.executemany(
+        f"INSERT OR IGNORE INTO labels ({cols}) "
+        f"VALUES ({', '.join('?' * len(LABEL_COLUMNS))})",
+        [tuple((defaults | r)[c] for c in LABEL_COLUMNS) for r in todo],
+    )
+    conn.commit()
+    per_conversation = Counter((r["character"], r["partner"]) for r in todo)
+    for (character, partner), n in sorted(per_conversation.items()):
+        _publish("labels-changed", character=character, partner=partner, hashes=n)
+    return len(todo), [h for h in wanted if h in present]
 
 
 def fill_unlabeled(

@@ -242,3 +242,91 @@ async def test_backups_leave_the_trash_out(client, workbench) -> None:  # noqa: 
     assert any(keep in n for n in names), names
     assert not any(gone in n for n in names), names
     assert not any("trash" in n for n in names), names
+
+
+def trash_bytes(client: TestClient) -> dict[str, bytes]:
+    """trash_id -> bytes of every file in the Trash."""
+    items = client.get("/flist/character/42/trash").json()["items"]
+    return {
+        i["trash_id"]: client.get(f"/flist/character/42/trash/{i['filename']}").content
+        for i in items
+    }
+
+
+def pool_bytes(client: TestClient) -> dict[str, bytes]:
+    """image_id -> bytes of every image in the pool."""
+    rows = client.get("/flist/character/42/images").json()["images"]
+    return {
+        r["image_id"]: client.get(
+            f"/flist/character/42/images/{r['image_id']}.{r['extension']}"
+        ).content
+        for r in rows
+    }
+
+
+def test_two_different_files_trashed_under_one_id_are_both_kept(
+    client, workbench  # noqa: F811
+) -> None:
+    # A Pull can put other bytes under an id the pool already had.
+    workbench.write_character_image("42", "47000002", "png", png(30))
+    client.delete("/flist/character/42/images/47000002")
+    workbench.write_character_image("42", "47000002", "jpg", png(31))
+    client.delete("/flist/character/42/images/47000002")
+
+    items = client.get("/flist/character/42/trash").json()["items"]
+    assert [i["image_id"] for i in items] == ["47000002", "47000002"]
+    assert sorted(trash_bytes(client).values()) == sorted([png(30), png(31)])
+
+    # Both come back, and neither overwrites the other.
+    res = client.post(
+        "/flist/character/42/trash/restore",
+        json={"image_ids": [i["trash_id"] for i in items]},
+    ).json()
+    assert len(res["restored"]) == 2
+    assert sorted(pool_bytes(client).values()) == sorted([png(30), png(31)])
+
+
+def test_trashing_the_same_bytes_twice_keeps_one_copy(client, workbench) -> None:  # noqa: F811
+    workbench.write_character_image("42", "47000003", "png", png(32))
+    client.delete("/flist/character/42/images/47000003")
+    workbench.write_character_image("42", "47000003", "png", png(32))
+    client.delete("/flist/character/42/images/47000003")
+
+    assert list(trash_bytes(client).values()) == [png(32)]
+
+
+def test_restoring_onto_a_pool_file_with_other_bytes_keeps_both(
+    client, workbench  # noqa: F811
+) -> None:
+    import hashlib
+
+    workbench.write_character_image("42", "47000004", "png", png(33))
+    client.delete("/flist/character/42/images/47000004")
+    # Meanwhile the pool got a different picture under the same name.
+    workbench.write_character_image("42", "47000004", "png", png(34))
+
+    res = client.post(
+        "/flist/character/42/trash/restore", json={"image_ids": ["47000004"]}
+    ).json()
+
+    local = f"local-{hashlib.sha256(png(33)).hexdigest()[:8]}"
+    assert res["restored"] == [{"image_id": local, "deduplicated": False, "from": "47000004"}]
+    assert pool_bytes(client) == {"47000004": png(34), local: png(33)}
+    assert trash_bytes(client) == {}
+
+
+def test_the_trash_lists_the_newest_delete_first(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from services import image_trash
+
+    clock = [1_800_000_000]
+    monkeypatch.setattr(image_trash, "time", SimpleNamespace(time=lambda: clock[0]))
+    ids = [upload(client, n) for n in (40, 41, 42)]
+    for iid in (ids[1], ids[0], ids[2]):
+        client.delete(f"/flist/character/42/images/{iid}")
+        clock[0] += 60
+
+    assert trash_ids(client) == [ids[2], ids[0], ids[1]]

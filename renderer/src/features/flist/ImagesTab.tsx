@@ -10,7 +10,8 @@ import {
   type Selection
 } from './imageSelection'
 import { FLIST_MAX_UPLOAD_BYTES, formatBytes, usageNotes } from './imageUsage'
-import { ImagesConfirmModal, ImagesTrash } from './ImagesTrash'
+import { ImagesConfirmModal } from './ImagesConfirmModal'
+import { ImagesTrash, trashEntryCount } from './ImagesTrash'
 
 type GalleryEntry = { image_id: string; description: string; sort_order: number }
 
@@ -194,8 +195,8 @@ export function ImagesTab({
   const [view, setView] = useState<'pool' | 'trash'>('pool')
   const [filters, setFilters] = useState({ unused: false, over2mb: false, png: false })
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
-  // Where each image is still used, for the trash warning and the
-  // "not in a working set" filter; and how full the trash is. Both
+  // Where each image is still used, for the Trash warning and the
+  // "not in a working set" filter; and how full the Trash is. Both
   // follow the pool listing, which reloads after every change to it.
   const [refs, setRefs] = useState<Record<string, FlistImageReferences>>({})
   const [trashCount, setTrashCount] = useState<number | null>(null)
@@ -211,7 +212,7 @@ export function ImagesTab({
     api
       .flistTrashList(characterId)
       .then((r) => {
-        if (!cancelled) setTrashCount(r.items.length)
+        if (!cancelled) setTrashCount(trashEntryCount(r))
       })
       .catch(() => {})
     return () => {
@@ -331,7 +332,7 @@ export function ImagesTab({
     )
   }
 
-  // ---- to the trash (modal confirm), one image or the selection -------
+  // ---- to the Trash (modal confirm), one image or the selection -------
   const [confirmTrash, setConfirmTrash] = useState<string[] | null>(null)
 
   const handleTrash = async () => {
@@ -343,7 +344,7 @@ export function ImagesTab({
       setSel(EMPTY_SELECTION)
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err)
-      setUploadError(`Couldn’t move to the trash: ${raw}`)
+      setUploadError(`Couldn’t move to the Trash: ${raw}`)
     }
   }
 
@@ -512,10 +513,10 @@ export function ImagesTab({
                     type="button"
                     className="flist-images-toolbar__btn flist-images-toolbar__btn--danger"
                     onClick={() => setConfirmTrash(sel.ids)}
-                    title="Move to trash (Del)"
+                    title="Move to Trash (Del)"
                     data-testid="flist-images-trash-selected"
                   >
-                    Move to trash
+                    Move to Trash
                   </button>
                 </div>
               )}
@@ -765,8 +766,8 @@ export function ImagesTab({
       {/* ---- Trash confirmation: what goes, and where it's still used ---- */}
       {confirmTrash && (
         <ImagesConfirmModal
-          title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the trash?`}
-          body="They leave the pool and can be restored from the trash until you empty it."
+          title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the Trash?`}
+          body="They leave the pool and can be restored from the Trash until you empty it."
           notes={usageNotes(confirmTrash, refs)}
           thumbs={poolEntries
             .filter((e) => confirmTrash.includes(e.image_id))
@@ -774,7 +775,7 @@ export function ImagesTab({
               key: e.image_id,
               url: api.flistImageUrl(characterId, `${e.image_id}.${e.extension}`)
             }))}
-          confirmLabel="Move to trash"
+          confirmLabel="Move to Trash"
           onCancel={() => setConfirmTrash(null)}
           onConfirm={() => void handleTrash()}
         />
@@ -869,7 +870,7 @@ function PoolRow({
               type="button"
               className="flist-images-pool-item__btn"
               onClick={onDelete}
-              title="Move to trash"
+              title="Move to Trash"
             >
               ×
             </button>

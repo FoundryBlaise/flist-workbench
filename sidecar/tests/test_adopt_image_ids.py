@@ -107,6 +107,31 @@ def test_a_twin_left_by_a_pull_is_dropped(archive) -> None:
     assert result["dropped_duplicate"] == [local_id]
 
 
+def test_a_different_picture_under_the_f_list_id_sends_ours_to_the_trash(archive) -> None:
+    # The file under the F-list id holds other bytes (F-list re-encoded
+    # the upload, or the pairing is wrong). Ours is not a duplicate, so
+    # it is not deleted: it goes to the Trash, where it can be restored.
+    from services import image_trash
+
+    row = archive.add_uploaded_image("42", PNG)
+    local_id = row["image_id"]
+    set_id = _with_gallery(archive, local_id)
+    images = archive.images_dir("42")
+    other = PNG + b"re-encoded by F-list"
+    (images / "47000849.png").write_bytes(other)
+
+    result = archive.adopt_flist_image_ids("42", {local_id: "47000849"})
+
+    assert result["dropped_duplicate"] == []
+    assert result["trashed"] == [local_id]
+    assert (images / "47000849.png").read_bytes() == other
+    assert not (images / f"{local_id}.png").exists()
+    [entry] = image_trash.list_trash("42")
+    assert entry["image_id"] == local_id
+    assert (image_trash.trash_dir("42") / entry["filename"]).read_bytes() == PNG
+    assert _gallery(archive, set_id) == ["47000849"]
+
+
 def test_running_it_twice_changes_nothing_further(archive) -> None:
     row = archive.add_uploaded_image("42", PNG)
     local_id = row["image_id"]

@@ -217,16 +217,92 @@ describe('typing while a save is in flight', () => {
     expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
   })
 
-  // Real bug, see #2: the two flushes queued behind the in-flight save
-  // both wake when it lands and each sends a PUT over the same etag, so
-  // against the real sidecar the second gets a 409 and raises a
-  // conflict banner for a conflict the window had with itself. Drop
-  // `.fails` once the fix lands; the test above checks everything else.
-  it.fails('no two saves leave over the same etag', async () => {
+  // The flushes queued behind the in-flight save must not each send a
+  // PUT over the same etag: the real sidecar answers the second with a
+  // 409, and the window would raise a conflict banner for a conflict it
+  // had with itself (#2).
+  it('no two saves leave over the same etag', async () => {
     const { puts } = await burstBehindASlowSave()
 
     const etags = puts.map((r) => r.headers['If-Match'])
     expect(etags).toEqual([...new Set(etags)])
+    expect(puts.map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
+  })
+
+  it('a burst behind a slow save raises no conflict banner against a sidecar that checks If-Match', async () => {
+    // Like the real sidecar: a save is accepted only over the Workbench's
+    // current etag, and each accepted save hands out a new one.
+    let current = 'seed-etag'
+    let version = 0
+    const answerLikeTheSidecar = () => {
+      for (const p of fake.pending(SAVE)) {
+        if (p.request.headers['If-Match'] !== current) {
+          p.resolve(json({ detail: { detail: 'etag_mismatch', current_etag: current } }, 409))
+          continue
+        }
+        current = `v${++version}`
+        p.resolve(json({ etag: current }))
+      }
+    }
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('one')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two three')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    for (let round = 0; round < 4; round++) {
+      answerLikeTheSidecar()
+      await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    }
+
+    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.saveError).toBeNull()
+    expect(slot.etag).toBe(current)
+  })
+
+  it('quitting while a save is in flight keeps the last edit: the close-time flush resolves only after it reaches the Workbench', async () => {
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('draft')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [inFlight] = fake.pending(SAVE)
+    expect(descOf(inFlight.request.body)).toBe('draft')
+
+    // The user types, then quits before the autosave pause has passed.
+    useStore.getState().setEditorContent('draft, final')
+    let flushed = false
+    const closing = useStore
+      .getState()
+      .flistFlushAllWorking()
+      .then(() => {
+        flushed = true
+      })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flushed).toBe(false)
+    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+
+    inFlight.resolve(json({ etag: 'after-draft' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const [lastEdit] = fake.pending(SAVE)
+    expect(descOf(lastEdit.request.body)).toBe('draft, final')
+    expect(lastEdit.request.headers['If-Match']).toBe('after-draft')
+    expect(flushed).toBe(false)
+
+    lastEdit.resolve(json({ etag: 'after-final' }))
+    await closing
+    expect(flushed).toBe(true)
+    expect(fake.requestsTo(SAVE)).toHaveLength(2)
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.etag).toBe('after-final')
   })
 })
 
@@ -572,6 +648,128 @@ describe('flistResetWorkingToLive + undo round-trip', () => {
   })
 })
 
+describe('undo of reset to Live never reverts a change made after the reset', () => {
+  // The Workbench on disk, answering like the sidecar: a save lands
+  // only over the etag the disk holds, and each landed save hands out
+  // a new etag. Anything else writing the bench goes through write().
+  function benchOnDisk(description: string) {
+    const disk = { etag: 'seed-etag', payload: workbenchPayload({ character: { description } }) }
+    let version = 0
+    fake.on(SAVE, (req) => {
+      if (req.headers['If-Match'] !== disk.etag) {
+        return json({ detail: { detail: 'etag_mismatch', current_etag: disk.etag } }, 409)
+      }
+      disk.etag = `disk-${++version}`
+      disk.payload = req.body as typeof disk.payload
+      return json({ etag: disk.etag })
+    })
+    fake.on(`GET ${BENCH_URL}`, () => json(payloadRead(disk.payload, disk.etag)))
+    return {
+      disk,
+      write(text: string) {
+        disk.etag = `disk-${++version}`
+        disk.payload = workbenchPayload({ character: { description: text } })
+        return disk.etag
+      }
+    }
+  }
+
+  beforeEach(() => {
+    seedLive({ character: { description: 'Amber on F-list' } })
+    seedSlot('99', {
+      character: { description: 'Amber keeps bees.' },
+      _overlay: ['character.description']
+    })
+  })
+
+  it('a model edit the window reloaded is not overwritten: the user is asked, and keeping it leaves it on disk', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    expect(descOf(bench.disk.payload)).toBe('Amber on F-list')
+
+    // A connected model rewrites the description; the event stream
+    // tells the window, which reloads it (no unsaved edits here).
+    const modelEtag = bench.write('Amber keeps wasps now.')
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: modelEtag,
+      origin: 'mcp:set_description'
+    })
+    await useStore.getState().flistReloadAfterExternalChange('99')
+    const putsBeforeUndo = fake.requestsTo(SAVE).length
+
+    await useStore.getState().flistUndoResetWorking()
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
+    const undo = useStore.getState().flistResetUndo
+    expect(undo?.characterId).toBe('99')
+    expect(undo?.conflict).toBe(true)
+    expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe('Amber keeps wasps now.')
+
+    useStore.getState().flistDismissResetUndo()
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps wasps now.')
+    expect(bench.disk.etag).toBe(modelEtag)
+  })
+
+  it('text typed in the window after the reset and saved is not overwritten either', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    useStore.getState().setEditorContent('Amber on F-list, and a new line.')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(descOf(bench.disk.payload)).toBe('Amber on F-list, and a new line.')
+    const typedEtag = bench.disk.etag
+    const putsBeforeUndo = fake.requestsTo(SAVE).length
+
+    await useStore.getState().flistUndoResetWorking()
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
+    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
+    expect(useStore.getState().editorContent).toBe('Amber on F-list, and a new line.')
+    expect(bench.disk.etag).toBe(typedEtag)
+  })
+
+  it('choosing to undo anyway puts the previous Workbench back over the model edit', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    const modelEtag = bench.write('Amber keeps wasps now.')
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: modelEtag,
+      origin: 'mcp:set_description'
+    })
+    await useStore.getState().flistReloadAfterExternalChange('99')
+    await useStore.getState().flistUndoResetWorking()
+    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
+
+    await useStore.getState().flistUndoResetWorking({ overwrite: true })
+
+    const [undoWrite] = fake.requestsTo(SAVE).slice(-1)
+    expect(undoWrite.headers['If-Match']).toBe(modelEtag)
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
+  })
+
+  it('without a change since the reset, undo puts the previous Workbench back on disk', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    expect(descOf(bench.disk.payload)).toBe('Amber on F-list')
+
+    await useStore.getState().flistUndoResetWorking()
+
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(useStore.getState().flistWorking['99'].etag).toBe(bench.disk.etag)
+    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
+  })
+})
+
 describe('switching characters must not strand the last edit', () => {
   // Reported from the field: "switching between characters silently
   // discards all changes". Autosave waits 500 ms for quiet time, so an
@@ -773,5 +971,228 @@ describe('gallery changes save themselves', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(fake.requestsTo(SAVE).length).toBe(1)
+  })
+})
+
+describe('opening a character never applies a stale read', () => {
+  // Two characters, each with its own Workbench. Clicking quickly
+  // between them leaves several reads in flight; whichever lands last
+  // must not decide what the editor shows, nor which text the next
+  // keystroke saves into which Workbench.
+  const AMBER = '99'
+  const BIRCH = '100'
+  const AMBER_SET = 'aaaaaaaaaaaa'
+  const BIRCH_SET = 'bbbbbbbbbbbb'
+  const benchUrl = (id: string, set: string) => `/flist/character/${id}/sets/${set}/payload`
+  const AMBER_READ = `GET ${benchUrl(AMBER, AMBER_SET)}`
+  const BIRCH_READ = `GET ${benchUrl(BIRCH, BIRCH_SET)}`
+  const AMBER_SAVE = `PUT ${benchUrl(AMBER, AMBER_SET)}`
+  const BIRCH_SAVE = `PUT ${benchUrl(BIRCH, BIRCH_SET)}`
+  const AMBER_TEXT = 'Amber keeps bees.'
+  const BIRCH_TEXT = 'Birch climbs cliffs.'
+
+  const amberBench = () => workbenchPayload({ character: { description: AMBER_TEXT } })
+  const birchBench = () => workbenchPayload({ character: { description: BIRCH_TEXT } })
+
+  beforeEach(() => {
+    useStore.setState({
+      flistRoster: [
+        { id: 99, name: 'Amber' },
+        { id: 100, name: 'Birch' }
+      ] as never,
+      flistActiveSetId: { [AMBER]: AMBER_SET, [BIRCH]: BIRCH_SET },
+      flistArchive: {
+        [AMBER]: archiveEntry(livePayload({ character: { description: 'Amber on F-list' } })),
+        [BIRCH]: archiveEntry(livePayload({ character: { description: 'Birch on F-list' } }))
+      }
+    })
+    // What selectCharacter loads alongside the Workbench: Live and the
+    // Backup lists. Answered at once; only the Workbench reads race.
+    for (const id of [AMBER, BIRCH]) {
+      fake.on(`GET /flist/character/${id}/live`, json(livePayload()))
+      fake.on(`GET /flist/character/${id}/snapshots`, json({ snapshots: [] }))
+      fake.on(`GET /flist/character/${id}/zip-backups`, json({ backups: [] }))
+    }
+    fake.on(AMBER_SAVE, json({ etag: 'amber-saved' }))
+    fake.on(BIRCH_SAVE, json({ etag: 'birch-saved' }))
+  })
+
+  it('A, then B, then A with the reads landing out of order: the editor shows A and each Workbench holds only its own text', async () => {
+    fake.hold(AMBER_READ).hold(BIRCH_READ)
+
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+
+    const [amberFirst, amberSecond] = fake.pending(AMBER_READ)
+    const [birch] = fake.pending(BIRCH_READ)
+    // The newest read lands first, the older ones after it.
+    amberSecond.resolve(json(payloadRead(amberBench(), 'amber-2')))
+    await vi.advanceTimersByTimeAsync(0)
+    amberFirst.resolve(json(payloadRead(amberBench(), 'amber-1')))
+    await vi.advanceTimersByTimeAsync(0)
+    birch.resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const s = useStore.getState()
+    expect(s.flistActiveCharacterId).toBe(AMBER)
+    expect(s.editorContent).toBe(AMBER_TEXT)
+    expect(descOf(s.flistWorking[AMBER].payload)).toBe(AMBER_TEXT)
+    expect(descOf(s.flistWorking[BIRCH].payload)).toBe(BIRCH_TEXT)
+    // The older of Amber's two reads is stale; the slot keeps the etag
+    // of the newest one.
+    expect(s.flistWorking[AMBER].etag).toBe('amber-2')
+
+    // The next keystroke edits Amber's own text and saves it into
+    // Amber's Workbench only.
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+
+    expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${AMBER_TEXT} And wasps.`
+    ])
+    expect(fake.requestsTo(BIRCH_SAVE)).toEqual([])
+  })
+
+  it('keystrokes typed while the read is held stay in the editor and are saved', async () => {
+    // Amber is open; a click on her again (or a refresh) re-reads her
+    // Workbench. The user keeps typing while that read is slow.
+    useStore.setState({
+      flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT
+    })
+    fake.hold(AMBER_READ)
+
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+    // The read lands inside the autosave's quiet time, carrying what
+    // is on disk: the text from before the keystrokes.
+    fake.pending(AMBER_READ)[0].resolve(json(payloadRead(amberBench(), 'amber-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${AMBER_TEXT} And wasps.`
+    ])
+  })
+
+  it('a read that went out before a save landed does not put the older text back', async () => {
+    // The keystrokes were saved while the read was still in flight; the
+    // read then brings back what was on disk before that save.
+    useStore.setState({
+      flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT
+    })
+    fake.hold(AMBER_READ)
+
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(AMBER_SAVE)).toHaveLength(1)
+    fake.pending(AMBER_READ)[0].resolve(json(payloadRead(amberBench(), 'amber-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const slot = useStore.getState().flistWorking[AMBER]
+    expect(descOf(slot.payload)).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(slot.etag).toBe('amber-saved')
+    expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+  })
+
+  it('a read landing after the user switched away leaves the active editor untouched', async () => {
+    fake.hold(BIRCH_READ)
+    fake.on(AMBER_READ, json(payloadRead(amberBench(), 'amber-1')))
+
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().editorContent).toBe(AMBER_TEXT)
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+
+    fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const s = useStore.getState()
+    expect(s.editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(s.editorTitle).toBe('Amber — Workbench')
+    expect(descOf(s.flistWorking[BIRCH].payload)).toBe(BIRCH_TEXT)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${AMBER_TEXT} And wasps.`
+    ])
+    expect(fake.requestsTo(BIRCH_SAVE)).toEqual([])
+  })
+
+  it('typing straight after a switch, before the read lands, edits the new character’s own text', async () => {
+    // Birch was opened earlier, so her Workbench is in memory. Until her
+    // read lands the editor must not keep showing Amber's text under
+    // Birch's name: a keystroke there would save Amber's description
+    // into Birch's Workbench.
+    useStore.setState({
+      flistWorking: {
+        [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }),
+        [BIRCH]: workingSlot(birchBench(), { etag: 'birch-1' })
+      },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT
+    })
+    fake.hold(BIRCH_READ)
+
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().editorContent).toBe(BIRCH_TEXT)
+    useStore.getState().setEditorContent(`${BIRCH_TEXT} Twice.`)
+    fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+
+    expect(useStore.getState().editorContent).toBe(`${BIRCH_TEXT} Twice.`)
+    expect(fake.requestsTo(BIRCH_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${BIRCH_TEXT} Twice.`
+    ])
+    expect(fake.requestsTo(AMBER_SAVE)).toEqual([])
+  })
+
+  it('a switch to a character not yet in memory shows a read-only loading state until the read lands', async () => {
+    // Birch has never been opened, so there is no Workbench in memory to
+    // show. The editor must neither keep showing Amber's text under
+    // Birch's name nor accept keystrokes the read would then overwrite.
+    useStore.setState({
+      flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT,
+      editorTitle: 'Amber — Workbench'
+    })
+    fake.hold(BIRCH_READ)
+
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+
+    let s = useStore.getState()
+    expect(s.editorContent).toBe('')
+    expect(s.editorReadOnly).toBe(true)
+    expect(s.editorTitle).toBe('Birch — Workbench (loading)')
+
+    fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    s = useStore.getState()
+    expect(s.editorReadOnly).toBe(false)
+    expect(s.editorContent).toBe(BIRCH_TEXT)
+    expect(s.editorTitle).toBe('Birch — Workbench')
+
+    useStore.getState().setEditorContent(`${BIRCH_TEXT} Twice.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(BIRCH_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${BIRCH_TEXT} Twice.`
+    ])
+    expect(fake.requestsTo(AMBER_SAVE)).toEqual([])
   })
 })

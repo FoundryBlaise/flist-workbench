@@ -42,10 +42,12 @@ import rag_store
 import settings as settings_store
 import workbench_mcp
 from archive_errors import InvalidCharacterId
-from refusals import InvalidFileName, Refusal
+from refusals import InvalidFileName, LogNameRefused, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
+from services import backup_trash as backup_trash_service
+from services import label_trash as label_trash_service
 from services import events as event_bus
 from services import foreign as foreign_service
 from services import image_import as image_import_service
@@ -92,6 +94,7 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await _eicons_warm_up()
     await _hydrate_activity_log_on_startup()
     await _avatar_cleanup_on_startup()
+    await _adopt_old_pre_upload_backups_on_startup()
     await _password_idle_watchdog()
     async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
         yield
@@ -769,23 +772,19 @@ async def flist_character_zip_backup_create_set(
 async def flist_character_zip_backup_delete(
     character_id: str, filename: str
 ) -> None:
-    """Delete a single backup ZIP. Filename validated against the
-    ISO-basic format so this can't be turned into an arbitrary-file
-    delete by crafting a `../` path. 404 if the backup isn't there
-    (idempotent-ish — UI should refresh anyway). Also drops any
-    user-set name from `_names.json` so the sidecar map doesn't
-    accumulate references to bytes that no longer exist."""
+    """Move a single Backup to the character's Trash, user-set name and
+    all; it can be restored from there until the Trash is emptied.
+    Filename validated against the ISO-basic format so a crafted `../`
+    path moves nothing. 404 if the Backup isn't there."""
     character_archive.require_backup_filename(filename)
-    p = character_archive.backups_dir(character_id) / filename
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail="backup not found")
     try:
-        p.unlink()
+        backup_trash_service.trash_backup(character_id, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="backup not found") from exc
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"could not delete backup: {exc}"
+            status_code=500, detail=f"could not move backup to the Trash: {exc}"
         ) from exc
-    character_archive.forget_backup_name(character_id, filename)
 
 
 class _ZipBackupRename(BaseModel):
@@ -901,6 +900,8 @@ async def flist_character_zip_backup_payload(
         raise HTTPException(
             status_code=500, detail="backup working.json is not valid JSON"
         ) from exc
+    if isinstance(payload, dict):
+        payload = character_archive.backup_payload(payload)
     return {"payload": payload, "filename": filename, "meta": meta}
 
 
@@ -1563,6 +1564,8 @@ async def flist_character_trash_list(character_id: str) -> dict:
     return {
         "character_id": character_id,
         "items": image_trash_service.list_trash(character_id),
+        "backups": backup_trash_service.list_backups(character_id),
+        "labels": label_trash_service.list_labels(_trash_owner(character_id)),
     }
 
 
@@ -1585,40 +1588,98 @@ async def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) 
     return image_trash_service.restore_images(character_id, body.image_ids)
 
 
+class _TrashIdsBody(BaseModel):
+    ids: list[str]
+
+
+@app.post("/flist/character/{character_id}/trash/backups/restore")
+async def flist_character_trash_backups_restore(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    """Put trashed Backups back in the Backup list, under their names."""
+    return backup_trash_service.restore_backups(character_id, body.ids)
+
+
+def _trash_owner(character_id: str) -> str:
+    """The name this character's cleared Labels are kept under, for the
+    Trash routes. The id is checked first, as every Trash route checks
+    it: an unsafe one is refused with `invalid_character_id` (400), one
+    the archive does not hold with `character_not_found` (404). A
+    character without a name owns no cleared Labels: its listing shows
+    none and a restore or purge finds none (`""` matches no entry)."""
+    character_archive.character_dir(character_id)
+    return character_archive.character_name(character_id) or ""
+
+
+@app.post("/flist/character/{character_id}/trash/labels/restore")
+async def flist_character_trash_labels_restore(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    """Put cleared Labels back. A message labelled again since keeps
+    its newer Label and is reported under `skipped`."""
+    return label_trash_service.restore(_trash_owner(character_id), body.ids)
+
+
 # Deleting for good is the window's alone: the MCP layer has no tool for
-# it, so a model can never make a picture unrecoverable.
+# it, so a model can never make a picture, a Backup or cleared Labels
+# unrecoverable.
 @app.post("/flist/character/{character_id}/trash/purge")
 async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
     return image_trash_service.purge_images(character_id, body.image_ids)
 
 
+@app.post("/flist/character/{character_id}/trash/backups/purge")
+async def flist_character_trash_backups_purge(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    return backup_trash_service.purge_backups(character_id, body.ids)
+
+
+@app.post("/flist/character/{character_id}/trash/labels/purge")
+async def flist_character_trash_labels_purge(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    return label_trash_service.purge(_trash_owner(character_id), body.ids)
+
+
 @app.delete("/flist/character/{character_id}/trash")
 async def flist_character_trash_empty(character_id: str) -> dict:
-    return {"purged": image_trash_service.empty_trash(character_id)}
+    """Empty the whole Trash: images, Backups and cleared Labels."""
+    owner = _trash_owner(character_id)
+    return {
+        "purged": image_trash_service.empty_trash(character_id)
+        + backup_trash_service.empty(character_id)
+        + label_trash_service.empty(owner)
+    }
 
 
 @app.get("/flist/character/{character_id}/export.zip")
 async def flist_character_export_zip(character_id: str) -> Response:
     """Build the userscript-compatible restore ZIP (Tier 6).
 
-    Bundles `character.json` + every pool image referenced by the
-    working copy's gallery + the avatar. The renderer triggers a
+    Bundles `character.json` + every image referenced by the
+    Workbench's gallery + the avatar. The renderer triggers a
     download by navigating to this URL, so the response stamps a
     `Content-Disposition: attachment` with a filename derived from
     the character name.
+
+    The export modal shows the Workbench's counts, so this is the
+    Workbench too: what the user reviewed is what they upload. The
+    legacy working copy is never read here. Live is the fallback only
+    for a character that has no Workbench yet.
     """
     import zip_serialise
 
-    working = character_archive.read_working(character_id)
+    working = None
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    if bench is not None:
+        working = character_archive.read_set_payload(character_id, bench.id)
     if working is None:
-        # Fall back to a Live-seeded payload so a user who hasn't yet
-        # edited the working copy can still export. Seeds inline since
-        # the renderer's seedWorkingFromLive isn't reachable from here.
         live = character_archive.read_live(character_id)
         if live is None:
             raise HTTPException(
                 status_code=404,
-                detail="no working copy or Live snapshot to export",
+                detail="no Workbench or Live to export",
             )
         working = payload_ops.seed_from_live(live)
     name_for_file = "character"
@@ -1721,6 +1782,16 @@ async def _avatar_cleanup_on_startup() -> None:
         print(
             f"[flist] cleaned {count} placeholder avatars from cache "
             "(left over from pre-URL-fix sidecar)",
+            flush=True,
+        )
+
+
+async def _adopt_old_pre_upload_backups_on_startup() -> None:
+    count = character_archive.adopt_old_pre_upload_backups()
+    if count > 0:
+        print(
+            f"[flist] {count} Backups taken before an Upload by an earlier "
+            "version are now in the Backup list",
             flush=True,
         )
 
@@ -2210,13 +2281,15 @@ class RagIngestRequest(BaseModel):
 
 @app.post("/rag/ingest", status_code=202)
 def rag_ingest_start(body: RagIngestRequest) -> dict:
-    if body.partner and not body.character:
-        raise HTTPException(status_code=400, detail="partner requires character")
-    scope: dict = {}
-    if body.character:
-        scope["character"] = body.character
-    if body.partner:
-        scope["partner"] = body.partner
+    # The same resolver MCP ingest_logs uses: any case, and a partner's
+    # alias reaches its conversation. An unknown name is refused instead
+    # of indexing nothing.
+    from workbench_mcp._context import ToolError, resolve_ingest_scope
+
+    try:
+        scope = resolve_ingest_scope(body.character, body.partner)
+    except ToolError as exc:
+        raise LogNameRefused(exc.message, code=exc.code) from exc
     job = rag_jobs.start(
         scope, include_ooc=body.include_ooc, force_rewipe=body.force_rewipe
     )
@@ -2363,26 +2436,39 @@ def labels_clear(body: LabelsClearRequest) -> dict:
 
     Used by the renderer's "Reset all labels" context-menu action.
     After this returns, the resolver falls back to rule-on-read for
-    every message in that conversation.
+    every message in that conversation. The cleared Labels go to the
+    character's Trash first (`trash_id`), where Restore puts them back.
     """
-    conn = labels_store.connect()
-    try:
-        alias_group = aliases_store.all_names_for(
-            conn, body.character, body.partner
-        )
-        deleted = labels_store.delete_labels_for_partner(
-            conn,
-            body.character,
-            body.partner,
-            partner_aliases=alias_group,
-        )
-    finally:
-        conn.close()
+    cleared = label_trash_service.clear(body.character, body.partner)
     return {
         "character": body.character,
         "partner": body.partner,
-        "deleted": deleted,
+        **cleared,
     }
+
+
+@app.get("/labels/trash")
+def labels_trash_list() -> dict:
+    """Every cleared-Labels entry in the Trash, newest first, for
+    Settings → Labels. Unlike a character's Trash view this includes a
+    Log character with no Workbench, and one whose Log name matches no
+    character in the list."""
+    return {"labels": label_trash_service.list_labels(None)}
+
+
+@app.post("/labels/trash/restore")
+def labels_trash_restore(body: _TrashIdsBody) -> dict:
+    """Put cleared Labels back, whichever character they were cleared
+    for. A message labelled again since keeps its newer Label and is
+    reported under `skipped`."""
+    return label_trash_service.restore(None, body.ids)
+
+
+@app.post("/labels/trash/purge")
+def labels_trash_purge(body: _TrashIdsBody) -> dict:
+    """Delete cleared Labels for good. The window's call only: MCP has
+    no tool for it."""
+    return label_trash_service.purge(None, body.ids)
 
 
 @app.post("/labels/clear-all")
@@ -2391,16 +2477,12 @@ def labels_clear_all() -> dict:
 
     The Settings → Labels "Reset all labels…" button calls this. After
     it returns, every message in every conversation falls back to
-    rule-on-read — manual overrides are gone too. There is no undo;
-    the renderer must confirm before invoking this.
+    rule-on-read — manual overrides are gone too. Each character's
+    cleared Labels go to its Trash first, as one entry per character;
+    the renderer still confirms before invoking this.
     """
-    conn = labels_store.connect()
-    try:
-        cur = conn.execute("DELETE FROM labels")
-        conn.commit()
-        return {"labels_deleted": cur.rowcount}
-    finally:
-        conn.close()
+    cleared = label_trash_service.clear_all()
+    return {"labels_deleted": cleared["deleted"], "trash_ids": cleared["trash_ids"]}
 
 
 @app.get("/labels/rollup")
