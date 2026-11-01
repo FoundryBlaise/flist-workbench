@@ -198,6 +198,50 @@ def build_zip(
     return buf.getvalue()
 
 
+def repack_with_payload(zip_bytes: bytes, working_payload: dict[str, Any]) -> bytes:
+    """The same ZIP with `character.json` and `working.json` written from
+    `working_payload`. Every other member (images, avatar, meta) is
+    copied as it is; the gallery in `character.json` lists only the
+    images the ZIP holds, as `build_zip` does."""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as src:
+        members = [i for i in src.infolist() if not i.is_dir()]
+        image_extensions: dict[str, str] = {}
+        for info in members:
+            if not info.filename.startswith("images/"):
+                continue
+            m = _IMAGE_FILE_RE.fullmatch(info.filename[len("images/"):])
+            if m:
+                image_extensions[m.group(1)] = m.group(2).lower()
+        character_json = to_zip_character_json(
+            working_payload, image_extensions=image_extensions
+        )
+        held = {info.filename for info in members}
+        present = [
+            entry
+            for entry in character_json["images"]["list"]
+            if entry.get("filename") in held
+        ]
+        for position, entry in enumerate(present):
+            entry["position"] = position
+        character_json["images"]["list"] = present
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as out:
+            out.writestr(
+                "character.json",
+                json.dumps(character_json, indent=2, ensure_ascii=False),
+            )
+            out.writestr(
+                "working.json",
+                json.dumps(working_payload, indent=2, ensure_ascii=False),
+            )
+            for info in members:
+                if info.filename in ("character.json", "working.json"):
+                    continue
+                out.writestr(info, src.read(info))
+    return buf.getvalue()
+
+
 # ---- internals --------------------------------------------------------
 
 

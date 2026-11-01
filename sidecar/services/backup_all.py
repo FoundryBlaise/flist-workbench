@@ -22,6 +22,7 @@ import flist_api
 import settings as settings_store
 import zip_serialise
 
+from . import image_trash
 from . import pull as pull_service
 
 #: Event names `run()` can yield. `error` is fatal and ends the sweep;
@@ -106,14 +107,15 @@ async def _pull_one_character_for_backup_all(
         except ValueError:
             ext = raw_ext.lower().lstrip(".")
         target = images_dir_path / f"{image_id}.{ext}"
-        # Stale-ext cleanup mirrors the per-character pull endpoint.
+        # Stale-ext cleanup mirrors the per-character pull endpoint:
+        # the old file goes to the Trash.
         for sibling in images_dir_path.glob(f"{image_id}.*"):
             if sibling.name == target.name:
                 continue
             if sibling.suffix.lstrip(".").lower() not in {"png", "jpg", "jpeg", "gif"}:
                 continue
             try:
-                sibling.unlink()
+                image_trash.trash_pool_file(cid, sibling)
             except OSError:
                 pass
         if target.exists():

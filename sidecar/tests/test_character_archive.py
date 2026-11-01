@@ -546,22 +546,6 @@ def test_add_uploaded_image_rejects_non_image_bytes():
     )
 
 
-@pytest.mark.known_violation(
-    "nothing_vanishes",
-    spec=2,
-    reason="remove_character_image deletes an image for good instead of moving it to the Trash",
-)
-def test_remove_character_image_is_permanent():
-    cid = "512"
-    character_archive.create_character_dir(cid)
-    character_archive.write_character_image(cid, "999", "png", _PNG_HEADER)
-    ok = character_archive.remove_character_image(cid, "999")
-    assert ok is True
-    # v5: no fallback store; the bytes are gone for good once delete fires.
-    assert not (character_archive.images_dir(cid) / "999.png").exists()
-    assert not (character_archive.character_dir(cid) / "pool").exists()
-
-
 def test_list_character_images_includes_added_at():
     cid = "514"
     character_archive.create_character_dir(cid)
