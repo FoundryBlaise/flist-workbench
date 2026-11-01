@@ -33,6 +33,9 @@ import character_archive
 import paths
 import zip_serialise
 
+#: `backup-meta.json` kind of the Backup taken before an Upload.
+PRE_UPLOAD_BACKUP_KIND = "pre_upload"
+
 
 _STATE_FILENAME = "restore-state.json"
 _HANDSHAKE_TTL_SEC = 300  # five minutes; client polls every 1.5s
@@ -293,7 +296,7 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
     2. **The Workbench** — the character's one editable copy. This is
        what a user means when they say "put my changes up".
     3. **Backups** — full ZIP archives under `backups/`, including the
-       pre-restore snapshots written by `/restore/snapshot/fresh`.
+       ones taken before an Upload by `/restore/snapshot/fresh`.
 
     Drafts the user never sees are not offered. A character used to be
     able to hold several named working sets, and the extension listed
@@ -345,12 +348,14 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
         filename = entry.get("filename") if isinstance(entry, dict) else None
         if not filename:
             continue
-        kind = "pre-restore" if filename.startswith("pre-restore-") else "backup"
         # Surface the user-set name (from _names.json) and the backup
         # provenance sub-kind (manual_single / manual_bulk / scheduled /
-        # import / unknown) so the extension's tab UI can bucket
-        # backups the same way the in-app sidebar does.
+        # import / pre_upload / unknown) so the extension's tab UI can
+        # bucket backups the same way the in-app sidebar does. The
+        # extension keeps the Backups taken before an Upload under their
+        # own heading, which it calls "pre-restore".
         backup_kind = entry.get("kind") if isinstance(entry, dict) else None
+        kind = "pre-restore" if backup_kind == PRE_UPLOAD_BACKUP_KIND else "backup"
         backup_name = entry.get("name") if isinstance(entry, dict) else None
         label = (
             entry.get("label")
@@ -451,9 +456,6 @@ def _avatar_path_for_name(character_name: str) -> Path | None:
 
 
 # ---- the Backup before an Upload --------------------------------------
-
-#: `backup-meta.json` kind of the Backup taken before an Upload.
-PRE_UPLOAD_BACKUP_KIND = "pre_upload"
 
 
 def write_pre_restore_snapshot(

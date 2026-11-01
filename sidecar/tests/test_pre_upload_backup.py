@@ -158,3 +158,28 @@ async def test_mcp_restores_the_backup_taken_before_an_upload(paired) -> None:
 
     assert not result.isError, data
     assert _workbench_payload(client)["kinks"] == {"580": "fave", "581": "no"}
+
+
+def _zip(data: bytes) -> zipfile.ZipFile:
+    return zipfile.ZipFile(io.BytesIO(data))
+
+
+def test_the_extension_offers_the_backup_as_an_upload_source(paired) -> None:
+    _client, extension = paired
+    taken = _upload_starts(extension)
+
+    sources = extension.get("/restore/snapshots", params={"character": NAME}).json()
+
+    offered = [s for s in sources if s["id"] == taken]
+    assert len(offered) == 1
+    # The extension files these under its own "Pre-restore" heading.
+    assert offered[0]["kind"] == "pre-restore"
+    res = extension.get(f"/restore/snapshot/{taken}", params={"character": NAME})
+    assert res.status_code == 200
+    # character.json is what the extension writes back into the form; it
+    # looks kinks and infotags up by bare id.
+    profile = json.loads(_zip(res.content).read("character.json"))
+    assert profile["character"]["description"] == "[b]What F-list had before the Upload.[/b]"
+    assert profile["kinks"] == {"580": "fave", "581": "no"}
+    assert profile["infotags"] == {"2": "Human"}
+    assert [k["name"] for k in profile["customKinks"]] == ["Lantern lore"]
