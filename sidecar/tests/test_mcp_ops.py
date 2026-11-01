@@ -417,6 +417,59 @@ async def test_export_restore_zip_names_the_manual_step(
     assert "cannot do it for them" in body["next_step"]
 
 
+EXPORT_TOOLS = ("export_working_set_bundle", "export_restore_zip")
+
+
+@pytest.mark.parametrize("tool", EXPORT_TOOLS)
+async def test_an_export_refuses_to_overwrite_an_existing_file(
+    workbench, tmp_path: Path, tool: str
+) -> None:
+    """A model must not clobber the user's files."""
+    existing = tmp_path / "keep.zip"
+    existing.write_bytes(b"the user's own file")
+    async with mcp_client("character") as session:
+        await call_tool(
+            session, "create_working_set", character="Lady Amber Blaise", name="Main"
+        )
+        result, _ = await call_tool(
+            session, tool, character="Lady Amber Blaise", path=str(existing)
+        )
+    assert f"{tool}: exists: " in tool_error_text(result)
+    assert existing.read_bytes() == b"the user's own file"
+
+
+@pytest.mark.parametrize("tool", EXPORT_TOOLS)
+async def test_exporting_into_a_folder_never_reuses_a_taken_name(
+    workbench, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """Two exports in the same instant still get two files: the clock
+    is frozen so the generated name collides on the second export."""
+    import time
+
+    monkeypatch.setattr(time, "time", lambda: 1700000000.0)
+    folder = tmp_path / "downloads"
+    folder.mkdir()
+    async with mcp_client("character") as session:
+        await call_tool(
+            session, "create_working_set", character="Lady Amber Blaise", name="Main"
+        )
+        _, first = await call_tool(
+            session, tool, character="Lady Amber Blaise", path=str(folder)
+        )
+        earlier = Path(first["path"])
+        earlier_bytes = earlier.read_bytes()
+        result, second = await call_tool(
+            session, tool, character="Lady Amber Blaise", path=str(folder)
+        )
+    assert not result.isError, second
+    later = Path(second["path"])
+    assert later.parent == folder
+    assert later.suffix == ".zip"
+    assert later != earlier
+    assert later.is_file()
+    assert earlier.read_bytes() == earlier_bytes
+
+
 async def test_extension_pairing_is_read_only(workbench) -> None:
     async with mcp_client("character") as session:
         _, body = await call_tool(session, "get_extension_pairing_status")
