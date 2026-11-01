@@ -1908,7 +1908,24 @@ _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 
 # `<image_id>.<ext>` filename in `images/`. image_id is digits for F-list
 # images, `local-<8 hex>` for pool-only user uploads not yet on F-list.
-_IMAGE_FILE_RE = re.compile(r"^([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$")
+# Always used with fullmatch.
+_IMAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+_IMAGE_FILE_RE = re.compile(r"([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)")
+
+
+def require_image_filename(filename: str) -> None:
+    """Refuse a name that is not `<image_id>.<ext>` (an image, a trashed
+    file, an inline), before any path is built from it. A caller hears
+    400 `invalid_file_name`."""
+    if not isinstance(filename, str) or not _IMAGE_FILE_RE.fullmatch(filename):
+        raise InvalidFileName("invalid image filename")
+
+
+def require_image_id(image_id: str) -> None:
+    """Refuse an image id that could not be the stem of an image file
+    name. A caller hears 400 `invalid_file_name`."""
+    if not isinstance(image_id, str) or not _IMAGE_ID_RE.fullmatch(image_id):
+        raise InvalidFileName("invalid image_id")
 
 
 # ---- pull integrity manifest -----------------------------------------

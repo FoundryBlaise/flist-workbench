@@ -140,6 +140,20 @@ def test_an_image_name_that_is_not_one_is_refused_as_invalid_file_name(
     assert res.json()["code"] == "invalid_file_name"
 
 
+@pytest.mark.parametrize("name", ["..%5Clive", "a.b", "id%0A"])
+def test_an_image_id_that_is_not_one_is_refused_as_invalid_file_name(
+    client: TestClient, character: str, name: str
+) -> None:
+    for url in (
+        f"/flist/character/{character}/image/{name}",
+        f"/foreign/character/Someone/image/{name}",
+    ):
+        res = client.get(url)
+        assert res.status_code == 400, f"{url}: {res.text}"
+        assert set(res.json()) == {"code", "message"}, url
+        assert res.json()["code"] == "invalid_file_name", url
+
+
 @pytest.mark.parametrize(
     ("method", "url", "body"),
     [

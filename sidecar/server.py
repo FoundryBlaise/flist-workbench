@@ -1447,9 +1447,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
     """Serve `images/<image_id>.<ext>`. The filename shape is validated
     against the safe-name regex so a hostile renderer call can't path-
     traverse out of the images directory."""
-    import re as _re
-    if not _re.fullmatch(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
-        raise InvalidFileName("invalid image filename")
+    character_archive.require_image_filename(filename)
     path = character_archive.images_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="image not found")
@@ -1476,9 +1474,7 @@ async def flist_character_image_by_id(
     know the extension. Tries the supported set in order; 404 when none
     exists. Lets the gallery render thumbnails reliably without a
     separate round-trip to look up extensions."""
-    import re as _re
-    if not _re.fullmatch(r"^[A-Za-z0-9_-]+$", image_id):
-        raise HTTPException(status_code=400, detail="invalid image_id")
+    character_archive.require_image_id(image_id)
     d = character_archive.images_dir(character_id)
     for ext in ("png", "jpg", "gif"):
         candidate = d / f"{image_id}.{ext}"
@@ -1578,9 +1574,9 @@ async def flist_character_trash_list(character_id: str) -> dict:
 async def flist_character_trash_file(character_id: str, filename: str) -> FileResponse:
     """Serve a trashed file, for the trash view's thumbnails."""
     _require_valid_character_id(character_id)
-    import re as _re
-
-    if not _re.fullmatch(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename) or filename.endswith(".json"):
+    character_archive.require_image_filename(filename)
+    if filename.endswith(".json"):
+        # The trash's own metadata sits next to the files.
         raise InvalidFileName("invalid image filename")
     path = image_trash_service.trash_dir(character_id) / filename
     if not path.exists():
@@ -1677,9 +1673,7 @@ def _safe_filename_part(name: str) -> str:
 
 @app.get("/flist/character/{character_id}/inlines/{filename}")
 async def flist_character_inline(character_id: str, filename: str) -> FileResponse:
-    import re as _re
-    if not _re.fullmatch(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
-        raise InvalidFileName("invalid inline filename")
+    character_archive.require_image_filename(filename)
     path = character_archive.inlines_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="inline not found")
@@ -1898,10 +1892,7 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     that is what stops this route being a general-purpose proxy for
     anything on the CDN.
     """
-    import re as _re
-
-    if not _re.fullmatch(r"^[A-Za-z0-9_-]+$", image_id):
-        raise HTTPException(status_code=400, detail="invalid image_id")
+    character_archive.require_image_id(image_id)
     profile = foreign_cache.read_profile(name)
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not cached")
