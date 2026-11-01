@@ -513,6 +513,34 @@ type WindowCreds = {
   getPassword: () => Promise<string | null>
 }
 
+/**
+ * A request the sidecar turned down with a code (`{code, message}`), so
+ * a caller can tell "not signed in" from "no such character" without
+ * matching on prose. Narrow with `instanceof`.
+ */
+export class RefusalError extends Error {
+  readonly code: string
+  readonly status: number
+
+  constructor(code: string, status: number, message: string) {
+    super(message)
+    this.name = 'RefusalError'
+    this.code = code
+    this.status = status
+  }
+}
+
+/** The bundle comes from another character; importing it needs the user's confirmation. */
+export class CrossCharacterImportRefusal extends RefusalError {
+  readonly source: { characterId: string; characterName: string; setName: string }
+
+  constructor(source: CrossCharacterImportRefusal['source']) {
+    super('requires_cross_character_confirmation', 422, 'requires_cross_character_confirmation')
+    this.name = 'CrossCharacterImportRefusal'
+    this.source = source
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -568,18 +596,17 @@ async function request<T>(
         const obj = raw as { message?: unknown; code?: unknown }
         if (typeof obj.message === 'string') detail = obj.message
         if (typeof obj.code === 'string') {
-          const err = new Error(
+          throw new RefusalError(
+            obj.code,
+            res.status,
             `HTTP ${res.status}: ${detail ?? res.statusText}`
-          ) as Error & { code?: string; status?: number }
-          err.code = obj.code
-          err.status = res.status
-          throw err
+          )
         }
       }
     } catch (e) {
-      // A thrown coded error above is the real failure — re-raise it.
+      // A refusal thrown above is the real failure — re-raise it.
       // Anything else means the body simply wasn't JSON.
-      if (e instanceof Error && 'code' in e) throw e
+      if (e instanceof RefusalError) throw e
     }
     throw new Error(`HTTP ${res.status}: ${detail ?? res.statusText}`)
   }
@@ -1248,23 +1275,11 @@ export const api = {
         typeof detail === 'object' &&
         detail.code === 'requires_cross_character_confirmation'
       ) {
-        const err = new Error(
-          'requires_cross_character_confirmation'
-        ) as Error & {
-          code: 'requires_cross_character_confirmation'
-          source: {
-            characterId: string
-            characterName: string
-            setName: string
-          }
-        }
-        err.code = 'requires_cross_character_confirmation'
-        err.source = {
+        throw new CrossCharacterImportRefusal({
           characterId: String(detail.source?.character_id ?? ''),
           characterName: String(detail.source?.character_name ?? ''),
           setName: String(detail.source?.set_name ?? '')
-        }
-        throw err
+        })
       }
       const msg = typeof detail === 'string' ? detail : 'invalid bundle'
       throw new Error(msg)
