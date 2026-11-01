@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import paths
-from archive_errors import InvalidCharacterId
+from archive_errors import CharacterNotFound, InvalidCharacterId
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -249,8 +249,8 @@ def register_character(character_id: int | str, name: str) -> str:
     elif old_slug:
         entry = {"name": name, "folder": old_slug}
     else:
-        # Brand-new character with no legacy folder. Lazy-create on
-        # first character_dir() call.
+        # Brand-new character with no legacy folder. `write_live`
+        # creates it right after registering.
         entry = {"name": name, "folder": new_slug}
     reg[cid] = entry
     save_registry(reg)
@@ -342,21 +342,42 @@ def _maybe_migrate_id_folders() -> None:
             pass
 
 
-def character_dir(character_id: int | str) -> Path:
+def _folder_for(character_id: int | str) -> tuple[Path, bool]:
+    """Where a character's folder is, and whether the registry names it."""
     cid = str(character_id)
     reg = load_registry()
     entry = reg.get(cid)
     if entry and entry.get("folder"):
-        p = root() / entry["folder"]
-    elif _is_folder_safe(cid) and not cid.startswith("_"):
+        return root() / entry["folder"], True
+    if _is_folder_safe(cid) and not cid.startswith("_"):
         # Unregistered id (no pull yet, or registry corruption) — fall
         # back to the legacy id-named folder so existing data keeps
         # working. Only a name that cannot leave `characters/` or hit
         # its reserved `_` entries gets here: on Windows a backslash
         # is a separator, so `..\..\x` would otherwise escape.
-        p = root() / cid
-    else:
-        raise InvalidCharacterId(cid)
+        return root() / cid, False
+    raise InvalidCharacterId(cid)
+
+
+def character_dir(character_id: int | str) -> Path:
+    """Find a character's folder. Never creates it.
+
+    A character the archive holds is one the registry names (a Pull
+    registered it) or one with a legacy id-named folder on disk. Any
+    other safe id raises `CharacterNotFound`; an unsafe one raises
+    `InvalidCharacterId`. Only `create_character_dir` makes a folder.
+    """
+    p, registered = _folder_for(character_id)
+    if not registered and not p.is_dir():
+        raise CharacterNotFound(str(character_id))
+    return p
+
+
+def create_character_dir(character_id: int | str) -> Path:
+    """Create a character's folder: the moment a character comes into
+    the archive. Only a Pull calls this (`write_live`); every other
+    path finds the character with `character_dir`."""
+    p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -620,7 +641,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     name = payload.get("name")
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
-    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
     _publish("live-changed", character_id=str(character_id))
 
 

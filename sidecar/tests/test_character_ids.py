@@ -94,7 +94,8 @@ def test_the_archive_refuses_a_hostile_id_directly(archive) -> None:  # noqa: AN
             archive.character_dir(cid)
 
 
-def test_a_real_id_still_works(client: TestClient) -> None:
+def test_a_real_id_still_works(client: TestClient, archive) -> None:  # noqa: ANN001
+    archive.create_character_dir("123")
     assert client.get("/flist/character/123/zip-backups").status_code == 200
 
 
@@ -109,7 +110,7 @@ def test_the_backup_payload_route_checks_the_file_name(
     client: TestClient, archive  # noqa: ANN001
 ) -> None:
     """A zip next to backups/, not in it, must not be readable."""
-    char = archive.character_dir("123")
+    char = archive.create_character_dir("123")
     (char / "outside.zip").write_bytes(_zip_with_working({"secret": True}))
     res = client.get("/flist/character/123/zip-backups/..%5Coutside.zip/payload")
     assert res.status_code == 400
@@ -123,7 +124,7 @@ def _pair(client: TestClient) -> dict[str, str]:
 
 
 def _archive_character(archive, name: str = "Someone") -> Path:  # noqa: ANN001
-    char = archive.character_dir("123")
+    char = archive.create_character_dir("123")
     (char / "live.json").write_text(json.dumps({"id": 123, "name": name}), encoding="utf-8")
     return char
 
