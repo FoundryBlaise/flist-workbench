@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { writeFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
@@ -555,8 +556,17 @@ function configureAutoUpdater(): void {
     debug: () => {}
   }
   if (updateFeed !== null) {
+    // Stands in for the app-update.yml only a packaged build carries, so
+    // the check and (on the installer) a download behave as shipped. JSON
+    // is YAML. The download cache follows LOCALAPPDATA, which the e2e
+    // suite points into its temp folder.
+    const configPath = join(app.getPath('userData'), 'test-app-update.yml')
+    writeFileSync(
+      configPath,
+      JSON.stringify({ provider: 'generic', url: updateFeed, updaterCacheDirName: 'flist-workbench-updater' })
+    )
     autoUpdater.forceDevUpdateConfig = true
-    autoUpdater.setFeedURL({ provider: 'generic', url: updateFeed })
+    autoUpdater.updateConfigPath = configPath
   }
   const channel = updateChannel(process.env)
   appendDiagLog('updater', `channel ${channel}`)
