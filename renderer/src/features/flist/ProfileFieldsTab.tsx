@@ -7,6 +7,7 @@ import {
 } from './infotagsResolver'
 import { ListField, NumberField, TextField, UnknownField } from './infotagFields/TextField'
 import { MappingListStaleness } from './MappingListStaleness'
+import { ResetUndoBanner } from './ResetUndoBanner'
 
 const COLLAPSE_KEY_PREFIX = 'flist-workbench:profile-fields-group-collapsed:'
 
@@ -35,15 +36,9 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
   const mapping = useStore((s) => s.flistMapping)
   const mappingStatus = useStore((s) => s.flistMapping.status)
   const driftBanner = useStore((s) => s.flistDriftBanners[characterId])
-  const resetUndo = useStore((s) =>
-    s.flistResetUndo && s.flistResetUndo.characterId === characterId
-      ? s.flistResetUndo
-      : null
-  )
   const setField = useStore((s) => s.flistSetWorkingField)
   const resetField = useStore((s) => s.flistResetWorkingField)
   const resetToLive = useStore((s) => s.flistResetWorkingToLive)
-  const undoReset = useStore((s) => s.flistUndoResetWorking)
   const loadMapping = useStore((s) => s.flistLoadMapping)
   const dismissDrift = useStore((s) => s.flistDismissDriftBanner)
   const roster = useStore((s) => s.flistRoster)
@@ -52,7 +47,6 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => readCollapsed())
   const [filter, setFilter] = useState('')
   const [resetConfirm, setResetConfirm] = useState(false)
-  const [undoCountdown, setUndoCountdown] = useState<number | null>(null)
   const [driftAnnounced, setDriftAnnounced] = useState(false)
   const [offAccountDismissed, setOffAccountDismissed] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -71,21 +65,6 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
       return () => clearTimeout(t)
     }
   }, [driftBanner, driftAnnounced])
-
-  // Live countdown for the reset-undo banner (UX P1-5).
-  useEffect(() => {
-    if (!resetUndo) {
-      setUndoCountdown(null)
-      return
-    }
-    const update = () => {
-      const remaining = Math.max(0, Math.ceil((resetUndo.expiresAt - Date.now()) / 1000))
-      setUndoCountdown(remaining)
-    }
-    update()
-    const interval = setInterval(update, 250)
-    return () => clearInterval(interval)
-  }, [resetUndo])
 
   // Esc closes the reset-confirm modal + autofocus the safe-default Cancel
   // button (UX P1-4). Per CLAUDE.md backdrop-click is intentionally NOT
@@ -265,19 +244,7 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
         </div>
       )}
 
-      {resetUndo && (
-        <div
-          className="profile-fields-banner profile-fields-banner-undo"
-          role="alert"
-          aria-live="assertive"
-          data-testid="profile-fields-reset-undo"
-        >
-          Working copy reset to Live.
-          <button type="button" onClick={() => void undoReset()}>
-            Undo{undoCountdown != null ? ` (${undoCountdown}s)` : ''}
-          </button>
-        </div>
-      )}
+      <ResetUndoBanner characterId={characterId} />
 
       {/* Custom title row, top of the tab per §4.5 */}
       <InfotagSection
