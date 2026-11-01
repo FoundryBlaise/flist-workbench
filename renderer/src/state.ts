@@ -821,6 +821,65 @@ function _isNewestOpen(characterId: string, token: number): boolean {
   return _openTokens.get(characterId) === token
 }
 
+/** Reads a character's legacy working copy (`working.json`) into a
+ *  slot without storing it. No copy on disk yet (payload null or a
+ *  404) seeds the slot from Live, unmaterialised: the first edit then
+ *  writes it (Tier 2 §1.6 materialise-on-first-edit). Null when the
+ *  read failed for any other reason. */
+async function _readLegacyWorking(
+  getter: () => State,
+  characterId: string
+): Promise<FlistWorkingSlot | null> {
+  const seedFromLive = (): FlistWorkingSlot => {
+    const live = getter().flistArchive[characterId]?.live ?? null
+    return {
+      ...emptyWorkingSlot(),
+      payload: live ? seedWorkingFromLive(live) : { ...emptyWorkingSlot().payload },
+      materialised: false
+    }
+  }
+  let read: Awaited<ReturnType<typeof api.flistWorkingRead>>
+  try {
+    read = await api.flistWorkingRead(characterId)
+  } catch (err) {
+    // First-open: Live may itself be missing — the caller tolerates.
+    const isHttp404 = err instanceof Error && /HTTP 404/.test(err.message)
+    return isHttp404 ? seedFromLive() : null
+  }
+  const { payload, etag } = read
+  // payload: null is the sidecar's "no working copy yet" signal,
+  // handled identically to the 404.
+  if (payload === null) return seedFromLive()
+  const workingPayload = payload as WorkingPayload
+  const overlay = Array.isArray(workingPayload._overlay)
+    ? (workingPayload._overlay as string[])
+    : []
+  // A v3 file migrated to v4 has its sha-keyed `images` stripped
+  // (sidecar can't translate without re-querying F-list). Backfill
+  // the gallery from live.json so the user doesn't see an empty
+  // pane after upgrading.
+  const images = (workingPayload as { images?: unknown }).images
+  if (!Array.isArray(images) || images.length === 0) {
+    const live = getter().flistArchive[characterId]?.live ?? null
+    if (live) {
+      const seeded = seedWorkingFromLive(live)
+      if (Array.isArray(seeded.images) && seeded.images.length > 0) {
+        workingPayload.images = seeded.images
+      }
+    }
+  }
+  return {
+    payload: workingPayload,
+    overlay,
+    etag,
+    unsavedDirty: false,
+    saveStatus: 'idle',
+    saveError: null,
+    lastSavedAt: null,
+    materialised: true
+  }
+}
+
 // Working-sets v2: autosave debouncer + single-flight, keyed by **set id**
 // rather than character id. Multiple sets can be open simultaneously in
 // memory; their writes are independent so the debounce + serialisation
@@ -2423,23 +2482,12 @@ export const useStore = create<State>((set, get) => ({
         }))
       }
     }
-    // Never reseed over unsaved edits. Autosave waits 500 ms for quiet
-    // time, and the picker calls this on every click — including a
-    // click on the character already open, which is how a user gets
-    // out of a read-only Live view. Reseeding then replaced the slot
-    // with a fresh copy of Live, and the armed flush, finding nothing
-    // dirty, dropped the write: what the user had just typed was gone
-    // with nothing said. The edits live in the slot; leave them there
-    // and let the pending flush do its job.
-    const pending = get().flistWorking[characterId]
-    if (pending?.unsavedDirty) {
-      set((s) => ({
-        flistWorkingLoadStatus: {
-          ...s.flistWorkingLoadStatus,
-          [characterId]: 'ready'
-        }
-      }))
-    } else if (activeSetId) {
+    // What the slot held when the read went out. Anything that replaces
+    // it meanwhile (a keystroke, a save landing with its new etag) is
+    // newer than what the read can bring back.
+    const before = get().flistWorking[characterId]
+    let read: FlistWorkingSlot | null
+    if (activeSetId) {
       // The set's own payload, fetched fresh — the same thing
       // flistActivateSet reads when the user clicks the row. This used
       // to seed from Live instead, on the theory that the slot was
@@ -2462,29 +2510,52 @@ export const useStore = create<State>((set, get) => ({
           ? seedWorkingFromLive(liveForSeed)
           : { ...emptyWorkingSlot().payload }
       }
-      if (!_isNewestOpen(characterId, token)) return
-      const slot: FlistWorkingSlot = {
+      read = {
         ...emptyWorkingSlot(),
         payload,
         overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
         etag,
         materialised: etag !== null
       }
+    } else {
+      read = await _readLegacyWorking(get, characterId)
+    }
+    if (!_isNewestOpen(characterId, token)) return
+    // Never reseed over unsaved edits, and decide that only now, after
+    // the read, right before applying it. Autosave waits 500 ms for
+    // quiet time, and the picker calls this on every click — including
+    // a click on the character already open, which is how a user gets
+    // out of a read-only Live view. Reseeding then replaced the slot,
+    // and the armed flush, finding nothing dirty, dropped the write:
+    // what the user had just typed was gone with nothing said. Checked
+    // before the read, a slow read still overwrote whatever was typed
+    // while it was in flight. The edits live in the slot; leave them
+    // there and let the pending flush do its job.
+    const current = get().flistWorking[characterId]
+    const untouched = current === before && !current?.unsavedDirty
+    if (read && untouched) {
+      const slot = read
       set((s) => ({
         flistWorking: { ...s.flistWorking, [characterId]: slot },
-        flistSetWorking: { ...s.flistSetWorking, [activeSetId]: slot },
+        ...(activeSetId
+          ? { flistSetWorking: { ...s.flistSetWorking, [activeSetId]: slot } }
+          : {}),
         flistWorkingLoadStatus: {
           ...s.flistWorkingLoadStatus,
           [characterId]: 'ready'
         }
       }))
     } else {
-      await get().flistLoadWorking(characterId)
+      set((s) => ({
+        flistWorkingLoadStatus: {
+          ...s.flistWorkingLoadStatus,
+          [characterId]: read || current ? 'ready' : 'error'
+        }
+      }))
     }
     // The editor shows the active character. A read that lands after
     // the user moved on to someone else leaves it alone; otherwise the
     // next keystroke would save this character's text into theirs.
-    if (!_isNewestOpen(characterId, token)) return
     if (get().flistActiveCharacterId !== characterId) return
     const slot = get().flistWorking[characterId]
     const live = archive?.live ?? null
@@ -2515,94 +2586,14 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({
       flistWorkingLoadStatus: { ...s.flistWorkingLoadStatus, [characterId]: 'loading' }
     }))
-    try {
-      const { payload, etag } = await api.flistWorkingRead(characterId)
-      // payload: null is the sidecar's "no working copy yet" signal
-      // — handled identically to the legacy 404 path. Seeds the slot
-      // from Live for materialise-on-first-edit (Tier 2 §1.6).
-      if (payload === null) {
-        const live = get().flistArchive[characterId]?.live ?? null
-        const seeded = live
-          ? seedWorkingFromLive(live)
-          : { ...emptyWorkingSlot().payload }
-        const slot: FlistWorkingSlot = {
-          ...emptyWorkingSlot(),
-          payload: seeded,
-          materialised: false
-        }
-        set((s) => ({
-          flistWorking: { ...s.flistWorking, [characterId]: slot },
-          flistWorkingLoadStatus: {
-            ...s.flistWorkingLoadStatus,
-            [characterId]: 'ready'
-          }
-        }))
-        return
+    const slot = await _readLegacyWorking(get, characterId)
+    set((s) => ({
+      ...(slot ? { flistWorking: { ...s.flistWorking, [characterId]: slot } } : {}),
+      flistWorkingLoadStatus: {
+        ...s.flistWorkingLoadStatus,
+        [characterId]: slot ? 'ready' : 'error'
       }
-      const overlay = Array.isArray((payload as WorkingPayload)._overlay)
-        ? ((payload as WorkingPayload)._overlay as string[])
-        : []
-      // A v3 file migrated to v4 has its sha-keyed `images` stripped
-      // (sidecar can't translate without re-querying F-list). Backfill
-      // the gallery from live.json so the user doesn't see an empty
-      // pane after upgrading.
-      const workingPayload = payload as WorkingPayload
-      const images = (workingPayload as { images?: unknown }).images
-      if (!Array.isArray(images) || images.length === 0) {
-        const live = get().flistArchive[characterId]?.live ?? null
-        if (live) {
-          const seeded = seedWorkingFromLive(live)
-          if (Array.isArray(seeded.images) && seeded.images.length > 0) {
-            workingPayload.images = seeded.images
-          }
-        }
-      }
-      const slot: FlistWorkingSlot = {
-        payload: workingPayload,
-        overlay,
-        etag,
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
-      set((s) => ({
-        flistWorking: { ...s.flistWorking, [characterId]: slot },
-        flistWorkingLoadStatus: {
-          ...s.flistWorkingLoadStatus,
-          [characterId]: 'ready'
-        }
-      }))
-    } catch (err) {
-      const isHttp404 =
-        err instanceof Error && /HTTP 404/.test(err.message)
-      if (isHttp404) {
-        // First-open: seed from Live (materialise-on-first-edit). Live
-        // may itself be missing — caller (flistOpenWorking) tolerates.
-        const live = get().flistArchive[characterId]?.live ?? null
-        const seeded = live ? seedWorkingFromLive(live) : { ...emptyWorkingSlot().payload }
-        const slot: FlistWorkingSlot = {
-          ...emptyWorkingSlot(),
-          payload: seeded,
-          materialised: false
-        }
-        set((s) => ({
-          flistWorking: { ...s.flistWorking, [characterId]: slot },
-          flistWorkingLoadStatus: {
-            ...s.flistWorkingLoadStatus,
-            [characterId]: 'ready'
-          }
-        }))
-        return
-      }
-      set((s) => ({
-        flistWorkingLoadStatus: {
-          ...s.flistWorkingLoadStatus,
-          [characterId]: 'error'
-        }
-      }))
-    }
+    }))
   },
 
   flistSetWorkingField(characterId, path, value) {

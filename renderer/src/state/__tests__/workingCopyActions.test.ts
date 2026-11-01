@@ -934,4 +934,53 @@ describe('opening a character never applies a stale read', () => {
     ])
     expect(fake.requestsTo(BIRCH_SAVE)).toEqual([])
   })
+
+  it('keystrokes typed while the read is held stay in the editor and are saved', async () => {
+    // Amber is open; a click on her again (or a refresh) re-reads her
+    // Workbench. The user keeps typing while that read is slow.
+    useStore.setState({
+      flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT
+    })
+    fake.hold(AMBER_READ)
+
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+    // The read lands inside the autosave's quiet time, carrying what
+    // is on disk: the text from before the keystrokes.
+    fake.pending(AMBER_READ)[0].resolve(json(payloadRead(amberBench(), 'amber-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${AMBER_TEXT} And wasps.`
+    ])
+  })
+
+  it('a read that went out before a save landed does not put the older text back', async () => {
+    // The keystrokes were saved while the read was still in flight; the
+    // read then brings back what was on disk before that save.
+    useStore.setState({
+      flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT
+    })
+    fake.hold(AMBER_READ)
+
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(AMBER_SAVE)).toHaveLength(1)
+    fake.pending(AMBER_READ)[0].resolve(json(payloadRead(amberBench(), 'amber-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const slot = useStore.getState().flistWorking[AMBER]
+    expect(descOf(slot.payload)).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(slot.etag).toBe('amber-saved')
+    expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+  })
 })
