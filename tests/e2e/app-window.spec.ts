@@ -196,3 +196,65 @@ test("the app's scheme serves the app and nothing outside it", async () => {
     }
   })
 })
+
+test('the close-time flush still carries the launch secret', async () => {
+  await withApp(async ({ app, window, sidecarUrl }) => {
+    // Keep the app running once its only window is gone, so the main
+    // process can still be asked what it saw.
+    await app.evaluate(({ app: electronApp }) => {
+      electronApp.removeAllListeners('window-all-closed')
+      electronApp.on('window-all-closed', () => undefined)
+    })
+    // Records, per request to the sidecar, whether it left with the
+    // secret and what the sidecar answered.
+    await app.evaluate(({ session }, url) => {
+      const seen: Record<string, { secret?: boolean; status?: number }> = {}
+      ;(globalThis as { __e2eFlush?: typeof seen }).__e2eFlush = seen
+      const filter = { urls: [`${url}/*`] }
+      session.defaultSession.webRequest.onSendHeaders(filter, (details) => {
+        seen[details.url] = {
+          ...seen[details.url],
+          secret: Object.keys(details.requestHeaders).some((h) => h.toLowerCase() === 'x-workbench-secret')
+        }
+      })
+      session.defaultSession.webRequest.onCompleted(filter, (details) => {
+        seen[details.url] = { ...seen[details.url], status: details.statusCode }
+      })
+    }, sidecarUrl)
+
+    // The same request the app's unload flush sends for an unsaved
+    // edit: a keepalive PUT of the working copy from `beforeunload`.
+    // The character is unknown, so the sidecar answers 404 if the
+    // secret came along and 401 if it did not. Any other request left
+    // behind by the closing page goes without it.
+    const flushUrl = `${sidecarUrl}/flist/character/123/working`
+    const otherUrl = `${sidecarUrl}/flist/character/123/snapshot`
+    await window.evaluate(
+      ([flush, other]) => {
+        addEventListener('beforeunload', () => {
+          const send = (u: string, method: string): void =>
+            void fetch(u, {
+              method,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ character: {} }),
+              keepalive: true
+            }).catch(() => undefined)
+          send(flush, 'PUT')
+          send(other, 'POST')
+        })
+      },
+      [flushUrl, otherUrl]
+    )
+
+    // Closed the way the window's close button closes it.
+    await (await app.browserWindow(window)).evaluate((w) => w.close())
+
+    const seen = (u: string): Promise<unknown> =>
+      app.evaluate(
+        (_electron, url) => (globalThis as { __e2eFlush?: Record<string, unknown> }).__e2eFlush?.[url],
+        u
+      )
+    await expect.poll(() => seen(flushUrl)).toEqual({ secret: true, status: 404 })
+    await expect.poll(() => seen(otherUrl)).toEqual({ secret: false, status: 401 })
+  })
+})
