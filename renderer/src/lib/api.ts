@@ -1514,6 +1514,9 @@ export const api = {
     }),
   restoreRevokeToken: () =>
     request<{ ok: boolean }>('/restore/token', { method: 'DELETE' }),
+  /** Whether a pairing token is stored. The token itself never comes
+   *  back; only the app window can ask. */
+  pairingStatus: () => get<{ paired: boolean }>('/pairing'),
 
   /** The extension version the browser runs, as of its last paired
    *  call. Null until the extension has made one since the app started. */
