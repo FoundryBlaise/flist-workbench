@@ -2001,6 +2001,8 @@ body {
   cursor: pointer;
   font-size: 15px;
   font-weight: 500;
+  /* The portable build's release link wears the same look. */
+  text-decoration: none;
 }
 .updater-toast-primary:hover { filter: brightness(1.1); }
 .updater-toast-close {
