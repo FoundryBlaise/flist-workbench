@@ -348,6 +348,14 @@ class RagStore:
         filtered to a scope."""
         return set(self._scroll_payloads(scope, ["chunk_id"]))
 
+    def partners(self, scope: dict | None = None) -> set[str]:
+        """The partner names the stored chunks in scope belong to."""
+        return {
+            str(p["partner"])
+            for p in self._scroll_payloads(scope, ["chunk_id", "partner"]).values()
+            if p.get("partner")
+        }
+
     def chunk_payloads(self, scope: dict | None = None) -> dict[str, dict]:
         """Every stored chunk in scope as {chunk_id: payload}. The ingest
         job compares these with freshly computed chunks to find what

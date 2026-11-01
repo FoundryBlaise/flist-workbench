@@ -718,6 +718,43 @@ def test_a_rebuild_of_one_character_leaves_another_characters_index(
     assert _found_as_ic("quarrel", amber_stale)
 
 
+def test_a_character_rebuild_without_channels_keeps_that_characters_channel_index(
+    two_labelled: tc.TwoCharacters,
+) -> None:
+    client = two_labelled.client
+    _ingest(client, {})
+    _seed_stale_chunk(tc.AZURE, "#Harbour Tavern", "Azure's tavern quarrel")
+    _seed_stale_chunk(tc.AZURE, "Mossgrave", "Azure's old harbour quarrel")
+    channel = {"character": tc.AZURE, "partner": "#Harbour Tavern"}
+
+    # The ingest leaves channels out, so the delete before it must too.
+    _ingest(client, {"character": tc.AZURE}, rebuild=True)
+
+    assert _found_as_ic("tavern", channel)
+    assert not _found_as_ic("quarrel", {"character": tc.AZURE, "partner": "Mossgrave"})
+    assert _found_as_ic(tc.SEARCH_TERM, AZURE_SCOPE)
+
+
+async def test_a_character_rebuild_with_channels_deletes_its_channel_index_too(
+    two_labelled: tc.TwoCharacters,
+) -> None:
+    from mcp_helpers import call_tool, mcp_client
+
+    _ingest(two_labelled.client, {})
+    _seed_stale_chunk(tc.AZURE, "#Harbour Tavern", "Azure's tavern quarrel")
+    channel = {"character": tc.AZURE, "partner": "#Harbour Tavern"}
+
+    async with mcp_client("logs") as session:
+        result, body = await call_tool(
+            session, "ingest_logs", character=tc.AZURE, rebuild=True, include_channels=True
+        )
+
+    assert not result.isError, body
+    assert body["state"] == "done", body
+    assert not _found_as_ic("tavern", channel)
+    assert _found_as_ic(tc.SEARCH_TERM, AZURE_SCOPE)
+
+
 def test_an_unscoped_rebuild_empties_the_whole_index_first(
     two_labelled: tc.TwoCharacters,
 ) -> None:

@@ -208,6 +208,29 @@ def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
     return targets
 
 
+def _delete_rebuild_scope(
+    scope: dict, *, store: rag_store.RagStore, lex: rag_lexical.LexicalStore
+) -> None:
+    """Delete what a scoped rebuild is about to fill again, and nothing
+    else. The delete mirrors the ingest's own filter: one conversation as
+    asked, or every conversation of the character except its channels
+    (`#name`) unless the ingest includes channels too. Otherwise a
+    rebuild would delete channel chunks it never puts back."""
+    character = scope["character"]
+    if scope.get("partner") or scope.get("include_channels"):
+        store.delete_scope(scope)
+        lex.delete_scope(scope)
+        return
+    owner = {"character": character}
+    partners = sorted(
+        p for p in store.partners(owner) | lex.partners(owner) if not p.startswith("#")
+    )
+    if not partners:
+        return
+    store.delete_scope({"character": character, "partners": partners})
+    lex.delete_scope({"character": character, "partners": partners})
+
+
 def _run_job(job: IngestJob) -> None:
     job.state = "running"
     try:
@@ -299,8 +322,7 @@ def _run_job(job: IngestJob) -> None:
                     # within the same (character, partner) via
                     # prev/next pointers.
                     if job.scope.get("character"):
-                        store.delete_scope(job.scope)
-                        lex.delete_scope(job.scope)
+                        _delete_rebuild_scope(job.scope, store=store, lex=lex)
                         store.ensure_collection(vector_size=dimension)
                     else:
                         # Unscoped: empty the whole Index first,

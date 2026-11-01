@@ -160,6 +160,12 @@ class LexicalStore:
         cur = self._conn.execute(f"SELECT COUNT(*) FROM rag_fts{sql}", args)
         return int(cur.fetchone()[0])
 
+    def partners(self, scope: dict | None = None) -> set[str]:
+        """The partner names the stored chunks in scope belong to."""
+        sql, args = _scope_clause(scope)
+        cur = self._conn.execute(f"SELECT DISTINCT partner FROM rag_fts{sql}", args)
+        return {str(r[0]) for r in cur.fetchall() if r[0]}
+
     def chunk_texts(self, scope: dict | None = None) -> dict[str, str]:
         """Every stored chunk in scope as {chunk_id: text}."""
         sql, args = _scope_clause(scope)
