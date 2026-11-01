@@ -669,9 +669,13 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
 async function createWindow(): Promise<void> {
   // The e2e harness starts the app many times per run; a window that
   // took the focus each time would keep the desktop unusable meanwhile.
+  // showInactive alone is not enough: Windows may still activate the
+  // window later. focusable: false (WS_EX_NOACTIVATE, and no taskbar
+  // button) means it never is; Playwright emulates focus over CDP.
   const noFocus = process.env['FLIST_WORKBENCH_NO_FOCUS'] === '1'
   mainWindow = new BrowserWindow({
     show: !noFocus,
+    focusable: !noFocus,
     width: 1400,
     height: 900,
     // Below ~1100 px the editor and preview both compress past readable
@@ -761,7 +765,9 @@ async function createWindow(): Promise<void> {
   // Auto-open DevTools in dev so the renderer console + network panel
   // are one click away. Packaged builds stay clean — F12 still works
   // if a user wants to peek under the hood.
-  if (isDev) {
+  // Not under FLIST_WORKBENCH_NO_FOCUS: the detached DevTools window
+  // would take the focus the app window no longer can.
+  if (isDev && !noFocus) {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
