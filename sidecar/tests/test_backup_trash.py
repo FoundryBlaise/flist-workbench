@@ -125,3 +125,33 @@ async def test_no_mcp_tool_can_empty_the_trash_or_delete_from_it(
     ], names
     assert [b["name"] for b in listed_over_mcp["backups"]] == ["Before the big rewrite"]
     assert [b["filename"] for b in trashed(client)] == [backup["filename"]]
+
+
+def test_a_restore_never_overwrites_a_different_backup_under_the_same_name(
+    client, backup, workbench  # noqa: F811
+) -> None:
+    filename = backup["filename"]
+    client.delete(f"{BACKUPS}/{filename}")
+    newer = workbench.backups_dir(CID) / filename
+    newer.write_bytes(b"another Backup that took the same file name")
+    [entry] = trashed(client)
+
+    res = client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]}).json()
+
+    assert res == {"restored": [], "not_found": [], "conflicts": [entry["id"]]}
+    assert newer.read_bytes() == b"another Backup that took the same file name"
+    assert [b["id"] for b in trashed(client)] == [entry["id"]]
+
+
+def test_two_deleted_backups_under_one_file_name_are_both_kept(
+    client, backup, workbench  # noqa: F811
+) -> None:
+    filename = backup["filename"]
+    client.delete(f"{BACKUPS}/{filename}")
+    (workbench.backups_dir(CID) / filename).write_bytes(b"a second Backup, same file name")
+
+    client.delete(f"{BACKUPS}/{filename}")
+
+    rows = trashed(client)
+    assert [r["filename"] for r in rows] == [filename, filename]
+    assert len({r["id"] for r in rows}) == 2
