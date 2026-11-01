@@ -29,9 +29,9 @@ contextBridge.exposeInMainWorld('workbench', {
   appVersion,
   selectDirectory: (opts?: { title?: string; defaultPath?: string }) =>
     ipcRenderer.invoke('workbench:select-directory', opts ?? {}) as Promise<string | null>,
-  // Working-set bundle export/import — pick a file path, then the
-  // renderer streams bytes through main. The renderer never sees a
-  // Node fs handle directly.
+  // Moving a Backup in or out of the app as a zip: pick a file path,
+  // then the renderer passes bytes through main. The renderer never
+  // sees a Node fs handle directly.
   saveFileDialog: (opts?: {
     title?: string
     defaultPath?: string
