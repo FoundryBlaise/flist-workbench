@@ -1596,15 +1596,26 @@ async def flist_character_trash_backups_restore(
 
 
 # Deleting for good is the window's alone: the MCP layer has no tool for
-# it, so a model can never make a picture unrecoverable.
+# it, so a model can never make a picture or a Backup unrecoverable.
 @app.post("/flist/character/{character_id}/trash/purge")
 async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
     return image_trash_service.purge_images(character_id, body.image_ids)
 
 
+@app.post("/flist/character/{character_id}/trash/backups/purge")
+async def flist_character_trash_backups_purge(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    return backup_trash_service.purge_backups(character_id, body.ids)
+
+
 @app.delete("/flist/character/{character_id}/trash")
 async def flist_character_trash_empty(character_id: str) -> dict:
-    return {"purged": image_trash_service.empty_trash(character_id)}
+    """Empty the whole Trash: images and Backups."""
+    return {
+        "purged": image_trash_service.empty_trash(character_id)
+        + backup_trash_service.empty(character_id)
+    }
 
 
 @app.get("/flist/character/{character_id}/export.zip")

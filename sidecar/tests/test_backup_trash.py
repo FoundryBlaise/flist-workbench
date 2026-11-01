@@ -81,3 +81,26 @@ def test_a_deleted_backup_goes_to_the_trash_and_comes_back_under_its_name(
     assert trashed(client) == []
     download = client.get(f"{BACKUPS}/{filename}/download")
     assert download.content == original
+
+
+@pytest.mark.invariant_exempt(
+    "nothing_vanishes",
+    reason="a human emptying the Trash is the one deletion the rule allows",
+)
+def test_only_the_window_deletes_a_trashed_backup_for_good(client, workbench) -> None:  # noqa: F811
+    first = workbench.save_zip_backup(CID, force=True)["filename"]
+    client.delete(f"{BACKUPS}/{first}")
+    second = workbench.save_zip_backup(CID, force=True)["filename"]
+    client.delete(f"{BACKUPS}/{second}")
+    ids = {b["filename"]: b["id"] for b in trashed(client)}
+
+    purged = client.post(f"{TRASH}/backups/purge", json={"ids": [ids[first]]}).json()
+
+    assert purged["purged"] == [ids[first]]
+    assert [b["filename"] for b in trashed(client)] == [second]
+
+    emptied = client.delete(TRASH).json()
+
+    assert emptied["purged"] == 1
+    assert trashed(client) == []
+    assert listed(client) == {}
