@@ -41,7 +41,7 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from archive_errors import InvalidCharacterId
+from archive_errors import CharacterNotFound, InvalidCharacterId
 from refusals import InvalidFileName, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
@@ -1604,10 +1604,10 @@ async def flist_character_trash_backups_restore(
 
 def _trash_owner(character_id: str) -> str:
     """The name cleared Labels are kept under for this character."""
-    character_archive.require_character_id(character_id)
+    character_archive.character_dir(character_id)
     name = label_trash_service.workbench_character_name(character_id)
     if not name:
-        raise HTTPException(status_code=404, detail="character not found")
+        raise CharacterNotFound(character_id)
     return name
 
 
