@@ -59,10 +59,12 @@ EXTENSION_PATHS = frozenset(
 )
 EXTENSION_PATH_PREFIXES = ("/restore/snapshot/",)
 
-#: The packaged window loads from file://, which browsers send as
-#: `Origin: null`. A sandboxed iframe on any site sends that too, so this
-#: grants a CORS read, never trust: the secret still decides.
-_WINDOW_ORIGIN = "null"
+#: The built window loads from `app://workbench`, an origin of its own
+#: (electron/appPage.ts). Builds from before that loaded from file://,
+#: which browsers send as `Origin: null`; a sandboxed iframe on any site
+#: sends that too. Either way this grants a CORS read, never trust: the
+#: secret still decides.
+_WINDOW_ORIGINS = frozenset({"app://workbench", "null"})
 #: Open routes the app window never calls. They take no credential, so
 #: `null` would let any sandboxed iframe start a pairing; only the
 #: extension does, from f-list.net or chrome-extension://.
@@ -104,7 +106,7 @@ def _extension_may_call(method: str, path: str) -> bool:
 
 
 def _origin_allowed(origin: str, method: str, path: str) -> bool:
-    if origin == _WINDOW_ORIGIN:
+    if origin in _WINDOW_ORIGINS:
         return (method, path) not in _NO_WINDOW_ORIGIN
     dev = os.environ.get(RENDERER_ORIGIN_ENV)
     if dev and origin == dev.rstrip("/"):

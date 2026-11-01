@@ -34,6 +34,8 @@ from sidecar_client import (
 EVIL = "https://evil.example"
 FLIST = "https://www.f-list.net"
 EXTENSION = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+#: The origin of the built app window (electron/appPage.ts).
+APP_ORIGIN = "app://workbench"
 
 #: Callable with no credential at all.
 OPEN_ROUTES = {
@@ -213,6 +215,48 @@ def test_the_packaged_window_origin_null_is_granted(app_window: TestClient) -> N
     assert res.headers["access-control-allow-origin"] == "null"
 
 
+def test_the_app_window_origin_is_granted(app_window: TestClient) -> None:
+    """The built window loads from `app://workbench`, an origin of its own."""
+    res = app_window.get("/settings", headers={"Origin": APP_ORIGIN})
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == APP_ORIGIN
+
+
+def test_the_app_window_origin_without_the_secret_is_refused(
+    stranger: TestClient,
+) -> None:
+    res = stranger.get("/settings", headers={"Origin": APP_ORIGIN})
+    assert res.status_code == 401
+    assert res.json()["code"] == "unauthorized"
+
+
+def test_a_preflight_from_the_app_window_origin_needs_no_secret(
+    stranger: TestClient,
+) -> None:
+    res = stranger.options(
+        "/flist/character/1/working",
+        headers={
+            "Origin": APP_ORIGIN,
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "content-type,if-match",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == APP_ORIGIN
+    assert "PUT" in res.headers["access-control-allow-methods"]
+
+
+@pytest.mark.parametrize(
+    "origin", ["app://evil", "app://workbench.evil", "app://workbench:1", "APP://WORKBENCH"]
+)
+def test_only_the_exact_app_window_origin_is_granted(
+    app_window: TestClient, origin: str
+) -> None:
+    res = app_window.get("/settings", headers={"Origin": origin})
+    assert res.status_code == 403
+    assert "access-control-allow-origin" not in res.headers
+
+
 def test_origin_null_without_the_secret_is_refused(stranger: TestClient) -> None:
     res = stranger.get("/settings", headers={"Origin": "null"})
     assert res.status_code == 401
@@ -304,14 +348,16 @@ def test_a_foreign_page_cannot_start_a_handshake(stranger: TestClient) -> None:
     assert res.status_code == 403
 
 
+@pytest.mark.parametrize("origin", ["null", APP_ORIGIN])
 @pytest.mark.parametrize("caller", ["stranger", "app_window"])
-def test_origin_null_cannot_start_a_handshake(
-    request: pytest.FixtureRequest, app_window: TestClient, caller: str
+def test_the_window_origins_cannot_start_a_handshake(
+    request: pytest.FixtureRequest, app_window: TestClient, caller: str, origin: str
 ) -> None:
     """Any sandboxed iframe sends `Origin: null`. Only the extension
-    starts a pairing, so not even the app window's null is let in here."""
+    starts a pairing, so not even the app window's own origins are let
+    in here."""
     client: TestClient = request.getfixturevalue(caller)
-    res = client.post("/restore/handshake", headers={"Origin": "null"})
+    res = client.post("/restore/handshake", headers={"Origin": origin})
     assert res.status_code == 403
     assert set(res.json()) == {"code", "message"}
     assert res.json()["code"] == "forbidden_origin"
@@ -319,12 +365,13 @@ def test_origin_null_cannot_start_a_handshake(
     assert app_window.get("/restore/handshake/pending").json() == {"pending": []}
 
 
-def test_a_preflight_from_origin_null_gets_no_handshake_grant(
-    stranger: TestClient,
+@pytest.mark.parametrize("origin", ["null", APP_ORIGIN])
+def test_a_preflight_from_the_window_origins_gets_no_handshake_grant(
+    stranger: TestClient, origin: str
 ) -> None:
     res = stranger.options(
         "/restore/handshake",
-        headers={"Origin": "null", "Access-Control-Request-Method": "POST"},
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
     )
     assert res.status_code == 403
     assert "access-control-allow-origin" not in res.headers
