@@ -106,3 +106,107 @@ async def test_clearing_labels_over_mcp_needs_confirm_and_leaves_them_in_the_tra
     assert entry["partner"] == DAELAN
     assert entry["count"] == 3
     assert entry["deleted_by"] == "mcp"
+
+
+def trashed(client: TestClient) -> list[dict]:
+    return client.get(TRASH).json()["labels"]
+
+
+async def test_the_window_clears_a_conversation_and_restore_brings_the_labels_back(
+    client,
+) -> None:
+    async with mcp_client() as session:
+        verdicts = await label_everything(session)
+
+    res = client.post("/labels/clear", json={"character": AMBER, "partner": DAELAN})
+
+    assert res.json()["deleted"] == 3
+    assert stored_labels() == {}
+    [entry] = trashed(client)
+    assert entry["id"] == res.json()["trash_id"]
+    assert (entry["partner"], entry["count"], entry["deleted_by"]) == (DAELAN, 3, "ui")
+
+    restored = client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]})
+
+    assert restored.status_code == 200
+    assert restored.json() == {
+        "restored": [{"id": entry["id"], "restored": 3, "skipped": []}],
+        "not_found": [],
+    }
+    assert stored_labels() == verdicts
+    assert trashed(client) == []
+
+
+async def test_a_message_labelled_again_since_the_clear_keeps_its_newer_label(
+    client,
+) -> None:
+    async with mcp_client() as session:
+        verdicts = await label_everything(session)
+    client.post("/labels/clear", json={"character": AMBER, "partner": DAELAN})
+    relabelled = next(h for h, v in verdicts.items() if v == "IC")
+    client.post(
+        "/labels/override",
+        json={
+            "character": AMBER,
+            "partner": DAELAN,
+            "hash": relabelled,
+            "ts": 1700000000,
+            "speaker": AMBER,
+            "label": "OOC",
+        },
+    )
+    [entry] = trashed(client)
+
+    res = client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]}).json()
+
+    assert res["restored"] == [{"id": entry["id"], "restored": 2, "skipped": [relabelled]}]
+    assert stored_labels() == {**verdicts, relabelled: "OOC"}
+
+
+async def test_resetting_every_label_keeps_each_characters_labels_in_its_trash(
+    client,
+) -> None:
+    async with mcp_client() as session:
+        verdicts = await label_everything(session)
+
+    res = client.post("/labels/clear-all").json()
+
+    assert res["labels_deleted"] == 3
+    [entry] = trashed(client)
+    assert (entry["partner"], entry["count"]) == (None, 3)
+
+    client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]})
+
+    assert stored_labels() == verdicts
+
+
+async def test_only_the_window_deletes_cleared_labels_for_good(client) -> None:
+    async with mcp_client() as session:
+        await label_everything(session)
+        await call_tool(
+            session, "clear_labels", character=AMBER, partner=DAELAN, confirm=True
+        )
+        names = {t.name for t in (await session.list_tools()).tools}
+        _, over_mcp = await call_tool(session, "list_trash", character=AMBER)
+
+    destructive = ("purge", "empty", "delete", "remove", "wipe", "clear")
+    assert not [
+        n for n in names if "trash" in n and any(word in n for word in destructive)
+    ], names
+    [entry] = over_mcp["labels"]
+
+    purged = client.post(f"{TRASH}/labels/purge", json={"ids": [entry["id"]]}).json()
+
+    assert purged == {"purged": [entry["id"]], "not_found": []}
+    assert trashed(client) == []
+
+
+async def test_emptying_the_trash_takes_the_cleared_labels_with_it(client) -> None:
+    async with mcp_client() as session:
+        await label_everything(session)
+    client.post("/labels/clear", json={"character": AMBER, "partner": DAELAN})
+
+    emptied = client.delete(TRASH).json()
+
+    assert emptied["purged"] == 1
+    assert trashed(client) == []

@@ -47,6 +47,7 @@ from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
+from services import label_trash as label_trash_service
 from services import events as event_bus
 from services import foreign as foreign_service
 from services import image_import as image_import_service
@@ -1564,6 +1565,9 @@ async def flist_character_trash_list(character_id: str) -> dict:
         "character_id": character_id,
         "items": image_trash_service.list_trash(character_id),
         "backups": backup_trash_service.list_backups(character_id),
+        "labels": label_trash_service.list_labels(
+            label_trash_service.workbench_character_name(character_id) or ""
+        ),
     }
 
 
@@ -1598,8 +1602,27 @@ async def flist_character_trash_backups_restore(
     return backup_trash_service.restore_backups(character_id, body.ids)
 
 
+def _trash_owner(character_id: str) -> str:
+    """The name cleared Labels are kept under for this character."""
+    character_archive.require_character_id(character_id)
+    name = label_trash_service.workbench_character_name(character_id)
+    if not name:
+        raise HTTPException(status_code=404, detail="character not found")
+    return name
+
+
+@app.post("/flist/character/{character_id}/trash/labels/restore")
+async def flist_character_trash_labels_restore(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    """Put cleared Labels back. A message labelled again since keeps
+    its newer Label and is reported under `skipped`."""
+    return label_trash_service.restore(_trash_owner(character_id), body.ids)
+
+
 # Deleting for good is the window's alone: the MCP layer has no tool for
-# it, so a model can never make a picture or a Backup unrecoverable.
+# it, so a model can never make a picture, a Backup or cleared Labels
+# unrecoverable.
 @app.post("/flist/character/{character_id}/trash/purge")
 async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
     return image_trash_service.purge_images(character_id, body.image_ids)
@@ -1612,12 +1635,21 @@ async def flist_character_trash_backups_purge(
     return backup_trash_service.purge_backups(character_id, body.ids)
 
 
+@app.post("/flist/character/{character_id}/trash/labels/purge")
+async def flist_character_trash_labels_purge(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    return label_trash_service.purge(_trash_owner(character_id), body.ids)
+
+
 @app.delete("/flist/character/{character_id}/trash")
 async def flist_character_trash_empty(character_id: str) -> dict:
-    """Empty the whole Trash: images and Backups."""
+    """Empty the whole Trash: images, Backups and cleared Labels."""
+    name = label_trash_service.workbench_character_name(character_id)
     return {
         "purged": image_trash_service.empty_trash(character_id)
         + backup_trash_service.empty(character_id)
+        + (label_trash_service.empty(name) if name else 0)
     }
 
 
@@ -2402,14 +2434,15 @@ def labels_clear(body: LabelsClearRequest) -> dict:
 
     Used by the renderer's "Reset all labels" context-menu action.
     After this returns, the resolver falls back to rule-on-read for
-    every message in that conversation.
+    every message in that conversation. The cleared Labels go to the
+    character's Trash first (`trash_id`), where Restore puts them back.
     """
     conn = labels_store.connect()
     try:
         alias_group = aliases_store.all_names_for(
             conn, body.character, body.partner
         )
-        deleted = labels_store.delete_labels_for_partner(
+        cleared = label_trash_service.clear(
             conn,
             body.character,
             body.partner,
@@ -2420,7 +2453,7 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     return {
         "character": body.character,
         "partner": body.partner,
-        "deleted": deleted,
+        **cleared,
     }
 
 
@@ -2430,14 +2463,14 @@ def labels_clear_all() -> dict:
 
     The Settings → Labels "Reset all labels…" button calls this. After
     it returns, every message in every conversation falls back to
-    rule-on-read — manual overrides are gone too. There is no undo;
-    the renderer must confirm before invoking this.
+    rule-on-read — manual overrides are gone too. Each character's
+    cleared Labels go to its Trash first, as one entry per character;
+    the renderer still confirms before invoking this.
     """
     conn = labels_store.connect()
     try:
-        cur = conn.execute("DELETE FROM labels")
-        conn.commit()
-        return {"labels_deleted": cur.rowcount}
+        cleared = label_trash_service.clear_all(conn)
+        return {"labels_deleted": cleared["deleted"], "trash_ids": cleared["trash_ids"]}
     finally:
         conn.close()
 
