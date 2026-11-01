@@ -127,10 +127,11 @@ async def test_no_mcp_tool_can_empty_the_trash_or_delete_from_it(
     assert [b["filename"] for b in trashed(client)] == [backup["filename"]]
 
 
-def test_a_restore_never_overwrites_a_different_backup_under_the_same_name(
+def test_a_restore_onto_a_different_backup_under_the_same_name_keeps_both(
     client, backup, workbench  # noqa: F811
 ) -> None:
     filename = backup["filename"]
+    original = Path(backup["path"]).read_bytes()
     client.delete(f"{BACKUPS}/{filename}")
     newer = workbench.backups_dir(CID) / filename
     newer.write_bytes(b"another Backup that took the same file name")
@@ -138,9 +139,46 @@ def test_a_restore_never_overwrites_a_different_backup_under_the_same_name(
 
     res = client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]}).json()
 
-    assert res == {"restored": [], "not_found": [], "conflicts": [entry["id"]]}
+    [restored_as] = res["restored"]
+    assert restored_as != filename
+    assert res["not_found"] == [] and res["conflicts"] == []
     assert newer.read_bytes() == b"another Backup that took the same file name"
-    assert [b["id"] for b in trashed(client)] == [entry["id"]]
+    assert listed(client) == {filename: None, restored_as: "Before the big rewrite"}
+    assert client.get(f"{BACKUPS}/{restored_as}/download").content == original
+    assert trashed(client) == []
+
+
+def test_trashing_the_same_bytes_again_keeps_the_name_the_earlier_entry_had(
+    client, backup, workbench  # noqa: F811
+) -> None:
+    filename = backup["filename"]
+    original = Path(backup["path"]).read_bytes()
+    client.delete(f"{BACKUPS}/{filename}")
+    # The very same Backup turns up in the list again, without its name
+    # (copied back by hand, say), and is deleted too.
+    (workbench.backups_dir(CID) / filename).write_bytes(original)
+    client.delete(f"{BACKUPS}/{filename}")
+
+    [entry] = trashed(client)
+    assert entry["name"] == "Before the big rewrite"
+    client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]})
+    assert listed(client) == {filename: "Before the big rewrite"}
+
+
+def test_trashing_the_same_bytes_under_another_name_keeps_both_names(
+    client, backup, workbench  # noqa: F811
+) -> None:
+    filename = backup["filename"]
+    original = Path(backup["path"]).read_bytes()
+    client.delete(f"{BACKUPS}/{filename}")
+    (workbench.backups_dir(CID) / filename).write_bytes(original)
+    workbench.rename_zip_backup(CID, filename, "After the big rewrite")
+    client.delete(f"{BACKUPS}/{filename}")
+
+    assert sorted(r["name"] for r in trashed(client)) == [
+        "After the big rewrite",
+        "Before the big rewrite",
+    ]
 
 
 def test_two_deleted_backups_under_one_file_name_are_both_kept(

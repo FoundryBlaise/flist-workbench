@@ -523,6 +523,11 @@ def rename_zip_backup(
     _write_backup_names(character_id, names)
 
 
+def backup_name(character_id: int | str, filename: str) -> str | None:
+    """The user-set name of one Backup, or None when it has none."""
+    return _read_backup_names(character_id).get(filename) or None
+
+
 def forget_backup_name(character_id: int | str, filename: str) -> None:
     """Drop the user-set name for a backup that's about to be deleted.
     Called by the DELETE endpoint so `_names.json` doesn't carry
@@ -837,6 +842,17 @@ def _free_backup_path(folder: Path, stem: str) -> Path:
         target = folder / f"{stem}-{i}.zip"
         i += 1
     return target
+
+
+def free_backup_filename(character_id: int | str, filename: str) -> str:
+    """A Backup file name like `filename` that nothing in the Backup list
+    holds yet: `filename` itself, or the next free `-N` one beside it."""
+    require_backup_filename(filename)
+    stem = re.sub(r"-\d+$", "", filename[: -len(".zip")])
+    target = backups_dir(character_id) / filename
+    if not target.exists():
+        return filename
+    return _free_backup_path(backups_dir(character_id), stem).name
 
 
 def write_backup_zip(character_id: int | str, data: bytes) -> Path:

@@ -12,6 +12,7 @@ MCP tool calls `purge_backups` or `empty`.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -22,6 +23,8 @@ from services import image_trash, trash_ledger
 
 FOLDER = "backups"
 INDEX_FILENAME = "index.json"
+
+_TRASH_SUFFIX_RE = re.compile(r"~\d+(?=\.zip$)")
 
 _lock = threading.Lock()
 
@@ -40,17 +43,35 @@ def _write_index(character_id: int | str, index: dict[str, dict[str, Any]]) -> N
     trash_ledger.write_index(_dir(character_id) / INDEX_FILENAME, index)
 
 
-def _free_id(folder: Path, filename: str, sha: str) -> str:
+def _free_id(
+    folder: Path, filename: str, sha: str, name: str | None, index: dict[str, dict[str, Any]]
+) -> str:
     """Where in the Trash a Backup goes: under its own file name, unless
-    the Trash already holds different bytes under that name."""
+    the Trash already holds different bytes under that name. The same
+    bytes share an entry, except when both carry different user-set
+    names: then each name keeps its own entry."""
     stem = filename[: -len(".zip")]
     candidate, n = filename, 1
     while (folder / candidate).exists():
         if character_archive.file_sha256(folder / candidate) == sha:
-            return candidate
+            earlier = (index.get(candidate) or {}).get("name")
+            if not (name and earlier and name != earlier):
+                return candidate
         n += 1
         candidate = f"{stem}~{n}.zip"
     return candidate
+
+
+def _list_filename(trash_id: str, filename: str) -> str | None:
+    """The Backup list file name a restore starts from: the one the
+    Backup had, else its trash id without the `~N` the Trash added."""
+    for candidate in (filename, _TRASH_SUFFIX_RE.sub("", trash_id)):
+        try:
+            character_archive.require_backup_filename(candidate)
+        except ValueError:
+            continue
+        return candidate
+    return None
 
 
 def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
@@ -72,8 +93,11 @@ def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
         folder = _dir(character_id)
         sha = character_archive.file_sha256(src)
         size = src.stat().st_size
-        trash_id = _free_id(folder, filename, sha)
         index = _read_index(character_id)
+        trash_id = _free_id(folder, filename, sha, name, index)
+        # The same bytes were trashed before: keep the name that entry
+        # had when this copy comes without one.
+        name = name or (index.get(trash_id) or {}).get("name")
         src.replace(folder / trash_id)
         entry = {
             "id": trash_id,
@@ -120,8 +144,12 @@ def list_backups(character_id: int | str) -> list[dict[str, Any]]:
 
 def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     """Put trashed Backups back in the Backup list, under the file name
-    and user-set name they had. When the list already holds different
-    bytes under that file name, the Backup stays in the Trash."""
+    and user-set name they had. When the list already holds the same
+    bytes under that file name, the Trash copy is dropped; when it holds
+    different bytes, both are kept: the restored Backup takes the next
+    free `-N` file name, as a second Backup in the same second would.
+    Only a Backup without any usable file name stays in the Trash, under
+    `conflicts`."""
     restored: list[str] = []
     conflicts: list[str] = []
     with _lock:
@@ -132,22 +160,27 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
         found, not_found = trash_ledger.resolve_ids(ids, rows.get)
         for trash_id, row in found:
             src = folder / trash_id
-            filename = row["filename"]
-            try:
-                character_archive.require_backup_filename(filename)
-            except ValueError:
-                filename = trash_id
+            filename = _list_filename(trash_id, row["filename"])
+            if filename is None:
+                conflicts.append(trash_id)
+                continue
             dest = target_dir / filename
-            if dest.exists():
-                if character_archive.file_sha256(dest) != character_archive.file_sha256(src):
-                    conflicts.append(trash_id)
-                    continue
+            name = row["name"]
+            if dest.exists() and character_archive.file_sha256(
+                dest
+            ) == character_archive.file_sha256(src):
                 src.unlink()
+                # The list's own name for these bytes wins over the
+                # Trash's; neither is lost when only one has one.
+                name = character_archive.backup_name(character_id, filename) or name
             else:
+                if dest.exists():
+                    filename = character_archive.free_backup_filename(character_id, filename)
+                    dest = target_dir / filename
                 src.replace(dest)
             index.pop(trash_id, None)
-            if row["name"]:
-                character_archive.rename_zip_backup(character_id, filename, row["name"])
+            if name:
+                character_archive.rename_zip_backup(character_id, filename, name)
             restored.append(filename)
         _write_index(character_id, index)
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
