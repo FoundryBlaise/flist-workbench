@@ -126,7 +126,7 @@ def get_live_profile(
 def list_working_sets(character: str) -> dict[str, Any]:
     """The named drafts stored for a character.
 
-    Exactly one is active at a time — that is the one the Workbench
+    Exactly one is active at a time — that is the one the app
     window is showing and the one tools edit when `working_set` is
     omitted.
     """
@@ -691,7 +691,7 @@ def explain_set_addressing() -> dict[str, Any]:
         "set": (
             f"A working set's name or id, or {LIVE!r} for the read-only "
             "profile last pulled from F-list. Omit it to use the "
-            "character's active set — the one the Workbench window is "
+            "character's active set — the one the app window is "
             "showing. If no set is active, create one with "
             "create_working_set; editing tools refuse to guess."
         ),

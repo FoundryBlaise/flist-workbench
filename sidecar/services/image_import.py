@@ -145,7 +145,7 @@ def check_source(source_path: str, roots: list[Path]) -> Path:
         raise ImportRefused(
             "no_import_folders",
             "No folders are cleared for importing images. The user adds "
-            "them in the Workbench window under Settings → Security; "
+            "them in the app window under Settings → Security; "
             "there is no tool for it on purpose.",
         )
     try:

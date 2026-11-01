@@ -35,7 +35,7 @@ out of date.
 ```
 Electron main ──spawns──> sidecar.exe (Python, FastAPI, 127.0.0.1:27384)
      │                        │
-     │                        ├─ REST  ← the Workbench window
+     │                        ├─ REST  ← the app window
      │                        ├─ /restore/*  ← the paired browser extension
      │                        └─ /mcp  ← LM Studio, Claude, any MCP client
      └─ BrowserWindow ──> React renderer

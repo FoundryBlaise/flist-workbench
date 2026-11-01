@@ -2,7 +2,7 @@
 
 Everything here changes local files only. Nothing is uploaded to
 f-list.net — when a profile is ready the user reviews it in the
-Workbench window and publishes it themselves in the browser. Say so if
+app window and publishes it themselves in the browser. Say so if
 a user asks whether a change is live; it is not.
 
 The rules a payload has to satisfy live in `services/payload_ops.py`,
@@ -64,7 +64,7 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
     except character_archive.EtagMismatch as exc:
         raise ToolError(
             "etag_conflict",
-            "The Workbench window saved this set while the edit was in "
+            "The app window saved this set while the edit was in "
             "flight, twice in a row. Read the field again and redo the "
             "change.",
             current_etag=exc.current_etag,

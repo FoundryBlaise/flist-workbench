@@ -166,7 +166,7 @@ _TOUCH_EXEMPT_PATHS = {
 async def _flist_touch_middleware(request, call_next):
     """Mark TicketStore as touched on any user-initiated /flist/*
     request. Heartbeat polls and audit-log reads are excluded so a
-    backgrounded Workbench window can't keep the password cached
+    backgrounded app window can't keep the password cached
     just by polling or auditing.
     """
     path = request.url.path

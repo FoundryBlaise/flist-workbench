@@ -65,7 +65,7 @@ Two things to keep straight:
 
 1. Workbench NEVER writes to f-list.net. Every tool here changes local
    files only. When the user wants a profile published they review it
-   in the Workbench window and upload it themselves in the browser.
+   in the app window and upload it themselves in the browser.
    Never tell the user a change is live on F-list.
 2. `live` is the last profile pulled down from F-list and is
    read-only. All editing happens in a "working set" — a named local

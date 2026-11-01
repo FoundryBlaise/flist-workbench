@@ -1,6 +1,6 @@
 """A broadcast bus so the window notices what MCP changed.
 
-Before this, the Workbench window was the only writer, so it always
+Before this, the app window was the only writer, so it always
 knew the current state of anything it displayed. Now a model can edit
 the same working set at the same time, and the window has no idea —
 it keeps showing a stale draft until the user reloads, and worse, its

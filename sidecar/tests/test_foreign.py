@@ -406,7 +406,7 @@ async def test_a_spent_mcp_budget_leaves_the_window_working(
     with pytest.raises(flist_api.RateLimited):
         await foreign_service.get_profile("Anexample Person", budget=spent)
 
-    # No budget passed = the Workbench window. Still fine.
+    # No budget passed = the app window. Still fine.
     result = await foreign_service.get_profile("Anexample Person")
     assert result["from_cache"] is False
 
