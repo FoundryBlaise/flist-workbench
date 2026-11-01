@@ -573,10 +573,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
     """
     import restore as restore_svc
 
-    # `auth_token_valid` is the only public read of the pairing state;
-    # an obviously-wrong token answers the question "is anything
-    # paired at all" without exposing the real one.
-    paired = restore_svc._STATE.accepted_token is not None
+    paired = restore_svc.is_paired()
     return {
         "paired": paired,
         "note": (

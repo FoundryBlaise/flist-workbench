@@ -3042,6 +3042,16 @@ def restore_token_revoke() -> dict[str, bool]:
     return {"ok": True}
 
 
+@app.get("/pairing")
+def pairing_status() -> dict[str, bool]:
+    """Whether the browser extension is paired, for Settings → Security.
+
+    Outside `/restore/` on purpose: it answers the app window only
+    (launch secret), never the extension, and never returns the token.
+    """
+    return {"paired": restore_svc.is_paired()}
+
+
 @app.get("/restore/extension")
 def restore_extension_seen() -> dict[str, Any]:
     """Which extension version the browser is running, as of its last

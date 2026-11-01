@@ -6,8 +6,10 @@ access control, and a wildcard CORS policy let any site read Logs, delete
 Backups, empty the Trash or pair itself as the extension. Every REST call
 except `/health` now carries a secret that Electron generates per launch
 and hands to the sidecar; Electron's main process adds it to every
-request the app window makes, because images and the event stream cannot
-set headers, so the renderer never holds it. The extension's `/restore/*`
+request the app's own page makes from the app window's main frame,
+because images and the event stream cannot set headers, so the renderer
+never holds it. The window never navigates away from that page and opens
+no other window. The extension's `/restore/*`
 routes accept only the pairing token. Starting a handshake and polling
 its status are the only other unauthenticated calls; accepting,
 rejecting or revoking a pairing needs the launch secret, so only the app

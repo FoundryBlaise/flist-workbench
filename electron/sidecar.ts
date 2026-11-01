@@ -71,7 +71,7 @@ export const sidecarPort = PORT
 
 // The sidecar answers only callers that carry this (ADR 0002): any web
 // page in the user's browser can reach the port, none can know a value
-// made fresh at every start. Main adds it to the window's requests
+// made fresh at every start. Main adds it to the app page's requests
 // (see main.ts) and to its own; the renderer never holds it.
 export const SECRET_HEADER = 'X-Workbench-Secret'
 const launchSecret = randomBytes(32).toString('hex')
