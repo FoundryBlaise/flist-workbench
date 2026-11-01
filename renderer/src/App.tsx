@@ -39,6 +39,8 @@ declare global {
       readFile?: (filePath: string) => Promise<Uint8Array | null>
       writeFile?: (filePath: string, bytes: Uint8Array) => Promise<boolean>
       onMenuAction?: (listener: (action: MenuAction) => void) => () => void
+      /** Main asks before the page goes away (close, reload, quit) and waits for the promise. */
+      onSaveEditsRequest?: (saver: () => Promise<void>) => () => void
       setMenuState?: (flags: {
         ingestCurrent: boolean
         ingestCharacter: boolean

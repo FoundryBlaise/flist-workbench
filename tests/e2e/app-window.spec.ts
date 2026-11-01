@@ -197,7 +197,7 @@ test("the app's scheme serves the app and nothing outside it", async () => {
   })
 })
 
-test('the close-time flush still carries the launch secret', async () => {
+test('a request that outlives the closing page goes without the launch secret', async () => {
   await withApp(async ({ app, window, sidecarUrl }) => {
     // Keep the app running once its only window is gone, so the main
     // process can still be asked what it saw.
@@ -205,32 +205,44 @@ test('the close-time flush still carries the launch secret', async () => {
       electronApp.removeAllListeners('window-all-closed')
       electronApp.on('window-all-closed', () => undefined)
     })
-    // Records, per request to the sidecar, whether it left with the
-    // secret and what the sidecar answered.
+    // Records, per request to the sidecar ("METHOD url"), whether it
+    // left with the secret and how it ended: the sidecar's status, or
+    // 'error' when the request was dropped on the way, as a keepalive
+    // request sometimes is once its page is gone. CORS preflights,
+    // which never carry the secret, are left out.
     await app.evaluate(({ session }, url) => {
-      const seen: Record<string, { secret?: boolean; status?: number }> = {}
-      ;(globalThis as { __e2eFlush?: typeof seen }).__e2eFlush = seen
+      const seen: Record<string, { secret?: boolean; outcome?: number | 'error' }> = {}
+      ;(globalThis as { __e2eUnload?: typeof seen }).__e2eUnload = seen
       const filter = { urls: [`${url}/*`] }
       session.defaultSession.webRequest.onSendHeaders(filter, (details) => {
-        seen[details.url] = {
-          ...seen[details.url],
+        if (details.method === 'OPTIONS') return
+        const key = `${details.method} ${details.url}`
+        seen[key] = {
+          ...seen[key],
           secret: Object.keys(details.requestHeaders).some((h) => h.toLowerCase() === 'x-workbench-secret')
         }
       })
       session.defaultSession.webRequest.onCompleted(filter, (details) => {
-        seen[details.url] = { ...seen[details.url], status: details.statusCode }
+        if (details.method === 'OPTIONS') return
+        const key = `${details.method} ${details.url}`
+        seen[key] = { ...seen[key], outcome: details.statusCode }
+      })
+      session.defaultSession.webRequest.onErrorOccurred(filter, (details) => {
+        if (details.method === 'OPTIONS') return
+        const key = `${details.method} ${details.url}`
+        seen[key] = { ...seen[key], outcome: 'error' }
       })
     }, sidecarUrl)
 
-    // The same request the app's unload flush sends for an unsaved
-    // edit: a keepalive PUT of the working copy from `beforeunload`.
-    // The character is unknown, so the sidecar answers 404 if the
-    // secret came along and 401 if it did not. Any other request left
-    // behind by the closing page goes without it.
-    const flushUrl = `${sidecarUrl}/flist/character/123/working`
+    // Keepalive requests sent from `beforeunload` outlive the page, and
+    // Electron reports them without a frame, so nothing places them on
+    // the app's page. The app saves before the page unloads instead
+    // (unsaved-edits.spec.ts); these, a working-copy PUT among them,
+    // must leave without the secret, so the sidecar refuses them.
+    const workingUrl = `${sidecarUrl}/flist/character/123/working`
     const otherUrl = `${sidecarUrl}/flist/character/123/snapshot`
     await window.evaluate(
-      ([flush, other]) => {
+      ([working, other]) => {
         addEventListener('beforeunload', () => {
           const send = (u: string, method: string): void =>
             void fetch(u, {
@@ -239,22 +251,28 @@ test('the close-time flush still carries the launch secret', async () => {
               body: JSON.stringify({ character: {} }),
               keepalive: true
             }).catch(() => undefined)
-          send(flush, 'PUT')
+          send(working, 'PUT')
           send(other, 'POST')
         })
       },
-      [flushUrl, otherUrl]
+      [workingUrl, otherUrl]
     )
 
     // Closed the way the window's close button closes it.
     await (await app.browserWindow(window)).evaluate((w) => w.close())
 
-    const seen = (u: string): Promise<unknown> =>
+    type Seen = { secret?: boolean; outcome?: number | 'error' }
+    const seen = (request: string): Promise<Seen | undefined> =>
       app.evaluate(
-        (_electron, url) => (globalThis as { __e2eFlush?: Record<string, unknown> }).__e2eFlush?.[url],
-        u
+        (_electron, key) => (globalThis as { __e2eUnload?: Record<string, Seen> }).__e2eUnload?.[key],
+        request
       )
-    await expect.poll(() => seen(flushUrl)).toEqual({ secret: true, status: 404 })
-    await expect.poll(() => seen(otherUrl)).toEqual({ secret: false, status: 401 })
+    for (const request of [`PUT ${workingUrl}`, `POST ${otherUrl}`]) {
+      await expect.poll(async () => (await seen(request))?.outcome, request).toBeDefined()
+      const { secret, outcome } = (await seen(request)) ?? {}
+      // Unset when it was dropped before its headers went out.
+      expect(secret, request).not.toBe(true)
+      expect([401, 'error'], request).toContain(outcome)
+    }
   })
 })

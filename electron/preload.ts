@@ -24,6 +24,18 @@ const appVersion = resolveAppVersion()
 // here. Returns an unsubscriber so React effects can clean up on unmount.
 type MenuActionListener = (action: string) => void
 
+// Before the page goes away (close, reload, quit), main asks it to
+// save the edits its autosave has not sent yet and waits for the answer
+// (electron/unsavedEdits.ts). Answered here even when the app has not
+// registered a saver yet, so main never waits on a page with nothing
+// to save.
+type EditsSaver = () => Promise<void>
+let editsSaver: EditsSaver | null = null
+ipcRenderer.on('workbench:save-edits', (_event, id: number) => {
+  const saving = editsSaver ? editsSaver().catch(() => undefined) : Promise.resolve()
+  void saving.then(() => ipcRenderer.send('workbench:edits-saved', id))
+})
+
 contextBridge.exposeInMainWorld('workbench', {
   sidecarUrl: `http://127.0.0.1:${sidecarPort}`,
   appVersion,
@@ -61,6 +73,13 @@ contextBridge.exposeInMainWorld('workbench', {
     ipcRenderer.on('menu:action', wrapped)
     return () => {
       ipcRenderer.removeListener('menu:action', wrapped)
+    }
+  },
+  /** Registers what saves the pending edits when main asks; returns an unregister. */
+  onSaveEditsRequest: (saver: EditsSaver) => {
+    editsSaver = saver
+    return () => {
+      if (editsSaver === saver) editsSaver = null
     }
   },
   setMenuState: (flags: {

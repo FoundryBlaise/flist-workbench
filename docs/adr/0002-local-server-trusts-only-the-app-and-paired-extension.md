@@ -9,7 +9,11 @@ and hands to the sidecar; Electron's main process adds it to every
 request the app's own page makes from the app window's main frame,
 because images and the event stream cannot set headers, so the renderer
 never holds it. The window never navigates away from that page and opens
-no other window. The extension's `/restore/*`
+no other window. A request that outlives the page, such as one sent
+while it unloads, comes from no frame and gets no secret; so before the
+window closes or reloads, or the app quits, main asks the page to save
+its pending edits with its ordinary requests and waits for it (a few
+seconds at most), and stops the sidecar only after that. The extension's `/restore/*`
 routes accept only the pairing token. Starting a handshake and polling
 its status are the only other unauthenticated calls; accepting,
 rejecting or revoking a pairing needs the launch secret, so only the app
