@@ -15,6 +15,7 @@ import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
 import { FileGrants } from './fileGrants'
 import { APP_PAGE_URL, isAppPage, registerAppScheme, serveAppScheme } from './appPage'
+import { saveEditsAndAllowClose, saveEditsOnClose } from './unsavedEdits'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -699,6 +700,10 @@ async function createWindow(): Promise<void> {
     mainWindow = null
   })
 
+  // Closing the window first lets the app's page save the edits its
+  // autosave has not sent yet, with its ordinary requests.
+  saveEditsOnClose(mainWindow)
+
   // The close-time flush: when the window closes, the app's page saves
   // unsaved edits with keepalive PUTs of the working copy from
   // `beforeunload` (AppLayout). Those outlive the page, and Electron
@@ -855,11 +860,15 @@ app.on('window-all-closed', () => {
 // clear the ticket via the same endpoint the renderer's sign-out path
 // uses, then kill the process. Bounded to 1.5s so a frozen sidecar
 // can't hang the shutdown.
+//
+// Before any of that, the window's page saves its pending edits while
+// the sidecar still runs; the window then closes without asking again.
 let quitInvalidationDone = false
 app.on('before-quit', async (event) => {
   if (quitInvalidationDone) return
   event.preventDefault()
   quitInvalidationDone = true
+  if (mainWindow) await saveEditsAndAllowClose(mainWindow)
   try {
     await Promise.race([
       sidecarFetch('/flist/session', { method: 'DELETE' }),

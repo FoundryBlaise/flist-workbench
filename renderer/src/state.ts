@@ -660,6 +660,9 @@ type State = {
    *  Live for that one image, leaving other gallery edits intact. */
   flistResetImageRow: (characterId: string, imageId: string) => void
   flistFlushWorking: (characterId: string) => Promise<void>
+  /** Saves every character's pending edits now, waiting out the
+   *  autosave's debounce and any save already on its way. */
+  flistFlushAllWorking: () => Promise<void>
   flistResetWorkingToLive: (characterId: string) => Promise<void>
   flistUndoResetWorking: () => Promise<void>
   flistDismissDriftBanner: (characterId: string) => void
@@ -2707,6 +2710,17 @@ export const useStore = create<State>((set, get) => ({
         _flushInflight.delete(characterId)
       }
     }
+  },
+
+  async flistFlushAllWorking() {
+    const ids = new Set([
+      ...Object.keys(get().flistWorking),
+      ..._autosaveTimers.keys(),
+      ..._flushInflight.keys()
+    ])
+    // flistFlushWorking chains after a save in flight and skips a
+    // character with nothing unsaved.
+    await Promise.all([...ids].map((id) => get().flistFlushWorking(id).catch(() => {})))
   },
 
   async flistResetWorkingToLive(characterId) {
