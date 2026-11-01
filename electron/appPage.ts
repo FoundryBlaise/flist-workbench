@@ -18,6 +18,12 @@ const devServerUrl = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER
 
 export const APP_PAGE_URL = devServerUrl ?? `${APP_SCHEME}://${APP_HOST}/index.html`
 
+/**
+ * The dev server's origin when the page loads from it, which the
+ * sidecar then has to grant as well; undefined in the built app.
+ */
+export const DEV_SERVER_ORIGIN = devServerUrl === undefined ? undefined : new URL(devServerUrl).origin
+
 const appPage = new URL(APP_PAGE_URL)
 
 /**
