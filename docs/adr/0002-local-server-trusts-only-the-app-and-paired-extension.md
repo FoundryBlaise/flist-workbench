@@ -17,8 +17,11 @@ window can do it. Every request must name `127.0.0.1` or `localhost` and
 the sidecar's port as its Host; and CORS allows only the app window and,
 for the extension's routes, `https://www.f-list.net` and
 `chrome-extension://` origins, because the extension calls the sidecar
-from its content script and its background worker. The packaged window
-loads from `file://` and so sends `Origin: null`, which any sandboxed
-iframe can also send: the secret, not the origin, tells the window
-apart. `/mcp` keeps its own optional bearer token, since MCP clients
+from its content script and its background worker. The built window
+loads from its own scheme, `app://workbench`, an origin no web page can
+send, so the window's origin, not only the secret, tells it apart. CORS
+still grants `Origin: null`, which the window sent while it loaded from
+`file://`, on every route but the handshake; any sandboxed iframe can
+send that too, so there only the secret keeps pages out. `/mcp` keeps
+its own optional bearer token, since MCP clients
 cannot receive a per-launch secret.

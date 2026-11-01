@@ -154,3 +154,39 @@ test("the launch secret goes only with the app's own page", async () => {
     await expect.poll(seen).toEqual({ app: true, subframe: false, page: false })
   })
 })
+
+test('the app window has an origin of its own', async () => {
+  await withApp(async ({ window }) => {
+    expect(await window.evaluate(() => location.origin)).toBe('app://workbench')
+  })
+})
+
+test("the app's scheme serves the app and nothing outside it", async () => {
+  await withApp(async ({ app }) => {
+    // Fetched from the main process, so the page's CSP is not what
+    // refuses them: only the scheme's handler is.
+    const status = (url: string): Promise<number | string> =>
+      app.evaluate(async ({ net }, u) => {
+        try {
+          return (await net.fetch(u)).status
+        } catch (error) {
+          return `error: ${error instanceof Error ? error.message : String(error)}`
+        }
+      }, url)
+
+    expect(await status('app://workbench/index.html')).toBe(200)
+    // Each of these names a file that exists next to the renderer's
+    // files (the main bundle, the preload, the app's package.json).
+    for (const outside of [
+      'app://workbench/../main/main.js',
+      'app://workbench/..%2fmain%2fmain.js',
+      'app://workbench/%2e%2e%2fpreload%2fpreload.js',
+      'app://workbench/..%5cmain%5cmain.js',
+      'app://workbench/assets/..%2f..%2f..%2fpackage.json',
+      'app://workbench/%2e%2e%5c%2e%2e%5cpackage.json',
+      'app://other/index.html'
+    ]) {
+      expect(await status(outside), outside).toBe(404)
+    }
+  })
+})
