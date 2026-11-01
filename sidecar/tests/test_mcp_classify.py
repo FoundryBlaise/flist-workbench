@@ -758,6 +758,11 @@ async def test_labelling_everything_at_once_spares_the_rules(
         assert body["labeled"] == 2
         assert body["decided_by_rules"] == 1, "the short message stays OOC"
         assert "next ingest_logs" in body["note"]
+        # An ingest without include_ooc drops the OOC chunks an earlier
+        # one indexed, so the hint has to say to pass it every time.
+        assert "include_ooc" in body["note"]
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+        assert "include_ooc=true on every ingest" in (tools["ingest_logs"].description or "")
 
         _, stats = await call_tool(
             session,

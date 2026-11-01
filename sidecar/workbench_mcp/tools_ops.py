@@ -230,7 +230,8 @@ async def ingest_logs(
     those skipped comes back as `skipped_unlabeled`, and a high number
     means the classification flow should run first. OOC is excluded
     unless `include_ooc=true`; it is usually noise in a search over
-    roleplay.
+    roleplay. Pass include_ooc=true on every ingest to keep OOC chunks;
+    one without it deletes them.
 
     Channel logs are excluded unless `include_channels=true`, matching
     list_partners. They are group chat rather than this character's
@@ -244,7 +245,8 @@ async def ingest_logs(
     (`chunks_removed`).
 
     `rebuild=true` first deletes only the scope's chunks (all of them
-    when unscoped).
+    when unscoped; a character's channel chunks only with
+    include_channels).
 
     Embedding runs in-process by default, so nothing needs to be
     installed. `wait=false` returns a job id to poll with get_job

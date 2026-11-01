@@ -57,7 +57,8 @@ MAX_BATCH = 200
 NEXT_INGEST = (
     "Search sees Label changes after the next ingest_logs of this "
     "conversation: it re-embeds only the days whose messages or Labels "
-    "changed, and drops messages that are no longer labelled IC."
+    "changed, and drops messages that are no longer labelled IC (OOC "
+    "ones stay only if that ingest passes include_ooc=true again)."
 )
 
 
@@ -296,7 +297,7 @@ def set_message_labels(
     how many batches it has done, is what says whether the work is
     complete.
 
-    Verdicts reach search on the next ingest_logs of the conversation,
+    Labels reach search on the next ingest_logs of the conversation,
     which picks up new and changed Labels alike.
     """
     if not isinstance(items, list) or not items:
