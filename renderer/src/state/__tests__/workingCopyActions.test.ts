@@ -648,6 +648,128 @@ describe('flistResetWorkingToLive + undo round-trip', () => {
   })
 })
 
+describe('undo of reset to Live never reverts a change made after the reset', () => {
+  // The Workbench on disk, answering like the sidecar: a save lands
+  // only over the etag the disk holds, and each landed save hands out
+  // a new etag. Anything else writing the bench goes through write().
+  function benchOnDisk(description: string) {
+    const disk = { etag: 'seed-etag', payload: workbenchPayload({ character: { description } }) }
+    let version = 0
+    fake.on(SAVE, (req) => {
+      if (req.headers['If-Match'] !== disk.etag) {
+        return json({ detail: { detail: 'etag_mismatch', current_etag: disk.etag } }, 409)
+      }
+      disk.etag = `disk-${++version}`
+      disk.payload = req.body as typeof disk.payload
+      return json({ etag: disk.etag })
+    })
+    fake.on(`GET ${BENCH_URL}`, () => json(payloadRead(disk.payload, disk.etag)))
+    return {
+      disk,
+      write(text: string) {
+        disk.etag = `disk-${++version}`
+        disk.payload = workbenchPayload({ character: { description: text } })
+        return disk.etag
+      }
+    }
+  }
+
+  beforeEach(() => {
+    seedLive({ character: { description: 'Amber on F-list' } })
+    seedSlot('99', {
+      character: { description: 'Amber keeps bees.' },
+      _overlay: ['character.description']
+    })
+  })
+
+  it('a model edit the window reloaded is not overwritten: the user is asked, and keeping it leaves it on disk', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    expect(descOf(bench.disk.payload)).toBe('Amber on F-list')
+
+    // A connected model rewrites the description; the event stream
+    // tells the window, which reloads it (no unsaved edits here).
+    const modelEtag = bench.write('Amber keeps wasps now.')
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: modelEtag,
+      origin: 'mcp:set_description'
+    })
+    await useStore.getState().flistReloadAfterExternalChange('99')
+    const putsBeforeUndo = fake.requestsTo(SAVE).length
+
+    await useStore.getState().flistUndoResetWorking()
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
+    const undo = useStore.getState().flistResetUndo
+    expect(undo?.characterId).toBe('99')
+    expect(undo?.conflict).toBe(true)
+    expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe('Amber keeps wasps now.')
+
+    useStore.getState().flistDismissResetUndo()
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps wasps now.')
+    expect(bench.disk.etag).toBe(modelEtag)
+  })
+
+  it('text typed in the window after the reset and saved is not overwritten either', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    useStore.getState().setEditorContent('Amber on F-list, and a new line.')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(descOf(bench.disk.payload)).toBe('Amber on F-list, and a new line.')
+    const typedEtag = bench.disk.etag
+    const putsBeforeUndo = fake.requestsTo(SAVE).length
+
+    await useStore.getState().flistUndoResetWorking()
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
+    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
+    expect(useStore.getState().editorContent).toBe('Amber on F-list, and a new line.')
+    expect(bench.disk.etag).toBe(typedEtag)
+  })
+
+  it('choosing to undo anyway puts the previous Workbench back over the model edit', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    const modelEtag = bench.write('Amber keeps wasps now.')
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: modelEtag,
+      origin: 'mcp:set_description'
+    })
+    await useStore.getState().flistReloadAfterExternalChange('99')
+    await useStore.getState().flistUndoResetWorking()
+    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
+
+    await useStore.getState().flistUndoResetWorking({ overwrite: true })
+
+    const [undoWrite] = fake.requestsTo(SAVE).slice(-1)
+    expect(undoWrite.headers['If-Match']).toBe(modelEtag)
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
+  })
+
+  it('without a change since the reset, undo puts the previous Workbench back on disk', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    expect(descOf(bench.disk.payload)).toBe('Amber on F-list')
+
+    await useStore.getState().flistUndoResetWorking()
+
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(useStore.getState().flistWorking['99'].etag).toBe(bench.disk.etag)
+    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
+  })
+})
+
 describe('switching characters must not strand the last edit', () => {
   // Reported from the field: "switching between characters silently
   // discards all changes". Autosave waits 500 ms for quiet time, so an
