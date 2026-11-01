@@ -97,7 +97,9 @@ async function launchApp(
     APPDATA: appData,
     SIDECAR_PORT: String(port),
     FLIST_WORKBENCH_NO_KEYCHAIN: '1',
-    FLIST_WORKBENCH_OFFLINE_STARTUP: '1'
+    FLIST_WORKBENCH_OFFLINE_STARTUP: '1',
+    // Show the window without taking the focus from the user's desktop.
+    FLIST_WORKBENCH_NO_FOCUS: '1'
   })
   if (opts.pinFchatDir !== false) env['FCHAT_DATA_DIR'] = fchatDir
 
