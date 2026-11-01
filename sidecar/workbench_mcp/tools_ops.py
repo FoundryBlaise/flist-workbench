@@ -548,31 +548,55 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
     """Write bytes to a user-chosen path, creating parent directories.
 
     A directory path gets a generated filename rather than an error —
-    "put it in Downloads" is a reasonable thing for a user to say.
+    "put it in Downloads" is a reasonable thing for a user to say. If
+    that name is taken, a numbered one beside it is used instead.
 
     An existing file is never overwritten: the file is created
     exclusively, so a model can't clobber something the user keeps
-    there, even if it appears between a check and the write.
+    there, even if it appears between a check and the write. A file
+    path that is taken gets an `exists` refusal.
     """
     target = Path(str(path)).expanduser()
     if target.is_dir():
-        target = target / f"workbench-{int(time.time())}{suffix}"
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("xb") as handle:
-            handle.write(data)
-    except FileExistsError as exc:
-        raise ToolError(
-            "exists",
-            f"{target} already exists and an export never overwrites a "
-            "file. Ask the user for another name, or give a folder to "
-            "get a fresh file name.",
-        ) from exc
-    except OSError as exc:
-        raise ToolError(
-            "write_failed", f"Couldn't write {target}: {exc}"
-        ) from exc
-    return target
+        stem = f"workbench-{int(time.time())}"
+        candidates = [target / f"{stem}{suffix}"] + [
+            target / f"{stem}-{n}{suffix}" for n in range(2, _MAX_NAME_TRIES + 1)
+        ]
+    else:
+        candidates = [target]
+
+    for candidate in candidates:
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            handle = candidate.open("xb")
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise ToolError(
+                "write_failed", f"Couldn't write {candidate}: {exc}"
+            ) from exc
+        try:
+            with handle:
+                handle.write(data)
+        except OSError as exc:
+            # Only ever our own half-written file: it was created above.
+            candidate.unlink(missing_ok=True)
+            raise ToolError(
+                "write_failed", f"Couldn't write {candidate}: {exc}"
+            ) from exc
+        return candidate
+
+    raise ToolError(
+        "exists",
+        f"{candidates[0]} already exists and an export never overwrites "
+        "a file. Ask the user for another name, or give a folder to get "
+        "a fresh file name.",
+    )
+
+
+#: How many numbered names an export into a folder tries before giving
+#: up with an `exists` refusal.
+_MAX_NAME_TRIES = 100
 
 
 @tool(tags=TAG_CORE, title="Extension pairing status", read_only=True)
