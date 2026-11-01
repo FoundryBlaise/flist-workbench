@@ -747,12 +747,11 @@ type State = {
     characterId: string,
     backupFilename: string
   ) => Promise<{ path: string; bytes: number } | null>
-  /** Right-click → Delete backup on a Backups row. Callers should
-   *  funnel through a confirm modal — there's no undo in the sidecar
-   *  (the bytes are gone). Refreshes the sidebar list on success.
-   *  If the deleted backup is currently being browsed, also closes
-   *  browse mode so the editor doesn't display data that no longer
-   *  exists on disk. */
+  /** Right-click → Delete backup on a Backups row. The sidecar moves
+   *  the ZIP to the character's Trash, where the Trash view can
+   *  restore it. Refreshes the sidebar list on success. If the deleted
+   *  backup is currently being browsed, also closes browse mode so the
+   *  editor doesn't display a Backup that has left the list. */
   flistDeleteZipBackup: (
     characterId: string,
     backupFilename: string
