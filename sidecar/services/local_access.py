@@ -63,6 +63,10 @@ EXTENSION_PATH_PREFIXES = ("/restore/snapshot/",)
 #: `Origin: null`. A sandboxed iframe on any site sends that too, so this
 #: grants a CORS read, never trust: the secret still decides.
 _WINDOW_ORIGIN = "null"
+#: Open routes the app window never calls. They take no credential, so
+#: `null` would let any sandboxed iframe start a pairing; only the
+#: extension does, from f-list.net or chrome-extension://.
+_NO_WINDOW_ORIGIN = frozenset({("POST", "/restore/handshake")})
 _FLIST_ORIGIN = "https://www.f-list.net"
 #: An unpacked extension's id depends on the folder it was loaded from,
 #: so it cannot be pinned. The pairing token is what identifies it.
@@ -101,7 +105,7 @@ def _extension_may_call(method: str, path: str) -> bool:
 
 def _origin_allowed(origin: str, method: str, path: str) -> bool:
     if origin == _WINDOW_ORIGIN:
-        return True
+        return (method, path) not in _NO_WINDOW_ORIGIN
     dev = os.environ.get(RENDERER_ORIGIN_ENV)
     if dev and origin == dev.rstrip("/"):
         return True
