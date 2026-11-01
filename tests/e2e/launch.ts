@@ -32,6 +32,8 @@ export type LaunchedApp = {
   appData: string
   /** The fixture F-Chat folder built in global setup. */
   fchatDir: string
+  /** Where this launch's sidecar listens, e.g. `http://127.0.0.1:50123`. */
+  sidecarUrl: string
 }
 
 function e2eEnv(name: string): string {
@@ -88,11 +90,12 @@ async function launchApp(
   // it) and turns electron.exe into plain node.
   for (const k of ['FCHAT_DATA_DIR', 'SIDECAR_PORT', 'ELECTRON_RENDERER_URL', 'ELECTRON_RUN_AS_NODE'])
     delete env[k]
+  const port = await freePort()
   Object.assign(env, {
     NODE_ENV: 'test',
     FLIST_WORKBENCH_DATA_DIR: dataDir,
     APPDATA: appData,
-    SIDECAR_PORT: String(await freePort()),
+    SIDECAR_PORT: String(port),
     FLIST_WORKBENCH_NO_KEYCHAIN: '1',
     FLIST_WORKBENCH_OFFLINE_STARTUP: '1'
   })
@@ -113,7 +116,7 @@ async function launchApp(
   await expect(signIn).toBeVisible()
   await signIn.getByRole('button', { name: 'Close' }).click()
   await expect(signIn).toBeHidden()
-  return { app, window, dataDir, userData, appData, fchatDir }
+  return { app, window, dataDir, userData, appData, fchatDir, sidecarUrl: `http://127.0.0.1:${port}` }
 }
 
 /**

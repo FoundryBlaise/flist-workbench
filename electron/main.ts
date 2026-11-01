@@ -14,6 +14,7 @@ import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
 import { FileGrants } from './fileGrants'
+import { APP_PAGE_URL, isAppPage } from './appPage'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -236,8 +237,10 @@ const EXTERNAL_HOSTS = new Set([
   'static.f-list.net'
 ])
 
-ipcMain.on('workbench:open-external', (event, url: unknown) => {
-  if (event.sender !== mainWindow?.webContents) return
+// The one way a URL leaves the app for the user's browser: the
+// renderer's openExternal, and every link or window.open the app window
+// would otherwise open as a window of its own.
+function openExternal(url: unknown): void {
   if (typeof url !== 'string') return
   let parsed: URL
   try {
@@ -248,6 +251,11 @@ ipcMain.on('workbench:open-external', (event, url: unknown) => {
   if (parsed.protocol !== 'https:') return
   if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
   void shell.openExternal(parsed.toString())
+}
+
+ipcMain.on('workbench:open-external', (event, url: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  openExternal(url)
 })
 
 // Settings → Security: where the bundled browser extension lives and
@@ -665,23 +673,49 @@ async function createWindow(): Promise<void> {
     mainWindow = null
   })
 
-  // Every request this window makes to the sidecar gets the launch
-  // secret: fetch, but also <img> and the event stream, which cannot
-  // set headers themselves. Keyed to this window's id, captured now,
-  // so the close-time flush still qualifies while the window unloads
-  // and no other web contents ever does.
+  // Every request the app's own page makes to the sidecar gets the
+  // launch secret: fetch, but also <img> and the event stream, which
+  // cannot set headers themselves. Only the main frame of this window,
+  // while it shows the app's page, qualifies: never a frame inside it,
+  // a page that isn't the app, or any other web contents. The window's
+  // id is captured now, so the close-time flush still qualifies while
+  // the window unloads.
   const windowContentsId = mainWindow.webContents.id
   mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
     { urls: [`${sidecarUrl}/*`, `http://localhost:${sidecarPort}/*`] },
     (details, callback) => {
+      const frame = details.frame
+      const fromAppPage =
+        details.webContentsId === windowContentsId &&
+        frame != null &&
+        frame.parent === null &&
+        isAppPage(frame.url)
       callback({
-        requestHeaders:
-          details.webContentsId === windowContentsId
-            ? withLaunchSecret(details.requestHeaders)
-            : details.requestHeaders
+        requestHeaders: fromAppPage ? withLaunchSecret(details.requestHeaders) : details.requestHeaders
       })
     }
   )
+
+  // The window never leaves the app's own page: a link dropped onto it,
+  // a script setting location, or a redirect on the way is cancelled.
+  // Main's own loadURL is not a navigation the page asked for and is
+  // not seen here.
+  const stayOnAppPage = (event: Electron.Event, url: string): void => {
+    if (isAppPage(url)) return
+    event.preventDefault()
+    appendDiagLog('navigation-blocked', url)
+  }
+  mainWindow.webContents.on('will-navigate', (event, url) => stayOnAppPage(event, url))
+  mainWindow.webContents.on('will-redirect', (event, url) => stayOnAppPage(event, url))
+
+  // No page in the window ever gets a window of its own, which would
+  // carry the preload bridge. Web links, target="_blank" ones in a
+  // profile preview included, go to the user's browser instead, through
+  // the same checks as the renderer's openExternal.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url)
+    return { action: 'deny' }
+  })
 
   // Renderer-side breakage is easy to miss when the only symptom is a
   // blank window. Surface render-process-gone + unresponsive events so
@@ -703,14 +737,9 @@ async function createWindow(): Promise<void> {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  appendDiagLog('createWindow', { isDev, devUrl: devUrl ?? null })
+  appendDiagLog('createWindow', { isDev, appPage: APP_PAGE_URL })
   try {
-    if (isDev && devUrl) {
-      await mainWindow.loadURL(devUrl)
-    } else {
-      await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-    }
+    await mainWindow.loadURL(APP_PAGE_URL)
     appendDiagLog('createWindow', 'load complete')
   } catch (err) {
     appendDiagLog('createWindow-load-failed', err)
