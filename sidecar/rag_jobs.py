@@ -291,18 +291,20 @@ def _run_job(job: IngestJob) -> None:
                     return
                 elif job.force_rewipe:
                     # No dim mismatch, user explicitly asked for a
-                    # rewipe — scope-aware so re-ingesting one
-                    # conversation doesn't nuke the whole index. Safe
-                    # because chunks only reference others within the
-                    # same (character, partner) via prev/next pointers.
-                    if job.scope.get("character") and job.scope.get("partner"):
+                    # rebuild. It deletes only the scope it was asked
+                    # for (one conversation, or every conversation of
+                    # one character), in both indexes, so rebuilding
+                    # one character never costs another character's
+                    # Index. Safe because chunks only reference others
+                    # within the same (character, partner) via
+                    # prev/next pointers.
+                    if job.scope.get("character"):
                         store.delete_scope(job.scope)
                         lex.delete_scope(job.scope)
                         store.ensure_collection(vector_size=dimension)
                     else:
-                        # Broad scope (character-only or all): nuke +
-                        # rebuild, matching the user's mental model of
-                        # "Re-ingest all".
+                        # Unscoped: empty the whole Index first,
+                        # matching "Re-ingest all".
                         store.recreate_collection(vector_size=dimension)
                         rag_store.clear_manifest()
                         lex.wipe()
