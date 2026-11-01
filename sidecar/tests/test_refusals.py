@@ -93,7 +93,7 @@ def character(client: TestClient) -> str:
 
     import character_archive
 
-    char = character_archive.character_dir("123")
+    char = character_archive.create_character_dir("123")
     (char / "live.json").write_text(json.dumps({"id": 123, "name": "Someone"}), encoding="utf-8")
     character_archive.backups_dir("123")
     return "123"
