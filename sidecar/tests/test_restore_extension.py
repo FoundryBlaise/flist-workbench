@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(restore_svc)
     hs = restore_svc.begin_handshake()
     restore_svc.accept_handshake(hs["handshake_id"])
-    c = TestClient(server.app)
+    c = app_client(server.app)
     c.token = hs["token"]  # type: ignore[attr-defined]
     yield c
     # The pairing lives in module state; leave the next test unpaired.

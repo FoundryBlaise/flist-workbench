@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 
 def _seed_live(client: TestClient, archive, cid: str = "123") -> None:
@@ -62,7 +63,7 @@ def client(archive) -> TestClient:
     import server
 
     importlib.reload(server)
-    return TestClient(server.app)
+    return app_client(server.app)
 
 
 # ---- list -------------------------------------------------------------

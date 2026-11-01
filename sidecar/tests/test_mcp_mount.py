@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 from mcp_helpers import call_tool, initialize_params, json_rpc, mcp_client
 
@@ -33,7 +34,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # `with` runs the lifespan — which is the whole point here.
     # Host must look like the real sidecar: the MCP endpoints reject
     # anything else, and TestClient defaults to "testserver".
-    with TestClient(server.app, base_url="http://127.0.0.1:27384") as c:
+    with app_client(server.app) as c:
         yield c
 
 
@@ -78,7 +79,8 @@ def test_foreign_host_is_refused(client: TestClient) -> None:
         initialize_params(),
         headers={"Host": "evil.example"},
     )
-    assert res.status_code == 421
+    # The sidecar-wide Host check refuses it before MCP's own (421) runs.
+    assert res.status_code == 403
 
 
 def test_localhost_origin_is_allowed(client: TestClient) -> None:
@@ -92,14 +94,9 @@ def test_localhost_origin_is_allowed(client: TestClient) -> None:
     assert res.status_code == 200
 
 
-def test_mcp_does_not_inherit_the_wildcard_cors_header(
-    client: TestClient,
-) -> None:
-    """The REST API allows any origin; the MCP endpoint must not
-    advertise itself as callable from an arbitrary web page."""
-    rest = client.get("/health", headers={"Origin": "http://localhost:5173"})
-    assert rest.headers.get("access-control-allow-origin") == "*"
-
+def test_mcp_grants_no_cors_read(client: TestClient) -> None:
+    """The MCP endpoint must not advertise itself as callable from a
+    web page, not even a local one."""
     res = json_rpc(
         client,
         "/mcp",
@@ -141,7 +138,7 @@ def test_lifespan_runs_every_former_startup_hook(
             server, hook, (lambda n: lambda: _record(n))(hook)
         )
 
-    with TestClient(server.app):
+    with app_client(server.app):
         pass
 
     assert called == [

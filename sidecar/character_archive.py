@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import paths
+from archive_errors import InvalidCharacterId
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -347,11 +348,15 @@ def character_dir(character_id: int | str) -> Path:
     entry = reg.get(cid)
     if entry and entry.get("folder"):
         p = root() / entry["folder"]
-    else:
+    elif _is_folder_safe(cid) and not cid.startswith("_"):
         # Unregistered id (no pull yet, or registry corruption) — fall
         # back to the legacy id-named folder so existing data keeps
-        # working.
+        # working. Only a name that cannot leave `characters/` or hit
+        # its reserved `_` entries gets here: on Windows a backslash
+        # is a separator, so `..\..\x` would otherwise escape.
         p = root() / cid
+    else:
+        raise InvalidCharacterId(cid)
     p.mkdir(parents=True, exist_ok=True)
     return p
 

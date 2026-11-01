@@ -18,8 +18,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import aliases as aliases_store
@@ -38,7 +37,8 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from services import label_rollup, payload_ops
+from archive_errors import InvalidCharacterId
+from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
 from services import events as event_bus
@@ -81,6 +81,7 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """
     import asyncio as _asyncio
 
+    local_access.require_configured()
     event_bus.bind_loop(_asyncio.get_running_loop())
     if not OFFLINE_STARTUP:
         await _eicons_warm_up()
@@ -105,42 +106,6 @@ app = FastAPI(
     version=os.environ.get("FLIST_WORKBENCH_VERSION") or "0.0.0-dev",
     lifespan=sidecar_lifespan,
 )
-
-# The renderer runs in Electron at file:// or http://localhost:<vite>.
-# Allow any local origin in dev; tighten in Phase 8 packaging.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.middleware("http")
-async def _strip_cors_on_mcp(request, call_next):
-    """Keep the app-wide `Access-Control-Allow-Origin: *` off `/mcp`.
-
-    The MCP endpoints do their own Host/Origin validation
-    (DNS-rebinding protection) and reject cross-origin callers before
-    any handler runs, so this is belt-and-braces — but advertising the
-    endpoint as browser-callable from any page would be a misleading
-    signal to a web client that then can't actually use it.
-
-    Registered after CORSMiddleware, which makes it the outer layer:
-    CORS has already written its headers by the time we see the
-    response.
-    """
-    response = await call_next(request)
-    if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
-        for header in (
-            "access-control-allow-origin",
-            "access-control-allow-credentials",
-            "access-control-expose-headers",
-        ):
-            if header in response.headers:
-                del response.headers[header]
-    return response
-
 
 workbench_mcp.mount(app, _MCP_SERVERS)
 
@@ -187,6 +152,21 @@ async def _flist_touch_middleware(request, call_next):
     if path.startswith("/flist/") and (path, request.method) not in _TOUCH_EXEMPT_PATHS:
         flist_api.ticket_store().touch()
     return await call_next(request)
+
+
+# Added last, so it is the outermost layer: a refused request touches
+# nothing above. CORS is answered there too, per caller.
+app.add_middleware(local_access.LocalAccessGuard, port=SIDECAR_PORT)
+
+
+@app.exception_handler(InvalidCharacterId)
+async def _invalid_character_id(_request: Request, _exc: InvalidCharacterId) -> JSONResponse:
+    """Wherever the archive refuses an id, the caller hears it the
+    same way rather than as a 500."""
+    return JSONResponse(
+        status_code=400,
+        content={"code": "invalid_character_id", "message": "invalid character_id"},
+    )
 
 
 @app.get("/health")
@@ -804,6 +784,8 @@ async def flist_character_zip_backup_payload(
     """
     import zipfile
 
+    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
+        raise HTTPException(status_code=400, detail="invalid backup filename")
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
@@ -981,7 +963,7 @@ def _require_valid_character_id(character_id: str) -> None:
     if not isinstance(character_id, str) or not _CHARACTER_ID_RE.match(
         character_id
     ):
-        raise HTTPException(status_code=400, detail="invalid character_id")
+        raise InvalidCharacterId(character_id)
 
 
 @app.get("/flist/character/{character_id}/workbench")

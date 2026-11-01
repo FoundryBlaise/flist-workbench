@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 import labels as labels_store
 import settings as settings_store
@@ -325,7 +326,7 @@ def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 def test_settings_get_exposes_labels_and_defaults(api_client: TestClient) -> None:
@@ -597,7 +598,7 @@ def conversation_api(
     # import time — it broke two log tests that run after this one.
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 _CONV = {"character": "Lady Amber Blaise", "partner": "Daelan Envale"}

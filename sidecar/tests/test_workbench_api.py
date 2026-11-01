@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(character_archive)
     from server import app
 
-    return TestClient(app), character_archive
+    return app_client(app), character_archive
 
 
 def _seed(archive, cid: str = "42") -> None:

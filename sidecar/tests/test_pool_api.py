@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 import character_archive
 
@@ -24,7 +25,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 # ---- image upload / list / delete ------------------------------------

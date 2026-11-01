@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 import labels as labels_store
 import rag_embed
@@ -210,7 +211,7 @@ def index_window(
     from server import app
 
     log = tmp_path / "fchat" / ME / "logs" / PARTNER
-    return TestClient(app), log
+    return app_client(app), log
 
 
 def _label(client: TestClient, text: str, label: str | None) -> None:
@@ -602,7 +603,7 @@ def api_client(
 ) -> TestClient:
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 def test_ingest_endpoint_rejects_partner_without_character(

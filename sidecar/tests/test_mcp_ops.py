@@ -507,7 +507,7 @@ def test_the_pull_route_still_streams_sse(
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    from fastapi.testclient import TestClient
+    from sidecar_client import app_client
 
     import server
     from services import pull as pull_service
@@ -519,7 +519,7 @@ def test_the_pull_route_still_streams_sse(
         yield "done", {"character_id": "42", "image_count": 0}
 
     monkeypatch.setattr(pull_service, "run", fake_run)
-    client = TestClient(server.app, base_url="http://127.0.0.1:27384")
+    client = app_client(server.app)
     with client.stream("POST", "/flist/character/Someone/pull") as resp:
         body = b"".join(resp.iter_bytes()).decode("utf-8")
     assert "event: queued" in body
@@ -534,7 +534,7 @@ def test_the_backup_all_route_still_streams_sse(
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    from fastapi.testclient import TestClient
+    from sidecar_client import app_client
 
     import server
     from services import backup_all as backup_all_service
@@ -547,7 +547,7 @@ def test_the_backup_all_route_still_streams_sse(
         yield "done", {"total": 1, "saved": 1, "unchanged": 0, "failed": 0}
 
     monkeypatch.setattr(backup_all_service, "run", fake_run)
-    client = TestClient(server.app, base_url="http://127.0.0.1:27384")
+    client = app_client(server.app)
     with client.stream("POST", "/flist/backup-all") as resp:
         body = b"".join(resp.iter_bytes()).decode("utf-8")
     assert "event: start" in body

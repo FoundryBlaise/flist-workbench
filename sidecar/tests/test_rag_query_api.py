@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 
 import labels as labels_store
 import rag_embed
@@ -36,7 +37,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(rag_rerank, "_build_encoder", lambda *_a, **_k: _FakeEncoder())
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 def _parse_sse(body: bytes) -> list[tuple[str, dict | str]]:

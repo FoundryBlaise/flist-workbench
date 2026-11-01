@@ -214,13 +214,13 @@ async def test_a_model_can_read_the_folders_but_not_change_them(
 
 
 def test_the_window_validates_the_folders_it_saves(workbench, tmp_path: Path) -> None:  # noqa: F811
-    from fastapi.testclient import TestClient
+    from sidecar_client import app_client
 
     import server
 
     real = tmp_path / "Outputs"
     real.mkdir()
-    with TestClient(server.app) as client:
+    with app_client(server.app) as client:
         bad = client.put(
             "/settings", json={"image_import_roots": [str(tmp_path / "missing")]}
         )

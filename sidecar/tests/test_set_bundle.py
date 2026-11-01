@@ -209,11 +209,11 @@ def test_endpoints_reject_path_traversal_character_id(tmp_path):
     """The new import endpoint accepts arbitrary bytes — a bogus
     character_id segment must not let us write payloads anywhere outside
     the validated archive root."""
-    from fastapi.testclient import TestClient
+    from sidecar_client import app_client
 
     import server
 
-    client = TestClient(server.app)
+    client = app_client(server.app)
     bad_ids = ["../escape", "..%2Fescape", "foo/bar", "a..b", "x" * 64]
     for bid in bad_ids:
         # Export: GET with a bad id should 400 before any disk touch.

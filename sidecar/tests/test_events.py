@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from sidecar_client import SECRET_HEADER, TEST_LAUNCH_SECRET
 from mcp_helpers import call_tool, mcp_client
 from test_mcp_reads import MAPPING
 
@@ -295,7 +296,10 @@ async def test_the_events_endpoint_streams(
         "query_string": b"",
         "root_path": "",
         "scheme": "http",
-        "headers": [(b"host", b"127.0.0.1:27384")],
+        "headers": [
+            (b"host", b"127.0.0.1:27384"),
+            (SECRET_HEADER.lower().encode(), TEST_LAUNCH_SECRET.encode()),
+        ],
         "client": ("127.0.0.1", 50000),
         "server": ("127.0.0.1", 27384),
     }

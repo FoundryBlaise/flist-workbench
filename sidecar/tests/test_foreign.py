@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import BASE_URL, SECRET_HEADER, TEST_LAUNCH_SECRET, app_client
 
 
 @pytest.fixture
@@ -30,7 +31,7 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def client(data_dir: Path) -> TestClient:
     from server import app
 
-    return TestClient(app)
+    return app_client(app)
 
 
 def _profile(name: str = "Anexample Person", **extra: Any) -> dict[str, Any]:
@@ -563,7 +564,11 @@ async def test_a_gallery_loads_several_images_at_once_but_never_more_than_the_ca
     )
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://sidecar") as c:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url=BASE_URL,
+        headers={SECRET_HEADER: TEST_LAUNCH_SECRET},
+    ) as c:
         assert (await c.get("/foreign/character/Anexample Person")).status_code == 200
         results = await asyncio.gather(
             *(c.get(f"/foreign/character/Anexample Person/image/{i}") for i in ids)

@@ -75,7 +75,7 @@ PARTNER = "Antiquill"
 def window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """The sidecar as the window reaches it, over an empty F-Chat folder.
     Returns (client, path of the one conversation's Log)."""
-    from fastapi.testclient import TestClient
+    from sidecar_client import app_client
 
     root = tmp_path / "fchat"
     monkeypatch.setenv("FCHAT_DATA_DIR", str(root))
@@ -83,7 +83,7 @@ def window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     from server import app
 
-    return TestClient(app), root / ME / "logs" / PARTNER
+    return app_client(app), root / ME / "logs" / PARTNER
 
 
 def _messages(client) -> list[dict]:

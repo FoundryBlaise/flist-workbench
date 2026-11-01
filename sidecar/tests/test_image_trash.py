@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sidecar_client import app_client
 from PIL import Image
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
@@ -31,7 +32,7 @@ def png(n: int) -> bytes:
 def client(workbench) -> TestClient:  # noqa: F811
     import server
 
-    with TestClient(server.app) as c:
+    with app_client(server.app) as c:
         yield c
 
 
