@@ -1044,15 +1044,19 @@ def list_trash(character: str) -> dict[str, Any]:
     whom (`ui` or `mcp`): `items` are images deleted from the pool,
     which `restore_image` puts back by `trash_id` (the image id, unless
     the trash holds several files under one id because a Pull replaced
-    it); `backups` are deleted Backups, which the user restores in the
-    window. Emptying the trash is the user's job, in the window."""
-    from services import backup_trash, image_trash
+    it); `backups` are deleted Backups and `labels` are cleared Labels
+    (one entry per clear, with its conversation, or `partner` null for
+    every conversation, and how many Labels it holds), both of which the
+    user restores in the window. Emptying the trash is the user's job,
+    in the window."""
+    from services import backup_trash, image_trash, label_trash
 
     target = resolve_character(character)
     return {
         "character": target.name,
         "items": image_trash.list_trash(target.id),
         "backups": backup_trash.list_backups(target.id),
+        "labels": label_trash.list_labels(target.name),
     }
 
 
