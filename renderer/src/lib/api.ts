@@ -548,11 +548,20 @@ async function request<T>(
   if (!res.ok) {
     let detail: string | undefined
     try {
-      const raw = ((await res.json()) as { detail?: unknown })?.detail
-      // Most routes answer with a plain string. The /foreign/ ones
-      // carry `{code, message}` so the caller can tell "not signed in"
-      // from "no such character" without matching on prose; without
-      // this branch that object stringified to "[object Object]".
+      const body = (await res.json()) as {
+        code?: unknown
+        message?: unknown
+        detail?: unknown
+      } | null
+      // Every refusal answers `{code, message}` at the top level, so the
+      // caller can tell "not signed in" from "no such character" without
+      // matching on prose. Older answers nest it, or a plain string, in
+      // `detail`; a nested object would otherwise stringify to
+      // "[object Object]".
+      const raw =
+        body && typeof body.code === 'string' && typeof body.message === 'string'
+          ? body
+          : body?.detail
       if (typeof raw === 'string') {
         detail = raw
       } else if (raw && typeof raw === 'object') {
