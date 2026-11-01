@@ -946,8 +946,8 @@ def remove_image(
     """Take an image off the profile.
 
     The file stays in the pool and can be put back with add_image.
-    `delete_file=true` moves it to the character's trash instead, where
-    `restore_image` can bring it back; only the user can empty the trash.
+    `delete_file=true` moves it to the character's Trash instead, where
+    `restore_image` can bring it back; only the user can empty the Trash.
     """
     from services import payload_ops
 
@@ -985,18 +985,18 @@ def remove_image(
         "image_id": image_id,
         "file_trashed": file_trashed,
         "note": (
-            "The file is in the trash; restore_image puts it back in the pool."
+            "The file is in the Trash; restore_image puts it back in the pool."
             if file_trashed
             else "The file is still in the pool; add_image can put it back."
         ),
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Move pool images to the trash")
+@tool(tags=TAG_CHARACTER, title="Move pool images to the Trash")
 def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     """Move images that are in the pool — on disk, not on the profile —
-    to the character's trash. `restore_image` brings them back; only the
-    user can empty the trash, in the window.
+    to the character's Trash. `restore_image` brings them back; only the
+    user can empty the Trash, in the window.
 
     An image still in a working set's gallery is refused (take it off
     with `remove_image` first), so no gallery is left pointing at a file
@@ -1038,16 +1038,16 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     return out
 
 
-@tool(tags=TAG_CHARACTER, title="List the trash", read_only=True)
+@tool(tags=TAG_CHARACTER, title="List the Trash", read_only=True)
 def list_trash(character: str) -> dict[str, Any]:
-    """What the character's trash holds, newest first, with when and by
+    """What the character's Trash holds, newest first, with when and by
     whom (`ui` or `mcp`): `items` are images deleted from the pool,
     which `restore_image` puts back by `trash_id` (the image id, unless
-    the trash holds several files under one id because a Pull replaced
+    the Trash holds several files under one id because a Pull replaced
     it); `backups` are deleted Backups and `labels` are cleared Labels
     (one entry per clear, with its conversation, or `partner` null for
     every conversation, and how many Labels it holds), both of which the
-    user restores in the window. Emptying the trash is the user's job,
+    user restores in the window. Emptying the Trash is the user's job,
     in the window."""
     from services import backup_trash, image_trash, label_trash
 
@@ -1060,16 +1060,16 @@ def list_trash(character: str) -> dict[str, Any]:
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Restore images from the trash")
+@tool(tags=TAG_CHARACTER, title="Restore images from the Trash")
 def restore_image(
     character: str,
     image_id: str | None = None,
     image_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Move images from the trash back into the pool — not onto the
+    """Move images from the Trash back into the pool — not onto the
     profile; use add_image for that. Give one `image_id` or several
     `image_ids`, as list_trash's `trash_id`. If the pool already holds
-    the same bytes, the trash entry is dropped and the existing id is
+    the same bytes, the Trash entry is dropped and the existing id is
     reported instead. If it holds a different picture under that id,
     the restored one comes back as `local-<sha8>`, so both are kept.
     """
@@ -1085,7 +1085,7 @@ def restore_image(
     if not result["restored"] and result["not_found"]:
         raise ToolError(
             "image_not_found",
-            f"Not in {target.name}'s trash: {result['not_found']}. "
+            f"Not in {target.name}'s Trash: {result['not_found']}. "
             "list_trash shows what is there.",
         )
     audit(

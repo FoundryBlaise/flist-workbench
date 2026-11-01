@@ -523,13 +523,13 @@ def label_all_unlabeled(
 
 @tool(
     tags=TAG_LOGS,
-    title="Clear stored verdicts",
+    title="Clear stored Labels",
     destructive=True,
 )
 def clear_labels(
     character: str, partner: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
-    """Delete stored IC/OOC verdicts, reverting messages to Unlabeled.
+    """Delete stored IC/OOC Labels, reverting messages to Unlabeled.
 
     It removes the user's own manual overrides as well as anything a
     model decided. Rule-based hints keep firing. Ask the user before
@@ -550,7 +550,7 @@ def clear_labels(
         scope = f"{partner} with {character}" if partner else f"every conversation of {character}"
         raise ToolError(
             "confirm_required",
-            f"This deletes every stored verdict for {scope}, including "
+            f"This deletes every stored Label for {scope}, including "
             "the user's own manual overrides. A copy goes to the Trash, "
             "where only the user can restore it. Ask the user, then call "
             "again with confirm=true.",

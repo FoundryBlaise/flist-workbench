@@ -41,7 +41,7 @@ export function ImagesTrash({
 }: {
   characterId: string
   readOnly: boolean
-  /** Changes whenever the pool listing reloads, so the trash does too. */
+  /** Changes whenever the pool listing reloads, so the Trash does too. */
   refreshKey: unknown
   onBack: () => void
   onCountChange: (n: number) => void
@@ -62,7 +62,7 @@ export function ImagesTrash({
       setLabels(res.labels ?? [])
       onCountChange(trashEntryCount(res))
     } catch (e) {
-      setMessage(`Couldn’t read the trash: ${e instanceof Error ? e.message : String(e)}`)
+      setMessage(`Couldn’t read the Trash: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -144,7 +144,7 @@ export function ImagesTrash({
               onClick={() => setConfirm('empty')}
               data-testid="flist-images-trash-empty"
             >
-              Empty trash
+              Empty Trash
             </button>
           </>
         )}
@@ -213,7 +213,7 @@ export function ImagesTrash({
           )
         })}
         {items !== null && entries === 0 && (
-          <li className="flist-images-pool-empty">The trash is empty.</li>
+          <li className="flist-images-pool-empty">The Trash is empty.</li>
         )}
       </ul>
       <TrashedBackups
@@ -245,10 +245,10 @@ export function ImagesTrash({
       )}
       {confirm === 'empty' && (
         <ImagesConfirmModal
-          title="Empty the trash?"
-          body={`Everything in this character’s trash (${entries} entr${entries === 1 ? 'y' : 'ies'}) is deleted for good. This can’t be undone.`}
+          title="Empty the Trash?"
+          body={`Everything in this character’s Trash (${entries} entr${entries === 1 ? 'y' : 'ies'}) is deleted for good. This can’t be undone.`}
           thumbs={thumbsFor(visible)}
-          confirmLabel="Empty trash"
+          confirmLabel="Empty Trash"
           danger
           onCancel={() => setConfirm(null)}
           onConfirm={() => {

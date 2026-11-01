@@ -1,7 +1,7 @@
-// Pool multi-select and the trash, as the user asked for them: ten
-// images picked with Shift-click go to the trash with one confirm, the
+// Pool multi-select and the Trash, as the user asked for them: ten
+// images picked with Shift-click go to the Trash with one confirm, the
 // confirm says which are still used elsewhere, and they come back from
-// the trash view.
+// the Trash view.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -101,7 +101,7 @@ it('shift-click selects ten, Delete asks once, and the confirm says what is stil
   fireEvent.keyDown(rows[0], { key: 'Delete' })
 
   const confirm = await screen.findByTestId('flist-images-delete-confirm')
-  expect(confirm.textContent).toContain('Move 10 images to the trash?')
+  expect(confirm.textContent).toContain('Move 10 images to the Trash?')
   expect(within(confirm).getByTestId('flist-images-usage-notes').textContent).toContain(
     '2 of these are on the live profile'
   )
@@ -166,7 +166,7 @@ it('filters narrow the pool and select-all takes only what they show', () => {
   expect(screen.getAllByTestId('flist-images-pool-item')).toHaveLength(11)
 })
 
-it('the trash view restores what was trashed', async () => {
+it('the Trash view restores what was trashed', async () => {
   trash = [
     {
       trash_id: 'gone1',
@@ -194,7 +194,7 @@ it('the trash view restores what was trashed', async () => {
   expect(fake.requestsTo(`POST ${TRASH}/restore`)[0].body).toEqual({
     image_ids: ['gone1']
   })
-  await waitFor(() => expect(screen.getByText('The trash is empty.')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('The Trash is empty.')).toBeTruthy())
 })
 
 it('two files trashed under one image id are listed and restored one by one', async () => {

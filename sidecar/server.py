@@ -1679,7 +1679,7 @@ async def flist_character_export_zip(character_id: str) -> Response:
         if live is None:
             raise HTTPException(
                 status_code=404,
-                detail="no Workbench or Live snapshot to export",
+                detail="no Workbench or Live to export",
             )
         working = payload_ops.seed_from_live(live)
     name_for_file = "character"

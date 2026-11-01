@@ -61,7 +61,7 @@ export function ResetUndoBanner({ characterId }: { characterId: string }) {
       aria-live="assertive"
       data-testid="profile-fields-reset-undo"
     >
-      Working copy reset to Live.
+      Workbench reset to Live.
       <button type="button" onClick={() => void undoReset()}>
         Undo{countdown != null ? ` (${countdown}s)` : ''}
       </button>
