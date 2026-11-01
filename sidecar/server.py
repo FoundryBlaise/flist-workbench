@@ -902,6 +902,8 @@ async def flist_character_zip_backup_payload(
         raise HTTPException(
             status_code=500, detail="backup working.json is not valid JSON"
         ) from exc
+    if isinstance(payload, dict):
+        payload = character_archive.backup_payload(payload)
     return {"payload": payload, "filename": filename, "meta": meta}
 
 

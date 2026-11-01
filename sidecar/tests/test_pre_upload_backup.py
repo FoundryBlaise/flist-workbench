@@ -267,17 +267,72 @@ def old_backup_on_disk(paired):
     return data
 
 
-def test_an_old_backup_taken_before_an_upload_is_listed_after_startup(
-    paired, old_backup_on_disk
-) -> None:
-    import character_archive
+@pytest.fixture
+def started(paired, old_backup_on_disk):
+    """The app starting over the data folder, startup work included. A
+    fresh app: each one's MCP session managers start only once."""
+    import importlib
+
     import server
 
+    importlib.reload(server)
     with app_client(server.app) as client:
-        listed = client.get("/flist/character/42/zip-backups").json()["backups"]
+        yield client
+
+
+def test_an_old_backup_taken_before_an_upload_is_listed_after_startup(
+    started, old_backup_on_disk
+) -> None:
+    import character_archive
+
+    listed = started.get("/flist/character/42/zip-backups").json()["backups"]
 
     assert [b["filename"] for b in listed] == [ADOPTED_NAME]
     # Not a byte lost: the file is the one that was there, renamed.
     adopted = character_archive.backups_dir("42") / ADOPTED_NAME
     assert adopted.read_bytes() == old_backup_on_disk
     assert not (character_archive.backups_dir("42") / OLD_NAME).exists()
+
+
+def test_an_old_backup_taken_before_an_upload_restores(started) -> None:
+    res = started.post(
+        "/flist/character/42/workbench/load-backup", json={"filename": ADOPTED_NAME}
+    )
+
+    assert res.status_code == 200, res.text
+    payload = _workbench_payload(started)
+
+    assert payload["character"]["description"] == "[b]What F-list had before the Upload.[/b]"
+    assert payload["kinks"] == {"580": "fave", "581": "no"}
+    assert payload["infotags"] == {"2": "Human"}
+    assert payload["custom_kinks"]["31712021"]["name"] == "Lantern lore"
+    assert [i["image_id"] for i in payload["images"]] == ["17924625"]
+
+
+def test_an_old_backup_taken_before_an_upload_can_be_browsed(started) -> None:
+    res = started.get(f"/flist/character/42/zip-backups/{ADOPTED_NAME}/payload")
+
+    assert res.status_code == 200, res.text
+    assert res.json()["payload"]["kinks"] == {"580": "fave", "581": "no"}
+
+
+def test_an_old_backup_taken_before_an_upload_is_an_upload_source_that_keeps_the_kinks(
+    started, paired
+) -> None:
+    """The earlier version wrote the form's own field names into
+    character.json. The extension looks kinks up by bare id, so it would
+    have read every kink as unset and cleared them all on the form."""
+    _client, extension = paired
+
+    sources = extension.get("/restore/snapshots", params={"character": NAME}).json()
+    assert ADOPTED_NAME in [s["id"] for s in sources]
+    res = extension.get(f"/restore/snapshot/{ADOPTED_NAME}", params={"character": NAME})
+
+    assert res.status_code == 200
+    backup = _zip(res.content)
+    profile = json.loads(backup.read("character.json"))
+    assert profile["kinks"] == {"580": "fave", "581": "no"}
+    assert profile["infotags"] == {"2": "Human"}
+    assert [k["name"] for k in profile["customKinks"]] == ["Lantern lore"]
+    assert backup.read("avatar.png") == AVATAR
+    assert backup.read("images/17924625.png") == PNG

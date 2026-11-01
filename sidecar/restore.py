@@ -20,11 +20,13 @@ calls /restore/handshake/accept|reject. Extension polls
 
 from __future__ import annotations
 
+import io
 import json
 import secrets
 import tempfile
 import threading
 import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -441,7 +443,26 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     candidate = character_archive.backups_dir(character_id) / snapshot_id
     if not candidate.is_file():
         return None
-    return candidate.read_bytes()
+    return _with_form_state_translated(candidate.read_bytes())
+
+
+def _with_form_state_translated(data: bytes) -> bytes:
+    """A Backup an earlier version took before an Upload holds the edit
+    form with the form's own field names (`fetish_<id>`, `info_<id>`) in
+    character.json. The extension looks kinks and infotags up by bare id,
+    so it would read every kink as unset and clear them on the page.
+    Such a Backup is served translated; the file on disk stays as it is.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            working = json.loads(zf.read("working.json").decode("utf-8"))
+    except (KeyError, ValueError, zipfile.BadZipFile):
+        return data
+    if not isinstance(working, dict) or not character_archive.is_form_state(working):
+        return data
+    return zip_serialise.repack_with_payload(
+        data, character_archive.payload_from_form_state(working)
+    )
 
 
 def _avatar_path_for_name(character_name: str) -> Path | None:

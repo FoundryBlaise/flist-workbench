@@ -1767,6 +1767,7 @@ def load_zip_backup_into_workbench(
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
+    payload = backup_payload(payload)
 
     bench = resolve_workbench(character_id)
     if bench is None:
@@ -1815,7 +1816,7 @@ def create_set_from_zip_backup(
         raise ValueError(f"backup working.json is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
-    return _materialise_set(character_id, clean, payload)
+    return _materialise_set(character_id, clean, backup_payload(payload))
 
 
 def duplicate_set(
@@ -2032,6 +2033,20 @@ def payload_from_form_state(
         "images": _seed_payload_from_live({"images": images})["images"],
         "inlines": inlines if inlines is not None else {},
     }
+
+
+def is_form_state(payload: dict[str, Any]) -> bool:
+    """Whether a Backup's `working.json` is the raw edit form an earlier
+    version packed before an Upload, rather than a Workbench payload.
+    Every Workbench payload carries `_schema_version` and `_overlay`."""
+    return "_schema_version" not in payload and "_overlay" not in payload
+
+
+def backup_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """A Backup's `working.json` as a Workbench payload. Backups taken
+    before an Upload by an earlier version hold the edit form as the
+    extension sent it; those are translated, the rest pass through."""
+    return payload_from_form_state(payload) if is_form_state(payload) else payload
 
 
 # ---- image storage ----------------------------------------------------
