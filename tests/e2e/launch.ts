@@ -5,6 +5,7 @@ import {
   type ElectronApplication,
   type Page
 } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
@@ -34,6 +35,12 @@ export type LaunchedApp = {
   fchatDir: string
   /** Where this launch's sidecar listens, e.g. `http://127.0.0.1:50123`. */
   sidecarUrl: string
+}
+
+export type LaunchOptions = {
+  pinFchatDir?: boolean
+  /** Start on this data folder instead of a fresh one. */
+  dataDir?: string
 }
 
 function e2eEnv(name: string): string {
@@ -72,17 +79,18 @@ async function freePort(): Promise<number> {
  * `pinFchatDir: false` leaves FCHAT_DATA_DIR unset so the Settings
  * value drives the F-Chat folder; it then defaults into the empty
  * temp APPDATA.
+ *
+ * `dataDir` starts the app on a data folder an earlier launch (or
+ * `seedCharacter`) already wrote, as the user's next start would.
  */
-async function launchApp(
-  opts: { pinFchatDir?: boolean } = {}
-): Promise<LaunchedApp> {
+async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> {
   const root = resolve(__dirname, '../..')
   const fchatDir = e2eEnv('FLIST_WB_E2E_FCHAT_DIR')
   const run = await mkdtemp(join(e2eEnv('FLIST_WB_E2E_ROOT'), 'run-'))
-  const dataDir = join(run, 'data')
+  const dataDir = opts.dataDir ?? join(run, 'data')
   const userData = join(run, 'userdata')
   const appData = join(run, 'appdata')
-  await Promise.all([dataDir, userData, appData].map((d) => mkdir(d)))
+  await Promise.all([dataDir, userData, appData].map((d) => mkdir(d, { recursive: true })))
 
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
@@ -129,7 +137,7 @@ async function launchApp(
  */
 export async function withApp(
   body: (launched: LaunchedApp) => Promise<void>,
-  opts: { pinFchatDir?: boolean } = {}
+  opts: LaunchOptions = {}
 ): Promise<void> {
   const launched = await launchApp(opts)
   try {
@@ -213,6 +221,26 @@ async function attachDiagLogTail(userData: string): Promise<void> {
   } catch {
     // Must not hide the real error either.
   }
+}
+
+/**
+ * A fresh data folder holding one pulled character, `name`, whose Live
+ * description is `description`. Written by the sidecar's own archive
+ * code through its venv python, as global setup writes the Logs. Pass
+ * the folder to `withApp` as `dataDir`.
+ */
+export async function seedCharacter(id: string, name: string, description: string): Promise<string> {
+  const repo = resolve(__dirname, '../..')
+  const python =
+    process.platform === 'win32'
+      ? join(repo, 'sidecar', '.venv', 'Scripts', 'python.exe')
+      : join(repo, 'sidecar', '.venv', 'bin', 'python')
+  const dataDir = join(await mkdtemp(join(e2eEnv('FLIST_WB_E2E_ROOT'), 'seed-')), 'data')
+  await mkdir(dataDir)
+  execFileSync(python, [join(__dirname, 'fixtures', 'seed_character.py'), dataDir, id, name, description], {
+    stdio: 'inherit'
+  })
+  return dataDir
 }
 
 /** Whether a window is the app's own, not the dev build's DevTools. */
