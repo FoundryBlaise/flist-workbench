@@ -649,7 +649,11 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
 })
 
 async function createWindow(): Promise<void> {
+  // The e2e harness starts the app many times per run; a window that
+  // took the focus each time would keep the desktop unusable meanwhile.
+  const noFocus = process.env['FLIST_WORKBENCH_NO_FOCUS'] === '1'
   mainWindow = new BrowserWindow({
+    show: !noFocus,
     width: 1400,
     height: 900,
     // Below ~1100 px the editor and preview both compress past readable
@@ -671,6 +675,7 @@ async function createWindow(): Promise<void> {
       ]
     }
   })
+  if (noFocus) mainWindow.showInactive()
 
   mainWindow.on('closed', () => {
     mainWindow = null

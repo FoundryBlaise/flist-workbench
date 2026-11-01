@@ -163,7 +163,10 @@ export async function startSidecar(): Promise<void> {
         cwd: sidecarDir,
         env: sidecarEnv(),
         stdio: ['ignore', 'inherit', 'inherit'],
-        detached: process.platform !== 'win32'
+        detached: process.platform !== 'win32',
+        // Electron has no console of its own, so on Windows a console
+        // child would open its own window and take the focus.
+        windowsHide: true
       }
     )
   }
@@ -227,7 +230,8 @@ function runUvSync(cwd: string): Promise<void> {
       cwd,
       env: process.env,
       stdio: ['ignore', 'inherit', 'inherit'],
-      shell: process.platform === 'win32'
+      shell: process.platform === 'win32',
+      windowsHide: true
     })
     child.on('exit', (code) => {
       if (code === 0) resolve()
