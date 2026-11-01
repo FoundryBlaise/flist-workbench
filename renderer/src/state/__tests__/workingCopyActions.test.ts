@@ -217,16 +217,92 @@ describe('typing while a save is in flight', () => {
     expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
   })
 
-  // Real bug, see #2: the two flushes queued behind the in-flight save
-  // both wake when it lands and each sends a PUT over the same etag, so
-  // against the real sidecar the second gets a 409 and raises a
-  // conflict banner for a conflict the window had with itself. Drop
-  // `.fails` once the fix lands; the test above checks everything else.
-  it.fails('no two saves leave over the same etag', async () => {
+  // The flushes queued behind the in-flight save must not each send a
+  // PUT over the same etag: the real sidecar answers the second with a
+  // 409, and the window would raise a conflict banner for a conflict it
+  // had with itself (#2).
+  it('no two saves leave over the same etag', async () => {
     const { puts } = await burstBehindASlowSave()
 
     const etags = puts.map((r) => r.headers['If-Match'])
     expect(etags).toEqual([...new Set(etags)])
+    expect(puts.map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
+  })
+
+  it('a burst behind a slow save raises no conflict banner against a sidecar that checks If-Match', async () => {
+    // Like the real sidecar: a save is accepted only over the Workbench's
+    // current etag, and each accepted save hands out a new one.
+    let current = 'seed-etag'
+    let version = 0
+    const answerLikeTheSidecar = () => {
+      for (const p of fake.pending(SAVE)) {
+        if (p.request.headers['If-Match'] !== current) {
+          p.resolve(json({ detail: { detail: 'etag_mismatch', current_etag: current } }, 409))
+          continue
+        }
+        current = `v${++version}`
+        p.resolve(json({ etag: current }))
+      }
+    }
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('one')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two three')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    for (let round = 0; round < 4; round++) {
+      answerLikeTheSidecar()
+      await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    }
+
+    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.saveError).toBeNull()
+    expect(slot.etag).toBe(current)
+  })
+
+  it('quitting while a save is in flight keeps the last edit: the close-time flush resolves only after it reaches the Workbench', async () => {
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('draft')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [inFlight] = fake.pending(SAVE)
+    expect(descOf(inFlight.request.body)).toBe('draft')
+
+    // The user types, then quits before the autosave pause has passed.
+    useStore.getState().setEditorContent('draft, final')
+    let flushed = false
+    const closing = useStore
+      .getState()
+      .flistFlushAllWorking()
+      .then(() => {
+        flushed = true
+      })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flushed).toBe(false)
+    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+
+    inFlight.resolve(json({ etag: 'after-draft' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const [lastEdit] = fake.pending(SAVE)
+    expect(descOf(lastEdit.request.body)).toBe('draft, final')
+    expect(lastEdit.request.headers['If-Match']).toBe('after-draft')
+    expect(flushed).toBe(false)
+
+    lastEdit.resolve(json({ etag: 'after-final' }))
+    await closing
+    expect(flushed).toBe(true)
+    expect(fake.requestsTo(SAVE)).toHaveLength(2)
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.etag).toBe('after-final')
   })
 })
 

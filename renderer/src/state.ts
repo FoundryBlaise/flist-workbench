@@ -796,9 +796,11 @@ const RESET_UNDO_MS = 5_000
 // Per-character autosave debouncers (Tier 2 §1.5 — 500 ms quiet time).
 // Keyed by character id so per-character switches don't race.
 const _autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-// Per-character in-flight flush promise. Ensures overlapping calls to
-// flistFlushWorking serialise per character so a later flush can't
-// race a still-running PUT and "succeed" on a stale payload (QA P1-4).
+// Per-character tail of the flush chain: the last flistFlushWorking
+// call, which settles only after every flush queued before it has.
+// Overlapping calls run one after another, so a later flush can't race
+// a still-running PUT and "succeed" on a stale payload (QA P1-4), and
+// two queued flushes can't send PUTs over the same etag.
 const _flushInflight = new Map<string, Promise<void>>()
 const AUTOSAVE_DEBOUNCE_MS = 500
 
@@ -863,6 +865,166 @@ function _cancelSetFlush(setId: string): void {
 // so a second trigger while one is running is a no-op rather than
 // stacking two passes onto pull_lock.
 let _flistAccountSweepInFlight = false
+
+/** One save of a character's Workbench: the PUT itself, with no
+ *  queueing. Only flistFlushWorking calls this, as the last step of its
+ *  per-character chain, so two saves never leave for the same character
+ *  at once. */
+async function _flushWorkingNow(
+  characterId: string,
+  get: () => State,
+  set: (fn: (s: State) => Partial<State>) => void
+): Promise<void> {
+  const slot = get().flistWorking[characterId]
+  if (!slot || !slot.unsavedDirty) {
+    // Second cancel post-early-return — a scheduleFlush may have armed
+    // while this flush waited its turn; we'd otherwise leave a stranded
+    // timer (QA P3-3).
+    _cancelFlush(characterId)
+    return
+  }
+  // Every PUT routes through the active set's payload endpoint. If
+  // nothing is active yet but the user has typed, the Workbench has
+  // simply never been opened for this character — so open it now and
+  // save into it. Materialise-on-first-edit, the same doctrine the
+  // legacy working.json followed (Tier 2 §1.6): looking at a
+  // character creates nothing, the first edit does.
+  //
+  // This used to return early and drop the write. Nothing said so —
+  // saveStatus stayed 'idle' — and the edits died with the next
+  // character switch.
+  let activeSetId = get().flistActiveSetId[characterId]
+  if (!activeSetId) {
+    const bench = await get().flistOpenWorkbench(characterId)
+    activeSetId = bench?.id ?? get().flistActiveSetId[characterId] ?? null
+  }
+  if (!activeSetId) {
+    // No Live to seed a Workbench from — a character that was never
+    // pulled. Keep the edits in memory and say so, rather than
+    // pretending they were saved.
+    set((st) => {
+      const existing = st.flistWorking[characterId]
+      if (!existing) return {}
+      return {
+        flistWorking: {
+          ...st.flistWorking,
+          [characterId]: {
+            ...existing,
+            saveStatus: 'error',
+            saveError: 'No Workbench yet — pull this character first.'
+          }
+        }
+      }
+    })
+    _cancelFlush(characterId)
+    return
+  }
+  // Pin the exact payload we're shipping so the success branch can
+  // tell whether new edits arrived during the round-trip.
+  const sentPayload = slot.payload
+  set((s) => {
+    const existing = s.flistWorking[characterId]
+    if (!existing) return {}
+    return {
+      flistWorking: {
+        ...s.flistWorking,
+        [characterId]: { ...existing, saveStatus: 'saving', saveError: null }
+      }
+    }
+  })
+  try {
+    const { etag } = await api.flistSetPayloadPut(
+      characterId,
+      activeSetId,
+      sentPayload,
+      slot.materialised ? slot.etag : null
+    )
+    set((s) => {
+      const existing = s.flistWorking[characterId]
+      if (!existing) return {}
+      // If the user typed something newer while we were saving, the
+      // newer slot's `payload` won't match `sentPayload` — keep
+      // unsavedDirty=true so the next flush picks up the delta.
+      const isFresh = existing.payload === sentPayload
+      const nextSlot: FlistWorkingSlot = {
+        ...existing,
+        etag,
+        unsavedDirty: isFresh ? false : existing.unsavedDirty,
+        saveStatus: isFresh ? 'saved' : existing.saveStatus,
+        saveError: null,
+        lastSavedAt: Date.now(),
+        materialised: true
+      }
+      // Mirror into the per-set cache so any consumer reading
+      // flistSetWorking[setId] sees the freshest payload, and bump
+      // the set's updatedAt so the "last changed Xm ago" suffix refreshes.
+      const setsList = s.flistSets[characterId] ?? []
+      return {
+        flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
+        flistSetWorking: {
+          ...s.flistSetWorking,
+          [activeSetId]: nextSlot
+        },
+        flistSets: {
+          ...s.flistSets,
+          [characterId]: setsList.map((m) =>
+            m.id === activeSetId
+              ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
+              : m
+          )
+        }
+      }
+    })
+    // If a newer payload is waiting, schedule a follow-up flush so
+    // the user's most recent edits land without needing another
+    // keystroke.
+    const next = get().flistWorking[characterId]
+    if (next?.unsavedDirty) {
+      _scheduleFlush(characterId, () => {
+        void get().flistFlushWorking(characterId)
+      })
+    }
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
+    const conflict = err instanceof Error && err.message === 'etag_mismatch'
+    const errWith = err as Error & { currentEtag?: string | null }
+    set((s) => {
+      const existing = s.flistWorking[characterId]
+      if (!existing) return {}
+      const patch: Partial<State> = {
+        flistWorking: {
+          ...s.flistWorking,
+          [characterId]: {
+            ...existing,
+            saveStatus: 'error',
+            saveError: conflict
+              ? 'Someone else changed this set. Choose whose version to keep.'
+              : raw,
+            // The server etag is deliberately NOT adopted on a
+            // conflict. Adopting it would let the next keystroke's
+            // autosave succeed and silently overwrite the other
+            // writer; keeping the stale one makes every retry
+            // conflict until the user decides.
+            etag: existing.etag,
+            unsavedDirty: true
+          }
+        }
+      }
+      if (conflict) {
+        patch.flistExternalChange = {
+          ...s.flistExternalChange,
+          [characterId]: {
+            setId: activeSetId,
+            etag: errWith.currentEtag ?? null,
+            origin: 'unknown',
+            at: Date.now()
+          }
+        }
+      }
+      return patch
+    })
+  }
+}
 
 /** Pull every account character on the current roster.
  *  - `thresholdSec === null` → unconditional (manual Refresh all).
@@ -2533,174 +2695,30 @@ export const useStore = create<State>((set, get) => ({
 
   async flistFlushWorking(characterId) {
     _cancelFlush(characterId)
-    // Per-character single-flight: if a flush is already in progress,
-    // chain after it. Otherwise the in-flight PUT could race a fresh
-    // one carrying a newer payload — the older PUT could win, leaving
-    // the user's later keystrokes unsaved while saveStatus shows 'saved'
-    // (QA P1-4).
+    // Per-character single-flight: every flush is a link in one chain
+    // and starts only once the flush before it has finished. Otherwise
+    // the in-flight PUT could race a fresh one carrying a newer payload
+    // — the older PUT could win, leaving the user's later keystrokes
+    // unsaved while saveStatus shows 'saved' (QA P1-4). Waiting on the
+    // previous link (not on the PUT in flight) is what keeps two
+    // flushes queued behind a slow save from both waking when it lands
+    // and sending two PUTs over the same etag: the second would 409 and
+    // raise a conflict banner for a conflict the window had with itself.
     const prior = _flushInflight.get(characterId)
-    if (prior) {
-      await prior.catch(() => {})
-      // Re-cancel any debounce that may have re-armed during the wait
-      // so we don't double-fire.
-      _cancelFlush(characterId)
-    }
-    const slot = get().flistWorking[characterId]
-    if (!slot || !slot.unsavedDirty) {
-      // Second cancel post-early-return — a scheduleFlush may have armed
-      // during the await above; we'd otherwise leave a stranded timer
-      // (QA P3-3).
-      _cancelFlush(characterId)
-      return
-    }
-    // Every PUT routes through the active set's payload endpoint. If
-    // nothing is active yet but the user has typed, the Workbench has
-    // simply never been opened for this character — so open it now and
-    // save into it. Materialise-on-first-edit, the same doctrine the
-    // legacy working.json followed (Tier 2 §1.6): looking at a
-    // character creates nothing, the first edit does.
-    //
-    // This used to return early and drop the write. Nothing said so —
-    // saveStatus stayed 'idle' — and the edits died with the next
-    // character switch.
-    let activeSetId = get().flistActiveSetId[characterId]
-    if (!activeSetId) {
-      const bench = await get().flistOpenWorkbench(characterId)
-      activeSetId = bench?.id ?? get().flistActiveSetId[characterId] ?? null
-    }
-    if (!activeSetId) {
-      // No Live to seed a Workbench from — a character that was never
-      // pulled. Keep the edits in memory and say so, rather than
-      // pretending they were saved.
-      set((st) => {
-        const existing = st.flistWorking[characterId]
-        if (!existing) return {}
-        return {
-          flistWorking: {
-            ...st.flistWorking,
-            [characterId]: {
-              ...existing,
-              saveStatus: 'error',
-              saveError: 'No Workbench yet — pull this character first.'
-            }
-          }
-        }
-      })
-      _cancelFlush(characterId)
-      return
-    }
-    const inflight = (async () => {
-      // Pin the exact payload we're shipping so the success branch can
-      // tell whether new edits arrived during the round-trip.
-      const sentPayload = slot.payload
-      set((s) => {
-        const existing = s.flistWorking[characterId]
-        if (!existing) return {}
-        return {
-          flistWorking: {
-            ...s.flistWorking,
-            [characterId]: { ...existing, saveStatus: 'saving', saveError: null }
-          }
-        }
-      })
-      try {
-        const { etag } = await api.flistSetPayloadPut(
-          characterId,
-          activeSetId,
-          sentPayload,
-          slot.materialised ? slot.etag : null
-        )
-        set((s) => {
-          const existing = s.flistWorking[characterId]
-          if (!existing) return {}
-          // If the user typed something newer while we were saving, the
-          // newer slot's `payload` won't match `sentPayload` — keep
-          // unsavedDirty=true so the next flush picks up the delta.
-          const isFresh = existing.payload === sentPayload
-          const nextSlot: FlistWorkingSlot = {
-            ...existing,
-            etag,
-            unsavedDirty: isFresh ? false : existing.unsavedDirty,
-            saveStatus: isFresh ? 'saved' : existing.saveStatus,
-            saveError: null,
-            lastSavedAt: Date.now(),
-            materialised: true
-          }
-          // Mirror into the per-set cache so any consumer reading
-          // flistSetWorking[setId] sees the freshest payload, and bump
-          // the set's updatedAt so the "last changed Xm ago" suffix refreshes.
-          const setsList = s.flistSets[characterId] ?? []
-          return {
-            flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
-            flistSetWorking: {
-              ...s.flistSetWorking,
-              [activeSetId]: nextSlot
-            },
-            flistSets: {
-              ...s.flistSets,
-              [characterId]: setsList.map((m) =>
-                m.id === activeSetId
-                  ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
-                  : m
-              )
-            }
-          }
-        })
-        // If a newer payload is waiting, schedule a follow-up flush so
-        // the user's most recent edits land without needing another
-        // keystroke.
-        const next = get().flistWorking[characterId]
-        if (next?.unsavedDirty) {
-          _scheduleFlush(characterId, () => {
-            void get().flistFlushWorking(characterId)
-          })
-        }
-      } catch (err) {
-        const raw = err instanceof Error ? err.message : String(err)
-        const conflict = err instanceof Error && err.message === 'etag_mismatch'
-        const errWith = err as Error & { currentEtag?: string | null }
-        set((s) => {
-          const existing = s.flistWorking[characterId]
-          if (!existing) return {}
-          const patch: Partial<State> = {
-            flistWorking: {
-              ...s.flistWorking,
-              [characterId]: {
-                ...existing,
-                saveStatus: 'error',
-                saveError: conflict
-                  ? 'Someone else changed this set. Choose whose version to keep.'
-                  : raw,
-                // The server etag is deliberately NOT adopted on a
-                // conflict. Adopting it would let the next keystroke's
-                // autosave succeed and silently overwrite the other
-                // writer; keeping the stale one makes every retry
-                // conflict until the user decides.
-                etag: existing.etag,
-                unsavedDirty: true
-              }
-            }
-          }
-          if (conflict) {
-            patch.flistExternalChange = {
-              ...s.flistExternalChange,
-              [characterId]: {
-                setId: activeSetId,
-                etag: errWith.currentEtag ?? null,
-                origin: 'unknown',
-                at: Date.now()
-              }
-            }
-          }
-          return patch
-        })
+    const link = (async () => {
+      if (prior) {
+        await prior.catch(() => {})
+        // Re-cancel any debounce that may have re-armed during the wait
+        // so we don't double-fire.
+        _cancelFlush(characterId)
       }
+      await _flushWorkingNow(characterId, get, set)
     })()
-    _flushInflight.set(characterId, inflight)
+    _flushInflight.set(characterId, link)
     try {
-      await inflight
+      await link
     } finally {
-      if (_flushInflight.get(characterId) === inflight) {
+      if (_flushInflight.get(characterId) === link) {
         _flushInflight.delete(characterId)
       }
     }
