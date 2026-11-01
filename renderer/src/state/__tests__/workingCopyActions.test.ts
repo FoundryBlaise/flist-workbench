@@ -734,6 +734,28 @@ describe('undo of reset to Live never reverts a change made after the reset', ()
     expect(bench.disk.etag).toBe(typedEtag)
   })
 
+  it('choosing to undo anyway puts the previous Workbench back over the model edit', async () => {
+    const bench = benchOnDisk('Amber keeps bees.')
+    await useStore.getState().flistResetWorkingToLive('99')
+    const modelEtag = bench.write('Amber keeps wasps now.')
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: modelEtag,
+      origin: 'mcp:set_description'
+    })
+    await useStore.getState().flistReloadAfterExternalChange('99')
+    await useStore.getState().flistUndoResetWorking()
+    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
+
+    await useStore.getState().flistUndoResetWorking({ overwrite: true })
+
+    const [undoWrite] = fake.requestsTo(SAVE).slice(-1)
+    expect(undoWrite.headers['If-Match']).toBe(modelEtag)
+    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
+  })
+
   it('without a change since the reset, undo puts the previous Workbench back on disk', async () => {
     const bench = benchOnDisk('Amber keeps bees.')
     await useStore.getState().flistResetWorkingToLive('99')
