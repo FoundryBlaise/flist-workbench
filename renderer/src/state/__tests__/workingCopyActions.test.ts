@@ -229,6 +229,43 @@ describe('typing while a save is in flight', () => {
     expect(puts.map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
     expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
   })
+
+  it('a burst behind a slow save raises no conflict banner against a sidecar that checks If-Match', async () => {
+    // Like the real sidecar: a save is accepted only over the Workbench's
+    // current etag, and each accepted save hands out a new one.
+    let current = 'seed-etag'
+    let version = 0
+    const answerLikeTheSidecar = () => {
+      for (const p of fake.pending(SAVE)) {
+        if (p.request.headers['If-Match'] !== current) {
+          p.resolve(json({ detail: { detail: 'etag_mismatch', current_etag: current } }, 409))
+          continue
+        }
+        current = `v${++version}`
+        p.resolve(json({ etag: current }))
+      }
+    }
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('one')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two three')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    for (let round = 0; round < 4; round++) {
+      answerLikeTheSidecar()
+      await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    }
+
+    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual(['one', 'one two three'])
+    expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.saveError).toBeNull()
+    expect(slot.etag).toBe(current)
+  })
 })
 
 describe('flistFlushWorking 409 etag-mismatch path', () => {
