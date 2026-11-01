@@ -1643,7 +1643,8 @@ function LabelsPane({
       'Reset ALL labels across every character?\n\n' +
         'Every stored IC/OOC verdict for every conversation reverts to ' +
         'Unlabeled. Rule-based hints (short messages, "((", etc.) keep ' +
-        'firing as OOC. This cannot be undone.'
+        'firing as OOC. A copy goes to each character’s Trash, where ' +
+        'Restore puts the labels back.'
     )
     if (!confirmed) return
     setResetStatus('resetting')

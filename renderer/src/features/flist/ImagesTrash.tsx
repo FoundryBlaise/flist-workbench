@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { api, type FlistTrashItem, type FlistTrashedBackup } from '../../lib/api'
+import {
+  api,
+  type FlistTrashItem,
+  type FlistTrashedBackup,
+  type FlistTrashedLabels
+} from '../../lib/api'
 import { useStore } from '../../state'
 import {
   EMPTY_SELECTION,
@@ -11,6 +16,7 @@ import {
 } from './imageSelection'
 import { formatBytes } from './imageUsage'
 import { TrashedBackups } from './TrashedBackups'
+import { TrashedLabels } from './TrashedLabels'
 
 const MAX_PREVIEW_THUMBS = 12
 
@@ -107,6 +113,16 @@ export function ImagesConfirmModal({
 /** The character's image trash, shown in place of the pool. Restore
  *  puts files back into the pool, never onto the profile. Deleting for
  *  good lives here and nowhere else — MCP has no tool for it. */
+/** How many entries a Trash listing holds: images, Backups and
+ *  cleared Labels. */
+export function trashEntryCount(res: {
+  items: unknown[]
+  backups?: unknown[]
+  labels?: unknown[]
+}): number {
+  return res.items.length + (res.backups?.length ?? 0) + (res.labels?.length ?? 0)
+}
+
 export function ImagesTrash({
   characterId,
   readOnly,
@@ -124,6 +140,7 @@ export function ImagesTrash({
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)
   const [items, setItems] = useState<FlistTrashItem[] | null>(null)
   const [backups, setBackups] = useState<FlistTrashedBackup[]>([])
+  const [labels, setLabels] = useState<FlistTrashedLabels[]>([])
   const [message, setMessage] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   const [confirm, setConfirm] = useState<null | 'purge' | 'empty'>(null)
@@ -133,7 +150,8 @@ export function ImagesTrash({
       const res = await api.flistTrashList(characterId)
       setItems(res.items)
       setBackups(res.backups ?? [])
-      onCountChange(res.items.length + (res.backups?.length ?? 0))
+      setLabels(res.labels ?? [])
+      onCountChange(trashEntryCount(res))
     } catch (e) {
       setMessage(`Couldn’t read the trash: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -184,6 +202,8 @@ export function ImagesTrash({
       return `Trash emptied — ${res.purged} deleted for good.`
     })
 
+  const entries = visible.length + backups.length + labels.length
+
   const click = (id: string, e: MouseEvent) => {
     setSel((s) => (e.shiftKey ? selectRange(s, id, visible) : toggleSelected(s, id)))
   }
@@ -199,7 +219,7 @@ export function ImagesTrash({
         <button type="button" className="flist-images-toolbar__btn" onClick={onBack}>
           ← Pool
         </button>
-        {!readOnly && visible.length + backups.length > 0 && (
+        {!readOnly && entries > 0 && (
           <>
             <button
               type="button"
@@ -283,13 +303,19 @@ export function ImagesTrash({
             </li>
           )
         })}
-        {items !== null && items.length === 0 && backups.length === 0 && (
+        {items !== null && entries === 0 && (
           <li className="flist-images-pool-empty">The trash is empty.</li>
         )}
       </ul>
       <TrashedBackups
         characterId={characterId}
         items={backups}
+        readOnly={readOnly}
+        onChanged={load}
+      />
+      <TrashedLabels
+        characterId={characterId}
+        items={labels}
         readOnly={readOnly}
         onChanged={load}
       />
@@ -310,7 +336,7 @@ export function ImagesTrash({
       {confirm === 'empty' && (
         <ImagesConfirmModal
           title="Empty the trash?"
-          body={`All ${visible.length + backups.length} file${visible.length + backups.length === 1 ? '' : 's'} in this character’s trash are removed from disk. This can’t be undone.`}
+          body={`Everything in this character’s trash (${entries} entr${entries === 1 ? 'y' : 'ies'}) is deleted for good. This can’t be undone.`}
           thumbs={thumbsFor(visible)}
           confirmLabel="Empty trash"
           danger

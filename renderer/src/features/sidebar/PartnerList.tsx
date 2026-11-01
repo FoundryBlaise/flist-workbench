@@ -167,7 +167,7 @@ export function PartnerList() {
       `Remove all IC/OOC labels for ${displayPartner(partnerName)} with ${activeChar}?\n\n` +
         `Every LLM and manual label in that conversation reverts to Unlabeled. ` +
         `Rule-based hints (short messages, "((", etc.) keep firing as OOC. ` +
-        `This cannot be undone.`
+        `A copy goes to ${activeChar}'s Trash, where Restore puts the labels back.`
     )
     if (!confirmed) return
     try {
