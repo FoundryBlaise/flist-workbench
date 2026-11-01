@@ -42,7 +42,7 @@ import rag_store
 import settings as settings_store
 import workbench_mcp
 from archive_errors import CharacterNotFound, InvalidCharacterId
-from refusals import InvalidFileName, Refusal
+from refusals import InvalidFileName, LogNameRefused, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
@@ -2279,15 +2279,33 @@ class RagIngestRequest(BaseModel):
     force_rewipe: bool = False
 
 
+def _resolve_ingest_scope(character: str | None, partner: str | None) -> dict:
+    """The ingest scope with its names spelled the way the Logs spell
+    them, through the same conversation resolver the MCP tools use: any
+    case, and a partner's alias reaches its conversation. An unknown
+    name is refused instead of indexing nothing."""
+    from workbench_mcp._context import (
+        ToolError,
+        resolve_conversation,
+        resolve_log_character,
+    )
+
+    try:
+        if character and partner:
+            conv = resolve_conversation(character, partner)
+            return {"character": conv.character, "partner": conv.partner}
+        if character:
+            return {"character": resolve_log_character(character)}
+    except ToolError as exc:
+        raise LogNameRefused(exc.message, code=exc.code) from exc
+    return {}
+
+
 @app.post("/rag/ingest", status_code=202)
 def rag_ingest_start(body: RagIngestRequest) -> dict:
     if body.partner and not body.character:
         raise HTTPException(status_code=400, detail="partner requires character")
-    scope: dict = {}
-    if body.character:
-        scope["character"] = body.character
-    if body.partner:
-        scope["partner"] = body.partner
+    scope = _resolve_ingest_scope(body.character, body.partner)
     job = rag_jobs.start(
         scope, include_ooc=body.include_ooc, force_rewipe=body.force_rewipe
     )

@@ -19,7 +19,9 @@ import labels as labels_store
 import rag_embed
 import rag_jobs
 import rag_store
+import two_characters as tc
 from fchat_logs import chat, parsed, utc, write_log
+from two_characters import two_characters  # noqa: F401  (the fixture is used by name)
 
 
 # ---- helpers ------------------------------------------------------------
@@ -178,12 +180,22 @@ def index_window(
     """The sidecar from outside over one fixture conversation: REST for
     Labels and ingest, the retrieval service for search. Embedding and
     reranking are stubbed. Returns (client, path of the Log)."""
-    import rag_rerank
-    import settings as settings_store
-
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
     monkeypatch.setenv("FCHAT_DATA_DIR", str(tmp_path / "fchat"))
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    _stub_index_services(monkeypatch)
+    from server import app
+
+    log = tmp_path / "fchat" / ME / "logs" / PARTNER
+    return app_client(app), log
+
+
+def _stub_index_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin a wide-window embedding model and stub embedding and
+    reranking, for a data dir the caller already pointed the env at."""
+    import rag_rerank
+    import settings as settings_store
+
     conn = settings_store.connect()
     try:
         settings_store.set_value(
@@ -201,10 +213,6 @@ def index_window(
             return [float(len(d)) for d in docs]
 
     monkeypatch.setattr(rag_rerank, "_build_encoder", lambda *_a, **_k: _FakeEncoder())
-    from server import app
-
-    log = tmp_path / "fchat" / ME / "logs" / PARTNER
-    return app_client(app), log
 
 
 def _label(client: TestClient, text: str, label: str | None) -> None:
@@ -227,9 +235,14 @@ def _label(client: TestClient, text: str, label: str | None) -> None:
     assert res.status_code == 200, res.text
 
 
-def _ingest(client: TestClient) -> dict:
-    """Run one ingest of the fixture conversation; returns the finished job."""
-    res = client.post("/rag/ingest", json={"character": ME, "partner": PARTNER})
+def _ingest(
+    client: TestClient, scope: dict | None = None, *, rebuild: bool = False
+) -> dict:
+    """Run one ingest the way the window starts it, of the fixture
+    conversation unless `scope` says otherwise ({} for everything);
+    returns the finished job."""
+    body = {"character": ME, "partner": PARTNER} if scope is None else dict(scope)
+    res = client.post("/rag/ingest", json={**body, "force_rewipe": rebuild})
     assert res.status_code == 202, res.text
     job_id = res.json()["id"]
     _wait_until(
@@ -241,14 +254,15 @@ def _ingest(client: TestClient) -> dict:
     return job
 
 
-def _found_as_ic(mark: str) -> bool:
+def _found_as_ic(mark: str, scope: dict | None = None) -> bool:
     """Whether a search finds `mark` in an IC chunk of the fixture
-    conversation. Asks the vector and the lexical Index separately and
-    insists they agree on which chunks hold it."""
+    conversation, or of `scope`. Asks the vector and the lexical Index
+    separately and insists they agree on which chunks hold it."""
     import rag_lexical
     from services import retrieval
 
-    scope = {"character": ME, "partner": PARTNER}
+    if scope is None:
+        scope = {"character": ME, "partner": PARTNER}
     # The stub embedding makes every chunk equally close, so a wide
     # top_k returns every chunk the vector Index holds for the scope.
     dense = retrieval.search(mark, scope=scope, top_k=50, neighbors=0, hybrid=False)
@@ -633,14 +647,181 @@ def test_job_with_force_rewipe_recreates_collection(
     assert manifest.embed_dimension == 8
 
 
+# ---- a rebuild deletes only its scope ----------------------------------
+
+
+AZURE_SCOPE = {"character": tc.AZURE, "partner": tc.PARTNER}
+AMBER_SCOPE = {"character": tc.AMBER, "partner": tc.PARTNER}
+
+
+@pytest.fixture
+def two_labelled(
+    two_characters: tc.TwoCharacters,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
+) -> tc.TwoCharacters:
+    """The two-character scenario with one lighthouse line per own
+    character labelled IC, nothing indexed yet."""
+    _stub_index_services(monkeypatch)
+    two_characters.label_by_hand(tc.AZURE, tc.PARTNER, tc.PARTNER_LINE, "IC")
+    two_characters.label_by_hand(tc.AMBER, tc.PARTNER, tc.AMBER_PARTNER_LINE, "IC")
+    return two_characters
+
+
+def _seed_stale_chunk(character: str, partner: str, text: str) -> None:
+    """A chunk in both indexes for a conversation the Logs no longer
+    have, as an old ingest may have left behind. Only a rebuild over its
+    scope removes it."""
+    import rag_lexical
+
+    chunk = {
+        "chunk_id": f"{character}__{partner}__2020-01-01__IC#0",
+        "char_owner": character,
+        "partner": partner,
+        "date": "2020-01-01",
+        "label": "IC",
+        "subchunk": 0,
+        "ts_start": 0,
+        "ts_end": 1,
+        "speakers": [character],
+        "msg_count": 1,
+        "char_count": len(text),
+        "text": text,
+        "prev_chunk_id": None,
+        "next_chunk_id": None,
+    }
+    with rag_store.RagStore() as store:
+        store.ensure_collection(vector_size=4)
+        store.upsert_chunks([chunk], [[1.0, 0.0, 0.0, 0.0]])
+    with rag_lexical.LexicalStore() as lex:
+        lex.upsert_chunks([chunk])
+
+
+def test_a_rebuild_of_one_character_leaves_another_characters_index(
+    two_labelled: tc.TwoCharacters,
+) -> None:
+    client = two_labelled.client
+    _ingest(client, {})
+    _seed_stale_chunk(tc.AZURE, "Mossgrave", "Azure's old harbour quarrel")
+    _seed_stale_chunk(tc.AMBER, "Mossgrave", "Amber's old harbour quarrel")
+    azure_stale = {"character": tc.AZURE, "partner": "Mossgrave"}
+    amber_stale = {"character": tc.AMBER, "partner": "Mossgrave"}
+    assert _found_as_ic("quarrel", azure_stale)
+
+    _ingest(client, {"character": tc.AZURE}, rebuild=True)
+
+    # The rebuilt character's scope was emptied and filled again.
+    assert not _found_as_ic("quarrel", azure_stale)
+    assert _found_as_ic(tc.SEARCH_TERM, AZURE_SCOPE)
+    # The other character's Index was not touched.
+    assert _found_as_ic(tc.SEARCH_TERM, AMBER_SCOPE)
+    assert _found_as_ic("quarrel", amber_stale)
+
+
+def test_an_unscoped_rebuild_empties_the_whole_index_first(
+    two_labelled: tc.TwoCharacters,
+) -> None:
+    client = two_labelled.client
+    _ingest(client, {})
+    _seed_stale_chunk(tc.AMBER, "Mossgrave", "Amber's old harbour quarrel")
+    _seed_stale_chunk("Retired Name", "Mossgrave", "a retired character's quarrel")
+    retired = {"character": "Retired Name", "partner": "Mossgrave"}
+    assert _found_as_ic("quarrel", retired)
+
+    _ingest(client, {}, rebuild=True)
+
+    assert not _found_as_ic("quarrel", {"character": tc.AMBER, "partner": "Mossgrave"})
+    assert not _found_as_ic("quarrel", retired)
+    assert _found_as_ic(tc.SEARCH_TERM, AZURE_SCOPE)
+    assert _found_as_ic(tc.SEARCH_TERM, AMBER_SCOPE)
+
+
+# ---- ingest resolves scope names like every other tool -----------------
+
+
+@pytest.mark.parametrize(
+    ("scope", "indexed"),
+    [
+        ({"character": "azure viper", "partner": "ANTIQUILL"}, AZURE_SCOPE),
+        ({"character": tc.AZURE, "partner": "quill ashgrove"}, AZURE_SCOPE),
+        ({"character": "lady amber blaise"}, AMBER_SCOPE),
+    ],
+    ids=["different-case", "alias-of-the-partner", "character-only-different-case"],
+)
+async def test_mcp_ingest_resolves_scope_names_to_the_conversation(
+    two_labelled: tc.TwoCharacters, scope: dict, indexed: dict
+) -> None:
+    from mcp_helpers import call_tool, mcp_client
+
+    async with mcp_client("logs") as session:
+        result, body = await call_tool(session, "ingest_logs", **scope)
+
+    assert not result.isError, body
+    assert body["state"] == "done", body
+    assert _found_as_ic(tc.SEARCH_TERM, indexed)
+
+
+@pytest.mark.parametrize(
+    ("scope", "code"),
+    [
+        ({"character": "Nobody Here"}, "log_character_not_found"),
+        ({"character": tc.AZURE, "partner": "Nobody Here"}, "partner_not_found"),
+    ],
+    ids=["unknown-character", "unknown-partner"],
+)
+async def test_mcp_ingest_of_an_unknown_name_is_refused(
+    two_labelled: tc.TwoCharacters, scope: dict, code: str
+) -> None:
+    from mcp_helpers import call_tool, mcp_client, tool_error_text
+
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(session, "ingest_logs", **scope)
+
+    assert code in tool_error_text(result)
+    assert rag_jobs.registry().list() == [], "no job was started"
+
+
+def test_an_ingest_from_the_window_resolves_scope_names(
+    two_labelled: tc.TwoCharacters,
+) -> None:
+    _ingest(two_labelled.client, {"character": "azure viper", "partner": "quill ashgrove"})
+
+    assert _found_as_ic(tc.SEARCH_TERM, AZURE_SCOPE)
+
+
+@pytest.mark.parametrize(
+    ("scope", "code"),
+    [
+        ({"character": "Nobody Here"}, "log_character_not_found"),
+        ({"character": tc.AZURE, "partner": "Nobody Here"}, "partner_not_found"),
+    ],
+    ids=["unknown-character", "unknown-partner"],
+)
+def test_an_ingest_from_the_window_of_an_unknown_name_is_refused(
+    two_labelled: tc.TwoCharacters, scope: dict, code: str
+) -> None:
+    res = two_labelled.client.post("/rag/ingest", json=scope)
+
+    assert res.status_code == 404, res.text
+    assert res.json()["code"] == code
+    assert res.json()["message"]
+    assert rag_jobs.registry().list() == [], "no job was started"
+
+
 # ---- /rag/ingest + /rag/jobs HTTP shape --------------------------------
 
 
 @pytest.fixture
 def api_client(
-    workbench_dir: Path,  # noqa: ARG001
+    workbench_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
     isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
 ) -> TestClient:
+    # The route resolves scope names against the Logs, so Char and
+    # Partner need a Log; the tests stub what is read from it.
+    fchat = workbench_dir / "fchat"
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(fchat))
+    write_log(fchat / "Char" / "logs" / "Partner", [chat("Partner", "Hi.", at=utc(2025, 1, 1))])
     from server import app
 
     return app_client(app)

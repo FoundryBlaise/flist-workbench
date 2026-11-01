@@ -339,6 +339,16 @@ type State = {
     characterId: string
     snapshot: FlistWorkingSlot
     expiresAt: number
+    /** The etag the reset leaves on the Workbench: the one its write
+     *  goes over until that write lands, the one it returned after.
+     *  Undo writes over this etag and no other, so a change anything
+     *  else made since the reset is never silently reverted. */
+    etag: string | null
+    /** True until the reset's own write has landed. */
+    awaitingWrite: boolean
+    /** The Workbench changed since the reset; undo waits for the user
+     *  to choose between reverting that change and keeping it. */
+    conflict: boolean
   } | null
   /** 5-second undo banner shown after a custom-kink tombstone. Single
    *  banner across both surfaces (single + bulk tombstone). Tier 3 §Step 8. */
@@ -658,7 +668,12 @@ type State = {
    *  autosave's debounce and any save already on its way. */
   flistFlushAllWorking: () => Promise<void>
   flistResetWorkingToLive: (characterId: string) => Promise<void>
-  flistUndoResetWorking: () => Promise<void>
+  /** Puts back the Workbench the reset replaced. If the Workbench
+   *  changed since the reset, nothing is written and the undo is marked
+   *  `conflict` so the user can choose; `overwrite` is that choice. */
+  flistUndoResetWorking: (opts?: { overwrite?: boolean }) => Promise<void>
+  /** Drops the pending undo and keeps the Workbench as it is now. */
+  flistDismissResetUndo: () => void
   flistDismissDriftBanner: (characterId: string) => void
   // ---- mapping list ----
   flistLoadMapping: (opts?: { force?: boolean }) => Promise<void>
@@ -1058,7 +1073,18 @@ async function _flushWorkingNow(
       // flistSetWorking[setId] sees the freshest payload, and bump
       // the set's updatedAt so the "last changed Xm ago" suffix refreshes.
       const setsList = s.flistSets[characterId] ?? []
+      // The first save over the etag a pending reset-undo holds is the
+      // reset's own write; undo goes over the etag it returned. Later
+      // saves are changes made after the reset, which undo must not
+      // revert unasked.
+      const undo = s.flistResetUndo
+      const resetWrite =
+        undo &&
+        undo.characterId === characterId &&
+        undo.awaitingWrite &&
+        undo.etag === slot.etag
       return {
+        ...(resetWrite ? { flistResetUndo: { ...undo, etag, awaitingWrite: false } } : {}),
         flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
         flistSetWorking: {
           ...s.flistSetWorking,
@@ -2792,7 +2818,14 @@ export const useStore = create<State>((set, get) => ({
         : { ...emptyWorkingSlot(), payload: seeded, materialised: false }
       return {
         flistWorking: { ...s.flistWorking, [characterId]: fresh },
-        flistResetUndo: { characterId, snapshot: current, expiresAt }
+        flistResetUndo: {
+          characterId,
+          snapshot: current,
+          expiresAt,
+          etag: current.materialised ? current.etag : null,
+          awaitingWrite: current.materialised,
+          conflict: false
+        }
       }
     })
     // Mirror the seeded description into the editor so the panel
@@ -3933,7 +3966,14 @@ export const useStore = create<State>((set, get) => ({
       }
       return {
         flistWorking: { ...s.flistWorking, [characterId]: fresh },
-        flistResetUndo: { characterId, snapshot: slot, expiresAt }
+        flistResetUndo: {
+          characterId,
+          snapshot: slot,
+          expiresAt,
+          etag: priorEtag,
+          awaitingWrite: true,
+          conflict: false
+        }
       }
     })
     const reloaded = get().flistWorking[characterId]
@@ -4276,11 +4316,10 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async flistUndoResetWorking() {
-    const undo = get().flistResetUndo
-    if (!undo) return
-    const { characterId, snapshot } = undo
-    set({ flistResetUndo: null })
+  async flistUndoResetWorking(opts) {
+    const pending = get().flistResetUndo
+    if (!pending) return
+    const { characterId, snapshot } = pending
     const timer = _resetUndoTimers.get(characterId)
     if (timer) {
       clearTimeout(timer)
@@ -4288,19 +4327,42 @@ export const useStore = create<State>((set, get) => ({
     }
     // Put the snapshot back into the bench the reset wrote, against the
     // etag that write left. Wait for the reset's own save first, or the
-    // two PUTs would race. A 409 here means another writer touched the
-    // bench inside the undo window, and the flush surfaces it like any
-    // other conflict instead of overwriting their bytes.
+    // two PUTs would race.
     _cancelFlush(characterId)
     const inflight = _flushInflight.get(characterId)
     if (inflight) await inflight.catch(() => {})
+    // Read the undo again after the drain: the reset's write may just
+    // have landed and recorded its etag, and a second click that
+    // finished first has already taken it.
+    const undo = get().flistResetUndo
+    if (!undo || undo.characterId !== characterId) return
     const current = get().flistWorking[characterId]
     if (current?.materialised) {
+      // Anything that moved the etag since the reset (a model, the
+      // window reloading a model's edit, an autosave of text typed
+      // after the reset) or edits still waiting to be saved are a
+      // change the undo would revert. Ask instead of writing.
+      const changed =
+        current.etag !== undo.etag || (current.unsavedDirty && !undo.awaitingWrite)
+      if (changed && !opts?.overwrite) {
+        set({ flistResetUndo: { ...undo, conflict: true } })
+        if (current.unsavedDirty) {
+          _scheduleFlush(characterId, () => {
+            void get().flistFlushWorking(characterId)
+          })
+        }
+        return
+      }
       set((s) => ({
+        flistResetUndo: null,
         flistWorking: {
           ...s.flistWorking,
           [characterId]: {
             ...snapshot,
+            // Without a change since the reset this is undo.etag; after
+            // the user chose to overwrite, it is the etag the window
+            // holds now. A 409 means yet another write landed, and the
+            // flush raises the conflict banner instead of overwriting.
             etag: current.etag,
             materialised: true,
             unsavedDirty: true,
@@ -4313,6 +4375,7 @@ export const useStore = create<State>((set, get) => ({
     } else {
       // The reset wrote nothing, so there is nothing on disk to undo.
       set((s) => ({
+        flistResetUndo: null,
         flistWorking: { ...s.flistWorking, [characterId]: snapshot }
       }))
     }
@@ -4328,6 +4391,17 @@ export const useStore = create<State>((set, get) => ({
         editorDirty: slot.unsavedDirty
       })
     }
+  },
+
+  flistDismissResetUndo() {
+    const undo = get().flistResetUndo
+    if (!undo) return
+    const timer = _resetUndoTimers.get(undo.characterId)
+    if (timer) {
+      clearTimeout(timer)
+      _resetUndoTimers.delete(undo.characterId)
+    }
+    set({ flistResetUndo: null })
   },
 
   flistDismissDriftBanner(characterId) {
