@@ -474,10 +474,6 @@ def write_pre_restore_snapshot(
     if character_id is None:
         return {"ok": False, "error": "unknown_character"}
 
-    ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
-    filename = f"pre-restore-{ts}.zip"
-    target = character_archive.backups_dir(character_id) / filename
-
     # Merge the form-state payload with the last-pulled image gallery so
     # zip_serialise.build_zip emits a complete character.json + images.
     working_shape = {
@@ -522,12 +518,11 @@ def write_pre_restore_snapshot(
             )
         zip_bytes = buf.getvalue()
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(zip_bytes)
+    target = character_archive.write_backup_zip(character_id, zip_bytes)
 
     return {
         "ok": True,
-        "snapshot_id": filename,
+        "snapshot_id": target.name,
         "path": str(target),
         "bytes": len(zip_bytes),
     }

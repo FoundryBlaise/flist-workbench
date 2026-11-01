@@ -827,6 +827,31 @@ def _zip_backup_filename(now: float | None = None) -> str:
     return ts.strftime("%Y-%m-%dT%H%M%SZ") + ".zip"
 
 
+def _free_backup_path(character_id: int | str, stem: str) -> Path:
+    """`backups/<stem>.zip`, or `<stem>-N.zip` with the first N not on
+    disk yet, so a same-second second Backup never overwrites the first."""
+    folder = backups_dir(character_id)
+    target = folder / f"{stem}.zip"
+    i = 1
+    while target.exists():
+        target = folder / f"{stem}-{i}.zip"
+        i += 1
+    return target
+
+
+def write_backup_zip(character_id: int | str, data: bytes) -> Path:
+    """Store `data` as a new Backup of the character, under the Backup
+    file name the list recognises, and return where it went. Written
+    through a temp file, so a crash leaves no half-written Backup."""
+    target = _free_backup_path(
+        character_id, _zip_backup_filename().removesuffix(".zip")
+    )
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+    return target
+
+
 def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
     """Reshape Live JSON into the working-copy payload `zip_serialise.
     build_zip` expects. Mirrors the renderer's `seedWorkingFromLive` —
@@ -1097,21 +1122,7 @@ def save_zip_backup(
         backup_note=note,
     )
 
-    target = backups_dir(character_id) / _zip_backup_filename()
-    # Collision suffix in case a same-second second click occurs.
-    if target.exists():
-        i = 1
-        while True:
-            stem = target.stem  # e.g. "2026-06-04T233015Z"
-            candidate = backups_dir(character_id) / f"{stem}-{i}.zip"
-            if not candidate.exists():
-                target = candidate
-                break
-            i += 1
-
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(target)
+    target = write_backup_zip(character_id, data)
     return {
         "saved": True,
         "path": str(target),
