@@ -781,14 +781,47 @@ async def test_mcp_ingest_of_an_unknown_name_is_refused(
     assert rag_jobs.registry().list() == [], "no job was started"
 
 
+def test_an_ingest_from_the_window_resolves_scope_names(
+    two_labelled: tc.TwoCharacters,
+) -> None:
+    _ingest(two_labelled.client, {"character": "azure viper", "partner": "quill ashgrove"})
+
+    assert _found_as_ic(tc.SEARCH_TERM, AZURE_SCOPE)
+
+
+@pytest.mark.parametrize(
+    ("scope", "code"),
+    [
+        ({"character": "Nobody Here"}, "log_character_not_found"),
+        ({"character": tc.AZURE, "partner": "Nobody Here"}, "partner_not_found"),
+    ],
+    ids=["unknown-character", "unknown-partner"],
+)
+def test_an_ingest_from_the_window_of_an_unknown_name_is_refused(
+    two_labelled: tc.TwoCharacters, scope: dict, code: str
+) -> None:
+    res = two_labelled.client.post("/rag/ingest", json=scope)
+
+    assert res.status_code == 404, res.text
+    assert res.json()["code"] == code
+    assert res.json()["message"]
+    assert rag_jobs.registry().list() == [], "no job was started"
+
+
 # ---- /rag/ingest + /rag/jobs HTTP shape --------------------------------
 
 
 @pytest.fixture
 def api_client(
-    workbench_dir: Path,  # noqa: ARG001
+    workbench_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
     isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
 ) -> TestClient:
+    # The route resolves scope names against the Logs, so Char and
+    # Partner need a Log; the tests stub what is read from it.
+    fchat = workbench_dir / "fchat"
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(fchat))
+    write_log(fchat / "Char" / "logs" / "Partner", [chat("Partner", "Hi.", at=utc(2025, 1, 1))])
     from server import app
 
     return app_client(app)
