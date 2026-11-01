@@ -418,22 +418,31 @@ def snapshots_dir(character_id: int | str) -> Path:
     """
     p = character_dir(character_id) / "snapshots"
     if not p.exists():
-        json_files = _legacy_snapshot_files(character_id)
-        if json_files:
-            p.mkdir(parents=True, exist_ok=True)
-            for entry in json_files:
-                try:
-                    entry.replace(p / entry.name)
-                except OSError:
-                    # If a JSON file can't move (locked, perms),
-                    # skip it — the legacy backups/ stays around.
-                    pass
+        _move_legacy_snapshots(p, _legacy_snapshot_files(character_id))
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
+def _move_legacy_snapshots(snapshots: Path, json_files: list[Path]) -> None:
+    """Move a pre-rename archive's JSON snapshots into `snapshots/`."""
+    if not json_files:
+        return
+    snapshots.mkdir(parents=True, exist_ok=True)
+    for entry in json_files:
+        try:
+            entry.replace(snapshots / entry.name)
+        except OSError:
+            # If a JSON file can't move (locked, perms),
+            # skip it — the legacy backups/ stays around.
+            pass
+
+
 def _legacy_snapshot_files(character_id: int | str) -> list[Path]:
-    """JSON snapshots a pre-rename archive kept under `backups/`."""
+    """JSON snapshots a pre-rename archive kept under `backups/`.
+
+    Legacy migration only: an archive written since the rename has
+    none, and nothing else should read `backups/` for snapshots.
+    """
     legacy = character_dir(character_id) / "backups"
     if not legacy.is_dir():
         return []
@@ -760,13 +769,14 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
     *truly* latest snapshot.
     """
     out: list[dict[str, Any]] = []
-    if not (character_dir(character_id) / "snapshots").exists() and not (
-        _legacy_snapshot_files(character_id)
-    ):
-        # None saved yet. Listing must not create the folder: the
-        # roster lists every character, so any read would touch them all.
-        return out
-    p = snapshots_dir(character_id)
+    p = character_dir(character_id) / "snapshots"
+    if not p.exists():
+        legacy = _legacy_snapshot_files(character_id)
+        if not legacy:
+            # None saved yet. Listing must not create the folder: the
+            # roster lists every character, so any read would touch them all.
+            return out
+        _move_legacy_snapshots(p, legacy)
     for entry in p.iterdir():
         if not entry.is_file():
             continue
