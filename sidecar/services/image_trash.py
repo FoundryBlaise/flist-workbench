@@ -88,6 +88,65 @@ def _announce(character_id: int | str) -> None:
     events.publish(events.IMAGES_CHANGED, character_id=str(character_id))
 
 
+def _image_id_of(trash_id: str, index: dict[str, dict[str, Any]]) -> str:
+    """The pool id a trashed file had. Its trash id unless the Trash
+    holds another file under that image id too."""
+    return str((index.get(trash_id) or {}).get("image_id") or trash_id)
+
+
+def _sha_of(path: Path, trash_id: str, index: dict[str, dict[str, Any]]) -> str | None:
+    known = (index.get(trash_id) or {}).get("sha256")
+    if isinstance(known, str) and known:
+        return known
+    try:
+        return character_archive.file_sha256(path)
+    except OSError:
+        return None
+
+
+def _trash_locked(
+    character_id: int | str,
+    src: Path,
+    image_id: str,
+    index: dict[str, dict[str, Any]],
+    meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Move one pool file into the Trash. Caller holds `_lock` and
+    writes the index.
+
+    An image id does not always name one picture: a Pull can replace
+    the bytes under an id, so two different files may be trashed under
+    the same id over time. Both stay. Only a copy with the very same
+    bytes is dropped, because the newer delete holds them too."""
+    target_dir = trash_dir(character_id)
+    sha = character_archive.file_sha256(src)
+    size = src.stat().st_size
+    for trash_id, path in _files(target_dir).items():
+        if _image_id_of(trash_id, index) == image_id and _sha_of(path, trash_id, index) == sha:
+            path.unlink(missing_ok=True)
+            index.pop(trash_id, None)
+    taken = _files(target_dir)
+    trash_id = image_id
+    for width in (8, 16, 64):
+        if trash_id not in taken:
+            break
+        trash_id = f"{image_id}-{sha[:width]}"
+    dest = target_dir / f"{trash_id}{src.suffix.lower()}"
+    src.replace(dest)
+    entry = {
+        "trash_id": trash_id,
+        "image_id": image_id,
+        "extension": dest.suffix.lstrip(".").lower(),
+        "deleted_at": int(time.time()),
+        "deleted_by": _actor(),
+        "size": size,
+        "sha256": sha,
+        "source_name": (meta.get(sha) or {}).get("source_name"),
+    }
+    index[trash_id] = entry
+    return entry
+
+
 def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any]:
     """Move pool files into the trash. Ids not in the pool come back
     under `not_found` rather than failing the rest."""
@@ -99,32 +158,12 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
     with _lock:
         pool = _files(character_archive.images_dir(character_id))
         index = _read_index(character_id)
-        target_dir = trash_dir(character_id)
         for image_id in dict.fromkeys(str(i) for i in image_ids):
             src = pool.get(image_id)
             if src is None:
                 not_found.append(image_id)
                 continue
-            sha = character_archive.file_sha256(src)
-            size = src.stat().st_size
-            dest = target_dir / src.name
-            # An image id names its bytes, so an older copy under the
-            # same name is the same picture; the newer delete wins.
-            for old in target_dir.glob(f"{image_id}.*"):
-                if old.name != INDEX_FILENAME:
-                    old.unlink(missing_ok=True)
-            src.replace(dest)
-            entry = {
-                "image_id": image_id,
-                "extension": dest.suffix.lstrip(".").lower(),
-                "deleted_at": int(time.time()),
-                "deleted_by": _actor(),
-                "size": size,
-                "sha256": sha,
-                "source_name": (meta.get(sha) or {}).get("source_name"),
-            }
-            index[image_id] = entry
-            trashed.append(entry)
+            trashed.append(_trash_locked(character_id, src, image_id, index, meta))
         if trashed:
             _write_index(character_id, index)
     if trashed:
@@ -132,22 +171,45 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
     return {"trashed": trashed, "not_found": not_found}
 
 
+def trash_pool_file(character_id: int | str, path: Path) -> dict[str, Any] | None:
+    """Move one particular file out of `images/` into the Trash: the
+    old file a Pull replaces, a stale copy gallery repair drops. None
+    when there is no such image file."""
+    from services import image_import
+
+    m = _FILE_RE.fullmatch(path.name)
+    if m is None or path.parent != character_archive.images_dir(character_id):
+        return None
+    meta = image_import.read_meta(character_id)
+    with _lock:
+        if not path.is_file():
+            return None
+        index = _read_index(character_id)
+        entry = _trash_locked(character_id, path, m.group(1), index, meta)
+        _write_index(character_id, index)
+    _announce(character_id)
+    return entry
+
+
 def list_trash(character_id: int | str) -> list[dict[str, Any]]:
     """What is in the trash, most recently deleted first. A file that
     got there without an index entry is still listed, with what can be
-    read off the disk."""
+    read off the disk. `trash_id` names the entry for restore and
+    purge; it is the image id unless the Trash holds several files
+    under that id."""
     files = _files(trash_dir(character_id))
     index = _read_index(character_id)
     rows: list[dict[str, Any]] = []
-    for image_id, path in files.items():
+    for trash_id, path in files.items():
         try:
             stat = path.stat()
         except OSError:
             continue
-        known = index.get(image_id) or {}
+        known = index.get(trash_id) or {}
         rows.append(
             {
-                "image_id": image_id,
+                "trash_id": trash_id,
+                "image_id": _image_id_of(trash_id, index),
                 "extension": path.suffix.lstrip(".").lower(),
                 "filename": path.name,
                 "size": stat.st_size,
@@ -160,10 +222,14 @@ def list_trash(character_id: int | str) -> list[dict[str, Any]]:
     return rows
 
 
-def restore_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any]:
+def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Put trashed files back into the pool — not onto the profile. When
     the pool already holds the same bytes (a pull fetched the picture
-    again, say), the trash entry is simply dropped: no duplicate."""
+    again, say), the trash entry is simply dropped: no duplicate. When
+    the pool holds a different picture under the same image id (a Pull
+    replaced it), both are kept: the restored one comes back under
+    `local-<sha8>`, the name the pool gives a picture only this machine
+    has."""
     restored: list[dict[str, Any]] = []
     not_found: list[str] = []
     conflicts: list[str] = []
@@ -171,50 +237,53 @@ def restore_images(character_id: int | str, image_ids: list[str]) -> dict[str, A
         files = _files(trash_dir(character_id))
         index = _read_index(character_id)
         pool_dir = character_archive.images_dir(character_id)
-        for image_id in dict.fromkeys(str(i) for i in image_ids):
-            src = files.get(image_id)
+        for trash_id in dict.fromkeys(str(i) for i in trash_ids):
+            src = files.get(trash_id)
             if src is None:
-                not_found.append(image_id)
+                not_found.append(trash_id)
                 continue
             sha = character_archive.file_sha256(src)
             existing = character_archive.find_image_with_sha(character_id, sha)
             if existing is not None:
                 src.unlink(missing_ok=True)
-                index.pop(image_id, None)
+                index.pop(trash_id, None)
                 restored.append(
-                    {"image_id": existing.stem, "deduplicated": True, "from": image_id}
+                    {"image_id": existing.stem, "deduplicated": True, "from": trash_id}
                 )
                 continue
-            dest = pool_dir / src.name
-            if dest.exists():
-                # Same name, different bytes: keep both rather than
-                # overwrite what the pool has now.
-                conflicts.append(image_id)
+            image_id = _image_id_of(trash_id, index)
+            if image_id in _files(pool_dir):
+                image_id = f"local-{sha[:8]}"
+            dest = pool_dir / f"{image_id}{src.suffix.lower()}"
+            if image_id in _files(pool_dir):
+                # Even that name holds other bytes: leave the file here
+                # rather than overwrite what the pool has now.
+                conflicts.append(trash_id)
                 continue
             src.replace(dest)
-            index.pop(image_id, None)
-            restored.append({"image_id": image_id, "deduplicated": False, "from": image_id})
+            index.pop(trash_id, None)
+            restored.append({"image_id": image_id, "deduplicated": False, "from": trash_id})
         _write_index(character_id, index)
     if restored:
         _announce(character_id)
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
 
 
-def purge_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any]:
+def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Delete trashed files for good. The window's call only."""
     purged: list[str] = []
     not_found: list[str] = []
     with _lock:
         files = _files(trash_dir(character_id))
         index = _read_index(character_id)
-        for image_id in dict.fromkeys(str(i) for i in image_ids):
-            path = files.get(image_id)
+        for trash_id in dict.fromkeys(str(i) for i in trash_ids):
+            path = files.get(trash_id)
             if path is None:
-                not_found.append(image_id)
+                not_found.append(trash_id)
                 continue
             path.unlink(missing_ok=True)
-            index.pop(image_id, None)
-            purged.append(image_id)
+            index.pop(trash_id, None)
+            purged.append(trash_id)
         _write_index(character_id, index)
     return {"purged": purged, "not_found": not_found}
 
