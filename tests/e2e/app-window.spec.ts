@@ -89,17 +89,23 @@ test('links that open a new window go to the browser, never to a new app window'
         globalThis.open(h)
       }, href)
 
-    // The external-open checks refuse these, so they open nowhere.
+    // Not web links, so they open nowhere.
+    await openWindow('file:///C:/Windows/win.ini')
+    await clickBlankLink('javascript:void(0)')
+    await openWindow('ftp://files.example.invalid/x')
+    // Web links on any host go to the user's browser, as a profile's
+    // links point anywhere.
     await openWindow('http://www.f-list.net/c/Plain')
     await clickBlankLink('https://example.invalid/somewhere')
-    await openWindow('file:///C:/Windows/win.ini')
-    // These pass them and go to the user's browser.
     await openWindow('https://www.f-list.net/c/Opened')
-    await clickBlankLink('https://github.com/FoundryBlaise/flist-workbench')
 
     await expect
       .poll(opened)
-      .toEqual(['https://www.f-list.net/c/Opened', 'https://github.com/FoundryBlaise/flist-workbench'])
+      .toEqual([
+        'http://www.f-list.net/c/Plain',
+        'https://example.invalid/somewhere',
+        'https://www.f-list.net/c/Opened'
+      ])
     expect(await windowCount()).toBe(before)
   })
 })
