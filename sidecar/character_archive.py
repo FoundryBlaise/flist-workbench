@@ -2540,13 +2540,15 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
 
     # The files left behind by the re-upload: byte-identical to one
     # F-list has, under an id it no longer knows. Keeping them would
-    # leave the picture sitting in the pool for good.
+    # leave the picture sitting in the pool for good, so they go to
+    # the Trash, where repair can never destroy them.
+    from services import image_trash  # lazy: image_trash imports this module
+
     stale_removed: list[str] = []
     for old_id in superseded:
         try:
             for entry in images.glob(f"{old_id}.*"):
-                if entry.is_file():
-                    entry.unlink()
+                if entry.is_file() and image_trash.trash_pool_file(character_id, entry):
                     stale_removed.append(old_id)
         except OSError:
             continue

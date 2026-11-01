@@ -155,3 +155,49 @@ def test_a_replaced_image_waits_in_the_trash_and_comes_back(
         local_name(OLD_PNG, "png"): OLD_PNG,
     }
     assert trash(client) == []
+
+
+def test_gallery_repair_moves_a_superseded_image_to_the_trash(
+    client: TestClient, archive  # noqa: ANN001
+) -> None:
+    # The extension re-uploaded the gallery: F-list now holds the same
+    # picture under 888, and 777 is gone from the profile.
+    archive.write_character_image(str(CID), "888", "png", OLD_PNG)
+    live = {
+        "character": {"id": CID, "name": NAME, "description": "x"},
+        "infotags": {},
+        "kinks": {},
+        "custom_kinks": {},
+        "inlines": {},
+        "images": [{"image_id": "888"}],
+        "fetched_at": 1000,
+    }
+    archive.write_live(str(CID), live)
+    bench = archive.resolve_workbench(str(CID))
+    archive.write_set_payload(
+        str(CID),
+        bench.id,
+        {
+            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_overlay": ["images"],
+            "character": {"description": "x"},
+            "images": [{"image_id": IMAGE_ID, "description": "", "sort_order": 0}],
+        },
+        expected_etag=None,
+    )
+
+    result = client.post(f"/flist/character/{CID}/images/repair").json()
+
+    assert result["stale_removed"] == [IMAGE_ID]
+    assert pool(client) == {"888.png": OLD_PNG}
+    items = trash(client)
+    assert [i["image_id"] for i in items] == [IMAGE_ID]
+    assert trash_bytes(client, items[0]) == OLD_PNG
+
+    # The pool holds the same bytes under 888, so restoring finds them
+    # there rather than making a twin.
+    res = restore(client, items[0]["trash_id"])
+    assert res["restored"] == [
+        {"image_id": "888", "deduplicated": True, "from": items[0]["trash_id"]}
+    ]
+    assert pool(client) == {"888.png": OLD_PNG}
