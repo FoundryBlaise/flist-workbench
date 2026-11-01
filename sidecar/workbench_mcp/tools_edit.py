@@ -1042,7 +1042,9 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
 def list_trash(character: str) -> dict[str, Any]:
     """Images deleted from the character's pool, newest first, with when
     and by whom (`ui` or `mcp`). `restore_image` puts them back into the
-    pool. Emptying the trash is the user's job, in the window."""
+    pool, by `trash_id`: the image id, unless the trash holds several
+    files under one id (a Pull replaced it). Emptying the trash is the
+    user's job, in the window."""
     from services import image_trash
 
     target = resolve_character(character)
@@ -1057,8 +1059,10 @@ def restore_image(
 ) -> dict[str, Any]:
     """Move images from the trash back into the pool — not onto the
     profile; use add_image for that. Give one `image_id` or several
-    `image_ids`. If the pool already holds the same bytes, the trash
-    entry is dropped and the existing id is reported instead.
+    `image_ids`, as list_trash's `trash_id`. If the pool already holds
+    the same bytes, the trash entry is dropped and the existing id is
+    reported instead. If it holds a different picture under that id,
+    the restored one comes back as `local-<sha8>`, so both are kept.
     """
     from services import image_trash
 

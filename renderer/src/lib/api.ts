@@ -98,6 +98,9 @@ export type FlistCharacterImage = {
 
 /** A file in a character's image trash (`<character>/trash/`). */
 export type FlistTrashItem = {
+  /** Names this entry for restore and purge. The image id, unless the
+   *  Trash holds several files under that id (a Pull replaced one). */
+  trash_id: string
   image_id: string
   extension: string
   filename: string
@@ -1395,21 +1398,21 @@ export const api = {
     ),
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
-  /** Back into the pool, not onto the profile. */
-  flistTrashRestore: (characterId: string | number, imageIds: string[]) =>
+  /** Back into the pool, not onto the profile. Takes trash ids. */
+  flistTrashRestore: (characterId: string | number, trashIds: string[]) =>
     request<{
       restored: { image_id: string; deduplicated: boolean; from: string }[]
       not_found: string[]
       conflicts: string[]
     }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/restore`, {
       method: 'POST',
-      body: JSON.stringify({ image_ids: imageIds })
+      body: JSON.stringify({ image_ids: trashIds })
     }),
-  /** Delete trashed files for good. */
-  flistTrashPurge: (characterId: string | number, imageIds: string[]) =>
+  /** Delete trashed files for good. Takes trash ids. */
+  flistTrashPurge: (characterId: string | number, trashIds: string[]) =>
     request<{ purged: string[]; not_found: string[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
-      { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
+      { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
     ),
   flistTrashEmpty: (characterId: string | number) =>
     request<{ purged: number }>(
