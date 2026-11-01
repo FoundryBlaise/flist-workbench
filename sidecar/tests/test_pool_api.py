@@ -97,14 +97,16 @@ def test_image_serves_uploaded_bytes(client: TestClient) -> None:
 # ---- export.zip ------------------------------------------------------
 
 
-def _seed_working_with_gallery(
+def _seed_workbench_with_gallery(
+    client: TestClient,
     character_id: str,
     name: str,
     images: list[dict],
 ) -> None:
-    """Drop a live + working pair onto disk so the export route has
-    something to bundle. Caller is responsible for placing the actual
-    image bytes in <char>/images/ via write_character_image."""
+    """Pull a Live, open its Workbench and save a gallery into it, so
+    the export route has something to bundle. Caller is responsible for
+    placing the actual image bytes in <char>/images/ via
+    write_character_image."""
     character_archive.write_live(
         character_id,
         {
@@ -114,15 +116,14 @@ def _seed_working_with_gallery(
             "fetched_at": 1,
         },
     )
-    character_archive.write_working(
-        character_id,
-        {
-            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
-            "_overlay": ["images"],
-            "character": {"id": character_id, "name": name, "description": "test profile"},
-            "images": images,
-        },
-    )
+    bench = client.get(f"/flist/character/{character_id}/workbench").json()
+    url = f"/flist/character/{character_id}/sets/{bench['workbench']['id']}/payload"
+    current = client.get(url).json()
+    payload = current["payload"]
+    payload["images"] = images
+    payload["_overlay"] = ["images"]
+    saved = client.put(url, json=payload, headers={"If-Match": current["etag"]})
+    assert saved.status_code == 200
 
 
 def test_export_zip_includes_character_json_and_images(
@@ -135,7 +136,8 @@ def test_export_zip_includes_character_json_and_images(
     row = character_archive.add_uploaded_image("9999", _PNG_VARIANT)
     assert row is not None
     local_id = row["image_id"]
-    _seed_working_with_gallery(
+    _seed_workbench_with_gallery(
+        client,
         "9999",
         "OOC Hub",
         [
@@ -158,7 +160,67 @@ def test_export_zip_includes_character_json_and_images(
     assert character_json["images"]["list"][0]["description"] == "first"
 
 
-def test_export_zip_falls_back_to_live_when_no_working(
+def _zip_of(client: TestClient, character_id: str) -> zipfile.ZipFile:
+    res = client.get(f"/flist/character/{character_id}/export.zip")
+    assert res.status_code == 200
+    return zipfile.ZipFile(io.BytesIO(res.content))
+
+
+def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
+    client: TestClient,
+) -> None:
+    """The export modal counts the Workbench, so the download has to be
+    the Workbench: its description, its gallery and its image files."""
+    character_archive.write_character_image("9999", "42", "png", _PNG)
+    character_archive.write_character_image("9999", "43", "png", _PNG_VARIANT)
+    character_archive.write_live(
+        "9999",
+        {
+            "id": "9999",
+            "name": "Ember Vale",
+            "description": "Live description",
+            "images": [{"image_id": "42", "extension": "png", "description": "old"}],
+            "fetched_at": 1,
+        },
+    )
+    bench = client.get("/flist/character/9999/workbench").json()["workbench"]
+    url = f"/flist/character/9999/sets/{bench['id']}/payload"
+    current = client.get(url).json()
+    payload = current["payload"]
+    payload["character"]["description"] = "Workbench description"
+    payload["images"] = [
+        {"image_id": "43", "description": "new cover", "sort_order": 0},
+        {"image_id": "42", "description": "old", "sort_order": 1},
+    ]
+    payload["_overlay"] = ["character.description", "images"]
+    saved = client.put(url, json=payload, headers={"If-Match": current["etag"]})
+    assert saved.status_code == 200
+    # A legacy working copy left on disk from an older build.
+    stale = client.put(
+        "/flist/character/9999/working",
+        json={
+            "_schema_version": 1,
+            "_overlay": ["character.description", "images"],
+            "character": {"id": "9999", "name": "Ember Vale", "description": "Stale"},
+            "images": [],
+        },
+    )
+    assert stale.status_code == 200
+
+    z = _zip_of(client, "9999")
+
+    character_json = json.loads(z.read("character.json"))
+    assert character_json["character"]["description"] == "Workbench description"
+    gallery = character_json["images"]["list"]
+    assert [(g["filename"], g["description"]) for g in gallery] == [
+        ("images/43.png", "new cover"),
+        ("images/42.png", "old"),
+    ]
+    assert z.read("images/43.png") == _PNG_VARIANT
+    assert z.read("images/42.png") == _PNG
+
+
+def test_export_zip_of_a_character_with_no_workbench_is_live(
     client: TestClient,
 ) -> None:
     character_archive.write_character_image("8888", "42", "png", _PNG)
@@ -174,10 +236,13 @@ def test_export_zip_falls_back_to_live_when_no_working(
             "fetched_at": 1,
         },
     )
-    res = client.get("/flist/character/8888/export.zip")
-    assert res.status_code == 200
-    z = zipfile.ZipFile(io.BytesIO(res.content))
-    assert "images/42.png" in z.namelist()
+    z = _zip_of(client, "8888")
+    character_json = json.loads(z.read("character.json"))
+    assert character_json["character"]["description"] == "Live-only"
+    assert z.read("images/42.png") == _PNG
+    # Exporting reads; it does not start a Workbench.
+    bench = client.get("/flist/character/8888/workbench?create=false").json()
+    assert bench["workbench"] is None
 
 
 def test_export_zip_404_when_nothing_to_export(client: TestClient) -> None:

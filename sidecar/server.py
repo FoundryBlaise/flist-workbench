@@ -1601,24 +1601,29 @@ async def flist_character_trash_empty(character_id: str) -> dict:
 async def flist_character_export_zip(character_id: str) -> Response:
     """Build the userscript-compatible restore ZIP (Tier 6).
 
-    Bundles `character.json` + every pool image referenced by the
-    working copy's gallery + the avatar. The renderer triggers a
+    Bundles `character.json` + every image referenced by the
+    Workbench's gallery + the avatar. The renderer triggers a
     download by navigating to this URL, so the response stamps a
     `Content-Disposition: attachment` with a filename derived from
     the character name.
+
+    The export modal shows the Workbench's counts, so this is the
+    Workbench too: what the user reviewed is what they upload. The
+    legacy working copy is never read here. Live is the fallback only
+    for a character that has no Workbench yet.
     """
     import zip_serialise
 
-    working = character_archive.read_working(character_id)
+    working = None
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    if bench is not None:
+        working = character_archive.read_set_payload(character_id, bench.id)
     if working is None:
-        # Fall back to a Live-seeded payload so a user who hasn't yet
-        # edited the working copy can still export. Seeds inline since
-        # the renderer's seedWorkingFromLive isn't reachable from here.
         live = character_archive.read_live(character_id)
         if live is None:
             raise HTTPException(
                 status_code=404,
-                detail="no working copy or Live snapshot to export",
+                detail="no Workbench or Live snapshot to export",
             )
         working = payload_ops.seed_from_live(live)
     name_for_file = "character"
