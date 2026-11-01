@@ -24,7 +24,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const root = await mkdtemp(join(tmpdir(), 'flist-wb-e2e-'))
   const fchatDir = join(root, 'fchat')
   execFileSync(python, [join(__dirname, 'fixtures', 'build_fchat_dir.py'), fchatDir], {
-    stdio: 'inherit'
+    stdio: 'inherit',
+    // Without a console of its own the parent would give python a new
+    // console window, which takes the focus from the user's desktop.
+    windowsHide: true
   })
 
   // Workers start after global setup and inherit these.

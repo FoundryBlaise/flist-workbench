@@ -19,6 +19,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
+# On Windows a child of a process without a console opens a console
+# window of its own, which takes the focus. 0 (no flag) elsewhere.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_LIST = HERE / "mutations.toml"
 
@@ -128,6 +132,7 @@ def git_status(root: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
+        creationflags=_NO_WINDOW,
     ).stdout
 
 
@@ -267,7 +272,8 @@ def _pytest_runner(root: Path, python: str, whole_suite: bool):
         if not whole_suite:
             args += [t.removeprefix("sidecar/") for t in tests]
         proc = subprocess.run(
-            args, cwd=root / "sidecar", capture_output=True, text=True, encoding="utf-8", errors="replace"
+            args, cwd=root / "sidecar", capture_output=True, text=True, encoding="utf-8", errors="replace",
+            creationflags=_NO_WINDOW,
         )
         out = proc.stdout + proc.stderr
         failures = list(dict.fromkeys(re.findall(r"^(?:FAILED|ERROR) (\S+)", out, re.M)))
@@ -287,7 +293,8 @@ def _vitest_runner(root: Path, whole_suite: bool):
             if not whole_suite:
                 args += list(tests)
             proc = subprocess.run(
-                args, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace"
+                args, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                creationflags=_NO_WINDOW,
             )
             if not report.is_file():
                 return Outcome(proc.returncode or 2, [], (proc.stdout + proc.stderr)[-300:])
@@ -336,7 +343,9 @@ def _raise_stop(signum, _frame):
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, creationflags=_NO_WINDOW
+    ).stdout.strip()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
