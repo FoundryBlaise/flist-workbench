@@ -183,6 +183,14 @@ def revoke_token() -> None:
         _persist()
 
 
+def is_paired() -> bool:
+    """Whether an accepted pairing token is stored. Settings → Security
+    shows this; the token itself never leaves this module."""
+    _load_if_needed()
+    with _STATE.lock:
+        return _STATE.accepted_token is not None
+
+
 def auth_token_valid(token: str | None) -> bool:
     _load_if_needed()
     if not token:
