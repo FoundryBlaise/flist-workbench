@@ -210,3 +210,74 @@ async def test_emptying_the_trash_takes_the_cleared_labels_with_it(client) -> No
 
     assert emptied["purged"] == 1
     assert trashed(client) == []
+
+
+# ---- the Labels section of the Trash: every entry, whoever owns it ------
+
+CORIN = "Corin Vale"
+LABELS_TRASH = "/labels/trash"
+
+
+@pytest.fixture
+def log_only(conversation) -> Path:
+    """A second Log character with no Workbench: nothing in the
+    character list, so no character Trash view, would ever show its
+    cleared Labels."""
+    write_log(
+        conversation / CORIN / "logs" / DAELAN,
+        [
+            chat(CORIN, LONG_A, at=1700000000),
+            chat(DAELAN, LONG_B, at=1700000060),
+        ],
+    )
+    return conversation
+
+
+async def test_cleared_labels_of_a_log_only_character_are_listed_and_restored(
+    client, log_only
+) -> None:
+    async with mcp_client() as session:
+        _, batch = await call_tool(
+            session, "get_messages_to_classify", character=CORIN, partner=DAELAN
+        )
+        items = [{"hash": m["hash"], "label": "IC"} for m in batch["messages"]]
+        await call_tool(
+            session, "set_message_labels", character=CORIN, partner=DAELAN, items=items
+        )
+    before = stored_labels()
+    cleared = client.post("/labels/clear", json={"character": CORIN, "partner": DAELAN}).json()
+    assert cleared["deleted"] == 2
+    assert trashed(client) == [], "Amber's Trash shows only Amber's Labels"
+
+    listing = client.get(LABELS_TRASH)
+
+    assert listing.status_code == 200
+    [entry] = listing.json()["labels"]
+    assert (entry["id"], entry["character"], entry["count"]) == (cleared["trash_id"], CORIN, 2)
+
+    restored = client.post(f"{LABELS_TRASH}/restore", json={"ids": [entry["id"], "nope"]})
+
+    assert restored.json() == {
+        "restored": [{"id": entry["id"], "restored": 2, "skipped": []}],
+        "not_found": ["nope"],
+    }
+    assert stored_labels() == before
+    assert client.get(LABELS_TRASH).json()["labels"] == []
+
+
+async def test_the_labels_section_lists_every_characters_entries_and_purges_one(
+    client, log_only
+) -> None:
+    async with mcp_client() as session:
+        await label_everything(session)
+    client.post("/labels/clear", json={"character": AMBER, "partner": DAELAN})
+    [amber_entry] = trashed(client)
+
+    [listed] = client.get(LABELS_TRASH).json()["labels"]
+    assert listed["id"] == amber_entry["id"]
+
+    purged = client.post(f"{LABELS_TRASH}/purge", json={"ids": [listed["id"]]}).json()
+
+    assert purged == {"purged": [listed["id"]], "not_found": []}
+    assert client.get(LABELS_TRASH).json()["labels"] == []
+    assert trashed(client) == []

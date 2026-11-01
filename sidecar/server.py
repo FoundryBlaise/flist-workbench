@@ -2447,6 +2447,30 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     }
 
 
+@app.get("/labels/trash")
+def labels_trash_list() -> dict:
+    """Every cleared-Labels entry in the Trash, newest first, for
+    Settings → Labels. Unlike a character's Trash view this includes a
+    Log character with no Workbench, and one whose Log name matches no
+    character in the list."""
+    return {"labels": label_trash_service.list_labels(None)}
+
+
+@app.post("/labels/trash/restore")
+def labels_trash_restore(body: _TrashIdsBody) -> dict:
+    """Put cleared Labels back, whichever character they were cleared
+    for. A message labelled again since keeps its newer Label and is
+    reported under `skipped`."""
+    return label_trash_service.restore(None, body.ids)
+
+
+@app.post("/labels/trash/purge")
+def labels_trash_purge(body: _TrashIdsBody) -> dict:
+    """Delete cleared Labels for good. The window's call only: MCP has
+    no tool for it."""
+    return label_trash_service.purge(None, body.ids)
+
+
 @app.post("/labels/clear-all")
 def labels_clear_all() -> dict:
     """Wipe every stored IC/OOC verdict across all characters.

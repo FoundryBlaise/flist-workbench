@@ -10,8 +10,9 @@ its row for the current labels table. A Label belongs to the message,
 not to a character (ADR 0004), so the entries live in one place,
 `<userdata>/trash/labels/`, and not in a character folder: a character
 that has Logs but no Workbench still gets its cleared Labels kept.
-Which character's Trash shows an entry follows from the Log character
-it was cleared for, matched by name like the character list does.
+Settings → Labels lists every entry, whoever it was cleared for; a
+character's Trash view shows the ones whose Log character matches its
+name, matched like the character list does.
 
 Only the window deletes for good, by purging or emptying the Trash. No
 MCP tool calls `purge` or `empty`.
@@ -88,10 +89,14 @@ def _read(trash_id: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and isinstance(data.get("labels"), list) else None
 
 
-def _owned(trash_id: str, character: str) -> dict[str, Any] | None:
-    """The entry `trash_id` names, if it is in `character`'s Trash."""
+def _owned(trash_id: str, character: str | None) -> dict[str, Any] | None:
+    """The entry `trash_id` names, if it is in `character`'s Trash, or
+    in the Trash at all when `character` is None."""
     entry = _read(trash_id)
-    if entry is None or not character_archive.same_character_name(entry.get("character"), character):
+    if entry is None or (
+        character is not None
+        and not character_archive.same_character_name(entry.get("character"), character)
+    ):
         return None
     return entry
 
@@ -149,23 +154,25 @@ def clear_all() -> dict[str, Any]:
         conn.close()
 
 
-def list_labels(character: str) -> list[dict[str, Any]]:
-    """The cleared Labels in `character`'s Trash, most recently cleared
-    first: who cleared them, the scope (`partner` None means every
-    conversation) and how many Labels each entry holds."""
+def list_labels(character: str | None) -> list[dict[str, Any]]:
+    """The cleared Labels in `character`'s Trash, or every entry when
+    `character` is None, most recently cleared first: who cleared them,
+    the scope (`partner` None means every conversation) and how many
+    Labels each entry holds."""
     rows: list[dict[str, Any]] = []
     for path in _dir().glob("*.json"):
-        entry = _read(path.stem)
-        if entry and character_archive.same_character_name(entry.get("character"), character):
+        entry = _owned(path.stem, character)
+        if entry:
             rows.append(_summary(entry))
     rows.sort(key=lambda r: (r["deleted_at"] or 0, r["id"]), reverse=True)
     return rows
 
 
-def restore(character: str, ids: list[str]) -> dict[str, Any]:
-    """Put cleared Labels back. A message labelled again since the clear
-    keeps its newer Label and is reported under `skipped`. The entry
-    leaves the Trash."""
+def restore(character: str | None, ids: list[str]) -> dict[str, Any]:
+    """Put cleared Labels back: entries in `character`'s Trash, or any
+    entry when `character` is None. A message labelled again since the
+    clear keeps its newer Label and is reported under `skipped`. The
+    entry leaves the Trash."""
     restored: list[dict[str, Any]] = []
     with _lock:
         found, not_found = trash_ledger.resolve_ids(ids, lambda i: _owned(i, character))
@@ -180,8 +187,9 @@ def restore(character: str, ids: list[str]) -> dict[str, Any]:
     return {"restored": restored, "not_found": not_found}
 
 
-def purge(character: str, ids: list[str]) -> dict[str, Any]:
-    """Delete cleared Labels for good. The window's call only."""
+def purge(character: str | None, ids: list[str]) -> dict[str, Any]:
+    """Delete cleared Labels for good, from `character`'s Trash or, when
+    None, from anywhere in it. The window's call only."""
     with _lock:
         return trash_ledger.purge(
             ids,
