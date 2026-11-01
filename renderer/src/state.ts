@@ -804,6 +804,23 @@ const _autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const _flushInflight = new Map<string, Promise<void>>()
 const AUTOSAVE_DEBOUNCE_MS = 500
 
+// Per-character request token for flistOpenWorking: the number of the
+// newest open. Clicking quickly between characters leaves several
+// reads in flight, landing in any order; only the newest open of a
+// character may apply its read, so an older one can never put a stale
+// payload (or a stale etag) back over a newer one.
+const _openTokens = new Map<string, number>()
+
+function _beginOpen(characterId: string): number {
+  const token = (_openTokens.get(characterId) ?? 0) + 1
+  _openTokens.set(characterId, token)
+  return token
+}
+
+function _isNewestOpen(characterId: string, token: number): boolean {
+  return _openTokens.get(characterId) === token
+}
+
 // Working-sets v2: autosave debouncer + single-flight, keyed by **set id**
 // rather than character id. Multiple sets can be open simultaneously in
 // memory; their writes are independent so the debounce + serialisation
@@ -2353,6 +2370,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistOpenWorking(characterId) {
+    const token = _beginOpen(characterId)
     // Ensure Live is loaded into flistArchive BEFORE we ask
     // flistLoadWorking to handle a 404 — its seed-from-Live branch
     // reads from flistArchive, so a race against the loader produces
@@ -2444,6 +2462,7 @@ export const useStore = create<State>((set, get) => ({
           ? seedWorkingFromLive(liveForSeed)
           : { ...emptyWorkingSlot().payload }
       }
+      if (!_isNewestOpen(characterId, token)) return
       const slot: FlistWorkingSlot = {
         ...emptyWorkingSlot(),
         payload,
@@ -2462,6 +2481,11 @@ export const useStore = create<State>((set, get) => ({
     } else {
       await get().flistLoadWorking(characterId)
     }
+    // The editor shows the active character. A read that lands after
+    // the user moved on to someone else leaves it alone; otherwise the
+    // next keystroke would save this character's text into theirs.
+    if (!_isNewestOpen(characterId, token)) return
+    if (get().flistActiveCharacterId !== characterId) return
     const slot = get().flistWorking[characterId]
     const live = archive?.live ?? null
     const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
