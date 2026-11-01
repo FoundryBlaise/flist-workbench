@@ -31,6 +31,7 @@ from typing import Any
 import character_archive
 import labels as labels_store
 import paths
+from services import trash_ledger
 
 FOLDER = "labels"
 
@@ -43,14 +44,6 @@ def _dir() -> Path:
     p = paths.user_data_dir() / "trash" / FOLDER
     p.mkdir(parents=True, exist_ok=True)
     return p
-
-
-def _actor() -> str:
-    """'ui' for the window, 'mcp' for a tool call."""
-    from services import events
-
-    origin = events.current_origin()
-    return "mcp" if origin.startswith("mcp") else origin.split(":", 1)[0]
 
 
 def _same_name(a: str | None, b: str | None) -> bool:
@@ -86,7 +79,7 @@ def _write_entry(character: str, partner: str | None, rows: list[dict]) -> dict[
         "partner": partner,
         "count": len(rows),
         "deleted_at": now,
-        "deleted_by": _actor(),
+        "deleted_by": trash_ledger.actor(),
         "labels": rows,
     }
     p = folder / f"{trash_id}.json"
@@ -108,6 +101,14 @@ def _read(trash_id: str) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) and isinstance(data.get("labels"), list) else None
+
+
+def _owned(trash_id: str, character: str) -> dict[str, Any] | None:
+    """The entry `trash_id` names, if it is in `character`'s Trash."""
+    entry = _read(trash_id)
+    if entry is None or not _same_name(entry.get("character"), character):
+        return None
+    return entry
 
 
 def _clear_rows(
@@ -175,15 +176,11 @@ def restore(character: str, ids: list[str]) -> dict[str, Any]:
     keeps its newer Label and is reported under `skipped`. The entry
     leaves the Trash."""
     restored: list[dict[str, Any]] = []
-    not_found: list[str] = []
     with _lock:
+        found, not_found = trash_ledger.resolve_ids(ids, lambda i: _owned(i, character))
         conn = labels_store.connect()
         try:
-            for trash_id in dict.fromkeys(str(i) for i in ids):
-                entry = _read(trash_id)
-                if entry is None or not _same_name(entry.get("character"), character):
-                    not_found.append(trash_id)
-                    continue
+            for trash_id, entry in found:
                 count, skipped = labels_store.restore_labels(conn, entry["labels"])
                 (_dir() / f"{trash_id}.json").unlink(missing_ok=True)
                 restored.append({"id": trash_id, "restored": count, "skipped": skipped})
@@ -194,17 +191,12 @@ def restore(character: str, ids: list[str]) -> dict[str, Any]:
 
 def purge(character: str, ids: list[str]) -> dict[str, Any]:
     """Delete cleared Labels for good. The window's call only."""
-    purged: list[str] = []
-    not_found: list[str] = []
     with _lock:
-        for trash_id in dict.fromkeys(str(i) for i in ids):
-            entry = _read(trash_id)
-            if entry is None or not _same_name(entry.get("character"), character):
-                not_found.append(trash_id)
-                continue
-            (_dir() / f"{trash_id}.json").unlink(missing_ok=True)
-            purged.append(trash_id)
-    return {"purged": purged, "not_found": not_found}
+        return trash_ledger.purge(
+            ids,
+            lambda i: _owned(i, character),
+            lambda trash_id, _entry: (_dir() / f"{trash_id}.json").unlink(missing_ok=True),
+        )
 
 
 def empty(character: str) -> int:

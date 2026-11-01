@@ -16,7 +16,6 @@ look in it.
 
 from __future__ import annotations
 
-import json
 import re
 import threading
 import time
@@ -24,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import character_archive
+from services import trash_ledger
 
 TRASH_DIRNAME = "trash"
 INDEX_FILENAME = "index.json"
@@ -45,18 +45,11 @@ def _index_path(character_id: int | str) -> Path:
 
 
 def _read_index(character_id: int | str) -> dict[str, dict[str, Any]]:
-    try:
-        data = json.loads(_index_path(character_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return trash_ledger.read_index(_index_path(character_id))
 
 
 def _write_index(character_id: int | str, index: dict[str, dict[str, Any]]) -> None:
-    p = _index_path(character_id)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(p)
+    trash_ledger.write_index(_index_path(character_id), index)
 
 
 def _files(directory: Path) -> dict[str, Path]:
@@ -71,15 +64,6 @@ def _files(directory: Path) -> dict[str, Path]:
         if m and m.group(2).lower() != "json":
             out[m.group(1)] = entry
     return out
-
-
-def _actor() -> str:
-    """'ui' for the window, 'mcp' for a tool call — who to name in the
-    trash listing."""
-    from services import events
-
-    origin = events.current_origin()
-    return "mcp" if origin.startswith("mcp") else origin.split(":", 1)[0]
 
 
 def _announce(character_id: int | str) -> None:
@@ -138,7 +122,7 @@ def _trash_locked(
         "image_id": image_id,
         "extension": dest.suffix.lstrip(".").lower(),
         "deleted_at": int(time.time()),
-        "deleted_by": _actor(),
+        "deleted_by": trash_ledger.actor(),
         "size": size,
         "sha256": sha,
         "source_name": (meta.get(sha) or {}).get("source_name"),
@@ -154,15 +138,11 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
 
     meta = image_import.read_meta(character_id)
     trashed: list[dict[str, Any]] = []
-    not_found: list[str] = []
     with _lock:
         pool = _files(character_archive.images_dir(character_id))
         index = _read_index(character_id)
-        for image_id in dict.fromkeys(str(i) for i in image_ids):
-            src = pool.get(image_id)
-            if src is None:
-                not_found.append(image_id)
-                continue
+        found, not_found = trash_ledger.resolve_ids(image_ids, pool.get)
+        for image_id, src in found:
             trashed.append(_trash_locked(character_id, src, image_id, index, meta))
         if trashed:
             _write_index(character_id, index)
@@ -231,17 +211,13 @@ def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, A
     `local-<sha8>`, the name the pool gives a picture only this machine
     has."""
     restored: list[dict[str, Any]] = []
-    not_found: list[str] = []
     conflicts: list[str] = []
     with _lock:
         files = _files(trash_dir(character_id))
         index = _read_index(character_id)
         pool_dir = character_archive.images_dir(character_id)
-        for trash_id in dict.fromkeys(str(i) for i in trash_ids):
-            src = files.get(trash_id)
-            if src is None:
-                not_found.append(trash_id)
-                continue
+        found, not_found = trash_ledger.resolve_ids(trash_ids, files.get)
+        for trash_id, src in found:
             sha = character_archive.file_sha256(src)
             existing = character_archive.find_image_with_sha(character_id, sha)
             if existing is not None:
@@ -271,21 +247,16 @@ def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, A
 
 def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Delete trashed files for good. The window's call only."""
-    purged: list[str] = []
-    not_found: list[str] = []
+    def drop(trash_id: str, path: Path) -> None:
+        path.unlink(missing_ok=True)
+        index.pop(trash_id, None)
+
     with _lock:
         files = _files(trash_dir(character_id))
         index = _read_index(character_id)
-        for trash_id in dict.fromkeys(str(i) for i in trash_ids):
-            path = files.get(trash_id)
-            if path is None:
-                not_found.append(trash_id)
-                continue
-            path.unlink(missing_ok=True)
-            index.pop(trash_id, None)
-            purged.append(trash_id)
+        result = trash_ledger.purge(trash_ids, files.get, drop)
         _write_index(character_id, index)
-    return {"purged": purged, "not_found": not_found}
+    return result
 
 
 def empty_trash(character_id: int | str) -> int:

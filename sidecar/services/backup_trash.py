@@ -12,14 +12,13 @@ MCP tool calls `purge_backups` or `empty`.
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
 import character_archive
-from services import image_trash
+from services import image_trash, trash_ledger
 
 FOLDER = "backups"
 INDEX_FILENAME = "index.json"
@@ -34,26 +33,11 @@ def _dir(character_id: int | str) -> Path:
 
 
 def _read_index(character_id: int | str) -> dict[str, dict[str, Any]]:
-    try:
-        data = json.loads((_dir(character_id) / INDEX_FILENAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return trash_ledger.read_index(_dir(character_id) / INDEX_FILENAME)
 
 
 def _write_index(character_id: int | str, index: dict[str, dict[str, Any]]) -> None:
-    p = _dir(character_id) / INDEX_FILENAME
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(p)
-
-
-def _actor() -> str:
-    """'ui' for the window, 'mcp' for a tool call."""
-    from services import events
-
-    origin = events.current_origin()
-    return "mcp" if origin.startswith("mcp") else origin.split(":", 1)[0]
+    trash_ledger.write_index(_dir(character_id) / INDEX_FILENAME, index)
 
 
 def _free_id(folder: Path, filename: str, sha: str) -> str:
@@ -98,7 +82,7 @@ def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
             "size": size,
             "sha256": sha,
             "deleted_at": int(time.time()),
-            "deleted_by": _actor(),
+            "deleted_by": trash_ledger.actor(),
         }
         index[trash_id] = entry
         _write_index(character_id, index)
@@ -139,18 +123,14 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     and user-set name they had. When the list already holds different
     bytes under that file name, the Backup stays in the Trash."""
     restored: list[str] = []
-    not_found: list[str] = []
     conflicts: list[str] = []
     with _lock:
         rows = {r["id"]: r for r in list_backups(character_id)}
         index = _read_index(character_id)
         folder = _dir(character_id)
         target_dir = character_archive.backups_dir(character_id)
-        for trash_id in dict.fromkeys(str(i) for i in ids):
-            row = rows.get(trash_id)
-            if row is None:
-                not_found.append(trash_id)
-                continue
+        found, not_found = trash_ledger.resolve_ids(ids, rows.get)
+        for trash_id, row in found:
             src = folder / trash_id
             filename = row["filename"]
             try:
@@ -175,21 +155,17 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
 
 def purge_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     """Delete trashed Backups for good. The window's call only."""
-    purged: list[str] = []
-    not_found: list[str] = []
+    def drop(trash_id: str, _row: dict[str, Any]) -> None:
+        (folder / trash_id).unlink(missing_ok=True)
+        index.pop(trash_id, None)
+
     with _lock:
-        present = {r["id"] for r in list_backups(character_id)}
+        rows = {r["id"]: r for r in list_backups(character_id)}
         index = _read_index(character_id)
         folder = _dir(character_id)
-        for trash_id in dict.fromkeys(str(i) for i in ids):
-            if trash_id not in present:
-                not_found.append(trash_id)
-                continue
-            (folder / trash_id).unlink(missing_ok=True)
-            index.pop(trash_id, None)
-            purged.append(trash_id)
+        result = trash_ledger.purge(ids, rows.get, drop)
         _write_index(character_id, index)
-    return {"purged": purged, "not_found": not_found}
+    return result
 
 
 def empty(character_id: int | str) -> int:
