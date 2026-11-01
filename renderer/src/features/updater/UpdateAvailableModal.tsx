@@ -3,7 +3,13 @@ import { useEffect } from 'react'
 export type UpdaterStatus =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'available'; version: string; releaseNotes?: string | null }
+  | {
+      kind: 'available'
+      version: string
+      releaseNotes?: string | null
+      /** Set on the portable build, which never downloads: where the user gets it. */
+      releaseUrl?: string
+    }
   | {
       kind: 'downloading'
       percent: number
@@ -25,6 +31,10 @@ export type UpdaterStatus =
  * checks opt into the "checking" / "up to date" / "error" states by
  * passing `manualCheck`; the "up to date" line self-dismisses after
  * a few seconds.
+ *
+ * The portable build never downloads or installs (ADR 0005): its card
+ * says a new version is available and links to the release page, which
+ * opens in the user's browser.
  */
 export function UpdateAvailableModal({
   status,
@@ -55,6 +65,7 @@ export function UpdateAvailableModal({
   let tone: 'info' | 'progress' | 'ready' | 'error' = 'info'
   let line: React.ReactNode = null
   let primary: { label: string; onClick: () => void } | null = null
+  let releaseLink: { label: string; href: string } | null = null
   let percent: number | null = null
 
   if (status.kind === 'checking' && manualCheck) {
@@ -65,6 +76,16 @@ export function UpdateAvailableModal({
         You're on the latest version{currentVersion ? ` (${currentVersion})` : ''}.
       </span>
     )
+  } else if (status.kind === 'available' && status.releaseUrl) {
+    line = (
+      <span>
+        New version available:{' '}
+        <strong>
+          {currentVersion || '?'} → {status.version}
+        </strong>
+      </span>
+    )
+    releaseLink = { label: `Get ${status.version}`, href: status.releaseUrl }
   } else if (status.kind === 'available') {
     line = (
       <span>
@@ -106,6 +127,17 @@ export function UpdateAvailableModal({
           >
             {primary.label}
           </button>
+        ) : null}
+        {releaseLink ? (
+          // A new window is never opened: main hands the link to the browser.
+          <a
+            className="updater-toast-primary"
+            href={releaseLink.href}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {releaseLink.label}
+          </a>
         ) : null}
         <button
           type="button"

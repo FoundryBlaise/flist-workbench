@@ -41,6 +41,8 @@ export type LaunchOptions = {
   pinFchatDir?: boolean
   /** Start on this data folder instead of a fresh one. */
   dataDir?: string
+  /** Extra environment for the app, applied last. */
+  env?: Record<string, string>
 }
 
 function e2eEnv(name: string): string {
@@ -96,7 +98,16 @@ async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> {
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
   // ELECTRON_RUN_AS_NODE leaks in from editor terminals (VS Code sets
   // it) and turns electron.exe into plain node.
-  for (const k of ['FCHAT_DATA_DIR', 'SIDECAR_PORT', 'ELECTRON_RENDERER_URL', 'ELECTRON_RUN_AS_NODE'])
+  // PORTABLE_EXECUTABLE_DIR and FLIST_WORKBENCH_UPDATE_FEED are set
+  // only by the spec that asks for them (opts.env).
+  for (const k of [
+    'FCHAT_DATA_DIR',
+    'SIDECAR_PORT',
+    'ELECTRON_RENDERER_URL',
+    'ELECTRON_RUN_AS_NODE',
+    'PORTABLE_EXECUTABLE_DIR',
+    'FLIST_WORKBENCH_UPDATE_FEED'
+  ])
     delete env[k]
   const port = await freePort()
   Object.assign(env, {
@@ -110,6 +121,7 @@ async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> {
     FLIST_WORKBENCH_NO_FOCUS: '1'
   })
   if (opts.pinFchatDir !== false) env['FCHAT_DATA_DIR'] = fchatDir
+  Object.assign(env, opts.env)
 
   const app = await electron.launch({
     args: [resolve(root, 'out/main/main.js'), `--user-data-dir=${userData}`],
