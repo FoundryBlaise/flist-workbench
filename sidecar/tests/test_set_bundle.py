@@ -126,7 +126,7 @@ def test_import_writes_missing_image_bytes(tmp_path):
     # Remove the image bytes from the source character; the target dir
     # for this character is the *same* dir (same character), so deleting
     # before import simulates a missing-byte case.
-    character_archive.remove_character_image("100", "111")
+    character_archive.image_path("100", "111", "png").unlink()
 
     result = set_bundle.import_set_bundle("100", data, name="Imported set 1")
 

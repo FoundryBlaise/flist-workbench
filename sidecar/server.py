@@ -93,6 +93,7 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await _eicons_warm_up()
     await _hydrate_activity_log_on_startup()
     await _avatar_cleanup_on_startup()
+    await _adopt_old_pre_upload_backups_on_startup()
     await _password_idle_watchdog()
     async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
         yield
@@ -898,6 +899,8 @@ async def flist_character_zip_backup_payload(
         raise HTTPException(
             status_code=500, detail="backup working.json is not valid JSON"
         ) from exc
+    if isinstance(payload, dict):
+        payload = character_archive.backup_payload(payload)
     return {"payload": payload, "filename": filename, "meta": meta}
 
 
@@ -1747,6 +1750,16 @@ async def _avatar_cleanup_on_startup() -> None:
         print(
             f"[flist] cleaned {count} placeholder avatars from cache "
             "(left over from pre-URL-fix sidecar)",
+            flush=True,
+        )
+
+
+async def _adopt_old_pre_upload_backups_on_startup() -> None:
+    count = character_archive.adopt_old_pre_upload_backups()
+    if count > 0:
+        print(
+            f"[flist] {count} Backups taken before an Upload by an earlier "
+            "version are now in the Backup list",
             flush=True,
         )
 

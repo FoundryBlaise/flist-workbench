@@ -143,7 +143,7 @@ export function ImagesTrash({
     void load()
   }, [characterId, refreshKey])
 
-  const visible = useMemo(() => (items ?? []).map((i) => i.image_id), [items])
+  const visible = useMemo(() => (items ?? []).map((i) => i.trash_id), [items])
   useEffect(() => {
     setSel((s) => pruneSelection(s, visible))
   }, [visible])
@@ -190,8 +190,8 @@ export function ImagesTrash({
 
   const thumbsFor = (ids: string[]) =>
     (items ?? [])
-      .filter((i) => ids.includes(i.image_id))
-      .map((i) => ({ key: i.image_id, url: api.flistTrashFileUrl(characterId, i.filename) }))
+      .filter((i) => ids.includes(i.trash_id))
+      .map((i) => ({ key: i.trash_id, url: api.flistTrashFileUrl(characterId, i.filename) }))
 
   return (
     <div className="flist-images-trash" data-testid="flist-images-trash">
@@ -248,10 +248,10 @@ export function ImagesTrash({
       )}
       <ul className="flist-images-pool-list">
         {(items ?? []).map((item) => {
-          const selected = sel.ids.includes(item.image_id)
+          const selected = sel.ids.includes(item.trash_id)
           return (
             <li
-              key={item.image_id}
+              key={item.trash_id}
               className={`flist-images-pool-item${selected ? ' flist-images-pool-item--selected' : ''}`}
               data-testid="flist-images-trash-item"
             >
@@ -260,7 +260,7 @@ export function ImagesTrash({
                   type="checkbox"
                   className="flist-images-select"
                   checked={selected}
-                  onClick={(e) => click(item.image_id, e)}
+                  onClick={(e) => click(item.trash_id, e)}
                   onChange={() => {}}
                   aria-label={`Select ${item.image_id}`}
                 />
