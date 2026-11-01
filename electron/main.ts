@@ -662,11 +662,6 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   if (foreignSearch) foreignSearch.enabled = !!flags.flistSessionActive
 })
 
-/** How long after the window starts to close its unload flush may still leave. */
-const CLOSE_FLUSH_MS = 5_000
-/** The request the unload flush sends: a character's working copy. */
-const WORKING_COPY_PATH = /^\/flist\/character\/[^/]+\/working$/
-
 async function createWindow(): Promise<void> {
   // The e2e harness starts the app many times per run; a window that
   // took the focus each time would keep the desktop unusable meanwhile.
@@ -704,29 +699,11 @@ async function createWindow(): Promise<void> {
   // autosave has not sent yet, with its ordinary requests.
   saveEditsOnClose(mainWindow)
 
-  // The close-time flush: when the window closes, the app's page saves
-  // unsaved edits with keepalive PUTs of the working copy from
-  // `beforeunload` (AppLayout). Those outlive the page, and Electron
-  // reports them with no web contents and no frame, so the check below
-  // cannot place them. For a few seconds after this window starts to
-  // close, exactly that request still gets the secret.
-  let closingUntil = 0
-  mainWindow.on('close', () => {
-    closingUntil = Date.now() + CLOSE_FLUSH_MS
-  })
-  const isCloseFlush = (details: Electron.OnBeforeSendHeadersListenerDetails): boolean =>
-    Date.now() < closingUntil &&
-    details.webContentsId === undefined &&
-    details.frame == null &&
-    details.method === 'PUT' &&
-    WORKING_COPY_PATH.test(new URL(details.url).pathname)
-
   // Every request the app's own page makes to the sidecar gets the
   // launch secret: fetch, but also <img> and the event stream, which
   // cannot set headers themselves. Only the main frame of this window,
   // while it shows the app's page, qualifies: never a frame inside it,
-  // a page that isn't the app, or any other web contents. The one
-  // exception is the close-time flush above.
+  // a page that isn't the app, or any other web contents.
   const windowContentsId = mainWindow.webContents.id
   mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
     { urls: [`${sidecarUrl}/*`, `http://localhost:${sidecarPort}/*`] },
@@ -739,9 +716,7 @@ async function createWindow(): Promise<void> {
         isAppPage(frame.url)
       callback({
         requestHeaders:
-          fromAppPage || isCloseFlush(details)
-            ? withLaunchSecret(details.requestHeaders)
-            : details.requestHeaders
+          fromAppPage ? withLaunchSecret(details.requestHeaders) : details.requestHeaders
       })
     }
   )
