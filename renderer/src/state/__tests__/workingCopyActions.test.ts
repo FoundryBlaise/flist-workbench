@@ -266,6 +266,44 @@ describe('typing while a save is in flight', () => {
     expect(slot.saveError).toBeNull()
     expect(slot.etag).toBe(current)
   })
+
+  it('quitting while a save is in flight keeps the last edit: the close-time flush resolves only after it reaches the Workbench', async () => {
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('draft')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [inFlight] = fake.pending(SAVE)
+    expect(descOf(inFlight.request.body)).toBe('draft')
+
+    // The user types, then quits before the autosave pause has passed.
+    useStore.getState().setEditorContent('draft, final')
+    let flushed = false
+    const closing = useStore
+      .getState()
+      .flistFlushAllWorking()
+      .then(() => {
+        flushed = true
+      })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flushed).toBe(false)
+    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+
+    inFlight.resolve(json({ etag: 'after-draft' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const [lastEdit] = fake.pending(SAVE)
+    expect(descOf(lastEdit.request.body)).toBe('draft, final')
+    expect(lastEdit.request.headers['If-Match']).toBe('after-draft')
+    expect(flushed).toBe(false)
+
+    lastEdit.resolve(json({ etag: 'after-final' }))
+    await closing
+    expect(flushed).toBe(true)
+    expect(fake.requestsTo(SAVE)).toHaveLength(2)
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(false)
+    expect(slot.etag).toBe('after-final')
+  })
 })
 
 describe('flistFlushWorking 409 etag-mismatch path', () => {
