@@ -360,6 +360,12 @@ def _folder_for(character_id: int | str) -> tuple[Path, bool]:
     raise InvalidCharacterId(cid)
 
 
+def require_character_id(character_id: int | str) -> None:
+    """Refuse an id no character folder could have (`InvalidCharacterId`),
+    whether or not the archive holds the character."""
+    _folder_for(character_id)
+
+
 def character_dir(character_id: int | str) -> Path:
     """Find a character's folder. Never creates it.
 
@@ -376,8 +382,8 @@ def character_dir(character_id: int | str) -> Path:
 
 def create_character_dir(character_id: int | str) -> Path:
     """Create a character's folder: the moment a character comes into
-    the archive. Only a Pull calls this (`write_live`); every other
-    path finds the character with `character_dir`."""
+    the archive. A Pull (`write_live`) and a set-bundle import call
+    this; every other path finds the character with `character_dir`."""
     p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -412,22 +418,31 @@ def snapshots_dir(character_id: int | str) -> Path:
     """
     p = character_dir(character_id) / "snapshots"
     if not p.exists():
-        json_files = _legacy_snapshot_files(character_id)
-        if json_files:
-            p.mkdir(parents=True, exist_ok=True)
-            for entry in json_files:
-                try:
-                    entry.replace(p / entry.name)
-                except OSError:
-                    # If a JSON file can't move (locked, perms),
-                    # skip it — the legacy backups/ stays around.
-                    pass
+        _move_legacy_snapshots(p, _legacy_snapshot_files(character_id))
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
+def _move_legacy_snapshots(snapshots: Path, json_files: list[Path]) -> None:
+    """Move a pre-rename archive's JSON snapshots into `snapshots/`."""
+    if not json_files:
+        return
+    snapshots.mkdir(parents=True, exist_ok=True)
+    for entry in json_files:
+        try:
+            entry.replace(snapshots / entry.name)
+        except OSError:
+            # If a JSON file can't move (locked, perms),
+            # skip it — the legacy backups/ stays around.
+            pass
+
+
 def _legacy_snapshot_files(character_id: int | str) -> list[Path]:
-    """JSON snapshots a pre-rename archive kept under `backups/`."""
+    """JSON snapshots a pre-rename archive kept under `backups/`.
+
+    Legacy migration only: an archive written since the rename has
+    none, and nothing else should read `backups/` for snapshots.
+    """
     legacy = character_dir(character_id) / "backups"
     if not legacy.is_dir():
         return []
@@ -754,13 +769,14 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
     *truly* latest snapshot.
     """
     out: list[dict[str, Any]] = []
-    if not (character_dir(character_id) / "snapshots").exists() and not (
-        _legacy_snapshot_files(character_id)
-    ):
-        # None saved yet. Listing must not create the folder: the
-        # roster lists every character, so any read would touch them all.
-        return out
-    p = snapshots_dir(character_id)
+    p = character_dir(character_id) / "snapshots"
+    if not p.exists():
+        legacy = _legacy_snapshot_files(character_id)
+        if not legacy:
+            # None saved yet. Listing must not create the folder: the
+            # roster lists every character, so any read would touch them all.
+            return out
+        _move_legacy_snapshots(p, legacy)
     for entry in p.iterdir():
         if not entry.is_file():
             continue
@@ -1902,7 +1918,24 @@ _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 
 # `<image_id>.<ext>` filename in `images/`. image_id is digits for F-list
 # images, `local-<8 hex>` for pool-only user uploads not yet on F-list.
-_IMAGE_FILE_RE = re.compile(r"^([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$")
+# Always used with fullmatch.
+_IMAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+_IMAGE_FILE_RE = re.compile(r"([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)")
+
+
+def require_image_filename(filename: str) -> None:
+    """Refuse a name that is not `<image_id>.<ext>` (an image, a trashed
+    file, an inline), before any path is built from it. A caller hears
+    400 `invalid_file_name`."""
+    if not isinstance(filename, str) or not _IMAGE_FILE_RE.fullmatch(filename):
+        raise InvalidFileName("invalid image filename")
+
+
+def require_image_id(image_id: str) -> None:
+    """Refuse an image id that could not be the stem of an image file
+    name. A caller hears 400 `invalid_file_name`."""
+    if not isinstance(image_id, str) or not _IMAGE_ID_RE.fullmatch(image_id):
+        raise InvalidFileName("invalid image_id")
 
 
 # ---- pull integrity manifest -----------------------------------------

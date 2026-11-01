@@ -3,7 +3,7 @@
 // code, rather than a bare HTTP status.
 
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { api } from '../../lib/api'
+import { api, RefusalError } from '../../lib/api'
 import { useStore } from '../../state'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 
@@ -21,13 +21,13 @@ afterEach(() => {
 it('shows the reason a Log was refused', async () => {
   fake.on(
     'GET /logs/messages',
-    json({ code: 'log_not_found', message: 'log not found: me/stranger' }, 404)
+    json({ code: 'log_not_found', message: 'no such log' }, 404)
   )
 
   await useStore.getState().loadMessages('me', 'stranger')
 
   const errors = Object.values(useStore.getState().messagesError)
-  expect(errors).toEqual(['HTTP 404: log not found: me/stranger'])
+  expect(errors).toEqual(['HTTP 404: no such log'])
 })
 
 it('hands the refusal code to the caller', async () => {
@@ -38,9 +38,10 @@ it('hands the refusal code to the caller', async () => {
 
   const err = await api.flistZipBackupPayload('7', 'bad.zip').catch((e: unknown) => e)
 
-  expect(err).toBeInstanceOf(Error)
-  expect((err as Error).message).toBe('HTTP 400: invalid backup filename')
-  expect((err as Error & { code?: string }).code).toBe('invalid_file_name')
+  expect(err).toBeInstanceOf(RefusalError)
+  expect((err as RefusalError).message).toBe('HTTP 400: invalid backup filename')
+  expect((err as RefusalError).code).toBe('invalid_file_name')
+  expect((err as RefusalError).status).toBe(400)
 })
 
 it('still reads a message the sidecar nests in `detail`', async () => {
@@ -51,6 +52,7 @@ it('still reads a message the sidecar nests in `detail`', async () => {
 
   const err = await api.foreignProfile('Nobody').catch((e: unknown) => e)
 
-  expect((err as Error).message).toBe('HTTP 404: no such character')
-  expect((err as Error & { code?: string }).code).toBe('not_found')
+  expect(err).toBeInstanceOf(RefusalError)
+  expect((err as RefusalError).message).toBe('HTTP 404: no such character')
+  expect((err as RefusalError).code).toBe('not_found')
 })

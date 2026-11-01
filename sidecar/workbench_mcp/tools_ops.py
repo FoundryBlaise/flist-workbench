@@ -48,7 +48,7 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
 
     This is a *download*. It refreshes `live` — the record of what is
     published — and leaves working sets alone. Needs the user to be
-    signed in, which happens in the Workbench window; there is no
+    signed in, which happens in the app window; there is no
     sign-in tool, because credentials never travel through MCP.
 
     Takes a while: F-list is rate-limited to one request a second and
@@ -88,7 +88,7 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
         if stage == "ticket":
             raise ToolError(
                 "not_signed_in",
-                f"{message} The user signs in inside the Workbench "
+                f"{message} The user signs in inside the app "
                 "window (F-list → Sign in).",
             )
         raise ToolError("pull_failed", message, stage=stage)
@@ -568,7 +568,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
     """Whether the browser extension is paired with this Workbench.
 
     The extension is one of the two ways the user uploads a profile to
-    F-list. Pairing is accepted by the user in the Workbench window and
+    F-list. Pairing is accepted by the user in the app window and
     cannot be done from here.
     """
     import restore as restore_svc

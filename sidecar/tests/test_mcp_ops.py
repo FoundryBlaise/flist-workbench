@@ -77,7 +77,9 @@ async def test_pull_without_a_session_says_where_to_sign_in(
         )
     text = tool_error_text(result)
     assert "not_signed_in" in text
-    assert "Workbench window" in text
+    assert "the app window" in text
+    # GLOSSARY: a bare "Workbench" is the editable copy, not the window.
+    assert "Workbench " + "window" not in text
 
 
 async def test_pull_reports_progress_and_returns_a_summary(

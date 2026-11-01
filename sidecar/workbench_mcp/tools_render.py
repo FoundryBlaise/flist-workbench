@@ -11,7 +11,7 @@ The picture comes from the app's own preview: same BBCode renderer,
 same stylesheet, same F-list theme mimics. So what the model sees is
 what the user sees, and the two cannot drift apart.
 
-Requires the Workbench window to be open — it is the thing that can
+Requires the app window to be open — it is the thing that can
 draw. The tool says so plainly when it is closed rather than making
 the caller wait out a timeout.
 """
@@ -60,7 +60,7 @@ async def render_profile_image(
     working_set="live" to see what is published right now instead of
     the Workbench.
 
-    The Workbench window has to be open: it holds the renderer that
+    The app window has to be open: it holds the renderer that
     draws this.
     """
     if theme not in THEMES:
@@ -88,7 +88,7 @@ async def render_profile_image(
     if not render_service.window_attached():
         raise ToolError(
             "window_not_running",
-            "Rendering needs the Workbench window, and it is not open. "
+            "Rendering needs the app window, and it is not open. "
             "Ask the user to start it, then try again.",
         )
 

@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { app } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { DEV_SERVER_ORIGIN } from './appPage'
 
 // Mirror main.ts's appendDiagLog so sidecar startup paints into the
 // same log file. We can't import from main.ts (circular) and we want
@@ -101,9 +102,8 @@ function sidecarEnv(): NodeJS.ProcessEnv {
   }
   // In dev the window loads from Vite rather than app://workbench, so the
   // sidecar has to grant that origin too. Never set when packaged.
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  if (!app.isPackaged && devUrl) {
-    env['FLIST_WORKBENCH_RENDERER_ORIGIN'] = new URL(devUrl).origin
+  if (DEV_SERVER_ORIGIN !== undefined) {
+    env['FLIST_WORKBENCH_RENDERER_ORIGIN'] = DEV_SERVER_ORIGIN
   } else {
     delete env['FLIST_WORKBENCH_RENDERER_ORIGIN']
   }

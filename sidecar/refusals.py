@@ -19,15 +19,17 @@ class Refusal(Exception):
 
     `status` and `code` belong to the class. The message is the text the
     error was raised with; a subclass that must not echo its input (an
-    id from the URL) fixes `message` on the class instead.
+    id or a name from the URL) sets `fixed_message` instead, and the
+    caller hears that. `str(exc)` still carries the input for logs.
     """
 
     status: int = 400
     code: str = "refused"
+    fixed_message: str | None = None
 
     @property
     def message(self) -> str:
-        return str(self)
+        return self.fixed_message if self.fixed_message is not None else str(self)
 
     def body(self) -> dict[str, str]:
         return {"code": self.code, "message": self.message}

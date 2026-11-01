@@ -107,7 +107,7 @@ def edit(
 
     `mutate` changes the payload in place and returns an `EditResult`
     carrying the paths it touched (its `etag` is filled in here). A
-    409 means the Workbench window saved while we were working; the
+    409 means the app window saved while we were working; the
     edit is re-applied once against the fresh payload rather than
     failing, because the two writers are usually touching different
     fields.

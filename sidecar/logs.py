@@ -57,15 +57,20 @@ class LogDirError(Exception):
 
 class LogNotFound(LogDirError, Refusal):
     """No Log by that name: an unknown character or partner. A caller
-    hears 404 `log_not_found`."""
+    hears 404 `log_not_found` with a fixed message: the names are not
+    echoed back (`str(exc)` keeps them for MCP and logs)."""
 
     status = 404
     code = "log_not_found"
+    fixed_message = "no such log"
 
 
 class InvalidLogName(LogDirError, InvalidFileName):
     """A character or partner name that cannot name an entry in its
-    folder. A caller hears 400 `invalid_file_name`."""
+    folder. A caller hears 400 `invalid_file_name` with a fixed
+    message, like `LogNotFound`."""
+
+    fixed_message = "invalid log name"
 
 
 @dataclass(slots=True, frozen=True)

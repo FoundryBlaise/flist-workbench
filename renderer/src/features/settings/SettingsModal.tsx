@@ -1432,8 +1432,9 @@ function BrowserExtensionInstall() {
 function SecurityPane() {
   // Whether the sidecar holds an accepted pairing token. Only the
   // extension has the token; the sidecar tells the app window whether
-  // one is stored, never the token itself.
-  const [paired, setPaired] = useState<'unknown' | 'yes' | 'no'>('unknown')
+  // one is stored, never the token itself. 'unavailable': the sidecar
+  // could not be asked, so neither answer is shown.
+  const [paired, setPaired] = useState<'checking' | 'yes' | 'no' | 'unavailable'>('checking')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
@@ -1442,7 +1443,7 @@ function SecurityPane() {
       const res = await api.pairingStatus()
       setPaired(res.paired ? 'yes' : 'no')
     } catch {
-      setPaired('unknown')
+      setPaired('unavailable')
     }
   }
 
@@ -1474,7 +1475,8 @@ function SecurityPane() {
           <strong>
             {paired === 'yes' && '● Paired'}
             {paired === 'no' && '○ Not paired'}
-            {paired === 'unknown' && '… Checking'}
+            {paired === 'checking' && '… Checking'}
+            {paired === 'unavailable' && 'Pairing status unavailable'}
           </strong>
         </div>
         <p className="settings-help">

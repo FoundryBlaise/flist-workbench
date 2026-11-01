@@ -225,9 +225,11 @@ type MenuFlags = {
 // WebContents — IPC from any other source (an unexpected iframe, say)
 // is dropped without acting.
 
-// Hostnames we'll open in the user's browser, locked down so a
-// compromised renderer can't redirect the user somewhere that looks
-// like us. Only the image context menu uses this today.
+// Hostnames the renderer's openExternal (the image context menu, the
+// character's edit-page button) may open in the user's browser, locked down
+// so a compromised renderer can't redirect the user somewhere that
+// looks like us. Links a page in the window opens are not held to it:
+// see openWebLink.
 const EXTERNAL_HOSTS = new Set([
   'github.com',
   // F-list main site and the static CDN that serves character
@@ -240,19 +242,30 @@ const EXTERNAL_HOSTS = new Set([
   'static.f-list.net'
 ])
 
-// The one way a URL leaves the app for the user's browser: the
-// renderer's openExternal, and every link or window.open the app window
-// would otherwise open as a window of its own.
-function openExternal(url: unknown): void {
-  if (typeof url !== 'string') return
-  let parsed: URL
+function parseUrl(url: unknown): URL | null {
+  if (typeof url !== 'string') return null
   try {
-    parsed = new URL(url)
+    return new URL(url)
   } catch {
-    return
+    return null
   }
-  if (parsed.protocol !== 'https:') return
+}
+
+// The renderer's openExternal: https on a known host only.
+function openExternal(url: unknown): void {
+  const parsed = parseUrl(url)
+  if (!parsed || parsed.protocol !== 'https:') return
   if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
+  void shell.openExternal(parsed.toString())
+}
+
+// A link or window.open the app window would otherwise open as a window
+// of its own. A profile's links point anywhere, so any web URL goes to
+// the user's browser; every other scheme (file:, javascript:, custom
+// protocol handlers) opens nowhere.
+function openWebLink(url: string): void {
+  const parsed = parseUrl(url)
+  if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) return
   void shell.openExternal(parsed.toString())
 }
 
@@ -648,6 +661,11 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
   if (foreignSearch) foreignSearch.enabled = !!flags.flistSessionActive
 })
 
+/** How long after the window starts to close its unload flush may still leave. */
+const CLOSE_FLUSH_MS = 5_000
+/** The request the unload flush sends: a character's working copy. */
+const WORKING_COPY_PATH = /^\/flist\/character\/[^/]+\/working$/
+
 async function createWindow(): Promise<void> {
   // The e2e harness starts the app many times per run; a window that
   // took the focus each time would keep the desktop unusable meanwhile.
@@ -681,13 +699,29 @@ async function createWindow(): Promise<void> {
     mainWindow = null
   })
 
+  // The close-time flush: when the window closes, the app's page saves
+  // unsaved edits with keepalive PUTs of the working copy from
+  // `beforeunload` (AppLayout). Those outlive the page, and Electron
+  // reports them with no web contents and no frame, so the check below
+  // cannot place them. For a few seconds after this window starts to
+  // close, exactly that request still gets the secret.
+  let closingUntil = 0
+  mainWindow.on('close', () => {
+    closingUntil = Date.now() + CLOSE_FLUSH_MS
+  })
+  const isCloseFlush = (details: Electron.OnBeforeSendHeadersListenerDetails): boolean =>
+    Date.now() < closingUntil &&
+    details.webContentsId === undefined &&
+    details.frame == null &&
+    details.method === 'PUT' &&
+    WORKING_COPY_PATH.test(new URL(details.url).pathname)
+
   // Every request the app's own page makes to the sidecar gets the
   // launch secret: fetch, but also <img> and the event stream, which
   // cannot set headers themselves. Only the main frame of this window,
   // while it shows the app's page, qualifies: never a frame inside it,
-  // a page that isn't the app, or any other web contents. The window's
-  // id is captured now, so the close-time flush still qualifies while
-  // the window unloads.
+  // a page that isn't the app, or any other web contents. The one
+  // exception is the close-time flush above.
   const windowContentsId = mainWindow.webContents.id
   mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
     { urls: [`${sidecarUrl}/*`, `http://localhost:${sidecarPort}/*`] },
@@ -699,7 +733,10 @@ async function createWindow(): Promise<void> {
         frame.parent === null &&
         isAppPage(frame.url)
       callback({
-        requestHeaders: fromAppPage ? withLaunchSecret(details.requestHeaders) : details.requestHeaders
+        requestHeaders:
+          fromAppPage || isCloseFlush(details)
+            ? withLaunchSecret(details.requestHeaders)
+            : details.requestHeaders
       })
     }
   )
@@ -718,10 +755,9 @@ async function createWindow(): Promise<void> {
 
   // No page in the window ever gets a window of its own, which would
   // carry the preload bridge. Web links, target="_blank" ones in a
-  // profile preview included, go to the user's browser instead, through
-  // the same checks as the renderer's openExternal.
+  // profile preview included, go to the user's browser instead.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    openExternal(url)
+    openWebLink(url)
     return { action: 'deny' }
   })
 
