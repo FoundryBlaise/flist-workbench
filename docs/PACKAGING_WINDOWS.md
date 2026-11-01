@@ -28,11 +28,19 @@
 > `PATH`, and a one-time `uv sync` inside `sidecar/` to create the venv
 > that `pack:sidecar` invokes PyInstaller from.
 >
-> **Default port:** sidecar binds **27384** in both dev and packaged
-> builds. Picked in the upper-20k range so it doesn't fight with the
-> cluster of common dev-tool ports around :8xxx. The browser extension
-> hardcodes the same number — keep them aligned if you ever move it.
-> `SIDECAR_PORT` env var still overrides at runtime.
+> **Default port:** the packaged app's sidecar binds **27384**; a dev
+> run (`npm run dev`, or any unpackaged build) binds **27385**, so it
+> never reaches the sidecar of an installed app running on the same
+> machine (`electron/sidecarPort.ts`). Both are in the upper-20k range
+> so they don't fight with the cluster of common dev-tool ports around
+> :8xxx. The browser extension hardcodes 27384 — keep them aligned if
+> you ever move it; to try the extension against a dev build, quit the
+> installed app and start dev with `SIDECAR_PORT=27384`. The
+> `SIDECAR_PORT` env var overrides either default at runtime. If the
+> port is already taken, start-up stops: the reason goes to stderr and
+> `main-diag.log` (`sidecar:port-taken`), the packaged app shows it in
+> an error box, and the app quits instead of talking to whatever holds
+> the port.
 >
 > The rest of this doc is the original implementation spec, kept for
 > reference. The "Things that will probably bite you" section near the

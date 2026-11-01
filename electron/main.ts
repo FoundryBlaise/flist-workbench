@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import {
+  SidecarPortTaken,
   sidecarFetch,
   sidecarPort,
   sidecarUrl,
@@ -785,6 +786,13 @@ app.whenReady().then(async () => {
     startRenderLoop()
   } catch (err) {
     appendDiagLog('sidecar-failed', err)
+    // The port belongs to someone else: a window would only talk to
+    // them. Say so and quit rather than open an app that cannot work.
+    if (err instanceof SidecarPortTaken) {
+      if (!isDev) dialog.showErrorBox('F-list Workbench cannot start', err.message)
+      app.exit(1)
+      return
+    }
   }
   // Menu has to be set after app is ready (uses app.name etc) but
   // before window creation so the new window picks it up.
