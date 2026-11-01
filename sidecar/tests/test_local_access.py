@@ -15,15 +15,21 @@ ASGI stack from outside, the way such a page or the real callers would
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import Iterator
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from sidecar_client import BASE_URL, SECRET_HEADER, app_client
+from services.local_access import RENDERER_ORIGIN_ENV, SECRET_ENV
+from sidecar_client import (
+    BASE_URL,
+    SECRET_HEADER,
+    Route,
+    api_routes,
+    app_client,
+    error_code,
+    sweep,
+)
 
 EVIL = "https://evil.example"
 FLIST = "https://www.f-list.net"
@@ -90,24 +96,6 @@ def pairing_token(app_window: TestClient) -> str:
     return begun.json()["token"]
 
 
-def _api_routes(app) -> Iterator[tuple[str, str]]:  # noqa: ANN001
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            for method in sorted(route.methods - {"HEAD"}):
-                yield method, route.path
-
-
-def _concrete(path: str) -> str:
-    return re.sub(r"\{[^}]+\}", "x", path)
-
-
-def _error_code(res) -> str | None:  # noqa: ANN001
-    try:
-        return res.json().get("code")
-    except ValueError:
-        return None
-
-
 # ---- the launch secret --------------------------------------------------
 
 
@@ -115,15 +103,17 @@ def test_every_app_route_refuses_a_caller_without_the_launch_secret(
     server, stranger: TestClient  # noqa: ANN001
 ) -> None:
     """Enumerated from the app, so a route added later is covered too."""
-    checked, let_through = 0, []
-    for method, path in _api_routes(server.app):
-        if (method, path) in OPEN_ROUTES or (method, path) in EXTENSION_ROUTES:
-            continue
-        res = stranger.request(method, _concrete(path))
-        checked += 1
-        if res.status_code != 401 or _error_code(res) != "unauthorized":
-            let_through.append(f"{method} {path} -> {res.status_code}")
-    assert checked > 100
+    routes = [
+        route
+        for route in api_routes(server.app)
+        if (route.method, route.path) not in OPEN_ROUTES | EXTENSION_ROUTES
+    ]
+    assert len(routes) > 100
+    let_through = sweep(
+        stranger,
+        routes,
+        lambda res: res.status_code == 401 and error_code(res) == "unauthorized",
+    )
     assert let_through == []
 
 
@@ -164,7 +154,7 @@ def test_without_a_configured_secret_nothing_gets_through(
     server, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
 ) -> None:
     """Fail closed: an empty secret must not match an empty header."""
-    monkeypatch.delenv("FLIST_WORKBENCH_LAUNCH_SECRET")
+    monkeypatch.delenv(SECRET_ENV)
     client = TestClient(server.app, base_url=BASE_URL)
     assert client.get("/settings", headers={SECRET_HEADER: ""}).status_code == 401
     assert client.get("/settings").status_code == 401
@@ -173,8 +163,8 @@ def test_without_a_configured_secret_nothing_gets_through(
 def test_the_sidecar_refuses_to_start_without_a_secret(
     server, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
 ) -> None:
-    monkeypatch.delenv("FLIST_WORKBENCH_LAUNCH_SECRET")
-    with pytest.raises(RuntimeError, match="FLIST_WORKBENCH_LAUNCH_SECRET"):
+    monkeypatch.delenv(SECRET_ENV)
+    with pytest.raises(RuntimeError, match=SECRET_ENV):
         with TestClient(server.app, base_url=BASE_URL):
             pass
 
@@ -258,7 +248,7 @@ def test_the_dev_server_origin_is_granted_only_when_configured(
 ) -> None:
     dev = "http://localhost:5173"
     assert app_window.get("/settings", headers={"Origin": dev}).status_code == 403
-    monkeypatch.setenv("FLIST_WORKBENCH_RENDERER_ORIGIN", dev)
+    monkeypatch.setenv(RENDERER_ORIGIN_ENV, dev)
     res = app_window.get("/settings", headers={"Origin": dev})
     assert res.status_code == 200
     assert res.headers["access-control-allow-origin"] == dev
@@ -355,7 +345,7 @@ def test_the_extension_starts_a_handshake_from_its_origins(
 def test_extension_routes_want_the_pairing_token_not_the_secret(
     app_window: TestClient, method: str, path: str
 ) -> None:
-    res = app_window.request(method, _concrete(path), json={})
+    res = app_window.request(method, Route(method, path).url(), json={})
     assert res.status_code == 401
 
 

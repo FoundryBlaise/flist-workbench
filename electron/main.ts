@@ -106,14 +106,15 @@ ipcMain.handle('workbench:select-directory', async (event, opts: { title?: strin
   return result.filePaths[0]
 })
 
-// Working-set bundle export/import file-dialog plumbing. The renderer
-// asks for a path, gets bytes back (for import) or writes bytes out
-// (for export). Both handlers verify the sender is the main window's
-// WebContents so a stray context can't read or write arbitrary files
-// from the user's disk.
-// The paths those dialogs returned. read-file and write-file accept
-// nothing else: a script in the window must not be able to name a
-// file of its own choosing.
+// File dialogs for moving a Backup in or out of the app as a zip. The
+// renderer asks for a path, then reads the chosen file's bytes or
+// writes bytes to it through main; it never holds a file handle. Every
+// handler checks that the sender is the main window's WebContents, so
+// no other context can read or write the user's files.
+//
+// `fileGrants` holds the paths those dialogs returned. read-file and
+// write-file accept nothing else: a script in the window must not be
+// able to name a file of its own choosing.
 const fileGrants = new FileGrants()
 
 type SaveDialogOpts = {

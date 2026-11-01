@@ -83,7 +83,7 @@ def require_configured() -> None:
     """Refuse to serve without a secret, rather than serve everyone."""
     if launch_secret() is None:
         raise RuntimeError(
-            f"{SECRET_ENV} is not set. Workbench starts the sidecar with a "
+            f"{SECRET_ENV} is not set. F-list Workbench starts the sidecar with a "
             "fresh secret; to run it by hand, set the variable to any value "
             "and send it as the X-Workbench-Secret header."
         )
@@ -172,7 +172,7 @@ class LocalAccessGuard:
                 send,
                 401,
                 "unauthorized",
-                "This route answers only the Workbench window or the paired extension.",
+                "This route answers only the app window or the paired extension.",
                 origin,
             )
             return

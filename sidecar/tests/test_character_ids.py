@@ -13,15 +13,13 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import zipfile
 from pathlib import Path
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from sidecar_client import app_client
+from sidecar_client import app_client, character_routes, disk_tree, sweep
 
 #: Each is percent-encoded the way it would arrive in a URL path.
 HOSTILE_IDS = [
@@ -59,38 +57,23 @@ def client(archive) -> TestClient:  # noqa: ANN001
     return app_client(server.app)
 
 
-def _tree(root: Path) -> set[str]:
-    return {str(p.relative_to(root)) for p in root.rglob("*")}
-
-
-def _character_routes(app) -> list[tuple[str, str]]:  # noqa: ANN001
-    out = []
-    for route in app.routes:
-        if isinstance(route, APIRoute) and "{character_id}" in route.path:
-            for method in sorted(route.methods - {"HEAD"}):
-                out.append((method, route.path))
-    return out
-
-
-def _fill(path: str, character_id: str) -> str:
-    path = path.replace("{character_id}", character_id)
-    return re.sub(r"\{[^}]+\}", "x", path)
-
-
 def test_no_character_route_accepts_a_hostile_id_or_touches_the_disk(
     client: TestClient, tmp_path: Path
 ) -> None:
-    before = _tree(tmp_path)
-    routes = _character_routes(client.app)
+    before = disk_tree(tmp_path)
+    routes = character_routes(client.app)
     assert len(routes) > 30
     accepted = []
-    for method, path in routes:
-        for cid in HOSTILE_IDS:
-            res = client.request(method, _fill(path, cid), json={})
-            if res.status_code < 400 or res.status_code >= 500:
-                accepted.append(f"{method} {_fill(path, cid)} -> {res.status_code}")
+    for cid in HOSTILE_IDS:
+        accepted += sweep(
+            client,
+            routes,
+            lambda res: 400 <= res.status_code < 500,
+            json={},
+            character_id=cid,
+        )
     assert accepted == []
-    assert _tree(tmp_path) == before
+    assert disk_tree(tmp_path) == before
 
 
 @pytest.mark.parametrize("cid", HOSTILE_IDS)
