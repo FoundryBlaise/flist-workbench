@@ -147,14 +147,7 @@ def test_job_runs_single_partner_to_done(
     assert counter["probe"] == 1
 
 
-#: Re-ingest must keep the Index in step with the Logs and their current
-#: Labels. Today it skips every chunk id it already holds, and a day's
-#: chunk id does not change when its messages or Labels do, so the
-#: Index goes stale. Spec #2 reconciles per conversation day.
-STALE_INDEX = pytest.mark.xfail(
-    strict=True,
-    reason="re-ingest skips chunk ids it already holds, so the Index goes stale #2",
-)
+# ---- re-ingest reconciles the Index with the Logs and their Labels ------
 
 
 ME, PARTNER = "Azure Viper", "Antiquill"
@@ -234,7 +227,8 @@ def _label(client: TestClient, text: str, label: str | None) -> None:
     assert res.status_code == 200, res.text
 
 
-def _ingest(client: TestClient) -> None:
+def _ingest(client: TestClient) -> dict:
+    """Run one ingest of the fixture conversation; returns the finished job."""
     res = client.post("/rag/ingest", json={"character": ME, "partner": PARTNER})
     assert res.status_code == 202, res.text
     job_id = res.json()["id"]
@@ -244,13 +238,28 @@ def _ingest(client: TestClient) -> None:
     )
     job = client.get(f"/rag/jobs/{job_id}").json()
     assert job["state"] == "done", job
+    return job
 
 
-def _ic_texts_found(question: str) -> list[str]:
+def _found_as_ic(mark: str) -> bool:
+    """Whether a search finds `mark` in an IC chunk of the fixture
+    conversation. Asks the vector and the lexical Index separately and
+    insists they agree on which chunks hold it."""
+    import rag_lexical
     from services import retrieval
 
-    hits = retrieval.search(question, scope={"character": ME, "partner": PARTNER}, top_k=50)
-    return [h.text for h in hits.hits if h.label == "IC"]
+    scope = {"character": ME, "partner": PARTNER}
+    # The stub embedding makes every chunk equally close, so a wide
+    # top_k returns every chunk the vector Index holds for the scope.
+    dense = retrieval.search(mark, scope=scope, top_k=50, neighbors=0, hybrid=False)
+    dense_ids = {h.chunk_id for h in dense.hits if h.label == "IC" and mark in h.text}
+    with rag_lexical.LexicalStore() as lex:
+        lexical_ids = {h.chunk_id for h in lex.search(mark, scope=scope)}
+    assert dense_ids == lexical_ids, (
+        f"vector and lexical Index disagree on {mark!r}: "
+        f"vector {sorted(dense_ids)}, lexical {sorted(lexical_ids)}"
+    )
+    return bool(dense_ids)
 
 
 def _opening_alone(client: TestClient, log: Path) -> None:
@@ -258,10 +267,9 @@ def _opening_alone(client: TestClient, log: Path) -> None:
     write_log(log, [chat(ME, OPENING, at=utc(2024, 3, 9, 20))])
     _label(client, OPENING, "IC")
     _ingest(client)
-    assert any(OPENING in t for t in _ic_texts_found("lighthouse"))
+    assert _found_as_ic("lighthouse")
 
 
-@STALE_INDEX
 def test_a_message_appended_to_an_indexed_day_becomes_searchable(index_window) -> None:
     client, log = index_window
     _opening_alone(client, log)
@@ -274,10 +282,10 @@ def test_a_message_appended_to_an_indexed_day_becomes_searchable(index_window) -
     _label(client, REPLY, "IC")
     _ingest(client)
 
-    assert any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+    assert _found_as_ic(REPLY_MARK)
+    assert _found_as_ic("lighthouse")
 
 
-@STALE_INDEX
 def test_a_label_given_after_the_day_was_indexed_becomes_searchable(
     index_window,
 ) -> None:
@@ -288,15 +296,14 @@ def test_a_label_given_after_the_day_was_indexed_becomes_searchable(
     ])
     _label(client, OPENING, "IC")
     _ingest(client)
-    assert not any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+    assert not _found_as_ic(REPLY_MARK)
 
     _label(client, REPLY, "IC")
     _ingest(client)
 
-    assert any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+    assert _found_as_ic(REPLY_MARK)
 
 
-@STALE_INDEX
 @pytest.mark.parametrize("new_label", ["OOC", None], ids=["flipped-to-ooc", "cleared"])
 def test_a_message_whose_label_flipped_or_was_cleared_drops_out(
     index_window, new_label: str | None
@@ -309,16 +316,49 @@ def test_a_message_whose_label_flipped_or_was_cleared_drops_out(
     _label(client, OPENING, "IC")
     _label(client, REPLY, "IC")
     _ingest(client)
-    assert any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+    assert _found_as_ic(REPLY_MARK)
 
     _label(client, REPLY, new_label)
     _ingest(client)
 
-    found = _ic_texts_found("blue lamp")
-    assert not any(REPLY_MARK in t for t in found)
+    assert not _found_as_ic(REPLY_MARK)
     # The day's other IC message is still there; the Index was not
     # simply emptied.
-    assert any(OPENING in t for t in found)
+    assert _found_as_ic("lighthouse")
+
+
+def test_a_re_ingest_with_nothing_changed_embeds_nothing(index_window) -> None:
+    client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 10, 21)),
+    ])
+    _label(client, OPENING, "IC")
+    _label(client, REPLY, "IC")
+    assert _ingest(client)["embedded"] == 2
+
+    again = _ingest(client)
+
+    assert again["embedded"] == 0
+    assert again["skipped_existing"] == 2
+    assert _found_as_ic(REPLY_MARK)
+    assert _found_as_ic("lighthouse")
+
+
+def test_a_new_day_embeds_only_that_day(index_window) -> None:
+    client, log = index_window
+    _opening_alone(client, log)
+
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 12, 21)),
+    ])
+    _label(client, REPLY, "IC")
+    job = _ingest(client)
+
+    assert job["embedded"] == 1
+    assert _found_as_ic(REPLY_MARK)
+    assert _found_as_ic("lighthouse")
 
 
 def test_job_writes_manifest_after_first_ingest(
@@ -720,3 +760,61 @@ def test_channels_are_left_out_of_the_ingest_scope(monkeypatch, workbench_dir) -
         {"character": "Amber", "include_channels": True}
     )
     assert [p for _, p in with_channels] == ["Envale", "#german ooc", "#adh-abc"]
+
+
+async def test_labels_changed_over_mcp_reach_the_index_on_the_next_ingest(
+    index_window,
+) -> None:
+    from mcp_helpers import call_tool, mcp_client
+
+    _client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 9, 21)),
+    ])
+    conv = {"character": ME, "partner": PARTNER}
+
+    async with mcp_client("logs") as session:
+        _, read = await call_tool(session, "read_log_messages", **conv)
+        hash_of = {m["text"]: m["hash"] for m in read["messages"]}
+
+        async def label(text: str, verdict: str) -> dict:
+            _, body = await call_tool(
+                session, "set_message_labels", **conv,
+                items=[{"hash": hash_of[text], "label": verdict}],
+            )
+            return body
+
+        async def ingest() -> dict:
+            _, body = await call_tool(session, "ingest_logs", **conv)
+            assert body["state"] == "done", body
+            return body
+
+        await label(OPENING, "IC")
+        await ingest()
+        assert _found_as_ic("lighthouse")
+        assert not _found_as_ic(REPLY_MARK)
+
+        labelled = await label(REPLY, "IC")
+        # The note says what makes the new Label searchable, and that
+        # it has not happened yet.
+        assert "next ingest_logs" in labelled["note"]
+        assert not _found_as_ic(REPLY_MARK)
+        await ingest()
+        assert _found_as_ic(REPLY_MARK)
+        _, hits = await call_tool(
+            session, "search_logs_semantic", question=REPLY_MARK, top_k=50, **conv
+        )
+        assert any(REPLY_MARK in h["text"] for h in hits["hits"])
+
+        await label(REPLY, "OOC")
+        await ingest()
+        assert not _found_as_ic(REPLY_MARK)
+        assert _found_as_ic("lighthouse")
+
+        _, cleared = await call_tool(session, "clear_labels", **conv, confirm=True)
+        assert "next ingest_logs" in cleared["note"]
+        assert _found_as_ic("lighthouse"), "clearing alone leaves the Index as it was"
+        after = await ingest()
+        assert after["chunks_removed"] == 1
+        assert not _found_as_ic("lighthouse")

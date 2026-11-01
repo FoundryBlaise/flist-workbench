@@ -18,6 +18,11 @@ Why it matters: only labelled messages are indexed for search. An
 unjudged message could be roleplay prose or two players chatting about
 their weekend, and indexing the latter poisons retrieval — so the
 index simply skips them.
+
+A Label change reaches search on the next `ingest_logs` of the
+conversation, not before. That ingest re-embeds only the days whose
+messages or Labels changed, and drops messages that are no longer
+labelled for the Index (flipped to OOC, or cleared).
 """
 
 from __future__ import annotations
@@ -45,6 +50,14 @@ from ._registry import TAG_CLASSIFY, TAG_LOGS, prompt, tool
 #: fits any client; a client with room can ask for more.
 DEFAULT_BATCH = 10
 MAX_BATCH = 200
+
+#: What makes a Label change searchable, said in every note that
+#: follows one so a model does not tell the user something false.
+NEXT_INGEST = (
+    "Search sees Label changes after the next ingest_logs of this "
+    "conversation: it re-embeds only the days whose messages or Labels "
+    "changed, and drops messages that are no longer labelled IC."
+)
 
 
 def _read_conversation(character: str, partner: str) -> list[dict[str, Any]]:
@@ -281,6 +294,9 @@ def set_message_labels(
     counted after the write. That number, not the caller's memory of
     how many batches it has done, is what says whether the work is
     complete.
+
+    Verdicts reach search on the next ingest_logs of the conversation,
+    which picks up new and changed Labels alike.
     """
     if not isinstance(items, list) or not items:
         raise ToolError("validation_failed", "items is empty")
@@ -375,8 +391,7 @@ def set_message_labels(
         )
     else:
         notes.append(
-            "Every message in this conversation now has a verdict. Run "
-            "ingest_logs to make the new ones searchable."
+            "Every message in this conversation now has a verdict. " + NEXT_INGEST
         )
     out["note"] = " ".join(notes)
     return out
@@ -441,7 +456,7 @@ def label_all_unlabeled(
     app.
 
     Unlabeled messages are skipped by ingest, so a conversation filled
-    this way needs re-ingesting before it can be found by search.
+    this way is found by search only after the next ingest_logs.
     """
     if label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
         raise ToolError(
@@ -499,8 +514,7 @@ def label_all_unlabeled(
         "decided_by_rules": result["decided_by_rules"],
         "total_messages": result["total_messages"],
         "note": (
-            f"{result['labeled']} message(s) are now {label}. Re-ingest this "
-            "conversation to make them searchable."
+            f"{result['labeled']} message(s) are now {label}. " + NEXT_INGEST
         ),
     }
 
@@ -518,6 +532,9 @@ def clear_labels(
     Permanent, and it removes the user's own manual overrides as well
     as anything a model decided. Rule-based hints keep firing. Ask the
     user before calling this with confirm=true.
+
+    Search keeps finding the cleared messages until the next
+    ingest_logs of the conversation, which drops them from the Index.
     """
     if partner:
         conv = resolve_conversation(character, partner)
@@ -555,5 +572,8 @@ def clear_labels(
         "character": character,
         "partner": partner,
         "deleted": deleted,
-        "note": "Those messages are Unlabeled again and will be skipped by ingest.",
+        "note": (
+            "Those messages are Unlabeled again. Search still finds them "
+            "until the next ingest_logs, which drops them from the Index."
+        ),
     }

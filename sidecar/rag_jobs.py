@@ -45,7 +45,11 @@ class IngestProgress:
     chunked: int = 0
     embedded: int = 0
     upserted: int = 0
+    # Chunks the Index already held with the same text: not embedded again.
     skipped_existing: int = 0
+    # Chunks the Logs and their Labels no longer produce, deleted from
+    # the Index.
+    removed: int = 0
     # Messages dropped because nothing has judged them IC or OOC yet.
     # A high count means the user should run the classification flow
     # (MCP: get_messages_to_classify / set_message_labels) first.
@@ -88,6 +92,7 @@ class IngestJob:
             "embedded": self.progress.embedded,
             "upserted": self.progress.upserted,
             "skipped_existing": self.progress.skipped_existing,
+            "removed": self.progress.removed,
             "failed": self.progress.failed,
             "total_chunks": self.progress.total_chunks,
             "skipped_unlabeled": self.progress.skipped_unlabeled,
@@ -408,17 +413,49 @@ def _ingest_one_partner(
     job.progress.skipped_unlabeled += unlabeled_counter[0]
     job.progress.chunked += len(chunks)
     job.progress.total_chunks += len(chunks)
-    if not chunks:
-        return
 
-    # Skip chunks already in Qdrant — re-runs after a "new messages
-    # arrived" event are mostly no-ops because chunk_ids are
-    # deterministic in (char, partner, date, label, subchunk).
-    existing = store.existing_chunk_ids({"character": character, "partner": partner})
-    pending = [c for c in chunks if c["chunk_id"] not in existing]
+    # Reconcile the conversation's Index with what the Logs and their
+    # current Labels make of it now. A chunk id names one (day, Label,
+    # sub-chunk), so it stays the same when F-Chat appends to a day or a
+    # Label changes; comparing the text is what tells a changed day from
+    # an unchanged one. Only changed chunks are embedded again.
+    scope = {"character": character, "partner": partner}
+    indexed = store.chunk_payloads(scope)
+    lexical = lex.chunk_texts(scope)
+    fresh_ids = {c["chunk_id"] for c in chunks}
+
+    # Chunk ids no longer produced: the message drops out of search
+    # (its Label flipped or was cleared, or a day lost its last IC line).
+    gone = (set(indexed) | set(lexical)) - fresh_ids
+    if gone:
+        store.delete_chunk_ids(gone)
+        lex.delete_chunk_ids(gone)
+        job.progress.removed += len(gone)
+
+    pending: list[dict] = []
+    repointed: list[dict] = []
+    for c in chunks:
+        stored = indexed.get(c["chunk_id"])
+        if stored is None or stored.get("text") != c["text"]:
+            pending.append(c)
+        elif stored != rag_store.chunk_payload(c):
+            repointed.append(c)
     job.progress.skipped_existing += len(chunks) - len(pending)
-    if not pending:
-        return
+    # Same text, so the same vector; only a neighbour pointer moved.
+    store.replace_payloads(repointed)
+    # The vector Index is current for these but the lexical one is not
+    # (a lexical mirror that failed on an earlier ingest).
+    pending_ids = {c["chunk_id"] for c in pending}
+    _mirror_lexical(
+        [
+            c
+            for c in chunks
+            if c["chunk_id"] not in pending_ids and lexical.get(c["chunk_id"]) != c["text"]
+        ],
+        lex=lex,
+        job=job,
+        where=f"{character} / {partner}",
+    )
 
     for i in range(0, len(pending), EMBED_BATCH):
         if job._cancel.is_set():
@@ -438,17 +475,25 @@ def _ingest_one_partner(
             continue
         job.progress.embedded += len(vectors)
         store.upsert_chunks(batch, vectors)
-        # Mirror into the FTS5 lexical index. Cheap (no network) — keep
-        # it inline so dense + lexical stay byte-equivalent in chunk_id
-        # coverage. A failure here should not abort the dense upsert
-        # the user already paid for, so swallow + log into last_error.
-        try:
-            lex.upsert_chunks(batch)
-        except Exception as exc:  # noqa: BLE001 — lexical mirror is best-effort
-            job.progress.last_error = (
-                f"{character} / {partner}: lexical mirror failed: {exc}"
-            )
+        # Mirror into the FTS5 lexical index inline so dense + lexical
+        # stay equivalent in chunk_id coverage.
+        _mirror_lexical(batch, lex=lex, job=job, where=f"{character} / {partner}")
         job.progress.upserted += len(batch)
+
+
+def _mirror_lexical(
+    chunks: list[dict], *, lex: rag_lexical.LexicalStore, job: IngestJob, where: str
+) -> None:
+    """Write chunks to the lexical Index. Cheap (no network). A failure
+    here should not abort the dense upsert the user already paid for, so
+    it is swallowed into last_error; the next ingest sees the lexical
+    text differ and writes it again."""
+    if not chunks:
+        return
+    try:
+        lex.upsert_chunks(chunks)
+    except Exception as exc:  # noqa: BLE001 — lexical mirror is best-effort
+        job.progress.last_error = f"{where}: lexical mirror failed: {exc}"
 
 
 def start(

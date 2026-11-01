@@ -38,6 +38,7 @@ from qdrant_client.models import (
     Filter,
     MatchAny,
     MatchValue,
+    PointIdsList,
     PointStruct,
     VectorParams,
 )
@@ -89,6 +90,11 @@ class Manifest:
 
 def cid_to_uuid(chunk_id: str) -> str:
     return str(uuid.uuid5(_NAMESPACE, chunk_id))
+
+
+def chunk_payload(chunk: dict) -> dict:
+    """The payload stored with a chunk's vector."""
+    return {k: chunk.get(k) for k in _PAYLOAD_FIELDS}
 
 
 def qdrant_dir(root: Path | None = None) -> Path:
@@ -309,34 +315,67 @@ class RagStore:
             PointStruct(
                 id=cid_to_uuid(c["chunk_id"]),
                 vector=v,
-                payload={k: c.get(k) for k in _PAYLOAD_FIELDS},
+                payload=chunk_payload(c),
             )
             for c, v in zip(chunks, vectors)
         ]
         self._client.upsert(collection_name=COLLECTION, points=points, wait=True)
 
+    def replace_payloads(self, chunks: list[dict]) -> None:
+        """Rewrite the stored payload of chunks whose text, and so whose
+        vector, is unchanged, e.g. a neighbour pointer that moved because
+        a later day was added. No embedding involved."""
+        for c in chunks:
+            self._client.overwrite_payload(
+                collection_name=COLLECTION,
+                payload=chunk_payload(c),
+                points=[cid_to_uuid(c["chunk_id"])],
+                wait=True,
+            )
+
+    def delete_chunk_ids(self, chunk_ids: set[str]) -> None:
+        """Delete the named chunks. Ids not in the collection are ignored."""
+        if not chunk_ids or not self._client.collection_exists(COLLECTION):
+            return
+        self._client.delete(
+            collection_name=COLLECTION,
+            points_selector=PointIdsList(points=[cid_to_uuid(c) for c in chunk_ids]),
+            wait=True,
+        )
+
     def existing_chunk_ids(self, scope: dict | None = None) -> set[str]:
         """Return the set of chunk_ids already in the collection, optionally
-        filtered to a scope. Used by the ingest job to skip re-embedding.
-        """
+        filtered to a scope."""
+        return set(self._scroll_payloads(scope, ["chunk_id"]))
+
+    def chunk_payloads(self, scope: dict | None = None) -> dict[str, dict]:
+        """Every stored chunk in scope as {chunk_id: payload}. The ingest
+        job compares these with freshly computed chunks to find what
+        changed."""
+        return self._scroll_payloads(scope, True)
+
+    def _scroll_payloads(
+        self, scope: dict | None, with_payload: bool | list[str]
+    ) -> dict[str, dict]:
         if not self._client.collection_exists(COLLECTION):
-            return set()
+            return {}
         flt = _scope_to_filter(scope)
-        seen: set[str] = set()
+        seen: dict[str, dict] = {}
         offset: str | int | None = None
         while True:
             points, offset = self._client.scroll(
                 collection_name=COLLECTION,
                 scroll_filter=flt,
-                with_payload=["chunk_id"],
+                with_payload=with_payload,
                 with_vectors=False,
                 limit=512,
                 offset=offset,
             )
             for p in points:
-                cid = (p.payload or {}).get("chunk_id")
+                payload = p.payload or {}
+                cid = payload.get("chunk_id")
                 if cid:
-                    seen.add(cid)
+                    seen[cid] = payload
             if offset is None:
                 break
         return seen

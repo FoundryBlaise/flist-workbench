@@ -230,6 +230,13 @@ async def ingest_logs(
     list_partners. They are group chat rather than this character's
     roleplay, and they are large enough to bury everything else.
 
+    Re-running it is how new messages and Label changes reach search:
+    each conversation day is recomputed from the Logs and the current
+    Labels, only days whose messages or Labels changed are embedded
+    again (`chunks_already_present` counts the rest), and chunks for
+    messages that are no longer labelled for the Index are deleted
+    (`chunks_removed`).
+
     Embedding runs in-process by default, so nothing needs to be
     installed. `wait=false` returns a job id to poll with get_job
     instead of blocking.
@@ -292,6 +299,7 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         "state": snapshot.get("state"),
         "chunks_indexed": snapshot.get("upserted"),
         "chunks_already_present": snapshot.get("skipped_existing"),
+        "chunks_removed": snapshot.get("removed"),
         "skipped_unlabeled": snapshot.get("skipped_unlabeled"),
         "failed": snapshot.get("failed"),
         "error": snapshot.get("error") or snapshot.get("last_error"),
