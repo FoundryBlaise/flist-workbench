@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from fchat_logs import chat, utc, write_log
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
 
@@ -225,8 +226,18 @@ async def test_ingest_rejects_a_partner_without_a_character(
     assert "validation_failed" in tool_error_text(result)
 
 
+@pytest.fixture
+def amber_has_logs(workbench, tmp_path: Path) -> None:  # noqa: ARG001
+    """One Log for Lady Amber Blaise, so ingest has a character to
+    resolve."""
+    write_log(
+        tmp_path / "fchat" / "Lady Amber Blaise" / "logs" / "Daelan Envale",
+        [chat("Daelan Envale", "Evening.", at=utc(2024, 1, 5, 20))],
+    )
+
+
 async def test_ingest_can_run_in_the_background(
-    workbench, monkeypatch: pytest.MonkeyPatch
+    amber_has_logs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import rag_jobs
 
@@ -256,7 +267,7 @@ async def test_ingest_can_run_in_the_background(
 
 
 async def test_ingest_reports_skipped_unlabeled_and_what_to_do(
-    workbench, monkeypatch: pytest.MonkeyPatch
+    amber_has_logs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Silently indexing half a log and reporting success is the
     failure mode this guards against."""

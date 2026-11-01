@@ -736,6 +736,51 @@ def test_an_unscoped_rebuild_empties_the_whole_index_first(
     assert _found_as_ic(tc.SEARCH_TERM, AMBER_SCOPE)
 
 
+# ---- ingest resolves scope names like every other tool -----------------
+
+
+@pytest.mark.parametrize(
+    ("scope", "indexed"),
+    [
+        ({"character": "azure viper", "partner": "ANTIQUILL"}, AZURE_SCOPE),
+        ({"character": tc.AZURE, "partner": "quill ashgrove"}, AZURE_SCOPE),
+        ({"character": "lady amber blaise"}, AMBER_SCOPE),
+    ],
+    ids=["different-case", "alias-of-the-partner", "character-only-different-case"],
+)
+async def test_mcp_ingest_resolves_scope_names_to_the_conversation(
+    two_labelled: tc.TwoCharacters, scope: dict, indexed: dict
+) -> None:
+    from mcp_helpers import call_tool, mcp_client
+
+    async with mcp_client("logs") as session:
+        result, body = await call_tool(session, "ingest_logs", **scope)
+
+    assert not result.isError, body
+    assert body["state"] == "done", body
+    assert _found_as_ic(tc.SEARCH_TERM, indexed)
+
+
+@pytest.mark.parametrize(
+    ("scope", "code"),
+    [
+        ({"character": "Nobody Here"}, "log_character_not_found"),
+        ({"character": tc.AZURE, "partner": "Nobody Here"}, "partner_not_found"),
+    ],
+    ids=["unknown-character", "unknown-partner"],
+)
+async def test_mcp_ingest_of_an_unknown_name_is_refused(
+    two_labelled: tc.TwoCharacters, scope: dict, code: str
+) -> None:
+    from mcp_helpers import call_tool, mcp_client, tool_error_text
+
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(session, "ingest_logs", **scope)
+
+    assert code in tool_error_text(result)
+    assert rag_jobs.registry().list() == [], "no job was started"
+
+
 # ---- /rag/ingest + /rag/jobs HTTP shape --------------------------------
 
 

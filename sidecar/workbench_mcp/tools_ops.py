@@ -26,7 +26,14 @@ import character_archive
 import rag_jobs
 from mcp.server.fastmcp import Context
 
-from ._context import ToolError, audit, resolve_character, resolve_set
+from ._context import (
+    ToolError,
+    audit,
+    resolve_character,
+    resolve_conversation,
+    resolve_log_character,
+    resolve_set,
+)
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 from .tools_session import NO_PUSH_NOTE
 
@@ -237,6 +244,9 @@ async def ingest_logs(
     messages that are no longer labelled for the Index are deleted
     (`chunks_removed`).
 
+    `rebuild=true` first deletes only the scope's chunks (all of them
+    when unscoped).
+
     Embedding runs in-process by default, so nothing needs to be
     installed. `wait=false` returns a job id to poll with get_job
     instead of blocking.
@@ -247,16 +257,25 @@ async def ingest_logs(
             "partner needs a character too — logs are scoped per (your "
             "character, their character) pair",
         )
+    # Resolve to the on-disk spelling like every other conversation
+    # tool: the Labels and alias links are keyed on it, so a different
+    # case or an alias would otherwise index nothing and report done.
     scope: dict[str, Any] = {}
-    if character:
-        scope["character"] = character
-    if partner:
-        scope["partner"] = partner
+    if character and partner:
+        conv = resolve_conversation(character, partner)
+        scope = {"character": conv.character, "partner": conv.partner}
+    elif character:
+        scope["character"] = resolve_log_character(character)
     if include_channels:
         scope["include_channels"] = True
 
     job = rag_jobs.start(scope, include_ooc=include_ooc, force_rewipe=rebuild)
-    audit("ingest_logs", character=character, partner=partner, job=job.id)
+    audit(
+        "ingest_logs",
+        character=scope.get("character"),
+        partner=scope.get("partner"),
+        job=job.id,
+    )
     if not wait:
         return {
             "job_id": job.id,
