@@ -207,14 +207,6 @@ def test_a_foreign_origin_is_refused_even_with_the_secret(
     assert "access-control-allow-origin" not in res.headers
 
 
-def test_the_packaged_window_origin_null_is_granted(app_window: TestClient) -> None:
-    """`file://` pages send `Origin: null`. Any sandboxed iframe can too,
-    which is why the secret, not the origin, is what keeps pages out."""
-    res = app_window.get("/settings", headers={"Origin": "null"})
-    assert res.status_code == 200
-    assert res.headers["access-control-allow-origin"] == "null"
-
-
 def test_the_app_window_origin_is_granted(app_window: TestClient) -> None:
     """The built window loads from `app://workbench`, an origin of its own."""
     res = app_window.get("/settings", headers={"Origin": APP_ORIGIN})
@@ -244,6 +236,7 @@ def test_a_preflight_from_the_app_window_origin_needs_no_secret(
     assert res.status_code == 200
     assert res.headers["access-control-allow-origin"] == APP_ORIGIN
     assert "PUT" in res.headers["access-control-allow-methods"]
+    assert "if-match" in res.headers["access-control-allow-headers"].lower()
 
 
 @pytest.mark.parametrize(
@@ -257,25 +250,59 @@ def test_only_the_exact_app_window_origin_is_granted(
     assert "access-control-allow-origin" not in res.headers
 
 
-def test_origin_null_without_the_secret_is_refused(stranger: TestClient) -> None:
-    res = stranger.get("/settings", headers={"Origin": "null"})
-    assert res.status_code == 401
+#: Routes the API list leaves out; they sit behind the same guard.
+UNLISTED_ROUTES = [
+    Route("GET", "/events"),
+    Route("GET", "/mcp-info"),
+    Route("POST", "/mcp-info/token"),
+    Route("GET", "/openapi.json"),
+    Route("GET", "/docs"),
+    Route("POST", "/mcp"),
+]
 
 
-def test_a_preflight_from_the_window_needs_no_secret(stranger: TestClient) -> None:
-    """A preflight never carries custom header values."""
+def _refused_origin(res) -> bool:  # noqa: ANN001
+    return (
+        res.status_code == 403
+        and error_code(res) == "forbidden_origin"
+        and "access-control-allow-origin" not in res.headers
+    )
+
+
+def test_origin_null_is_refused_on_every_route(server) -> None:  # noqa: ANN001
+    """`Origin: null` is what a sandboxed iframe on any site sends. The
+    app window has an origin of its own, so nothing that may call the
+    sidecar sends `null`: not even the launch secret lets it in."""
+    client = app_client(server.app, headers={"Origin": "null"})
+    routes = [*api_routes(server.app), *UNLISTED_ROUTES]
+    assert len(routes) > 100
+    let_through = sweep(client, routes, _refused_origin, json={})
+    assert let_through == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PUT", "/flist/character/1/working"),
+        ("GET", "/settings"),
+        ("POST", "/restore/handshake"),
+        ("GET", "/restore/handshake-status"),
+        ("GET", "/restore/characters"),
+    ],
+)
+def test_a_preflight_from_origin_null_gets_no_grant(
+    stranger: TestClient, method: str, path: str
+) -> None:
     res = stranger.options(
-        "/flist/character/1/working",
+        path,
         headers={
             "Origin": "null",
-            "Access-Control-Request-Method": "PUT",
-            "Access-Control-Request-Headers": "content-type,if-match",
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "content-type,x-workbench-auth",
         },
     )
-    assert res.status_code == 200
-    assert res.headers["access-control-allow-origin"] == "null"
-    assert "PUT" in res.headers["access-control-allow-methods"]
-    assert "if-match" in res.headers["access-control-allow-headers"].lower()
+    assert _refused_origin(res)
+    assert set(res.json()) == {"code", "message"}
 
 
 def test_a_preflight_from_a_foreign_origin_gets_no_grant(stranger: TestClient) -> None:
@@ -334,7 +361,7 @@ def test_a_page_cannot_approve_its_own_pairing(stranger: TestClient) -> None:
     res = stranger.post(
         "/restore/handshake/accept",
         json={"handshake_id": begun["handshake_id"]},
-        headers={"Origin": "null"},
+        headers={"Origin": APP_ORIGIN},
     )
     assert res.status_code == 401
     status = stranger.get(
@@ -348,16 +375,14 @@ def test_a_foreign_page_cannot_start_a_handshake(stranger: TestClient) -> None:
     assert res.status_code == 403
 
 
-@pytest.mark.parametrize("origin", ["null", APP_ORIGIN])
 @pytest.mark.parametrize("caller", ["stranger", "app_window"])
-def test_the_window_origins_cannot_start_a_handshake(
-    request: pytest.FixtureRequest, app_window: TestClient, caller: str, origin: str
+def test_the_app_window_origin_cannot_start_a_handshake(
+    request: pytest.FixtureRequest, app_window: TestClient, caller: str
 ) -> None:
-    """Any sandboxed iframe sends `Origin: null`. Only the extension
-    starts a pairing, so not even the app window's own origins are let
-    in here."""
+    """Only the extension starts a pairing, so not even the app window's
+    own origin is let in here."""
     client: TestClient = request.getfixturevalue(caller)
-    res = client.post("/restore/handshake", headers={"Origin": origin})
+    res = client.post("/restore/handshake", headers={"Origin": APP_ORIGIN})
     assert res.status_code == 403
     assert set(res.json()) == {"code", "message"}
     assert res.json()["code"] == "forbidden_origin"
@@ -365,13 +390,12 @@ def test_the_window_origins_cannot_start_a_handshake(
     assert app_window.get("/restore/handshake/pending").json() == {"pending": []}
 
 
-@pytest.mark.parametrize("origin", ["null", APP_ORIGIN])
-def test_a_preflight_from_the_window_origins_gets_no_handshake_grant(
-    stranger: TestClient, origin: str
+def test_a_preflight_from_the_app_window_origin_gets_no_handshake_grant(
+    stranger: TestClient,
 ) -> None:
     res = stranger.options(
         "/restore/handshake",
-        headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+        headers={"Origin": APP_ORIGIN, "Access-Control-Request-Method": "POST"},
     )
     assert res.status_code == 403
     assert "access-control-allow-origin" not in res.headers

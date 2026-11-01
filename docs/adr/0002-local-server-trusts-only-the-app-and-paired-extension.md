@@ -14,14 +14,14 @@ routes accept only the pairing token. Starting a handshake and polling
 its status are the only other unauthenticated calls; accepting,
 rejecting or revoking a pairing needs the launch secret, so only the app
 window can do it. Every request must name `127.0.0.1` or `localhost` and
-the sidecar's port as its Host; and CORS allows only the app window and,
-for the extension's routes, `https://www.f-list.net` and
-`chrome-extension://` origins, because the extension calls the sidecar
-from its content script and its background worker. The built window
-loads from its own scheme, `app://workbench`, an origin no web page can
-send, so the window's origin, not only the secret, tells it apart. CORS
-still grants `Origin: null`, which the window sent while it loaded from
-`file://`, on every route but the handshake; any sandboxed iframe can
-send that too, so there only the secret keeps pages out. `/mcp` keeps
-its own optional bearer token, since MCP clients
+the sidecar's port as its Host; and CORS allows only the app window's
+origin on its routes and, for the extension's routes,
+`https://www.f-list.net` and `chrome-extension://` origins, because the
+extension calls the sidecar from its content script and its background
+worker. The built window loads from its own scheme, `app://workbench`,
+an origin no web page can send, so the window's origin, not only the
+secret, tells it apart; in dev the Vite server's origin stands in for
+it, and only in dev. `Origin: null`, which any sandboxed iframe or
+`data:` page sends, is refused on every route, `/mcp` included. `/mcp`
+keeps its own optional bearer token, since MCP clients
 cannot receive a per-launch secret.
