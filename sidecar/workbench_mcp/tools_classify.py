@@ -33,6 +33,7 @@ import aliases as aliases_store
 import labels as labels_store
 import logs as log_store
 import settings as settings_store
+from services import label_trash
 
 from ._context import (
     ToolError,
@@ -529,9 +530,11 @@ def clear_labels(
 ) -> dict[str, Any]:
     """Delete stored IC/OOC verdicts, reverting messages to Unlabeled.
 
-    Permanent, and it removes the user's own manual overrides as well
-    as anything a model decided. Rule-based hints keep firing. Ask the
-    user before calling this with confirm=true.
+    It removes the user's own manual overrides as well as anything a
+    model decided. Rule-based hints keep firing. Ask the user before
+    calling this with confirm=true. The cleared Labels go to the
+    character's Trash as one entry (`trash_id`), which the user can
+    restore in the window.
 
     Search keeps finding the cleared messages until the next
     ingest_logs of the conversation, which drops them from the Index.
@@ -547,33 +550,38 @@ def clear_labels(
         raise ToolError(
             "confirm_required",
             f"This deletes every stored verdict for {scope}, including "
-            "the user's own manual overrides, and cannot be undone. Ask "
-            "the user, then call again with confirm=true.",
+            "the user's own manual overrides. A copy goes to the Trash, "
+            "where only the user can restore it. Ask the user, then call "
+            "again with confirm=true.",
         )
 
     conn = labels_store.connect()
     try:
-        if partner:
-            alias_group = aliases_store.all_names_for(conn, character, partner)
-            deleted = labels_store.delete_labels_for_partner(
-                conn, character, partner, partner_aliases=alias_group
-            )
-        else:
-            cur = conn.execute(
-                "DELETE FROM labels WHERE character = ?", (character,)
-            )
-            conn.commit()
-            deleted = cur.rowcount
+        alias_group = (
+            aliases_store.all_names_for(conn, character, partner) if partner else None
+        )
+        cleared = label_trash.clear(
+            conn, character, partner, partner_aliases=alias_group
+        )
     finally:
         conn.close()
 
-    audit("clear_labels", character=character, partner=partner, deleted=deleted)
+    audit(
+        "clear_labels",
+        character=character,
+        partner=partner,
+        deleted=cleared["deleted"],
+        trash_id=cleared["trash_id"],
+    )
     return {
         "character": character,
         "partner": partner,
-        "deleted": deleted,
+        "deleted": cleared["deleted"],
+        "trash_id": cleared["trash_id"],
         "note": (
-            "Those messages are Unlabeled again. Search still finds them "
-            "until the next ingest_logs, which drops them from the Index."
+            "Those messages are Unlabeled again. The cleared Labels are in "
+            "the character's Trash; the user can restore them in the "
+            "window. Search still finds the messages until the next "
+            "ingest_logs, which drops them from the Index."
         ),
     }

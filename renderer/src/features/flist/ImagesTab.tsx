@@ -10,7 +10,7 @@ import {
   type Selection
 } from './imageSelection'
 import { FLIST_MAX_UPLOAD_BYTES, formatBytes, usageNotes } from './imageUsage'
-import { ImagesConfirmModal, ImagesTrash } from './ImagesTrash'
+import { ImagesConfirmModal, ImagesTrash, trashEntryCount } from './ImagesTrash'
 
 type GalleryEntry = { image_id: string; description: string; sort_order: number }
 
@@ -211,7 +211,7 @@ export function ImagesTab({
     api
       .flistTrashList(characterId)
       .then((r) => {
-        if (!cancelled) setTrashCount(r.items.length + (r.backups?.length ?? 0))
+        if (!cancelled) setTrashCount(trashEntryCount(r))
       })
       .catch(() => {})
     return () => {
