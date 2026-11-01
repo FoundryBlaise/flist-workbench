@@ -60,6 +60,9 @@ def test_an_unknown_log_is_refused_as_log_not_found(
     assert res.status_code == 404, res.text
     assert set(res.json()) == {"code", "message"}
     assert res.json()["code"] == "log_not_found"
+    # Names from the request are not echoed back.
+    for name in ("nobody", "stranger"):
+        assert name not in res.json()["message"]
 
 
 @pytest.mark.parametrize(
@@ -81,6 +84,8 @@ def test_a_log_name_that_cannot_name_a_file_is_refused_as_invalid_file_name(
     assert res.status_code == 400, res.text
     assert set(res.json()) == {"code", "message"}
     assert res.json()["code"] == "invalid_file_name"
+    for name in ("..", "a/b", "partner"):
+        assert name not in res.json()["message"]
 
 
 # ---- Backup file names -------------------------------------------------------
@@ -150,3 +155,5 @@ def test_the_label_routes_refuse_an_unknown_log_the_same_way(
     assert res.status_code == 404, res.text
     assert set(res.json()) == {"code", "message"}
     assert res.json()["code"] == "log_not_found"
+    for name in ("nobody", "stranger"):
+        assert name not in res.json()["message"]

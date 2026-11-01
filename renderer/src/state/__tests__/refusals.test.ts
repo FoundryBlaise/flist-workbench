@@ -21,13 +21,13 @@ afterEach(() => {
 it('shows the reason a Log was refused', async () => {
   fake.on(
     'GET /logs/messages',
-    json({ code: 'log_not_found', message: 'log not found: me/stranger' }, 404)
+    json({ code: 'log_not_found', message: 'no such log' }, 404)
   )
 
   await useStore.getState().loadMessages('me', 'stranger')
 
   const errors = Object.values(useStore.getState().messagesError)
-  expect(errors).toEqual(['HTTP 404: log not found: me/stranger'])
+  expect(errors).toEqual(['HTTP 404: no such log'])
 })
 
 it('hands the refusal code to the caller', async () => {
