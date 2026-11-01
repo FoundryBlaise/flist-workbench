@@ -58,6 +58,7 @@ def test_image_path_rejects_path_traversal():
 
 
 def test_image_path_safe_stays_under_images_dir():
+    character_archive.create_character_dir("12345")
     p = character_archive.image_path("12345", "30012128", "png")
     # Resolve relative to the character's images dir — if the safe
     # check ever lets a traversal through, relative_to raises.
@@ -114,6 +115,7 @@ def test_save_snapshot_if_changed_writes_when_content_differs():
 
 
 def test_save_snapshot_if_changed_no_live():
+    character_archive.create_character_dir("nope")
     assert character_archive.save_snapshot_if_changed("nope") == {
         "saved": False,
         "reason": "no_live",
@@ -127,6 +129,7 @@ def test_snapshots_dir_migrates_legacy_backups(tmp_path):
     and the renderer's history view keep working without the user
     losing their checkpoint history."""
     cid = "6666"
+    character_archive.create_character_dir(cid)
     char_root = character_archive.character_dir(cid)
     legacy = char_root / "backups"
     legacy.mkdir(parents=True, exist_ok=True)
@@ -209,6 +212,7 @@ def test_save_zip_backup_force_bypasses_dedup(tmp_path):
 
 
 def test_save_zip_backup_no_live(tmp_path):
+    character_archive.create_character_dir("nope")
     assert character_archive.save_zip_backup("nope") == {
         "saved": False,
         "reason": "no_live",
@@ -304,6 +308,7 @@ def test_merge_roster_dedupes_int_account_id_vs_str_archive_id():
 
 
 def test_compute_pull_status_never_pulled():
+    character_archive.create_character_dir("404")
     s = character_archive.compute_pull_status("404")
     assert s["status"] == "never_pulled"
     assert s["missing_image_ids"] == []
@@ -424,6 +429,7 @@ _JPG_HEADER = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 
 def test_write_character_image_lands_in_images_only():
     cid = "508"
+    character_archive.create_character_dir(cid)
     character_archive.write_character_image(cid, "30012128", "png", _PNG_HEADER)
     assert (character_archive.images_dir(cid) / "30012128.png").exists()
     # v5: no parallel pool/ store, ever.
@@ -435,12 +441,14 @@ def test_write_character_image_normalises_jpeg_to_jpg():
     # extension; if write_character_image stored ".jpeg" the cache would
     # miss for an existing file.
     cid = "508a"
+    character_archive.create_character_dir(cid)
     character_archive.write_character_image(cid, "99", "jpeg", _JPG_HEADER)
     assert (character_archive.images_dir(cid) / "99.jpg").exists()
 
 
 def test_add_uploaded_image_creates_local_id():
     cid = "509"
+    character_archive.create_character_dir(cid)
     row = character_archive.add_uploaded_image(cid, _PNG_HEADER)
     assert row is not None
     assert row["image_id"].startswith("local-")
@@ -450,6 +458,7 @@ def test_add_uploaded_image_creates_local_id():
 
 def test_add_uploaded_image_is_idempotent_on_identical_bytes():
     cid = "510"
+    character_archive.create_character_dir(cid)
     a = character_archive.add_uploaded_image(cid, _PNG_HEADER)
     b = character_archive.add_uploaded_image(cid, _PNG_HEADER)
     assert a is not None and b is not None
@@ -465,6 +474,7 @@ def test_add_uploaded_image_reuses_existing_real_id_file():
     showing the same image twice once the real-id slot is dragged off
     profile — the bug seen 2026-06-14."""
     cid = "509b"
+    character_archive.create_character_dir(cid)
     character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
     row = character_archive.add_uploaded_image(cid, _PNG_HEADER)
     assert row is not None
@@ -481,6 +491,7 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
     pointing at bytes that are gone is what turns a profile image into
     a black placeholder."""
     cid = "509c"
+    character_archive.create_character_dir(cid)
     # Pre-existing dupe state on disk: same bytes under two ids.
     character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
     character_archive.write_character_image(
@@ -527,6 +538,7 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
 
 def test_add_uploaded_image_rejects_non_image_bytes():
     cid = "511"
+    character_archive.create_character_dir(cid)
     row = character_archive.add_uploaded_image(cid, b"not an image")
     assert row is None
     assert not character_archive.images_dir(cid).exists() or not any(
@@ -541,6 +553,7 @@ def test_add_uploaded_image_rejects_non_image_bytes():
 )
 def test_remove_character_image_is_permanent():
     cid = "512"
+    character_archive.create_character_dir(cid)
     character_archive.write_character_image(cid, "999", "png", _PNG_HEADER)
     ok = character_archive.remove_character_image(cid, "999")
     assert ok is True
@@ -551,6 +564,7 @@ def test_remove_character_image_is_permanent():
 
 def test_list_character_images_includes_added_at():
     cid = "514"
+    character_archive.create_character_dir(cid)
     character_archive.write_character_image(cid, "333", "png", _PNG_HEADER)
     rows = character_archive.list_character_images(cid)
     assert len(rows) == 1
@@ -561,6 +575,7 @@ def test_list_character_images_includes_added_at():
 
 def test_migrate_working_v3_drops_sha_only_images():
     cid = "515"
+    character_archive.create_character_dir(cid)
     target = character_archive.working_path(cid)
     target.parent.mkdir(parents=True, exist_ok=True)
     import json as _json
@@ -593,6 +608,7 @@ def test_migrate_v4_pool_promotes_orphan_to_local():
     migration runs."""
     import hashlib
     cid = "516"
+    character_archive.create_character_dir(cid)
     cdir = character_archive.character_dir(cid)
     pool_d = cdir / "pool"
     pool_d.mkdir()
@@ -618,6 +634,7 @@ def test_migrate_v4_pool_skips_already_preserved_bytes():
     a redundant local-<sha8> copy."""
     import hashlib, json as _json
     cid = "517"
+    character_archive.create_character_dir(cid)
     cdir = character_archive.character_dir(cid)
     images_d = character_archive.images_dir(cid)
     pool_d = cdir / "pool"
@@ -656,6 +673,7 @@ def test_migrate_v4_pool_uses_first_free_image_id():
     synthetic — preserves identity across the v5 upgrade."""
     import hashlib, json as _json
     cid = "518"
+    character_archive.create_character_dir(cid)
     cdir = character_archive.character_dir(cid)
     pool_d = cdir / "pool"
     pool_d.mkdir()
@@ -682,6 +700,7 @@ def test_migrate_v4_pool_uses_first_free_image_id():
 
 def test_migrate_v4_pool_is_idempotent_when_already_v5():
     cid = "519"
+    character_archive.create_character_dir(cid)
     # No pool/ dir at all — migration should be a no-op.
     promoted = character_archive.migrate_v4_pool_to_images(cid)
     assert promoted == 0
@@ -702,6 +721,7 @@ def test_read_working_refuses_future_schema_version():
     on None, so the file stays intact for a future re-open with the
     matching version (QA feedback BLOCK #4)."""
     cid = "510"
+    character_archive.create_character_dir(cid)
     target = character_archive.working_path(cid)
     target.parent.mkdir(parents=True, exist_ok=True)
     import json as _json
@@ -801,8 +821,18 @@ def test_character_dir_resolves_via_registry(tmp_path):
 
 def test_character_dir_falls_back_to_id_when_not_in_registry(tmp_path):
     _reset_registry_state()
+    (character_archive.root() / "999999").mkdir()
     p = character_archive.character_dir("999999")
     assert p.name == "999999"
+
+
+def test_character_dir_finds_and_never_creates(tmp_path):
+    _reset_registry_state()
+    with pytest.raises(character_archive.CharacterNotFound):
+        character_archive.character_dir("999998")
+    assert not (character_archive.root() / "999998").exists()
+    created = character_archive.create_character_dir("999998")
+    assert character_archive.character_dir("999998") == created
 
 
 def test_migration_is_idempotent(tmp_path):
@@ -1039,6 +1069,7 @@ def test_create_set_from_zip_backup_seeds_payload(tmp_path):
 
 
 def test_create_set_from_zip_backup_rejects_bad_filename(tmp_path):
+    character_archive.create_character_dir("8021")
     import pytest
 
     with pytest.raises(ValueError):
@@ -1046,6 +1077,7 @@ def test_create_set_from_zip_backup_rejects_bad_filename(tmp_path):
 
 
 def test_create_set_from_zip_backup_404_when_missing(tmp_path):
+    character_archive.create_character_dir("8022")
     import pytest
 
     with pytest.raises(FileNotFoundError):

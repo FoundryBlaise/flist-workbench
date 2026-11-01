@@ -34,8 +34,10 @@ def _seed_payload(**extra: Any) -> dict[str, Any]:
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
+    import character_archive
     from server import app
 
+    _archive_characters(character_archive)
     return app_client(app)
 
 
@@ -47,7 +49,14 @@ def archive_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import character_archive
 
     importlib.reload(character_archive)
+    _archive_characters(character_archive)
     return character_archive
+
+
+def _archive_characters(archive) -> None:  # noqa: ANN001
+    """The characters these tests use, as a Pull would have left them."""
+    for cid in ("123", "999"):
+        archive.create_character_dir(cid)
 
 
 # ---- character_archive module ----------------------------------------

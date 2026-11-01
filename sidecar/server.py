@@ -103,8 +103,24 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # separate endpoints over the same implementations.
 _MCP_SERVERS = workbench_mcp.build_mcp_servers()
 
+
+def _known_character(request: Request) -> None:
+    """Every route with a `{character_id}` names a character the archive
+    already holds.
+
+    Checked before the route's own parameters and body, so an unknown
+    id is refused the same way however complete the request is, and
+    before anything could create a folder for it. Only a Pull brings a
+    character into the archive, and its route is keyed by name.
+    """
+    character_id = request.path_params.get("character_id")
+    if character_id is not None:
+        character_archive.character_dir(character_id)
+
+
 app = FastAPI(
     title="F-list Workbench sidecar",
+    dependencies=[Depends(_known_character)],
     # Electron passes its own version when it spawns us, so /health
     # reports what the user actually installed. Standalone runs
     # (tests, a bare `uv run`) have no app around to ask.
