@@ -2687,13 +2687,15 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
 
     # The files left behind by the re-upload: byte-identical to one
     # F-list has, under an id it no longer knows. Keeping them would
-    # leave the picture sitting in the pool for good.
+    # leave the picture sitting in the pool for good, so they go to
+    # the Trash, where repair can never destroy them.
+    from services import image_trash  # lazy: image_trash imports this module
+
     stale_removed: list[str] = []
     for old_id in superseded:
         try:
             for entry in images.glob(f"{old_id}.*"):
-                if entry.is_file():
-                    entry.unlink()
+                if entry.is_file() and image_trash.trash_pool_file(character_id, entry):
                     stale_removed.append(old_id)
         except OSError:
             continue
@@ -2809,29 +2811,6 @@ def adopt_flist_image_ids(
         "unknown": unknown,
         "sets_rewritten": rewritten_sets,
     }
-
-
-def remove_character_image(character_id: int | str, image_id: str) -> bool:
-    """Delete `images/<image_id>.<ext>` for good. No user-facing path
-    calls this: the window and `remove_image` go through the trash
-    (`services/image_trash.py`). Returns True iff a file was removed."""
-    if not _SAFE_NAME_RE.fullmatch(image_id):
-        return False
-    d = images_dir(character_id)
-    if not d.exists():
-        return False
-    for entry in d.iterdir():
-        if not entry.is_file():
-            continue
-        m = _IMAGE_FILE_RE.fullmatch(entry.name)
-        if not m or m.group(1) != image_id:
-            continue
-        try:
-            entry.unlink()
-            return True
-        except OSError:
-            return False
-    return False
 
 
 # ---- v4 → v5 pool migration ------------------------------------------

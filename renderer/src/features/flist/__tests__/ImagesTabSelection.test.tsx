@@ -16,7 +16,7 @@ const IMAGES = `/flist/character/${CID}/images`
 const TRASH = `/flist/character/${CID}/trash`
 
 let fake: FakeApi
-let trash: { image_id: string; extension: string; filename: string; size: number; deleted_at: number; deleted_by: string; source_name: null }[] = []
+let trash: { trash_id: string; image_id: string; extension: string; filename: string; size: number; deleted_at: number; deleted_by: string; source_name: null }[] = []
 
 beforeEach(() => {
   trash = []
@@ -54,6 +54,7 @@ beforeEach(() => {
     .on(`POST ${IMAGES}/trash`, (req) => {
       const ids = (req.body as { image_ids: string[] }).image_ids
       trash = ids.map((id) => ({
+        trash_id: id,
         image_id: id,
         extension: 'png',
         filename: `${id}.png`,
@@ -66,7 +67,7 @@ beforeEach(() => {
     })
     .on(`POST ${TRASH}/restore`, (req) => {
       const ids = (req.body as { image_ids: string[] }).image_ids
-      trash = trash.filter((t) => !ids.includes(t.image_id))
+      trash = trash.filter((t) => !ids.includes(t.trash_id))
       return json({
         restored: ids.map((id) => ({ image_id: id, deduplicated: false, from: id })),
         not_found: [],
@@ -168,6 +169,7 @@ it('filters narrow the pool and select-all takes only what they show', () => {
 it('the trash view restores what was trashed', async () => {
   trash = [
     {
+      trash_id: 'gone1',
       image_id: 'gone1',
       extension: 'png',
       filename: 'gone1.png',
@@ -193,4 +195,35 @@ it('the trash view restores what was trashed', async () => {
     image_ids: ['gone1']
   })
   await waitFor(() => expect(screen.getByText('The trash is empty.')).toBeTruthy())
+})
+
+it('two files trashed under one image id are listed and restored one by one', async () => {
+  const entry = (trash_id: string, deleted_at: number) => ({
+    trash_id,
+    image_id: '47000002',
+    extension: 'png',
+    filename: `${trash_id}.png`,
+    size: 1000,
+    deleted_at,
+    deleted_by: 'ui',
+    source_name: null
+  })
+  trash = [entry('47000002-0a1b2c3d', 2), entry('47000002', 1)]
+  render(<ImagesTab characterId={CID} />)
+  await waitFor(() =>
+    expect(screen.getByTestId('flist-images-trash-toggle').textContent).toBe('Trash (2)')
+  )
+  fireEvent.click(screen.getByTestId('flist-images-trash-toggle'))
+
+  const items = await screen.findAllByTestId('flist-images-trash-item')
+  expect(items).toHaveLength(2)
+  fireEvent.click(checkbox(items[1]))
+  expect(checkbox(items[0]).checked).toBe(false)
+  fireEvent.click(screen.getByTestId('flist-images-trash-restore'))
+
+  await waitFor(() => expect(fake.requestsTo(`POST ${TRASH}/restore`).length > 0).toBe(true))
+  expect(fake.requestsTo(`POST ${TRASH}/restore`)[0].body).toEqual({
+    image_ids: ['47000002']
+  })
+  await waitFor(() => expect(screen.getAllByTestId('flist-images-trash-item')).toHaveLength(1))
 })

@@ -24,6 +24,8 @@ import flist_activity
 import flist_api
 import settings as settings_store
 
+from . import image_trash
+
 #: F-list ids are integers in practice, but the value becomes a
 #: directory name under `<userdata>/characters/`, so the shape is
 #: whitelisted rather than trusted.
@@ -200,8 +202,9 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 except ValueError:
                     ext = raw_ext.lower().lstrip(".")
                 target = images_dir_path / f"{image_id}.{ext}"
-                # Remove any stale-ext sibling for the same image_id
-                # so a downloaded .jpg doesn't sit next to an old .png.
+                # Move any stale-ext sibling for the same image_id to
+                # the Trash so a downloaded .jpg doesn't sit next to an
+                # old .png, and the old bytes stay recoverable.
                 # Only touch png/jpg/gif siblings — leave debris like
                 # .tmp from an in-flight write alone.
                 for sibling in images_dir_path.glob(f"{image_id}.*"):
@@ -210,7 +213,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                     if sibling.suffix.lstrip(".").lower() not in {"png", "jpg", "jpeg", "gif"}:
                         continue
                     try:
-                        sibling.unlink()
+                        image_trash.trash_pool_file(cid, sibling)
                     except OSError:
                         pass
                 if target.exists():
