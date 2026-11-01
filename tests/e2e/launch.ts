@@ -5,9 +5,21 @@ import {
   type ElectronApplication,
   type Page
 } from '@playwright/test'
-import { mkdir, mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
+
+/**
+ * How long the app gets to start: its window open and the sidecar
+ * status reading ok. Main opens the window only once the sidecar
+ * answers, so on a slow runner both sit in this one budget. It is kept
+ * apart from the 15 s each test step gets (playwright.config.ts), so a
+ * slow start fails only when the app really doesn't start.
+ */
+const START_BUDGET_MS = 45_000
+
+/** Lines of the app's diagnostic log attached when the start times out. */
+const DIAG_LOG_TAIL_LINES = 200
 
 export type LaunchedApp = {
   app: ElectronApplication
@@ -92,14 +104,7 @@ async function launchApp(
     env
   })
 
-  // Dev builds open a detached DevTools window too; skip past it.
-  let window = app.windows().find(isAppWindow)
-  while (!window) {
-    const w = await app.waitForEvent('window')
-    if (isAppWindow(w)) window = w
-  }
-  window.on('dialog', (d) => void d.accept())
-  await expect(window.getByTestId('sidecar-status')).toContainText('ok')
+  const window = await waitForStart(app, userData)
 
   // With no saved login the app always opens the F-list sign-in on
   // start. The suite never signs in; close it so it does not sit over
@@ -132,15 +137,76 @@ export async function withApp(
   }
 }
 
-async function attachScreenshot(window: Page): Promise<void> {
+/**
+ * Waits, within START_BUDGET_MS, for the app's window to open and its
+ * sidecar status to read ok. When the start times out, the app is
+ * closed and the failure carries a screenshot of the window (if one
+ * opened) and the tail of the app's diagnostic log, so a slow start
+ * can be told apart from a broken renderer.
+ */
+async function waitForStart(app: ElectronApplication, userData: string): Promise<Page> {
+  const deadline = Date.now() + START_BUDGET_MS
+  const left = (): number => Math.max(1, deadline - Date.now())
+  let window: Page | undefined
+  try {
+    // Dev builds open a detached DevTools window too; skip past it.
+    window = app.windows().find(isAppWindow)
+    while (!window) {
+      const w = await app.waitForEvent('window', { timeout: left() })
+      if (isAppWindow(w)) window = w
+    }
+    window.on('dialog', (d) => void d.accept())
+    await expect(window.getByTestId('sidecar-status')).toContainText('ok', { timeout: left() })
+    return window
+  } catch (error) {
+    window ??= app.windows().find(isAppWindow)
+    if (window) await attachScreenshot(window, 'window at start timeout', 'start-timeout.png')
+    // Closed before the log is read, so the log also holds how the
+    // app and its sidecar shut down.
+    await app.close().catch(() => undefined)
+    await attachDiagLogTail(userData)
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `the app did not start within ${START_BUDGET_MS / 1000} s ` +
+        `(${window ? 'sidecar status never read ok' : 'no window opened'}); ` +
+        `see the attached screenshot and diagnostic log\n\n${reason}`,
+      { cause: error }
+    )
+  }
+}
+
+async function attachScreenshot(
+  window: Page,
+  name = 'window at failure',
+  file = 'failure.png'
+): Promise<void> {
   try {
     // Written to disk, not attached as a body: the list reporter keeps
     // a body in memory only, and CI uploads test-results/ on failure.
-    const path = test.info().outputPath('failure.png')
+    const path = test.info().outputPath(file)
     await window.screenshot({ path })
-    await test.info().attach('window at failure', { path, contentType: 'image/png' })
+    await test.info().attach(name, { path, contentType: 'image/png' })
   } catch {
     // A window too broken to photograph must not hide the real error.
+  }
+}
+
+/** Attaches the last lines of main-diag.log, which main and the sidecar launcher write. */
+async function attachDiagLogTail(userData: string): Promise<void> {
+  const log = join(userData, 'main-diag.log')
+  let tail: string
+  try {
+    const lines = (await readFile(log, 'utf8')).trimEnd().split('\n')
+    tail = lines.slice(-DIAG_LOG_TAIL_LINES).join('\n') + '\n'
+  } catch (error) {
+    tail = `(no diagnostic log at ${log}: ${error instanceof Error ? error.message : String(error)})\n`
+  }
+  try {
+    const path = test.info().outputPath('main-diag-tail.log')
+    await writeFile(path, tail)
+    await test.info().attach('app diagnostic log (tail)', { path, contentType: 'text/plain' })
+  } catch {
+    // Must not hide the real error either.
   }
 }
 
