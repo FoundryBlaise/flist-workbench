@@ -412,23 +412,29 @@ def snapshots_dir(character_id: int | str) -> Path:
     """
     p = character_dir(character_id) / "snapshots"
     if not p.exists():
-        legacy = character_dir(character_id) / "backups"
-        if legacy.exists() and legacy.is_dir():
-            json_files = [
-                e for e in legacy.iterdir()
-                if e.is_file() and e.suffix.lower() == ".json"
-            ]
-            if json_files:
-                p.mkdir(parents=True, exist_ok=True)
-                for entry in json_files:
-                    try:
-                        entry.replace(p / entry.name)
-                    except OSError:
-                        # If a JSON file can't move (locked, perms),
-                        # skip it — the legacy backups/ stays around.
-                        pass
+        json_files = _legacy_snapshot_files(character_id)
+        if json_files:
+            p.mkdir(parents=True, exist_ok=True)
+            for entry in json_files:
+                try:
+                    entry.replace(p / entry.name)
+                except OSError:
+                    # If a JSON file can't move (locked, perms),
+                    # skip it — the legacy backups/ stays around.
+                    pass
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _legacy_snapshot_files(character_id: int | str) -> list[Path]:
+    """JSON snapshots a pre-rename archive kept under `backups/`."""
+    legacy = character_dir(character_id) / "backups"
+    if not legacy.is_dir():
+        return []
+    return [
+        e for e in legacy.iterdir()
+        if e.is_file() and e.suffix.lower() == ".json"
+    ]
 
 
 def backups_dir(character_id: int | str) -> Path:
@@ -748,6 +754,12 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
     *truly* latest snapshot.
     """
     out: list[dict[str, Any]] = []
+    if not (character_dir(character_id) / "snapshots").exists() and not (
+        _legacy_snapshot_files(character_id)
+    ):
+        # None saved yet. Listing must not create the folder: the
+        # roster lists every character, so any read would touch them all.
+        return out
     p = snapshots_dir(character_id)
     for entry in p.iterdir():
         if not entry.is_file():
