@@ -120,7 +120,7 @@ def build_zip(
         for entry in images_dir.iterdir():
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if not m:
                 continue
             image_extensions[m.group(1)] = m.group(2).lower()
