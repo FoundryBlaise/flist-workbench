@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import paths
-from archive_errors import InvalidCharacterId
+from archive_errors import CharacterNotFound, InvalidCharacterId
+from refusals import InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -122,7 +123,7 @@ _WIN_RESERVED = {
 def _is_folder_safe(name: str) -> bool:
     if not isinstance(name, str) or not name:
         return False
-    if not _FOLDER_SAFE_RE.match(name):
+    if not _FOLDER_SAFE_RE.fullmatch(name):
         return False
     # Leading/trailing space or dot trips Windows.
     if name[0] in " ." or name[-1] in " .":
@@ -249,8 +250,8 @@ def register_character(character_id: int | str, name: str) -> str:
     elif old_slug:
         entry = {"name": name, "folder": old_slug}
     else:
-        # Brand-new character with no legacy folder. Lazy-create on
-        # first character_dir() call.
+        # Brand-new character with no legacy folder. `write_live`
+        # creates it right after registering.
         entry = {"name": name, "folder": new_slug}
     reg[cid] = entry
     save_registry(reg)
@@ -342,21 +343,48 @@ def _maybe_migrate_id_folders() -> None:
             pass
 
 
-def character_dir(character_id: int | str) -> Path:
+def _folder_for(character_id: int | str) -> tuple[Path, bool]:
+    """Where a character's folder is, and whether the registry names it."""
     cid = str(character_id)
     reg = load_registry()
     entry = reg.get(cid)
     if entry and entry.get("folder"):
-        p = root() / entry["folder"]
-    elif _is_folder_safe(cid) and not cid.startswith("_"):
+        return root() / entry["folder"], True
+    if _is_folder_safe(cid) and not cid.startswith("_"):
         # Unregistered id (no pull yet, or registry corruption) — fall
         # back to the legacy id-named folder so existing data keeps
         # working. Only a name that cannot leave `characters/` or hit
         # its reserved `_` entries gets here: on Windows a backslash
         # is a separator, so `..\..\x` would otherwise escape.
-        p = root() / cid
-    else:
-        raise InvalidCharacterId(cid)
+        return root() / cid, False
+    raise InvalidCharacterId(cid)
+
+
+def require_character_id(character_id: int | str) -> None:
+    """Refuse an id no character folder could have (`InvalidCharacterId`),
+    whether or not the archive holds the character."""
+    _folder_for(character_id)
+
+
+def character_dir(character_id: int | str) -> Path:
+    """Find a character's folder. Never creates it.
+
+    A character the archive holds is one the registry names (a Pull
+    registered it) or one with a legacy id-named folder on disk. Any
+    other safe id raises `CharacterNotFound`; an unsafe one raises
+    `InvalidCharacterId`. Only `create_character_dir` makes a folder.
+    """
+    p, registered = _folder_for(character_id)
+    if not registered and not p.is_dir():
+        raise CharacterNotFound(str(character_id))
+    return p
+
+
+def create_character_dir(character_id: int | str) -> Path:
+    """Create a character's folder: the moment a character comes into
+    the archive. A Pull (`write_live`) and a set-bundle import call
+    this; every other path finds the character with `character_dir`."""
+    p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -390,23 +418,38 @@ def snapshots_dir(character_id: int | str) -> Path:
     """
     p = character_dir(character_id) / "snapshots"
     if not p.exists():
-        legacy = character_dir(character_id) / "backups"
-        if legacy.exists() and legacy.is_dir():
-            json_files = [
-                e for e in legacy.iterdir()
-                if e.is_file() and e.suffix.lower() == ".json"
-            ]
-            if json_files:
-                p.mkdir(parents=True, exist_ok=True)
-                for entry in json_files:
-                    try:
-                        entry.replace(p / entry.name)
-                    except OSError:
-                        # If a JSON file can't move (locked, perms),
-                        # skip it — the legacy backups/ stays around.
-                        pass
+        _move_legacy_snapshots(p, _legacy_snapshot_files(character_id))
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _move_legacy_snapshots(snapshots: Path, json_files: list[Path]) -> None:
+    """Move a pre-rename archive's JSON snapshots into `snapshots/`."""
+    if not json_files:
+        return
+    snapshots.mkdir(parents=True, exist_ok=True)
+    for entry in json_files:
+        try:
+            entry.replace(snapshots / entry.name)
+        except OSError:
+            # If a JSON file can't move (locked, perms),
+            # skip it — the legacy backups/ stays around.
+            pass
+
+
+def _legacy_snapshot_files(character_id: int | str) -> list[Path]:
+    """JSON snapshots a pre-rename archive kept under `backups/`.
+
+    Legacy migration only: an archive written since the rename has
+    none, and nothing else should read `backups/` for snapshots.
+    """
+    legacy = character_dir(character_id) / "backups"
+    if not legacy.is_dir():
+        return []
+    return [
+        e for e in legacy.iterdir()
+        if e.is_file() and e.suffix.lower() == ".json"
+    ]
 
 
 def backups_dir(character_id: int | str) -> Path:
@@ -467,8 +510,7 @@ def rename_zip_backup(
     untouched (renames don't need to rewrite the archive bytes); the
     name only lives in the sidecar `_names.json` map. Empty string
     clears the entry so the UI falls back to the timestamp default."""
-    if not _ZIP_BACKUP_FILE_RE.match(filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(filename)
     target = backups_dir(character_id) / filename
     if not target.exists():
         raise FileNotFoundError(str(target))
@@ -620,7 +662,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     name = payload.get("name")
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
-    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
     _publish("live-changed", character_id=str(character_id))
 
 
@@ -727,11 +769,18 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
     *truly* latest snapshot.
     """
     out: list[dict[str, Any]] = []
-    p = snapshots_dir(character_id)
+    p = character_dir(character_id) / "snapshots"
+    if not p.exists():
+        legacy = _legacy_snapshot_files(character_id)
+        if not legacy:
+            # None saved yet. Listing must not create the folder: the
+            # roster lists every character, so any read would touch them all.
+            return out
+        _move_legacy_snapshots(p, legacy)
     for entry in p.iterdir():
         if not entry.is_file():
             continue
-        m = _SNAPSHOT_FILE_RE.match(entry.name)
+        m = _SNAPSHOT_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         try:
@@ -756,6 +805,14 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
 _ZIP_BACKUP_FILE_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-(\d+))?\.zip$"
 )
+
+
+def require_backup_filename(filename: str) -> None:
+    """Refuse a name that is not a Backup file name, before any path is
+    built from it, so a crafted `../` name reads or deletes nothing.
+    A caller hears 400 `invalid_file_name`."""
+    if not isinstance(filename, str) or not _ZIP_BACKUP_FILE_RE.fullmatch(filename):
+        raise InvalidFileName("invalid backup filename")
 
 
 def _zip_backup_filename(now: float | None = None) -> str:
@@ -842,7 +899,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
         # isn't a backup of its own.
         if entry.name == _BACKUP_NAMES_FILENAME:
             continue
-        m = _ZIP_BACKUP_FILE_RE.match(entry.name)
+        m = _ZIP_BACKUP_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         try:
@@ -1066,7 +1123,7 @@ def save_zip_backup(
 
 
 def read_snapshot(character_id: int | str, filename: str) -> dict[str, Any] | None:
-    if not _SNAPSHOT_FILE_RE.match(filename):
+    if not _SNAPSHOT_FILE_RE.fullmatch(filename):
         # Reject anything that doesn't match the on-disk filename shape
         # so a caller can't path-traverse out of snapshots/.
         return None
@@ -1282,7 +1339,7 @@ class SetMeta:
 
 
 def _is_valid_set_id(set_id: str) -> bool:
-    return isinstance(set_id, str) and bool(_SET_ID_RE.match(set_id))
+    return isinstance(set_id, str) and bool(_SET_ID_RE.fullmatch(set_id))
 
 
 def _new_set_id() -> str:
@@ -1652,8 +1709,7 @@ def load_zip_backup_into_workbench(
     import zipfile
 
     _migrate_working_v2(character_id)
-    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(backup_filename)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(str(target))
@@ -1697,8 +1753,7 @@ def create_set_from_zip_backup(
     import zipfile
 
     _migrate_working_v2(character_id)
-    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(backup_filename)
     clean = validate_set_name(name)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
@@ -1863,7 +1918,24 @@ _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 
 # `<image_id>.<ext>` filename in `images/`. image_id is digits for F-list
 # images, `local-<8 hex>` for pool-only user uploads not yet on F-list.
-_IMAGE_FILE_RE = re.compile(r"^([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$")
+# Always used with fullmatch.
+_IMAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+_IMAGE_FILE_RE = re.compile(r"([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)")
+
+
+def require_image_filename(filename: str) -> None:
+    """Refuse a name that is not `<image_id>.<ext>` (an image, a trashed
+    file, an inline), before any path is built from it. A caller hears
+    400 `invalid_file_name`."""
+    if not isinstance(filename, str) or not _IMAGE_FILE_RE.fullmatch(filename):
+        raise InvalidFileName("invalid image filename")
+
+
+def require_image_id(image_id: str) -> None:
+    """Refuse an image id that could not be the stem of an image file
+    name. A caller hears 400 `invalid_file_name`."""
+    if not isinstance(image_id, str) or not _IMAGE_ID_RE.fullmatch(image_id):
+        raise InvalidFileName("invalid image_id")
 
 
 # ---- pull integrity manifest -----------------------------------------
@@ -1927,7 +1999,7 @@ def _images_present_ids(character_id: int | str) -> set[str]:
     for p in d.iterdir():
         if not p.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(p.name)
+        m = _IMAGE_FILE_RE.fullmatch(p.name)
         if not m:
             continue
         iid = m.group(1)
@@ -2009,9 +2081,9 @@ def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
     """`images/<image_id>.<ext>`. Both parts are validated against a
     conservative whitelist so a hostile filename in a payload can't
     escape the character's archive directory."""
-    if not _SAFE_NAME_RE.match(image_id):
+    if not _SAFE_NAME_RE.fullmatch(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
-    if not _SAFE_NAME_RE.match(ext):
+    if not _SAFE_NAME_RE.fullmatch(ext):
         raise ValueError(f"unsafe extension: {ext!r}")
     return images_dir(character_id) / f"{image_id}.{ext}"
 
@@ -2019,7 +2091,7 @@ def image_path(character_id: int | str, image_id: str, ext: str) -> Path:
 def inline_path(character_id: int | str, basename: str) -> Path:
     """`inlines/<basename>`. The basename is the CDN URL's last segment
     (typically `<sha1>.<ext>`); validated against the safe-name regex."""
-    if not _SAFE_NAME_RE.match(basename):
+    if not _SAFE_NAME_RE.fullmatch(basename):
         raise ValueError(f"unsafe inline name: {basename!r}")
     return inlines_dir(character_id) / basename
 
@@ -2083,7 +2155,7 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     for entry in d.iterdir():
         if not entry.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(entry.name)
+        m = _IMAGE_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         try:
@@ -2112,7 +2184,7 @@ def write_character_image(
     — re-calling with the same id+ext overwrites in place (pull loop
     relies on this for re-pulls). `image_id` and `ext` are validated
     against the safe-name regex; `ext` is normalised (jpeg → jpg)."""
-    if not _SAFE_NAME_RE.match(image_id):
+    if not _SAFE_NAME_RE.fullmatch(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
     ext_n = normalise_image_ext(ext)
     target = images_dir(character_id) / f"{image_id}.{ext_n}"
@@ -2136,7 +2208,7 @@ def find_image_with_sha(
     for entry in d.iterdir():
         if not entry.is_file():
             continue
-        if not _IMAGE_FILE_RE.match(entry.name):
+        if not _IMAGE_FILE_RE.fullmatch(entry.name):
             continue
         try:
             if entry.stat().st_size == 0:
@@ -2188,7 +2260,7 @@ def collapse_local_duplicates(character_id: int | str) -> int:
     for entry in sorted(d.iterdir()):
         if not entry.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(entry.name)
+        m = _IMAGE_FILE_RE.fullmatch(entry.name)
         if not m:
             continue
         image_id = m.group(1)
@@ -2290,7 +2362,7 @@ def add_uploaded_image(
     if existing is not None:
         try:
             stat = existing.stat()
-            m = _IMAGE_FILE_RE.match(existing.name)
+            m = _IMAGE_FILE_RE.fullmatch(existing.name)
             return {
                 "image_id": m.group(1) if m else existing.stem,
                 "extension": (m.group(2).lower() if m else ext),
@@ -2370,7 +2442,7 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
         for entry in sorted(images.iterdir()):
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if not m:
                 continue
             image_id = m.group(1)
@@ -2530,7 +2602,7 @@ def adopt_flist_image_ids(
         for entry in images.iterdir():
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if m:
                 on_disk[m.group(1)] = m.group(2).lower()
 
@@ -2540,7 +2612,7 @@ def adopt_flist_image_ids(
         if not old_id.startswith("local-") or not new_id:
             unknown.append(old_id)
             continue
-        if not _SAFE_NAME_RE.match(new_id) or not _SAFE_NAME_RE.match(old_id):
+        if not _SAFE_NAME_RE.fullmatch(new_id) or not _SAFE_NAME_RE.fullmatch(old_id):
             unknown.append(old_id)
             continue
         ext = on_disk.get(old_id)
@@ -2596,7 +2668,7 @@ def remove_character_image(character_id: int | str, image_id: str) -> bool:
     """Delete `images/<image_id>.<ext>` for good. No user-facing path
     calls this: the window and `remove_image` go through the trash
     (`services/image_trash.py`). Returns True iff a file was removed."""
-    if not _SAFE_NAME_RE.match(image_id):
+    if not _SAFE_NAME_RE.fullmatch(image_id):
         return False
     d = images_dir(character_id)
     if not d.exists():
@@ -2604,7 +2676,7 @@ def remove_character_image(character_id: int | str, image_id: str) -> bool:
     for entry in d.iterdir():
         if not entry.is_file():
             continue
-        m = _IMAGE_FILE_RE.match(entry.name)
+        m = _IMAGE_FILE_RE.fullmatch(entry.name)
         if not m or m.group(1) != image_id:
             continue
         try:
@@ -2674,20 +2746,20 @@ def migrate_v4_pool_to_images(character_id: int | str) -> int:
         # images/<id>.<ext>, the bytes are already preserved under that
         # id — skip rather than mint a redundant `local-<sha8>` copy.
         already_preserved = any(
-            _SAFE_NAME_RE.match(iid) and (images_d / f"{iid}.{ext}").exists()
+            _SAFE_NAME_RE.fullmatch(iid) and (images_d / f"{iid}.{ext}").exists()
             for iid in image_ids
         )
         if already_preserved:
             continue
         chosen: str | None = None
         for iid in image_ids:
-            if not _SAFE_NAME_RE.match(iid):
+            if not _SAFE_NAME_RE.fullmatch(iid):
                 continue
             chosen = iid
             break
         if chosen is None:
             chosen = f"local-{sha[:8]}"
-        if not _SAFE_NAME_RE.match(chosen):
+        if not _SAFE_NAME_RE.fullmatch(chosen):
             continue
         target = images_d / f"{chosen}.{ext}"
         if not target.exists():
@@ -2711,7 +2783,7 @@ def migrate_v4_pool_to_images(character_id: int | str) -> int:
             ext = normalise_image_ext(ext_part)
         except ValueError:
             continue
-        if len(stem) < 8 or not _SAFE_NAME_RE.match(stem):
+        if len(stem) < 8 or not _SAFE_NAME_RE.fullmatch(stem):
             continue
         chosen = f"local-{stem[:8]}"
         target = images_d / f"{chosen}.{ext}"
@@ -2748,7 +2820,7 @@ def avatar_path_for(name: str) -> Path:
     import hashlib
 
     slug = name.strip().lower().replace(" ", "_")
-    if _SAFE_NAME_RE.match(slug):
+    if _SAFE_NAME_RE.fullmatch(slug):
         return avatars_root() / f"{slug}.png"
     # Hash the original (case-preserving + space-preserving) name so
     # two characters that only differ in casing land on distinct paths

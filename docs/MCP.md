@@ -9,7 +9,7 @@ search the index.
 Two things to hold onto before anything else:
 
 1. **Nothing here uploads to F-list.** Every tool changes local files.
-   When a profile is ready you review it in the Workbench window and
+   When a profile is ready you review it in the app window and
    publish it yourself in the browser, with the userscript or the
    paired extension. A model that tells you a change is live on F-list
    is wrong.
@@ -99,7 +99,7 @@ cases where it does help — a shared machine, or a sandboxed tool you
 want to keep out. The snippets there then include it.
 
 **No credentials pass through MCP.** There is no sign-in tool; you
-sign in to F-list in the Workbench window, and tools that need a
+sign in to F-list in the app window, and tools that need a
 ticket say so. The embedding API key can be read as a yes/no but never
 as a value, and cannot be set through a tool — a secret in a tool call
 ends up in a transcript.
@@ -132,7 +132,7 @@ swallows the rest of the page, a colour that reads well on Dark can
 vanish on Light, an `[img]` id that no longer resolves leaves a hole —
 and none of that shows up when you re-read the source you just wrote.
 Worth a look after any substantial edit, and worth trying a second
-`theme` when the description sets colours. The Workbench window has to
+`theme` when the description sets colours. The app window has to
 be open: it is the thing that draws. A picture-heavy profile comes
 back as JPEG rather than PNG, because the image travels to the model
 as base64 and an oversized tool result is refused outright.
@@ -297,7 +297,7 @@ Tool errors carry a stable code as their first word:
 | `character_not_found` | no local archive for that name — the error lists the ones that exist |
 | `no_active_set` | nothing is active; create one or name one explicitly |
 | `live_is_read_only` | tried to edit the published profile |
-| `not_signed_in` | needs an F-list session — sign in from the Workbench window |
+| `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
 | `validation_failed` | a value F-list wouldn't accept — the error carries the allowed ones |
 | `etag_conflict` | the window saved while the edit was in flight |

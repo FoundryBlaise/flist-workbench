@@ -2,7 +2,7 @@
 
 Everything here changes local files only. Nothing is uploaded to
 f-list.net — when a profile is ready the user reviews it in the
-Workbench window and publishes it themselves in the browser. Say so if
+app window and publishes it themselves in the browser. Say so if
 a user asks whether a change is live; it is not.
 
 The rules a payload has to satisfy live in `services/payload_ops.py`,
@@ -64,7 +64,7 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
     except character_archive.EtagMismatch as exc:
         raise ToolError(
             "etag_conflict",
-            "The Workbench window saved this set while the edit was in "
+            "The app window saved this set while the edit was in "
             "flight, twice in a row. Read the field again and redo the "
             "change.",
             current_etag=exc.current_etag,
@@ -1005,10 +1005,10 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     """
     from services import image_import, image_trash
 
+    target = resolve_character(character)
     ids = list(dict.fromkeys(str(i) for i in image_ids))
     if not ids:
         raise ToolError("validation_failed", "Give at least one image id.")
-    target = resolve_character(character)
     refs = image_import.references(target.id)
     in_gallery = {
         i: refs[i]["working_sets"] for i in ids if refs.get(i, {}).get("working_sets")
@@ -1062,12 +1062,12 @@ def restore_image(
     """
     from services import image_trash
 
+    target = resolve_character(character)
     ids = [str(i) for i in (image_ids or [])]
     if image_id:
         ids.insert(0, str(image_id))
     if not ids:
         raise ToolError("validation_failed", "Give image_id or image_ids.")
-    target = resolve_character(character)
     result = image_trash.restore_images(target.id, ids)
     if not result["restored"] and result["not_found"]:
         raise ToolError(
@@ -1167,6 +1167,7 @@ def _import_batch(
 ) -> dict[str, Any]:
     from services import events, image_import, payload_ops
 
+    target = resolve_character(character)
     if not items:
         raise ToolError("validation_failed", "No items to import.")
     if len(items) > MAX_IMPORT_ITEMS:
@@ -1174,7 +1175,6 @@ def _import_batch(
             "validation_failed",
             f"{len(items)} items; one call takes at most {MAX_IMPORT_ITEMS}.",
         )
-    target = resolve_character(character)
     targets = [str(i.replace_image_id) for i in items if i.replace_image_id]
     touches_gallery = add_to_gallery or bool(targets)
 

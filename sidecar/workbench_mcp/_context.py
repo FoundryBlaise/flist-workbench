@@ -43,7 +43,7 @@ class ToolError(Exception):
 def not_signed_in() -> ToolError:
     return ToolError(
         "not_signed_in",
-        "No F-list session. The user signs in inside the Workbench "
+        "No F-list session. The user signs in inside the app "
         "window (F-list → Sign in); there is no sign-in tool on "
         "purpose, because credentials never travel through MCP.",
     )

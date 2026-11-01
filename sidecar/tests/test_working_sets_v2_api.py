@@ -53,6 +53,8 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import character_archive
 
     importlib.reload(character_archive)
+    # The character these tests use, as a Pull would have left it.
+    character_archive.create_character_dir("123")
     return character_archive
 
 

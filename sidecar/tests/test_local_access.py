@@ -15,19 +15,27 @@ ASGI stack from outside, the way such a page or the real callers would
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import Iterator
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from sidecar_client import BASE_URL, SECRET_HEADER, app_client
+from services.local_access import RENDERER_ORIGIN_ENV, SECRET_ENV
+from sidecar_client import (
+    BASE_URL,
+    SECRET_HEADER,
+    Route,
+    api_routes,
+    app_client,
+    error_code,
+    sweep,
+)
 
 EVIL = "https://evil.example"
 FLIST = "https://www.f-list.net"
 EXTENSION = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+#: The origin of the built app window (electron/appPage.ts).
+APP_ORIGIN = "app://workbench"
 
 #: Callable with no credential at all.
 OPEN_ROUTES = {
@@ -90,24 +98,6 @@ def pairing_token(app_window: TestClient) -> str:
     return begun.json()["token"]
 
 
-def _api_routes(app) -> Iterator[tuple[str, str]]:  # noqa: ANN001
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            for method in sorted(route.methods - {"HEAD"}):
-                yield method, route.path
-
-
-def _concrete(path: str) -> str:
-    return re.sub(r"\{[^}]+\}", "x", path)
-
-
-def _error_code(res) -> str | None:  # noqa: ANN001
-    try:
-        return res.json().get("code")
-    except ValueError:
-        return None
-
-
 # ---- the launch secret --------------------------------------------------
 
 
@@ -115,15 +105,17 @@ def test_every_app_route_refuses_a_caller_without_the_launch_secret(
     server, stranger: TestClient  # noqa: ANN001
 ) -> None:
     """Enumerated from the app, so a route added later is covered too."""
-    checked, let_through = 0, []
-    for method, path in _api_routes(server.app):
-        if (method, path) in OPEN_ROUTES or (method, path) in EXTENSION_ROUTES:
-            continue
-        res = stranger.request(method, _concrete(path))
-        checked += 1
-        if res.status_code != 401 or _error_code(res) != "unauthorized":
-            let_through.append(f"{method} {path} -> {res.status_code}")
-    assert checked > 100
+    routes = [
+        route
+        for route in api_routes(server.app)
+        if (route.method, route.path) not in OPEN_ROUTES | EXTENSION_ROUTES
+    ]
+    assert len(routes) > 100
+    let_through = sweep(
+        stranger,
+        routes,
+        lambda res: res.status_code == 401 and error_code(res) == "unauthorized",
+    )
     assert let_through == []
 
 
@@ -164,7 +156,7 @@ def test_without_a_configured_secret_nothing_gets_through(
     server, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
 ) -> None:
     """Fail closed: an empty secret must not match an empty header."""
-    monkeypatch.delenv("FLIST_WORKBENCH_LAUNCH_SECRET")
+    monkeypatch.delenv(SECRET_ENV)
     client = TestClient(server.app, base_url=BASE_URL)
     assert client.get("/settings", headers={SECRET_HEADER: ""}).status_code == 401
     assert client.get("/settings").status_code == 401
@@ -173,8 +165,8 @@ def test_without_a_configured_secret_nothing_gets_through(
 def test_the_sidecar_refuses_to_start_without_a_secret(
     server, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
 ) -> None:
-    monkeypatch.delenv("FLIST_WORKBENCH_LAUNCH_SECRET")
-    with pytest.raises(RuntimeError, match="FLIST_WORKBENCH_LAUNCH_SECRET"):
+    monkeypatch.delenv(SECRET_ENV)
+    with pytest.raises(RuntimeError, match=SECRET_ENV):
         with TestClient(server.app, base_url=BASE_URL):
             pass
 
@@ -215,33 +207,102 @@ def test_a_foreign_origin_is_refused_even_with_the_secret(
     assert "access-control-allow-origin" not in res.headers
 
 
-def test_the_packaged_window_origin_null_is_granted(app_window: TestClient) -> None:
-    """`file://` pages send `Origin: null`. Any sandboxed iframe can too,
-    which is why the secret, not the origin, is what keeps pages out."""
-    res = app_window.get("/settings", headers={"Origin": "null"})
+def test_the_app_window_origin_is_granted(app_window: TestClient) -> None:
+    """The built window loads from `app://workbench`, an origin of its own."""
+    res = app_window.get("/settings", headers={"Origin": APP_ORIGIN})
     assert res.status_code == 200
-    assert res.headers["access-control-allow-origin"] == "null"
+    assert res.headers["access-control-allow-origin"] == APP_ORIGIN
 
 
-def test_origin_null_without_the_secret_is_refused(stranger: TestClient) -> None:
-    res = stranger.get("/settings", headers={"Origin": "null"})
+def test_the_app_window_origin_without_the_secret_is_refused(
+    stranger: TestClient,
+) -> None:
+    res = stranger.get("/settings", headers={"Origin": APP_ORIGIN})
     assert res.status_code == 401
+    assert res.json()["code"] == "unauthorized"
 
 
-def test_a_preflight_from_the_window_needs_no_secret(stranger: TestClient) -> None:
-    """A preflight never carries custom header values."""
+def test_a_preflight_from_the_app_window_origin_needs_no_secret(
+    stranger: TestClient,
+) -> None:
     res = stranger.options(
         "/flist/character/1/working",
         headers={
-            "Origin": "null",
+            "Origin": APP_ORIGIN,
             "Access-Control-Request-Method": "PUT",
             "Access-Control-Request-Headers": "content-type,if-match",
         },
     )
     assert res.status_code == 200
-    assert res.headers["access-control-allow-origin"] == "null"
+    assert res.headers["access-control-allow-origin"] == APP_ORIGIN
     assert "PUT" in res.headers["access-control-allow-methods"]
     assert "if-match" in res.headers["access-control-allow-headers"].lower()
+
+
+@pytest.mark.parametrize(
+    "origin", ["app://evil", "app://workbench.evil", "app://workbench:1", "APP://WORKBENCH"]
+)
+def test_only_the_exact_app_window_origin_is_granted(
+    app_window: TestClient, origin: str
+) -> None:
+    res = app_window.get("/settings", headers={"Origin": origin})
+    assert res.status_code == 403
+    assert "access-control-allow-origin" not in res.headers
+
+
+#: Routes the API list leaves out; they sit behind the same guard.
+UNLISTED_ROUTES = [
+    Route("GET", "/events"),
+    Route("GET", "/mcp-info"),
+    Route("POST", "/mcp-info/token"),
+    Route("GET", "/openapi.json"),
+    Route("GET", "/docs"),
+    Route("POST", "/mcp"),
+]
+
+
+def _refused_origin(res) -> bool:  # noqa: ANN001
+    return (
+        res.status_code == 403
+        and error_code(res) == "forbidden_origin"
+        and "access-control-allow-origin" not in res.headers
+    )
+
+
+def test_origin_null_is_refused_on_every_route(server) -> None:  # noqa: ANN001
+    """`Origin: null` is what a sandboxed iframe on any site sends. The
+    app window has an origin of its own, so nothing that may call the
+    sidecar sends `null`: not even the launch secret lets it in."""
+    client = app_client(server.app, headers={"Origin": "null"})
+    routes = [*api_routes(server.app), *UNLISTED_ROUTES]
+    assert len(routes) > 100
+    let_through = sweep(client, routes, _refused_origin, json={})
+    assert let_through == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PUT", "/flist/character/1/working"),
+        ("GET", "/settings"),
+        ("POST", "/restore/handshake"),
+        ("GET", "/restore/handshake-status"),
+        ("GET", "/restore/characters"),
+    ],
+)
+def test_a_preflight_from_origin_null_gets_no_grant(
+    stranger: TestClient, method: str, path: str
+) -> None:
+    res = stranger.options(
+        path,
+        headers={
+            "Origin": "null",
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "content-type,x-workbench-auth",
+        },
+    )
+    assert _refused_origin(res)
+    assert set(res.json()) == {"code", "message"}
 
 
 def test_a_preflight_from_a_foreign_origin_gets_no_grant(stranger: TestClient) -> None:
@@ -258,7 +319,7 @@ def test_the_dev_server_origin_is_granted_only_when_configured(
 ) -> None:
     dev = "http://localhost:5173"
     assert app_window.get("/settings", headers={"Origin": dev}).status_code == 403
-    monkeypatch.setenv("FLIST_WORKBENCH_RENDERER_ORIGIN", dev)
+    monkeypatch.setenv(RENDERER_ORIGIN_ENV, dev)
     res = app_window.get("/settings", headers={"Origin": dev})
     assert res.status_code == 200
     assert res.headers["access-control-allow-origin"] == dev
@@ -300,7 +361,7 @@ def test_a_page_cannot_approve_its_own_pairing(stranger: TestClient) -> None:
     res = stranger.post(
         "/restore/handshake/accept",
         json={"handshake_id": begun["handshake_id"]},
-        headers={"Origin": "null"},
+        headers={"Origin": APP_ORIGIN},
     )
     assert res.status_code == 401
     status = stranger.get(
@@ -314,11 +375,48 @@ def test_a_foreign_page_cannot_start_a_handshake(stranger: TestClient) -> None:
     assert res.status_code == 403
 
 
+@pytest.mark.parametrize("caller", ["stranger", "app_window"])
+def test_the_app_window_origin_cannot_start_a_handshake(
+    request: pytest.FixtureRequest, app_window: TestClient, caller: str
+) -> None:
+    """Only the extension starts a pairing, so not even the app window's
+    own origin is let in here."""
+    client: TestClient = request.getfixturevalue(caller)
+    res = client.post("/restore/handshake", headers={"Origin": APP_ORIGIN})
+    assert res.status_code == 403
+    assert set(res.json()) == {"code", "message"}
+    assert res.json()["code"] == "forbidden_origin"
+    assert "access-control-allow-origin" not in res.headers
+    assert app_window.get("/restore/handshake/pending").json() == {"pending": []}
+
+
+def test_a_preflight_from_the_app_window_origin_gets_no_handshake_grant(
+    stranger: TestClient,
+) -> None:
+    res = stranger.options(
+        "/restore/handshake",
+        headers={"Origin": APP_ORIGIN, "Access-Control-Request-Method": "POST"},
+    )
+    assert res.status_code == 403
+    assert "access-control-allow-origin" not in res.headers
+
+
+@pytest.mark.parametrize("origin", [FLIST, EXTENSION])
+def test_the_extension_starts_a_handshake_from_its_origins(
+    stranger: TestClient, app_window: TestClient, origin: str
+) -> None:
+    res = stranger.post("/restore/handshake", headers={"Origin": origin})
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == origin
+    pending = app_window.get("/restore/handshake/pending").json()["pending"]
+    assert [p["handshake_id"] for p in pending] == [res.json()["handshake_id"]]
+
+
 @pytest.mark.parametrize(("method", "path"), sorted(EXTENSION_ROUTES))
 def test_extension_routes_want_the_pairing_token_not_the_secret(
     app_window: TestClient, method: str, path: str
 ) -> None:
-    res = app_window.request(method, _concrete(path), json={})
+    res = app_window.request(method, Route(method, path).url(), json={})
     assert res.status_code == 401
 
 

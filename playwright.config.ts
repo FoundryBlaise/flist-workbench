@@ -7,10 +7,14 @@ import { defineConfig } from '@playwright/test'
 // data. Screenshots are taken only when a test fails (see withApp in
 // launch.ts; Playwright's own `screenshot` option does not reach
 // Electron windows), and land in test-results/ with the trace.
+//
+// The app's start has its own 45 s budget (START_BUDGET_MS in
+// launch.ts); `expect.timeout` is the 15 s each test step gets. The
+// test timeout leaves room for a slow start plus the steps.
 export default defineConfig({
   testDir: './tests/e2e',
   globalSetup: './tests/e2e/global-setup.ts',
-  timeout: 60_000,
+  timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,

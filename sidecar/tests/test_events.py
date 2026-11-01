@@ -1,6 +1,6 @@
 """The change-broadcast bus (design §4.3).
 
-Why this exists: the Workbench window used to be the only writer, so
+Why this exists: the app window used to be the only writer, so
 it always knew the current state of what it displayed. A model editing
 the same working set breaks that — the window shows a stale draft and
 then autosaves it back over the model's work. These tests cover the

@@ -43,7 +43,7 @@ def character_id_from_payload(payload: dict[str, Any]) -> str:
     if cid is None:
         raise UnsafeCharacterId("API response missing character id")
     cid_str = str(cid)
-    if not _CHARACTER_ID_RE.match(cid_str):
+    if not _CHARACTER_ID_RE.fullmatch(cid_str):
         raise UnsafeCharacterId(
             f"API response carries unsafe character id: {cid_str!r}"
         )

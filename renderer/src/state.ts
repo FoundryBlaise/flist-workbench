@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import {
   api,
+  CrossCharacterImportRefusal,
+  RefusalError,
   type CharacterEntry,
   type FlistAccountCharacter,
   type FlistSnapshotEntry,
@@ -658,6 +660,9 @@ type State = {
    *  Live for that one image, leaving other gallery edits intact. */
   flistResetImageRow: (characterId: string, imageId: string) => void
   flistFlushWorking: (characterId: string) => Promise<void>
+  /** Saves every character's pending edits now, waiting out the
+   *  autosave's debounce and any save already on its way. */
+  flistFlushAllWorking: () => Promise<void>
   flistResetWorkingToLive: (characterId: string) => Promise<void>
   flistUndoResetWorking: () => Promise<void>
   flistDismissDriftBanner: (characterId: string) => void
@@ -1764,10 +1769,16 @@ export const useStore = create<State>((set, get) => ({
       api
         .flistZipBackups(characterId)
         .then((r) => ({ ok: true as const, backups: r.backups }))
-        .catch((err: unknown) => ({
-          ok: false as const,
-          error: err instanceof Error ? err.message : String(err)
-        }))
+        .catch((err: unknown) =>
+          // A character never pulled is not in the archive yet (404
+          // `character_not_found`): it simply has no backups.
+          err instanceof RefusalError && err.code === 'character_not_found'
+            ? { ok: true as const, backups: [] }
+            : {
+                ok: false as const,
+                error: err instanceof Error ? err.message : String(err)
+              }
+        )
     ])
     set((s) => ({
       flistArchive: {
@@ -2701,6 +2712,17 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async flistFlushAllWorking() {
+    const ids = new Set([
+      ...Object.keys(get().flistWorking),
+      ..._autosaveTimers.keys(),
+      ..._flushInflight.keys()
+    ])
+    // flistFlushWorking chains after a save in flight and skips a
+    // character with nothing unsaved.
+    await Promise.all([...ids].map((id) => get().flistFlushWorking(id).catch(() => {})))
+  },
+
   async flistResetWorkingToLive(characterId) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
@@ -3531,23 +3553,19 @@ export const useStore = create<State>((set, get) => ({
         crossCharacter: result.cross_character
       }
     } catch (err) {
-      const e = err as Error & {
-        code?: string
-        source?: { characterId: string; characterName: string; setName: string }
-      }
-      if (
-        e.code === 'requires_cross_character_confirmation' &&
-        e.source
-      ) {
+      if (err instanceof CrossCharacterImportRefusal) {
         _pendingCrossCharImport = {
           targetCharacterId,
           zipBytes: bytes,
           name
         }
-        return { status: 'requires_confirmation', source: e.source }
+        return { status: 'requires_confirmation', source: err.source }
       }
       _pendingCrossCharImport = null
-      return { status: 'error', message: e.message || 'import failed' }
+      return {
+        status: 'error',
+        message: (err instanceof Error && err.message) || 'import failed'
+      }
     }
   },
 
@@ -4850,15 +4868,17 @@ export const useStore = create<State>((set, get) => ({
       // The sidecar answers these with a code so the window can say
       // something useful instead of echoing an HTTP status at someone
       // who mistyped a name.
-      const coded = err as { code?: string; message?: string }
+      const code = err instanceof RefusalError ? err.code : undefined
       const message =
-        coded?.code === 'not_found'
+        code === 'not_found'
           ? `F-list has no character called "${clean}".`
-          : coded?.code === 'rate_limited'
+          : code === 'rate_limited'
             ? 'F-list is rate-limiting us. Give it a minute and try again.'
-            : coded?.code === 'not_signed_in'
+            : code === 'not_signed_in'
               ? 'Your F-list session expired. Sign in again to look up profiles.'
-              : (coded?.message ?? String(err))
+              : err instanceof Error
+                ? err.message
+                : String(err)
       set({ foreignStatus: 'error', foreignError: message })
     }
   },

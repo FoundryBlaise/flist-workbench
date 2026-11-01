@@ -113,45 +113,13 @@ export function AppLayout() {
     }
   }, [])
 
-  // Tier 2 made working copies persistent. On unload, hard-flush any
-  // pending autosaves synchronously via fetch+keepalive so unsaved
-  // edits never get stranded in the 500 ms debounce window.
+  // Before the window closes or reloads, or the app quits, main asks
+  // the page to save the edits the autosave has not sent yet, and waits
+  // (electron/unsavedEdits.ts). Saving then is an ordinary request from
+  // the app's page. Nothing is sent while the page unloads: a request
+  // that outlives its page no longer carries the launch secret.
   useEffect(() => {
-    const onBeforeUnload = () => {
-      const s = useStore.getState()
-      for (const [characterId, slot] of Object.entries(s.flistWorking)) {
-        // Skip slots already mid-save — a parallel keepalive PUT with a
-        // stale etag would race the in-flight request and lose, or
-        // worse, win and clobber it (QA P2-2). The in-flight PUT
-        // already includes the user's most recent payload.
-        if (!slot.unsavedDirty) continue
-        if (slot.saveStatus === 'saving') continue
-        try {
-          const url = `${api.base()}/flist/character/${encodeURIComponent(
-            characterId
-          )}/working`
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json'
-          }
-          if (slot.materialised && slot.etag) headers['If-Match'] = slot.etag
-          // keepalive lets the request survive the page unload — sized
-          // for the typical working-copy payload (sub-100 KB), well
-          // under the 64 KB hard cap on most browsers / Electron. If a
-          // payload exceeds the cap we just lose the in-flight save;
-          // the next open re-presents an unsaved-dirty banner.
-          fetch(url, {
-            method: 'PUT',
-            headers,
-            body: JSON.stringify(slot.payload),
-            keepalive: true
-          }).catch(() => {})
-        } catch {
-          // best-effort
-        }
-      }
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+    return window.workbench?.onSaveEditsRequest?.(() => useStore.getState().flistFlushAllWorking())
   }, [])
 
   // Sign-in at app start. The flow on every launch is:

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, Menu, MenuItemConstructorOptions, shell } from 'electron'
+import { saveEditsBeforeUnload } from './unsavedEdits'
 
 // All Workbench-specific menu items send a single channel with a known
 // id. The renderer dispatches to its existing handlers. Adding a new
@@ -24,6 +25,15 @@ function send(win: BrowserWindow | null, action: MenuAction): void {
   if (win && !win.isDestroyed()) {
     win.webContents.send('menu:action', action)
   }
+}
+
+function reloadAfterSaving(win: BrowserWindow | null, ignoringCache: boolean): void {
+  if (!win || win.isDestroyed()) return
+  void saveEditsBeforeUnload(win).then(() => {
+    if (win.isDestroyed()) return
+    if (ignoringCache) win.webContents.reloadIgnoringCache()
+    else win.webContents.reload()
+  })
 }
 
 export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
@@ -101,8 +111,18 @@ export function buildMenu(getWindow: () => BrowserWindow | null): Menu {
           click: () => send(getWindow(), 'mode-logs')
         },
         { type: 'separator' },
-        { role: 'reload' },
-        { role: 'forceReload' },
+        // Not the built-in reload roles: the page first saves the edits
+        // its autosave has not sent yet, as on close.
+        {
+          label: 'Reload',
+          accelerator: 'CmdOrCtrl+R',
+          click: () => reloadAfterSaving(getWindow(), false)
+        },
+        {
+          label: 'Force Reload',
+          accelerator: 'Shift+CmdOrCtrl+R',
+          click: () => reloadAfterSaving(getWindow(), true)
+        },
         { role: 'toggleDevTools' },
         { type: 'separator' },
         { role: 'resetZoom' },

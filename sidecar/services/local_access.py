@@ -13,7 +13,8 @@ sidecar trusts exactly two callers:
   own routes under `/restore/`.
 
 MCP clients are a third kind of caller with their own optional bearer
-(`workbench_mcp._TokenGate`); `/mcp` only gets the Host check here.
+(`workbench_mcp._TokenGate`); `/mcp` only gets the Host check and the
+refusal of `Origin: null` here, its transport checks other origins.
 
 One ASGI middleware decides, in this order: Host, then Origin (which
 also answers CORS), then the credential. It runs before routing, so a
@@ -59,10 +60,17 @@ EXTENSION_PATHS = frozenset(
 )
 EXTENSION_PATH_PREFIXES = ("/restore/snapshot/",)
 
-#: The packaged window loads from file://, which browsers send as
-#: `Origin: null`. A sandboxed iframe on any site sends that too, so this
-#: grants a CORS read, never trust: the secret still decides.
-_WINDOW_ORIGIN = "null"
+#: The built window loads from `app://workbench`, an origin of its own
+#: (electron/appPage.ts) that no web page can send. In dev it loads from
+#: the Vite server instead (`RENDERER_ORIGIN_ENV`).
+_WINDOW_ORIGIN = "app://workbench"
+#: The opaque origin: a sandboxed iframe or a `data:` page on any site
+#: sends it, and no caller the sidecar trusts does, so it is refused on
+#: every route, `/mcp` included.
+_OPAQUE_ORIGIN = "null"
+#: Open routes the app window never calls: only the extension starts a
+#: pairing, from f-list.net or chrome-extension://.
+_NO_WINDOW_ORIGIN = frozenset({("POST", "/restore/handshake")})
 _FLIST_ORIGIN = "https://www.f-list.net"
 #: An unpacked extension's id depends on the folder it was loaded from,
 #: so it cannot be pinned. The pairing token is what identifies it.
@@ -79,7 +87,7 @@ def require_configured() -> None:
     """Refuse to serve without a secret, rather than serve everyone."""
     if launch_secret() is None:
         raise RuntimeError(
-            f"{SECRET_ENV} is not set. Workbench starts the sidecar with a "
+            f"{SECRET_ENV} is not set. F-list Workbench starts the sidecar with a "
             "fresh secret; to run it by hand, set the variable to any value "
             "and send it as the X-Workbench-Secret header."
         )
@@ -100,11 +108,9 @@ def _extension_may_call(method: str, path: str) -> bool:
 
 
 def _origin_allowed(origin: str, method: str, path: str) -> bool:
-    if origin == _WINDOW_ORIGIN:
-        return True
     dev = os.environ.get(RENDERER_ORIGIN_ENV)
-    if dev and origin == dev.rstrip("/"):
-        return True
+    if origin == _WINDOW_ORIGIN or (dev and origin == dev.rstrip("/")):
+        return (method, path) not in _NO_WINDOW_ORIGIN
     if _extension_may_call(method, path):
         return origin == _FLIST_ORIGIN or origin.startswith(_EXTENSION_SCHEME)
     return False
@@ -146,11 +152,14 @@ class LocalAccessGuard:
         if headers.get(b"host") not in self._hosts:
             await _refuse(send, 403, "forbidden_host", "Unknown Host header.")
             return
+        origin = headers.get(b"origin")
+        if origin == _OPAQUE_ORIGIN:
+            await _refuse(send, 403, "forbidden_origin", "Origin not allowed.")
+            return
         if _is_mcp(path):
             await self.app(scope, receive, send)
             return
 
-        origin = headers.get(b"origin")
         preflight = method == "OPTIONS" and b"access-control-request-method" in headers
         if preflight:
             requested = headers[b"access-control-request-method"].upper()
@@ -168,7 +177,7 @@ class LocalAccessGuard:
                 send,
                 401,
                 "unauthorized",
-                "This route answers only the Workbench window or the paired extension.",
+                "This route answers only the app window or the paired extension.",
                 origin,
             )
             return

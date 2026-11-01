@@ -899,7 +899,7 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
 async def test_an_edit_retries_once_when_the_ui_saves_underneath(
     workbench,
 ) -> None:
-    """The Workbench window and a model can both be editing. A save
+    """The app window and a model can both be editing. A save
     landing between our read and write is expected, not an error — the
     two are usually touching different fields."""
     from services import payload_ops

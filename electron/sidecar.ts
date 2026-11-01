@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { app } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { DEV_SERVER_ORIGIN } from './appPage'
 
 // Mirror main.ts's appendDiagLog so sidecar startup paints into the
 // same log file. We can't import from main.ts (circular) and we want
@@ -71,7 +72,7 @@ export const sidecarPort = PORT
 
 // The sidecar answers only callers that carry this (ADR 0002): any web
 // page in the user's browser can reach the port, none can know a value
-// made fresh at every start. Main adds it to the window's requests
+// made fresh at every start. Main adds it to the app page's requests
 // (see main.ts) and to its own; the renderer never holds it.
 export const SECRET_HEADER = 'X-Workbench-Secret'
 const launchSecret = randomBytes(32).toString('hex')
@@ -99,11 +100,10 @@ function sidecarEnv(): NodeJS.ProcessEnv {
     FLIST_WORKBENCH_VERSION: app.getVersion(),
     FLIST_WORKBENCH_LAUNCH_SECRET: launchSecret
   }
-  // In dev the window loads from Vite rather than file://, so the
+  // In dev the window loads from Vite rather than app://workbench, so the
   // sidecar has to grant that origin too. Never set when packaged.
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  if (!app.isPackaged && devUrl) {
-    env['FLIST_WORKBENCH_RENDERER_ORIGIN'] = new URL(devUrl).origin
+  if (DEV_SERVER_ORIGIN !== undefined) {
+    env['FLIST_WORKBENCH_RENDERER_ORIGIN'] = DEV_SERVER_ORIGIN
   } else {
     delete env['FLIST_WORKBENCH_RENDERER_ORIGIN']
   }
@@ -163,7 +163,10 @@ export async function startSidecar(): Promise<void> {
         cwd: sidecarDir,
         env: sidecarEnv(),
         stdio: ['ignore', 'inherit', 'inherit'],
-        detached: process.platform !== 'win32'
+        detached: process.platform !== 'win32',
+        // Electron has no console of its own, so on Windows a console
+        // child would open its own window and take the focus.
+        windowsHide: true
       }
     )
   }
@@ -227,7 +230,8 @@ function runUvSync(cwd: string): Promise<void> {
       cwd,
       env: process.env,
       stdio: ['ignore', 'inherit', 'inherit'],
-      shell: process.platform === 'win32'
+      shell: process.platform === 'win32',
+      windowsHide: true
     })
     child.on('exit', (code) => {
       if (code === 0) resolve()

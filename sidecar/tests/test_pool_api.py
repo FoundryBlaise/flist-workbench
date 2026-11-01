@@ -23,8 +23,12 @@ _GIF = b"GIF89a" + b"\x00" * 32
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
+    import character_archive
     from server import app
 
+    # The characters these tests use, as a Pull would have left them.
+    for cid in ("7777", "8888", "9999"):
+        character_archive.create_character_dir(cid)
     return app_client(app)
 
 

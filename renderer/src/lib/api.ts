@@ -513,6 +513,34 @@ type WindowCreds = {
   getPassword: () => Promise<string | null>
 }
 
+/**
+ * A request the sidecar turned down with a code (`{code, message}`), so
+ * a caller can tell "not signed in" from "no such character" without
+ * matching on prose. Narrow with `instanceof`.
+ */
+export class RefusalError extends Error {
+  readonly code: string
+  readonly status: number
+
+  constructor(code: string, status: number, message: string) {
+    super(message)
+    this.name = 'RefusalError'
+    this.code = code
+    this.status = status
+  }
+}
+
+/** The bundle comes from another character; importing it needs the user's confirmation. */
+export class CrossCharacterImportRefusal extends RefusalError {
+  readonly source: { characterId: string; characterName: string; setName: string }
+
+  constructor(source: CrossCharacterImportRefusal['source']) {
+    super('requires_cross_character_confirmation', 422, 'requires_cross_character_confirmation')
+    this.name = 'CrossCharacterImportRefusal'
+    this.source = source
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -548,29 +576,37 @@ async function request<T>(
   if (!res.ok) {
     let detail: string | undefined
     try {
-      const raw = ((await res.json()) as { detail?: unknown })?.detail
-      // Most routes answer with a plain string. The /foreign/ ones
-      // carry `{code, message}` so the caller can tell "not signed in"
-      // from "no such character" without matching on prose; without
-      // this branch that object stringified to "[object Object]".
+      const body = (await res.json()) as {
+        code?: unknown
+        message?: unknown
+        detail?: unknown
+      } | null
+      // Every refusal answers `{code, message}` at the top level, so the
+      // caller can tell "not signed in" from "no such character" without
+      // matching on prose. Older answers nest it, or a plain string, in
+      // `detail`; a nested object would otherwise stringify to
+      // "[object Object]".
+      const raw =
+        body && typeof body.code === 'string' && typeof body.message === 'string'
+          ? body
+          : body?.detail
       if (typeof raw === 'string') {
         detail = raw
       } else if (raw && typeof raw === 'object') {
         const obj = raw as { message?: unknown; code?: unknown }
         if (typeof obj.message === 'string') detail = obj.message
         if (typeof obj.code === 'string') {
-          const err = new Error(
+          throw new RefusalError(
+            obj.code,
+            res.status,
             `HTTP ${res.status}: ${detail ?? res.statusText}`
-          ) as Error & { code?: string; status?: number }
-          err.code = obj.code
-          err.status = res.status
-          throw err
+          )
         }
       }
     } catch (e) {
-      // A thrown coded error above is the real failure — re-raise it.
+      // A refusal thrown above is the real failure — re-raise it.
       // Anything else means the body simply wasn't JSON.
-      if (e instanceof Error && 'code' in e) throw e
+      if (e instanceof RefusalError) throw e
     }
     throw new Error(`HTTP ${res.status}: ${detail ?? res.statusText}`)
   }
@@ -1239,23 +1275,11 @@ export const api = {
         typeof detail === 'object' &&
         detail.code === 'requires_cross_character_confirmation'
       ) {
-        const err = new Error(
-          'requires_cross_character_confirmation'
-        ) as Error & {
-          code: 'requires_cross_character_confirmation'
-          source: {
-            characterId: string
-            characterName: string
-            setName: string
-          }
-        }
-        err.code = 'requires_cross_character_confirmation'
-        err.source = {
+        throw new CrossCharacterImportRefusal({
           characterId: String(detail.source?.character_id ?? ''),
           characterName: String(detail.source?.character_name ?? ''),
           setName: String(detail.source?.set_name ?? '')
-        }
-        throw err
+        })
       }
       const msg = typeof detail === 'string' ? detail : 'invalid bundle'
       throw new Error(msg)
@@ -1505,6 +1529,9 @@ export const api = {
     }),
   restoreRevokeToken: () =>
     request<{ ok: boolean }>('/restore/token', { method: 'DELETE' }),
+  /** Whether a pairing token is stored. The token itself never comes
+   *  back; only the app window can ask. */
+  pairingStatus: () => get<{ paired: boolean }>('/pairing'),
 
   /** The extension version the browser runs, as of its last paired
    *  call. Null until the extension has made one since the app started. */

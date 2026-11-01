@@ -115,7 +115,7 @@ def build_set_bundle(
         for entry in images_dir.iterdir():
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if not m:
                 continue
             iid = m.group(1)
@@ -214,6 +214,10 @@ def import_set_bundle(
         if cross_character:
             payload = _rewrite_character_identity(payload, target_character_id)
 
+        # A bundle carried over from another install brings the
+        # character with it, like a first Pull. Only a bundle that
+        # passed every check above gets this far.
+        character_archive.create_character_dir(target_character_id)
         added, skipped = _copy_images(zf, target_character_id)
 
     new_meta = character_archive._materialise_set(
@@ -366,7 +370,7 @@ def _copy_images(
         for entry in images_dir.iterdir():
             if not entry.is_file():
                 continue
-            m = _IMAGE_FILE_RE.match(entry.name)
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
             if m:
                 existing_ids.add(m.group(1))
 
@@ -380,12 +384,12 @@ def _copy_images(
         rest = info.filename[len(_IMAGES_PREFIX):]
         if "/" in rest or "\\" in rest or ".." in rest:
             continue
-        m = _IMAGE_FILE_RE.match(rest)
+        m = _IMAGE_FILE_RE.fullmatch(rest)
         if not m:
             continue
         image_id = m.group(1)
         ext = m.group(2).lower()
-        if not _SAFE_ID_RE.match(image_id):
+        if not _SAFE_ID_RE.fullmatch(image_id):
             continue
         if image_id in existing_ids:
             skipped += 1

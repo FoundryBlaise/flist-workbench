@@ -233,7 +233,7 @@ async def get_profile(
     `live.json`, so the viewer's panes need no second reader.
 
     `budget`, when given, is charged one call before F-list is asked.
-    The Workbench window passes none; MCP passes its own share.
+    The app window passes none; MCP passes its own share.
     """
     clean = (name or "").strip()
     if not clean:

@@ -14,6 +14,8 @@ import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
 import { FileGrants } from './fileGrants'
+import { APP_PAGE_URL, isAppPage, registerAppScheme, serveAppScheme } from './appPage'
+import { saveEditsAndAllowClose, saveEditsOnClose } from './unsavedEdits'
 
 // Lazy keytar handle. We deliberately do NOT `import keytar` at the top
 // of the module: keytar is a native binding, and a load failure (ABI
@@ -47,6 +49,9 @@ function loadKeytar(): Keytar | null {
 }
 
 const isDev = !app.isPackaged
+
+// The app's own scheme has to be known before the app is ready.
+registerAppScheme()
 
 let mainWindow: BrowserWindow | null = null
 
@@ -106,14 +111,15 @@ ipcMain.handle('workbench:select-directory', async (event, opts: { title?: strin
   return result.filePaths[0]
 })
 
-// Working-set bundle export/import file-dialog plumbing. The renderer
-// asks for a path, gets bytes back (for import) or writes bytes out
-// (for export). Both handlers verify the sender is the main window's
-// WebContents so a stray context can't read or write arbitrary files
-// from the user's disk.
-// The paths those dialogs returned. read-file and write-file accept
-// nothing else: a script in the window must not be able to name a
-// file of its own choosing.
+// File dialogs for moving a Backup in or out of the app as a zip. The
+// renderer asks for a path, then reads the chosen file's bytes or
+// writes bytes to it through main; it never holds a file handle. Every
+// handler checks that the sender is the main window's WebContents, so
+// no other context can read or write the user's files.
+//
+// `fileGrants` holds the paths those dialogs returned. read-file and
+// write-file accept nothing else: a script in the window must not be
+// able to name a file of its own choosing.
 const fileGrants = new FileGrants()
 
 type SaveDialogOpts = {
@@ -220,9 +226,11 @@ type MenuFlags = {
 // WebContents — IPC from any other source (an unexpected iframe, say)
 // is dropped without acting.
 
-// Hostnames we'll open in the user's browser, locked down so a
-// compromised renderer can't redirect the user somewhere that looks
-// like us. Only the image context menu uses this today.
+// Hostnames the renderer's openExternal (the image context menu, the
+// character's edit-page button) may open in the user's browser, locked down
+// so a compromised renderer can't redirect the user somewhere that
+// looks like us. Links a page in the window opens are not held to it:
+// see openWebLink.
 const EXTERNAL_HOSTS = new Set([
   'github.com',
   // F-list main site and the static CDN that serves character
@@ -235,18 +243,36 @@ const EXTERNAL_HOSTS = new Set([
   'static.f-list.net'
 ])
 
-ipcMain.on('workbench:open-external', (event, url: unknown) => {
-  if (event.sender !== mainWindow?.webContents) return
-  if (typeof url !== 'string') return
-  let parsed: URL
+function parseUrl(url: unknown): URL | null {
+  if (typeof url !== 'string') return null
   try {
-    parsed = new URL(url)
+    return new URL(url)
   } catch {
-    return
+    return null
   }
-  if (parsed.protocol !== 'https:') return
+}
+
+// The renderer's openExternal: https on a known host only.
+function openExternal(url: unknown): void {
+  const parsed = parseUrl(url)
+  if (!parsed || parsed.protocol !== 'https:') return
   if (!EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return
   void shell.openExternal(parsed.toString())
+}
+
+// A link or window.open the app window would otherwise open as a window
+// of its own. A profile's links point anywhere, so any web URL goes to
+// the user's browser; every other scheme (file:, javascript:, custom
+// protocol handlers) opens nowhere.
+function openWebLink(url: string): void {
+  const parsed = parseUrl(url)
+  if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) return
+  void shell.openExternal(parsed.toString())
+}
+
+ipcMain.on('workbench:open-external', (event, url: unknown) => {
+  if (event.sender !== mainWindow?.webContents) return
+  openExternal(url)
 })
 
 // Settings → Security: where the bundled browser extension lives and
@@ -637,7 +663,11 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
 })
 
 async function createWindow(): Promise<void> {
+  // The e2e harness starts the app many times per run; a window that
+  // took the focus each time would keep the desktop unusable meanwhile.
+  const noFocus = process.env['FLIST_WORKBENCH_NO_FOCUS'] === '1'
   mainWindow = new BrowserWindow({
+    show: !noFocus,
     width: 1400,
     height: 900,
     // Below ~1100 px the editor and preview both compress past readable
@@ -659,28 +689,57 @@ async function createWindow(): Promise<void> {
       ]
     }
   })
+  if (noFocus) mainWindow.showInactive()
 
   mainWindow.on('closed', () => {
     mainWindow = null
   })
 
-  // Every request this window makes to the sidecar gets the launch
-  // secret: fetch, but also <img> and the event stream, which cannot
-  // set headers themselves. Keyed to this window's id, captured now,
-  // so the close-time flush still qualifies while the window unloads
-  // and no other web contents ever does.
+  // Closing the window first lets the app's page save the edits its
+  // autosave has not sent yet, with its ordinary requests.
+  saveEditsOnClose(mainWindow)
+
+  // Every request the app's own page makes to the sidecar gets the
+  // launch secret: fetch, but also <img> and the event stream, which
+  // cannot set headers themselves. Only the main frame of this window,
+  // while it shows the app's page, qualifies: never a frame inside it,
+  // a page that isn't the app, or any other web contents.
   const windowContentsId = mainWindow.webContents.id
   mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
     { urls: [`${sidecarUrl}/*`, `http://localhost:${sidecarPort}/*`] },
     (details, callback) => {
+      const frame = details.frame
+      const fromAppPage =
+        details.webContentsId === windowContentsId &&
+        frame != null &&
+        frame.parent === null &&
+        isAppPage(frame.url)
       callback({
         requestHeaders:
-          details.webContentsId === windowContentsId
-            ? withLaunchSecret(details.requestHeaders)
-            : details.requestHeaders
+          fromAppPage ? withLaunchSecret(details.requestHeaders) : details.requestHeaders
       })
     }
   )
+
+  // The window never leaves the app's own page: a link dropped onto it,
+  // a script setting location, or a redirect on the way is cancelled.
+  // Main's own loadURL is not a navigation the page asked for and is
+  // not seen here.
+  const stayOnAppPage = (event: Electron.Event, url: string): void => {
+    if (isAppPage(url)) return
+    event.preventDefault()
+    appendDiagLog('navigation-blocked', url)
+  }
+  mainWindow.webContents.on('will-navigate', (event, url) => stayOnAppPage(event, url))
+  mainWindow.webContents.on('will-redirect', (event, url) => stayOnAppPage(event, url))
+
+  // No page in the window ever gets a window of its own, which would
+  // carry the preload bridge. Web links, target="_blank" ones in a
+  // profile preview included, go to the user's browser instead.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openWebLink(url)
+    return { action: 'deny' }
+  })
 
   // Renderer-side breakage is easy to miss when the only symptom is a
   // blank window. Surface render-process-gone + unresponsive events so
@@ -702,14 +761,9 @@ async function createWindow(): Promise<void> {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  appendDiagLog('createWindow', { isDev, devUrl: devUrl ?? null })
+  appendDiagLog('createWindow', { isDev, appPage: APP_PAGE_URL })
   try {
-    if (isDev && devUrl) {
-      await mainWindow.loadURL(devUrl)
-    } else {
-      await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-    }
+    await mainWindow.loadURL(APP_PAGE_URL)
     appendDiagLog('createWindow', 'load complete')
   } catch (err) {
     appendDiagLog('createWindow-load-failed', err)
@@ -718,6 +772,7 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  serveAppScheme()
   appendDiagLog('whenReady', 'app ready, starting sidecar')
   try {
     await startSidecar()
@@ -780,11 +835,15 @@ app.on('window-all-closed', () => {
 // clear the ticket via the same endpoint the renderer's sign-out path
 // uses, then kill the process. Bounded to 1.5s so a frozen sidecar
 // can't hang the shutdown.
+//
+// Before any of that, the window's page saves its pending edits while
+// the sidecar still runs; the window then closes without asking again.
 let quitInvalidationDone = false
 app.on('before-quit', async (event) => {
   if (quitInvalidationDone) return
   event.preventDefault()
   quitInvalidationDone = true
+  if (mainWindow) await saveEditsAndAllowClose(mainWindow)
   try {
     await Promise.race([
       sidecarFetch('/flist/session', { method: 'DELETE' }),

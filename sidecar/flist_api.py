@@ -127,7 +127,7 @@ class TicketStore:
     The `_last_touched` timestamp tracks user-initiated activity (any
     `/flist/*` hit that is *not* the renderer's heartbeat poll). After
     a configurable idle window the password is dropped from memory so
-    the process doesn't sit on it while a forgotten Workbench window
+    the process doesn't sit on it while a forgotten app window
     lingers in the background. The ticket itself is left alone — it
     will expire naturally at the F-list-side 30-min TTL; the user just
     can't *auto-refresh* into a fresh session without typing the
@@ -396,7 +396,7 @@ class HourlyBudget:
             if len(self._calls) >= self.cap:
                 raise RateLimited(
                     f"{self.label} has used its hourly share of the F-list "
-                    f"API ({self.cap} requests). The Workbench window is "
+                    f"API ({self.cap} requests). The app window is "
                     "not affected; this budget refills as the hour rolls on."
                 )
             self._calls.append(now)
@@ -419,7 +419,7 @@ _MCP_CHARACTER_BUDGET = HourlyBudget(cap=MCP_PER_HOUR, label="MCP")
 
 def mcp_character_budget() -> HourlyBudget:
     """The share of `character-data.php` calls an MCP client may spend
-    per hour. The Workbench window charges nothing against it."""
+    per hour. The app window charges nothing against it."""
     return _MCP_CHARACTER_BUDGET
 
 

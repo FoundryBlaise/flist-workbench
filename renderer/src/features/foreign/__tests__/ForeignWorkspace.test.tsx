@@ -14,7 +14,7 @@ import {
   within
 } from '@testing-library/react'
 import { useStore } from '../../../state'
-import { api } from '../../../lib/api'
+import { api, RefusalError } from '../../../lib/api'
 import { ForeignWorkspace } from '../ForeignWorkspace'
 
 const PROFILE = {
@@ -153,7 +153,7 @@ it('free text never calls the search endpoint', async () => {
 
 it('explains a name F-list does not know', async () => {
   vi.mocked(api.foreignProfile).mockRejectedValue(
-    Object.assign(new Error('HTTP 404'), { code: 'not_found' })
+    new RefusalError('not_found', 404, 'HTTP 404: no such character')
   )
   render(<ForeignWorkspace />)
   fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))

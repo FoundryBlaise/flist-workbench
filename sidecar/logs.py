@@ -20,6 +20,7 @@ from typing import Iterator
 
 import aliases as aliases_store
 from parser import Message, parse_log
+from refusals import InvalidFileName, Refusal
 
 
 def default_data_dir() -> Path:
@@ -52,6 +53,24 @@ DEFAULT_DATA_DIR = default_data_dir()
 
 class LogDirError(Exception):
     pass
+
+
+class LogNotFound(LogDirError, Refusal):
+    """No Log by that name: an unknown character or partner. A caller
+    hears 404 `log_not_found` with a fixed message: the names are not
+    echoed back (`str(exc)` keeps them for MCP and logs)."""
+
+    status = 404
+    code = "log_not_found"
+    fixed_message = "no such log"
+
+
+class InvalidLogName(LogDirError, InvalidFileName):
+    """A character or partner name that cannot name an entry in its
+    folder. A caller hears 400 `invalid_file_name` with a fixed
+    message, like `LogNotFound`."""
+
+    fixed_message = "invalid log name"
 
 
 @dataclass(slots=True, frozen=True)
@@ -124,25 +143,26 @@ def _is_one_name(name: str) -> bool:
     Character and partner names arrive from requests. F-Chat names its
     folders and files after characters and channels, so the rule only
     refuses what no such name contains: a separator (`\\` is one on
-    Windows), a drive colon, NUL, and the `.`/`..` entries.
+    Windows), a drive colon, a control character (NUL, or the trailing
+    newline a `$`-anchored check lets through), and the `.`/`..` entries.
     """
     return (
         isinstance(name, str)
         and name not in ("", ".", "..")
-        and not any(c in name for c in "/\\:\x00")
+        and not any(c in "/\\:" or ord(c) < 0x20 or c == "\x7f" for c in name)
     )
 
 
 def _logs_dir(character: str, root: Path | None) -> Path:
     if not _is_one_name(character):
-        raise LogDirError(f"no logs for character: {character}")
+        raise InvalidLogName(f"invalid log character name: {character}")
     return (root or data_dir()) / character / "logs"
 
 
 def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry]:
     logs_dir = _logs_dir(character, root)
     if not logs_dir.exists():
-        raise LogDirError(f"no logs for character: {character}")
+        raise LogNotFound(f"no logs for character: {character}")
 
     seen: dict[str, int] = {}
     for entry in logs_dir.iterdir():
@@ -217,10 +237,10 @@ def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry
 
 def log_path(character: str, partner: str, root: Path | None = None) -> Path:
     if not _is_one_name(partner):
-        raise LogDirError(f"log not found: {character}/{partner}")
+        raise InvalidLogName(f"invalid log partner name: {partner}")
     path = _logs_dir(character, root) / partner
     if not path.exists() or not path.is_file():
-        raise LogDirError(f"log not found: {character}/{partner}")
+        raise LogNotFound(f"log not found: {character}/{partner}")
     return path
 
 
@@ -239,9 +259,11 @@ def read_messages(
     order. For unaliased partners this is exactly the original
     single-file behaviour. limit/offset apply to the merged stream.
     """
+    if not _is_one_name(partner):
+        raise InvalidLogName(f"invalid log partner name: {partner}")
     paths = _alias_paths(character, partner, root)
     if not paths:
-        raise LogDirError(f"log not found: {character}/{partner}")
+        raise LogNotFound(f"log not found: {character}/{partner}")
     if len(paths) == 1:
         # Fast path — no merge sort, no list buffering, identical to
         # the pre-aliases behaviour.

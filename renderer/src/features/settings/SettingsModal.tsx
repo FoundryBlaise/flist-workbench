@@ -1430,27 +1430,20 @@ function BrowserExtensionInstall() {
 }
 
 function SecurityPane() {
-  // Tracks whether a token has been issued + accepted. We can't read
-  // the token itself (sidecar never returns it after pairing) so this
-  // is a coarse "is anything stored?" signal derived from whether a
-  // /restore/* auth call succeeds. The simplest probe is to call any
-  // authed endpoint; we use snapshots with an empty character — it
-  // returns 200 + [] when paired, 401 when not.
-  const [paired, setPaired] = useState<'unknown' | 'yes' | 'no'>('unknown')
+  // Whether the sidecar holds an accepted pairing token. Only the
+  // extension has the token; the sidecar tells the app window whether
+  // one is stored, never the token itself. 'unavailable': the sidecar
+  // could not be asked, so neither answer is shown.
+  const [paired, setPaired] = useState<'checking' | 'yes' | 'no' | 'unavailable'>('checking')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
   const refresh = async () => {
     try {
-      const res = await fetch(`${api.base()}/restore/snapshots?character=__probe__`, {
-        // No X-Workbench-Auth header — if the sidecar replies 401, we
-        // know there's no accepted token. We can't actively test "is
-        // MY token valid" from the renderer because the renderer
-        // doesn't hold the token (only the extension does).
-      })
-      setPaired(res.status === 401 ? 'no' : res.status === 200 ? 'yes' : 'unknown')
+      const res = await api.pairingStatus()
+      setPaired(res.paired ? 'yes' : 'no')
     } catch {
-      setPaired('unknown')
+      setPaired('unavailable')
     }
   }
 
@@ -1482,7 +1475,8 @@ function SecurityPane() {
           <strong>
             {paired === 'yes' && '● Paired'}
             {paired === 'no' && '○ Not paired'}
-            {paired === 'unknown' && '… Checking'}
+            {paired === 'checking' && '… Checking'}
+            {paired === 'unavailable' && 'Pairing status unavailable'}
           </strong>
         </div>
         <p className="settings-help">
