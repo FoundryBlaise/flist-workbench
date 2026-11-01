@@ -740,11 +740,13 @@ async def flist_character_zip_backup_create_set(
     (POST /sets/import) — that one expects a manifest.json-style
     bundle and rejects backups for missing it. This path goes
     straight from the backup's payload to a new set."""
-    character_archive.require_backup_filename(filename)
     try:
         meta = character_archive.create_set_from_zip_backup(
             character_id, filename, body.name
         )
+    except Refusal:
+        # A bad backup name answers as itself, not as a bad set name.
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -800,9 +802,11 @@ async def flist_character_zip_backup_rename(
     back to the timestamp-derived default). Returns the canonical
     entry for the renamed backup so the renderer can update its
     in-memory list without a separate /zip-backups re-fetch."""
-    character_archive.require_backup_filename(filename)
     try:
         character_archive.rename_zip_backup(character_id, filename, body.name)
+    except Refusal:
+        # A bad backup name answers as itself, not as a bad set name.
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -1027,14 +1031,10 @@ _CHARACTER_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
 def _require_valid_character_id(character_id: str) -> None:
-    """Block path-traversal payloads in `{character_id}` segments.
-
-    Most legacy F-list-character routes accept the segment unchecked
-    (predates this guard); the new working-set bundle endpoints
-    deliberately validate because they accept arbitrary bytes and a
-    bogus id could write a multipart payload anywhere under
-    `<userdata>/characters/`. Real F-list ids are digits but archived
-    characters can also be keyed by name slug — the regex permits both.
+    """The id shape a route that creates a character accepts: an F-list
+    id (digits) or a name slug, at most 32 characters. Every other
+    `{character_id}` route needs no check of its own, because
+    `_known_character` only lets ids through that the archive holds.
     """
     if not isinstance(character_id, str) or not _CHARACTER_ID_RE.fullmatch(
         character_id
@@ -1087,6 +1087,8 @@ async def flist_character_workbench_load_backup(
     filename = (body.filename or "").strip()
     if not filename:
         raise HTTPException(status_code=422, detail="filename is required")
+    # Checked here as well as in the archive: `back_up_first` writes a
+    # Backup before the archive would get to refuse the name.
     character_archive.require_backup_filename(filename)
 
     saved_first: dict | None = None
@@ -1349,7 +1351,6 @@ async def flist_character_set_export(
     verbatim plus every referenced image's bytes. Renderer triggers a
     save dialog with the suggested filename derived from character + set.
     """
-    _require_valid_character_id(character_id)
     _require_valid_set_id(set_id)
     import set_bundle as _set_bundle
 
@@ -1395,7 +1396,6 @@ async def flist_character_set_import(
     duplicate names are permitted per the working-sets v2 design — the
     set_id is the unique identity.
     """
-    _require_valid_character_id(character_id)
     import set_bundle as _set_bundle
 
     try:
@@ -1534,7 +1534,6 @@ async def flist_character_image_remove(
     """Move `images/<image_id>.<ext>` into the character's trash, where
     it can be restored until the trash is emptied. The renderer drops
     any gallery row pointing at it."""
-    _require_valid_character_id(character_id)
     result = image_trash_service.trash_images(character_id, [image_id])
     if not result["trashed"]:
         raise HTTPException(status_code=404, detail="image not found")
@@ -1548,7 +1547,6 @@ class _ImageIdsBody(BaseModel):
 @app.post("/flist/character/{character_id}/images/trash")
 async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
     """Move several pool files into the trash at once."""
-    _require_valid_character_id(character_id)
     return image_trash_service.trash_images(character_id, body.image_ids)
 
 
@@ -1557,13 +1555,11 @@ async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -
 async def flist_character_image_references(character_id: str) -> dict:
     """Where each image id is still used — working sets, live, pull
     snapshots — so the window can warn before trashing one."""
-    _require_valid_character_id(character_id)
     return image_import_service.references(character_id)
 
 
 @app.get("/flist/character/{character_id}/trash")
 async def flist_character_trash_list(character_id: str) -> dict:
-    _require_valid_character_id(character_id)
     return {
         "character_id": character_id,
         "items": image_trash_service.list_trash(character_id),
@@ -1573,7 +1569,6 @@ async def flist_character_trash_list(character_id: str) -> dict:
 @app.get("/flist/character/{character_id}/trash/{filename}")
 async def flist_character_trash_file(character_id: str, filename: str) -> FileResponse:
     """Serve a trashed file, for the trash view's thumbnails."""
-    _require_valid_character_id(character_id)
     character_archive.require_image_filename(filename)
     if filename.endswith(".json"):
         # The trash's own metadata sits next to the files.
@@ -1587,7 +1582,6 @@ async def flist_character_trash_file(character_id: str, filename: str) -> FileRe
 @app.post("/flist/character/{character_id}/trash/restore")
 async def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) -> dict:
     """Put trashed files back into the pool (not onto the profile)."""
-    _require_valid_character_id(character_id)
     return image_trash_service.restore_images(character_id, body.image_ids)
 
 
@@ -1595,13 +1589,11 @@ async def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) 
 # it, so a model can never make a picture unrecoverable.
 @app.post("/flist/character/{character_id}/trash/purge")
 async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
-    _require_valid_character_id(character_id)
     return image_trash_service.purge_images(character_id, body.image_ids)
 
 
 @app.delete("/flist/character/{character_id}/trash")
 async def flist_character_trash_empty(character_id: str) -> dict:
-    _require_valid_character_id(character_id)
     return {"purged": image_trash_service.empty_trash(character_id)}
 
 
