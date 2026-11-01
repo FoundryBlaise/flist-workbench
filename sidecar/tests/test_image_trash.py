@@ -111,6 +111,10 @@ def test_unknown_ids_are_reported_not_fatal(client) -> None:
     assert client.delete("/flist/character/42/images/nope").status_code == 404
 
 
+@pytest.mark.invariant_exempt(
+    "nothing_vanishes",
+    reason="a human emptying the Trash is the one deletion the rule allows",
+)
 def test_only_the_window_deletes_for_good(client) -> None:
     a, b, c = (upload(client, n) for n in (5, 6, 7))
     client.post("/flist/character/42/images/trash", json={"image_ids": [a, b, c]})

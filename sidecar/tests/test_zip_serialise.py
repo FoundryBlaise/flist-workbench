@@ -152,24 +152,13 @@ def test_zip_serialise_standard_kinks_passthrough():
 # ---- Tier 6 format-drift canary -------------------------------------
 
 
-def _candidate_fixture_paths():
-    """Look up a real flistcharexporter export to canary against. The
-    fixture isn't committed (treat real character exports as sensitive),
-    so the test scans:
-      1. `tests/fixtures/working/flist_OOC_Hub_*.zip` — local checkout
-      2. `/sideprojects/flistcharexporter/flist_OOC_Hub_*.zip` — read-only
-         mount inside the devcontainer
-    First match wins; skip if neither is present (e.g. CI without the
-    sideprojects mount)."""
-    in_tree = list(FIXTURE_DIR.glob("flist_OOC_Hub_*.zip"))
-    if in_tree:
-        return in_tree[0]
-    side = Path("/sideprojects/flistcharexporter")
-    if side.exists():
-        matches = list(side.glob("flist_OOC_Hub_*.zip"))
-        if matches:
-            return matches[0]
-    return None
+def _real_export_fixture() -> Path:
+    """The user's own OOC Hub profile exported by flistcharexporter,
+    committed as a fixture. It holds a profile text, settings, kinks and
+    an avatar; no Logs and no other people's data."""
+    matches = sorted(FIXTURE_DIR.glob("flist_OOC_Hub_*.zip"))
+    assert matches, "real-export fixture missing from tests/fixtures/working/"
+    return matches[0]
 
 
 def _derive_working_from_character_json(character_json: dict) -> tuple[dict, dict]:
@@ -250,12 +239,7 @@ def test_round_trip_against_real_export_fixture():
     restore bundle (QA feedback BLOCK #11)."""
     import zipfile
 
-    fixture = _candidate_fixture_paths()
-    if fixture is None:
-        pytest.skip(
-            "no flistcharexporter OOC Hub sample available (commit one to "
-            "tests/fixtures/working/ or mount /sideprojects/flistcharexporter)"
-        )
+    fixture = _real_export_fixture()
     serialiser = _load_serialiser()
     with zipfile.ZipFile(fixture) as z:
         original = json.loads(z.read("character.json"))
@@ -264,11 +248,16 @@ def test_round_trip_against_real_export_fixture():
         working, image_extensions=image_extensions
     )
 
+    # `images.missing` is Workbench's own addition (gallery rows with no
+    # bytes); the extension reads it, the userscript's export predates it.
+    # A complete export has none.
+    assert reproduced["images"].pop("missing") == []
+
     # Compare modulo meta (exportedAt + version are emitter-specific).
     original_no_meta = {k: v for k, v in original.items() if k != "meta"}
     reproduced_no_meta = {k: v for k, v in reproduced.items() if k != "meta"}
     assert reproduced_no_meta == original_no_meta, (
-        "round-trip diverged from original export — "
+        "round-trip diverged from original export: "
         "the userscript's reader will fail to consume the Workbench ZIP"
     )
 

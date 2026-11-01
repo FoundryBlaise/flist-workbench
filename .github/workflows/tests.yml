@@ -1,0 +1,123 @@
+# Runs the sidecar's pytest suite, the renderer's vitest suite and the
+# Playwright e2e suite (own job, see `e2e` below) on every branch push
+# and pull request, on Windows because that is the only platform the
+# app ships for. release.yml calls this same file (workflow_call)
+# before it packs anything, so a tag build runs the tests on the tagged
+# commit and a red suite never becomes a release.
+#
+# Every job installs through the same local action release.yml uses
+# (.github/actions/setup-toolchain: Python 3.12, uv, `uv sync --project
+# sidecar`; Node 22, `npm ci`), so a dependency that only breaks the
+# release build breaks here first.
+#
+# Nothing in either suite needs the network or a downloaded model:
+# fastembed is mocked in the rag tests, outbound HTTP is mocked with
+# pytest-httpx, and app routes are exercised in-process. No test needs
+# files that only exist on a developer machine, so nothing skips today;
+# `-rs` prints the reason of any skip that appears, so one is never
+# silent. Checked locally by running the suite with APPDATA,
+# LOCALAPPDATA and USERPROFILE pointed at an empty folder, which is
+# what a runner has.
+#
+# Run time on windows-latest (first run, 2026-10-25, jobs in parallel):
+# sidecar about 3.5 min (pytest itself 3 min), renderer about 1 min,
+# e2e about 1.5 min including the build; about 4 min wall clock.
+name: Tests
+
+on:
+  push:
+    # Branches only. Tag pushes reach these tests through release.yml,
+    # which calls this workflow; listing tags here would run them twice.
+    branches: ['**']
+  pull_request: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    name: Sidecar (pytest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and the sidecar venv
+        uses: ./.github/actions/setup-toolchain
+        with:
+          python: 'true'
+
+      # --no-sync: test exactly the environment the step above built.
+      # -rs: print the reason for every skipped test.
+      - name: pytest
+        working-directory: sidecar
+        run: uv run --no-sync pytest -q -rs
+
+      # The mutation probe's own tests (docs/MUTATION_PROBE.md): dirty-tree
+      # refusal and restore-on-failure, on throwaway git repos. Not the
+      # probe itself, which takes half an hour.
+      - name: pytest (mutation probe)
+        run: uv run --project sidecar --no-sync python -m pytest -q -p no:cacheprovider scripts/mutation_probe
+
+  renderer:
+    name: Renderer (vitest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node and node_modules
+        uses: ./.github/actions/setup-toolchain
+        with:
+          node: 'true'
+
+      - name: vitest
+        run: npx vitest run
+
+  # The Playwright suite against the built Electron app. It launches
+  # the dev build, which starts its sidecar from sidecar/.venv, so this
+  # job needs both installs plus `npm run build`. Every launch gets
+  # fresh temp data folders and the fixture F-Chat folder that global
+  # setup writes with the sidecar's shared Log writer
+  # (tests/e2e/fixtures/build_fchat_dir.py); see tests/e2e/launch.ts.
+  # fetch:extension downloads the pinned extension release so the
+  # browser-extension spec runs instead of skipping.
+  # Measured locally at about 25 s for the three specs.
+  e2e:
+    name: App (Playwright e2e)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python, Node and both installs
+        uses: ./.github/actions/setup-toolchain
+        with:
+          python: 'true'
+          node: 'true'
+
+      - name: Build the app
+        run: npm run build
+
+      - name: Fetch the bundled browser extension
+        run: npm run fetch:extension
+
+      - name: Playwright
+        run: npx playwright test
+
+      # Traces and screenshots of a failed run, for
+      # `npx playwright show-trace`.
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: test-results/
+          retention-days: 7

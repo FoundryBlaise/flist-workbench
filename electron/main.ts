@@ -21,6 +21,13 @@ let _keytarLoadError: string | null = null
 function loadKeytar(): Keytar | null {
   if (_keytar) return _keytar
   if (_keytarLoadError) return null
+  // The e2e suite sets this so a test run never reads or signs in with
+  // the developer's own saved F-list login from the OS credential
+  // store. The app then behaves as on a machine with no keychain.
+  if (process.env['FLIST_WORKBENCH_NO_KEYCHAIN'] === '1') {
+    _keytarLoadError = 'disabled by FLIST_WORKBENCH_NO_KEYCHAIN'
+    return null
+  }
   try {
     _keytar = require('keytar') as Keytar
     return _keytar

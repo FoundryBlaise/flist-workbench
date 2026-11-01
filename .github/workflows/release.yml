@@ -6,6 +6,9 @@
 # Unsigned builds. See docs/INSTALL_WINDOWS.md for the SmartScreen
 # click-through users will see; code-signing is a separate decision.
 #
+# Packing starts only after tests.yml (pytest, vitest, e2e) has passed on
+# the same commit; see the `tests` job below.
+#
 # Trigger:
 #   git tag v0.0.1 && git push origin v0.0.1
 #
@@ -25,7 +28,14 @@ permissions:
   contents: write
 
 jobs:
+  # All test suites, on the commit being released. build-windows waits
+  # for them, so a red suite stops the run before anything is packed
+  # or published. The called workflow drops to contents: read.
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   build-windows:
+    needs: tests
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -49,31 +59,14 @@ jobs:
             exit 1
           }
 
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
+      # Node 22 + npm ci and Python 3.12 + uv + the sidecar venv, the
+      # same installs tests.yml runs. PyInstaller comes with the venv's
+      # dev group.
+      - name: Set up Python, Node and both installs
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version: '22'
-          cache: npm
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: latest
-
-      # Sync the sidecar's uv-managed venv. PyInstaller lives in the
-      # dev group; without --all-extras it'd be missing on the runner.
-      - name: uv sync (sidecar)
-        run: uv sync --project sidecar
-
-      # npm ci wipes node_modules and rebuilds native deps (keytar)
-      # against the Electron ABI. build-win.ps1 does the same.
-      - name: npm ci
-        run: npm ci
+          python: 'true'
+          node: 'true'
 
       # electron-builder fetches winCodeSign, nsis and nsis-resources
       # from GitHub at pack time. A cold runner downloads all three on

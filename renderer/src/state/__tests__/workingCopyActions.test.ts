@@ -3,62 +3,27 @@
 // interleaving, 409 etag-mismatch handling, openWorking + archive race,
 // reset-to-Live → undo round-trip, and signOut drains pending edits.
 //
-// All tests mock `fetch` so the real sidecar isn't touched.
+// All tests talk to the shared fake sidecar, so the real one isn't
+// touched. Held requests (`fake.hold`) are how the in-flight races
+// below are staged: a save stays open until the test releases it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
+import { installFakeApi, json, networkError, type FakeApi } from '../../test/fakeApi'
+import {
+  archiveEntry,
+  livePayload,
+  payloadRead,
+  workbenchPayload,
+  workbenchRead,
+  workingSlot
+} from '../../test/payloads'
 
-interface Capture {
-  url: string
-  method: string
-  body?: unknown
-  headers?: Record<string, string>
-}
-
-function mockFetch(
-  routes: ((c: Capture) => Promise<Response>)[]
-): Capture[] {
-  const calls: Capture[] = []
-  let idx = 0
-  ;(globalThis as { fetch?: unknown }).fetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : (input as URL).toString()
-      const method = (init?.method ?? 'GET').toUpperCase()
-      const headers: Record<string, string> = {}
-      if (init?.headers) {
-        for (const [k, v] of Object.entries(
-          init.headers as Record<string, string>
-        )) {
-          headers[k] = String(v)
-        }
-      }
-      let body: unknown = undefined
-      try {
-        body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
-      } catch {
-        body = init?.body
-      }
-      const capture: Capture = { url, method, body, headers }
-      calls.push(capture)
-      const route = routes[Math.min(idx, routes.length - 1)]
-      idx++
-      return route(capture)
-    }
-  )
-  return calls
-}
-
-function ok(body: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => body,
-    text: async () => JSON.stringify(body)
-  } as unknown as Response
-}
+let fake: FakeApi
 
 beforeEach(() => {
   vi.useFakeTimers()
+  fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
     flistSetWorking: {},
@@ -78,25 +43,26 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  fake.restore()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
 const SET_ID = 'aaaaaaaaaaaa'
+const BENCH_URL = `/flist/character/99/sets/${SET_ID}/payload`
+const SAVE = `PUT ${BENCH_URL}`
+const AUTOSAVE_MS = 500
+
+const descOf = (body: unknown) =>
+  ((body as { character?: { description?: string } }).character ?? {}).description
+
+const conflict = json(
+  { detail: { detail: 'etag_mismatch', current_etag: 'server-etag' } },
+  409
+)
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
-  const slot = {
-    payload: { _schema_version: 2, _overlay: [], ...payload },
-    overlay: Array.isArray(payload._overlay)
-      ? (payload._overlay as string[])
-      : [],
-    etag: 'seed-etag',
-    unsavedDirty: false,
-    saveStatus: 'idle' as const,
-    saveError: null,
-    lastSavedAt: null,
-    materialised: true
-  }
+  const slot = workingSlot(workbenchPayload(payload))
   useStore.setState((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     // Working sets v2: a flush routes through the *active set's*
@@ -109,10 +75,16 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
   }))
 }
 
+function seedLive(live: Record<string, unknown>) {
+  useStore.setState({
+    flistArchive: { '99': archiveEntry(livePayload(live)) }
+  })
+}
+
 describe('autosave debouncer', () => {
   it('coalesces three keystrokes within 500 ms into a single PUT carrying the last payload', async () => {
     seedSlot('99', { character: { description: '' } })
-    const calls = mockFetch([async () => ok({ etag: 'new1' })])
+    fake.on(SAVE, json({ etag: 'new1' }))
 
     useStore.getState().flistSetWorkingField('99', 'character.description', 'a')
     await vi.advanceTimersByTimeAsync(200)
@@ -121,35 +93,142 @@ describe('autosave debouncer', () => {
     useStore.getState().flistSetWorkingField('99', 'character.description', 'abc')
     await vi.advanceTimersByTimeAsync(500)
 
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
-    expect((puts[0].body as Record<string, Record<string, string>>).character.description).toBe('abc')
+    expect(descOf(puts[0].body)).toBe('abc')
+  })
+
+  it('keystrokes spaced wider than the debounce window each get their own save', async () => {
+    // Coalescing is for bursts. Someone who types, pauses, and types
+    // again has two versions worth keeping, and the first must not wait
+    // for the second.
+    seedSlot('99', { character: { description: '' } })
+    fake.on(SAVE, json({ etag: 'saved' }))
+
+    useStore.getState().setEditorContent('Azure')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual(['Azure'])
+
+    useStore.getState().setEditorContent('Azure Viper')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+
+    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual([
+      'Azure',
+      'Azure Viper'
+    ])
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
   })
 
   it('signOut drains pending working-copy edits via flistFlushWorking', async () => {
     seedSlot('99', { character: { description: 'before' } })
-    const calls = mockFetch([
-      async () => ok({ etag: 'flushed' }),
-      async () => ok({ signed_out: true })
-    ])
+    fake.on(SAVE, json({ etag: 'flushed' }))
+    fake.on('DELETE /flist/session', json({ signed_out: true }))
     useStore.getState().flistSetWorkingField('99', 'character.description', 'after')
     // Don't advance — leave the debounce armed; signOut should still flush.
     await useStore.getState().flistSignOut()
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
-    expect((puts[0].body as Record<string, Record<string, string>>).character.description).toBe('after')
+    expect(descOf(puts[0].body)).toBe('after')
+  })
+
+  it('an edit saves the Workbench with its unknown top-level keys intact (forward-compat)', async () => {
+    // A newer version may have written keys this one does not know;
+    // saving an edit must carry them back to disk, not drop them.
+    seedSlot('99', { character: { description: 'before' }, _future: { tier: 5 } })
+    fake.on(SAVE, json({ etag: 'saved' }))
+
+    useStore.getState().flistSetWorkingField('99', 'character.description', 'after')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+
+    const puts = fake.requestsTo(SAVE)
+    expect(puts.map((r) => descOf(r.body))).toEqual(['after'])
+    expect((puts[0].body as Record<string, unknown>)._future).toEqual({ tier: 5 })
   })
 })
 
-const conflictResponse = async () =>
-  ({
-    ok: false,
-    status: 409,
-    json: async () => ({
-      detail: { detail: 'etag_mismatch', current_etag: 'server-etag' }
-    }),
-    text: async () => '{}'
-  }) as unknown as Response
+describe('typing while a save is in flight', () => {
+  it('keeps the slot unsaved when the save lands, then saves the newer text', async () => {
+    // The save carried "draft"; "draft, revised" arrived during the
+    // round-trip. Marking the slot saved on the response would drop the
+    // revision the moment the user switched away.
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('draft')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [first] = fake.pending(SAVE)
+    expect(descOf(first.request.body)).toBe('draft')
+
+    useStore.getState().setEditorContent('draft, revised')
+    first.resolve(json({ etag: 'after-first' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(true)
+    expect(slot.etag).toBe('after-first')
+
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [second] = fake.pending(SAVE)
+    expect(descOf(second.request.body)).toBe('draft, revised')
+    expect(second.request.headers['If-Match']).toBe('after-first')
+
+    second.resolve(json({ etag: 'after-second' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
+    expect(fake.requestsTo(SAVE)).toHaveLength(2)
+  })
+
+  // A slow sidecar: the first save stays open while two more pauses
+  // pass, so two flushes queue behind it; then every save lands.
+  async function burstBehindASlowSave() {
+    seedSlot('99', { character: { description: '' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('one')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    useStore.getState().setEditorContent('one two three')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const sentWhileOpen = fake.requestsTo(SAVE).length
+
+    fake.pending(SAVE)[0].resolve(json({ etag: 'e1' }))
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    for (const p of fake.pending(SAVE)) p.resolve(json({ etag: 'e2' }))
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+
+    return { sentWhileOpen, puts: fake.requestsTo(SAVE) }
+  }
+
+  it('edits behind a slow save wait for it, then the newest text is saved over its etag', async () => {
+    const { sentWhileOpen, puts } = await burstBehindASlowSave()
+
+    expect(sentWhileOpen).toBe(1)
+    expect(descOf(puts[0].body)).toBe('one')
+    expect(puts[0].headers['If-Match']).toBe('seed-etag')
+    const after = puts.slice(1)
+    expect(after.length).toBeGreaterThan(0)
+    for (const put of after) {
+      expect(descOf(put.body)).toBe('one two three')
+      expect(put.headers['If-Match']).toBe('e1')
+    }
+    expect(fake.pending(SAVE)).toEqual([])
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
+  })
+
+  // Real bug, see #2: the two flushes queued behind the in-flight save
+  // both wake when it lands and each sends a PUT over the same etag, so
+  // against the real sidecar the second gets a 409 and raises a
+  // conflict banner for a conflict the window had with itself. Drop
+  // `.fails` once the fix lands; the test above checks everything else.
+  it.fails('no two saves leave over the same etag', async () => {
+    const { puts } = await burstBehindASlowSave()
+
+    const etags = puts.map((r) => r.headers['If-Match'])
+    expect(etags).toEqual([...new Set(etags)])
+  })
+})
 
 describe('flistFlushWorking 409 etag-mismatch path', () => {
   it('does NOT adopt the server etag, so a retry cannot overwrite', async () => {
@@ -158,7 +237,7 @@ describe('flistFlushWorking 409 etag-mismatch path', () => {
     // the next keystroke's autosave succeed and silently overwrite the
     // model's work — the whole point of the conflict.
     seedSlot('99', { character: { description: 'mine' } })
-    mockFetch([conflictResponse])
+    fake.on(SAVE, conflict)
     useStore.getState().flistSetWorkingField('99', 'character.description', 'mine-updated')
     await vi.advanceTimersByTimeAsync(500)
     const slot = useStore.getState().flistWorking['99']
@@ -169,7 +248,7 @@ describe('flistFlushWorking 409 etag-mismatch path', () => {
 
   it('raises the conflict banner carrying the server etag', async () => {
     seedSlot('99', { character: { description: 'mine' } })
-    mockFetch([conflictResponse])
+    fake.on(SAVE, conflict)
     useStore.getState().flistSetWorkingField('99', 'character.description', 'mine-updated')
     await vi.advanceTimersByTimeAsync(500)
     const change = useStore.getState().flistExternalChange['99']
@@ -209,17 +288,10 @@ describe('external-change resolution', () => {
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
-    mockFetch([
-      async () =>
-        ok({
-          payload: {
-            _schema_version: 2,
-            _overlay: [],
-            character: { description: 'theirs' }
-          },
-          etag: 'theirs'
-        })
-    ])
+    fake.on(
+      `GET ${BENCH_URL}`,
+      json(payloadRead(workbenchPayload({ character: { description: 'theirs' } }), 'theirs'))
+    )
     await useStore.getState().flistReloadAfterExternalChange('99')
     const slot = useStore.getState().flistWorking['99']
     const char = slot.payload.character as { description?: string } | undefined
@@ -229,6 +301,37 @@ describe('external-change resolution', () => {
     expect(useStore.getState().flistExternalChange['99']).toBeNull()
   })
 
+  it('after the reload the editor shows the reloaded description', async () => {
+    // The slot taking their version is half of it; the open editor has
+    // to show it too, or the next keystroke saves the old text over it.
+    seedSlot('99', { character: { description: 'Lady Amber Blaise, as I left her' } })
+    useStore.setState({ editorContent: 'Lady Amber Blaise, as I left her' })
+    useStore.getState().flistNoteExternalChange('99', {
+      setId: SET_ID,
+      etag: 'theirs',
+      origin: 'mcp:set_description'
+    })
+    fake.on(
+      `GET ${BENCH_URL}`,
+      json(
+        payloadRead(
+          workbenchPayload({
+            _overlay: ['character.description'],
+            character: { description: 'Lady Amber Blaise, as the model wrote her' }
+          }),
+          'theirs'
+        )
+      )
+    )
+
+    await useStore.getState().flistReloadAfterExternalChange('99')
+
+    expect(useStore.getState().editorContent).toBe(
+      'Lady Amber Blaise, as the model wrote her'
+    )
+    expect(useStore.getState().editorDirty).toBe(false)
+  })
+
   it('keep-mine writes against their etag, which is what makes it win', async () => {
     seedSlot('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
@@ -236,10 +339,10 @@ describe('external-change resolution', () => {
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
-    const calls = mockFetch([async () => ok({ etag: 'mine-now' })])
+    fake.on(SAVE, json({ etag: 'mine-now' }))
     await useStore.getState().flistOverwriteAfterExternalChange('99')
-    const put = calls.find((c) => c.method === 'PUT')
-    expect(put?.headers?.['If-Match']).toBe('theirs')
+    const [put] = fake.requestsTo(SAVE)
+    expect(put?.headers['If-Match']).toBe('theirs')
     const slot = useStore.getState().flistWorking['99']
     expect(slot.etag).toBe('mine-now')
     expect(slot.unsavedDirty).toBe(false)
@@ -253,7 +356,7 @@ describe('external-change resolution', () => {
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
-    mockFetch([conflictResponse])
+    fake.on(SAVE, conflict)
     await useStore.getState().flistOverwriteAfterExternalChange('99')
     expect(useStore.getState().flistExternalChange['99']).toBeTruthy()
   })
@@ -262,19 +365,15 @@ describe('external-change resolution', () => {
 describe('flistOpenWorking archive race (QA P1-3)', () => {
   it('fetches Live + caches it before seeding the working copy on 404', async () => {
     useStore.setState({ flistArchive: {}, flistRoster: [] })
-    const calls = mockFetch([
-      async () => ok({ character: { description: 'live-desc', id: '99' }, id: '99' }),
-      async () =>
-        ({
-          ok: false,
-          status: 404,
-          json: async () => ({ detail: 'no working copy' }),
-          text: async () => '{}'
-        }) as unknown as Response
-    ])
+    fake.on(
+      'GET /flist/character/99/live',
+      json({ character: { description: 'live-desc', id: '99' }, id: '99' })
+    )
+    fake.on('GET /flist/character/99/workbench', json({ detail: 'no workbench' }, 404))
+    fake.on('GET /flist/character/99/working', json({ detail: 'no working copy' }, 404))
     await useStore.getState().flistOpenWorking('99')
-    expect(calls.some((c) => c.url.includes('/flist/character/99/live'))).toBe(true)
-    expect(calls.some((c) => c.url.includes('/working') && c.method === 'GET')).toBe(true)
+    expect(fake.requestsTo('GET /flist/character/99/live')).toHaveLength(1)
+    expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(1)
     const slot = useStore.getState().flistWorking['99']
     expect(slot).toBeDefined()
     const char = slot.payload.character as { description?: string } | undefined
@@ -287,35 +386,21 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   it('hydrates the real bench and reads its payload instead of working.json', async () => {
     useStore.setState({
       flistArchive: {
-        '99': {
-          live: { character: { description: 'live-desc' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
+        '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
       },
       flistRoster: []
     })
-    const calls = mockFetch([
-      async () =>
-        ok({
-          workbench: { id: 'bbbbbbbbbbbb', kind: 'bench', name: 'Workbench' },
-          active_set_id: 'bbbbbbbbbbbb'
-        }),
-      async () =>
-        ok({
-          payload: {
-            _schema_version: 2,
-            _overlay: [],
-            character: { description: 'bench-desc' }
-          },
-          etag: 'disk-etag'
-        })
-    ])
+    fake.on(
+      'GET /flist/character/99/workbench?create=false',
+      json(workbenchRead('bbbbbbbbbbbb'))
+    )
+    fake.on(
+      'GET /flist/character/99/sets/bbbbbbbbbbbb/payload',
+      json(payloadRead(workbenchPayload({ character: { description: 'bench-desc' } }), 'disk-etag'))
+    )
     await useStore.getState().flistOpenWorking('99')
-    expect(
-      calls.some((c) => c.url.includes('/flist/character/99/workbench?create=false'))
-    ).toBe(true)
-    expect(calls.some((c) => c.url.includes('/working') && c.method === 'GET')).toBe(false)
+    expect(fake.requestsTo('GET /flist/character/99/workbench?create=false')).toHaveLength(1)
+    expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(0)
     expect(useStore.getState().flistActiveSetId['99']).toBe('bbbbbbbbbbbb')
     const slot = useStore.getState().flistWorking['99']
     expect(slot.etag).toBe('disk-etag')
@@ -326,42 +411,23 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
   it('a character with no bench yet still falls through to the legacy read', async () => {
     useStore.setState({
       flistArchive: {
-        '99': {
-          live: { character: { description: 'live-desc' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
+        '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
       },
       flistRoster: []
     })
-    const calls = mockFetch([
-      async () => ok({ workbench: null, reason: 'no_workbench' }),
-      async () =>
-        ({
-          ok: false,
-          status: 404,
-          json: async () => ({ detail: 'no working copy' }),
-          text: async () => '{}'
-        }) as unknown as Response
-    ])
+    fake.on(
+      'GET /flist/character/99/workbench?create=false',
+      json({ workbench: null, reason: 'no_workbench' })
+    )
+    fake.on('GET /flist/character/99/working', json({ detail: 'no working copy' }, 404))
     await useStore.getState().flistOpenWorking('99')
-    expect(calls.some((c) => c.url.includes('/workbench?create=false'))).toBe(true)
-    expect(calls.some((c) => c.url.includes('/working') && c.method === 'GET')).toBe(true)
+    expect(fake.requestsTo('GET /flist/character/99/workbench?create=false')).toHaveLength(1)
+    expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(1)
     const slot = useStore.getState().flistWorking['99']
     expect((slot.payload.character as { description?: string }).description).toBe('live-desc')
     expect(slot.materialised).toBe(false)
   })
 })
-
-const BENCH_URL = `/flist/character/99/sets/${SET_ID}/payload`
-const descOf = (body: unknown) =>
-  ((body as { character?: { description?: string } }).character ?? {}).description
-
-function seedLive(live: Record<string, unknown>) {
-  useStore.setState({
-    flistArchive: { '99': { live, snapshots: [], pullStatus: 'idle' } }
-  })
-}
 
 describe('flistResetWorkingToLive writes the bench, not working.json', () => {
   it('replaces the bench on disk with Live, against the etag the window holds', async () => {
@@ -381,15 +447,15 @@ describe('flistResetWorkingToLive writes the bench, not working.json', () => {
       ],
       _overlay: ['character.description', 'images']
     })
-    const calls = mockFetch([async () => ok({ etag: 'after-reset' })])
+    fake.on(SAVE, json({ etag: 'after-reset' }))
 
     await useStore.getState().flistResetWorkingToLive('99')
 
-    expect(calls.length).toBe(1)
-    const [put] = calls
+    expect(fake.requests.length).toBe(1)
+    const [put] = fake.requests
     expect(put.method).toBe('PUT')
-    expect(put.url).toContain(BENCH_URL)
-    expect(put.headers?.['If-Match']).toBe('seed-etag')
+    expect(put.path).toBe(BENCH_URL)
+    expect(put.headers['If-Match']).toBe('seed-etag')
     expect(descOf(put.body)).toBe('live')
     const images = (put.body as { images: { image_id: string }[] }).images
     expect(images.map((i) => i.image_id)).toEqual(['1', '2'])
@@ -405,11 +471,9 @@ describe('flistResetWorkingToLive writes the bench, not working.json', () => {
   it('a follow-up flush armed before the reset never ships the pre-reset payload', async () => {
     seedLive({ character: { description: 'live' } })
     seedSlot('99', { character: { description: 'edited' } })
-    const calls = mockFetch([
-      async () => ok({ etag: 'next' }),
-      async () => ok({ etag: 'after-reset' }),
-      async () => ok({ etag: 'unexpected' })
-    ])
+    fake.once(SAVE, json({ etag: 'next' }))
+    fake.once(SAVE, json({ etag: 'after-reset' }))
+    fake.on(SAVE, json({ etag: 'unexpected' }))
     // A save lands, then a newer edit arms the success branch's
     // follow-up flush; the reset arrives before that timer fires.
     useStore.getState().flistSetWorkingField('99', 'character.description', 'edited+')
@@ -418,13 +482,45 @@ describe('flistResetWorkingToLive writes the bench, not working.json', () => {
     await useStore.getState().flistResetWorkingToLive('99')
     await vi.advanceTimersByTimeAsync(1000)
 
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.map((p) => descOf(p.body))).toEqual(['edited+', 'live'])
     // The reset writes over the etag the landed save left, not the
     // one the slot carried before it.
-    expect(puts[1].headers?.['If-Match']).toBe('next')
-    expect(calls.some((c) => c.url.includes('/working'))).toBe(false)
+    expect(puts[1].headers['If-Match']).toBe('next')
+    expect(fake.requests.some((r) => r.path.includes('/working'))).toBe(false)
     expect(useStore.getState().flistWorking['99'].etag).toBe('after-reset')
+  })
+
+  it('drains a save still in flight, then writes Live over the etag that save returned', async () => {
+    // The reset is pressed while an autosave is on the wire. Writing
+    // straight away would race it: whichever lands second wins, and
+    // the reset's If-Match would name an etag the save is about to
+    // replace.
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', { character: { description: 'edited' } })
+    fake.hold(SAVE)
+
+    useStore.getState().setEditorContent('edited, still saving')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [inFlight] = fake.pending(SAVE)
+    expect(descOf(inFlight.request.body)).toBe('edited, still saving')
+
+    const reset = useStore.getState().flistResetWorkingToLive('99')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+
+    inFlight.resolve(json({ etag: 'landed' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const [resetWrite] = fake.pending(SAVE)
+    expect(descOf(resetWrite.request.body)).toBe('live')
+    expect(resetWrite.request.headers['If-Match']).toBe('landed')
+
+    resetWrite.resolve(json({ etag: 'after-reset' }))
+    await reset
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+    expect(fake.requestsTo(SAVE)).toHaveLength(2)
+    expect(useStore.getState().flistWorking['99'].etag).toBe('after-reset')
+    expect(useStore.getState().editorContent).toBe('live')
   })
 
   it('a slot that was never materialised is reseeded in memory only', async () => {
@@ -436,12 +532,12 @@ describe('flistResetWorkingToLive writes the bench, not working.json', () => {
         '99': { ...s.flistWorking['99'], materialised: false, etag: null }
       }
     }))
-    const calls = mockFetch([async () => ok({ etag: 'unexpected' })])
+    fake.on(SAVE, json({ etag: 'unexpected' }))
 
     await useStore.getState().flistResetWorkingToLive('99')
     await vi.advanceTimersByTimeAsync(1000)
 
-    expect(calls).toEqual([])
+    expect(fake.requests).toEqual([])
     expect(useStore.getState().flistWorking['99'].materialised).toBe(false)
   })
 })
@@ -453,20 +549,18 @@ describe('flistResetWorkingToLive + undo round-trip', () => {
       character: { description: 'edited' },
       _overlay: ['character.description']
     })
-    const calls = mockFetch([
-      async () => ok({ etag: 'after-reset' }),
-      async () => ok({ etag: 'after-undo' })
-    ])
+    fake.once(SAVE, json({ etag: 'after-reset' }))
+    fake.once(SAVE, json({ etag: 'after-undo' }))
 
     await useStore.getState().flistResetWorkingToLive('99')
     expect(useStore.getState().flistResetUndo).not.toBeNull()
     await useStore.getState().flistUndoResetWorking()
 
-    expect(calls.length).toBe(2)
-    const undoPut = calls[1]
+    expect(fake.requests.length).toBe(2)
+    const undoPut = fake.requests[1]
     expect(undoPut.method).toBe('PUT')
-    expect(undoPut.url).toContain(BENCH_URL)
-    expect(undoPut.headers?.['If-Match']).toBe('after-reset')
+    expect(undoPut.path).toBe(BENCH_URL)
+    expect(undoPut.headers['If-Match']).toBe('after-reset')
     expect(descOf(undoPut.body)).toBe('edited')
 
     const restored = useStore.getState().flistWorking['99']
@@ -486,7 +580,7 @@ describe('switching characters must not strand the last edit', () => {
   // is the worst version of it.
   it('flushes a pending edit before the switch', async () => {
     seedSlot('99', { character: { description: 'before' } })
-    const calls = mockFetch([async () => ok({ etag: 'flushed' })])
+    fake.on(SAVE, json({ etag: 'flushed' }))
 
     useStore
       .getState()
@@ -495,12 +589,9 @@ describe('switching characters must not strand the last edit', () => {
     // someone types and immediately clicks another character.
     await useStore.getState().flistSelectCharacter('100')
 
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
-    expect(
-      (puts[0].body as Record<string, Record<string, string>>).character
-        .description
-    ).toBe('typed then left')
+    expect(descOf(puts[0].body)).toBe('typed then left')
     expect(useStore.getState().flistActiveCharacterId).toBe('100')
   })
 
@@ -509,11 +600,7 @@ describe('switching characters must not strand the last edit', () => {
     // user — so the edit has to survive in memory with the error
     // visible, not vanish quietly.
     seedSlot('99', { character: { description: 'before' } })
-    mockFetch([
-      async () => {
-        throw new Error('sidecar down')
-      }
-    ])
+    fake.on(SAVE, networkError('sidecar down'))
 
     useStore
       .getState()
@@ -521,10 +608,7 @@ describe('switching characters must not strand the last edit', () => {
     await useStore.getState().flistSelectCharacter('100')
 
     const slot = useStore.getState().flistWorking['99']
-    expect(
-      (slot.payload as Record<string, Record<string, string>>).character
-        .description
-    ).toBe('at risk')
+    expect(descOf(slot.payload)).toBe('at risk')
     expect(slot.unsavedDirty).toBe(true)
     expect(slot.saveStatus).toBe('error')
   })
@@ -542,26 +626,21 @@ describe('reopening a character must not discard what was typed', () => {
     useStore.setState({
       flistRoster: [{ id: 99, name: 'Amber' }] as never,
       flistArchive: {
-        '99': {
-          live: { character: { name: 'Amber', description: 'live text' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      } as never,
+        '99': archiveEntry(
+          livePayload({ character: { name: 'Amber', description: 'live text' } })
+        )
+      },
       editorReadOnly: false
     })
-    const calls = mockFetch([async () => ok({ etag: 'x' })])
+    fake.on(SAVE, json({ etag: 'x' }))
 
     useStore.getState().setEditorContent('typed just now')
     useStore.getState().selectCharacter('Amber')
     await vi.advanceTimersByTimeAsync(2000)
 
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
-    expect(
-      (puts[0].body as Record<string, Record<string, string>>).character
-        .description
-    ).toBe('typed just now')
+    expect(descOf(puts[0].body)).toBe('typed just now')
     expect(useStore.getState().editorContent).toBe('typed just now')
   })
 
@@ -574,22 +653,26 @@ describe('reopening a character must not discard what was typed', () => {
       flistActiveSetId: { ...s.flistActiveSetId, '99': null },
       editorReadOnly: false
     }))
-    const calls = mockFetch([
-      // flistOpenWorkbench: resolve the bench, then activate it.
-      async () => ok({ workbench: { id: 'bbbbbbbbbbbb', name: 'Workbench', created_at: 1, updated_at: 2 }, active_set_id: 'bbbbbbbbbbbb' }),
-      async () => ok({ ok: true }),
-      async () => ok({ payload: { character: { description: 'typed' } }, etag: 'e1' }),
-      async () => ok({ etag: 'saved' })
-    ])
+    const NEW_BENCH = '/flist/character/99/sets/bbbbbbbbbbbb'
+    // flistOpenWorkbench: resolve the bench, then activate it.
+    fake.on(
+      'GET /flist/character/99/workbench',
+      json({
+        workbench: { id: 'bbbbbbbbbbbb', name: 'Workbench', created_at: 1, updated_at: 2 },
+        active_set_id: 'bbbbbbbbbbbb'
+      })
+    )
+    fake.on(`POST ${NEW_BENCH}/activate`, json({ ok: true }))
+    fake.on(
+      `GET ${NEW_BENCH}/payload`,
+      json(payloadRead(workbenchPayload({ character: { description: 'typed' } }), 'e1'))
+    )
+    fake.on(`PUT ${NEW_BENCH}/payload`, json({ etag: 'saved' }))
 
     useStore.getState().setEditorContent('typed')
     await vi.advanceTimersByTimeAsync(2000)
 
-    const puts = calls.filter((c) => c.method === 'PUT')
-    expect(puts.length).toBeGreaterThan(0)
-    expect(puts.some((p) => p.url.includes('/sets/bbbbbbbbbbbb/payload'))).toBe(
-      true
-    )
+    expect(fake.requestsTo(`PUT ${NEW_BENCH}/payload`).length).toBeGreaterThan(0)
   })
 })
 
@@ -605,35 +688,31 @@ describe('coming back to a character shows the Workbench, not Live', () => {
     useStore.setState((s) => ({
       flistWorking: {},
       flistArchive: {
-        '99': {
-          live: { character: { name: 'Amber', description: 'what the site has' } },
-          snapshots: [],
-          pullStatus: 'idle'
-        }
-      } as never,
+        '99': archiveEntry(
+          livePayload({ character: { name: 'Amber', description: 'what the site has' } })
+        )
+      },
       flistActiveSetId: { ...s.flistActiveSetId, '99': SET_ID },
       flistActiveCharacterId: '99'
     }))
-    mockFetch([
-      async () =>
-        ok({
-          payload: {
-            _schema_version: 2,
+    fake.on(
+      `GET ${BENCH_URL}`,
+      json(
+        payloadRead(
+          workbenchPayload({
             _overlay: ['character.description'],
             character: { description: 'what I typed earlier' }
-          },
-          etag: 'e1'
-        })
-    ])
+          }),
+          'e1'
+        )
+      )
+    )
 
     await useStore.getState().flistOpenWorking('99')
 
     expect(useStore.getState().editorContent).toBe('what I typed earlier')
     const slot = useStore.getState().flistWorking['99']
-    expect(
-      (slot.payload as Record<string, Record<string, string>>).character
-        .description
-    ).toBe('what I typed earlier')
+    expect(descOf(slot.payload)).toBe('what I typed earlier')
   })
 })
 
@@ -645,12 +724,12 @@ describe('gallery changes save themselves', () => {
   // Every other mutation schedules a flush; this one did not.
   it('adding an image to the profile writes it to disk', async () => {
     seedSlot('99', { character: { description: 'x' }, images: [] })
-    const calls = mockFetch([async () => ok({ etag: 'saved' })])
+    fake.on(SAVE, json({ etag: 'saved' }))
 
     useStore.getState().flistMoveImageToProfile('99', 'local-abc12345')
     await vi.advanceTimersByTimeAsync(1000)
 
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
     const body = puts[0].body as { images: { image_id: string }[] }
     expect(body.images.map((i) => i.image_id)).toEqual(['local-abc12345'])
@@ -662,12 +741,12 @@ describe('gallery changes save themselves', () => {
       character: { description: 'x' },
       images: [{ image_id: '47002195', description: '', sort_order: 0 }]
     })
-    const calls = mockFetch([async () => ok({ etag: 'saved' })])
+    fake.on(SAVE, json({ etag: 'saved' }))
 
     useStore.getState().flistMoveImageToPool('99', '47002195')
     await vi.advanceTimersByTimeAsync(1000)
 
-    const puts = calls.filter((c) => c.method === 'PUT')
+    const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
     expect((puts[0].body as { images: unknown[] }).images).toEqual([])
   })
@@ -681,7 +760,7 @@ describe('gallery changes save themselves', () => {
         { image_id: 'b', description: '', sort_order: 1 }
       ]
     })
-    const calls = mockFetch([async () => ok({ etag: 'saved' })])
+    fake.on(SAVE, json({ etag: 'saved' }))
 
     const setGallery = useStore.getState().flistSetGalleryImages
     for (let i = 0; i < 4; i++) {
@@ -693,6 +772,6 @@ describe('gallery changes save themselves', () => {
     }
     await vi.advanceTimersByTimeAsync(1000)
 
-    expect(calls.filter((c) => c.method === 'PUT').length).toBe(1)
+    expect(fake.requestsTo(SAVE).length).toBe(1)
   })
 })

@@ -1,0 +1,1000 @@
+# Mutations for the mutation probe (scripts/mutation_probe/probe.py).
+# How to run it and read the result: docs/MUTATION_PROBE.md.
+#
+# Each [[mutation]] is one small realistic bug:
+#   id       A = sidecar archive (Workbench, Backups, Trash, Upload),
+#            L = sidecar Logs, Labels, Index, search and MCP,
+#            R = renderer. Ids are stable; never renumber.
+#   suite    "sidecar" (pytest) or "renderer" (vitest)
+#   file     repo-relative file the mutation edits
+#   find     exact text, must occur exactly once in `file`
+#   replace  what it becomes
+#   breaks   the behaviour it breaks, in GLOSSARY.md terms
+#   tests    repo-relative test files, globs, or @group from [groups]
+#   audit    verdict before spec #9: the October 2026 audit runs for A and L;
+#            R and A06 re-measured with this tool on main 77d79c4 (the
+#            audit's renderer log was lost, and A06 did not apply then)
+#   spec     the spec whose tests should kill it if it survives
+#            (9 = should already be killed by spec #9's fixtures)
+#
+# find/replace are TOML multi-line literal strings: the newline right after
+# the opening ''' is dropped, everything else is byte-exact.
+# When code moves, re-anchor the find text (`probe.py --check` lists stale
+# entries); do not drop the mutation.
+
+[groups]
+archive = [
+  "sidecar/tests/test_character_archive.py",
+  "sidecar/tests/test_workbench_api.py",
+  "sidecar/tests/test_working_copy.py",
+  "sidecar/tests/test_working_sets_v2_api.py",
+  "sidecar/tests/test_working_sets_v2_storage.py",
+  "sidecar/tests/test_set_bundle.py",
+  "sidecar/tests/test_image_trash.py",
+  "sidecar/tests/test_pool_api.py",
+  "sidecar/tests/test_adopt_image_ids.py",
+  "sidecar/tests/test_repair_gallery.py",
+  "sidecar/tests/test_restore_extension.py",
+  "sidecar/tests/test_restore_saved.py",
+  "sidecar/tests/test_zip_serialise.py",
+  "sidecar/tests/test_profile.py",
+  "sidecar/tests/test_flist_api.py",
+  "sidecar/tests/test_flist_api_endpoints.py",
+  "sidecar/tests/test_foreign.py",
+  "sidecar/tests/test_settings.py",
+  "sidecar/tests/test_events.py",
+  "sidecar/tests/test_health.py",
+  "sidecar/tests/test_render.py",
+  "sidecar/tests/test_flist_activity.py",
+  "sidecar/tests/test_data_invariants.py",
+]
+logs = [
+  "sidecar/tests/test_parser.py",
+  "sidecar/tests/test_log_records.py",
+  "sidecar/tests/test_logs.py",
+  "sidecar/tests/test_logs_aliases.py",
+  "sidecar/tests/test_two_characters.py",
+  "sidecar/tests/test_aliases.py",
+  "sidecar/tests/test_aliases_api.py",
+  "sidecar/tests/test_labels.py",
+  "sidecar/tests/test_chunker.py",
+  "sidecar/tests/test_rag_*.py",
+]
+mcp = ["sidecar/tests/test_mcp_*.py"]
+renderer = ["renderer/**/*.test.ts", "renderer/**/*.test.tsx"]
+
+
+[[mutation]]
+id = "A01"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "Saving the Workbench with a stale etag overwrites it instead of refusing with a conflict."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 3
+# audit: M1 set payload: etag check skipped
+find = '''
+    current = _file_sha256(p)
+    if expected_etag is not None and current != expected_etag:
+        raise EtagMismatch(current)
+    _atomic_write_json(p, payload)
+    now = int(time.time())'''
+replace = '''
+    current = _file_sha256(p)
+    _atomic_write_json(p, payload)
+    now = int(time.time())'''
+
+[[mutation]]
+id = "A02"
+suite = "sidecar"
+file = "sidecar/server.py"
+breaks = "A Workbench save that never read the current version (no If-Match) is accepted: a blind overwrite."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 3
+# audit: M2 PUT set payload: blind write (no If-Match) allowed
+find = '''
+    if if_match is None:
+        existing = character_archive.set_payload_etag(character_id, set_id)
+        if existing is not None:'''
+replace = '''
+    if if_match is None:
+        existing = character_archive.set_payload_etag(character_id, set_id)
+        if False:'''
+
+[[mutation]]
+id = "A03"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "The Workbench is written in place instead of temp file plus swap, so an interrupted save can leave it half written."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 4
+# audit: M3 atomic write -> direct write (no tmp+replace)
+find = '''
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        tmp.replace(path)
+    except OSError:'''
+replace = '''
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        pass
+    except OSError:'''
+
+[[mutation]]
+id = "A04"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "A Backup holds Live although the character has a Workbench."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 2
+# audit: M4 backup packs Live even when a Workbench exists
+find = '''
+    if bench is not None:
+        working = read_set_payload(character_id, bench.id)
+    if working is None:
+        working = _live_to_zip_payload(live)'''
+replace = '''
+    if working is None:
+        working = _live_to_zip_payload(live)'''
+
+[[mutation]]
+id = "A05"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "A Backup zip leaves out the avatar."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 2
+# audit: M5 backup zip omits the avatar
+find = '''
+            if candidate_avatar.exists():
+                avatar_path = candidate_avatar'''
+replace = '''
+            if candidate_avatar.exists():
+                avatar_path = None'''
+
+[[mutation]]
+id = "A06"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "The Backup list shows the oldest Backup first."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 2
+# audit: M6 backup list sorted oldest first
+find = '''
+                "name": names.get(entry.name),
+            }
+        )
+    out.sort(key=lambda r: (r["created_at"], r["_suffix"]), reverse=True)'''
+replace = '''
+                "name": names.get(entry.name),
+            }
+        )
+    out.sort(key=lambda r: (r["created_at"], r["_suffix"]))'''
+
+[[mutation]]
+id = "A07"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "Backup file names use a clock one hour off UTC, so scheduled Backups are pruned by the wrong age."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 2
+# audit: M7 backup filename shifted 1h (local time, not UTC)
+find = '''
+    ts = _dt.datetime.fromtimestamp(
+        time.time() if now is None else now, tz=_dt.timezone.utc
+    )
+    return ts.strftime'''
+replace = '''
+    ts = _dt.datetime.fromtimestamp(
+        (time.time() if now is None else now) + 3600, tz=_dt.timezone.utc
+    )
+    return ts.strftime'''
+
+[[mutation]]
+id = "A08"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "Two Backups made in the same second overwrite each other instead of both being kept."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 2
+# audit: M8 same-second backup overwrites instead of -N suffix
+find = '''
+    # Collision suffix in case a same-second second click occurs.
+    if target.exists():'''
+replace = '''
+    # Collision suffix in case a same-second second click occurs.
+    if False:'''
+
+[[mutation]]
+id = "A09"
+suite = "sidecar"
+file = "sidecar/services/image_trash.py"
+breaks = "Restoring an image from the Trash overwrites a different image of the same name in the pool."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 2
+# audit: M9 trash restore overwrites a different pool file
+find = '''
+            if dest.exists():
+                # Same name, different bytes: keep both rather than
+                # overwrite what the pool has now.
+                conflicts.append(image_id)
+                continue'''
+replace = '''
+            if False:
+                conflicts.append(image_id)
+                continue'''
+
+[[mutation]]
+id = "A10"
+suite = "sidecar"
+file = "sidecar/services/image_trash.py"
+breaks = "The Trash lists the oldest deletion first."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 2
+# audit: M10 trash list oldest first
+find = '''
+    rows.sort(key=lambda r: r["deleted_at"], reverse=True)'''
+replace = '''
+    rows.sort(key=lambda r: r["deleted_at"])'''
+
+[[mutation]]
+id = "A11"
+suite = "sidecar"
+file = "sidecar/workbench_mcp/_context.py"
+breaks = "An MCP edit may write to Live, which is read-only."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 6
+# audit: M11 MCP write to 'live' no longer refused
+find = '''
+        if not allow_live or for_write:'''
+replace = '''
+        if not allow_live:'''
+
+[[mutation]]
+id = "A12"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "A Foreign profile slug starting with a dot (such as `..`) is accepted, so its cache can escape its folder."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 5
+# audit: M12 slug safety: leading-dot check dropped ('..' escapes cache)
+find = '''
+    if name[0] in " ." or name[-1] in " .":
+        return False'''
+replace = '''
+    if name[0] == " " or name[-1] == " ":
+        return False'''
+
+[[mutation]]
+id = "A13"
+suite = "sidecar"
+file = "sidecar/character_archive.py"
+breaks = "Writing Live (a Pull) publishes no change event, so open windows keep the old Live."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 4
+# audit: M13 write_live no longer publishes live-changed
+find = '''
+    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
+    _publish("live-changed", character_id=str(character_id))'''
+replace = '''
+    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)'''
+
+[[mutation]]
+id = "A14"
+suite = "sidecar"
+file = "sidecar/services/image_trash.py"
+breaks = "Moving images to or from the Trash publishes no change event, so the image pool view goes stale."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 4
+# audit: M14 trash/restore no longer announce images-changed
+find = '''
+    events.publish(events.IMAGES_CHANGED, character_id=str(character_id))'''
+replace = '''
+    pass'''
+
+[[mutation]]
+id = "A15"
+suite = "sidecar"
+file = "sidecar/restore.py"
+breaks = "The Upload source list leaves out the Workbench."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 3
+# audit: M15 extension source list drops the Workbench
+find = '''
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    if bench is not None:
+        payload = character_archive.read_set_payload'''
+replace = '''
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    if False:
+        payload = character_archive.read_set_payload'''
+
+[[mutation]]
+id = "A16"
+suite = "sidecar"
+file = "sidecar/restore.py"
+breaks = "An Upload of Live sends the Workbench instead."
+tests = ["@archive", "@mcp"]
+audit = "survived"
+spec = 3
+# audit: M16 extension 'live' source packs the bench instead
+find = '''
+        working_shape = character_archive._seed_payload_from_live(live)'''
+replace = '''
+        _b = character_archive.resolve_workbench(character_id, create=False)
+        working_shape = character_archive.read_set_payload(character_id, _b.id) if _b else character_archive._seed_payload_from_live(live)'''
+
+[[mutation]]
+id = "A17"
+suite = "sidecar"
+file = "sidecar/services/payload_ops.py"
+breaks = "An MCP edit does not record the field it touched, so the overlay marking model edits misses it."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 6
+# audit: M17 MCP edit does not record touched path in _overlay
+find = '''
+        if path not in seen:
+            overlay.append(path)
+            seen.add(path)'''
+replace = '''
+        if path not in seen:
+            seen.add(path)'''
+
+[[mutation]]
+id = "A18"
+suite = "sidecar"
+file = "sidecar/services/image_trash.py"
+breaks = "Restoring a Trash image the pool already has leaves the copy in the Trash."
+tests = ["@archive", "@mcp"]
+audit = "killed"
+spec = 2
+# audit: M18 trash restore of a duplicate keeps the trash file
+find = '''
+            if existing is not None:
+                src.unlink(missing_ok=True)'''
+replace = '''
+            if existing is not None:
+                pass'''
+
+[[mutation]]
+id = "L01"
+suite = "sidecar"
+file = "sidecar/parser.py"
+breaks = "The Log reader believes a single record after damage and resyncs onto garbage."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 5
+# audit: M01 parser resync trusts 1 record
+find = '''
+_RESYNC_CONFIRM = 4'''
+replace = '''
+_RESYNC_CONFIRM = 1'''
+
+[[mutation]]
+id = "L02"
+suite = "sidecar"
+file = "sidecar/parser.py"
+breaks = "A `/me` action loses its speaker-name prefix when a Log is read."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 9
+# audit: M02 parser /me loses speaker prefix
+find = '''
+text = f"{sender} {text.lstrip()}"'''
+replace = '''
+text = text.lstrip()'''
+
+[[mutation]]
+id = "L03"
+suite = "sidecar"
+file = "sidecar/parser.py"
+breaks = "Ads (record type 2) are read as written messages, so they get Labels and reach the Index."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 9
+# audit: M03 parser ads(type 2) bucketed as chat
+find = '''
+    if type_byte == 0:
+        return "ooc"'''
+replace = '''
+    if type_byte in (0, 2):
+        return "ooc"'''
+
+[[mutation]]
+id = "L04"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "A message exactly at the short-message threshold counts as under it (OOC)."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 9
+# audit: M04 resolver threshold < -> <=
+find = '''
+if len(text) < settings.threshold_chars:'''
+replace = '''
+if len(text) <= settings.threshold_chars:'''
+
+[[mutation]]
+id = "L05"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "The short-message rule overrides a stored Label."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 5
+# audit: M05 resolver rules beat stored verdict
+find = '''
+    if db_label is not None:
+        # sqlite3.Row supports __getitem__ like a dict
+        return db_label["label"]
+    text = (msg.get("text") or "").strip()
+    if not text:
+        return LABEL_OOC
+    if len(text) < settings.threshold_chars:
+        return LABEL_OOC
+'''
+replace = '''
+    text = (msg.get("text") or "").strip()
+    if not text:
+        return LABEL_OOC
+    if len(text) < settings.threshold_chars:
+        return LABEL_OOC
+    if db_label is not None:
+        return db_label["label"]
+'''
+
+[[mutation]]
+id = "L06"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "Resetting Labels for one partner wipes that partner's Labels for every one of your characters."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 9
+# audit: M06 delete_labels_for_partner ignores character
+find = '''
+f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
+        (character, *names),'''
+replace = '''
+f"DELETE FROM labels WHERE partner IN ({placeholders})",
+        (*names,),'''
+
+[[mutation]]
+id = "L07"
+suite = "sidecar"
+file = "sidecar/services/retrieval.py"
+breaks = "Search scoped to a partner ignores the partner's aliases."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 5
+# audit: M07 semantic search scope not widened to alias group
+find = '''
+    if len(group) <= 1:
+        return scope'''
+replace = '''
+    if True:
+        return scope'''
+
+[[mutation]]
+id = "L08"
+suite = "sidecar"
+file = "sidecar/chunker.py"
+breaks = "System lines (ads, rolls, status events) reach the Index."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 5
+# audit: M08 chunker keeps system lines
+find = '''
+        if m.get("kind") == "system":
+            continue'''
+replace = '''
+        pass'''
+
+[[mutation]]
+id = "L09"
+suite = "sidecar"
+file = "sidecar/chunker.py"
+breaks = "The Index cuts Logs into days by local time instead of UTC."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 9
+# audit: M09 chunker day boundary in local time
+find = '''
+return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")'''
+replace = '''
+return datetime.fromtimestamp(ts + 2 * 3600, tz=timezone.utc).strftime("%Y-%m-%d")'''
+
+[[mutation]]
+id = "L10"
+suite = "sidecar"
+file = "sidecar/rag_query.py"
+breaks = "Hybrid search ranks the worst matches first."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 5
+# audit: M10 RRF sorted ascending
+find = '''
+return sorted(scores.items(), key=lambda x: -x[1])'''
+replace = '''
+return sorted(scores.items(), key=lambda x: x[1])'''
+
+[[mutation]]
+id = "L11"
+suite = "sidecar"
+file = "sidecar/rag_query.py"
+breaks = "The keyword half of hybrid search ignores the character and partner scope."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 5
+# audit: M11 lexical search ignores scope
+find = '''
+question, scope=scope, limit=hybrid_bm25_candidates'''
+replace = '''
+question, scope=None, limit=hybrid_bm25_candidates'''
+
+[[mutation]]
+id = "L12"
+suite = "sidecar"
+file = "sidecar/rag_store.py"
+breaks = "The Index search filter drops the character, so other characters' Logs show up."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 5
+# audit: M12 vector filter drops character
+find = '''
+        must.append(FieldCondition(key="char_owner", match=MatchValue(value=char)))'''
+replace = '''
+        pass'''
+
+[[mutation]]
+id = "L13"
+suite = "sidecar"
+file = "sidecar/workbench_mcp/_context.py"
+breaks = "The MCP error for an unknown partner loses its `partner_not_found` code."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 6
+# audit: M13 MCP partner_not_found code renamed
+find = '''
+        "partner_not_found",
+        f"{name} has no conversation'''
+replace = '''
+        "not_found",
+        f"{name} has no conversation'''
+
+[[mutation]]
+id = "L14"
+suite = "sidecar"
+file = "sidecar/workbench_mcp/tools_classify.py"
+breaks = "Clearing every Label of a character over MCP no longer needs `confirm`."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 6
+# audit: M14 clear_labels character-wide skips confirm
+find = '''
+    if not confirm:
+        scope = f"{partner} with'''
+replace = '''
+    if not confirm and partner:
+        scope = f"{partner} with'''
+
+[[mutation]]
+id = "L15"
+suite = "sidecar"
+file = "sidecar/services/classification.py"
+breaks = "MCP classify batches repeat the last message of the previous page."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 5
+# audit: M15 classify next_cursor off by one
+find = '''
+next_cursor = batch[-1][0] + 1 if'''
+replace = '''
+next_cursor = batch[-1][0] if'''
+
+[[mutation]]
+id = "L16"
+suite = "sidecar"
+file = "sidecar/workbench_mcp/tools_classify.py"
+breaks = "The Unlabeled count over MCP ignores the partner's aliases."
+tests = ["@logs", "@mcp"]
+audit = "survived"
+spec = 9
+# audit: M16 unlabeled_remaining ignores alias group
+find = '''
+            labels_conn, character, partner, partner_aliases=alias_group
+        )
+        return sum('''
+replace = '''
+            labels_conn, character, partner, partner_aliases=None
+        )
+        return sum('''
+
+[[mutation]]
+id = "L17"
+suite = "sidecar"
+file = "sidecar/workbench_mcp/__init__.py"
+breaks = "The Logs-only MCP endpoint also serves the character-editing tools."
+tests = ["@logs", "@mcp"]
+audit = "killed"
+spec = 6
+# audit: M17 /mcp/logs also serves character tools
+find = '''
+"logs": frozenset({TAG_CORE, TAG_LOGS}),'''
+replace = '''
+"logs": frozenset({TAG_CORE, TAG_LOGS, TAG_CHARACTER}),'''
+
+[[mutation]]
+id = "R01"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "A Workbench save that hits a conflict adopts the server's etag, so the next save silently overwrites the other change."
+tests = ["@renderer"]
+audit = "killed"
+spec = 2
+# audit: M01 409 conflict adopts server etag
+find = '''
+                etag: existing.etag,
+                unsavedDirty: true'''
+replace = '''
+                etag: errWith.currentEtag ?? existing.etag,
+                unsavedDirty: true'''
+
+[[mutation]]
+id = "R02"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Autosave stops coalescing typing: every keystroke schedules its own save."
+tests = ["@renderer"]
+audit = "survived"
+spec = 2
+# audit: M02 debounce never clears previous timer (no coalescing)
+find = '''
+  const prev = _autosaveTimers.get(characterId)
+  if (prev) clearTimeout(prev)
+  const t = setTimeout'''
+replace = '''
+  const prev = _autosaveTimers.get(characterId)
+  void prev
+  const t = setTimeout'''
+
+[[mutation]]
+id = "R03"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "A save that lands marks the Workbench clean although the user typed while it was in flight; those keystrokes are never saved."
+tests = ["@renderer"]
+audit = "survived"
+spec = 9
+# audit: M03 save success clears dirty even if user typed during PUT
+find = '''
+
+            unsavedDirty: isFresh ? false : existing.unsavedDirty,'''
+replace = '''
+
+            unsavedDirty: false,'''
+
+[[mutation]]
+id = "R04"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Edits typed while a save is in flight get no follow-up save."
+tests = ["@renderer"]
+audit = "survived"
+spec = 2
+# audit: M04 no follow-up flush when newer edits arrived during PUT
+# Equivalent today: every edit arms its own autosave, so the newer text is
+# saved without the follow-up (the in-flight test from spec #9 checks that
+# and passes either way). Spec #2's "one follow-up flush per character"
+# fix makes the follow-up the only path and this mutation killable.
+find = '''
+        if (next?.unsavedDirty) {
+          _scheduleFlush(characterId, () => {
+            void get().flistFlushWorking(characterId)
+          })
+        }'''
+replace = '''
+        void next'''
+
+[[mutation]]
+id = "R05"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "The app's own save, echoed back as a change event, raises the external-change banner."
+tests = ["@renderer"]
+audit = "killed"
+spec = 7
+# audit: M05 own echo (same etag) raises external-change banner
+find = '''
+if (slot && change.etag && slot.etag === change.etag) return {}'''
+replace = '''
+if (slot && change.etag && slot.etag === change.etag && false) return {}'''
+
+[[mutation]]
+id = "R06"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Reloading after an external change leaves the editor showing the old description."
+tests = ["@renderer"]
+audit = "survived"
+spec = 7
+# audit: M06 reload-after-external-change leaves editor showing stale text
+find = '''
+flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+        }
+        if (s.flistActiveCharacterId === characterId) {
+          patch.editorContent = descriptionOf(payload)'''
+replace = '''
+flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
+        }
+        if (s.flistActiveCharacterId === characterId) {
+          void descriptionOf'''
+
+[[mutation]]
+id = "R07"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Keeping my version after an external change saves against my stale etag."
+tests = ["@renderer"]
+audit = "killed"
+spec = 7
+# audit: M07 keep-mine writes against own stale etag
+find = '''
+        slot.payload,
+        change.etag
+      )'''
+replace = '''
+        slot.payload,
+        slot.etag
+      )'''
+
+[[mutation]]
+id = "R08"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Switching character no longer saves the pending edit of the character left behind."
+tests = ["@renderer"]
+audit = "killed"
+spec = 2
+# audit: M08 character switch skips flushing pending edit
+find = '''
+    if (prevId && prevId !== characterId) {
+      try {
+        await get().flistFlushWorking(prevId)'''
+replace = '''
+    if (false && prevId && prevId !== characterId) {
+      try {
+        await get().flistFlushWorking(prevId!)'''
+
+[[mutation]]
+id = "R09"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Resetting the Workbench to Live uses the etag from before pending saves drained."
+tests = ["@renderer"]
+audit = "survived"
+spec = 2
+# audit: M09 reset-to-Live uses pre-drain etag
+find = '''
+const current = get().flistWorking[characterId] ?? slot'''
+replace = '''
+const current = slot'''
+
+[[mutation]]
+id = "R10"
+suite = "renderer"
+file = "renderer/src/components/AppLayout.tsx"
+breaks = "A Workbench change event is dispatched with the character id as set id, so the open Workbench does not reload."
+tests = ["@renderer"]
+audit = "survived"
+spec = 7
+# audit: M10 event wiring: set-payload-changed passes character id as set id
+find = '''
+setId: event.set_id,'''
+replace = '''
+setId: event.character_id,'''
+
+[[mutation]]
+id = "R11"
+suite = "renderer"
+file = "renderer/src/lib/eventStream.ts"
+breaks = "The event stream drops Workbench change events."
+tests = ["@renderer"]
+audit = "survived"
+spec = 7
+# audit: M11 event stream no longer subscribes set-payload-changed
+find = '''
+    'set-payload-changed',
+'''
+replace = '''
+'''
+
+[[mutation]]
+id = "R12"
+suite = "renderer"
+file = "renderer/src/features/flist/diff/diffEngine.ts"
+breaks = "The image diff compares raw positions instead of ranks, so deletions show as moves."
+tests = ["@renderer"]
+audit = "killed"
+spec = 8
+# audit: M12 image diff compares absolute positions, not ranks
+find = '''
+const reordered = workingRanks.get(imageId) !== rightRanks.get(imageId)'''
+replace = '''
+const reordered = w.position !== r.position'''
+
+[[mutation]]
+id = "R13"
+suite = "renderer"
+file = "renderer/src/lib/bbcode/index.ts"
+breaks = "BBCode links accept any protocol but `data:`, so `javascript:` links render."
+tests = ["@renderer"]
+audit = "killed"
+spec = 8
+# audit: M13 bbcode url allowlist becomes data:-denylist (javascript: allowed)
+find = '''
+return parsed.protocol === 'http:' || parsed.protocol === 'https:''''
+replace = '''
+return parsed.protocol !== 'data:''''
+
+[[mutation]]
+id = "R14"
+suite = "renderer"
+file = "renderer/src/state/flist.ts"
+breaks = "Clearing an infotag in the Workbench stores an empty string instead of removing it."
+tests = ["@renderer"]
+audit = "killed"
+spec = 8
+# audit: M14 clearing an infotag stores "" instead of deleting key
+find = '''
+if (isInfotagPath(path) && (value === '' || value === null || value === undefined)) {'''
+replace = '''
+if (isInfotagPath(path) && (value === null || value === undefined)) {'''
+
+[[mutation]]
+id = "R15"
+suite = "renderer"
+file = "renderer/src/state/flist.ts"
+breaks = "Seeding the Workbench from Live no longer orders the gallery by sort order."
+tests = ["@renderer"]
+audit = "survived"
+spec = 8
+# audit: M15 seed from Live no longer sorts gallery by sort_order
+find = '''
+      gallery.sort((a, b) => a.sort_order - b.sort_order)
+'''
+replace = '''
+'''
+
+[[mutation]]
+id = "R16"
+suite = "renderer"
+file = "renderer/src/features/flist/imageSelection.ts"
+breaks = "Shift-click range selection in the image pool moves the anchor."
+tests = ["@renderer"]
+audit = "killed"
+spec = 8
+# audit: M16 shift-range moves the anchor
+find = '''
+return { ids: [...sel.ids, ...added], anchor: sel.anchor }'''
+replace = '''
+return { ids: [...sel.ids, ...added], anchor: id }'''
+
+[[mutation]]
+id = "R17"
+suite = "renderer"
+file = "renderer/src/features/flist/kinksUnified.ts"
+breaks = "Custom kinks sort last instead of first."
+tests = ["@renderer"]
+audit = "survived"
+spec = 8
+# audit: M17 customs-first kink sort puts customs last
+find = '''
+if (a.type !== b.type) return a.type === 'custom' ? -1 : 1'''
+replace = '''
+if (a.type !== b.type) return a.type === 'custom' ? 1 : -1'''
+
+[[mutation]]
+id = "R18"
+suite = "renderer"
+file = "renderer/src/features/flist/kinksUnified.ts"
+breaks = "Kinks marked undecided drop out of the choice buckets."
+tests = ["@renderer"]
+audit = "survived"
+spec = 8
+# audit: M18 bucketByChoice drops undecided
+find = '''
+for (const entry of list) buckets[entry.choice].push(entry)'''
+replace = '''
+for (const entry of list) if (entry.choice !== 'undecided') buckets[entry.choice].push(entry)'''
+
+[[mutation]]
+id = "R19"
+suite = "renderer"
+file = "renderer/src/lib/undoRedo.ts"
+breaks = "Undo and redo are swapped in the description editor."
+tests = ["@renderer"]
+audit = "survived"
+spec = 7
+# audit: M19 undo/redo swapped for CodeMirror
+find = '''
+if (action === 'undo') undo(view)'''
+replace = '''
+if (action !== 'undo') undo(view)'''
+
+[[mutation]]
+id = "R20"
+suite = "renderer"
+file = "renderer/src/lib/undoRedo.ts"
+breaks = "Undo in a text field undoes the description editor instead."
+tests = ["@renderer"]
+audit = "survived"
+spec = 7
+# audit: M20 undo in text inputs falls through to CodeMirror
+find = '''
+    active instanceof HTMLInputElement ||
+'''
+replace = '''
+    false ||
+'''
+
+[[mutation]]
+id = "R21"
+suite = "renderer"
+file = "renderer/src/lib/partnerName.ts"
+breaks = "Partner names from `#adh-` private rooms are no longer recognised as rooms."
+tests = ["@renderer"]
+audit = "killed"
+spec = 8
+# audit: M21 partnerName ADH guard broken
+find = '''
+const ADH_PREFIX = /^#adh-/i'''
+replace = '''
+const ADH_PREFIX = /^#adh_/i'''
+
+[[mutation]]
+id = "R22"
+suite = "renderer"
+file = "renderer/src/state/flist.ts"
+breaks = "Live drift detection ignores the ignore list, so ignored fields show as drift."
+tests = ["@renderer"]
+audit = "killed"
+spec = 8
+# audit: M22 detectLiveDrift ignores the ignore list
+find = '''
+    if (ignore.has(path)) continue
+'''
+replace = '''
+'''
+
+[[mutation]]
+id = "R23"
+suite = "renderer"
+file = "renderer/src/state.ts"
+breaks = "Two saves of the same Workbench can be in flight at once and race."
+tests = ["@renderer"]
+audit = "survived"
+spec = 9
+# audit: M23 flush no longer registers single-flight (overlapping PUTs race)
+find = '''
+    _flushInflight.set(characterId, inflight)
+'''
+replace = '''
+'''

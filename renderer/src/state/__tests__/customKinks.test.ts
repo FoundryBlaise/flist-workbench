@@ -5,52 +5,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
+import { installFakeApi, type FakeApi } from '../../test/fakeApi'
+import { workbenchPayload, workingSlot } from '../../test/payloads'
 
-type MockResponse = { status: number; body?: unknown; etag?: string }
-
-function mockFetchOnce(responses: Record<string, MockResponse[]>) {
-  const calls: { url: string; init?: RequestInit }[] = []
-  ;(globalThis as { fetch?: unknown }).fetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : (input as URL).toString()
-      calls.push({ url, init })
-      const queue = Object.entries(responses).find(([k]) => url.includes(k))?.[1]
-      const next = queue?.shift()
-      if (!next) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({}),
-          text: async () => '{}'
-        } as unknown as Response
-      }
-      return {
-        ok: next.status >= 200 && next.status < 300,
-        status: next.status,
-        json: async () => next.body ?? {},
-        text: async () => JSON.stringify(next.body ?? {})
-      } as unknown as Response
-    }
-  )
-  return calls
-}
+// No test here waits out the autosave debounce, so none should reach
+// the sidecar; afterEach checks that none did.
+let fake: FakeApi
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
   useStore.setState({
     flistWorking: {
       ...useStore.getState().flistWorking,
-      [characterId]: {
-        payload: { _schema_version: 2, _overlay: [], ...payload },
-        overlay: Array.isArray(payload._overlay)
-          ? (payload._overlay as string[])
-          : [],
-        etag: 'seed',
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: null,
-        materialised: true
-      }
+      [characterId]: workingSlot(workbenchPayload(payload), { etag: 'seed' })
     },
     flistActiveCharacterId: characterId,
     editorReadOnly: false
@@ -59,6 +25,7 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.useFakeTimers()
+  fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
     flistCustomKinksUI: {},
@@ -68,8 +35,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  fake.restore()
   vi.useRealTimers()
   vi.restoreAllMocks()
+  expect(fake.requests).toEqual([])
 })
 
 describe('custom-kinks reducer surface', () => {
@@ -181,7 +150,6 @@ describe('custom-kinks reducer surface', () => {
 
 describe('standard-kinks coercion (QA P1-4)', () => {
   it('flistStandardKinkSet on a list-shape kinks block coerces to dict', () => {
-    mockFetchOnce({ working: [{ status: 200, body: { etag: 'new' } }] })
     seedSlot('99', { kinks: [] })
     useStore.getState().flistStandardKinkSet('99', 'fetish_71', 'fave')
     const kinks = useStore.getState().flistWorking['99'].payload.kinks

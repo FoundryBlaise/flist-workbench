@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import chunker
 import labels as labels_store
+from fchat_logs import chat, event, parsed
 
 
-def _mkmsg(ts: int, speaker: str, text: str, *, kind: str = "ic") -> dict:
-    # Parser-shape dict. `raw` matches `text` for hash determinism since
-    # the chunker only reads `ts`, `speaker`, `text`, `kind`.
-    return {
-        "ts": ts,
-        "speaker": speaker,
-        "raw": text,
-        "text": text,
-        "type": 0,
-        "kind": kind,
-    }
+def _mkmsg(ts: int, speaker: str, text: str, *, system: bool = False) -> dict:
+    """One message as the parser reads it from a Log: a chat line, or a
+    status event (a system line) when `system`."""
+    record = event if system else chat
+    [msg] = parsed(record(speaker, text, at=ts))
+    return msg
 
 
 def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
@@ -155,7 +151,7 @@ def test_includes_ooc_when_requested() -> None:
 
 def test_skips_system_messages_always() -> None:
     long = "x" * 300
-    sysmsg = _mkmsg(ts(2026, 1, 1, 10), "F-Chat", long, kind="system")
+    sysmsg = _mkmsg(ts(2026, 1, 1, 10), "F-Chat", long, system=True)
     by_hash = {labels_store.msg_hash(sysmsg): _stored("IC")}  # even if labeled
     chunks = chunker.chunk_messages(
         [sysmsg],

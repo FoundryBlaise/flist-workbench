@@ -6,36 +6,13 @@ exercise the same code paths the renderer hits.
 
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 
 import pytest
 
 import aliases as aliases_store
+from fchat_logs import chat, write_log
 from logs import LogDirError, PartnerEntry, list_partners, read_messages
-
-
-def _write_log(path: Path, records: list[tuple[int, str, str]]) -> None:
-    """Tiny F-Chat 3.0 log writer. Each record: (ts, speaker, body).
-
-    Mirrors the binary record layout from parser.py — uint32 ts, uint8
-    type=0(chat), uint8 sender_len, sender bytes, uint16 body_len,
-    body bytes, uint16 record_size footer.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as f:
-        for ts, speaker, body in records:
-            sb = speaker.encode("utf-8")
-            bb = body.encode("utf-8")
-            # body_type=0 (chat), unused header byte
-            record = struct.pack(
-                "<IBB",  # ts (uint32), type (uint8), sender_len (uint8)
-                ts,
-                0,
-                len(sb),
-            ) + sb + struct.pack("<H", len(bb)) + bb
-            footer = struct.pack("<H", len(record))
-            f.write(record + footer)
 
 
 @pytest.fixture
@@ -44,16 +21,16 @@ def fake_data(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
     # One character with two partner log files that we'll alias together.
     char = tmp_path / "MyChar" / "logs"
-    _write_log(char / "Daelan Envale", [
-        (1_700_000_000, "Daelan Envale", "Old-name line one."),
-        (1_700_000_300, "MyChar", "Old-name response."),
+    write_log(char / "Daelan Envale", [
+        chat("Daelan Envale", "Old-name line one.", at=1_700_000_000),
+        chat("MyChar", "Old-name response.", at=1_700_000_300),
     ])
-    _write_log(char / "Asmira", [
-        (1_700_000_900, "Asmira", "New-name continuation."),
+    write_log(char / "Asmira", [
+        chat("Asmira", "New-name continuation.", at=1_700_000_900),
     ])
     # Plus an unrelated partner so we can verify grouping doesn't bleed.
-    _write_log(char / "Other Partner", [
-        (1_700_000_500, "Other Partner", "Unrelated."),
+    write_log(char / "Other Partner", [
+        chat("Other Partner", "Unrelated.", at=1_700_000_500),
     ])
     return tmp_path
 
@@ -109,7 +86,7 @@ def test_list_partners_alias_pointing_at_missing_primary(fake_data: Path) -> Non
 def test_list_partners_alias_aware_per_character(fake_data: Path) -> None:
     # Linking under Character X must not affect Character Y's view.
     char2 = fake_data / "OtherChar" / "logs"
-    _write_log(char2 / "Daelan Envale", [(1, "Daelan Envale", "hi")])
+    write_log(char2 / "Daelan Envale", [chat("Daelan Envale", "hi", at=1)])
     conn = aliases_store.connect()
     try:
         aliases_store.add_alias(conn, "MyChar", "Daelan Envale", "Asmira")

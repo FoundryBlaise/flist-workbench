@@ -18,23 +18,16 @@ import labels as labels_store
 import rag_embed
 import rag_jobs
 import rag_store
+from fchat_logs import chat, parsed, utc, write_log
 
 
 # ---- helpers ------------------------------------------------------------
 
 
-def _msg(ts: int, text: str, speaker: str = "Bob", kind: str = "ic") -> dict:
-    return {
-        "ts": ts,
-        "iso": "2026-01-01T00:00:00+00:00",
-        "type": 0,
-        "type_name": "chat",
-        "speaker": speaker,
-        "raw": text,
-        "text": text,
-        "mentions": [],
-        "kind": kind,
-    }
+def _msg(ts: int, text: str, speaker: str = "Bob") -> dict:
+    """One chat line as the parser reads it from a Log."""
+    [msg] = parsed(chat(speaker, text, at=ts))
+    return msg
 
 
 def _wait_until(predicate, timeout: float = 5.0) -> None:
@@ -153,41 +146,178 @@ def test_job_runs_single_partner_to_done(
     assert counter["probe"] == 1
 
 
-def test_job_skips_existing_on_rerun(
-    workbench_dir: Path,  # noqa: ARG001
+#: Re-ingest must keep the Index in step with the Logs and their current
+#: Labels. Today it skips every chunk id it already holds, and a day's
+#: chunk id does not change when its messages or Labels do, so the
+#: Index goes stale. Spec #2 reconciles per conversation day.
+STALE_INDEX = pytest.mark.xfail(
+    strict=True,
+    reason="re-ingest skips chunk ids it already holds, so the Index goes stale #2",
+)
+
+
+ME, PARTNER = "Azure Viper", "Antiquill"
+# Long enough that the short-message rule leaves them Unlabeled, so
+# only an explicit Label puts them in the Index.
+OPENING = (
+    "Azure Viper leans on the rail of the night ferry and counts the "
+    "lanterns along the harbour wall, one for every year she stayed away, "
+    "and wonders aloud whether the old lighthouse keeper still keeps the "
+    "blue lamp burning for ships that never come back."
+)
+REPLY = (
+    "Antiquill sets down his cup and admits the keeper retired last "
+    "winter, but the blue lamp still burns, because the whole town took "
+    "turns climbing the stairs each night rather than let it go dark, "
+    "and nobody ever decided who would stop first. Marmalade."
+)
+# A word only REPLY contains, to recognise it in a hit.
+REPLY_MARK = "Marmalade"
+
+
+@pytest.fixture
+def index_window(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
-) -> None:
-    long = "z" * 300
-    msgs = [_msg(1735689600, long, speaker="A")]
-    _stub_one_partner(monkeypatch, "Char", "Partner", msgs)
-    counter = _stub_embedding(monkeypatch, dimension=4)
-    labels_conn = labels_store.connect()
+    isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
+):
+    """The sidecar from outside over one fixture conversation: REST for
+    Labels and ingest, the retrieval service for search. Embedding and
+    reranking are stubbed. Returns (client, path of the Log)."""
+    import rag_rerank
+    import settings as settings_store
+
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(tmp_path / "fchat"))
+    monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    conn = settings_store.connect()
     try:
-        labels_store.upsert_label(
-            labels_conn,
-            hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
-            ts=msgs[0]["ts"],
-            speaker="A",
-            label="IC",
-            source="manual",
+        settings_store.set_value(
+            conn,
+            settings_store.KEY_RAG_EMBED_MODEL,
+            "jinaai/jina-embeddings-v2-base-en",
         )
     finally:
-        labels_conn.close()
+        conn.close()
+    _stub_embedding(monkeypatch, dimension=4)
+    rag_rerank.reset_cache()
 
-    job1 = rag_jobs.start({"character": "Char", "partner": "Partner"})
-    _wait_until(lambda: job1.state == "done", timeout=3.0)
-    assert job1.progress.upserted == 1
-    first_embed = counter["embed"]
+    class _FakeEncoder:
+        def rerank(self, query: str, docs):  # noqa: ARG002
+            return [float(len(d)) for d in docs]
 
-    # Second run: same scope, no new messages. Should skip everything.
-    job2 = rag_jobs.start({"character": "Char", "partner": "Partner"})
-    _wait_until(lambda: job2.state == "done", timeout=3.0)
-    assert job2.progress.upserted == 0
-    assert job2.progress.skipped_existing == 1
-    assert counter["embed"] == first_embed  # no new embeddings
+    monkeypatch.setattr(rag_rerank, "_build_encoder", lambda *_a, **_k: _FakeEncoder())
+    from server import app
+
+    log = tmp_path / "fchat" / ME / "logs" / PARTNER
+    return TestClient(app), log
+
+
+def _label(client: TestClient, text: str, label: str | None) -> None:
+    """Give the message whose text is `text` a Label (None clears it),
+    the way the log view does."""
+    res = client.get("/logs/messages", params={"char": ME, "partner": PARTNER})
+    assert res.status_code == 200, res.text
+    (msg,) = [m for m in res.json()["messages"] if m["text"] == text]
+    res = client.post(
+        "/labels/override",
+        json={
+            "character": ME,
+            "partner": PARTNER,
+            "hash": msg["hash"],
+            "ts": msg["ts"],
+            "speaker": msg["speaker"],
+            "label": label,
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
+def _ingest(client: TestClient) -> None:
+    res = client.post("/rag/ingest", json={"character": ME, "partner": PARTNER})
+    assert res.status_code == 202, res.text
+    job_id = res.json()["id"]
+    _wait_until(
+        lambda: client.get(f"/rag/jobs/{job_id}").json()["state"]
+        in ("done", "failed", "cancelled"),
+    )
+    job = client.get(f"/rag/jobs/{job_id}").json()
+    assert job["state"] == "done", job
+
+
+def _ic_texts_found(question: str) -> list[str]:
+    from services import retrieval
+
+    hits = retrieval.search(question, scope={"character": ME, "partner": PARTNER}, top_k=50)
+    return [h.text for h in hits.hits if h.label == "IC"]
+
+
+def _opening_alone(client: TestClient, log: Path) -> None:
+    """Day one: only OPENING, labelled IC and indexed."""
+    write_log(log, [chat(ME, OPENING, at=utc(2024, 3, 9, 20))])
+    _label(client, OPENING, "IC")
+    _ingest(client)
+    assert any(OPENING in t for t in _ic_texts_found("lighthouse"))
+
+
+@STALE_INDEX
+def test_a_message_appended_to_an_indexed_day_becomes_searchable(index_window) -> None:
+    client, log = index_window
+    _opening_alone(client, log)
+
+    # F-Chat appends the reply to the same day; the user labels it.
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 9, 21)),
+    ])
+    _label(client, REPLY, "IC")
+    _ingest(client)
+
+    assert any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+
+
+@STALE_INDEX
+def test_a_label_given_after_the_day_was_indexed_becomes_searchable(
+    index_window,
+) -> None:
+    client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 9, 21)),
+    ])
+    _label(client, OPENING, "IC")
+    _ingest(client)
+    assert not any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+
+    _label(client, REPLY, "IC")
+    _ingest(client)
+
+    assert any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+
+
+@STALE_INDEX
+@pytest.mark.parametrize("new_label", ["OOC", None], ids=["flipped-to-ooc", "cleared"])
+def test_a_message_whose_label_flipped_or_was_cleared_drops_out(
+    index_window, new_label: str | None
+) -> None:
+    client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 9, 21)),
+    ])
+    _label(client, OPENING, "IC")
+    _label(client, REPLY, "IC")
+    _ingest(client)
+    assert any(REPLY_MARK in t for t in _ic_texts_found("blue lamp"))
+
+    _label(client, REPLY, new_label)
+    _ingest(client)
+
+    found = _ic_texts_found("blue lamp")
+    assert not any(REPLY_MARK in t for t in found)
+    # The day's other IC message is still there; the Index was not
+    # simply emptied.
+    assert any(OPENING in t for t in found)
 
 
 def test_job_writes_manifest_after_first_ingest(
