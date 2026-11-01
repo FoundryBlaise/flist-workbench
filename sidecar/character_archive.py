@@ -2760,7 +2760,9 @@ def adopt_flist_image_ids(
     - every working set's gallery row moves to the new id;
     - `images/local-<sha8>.<ext>` becomes `images/<new id>.<ext>`, or
       is simply dropped when a pull already fetched the same bytes
-      under that name.
+      under that name. When that name holds other bytes, the local
+      file goes to the Trash (`trashed`) instead: only a byte-identical
+      twin is deleted.
 
     Backups are untouched: they are self-contained ZIPs carrying their
     own copy of the bytes, and rewriting history inside them would make
@@ -2773,6 +2775,7 @@ def adopt_flist_image_ids(
     """
     renamed: list[dict[str, str]] = []
     dropped_duplicate: list[str] = []
+    trashed: list[str] = []
     unknown: list[str] = []
 
     images = images_dir(character_id)
@@ -2803,11 +2806,19 @@ def adopt_flist_image_ids(
 
         src = image_path(character_id, old_id, ext)
         dst = image_path(character_id, new_id, on_disk.get(new_id, ext))
-        if dst.exists():
+        if dst.exists() and file_sha256(dst) == file_sha256(src):
             # A pull fetched the same picture under its F-list name.
             # One copy is enough.
             src.unlink(missing_ok=True)
             dropped_duplicate.append(old_id)
+        elif dst.exists():
+            # Other bytes under the F-list id (F-list re-encoded the
+            # upload, or the pairing is wrong): ours is no duplicate,
+            # so it goes to the Trash rather than away for good.
+            from services import image_trash
+
+            image_trash.trash_pool_file(character_id, src)
+            trashed.append(old_id)
         else:
             src.replace(dst)
             renamed.append({"from": old_id, "to": new_id})
@@ -2838,6 +2849,7 @@ def adopt_flist_image_ids(
     return {
         "renamed": renamed,
         "dropped_duplicate": dropped_duplicate,
+        "trashed": trashed,
         "unknown": unknown,
         "sets_rewritten": rewritten_sets,
     }
