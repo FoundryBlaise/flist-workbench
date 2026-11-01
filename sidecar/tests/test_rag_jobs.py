@@ -761,3 +761,60 @@ def test_channels_are_left_out_of_the_ingest_scope(monkeypatch, workbench_dir) -
     )
     assert [p for _, p in with_channels] == ["Envale", "#german ooc", "#adh-abc"]
 
+
+async def test_labels_changed_over_mcp_reach_the_index_on_the_next_ingest(
+    index_window,
+) -> None:
+    from mcp_helpers import call_tool, mcp_client
+
+    _client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 9, 21)),
+    ])
+    conv = {"character": ME, "partner": PARTNER}
+
+    async with mcp_client("logs") as session:
+        _, read = await call_tool(session, "read_log_messages", **conv)
+        hash_of = {m["text"]: m["hash"] for m in read["messages"]}
+
+        async def label(text: str, verdict: str) -> dict:
+            _, body = await call_tool(
+                session, "set_message_labels", **conv,
+                items=[{"hash": hash_of[text], "label": verdict}],
+            )
+            return body
+
+        async def ingest() -> dict:
+            _, body = await call_tool(session, "ingest_logs", **conv)
+            assert body["state"] == "done", body
+            return body
+
+        await label(OPENING, "IC")
+        await ingest()
+        assert _found_as_ic("lighthouse")
+        assert not _found_as_ic(REPLY_MARK)
+
+        labelled = await label(REPLY, "IC")
+        # The note says what makes the new Label searchable, and that
+        # it has not happened yet.
+        assert "next ingest_logs" in labelled["note"]
+        assert not _found_as_ic(REPLY_MARK)
+        await ingest()
+        assert _found_as_ic(REPLY_MARK)
+        _, hits = await call_tool(
+            session, "search_logs_semantic", question=REPLY_MARK, top_k=50, **conv
+        )
+        assert any(REPLY_MARK in h["text"] for h in hits["hits"])
+
+        await label(REPLY, "OOC")
+        await ingest()
+        assert not _found_as_ic(REPLY_MARK)
+        assert _found_as_ic("lighthouse")
+
+        _, cleared = await call_tool(session, "clear_labels", **conv, confirm=True)
+        assert "next ingest_logs" in cleared["note"]
+        assert _found_as_ic("lighthouse"), "clearing alone leaves the Index as it was"
+        after = await ingest()
+        assert after["chunks_removed"] == 1
+        assert not _found_as_ic("lighthouse")

@@ -757,7 +757,7 @@ async def test_labelling_everything_at_once_spares_the_rules(
         )
         assert body["labeled"] == 2
         assert body["decided_by_rules"] == 1, "the short message stays OOC"
-        assert "Re-ingest" in body["note"]
+        assert "next ingest_logs" in body["note"]
 
         _, stats = await call_tool(
             session,
