@@ -4,7 +4,7 @@
 // `{paired}` (ADR 0002).
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { api } from '../../../lib/api'
 import { SettingsModal } from '../SettingsModal'
 
@@ -63,12 +63,13 @@ it('shows Not paired with Rotate disabled when the sidecar says not paired', asy
   ).toBe(true)
 })
 
-it('keeps Rotate disabled when the status cannot be read', async () => {
+it('says the status is unavailable, with Rotate disabled, when it cannot be read', async () => {
   vi.spyOn(api, 'pairingStatus').mockRejectedValue(new Error('offline'))
   openSecurity()
 
-  await waitFor(() => expect(api.pairingStatus).toHaveBeenCalled())
+  expect(await screen.findByText('Pairing status unavailable')).toBeTruthy()
   expect(screen.queryByText('● Paired')).toBeNull()
+  expect(screen.queryByText('… Checking')).toBeNull()
   expect(
     (screen.getByTestId('settings-security-rotate') as HTMLButtonElement).disabled
   ).toBe(true)
