@@ -81,6 +81,9 @@ def sweep(
     """Call every route once and describe each answer `accept` rejects.
 
     `params` fill the path (see `Route.url`); `json` is sent as the body.
+    Every refusal the sweep provokes must also be in the agreed
+    `{code, message}` shape, whatever `accept` says, so callers can show
+    the reason without special cases.
     An empty result means every route answered as expected, so a test
     asserts `== []` and a failure lists the routes that let it down.
     """
@@ -90,7 +93,22 @@ def sweep(
         res = client.request(route.method, url, json=json)
         if not accept(res):
             failures.append(f"{route.method} {url} -> {res.status_code}")
+        elif 400 <= res.status_code < 500 and not is_refusal_shaped(res):
+            failures.append(f"{route.method} {url} -> {res.status_code} without {{code, message}}")
     return failures
+
+
+def is_refusal_shaped(res: Response) -> bool:
+    """True when the body carries a string `code` and a string `message`."""
+    try:
+        body = res.json()
+    except ValueError:
+        return False
+    return (
+        isinstance(body, dict)
+        and isinstance(body.get("code"), str)
+        and isinstance(body.get("message"), str)
+    )
 
 
 def error_code(res: Response) -> str | None:
