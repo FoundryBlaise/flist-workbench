@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from sidecar_client import app_client, character_routes, disk_tree, sweep
+from sidecar_client import app_client, character_routes, disk_tree, error_code, sweep
 
 #: Each is percent-encoded the way it would arrive in a URL path.
 HOSTILE_IDS = [
@@ -182,7 +182,8 @@ def test_a_log_character_outside_the_fchat_folder_is_refused(
     client: TestClient, fchat: Path, char: str
 ) -> None:
     res = client.get(f"/logs/partners?char={char}")
-    assert res.status_code == 404
+    assert res.status_code == 400
+    assert error_code(res) == "invalid_file_name"
     assert "victim" not in res.text
 
 
@@ -195,7 +196,8 @@ def test_a_log_outside_the_fchat_folder_is_not_read(
 ) -> None:
     for path in ("/logs/messages", "/logs/search"):
         res = client.get(f"{path}?char={char}&partner={partner}&q=private")
-        assert res.status_code == 404, f"{path}: {res.text}"
+        assert res.status_code == 400, f"{path}: {res.text}"
+        assert error_code(res) == "invalid_file_name"
         assert "private" not in res.text
 
 

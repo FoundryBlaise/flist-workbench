@@ -1767,7 +1767,7 @@ export const useStore = create<State>((set, get) => ({
         .catch((err: unknown) =>
           // A character never pulled is not in the archive yet (404
           // `character_not_found`): it simply has no backups.
-          err instanceof Error && /^HTTP 404\b/.test(err.message)
+          (err as { code?: unknown } | null)?.code === 'character_not_found'
             ? { ok: true as const, backups: [] }
             : {
                 ok: false as const,

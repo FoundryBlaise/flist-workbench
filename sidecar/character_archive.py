@@ -38,6 +38,7 @@ from typing import Any, Iterable
 
 import paths
 from archive_errors import CharacterNotFound, InvalidCharacterId
+from refusals import InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -488,8 +489,7 @@ def rename_zip_backup(
     untouched (renames don't need to rewrite the archive bytes); the
     name only lives in the sidecar `_names.json` map. Empty string
     clears the entry so the UI falls back to the timestamp default."""
-    if not _ZIP_BACKUP_FILE_RE.match(filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(filename)
     target = backups_dir(character_id) / filename
     if not target.exists():
         raise FileNotFoundError(str(target))
@@ -777,6 +777,14 @@ def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
 _ZIP_BACKUP_FILE_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-(\d+))?\.zip$"
 )
+
+
+def require_backup_filename(filename: str) -> None:
+    """Refuse a name that is not a Backup file name, before any path is
+    built from it, so a crafted `../` name reads or deletes nothing.
+    A caller hears 400 `invalid_file_name`."""
+    if not isinstance(filename, str) or not _ZIP_BACKUP_FILE_RE.match(filename):
+        raise InvalidFileName("invalid backup filename")
 
 
 def _zip_backup_filename(now: float | None = None) -> str:
@@ -1673,8 +1681,7 @@ def load_zip_backup_into_workbench(
     import zipfile
 
     _migrate_working_v2(character_id)
-    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(backup_filename)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(str(target))
@@ -1718,8 +1725,7 @@ def create_set_from_zip_backup(
     import zipfile
 
     _migrate_working_v2(character_id)
-    if not _ZIP_BACKUP_FILE_RE.match(backup_filename):
-        raise ValueError("invalid backup filename")
+    require_backup_filename(backup_filename)
     clean = validate_set_name(name)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():

@@ -5,6 +5,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from http import HTTPStatus
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import (
@@ -18,8 +19,11 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import aliases as aliases_store
 import character_archive
@@ -37,7 +41,8 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from archive_errors import CharacterNotFound, InvalidCharacterId
+from archive_errors import InvalidCharacterId
+from refusals import InvalidFileName, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
@@ -175,22 +180,57 @@ async def _flist_touch_middleware(request, call_next):
 app.add_middleware(local_access.LocalAccessGuard, port=SIDECAR_PORT)
 
 
-@app.exception_handler(InvalidCharacterId)
-async def _invalid_character_id(_request: Request, _exc: InvalidCharacterId) -> JSONResponse:
-    """Wherever the archive refuses an id, the caller hears it the
-    same way rather than as a 500."""
+@app.exception_handler(Refusal)
+async def _refusal(_request: Request, exc: Refusal) -> JSONResponse:
+    """Wherever a typed refusal is raised (a hostile character id, a
+    bad file name, a missing Log), the caller hears it as
+    `{code, message}` rather than as a 500."""
+    return JSONResponse(status_code=exc.status, content=exc.body())
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Refusals not yet raised as a typed `Refusal` still answer in the
+    `{code, message}` shape.
+
+    `detail` stays in the body as it was, because the app window reads
+    structured details from it (an etag conflict, a cross-character
+    confirmation). A detail that carries its own `code` keeps it; any
+    other gets a generic `http_<status>`.
+    """
+    detail = exc.detail
+    code = f"http_{exc.status_code}"
+    try:
+        message = HTTPStatus(exc.status_code).phrase
+    except ValueError:
+        message = "refused"
+    if isinstance(detail, str):
+        message = detail
+    elif isinstance(detail, dict):
+        if isinstance(detail.get("code"), str):
+            code = detail["code"]
+        for key in ("message", "detail"):
+            if isinstance(detail.get(key), str):
+                message = detail[key]
+                break
     return JSONResponse(
-        status_code=400,
-        content={"code": "invalid_character_id", "message": "invalid character_id"},
+        status_code=exc.status_code,
+        content={"code": code, "message": message, "detail": detail},
+        headers=getattr(exc, "headers", None),
     )
 
 
-@app.exception_handler(CharacterNotFound)
-async def _character_not_found(_request: Request, _exc: CharacterNotFound) -> JSONResponse:
-    """An id the archive holds no character for. Nothing was created."""
+@app.exception_handler(RequestValidationError)
+async def _invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A request FastAPI could not bind (a missing query parameter, a
+    body of the wrong shape). `detail` keeps FastAPI's error list."""
+    errors = jsonable_encoder(exc.errors())
+    first = errors[0] if errors else {}
+    where = ".".join(str(part) for part in first.get("loc", ()))
+    message = f"{where}: {first.get('msg', 'invalid request')}" if where else "invalid request"
     return JSONResponse(
-        status_code=404,
-        content={"code": "character_not_found", "message": "no such character in the archive"},
+        status_code=422,
+        content={"code": "invalid_request", "message": message, "detail": errors},
     )
 
 
@@ -688,6 +728,7 @@ async def flist_character_zip_backup_create_set(
     (POST /sets/import) — that one expects a manifest.json-style
     bundle and rejects backups for missing it. This path goes
     straight from the backup's payload to a new set."""
+    character_archive.require_backup_filename(filename)
     try:
         meta = character_archive.create_set_from_zip_backup(
             character_id, filename, body.name
@@ -720,8 +761,7 @@ async def flist_character_zip_backup_delete(
     (idempotent-ish — UI should refresh anyway). Also drops any
     user-set name from `_names.json` so the sidecar map doesn't
     accumulate references to bytes that no longer exist."""
-    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
-        raise HTTPException(status_code=400, detail="invalid backup filename")
+    character_archive.require_backup_filename(filename)
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
@@ -748,6 +788,7 @@ async def flist_character_zip_backup_rename(
     back to the timestamp-derived default). Returns the canonical
     entry for the renamed backup so the renderer can update its
     in-memory list without a separate /zip-backups re-fetch."""
+    character_archive.require_backup_filename(filename)
     try:
         character_archive.rename_zip_backup(character_id, filename, body.name)
     except ValueError as exc:
@@ -773,8 +814,7 @@ async def flist_character_zip_backup_download(
     parsing must match the ISO-basic backup filename format; we
     reject anything else so this endpoint can't be turned into an
     arbitrary-file-read by crafting a `../` path."""
-    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
-        raise HTTPException(status_code=400, detail="invalid backup filename")
+    character_archive.require_backup_filename(filename)
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
@@ -809,8 +849,7 @@ async def flist_character_zip_backup_payload(
     """
     import zipfile
 
-    if not character_archive._ZIP_BACKUP_FILE_RE.match(filename):
-        raise HTTPException(status_code=400, detail="invalid backup filename")
+    character_archive.require_backup_filename(filename)
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
@@ -1036,6 +1075,7 @@ async def flist_character_workbench_load_backup(
     filename = (body.filename or "").strip()
     if not filename:
         raise HTTPException(status_code=422, detail="filename is required")
+    character_archive.require_backup_filename(filename)
 
     saved_first: dict | None = None
     if body.back_up_first:
@@ -1397,7 +1437,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
     traverse out of the images directory."""
     import re as _re
     if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
-        raise HTTPException(status_code=400, detail="invalid image filename")
+        raise InvalidFileName("invalid image filename")
     path = character_archive.images_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="image not found")
@@ -1529,7 +1569,7 @@ async def flist_character_trash_file(character_id: str, filename: str) -> FileRe
     import re as _re
 
     if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename) or filename.endswith(".json"):
-        raise HTTPException(status_code=400, detail="invalid image filename")
+        raise InvalidFileName("invalid image filename")
     path = image_trash_service.trash_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="image not found")
@@ -1627,7 +1667,7 @@ def _safe_filename_part(name: str) -> str:
 async def flist_character_inline(character_id: str, filename: str) -> FileResponse:
     import re as _re
     if not _re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$", filename):
-        raise HTTPException(status_code=400, detail="invalid inline filename")
+        raise InvalidFileName("invalid inline filename")
     path = character_archive.inlines_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="inline not found")
@@ -1892,19 +1932,13 @@ def logs_characters() -> dict:
 
 @app.get("/logs/partners")
 def logs_partners(char: str) -> dict:
-    try:
-        entries = list_partners(char)
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    entries = list_partners(char)
     return {"character": char, "partners": [asdict(e) for e in entries]}
 
 
 @app.get("/logs/messages")
 def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = None) -> dict:
-    try:
-        messages = list(read_messages(char, partner, offset=offset, limit=limit))
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    messages = list(read_messages(char, partner, offset=offset, limit=limit))
 
     # Resolve each message's IC/OOC/Unlabeled label live — labels are
     # rule-on-read, so settings changes (e.g. threshold) take effect
@@ -1949,19 +1983,13 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
 
 @app.get("/logs/search")
 def logs_search(char: str, partner: str, q: str) -> dict:
-    try:
-        hits = search_messages(char, partner, q)
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    hits = search_messages(char, partner, q)
     return {"character": char, "partner": partner, "query": q, "hits": hits}
 
 
 @app.get("/logs/search_all")
 def logs_search_all(char: str, q: str, limit_per_partner: int = 50) -> dict:
-    try:
-        return search_all_partners(char, q, limit_per_partner=limit_per_partner)
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return search_all_partners(char, q, limit_per_partner=limit_per_partner)
 
 
 @app.get("/logs/contacts")
@@ -2012,10 +2040,7 @@ async def render_fail(request_id: str, body: dict | None = None) -> dict:
 
 @app.get("/labels/stats")
 def labels_stats(char: str, partner: str) -> dict:
-    try:
-        messages = list(read_messages(char, partner))
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    messages = list(read_messages(char, partner))
     settings_conn = settings_store.connect()
     labels_conn = labels_store.connect()
     try:
@@ -2057,10 +2082,7 @@ def labels_stats_all(char: str) -> dict:
     log activity arrived after the last classify run for that
     conversation.
     """
-    try:
-        entries = list_partners(char)
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    entries = list_partners(char)
 
     base = data_dir() / char / "logs"
     settings_conn = settings_store.connect()
@@ -2433,10 +2455,7 @@ def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> dict:
             status_code=400,
             detail=f"label must be IC or OOC, got {body.label!r}",
         )
-    try:
-        messages = list(read_messages(body.character, body.partner))
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    messages = list(read_messages(body.character, body.partner))
     settings_conn = settings_store.connect()
     labels_conn = labels_store.connect()
     try:
