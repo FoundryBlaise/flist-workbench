@@ -46,6 +46,7 @@ from refusals import InvalidFileName, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
 from services import backup_all as backup_all_service
+from services import backup_trash as backup_trash_service
 from services import events as event_bus
 from services import foreign as foreign_service
 from services import image_import as image_import_service
@@ -769,23 +770,19 @@ async def flist_character_zip_backup_create_set(
 async def flist_character_zip_backup_delete(
     character_id: str, filename: str
 ) -> None:
-    """Delete a single backup ZIP. Filename validated against the
-    ISO-basic format so this can't be turned into an arbitrary-file
-    delete by crafting a `../` path. 404 if the backup isn't there
-    (idempotent-ish — UI should refresh anyway). Also drops any
-    user-set name from `_names.json` so the sidecar map doesn't
-    accumulate references to bytes that no longer exist."""
+    """Move a single Backup to the character's Trash, user-set name and
+    all; it can be restored from there until the Trash is emptied.
+    Filename validated against the ISO-basic format so a crafted `../`
+    path moves nothing. 404 if the Backup isn't there."""
     character_archive.require_backup_filename(filename)
-    p = character_archive.backups_dir(character_id) / filename
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail="backup not found")
     try:
-        p.unlink()
+        backup_trash_service.trash_backup(character_id, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="backup not found") from exc
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"could not delete backup: {exc}"
+            status_code=500, detail=f"could not move backup to the Trash: {exc}"
         ) from exc
-    character_archive.forget_backup_name(character_id, filename)
 
 
 class _ZipBackupRename(BaseModel):
@@ -1563,6 +1560,7 @@ async def flist_character_trash_list(character_id: str) -> dict:
     return {
         "character_id": character_id,
         "items": image_trash_service.list_trash(character_id),
+        "backups": backup_trash_service.list_backups(character_id),
     }
 
 
@@ -1585,16 +1583,39 @@ async def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) 
     return image_trash_service.restore_images(character_id, body.image_ids)
 
 
+class _TrashIdsBody(BaseModel):
+    ids: list[str]
+
+
+@app.post("/flist/character/{character_id}/trash/backups/restore")
+async def flist_character_trash_backups_restore(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    """Put trashed Backups back in the Backup list, under their names."""
+    return backup_trash_service.restore_backups(character_id, body.ids)
+
+
 # Deleting for good is the window's alone: the MCP layer has no tool for
-# it, so a model can never make a picture unrecoverable.
+# it, so a model can never make a picture or a Backup unrecoverable.
 @app.post("/flist/character/{character_id}/trash/purge")
 async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
     return image_trash_service.purge_images(character_id, body.image_ids)
 
 
+@app.post("/flist/character/{character_id}/trash/backups/purge")
+async def flist_character_trash_backups_purge(
+    character_id: str, body: _TrashIdsBody
+) -> dict:
+    return backup_trash_service.purge_backups(character_id, body.ids)
+
+
 @app.delete("/flist/character/{character_id}/trash")
 async def flist_character_trash_empty(character_id: str) -> dict:
-    return {"purged": image_trash_service.empty_trash(character_id)}
+    """Empty the whole Trash: images and Backups."""
+    return {
+        "purged": image_trash_service.empty_trash(character_id)
+        + backup_trash_service.empty(character_id)
+    }
 
 
 @app.get("/flist/character/{character_id}/export.zip")

@@ -301,8 +301,8 @@ function DeleteBackupConfirm({
           <strong>{backup.filename}</strong>
         </p>
         <p>
-          The ZIP and every byte it carries will be removed from disk.
-          This can't be undone.
+          It moves to this character's Trash (Images → Trash), where you
+          can restore it until you empty the Trash.
         </p>
         <div className="modal-actions">
           <button type="button" onClick={onCancel}>

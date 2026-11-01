@@ -497,7 +497,7 @@ def test_a_known_violation_names_its_spec_and_passes(pytester: pytest.Pytester) 
     result = run(
         pytester,
         """
-        @pytest.mark.known_violation("nothing_vanishes", spec=2, reason="deleting a Backup is final")
+        @pytest.mark.known_violation("nothing_vanishes", spec=3, reason="pruning deletes a Backup for good")
         def test_it(home):
             home.backup.unlink()
         """,
@@ -509,7 +509,7 @@ def test_a_known_violation_needs_a_spec(pytester: pytest.Pytester) -> None:
     result = run(
         pytester,
         """
-        @pytest.mark.known_violation("nothing_vanishes", reason="deleting a Backup is final")
+        @pytest.mark.known_violation("nothing_vanishes", reason="pruning deletes a Backup for good")
         def test_it(home):
             home.backup.unlink()
         """,
@@ -524,10 +524,10 @@ def test_a_known_violation_that_no_longer_happens_says_remove_the_marker(
     result = run(
         pytester,
         """
-        @pytest.mark.known_violation("nothing_vanishes", spec=2, reason="deleting a Backup is final")
+        @pytest.mark.known_violation("nothing_vanishes", spec=3, reason="pruning deletes a Backup for good")
         def test_it(home):
             pass
         """,
     )
     result.assert_outcomes(passed=1, errors=1)
-    result.stdout.fnmatch_lines(["*spec #2*remove the marker*"])
+    result.stdout.fnmatch_lines(["*spec #3*remove the marker*"])

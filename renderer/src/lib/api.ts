@@ -108,6 +108,19 @@ export type FlistTrashItem = {
   source_name: string | null
 }
 
+/** A deleted Backup in a character's Trash (`<character>/trash/backups/`). */
+export type FlistTrashedBackup = {
+  /** Its file name in the Trash; what restore and purge take. */
+  id: string
+  /** The Backup's file name in the Backup list, where a restore puts it. */
+  filename: string
+  /** The user-set name it had, kept for the restore. */
+  name: string | null
+  size: number
+  deleted_at: number
+  deleted_by: string | null
+}
+
 /** Where an image id is still used, beyond the pool. */
 export type FlistImageReferences = {
   working_sets: string[]
@@ -989,8 +1002,9 @@ export const api = {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
     return (await res.json()) as FlistZipBackupEntry
   },
-  /** Delete a single backup ZIP. Idempotent enough that the renderer
-   *  refreshes the list either way; surfaces error status to a toast.
+  /** Move a single backup ZIP to the character's Trash. Idempotent
+   *  enough that the renderer refreshes the list either way; surfaces
+   *  error status to a toast.
    */
   flistZipBackupDelete: async (
     characterId: string | number,
@@ -1390,7 +1404,7 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
     ),
   flistTrashList: (characterId: string | number) =>
-    get<{ character_id: string; items: FlistTrashItem[] }>(
+    get<{ character_id: string; items: FlistTrashItem[]; backups?: FlistTrashedBackup[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash`
     ),
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
@@ -1411,6 +1425,19 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
       { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
     ),
+  /** Back into the Backup list, under the name they had. */
+  flistTrashBackupsRestore: (characterId: string | number, ids: string[]) =>
+    request<{ restored: string[]; not_found: string[]; conflicts: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/restore`,
+      { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
+  /** Delete trashed Backups for good. */
+  flistTrashBackupsPurge: (characterId: string | number, ids: string[]) =>
+    request<{ purged: string[]; not_found: string[] }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/purge`,
+      { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
+  /** Empty the whole Trash: images and Backups. */
   flistTrashEmpty: (characterId: string | number) =>
     request<{ purged: number }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash`,

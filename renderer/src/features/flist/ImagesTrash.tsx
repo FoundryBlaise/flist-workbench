@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { api, type FlistTrashItem } from '../../lib/api'
+import { api, type FlistTrashItem, type FlistTrashedBackup } from '../../lib/api'
 import { useStore } from '../../state'
 import {
   EMPTY_SELECTION,
@@ -10,6 +10,7 @@ import {
   type Selection
 } from './imageSelection'
 import { formatBytes } from './imageUsage'
+import { TrashedBackups } from './TrashedBackups'
 
 const MAX_PREVIEW_THUMBS = 12
 
@@ -122,6 +123,7 @@ export function ImagesTrash({
 }) {
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)
   const [items, setItems] = useState<FlistTrashItem[] | null>(null)
+  const [backups, setBackups] = useState<FlistTrashedBackup[]>([])
   const [message, setMessage] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   const [confirm, setConfirm] = useState<null | 'purge' | 'empty'>(null)
@@ -130,7 +132,8 @@ export function ImagesTrash({
     try {
       const res = await api.flistTrashList(characterId)
       setItems(res.items)
-      onCountChange(res.items.length)
+      setBackups(res.backups ?? [])
+      onCountChange(res.items.length + (res.backups?.length ?? 0))
     } catch (e) {
       setMessage(`Couldn’t read the trash: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -196,7 +199,7 @@ export function ImagesTrash({
         <button type="button" className="flist-images-toolbar__btn" onClick={onBack}>
           ← Pool
         </button>
-        {!readOnly && visible.length > 0 && (
+        {!readOnly && visible.length + backups.length > 0 && (
           <>
             <button
               type="button"
@@ -280,10 +283,16 @@ export function ImagesTrash({
             </li>
           )
         })}
-        {items !== null && items.length === 0 && (
+        {items !== null && items.length === 0 && backups.length === 0 && (
           <li className="flist-images-pool-empty">The trash is empty.</li>
         )}
       </ul>
+      <TrashedBackups
+        characterId={characterId}
+        items={backups}
+        readOnly={readOnly}
+        onChanged={load}
+      />
       {confirm === 'purge' && (
         <ImagesConfirmModal
           title={`Delete ${sel.ids.length} image${sel.ids.length === 1 ? '' : 's'} for good?`}
@@ -301,7 +310,7 @@ export function ImagesTrash({
       {confirm === 'empty' && (
         <ImagesConfirmModal
           title="Empty the trash?"
-          body={`All ${visible.length} file${visible.length === 1 ? '' : 's'} in this character’s trash are removed from disk. This can’t be undone.`}
+          body={`All ${visible.length + backups.length} file${visible.length + backups.length === 1 ? '' : 's'} in this character’s trash are removed from disk. This can’t be undone.`}
           thumbs={thumbsFor(visible)}
           confirmLabel="Empty trash"
           danger

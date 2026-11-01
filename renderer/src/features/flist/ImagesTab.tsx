@@ -211,7 +211,7 @@ export function ImagesTab({
     api
       .flistTrashList(characterId)
       .then((r) => {
-        if (!cancelled) setTrashCount(r.items.length)
+        if (!cancelled) setTrashCount(r.items.length + (r.backups?.length ?? 0))
       })
       .catch(() => {})
     return () => {
