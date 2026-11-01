@@ -821,6 +821,30 @@ function _isNewestOpen(characterId: string, token: number): boolean {
   return _openTokens.get(characterId) === token
 }
 
+/** The editor patch that shows a character's Workbench as the slot in
+ *  memory holds it, unsaved keystrokes included. */
+function _workbenchInEditor(s: State, characterId: string): Partial<State> {
+  const slot = s.flistWorking[characterId]
+  const live = s.flistArchive[characterId]?.live ?? null
+  const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
+  // "Workbench", not "My edits": the sidebar row, the window title
+  // and the read-only hints all name the same one thing now. Two
+  // names for it was half the reason testers could not say what they
+  // were editing.
+  const name = entry?.name ?? 'Workbench'
+  const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
+  return {
+    editorContent: slot ? descriptionOf(slot.payload) : '',
+    editorTitle: `${name} — Workbench${titleSuffix}`,
+    editorInlines: live ? flistExtractInlines(live) : {},
+    editorReadOnly: false,
+    editorDirty: !!slot?.unsavedDirty,
+    saveStatus: 'idle',
+    saveError: null,
+    draftStatus: 'idle'
+  }
+}
+
 /** Reads a character's legacy working copy (`working.json`) into a
  *  slot without storing it. No copy on disk yet (payload null or a
  *  404) seeds the slot from Live, unmaterialised: the first edit then
@@ -2430,12 +2454,12 @@ export const useStore = create<State>((set, get) => ({
 
   async flistOpenWorking(characterId) {
     const token = _beginOpen(characterId)
-    // Ensure Live is loaded into flistArchive BEFORE we ask
-    // flistLoadWorking to handle a 404 — its seed-from-Live branch
+    // Ensure Live is loaded into flistArchive BEFORE the legacy read
+    // handles a 404 — its seed-from-Live branch
     // reads from flistArchive, so a race against the loader produces
     // an empty `character` block and the first edit ships a bare
     // payload (QA P1-3).
-    let archive = get().flistArchive[characterId]
+    const archive = get().flistArchive[characterId]
     if (!archive || archive.live === null) {
       const fetched = await api.flistLive(characterId).catch(() => null)
       if (fetched) {
@@ -2452,7 +2476,6 @@ export const useStore = create<State>((set, get) => ({
             }
           }
         }))
-        archive = get().flistArchive[characterId]
       }
     }
     // Load the persisted working copy. On 404 the slot is seeded from
@@ -2557,27 +2580,7 @@ export const useStore = create<State>((set, get) => ({
     // the user moved on to someone else leaves it alone; otherwise the
     // next keystroke would save this character's text into theirs.
     if (get().flistActiveCharacterId !== characterId) return
-    const slot = get().flistWorking[characterId]
-    const live = archive?.live ?? null
-    const inlines: Record<string, InlineImage> = live ? flistExtractInlines(live) : {}
-    const content = slot ? descriptionOf(slot.payload) : ''
-    const entry = get().flistRoster.find((r) => String(r.id ?? '') === characterId)
-    // "Workbench", not "My edits": the sidebar row, the window title
-    // and the read-only hints all name the same one thing now. Two
-    // names for it was half the reason testers could not say what they
-    // were editing.
-    const name = entry?.name ?? 'Workbench'
-    const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
-    set({
-      editorContent: content,
-      editorTitle: `${name} — Workbench${titleSuffix}`,
-      editorInlines: inlines,
-      editorReadOnly: false,
-      editorDirty: !!slot?.unsavedDirty,
-      saveStatus: 'idle',
-      saveError: null,
-      draftStatus: 'idle'
-    })
+    set(_workbenchInEditor(get(), characterId))
   },
 
   // ---- Tier 2 working-copy persistence ------------------------------
@@ -4796,6 +4799,13 @@ export const useStore = create<State>((set, get) => ({
           // ignore
         }
         set({ flistActiveCharacterId: id })
+        // From here on a keystroke is saved into this character's
+        // Workbench, so the editor must stop showing the one being left.
+        // A Workbench already in memory is shown straight away; the
+        // read below refreshes it unless the user types first.
+        if (!get().editorReadOnly && get().flistWorking[id]) {
+          set(_workbenchInEditor(get(), id))
+        }
         void get().flistLoadArchive(id)
       }
       // Always reload the working copy on a picker click, even when

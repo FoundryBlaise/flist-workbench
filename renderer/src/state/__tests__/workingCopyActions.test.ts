@@ -983,4 +983,58 @@ describe('opening a character never applies a stale read', () => {
     expect(slot.etag).toBe('amber-saved')
     expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
   })
+
+  it('a read landing after the user switched away leaves the active editor untouched', async () => {
+    fake.hold(BIRCH_READ)
+    fake.on(AMBER_READ, json(payloadRead(amberBench(), 'amber-1')))
+
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+    useStore.getState().selectCharacter('Amber')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().editorContent).toBe(AMBER_TEXT)
+    useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
+
+    fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const s = useStore.getState()
+    expect(s.editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(s.editorTitle).toBe('Amber — Workbench')
+    expect(descOf(s.flistWorking[BIRCH].payload)).toBe(BIRCH_TEXT)
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${AMBER_TEXT} And wasps.`
+    ])
+    expect(fake.requestsTo(BIRCH_SAVE)).toEqual([])
+  })
+
+  it('typing straight after a switch, before the read lands, edits the new character’s own text', async () => {
+    // Birch was opened earlier, so her Workbench is in memory. Until her
+    // read lands the editor must not keep showing Amber's text under
+    // Birch's name: a keystroke there would save Amber's description
+    // into Birch's Workbench.
+    useStore.setState({
+      flistWorking: {
+        [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }),
+        [BIRCH]: workingSlot(birchBench(), { etag: 'birch-1' })
+      },
+      flistActiveCharacterId: AMBER,
+      editorContent: AMBER_TEXT
+    })
+    fake.hold(BIRCH_READ)
+
+    useStore.getState().selectCharacter('Birch')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().editorContent).toBe(BIRCH_TEXT)
+    useStore.getState().setEditorContent(`${BIRCH_TEXT} Twice.`)
+    fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+
+    expect(useStore.getState().editorContent).toBe(`${BIRCH_TEXT} Twice.`)
+    expect(fake.requestsTo(BIRCH_SAVE).map((r) => descOf(r.body))).toEqual([
+      `${BIRCH_TEXT} Twice.`
+    ])
+    expect(fake.requestsTo(AMBER_SAVE)).toEqual([])
+  })
 })
