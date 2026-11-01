@@ -1,10 +1,11 @@
 """Backups in the Trash: `characters/<name>/trash/backups/`.
 
-The Trash is one place for everything the user deletes. Images lie at
-its top level (see `image_trash`); a deleted Backup goes into the
-`backups/` folder inside it, with its user-set name kept in that
-folder's index so a restore puts it back in the Backup list under the
-same name.
+A character's Trash holds the images and Backups the user deletes.
+Images lie at its top level (see `image_trash`); a deleted Backup goes
+into the `backups/` folder inside it, with its user-set name kept in
+that folder's index so a restore puts it back in the Backup list under
+the same name. Cleared Labels belong to no character folder and wait in
+the one shared place `label_trash` keeps.
 
 Only the window deletes for good, by purging or emptying the Trash. No
 MCP tool calls `purge_backups` or `empty`.

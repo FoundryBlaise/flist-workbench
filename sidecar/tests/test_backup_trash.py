@@ -1,7 +1,6 @@
 """Deleting a Backup moves it to the Trash.
 
-The Trash is one place for everything the user deletes: images and
-Backups alike. A deleted Backup keeps its bytes and its user-set name
+A character's Trash holds the images and Backups the user deletes. A deleted Backup keeps its bytes and its user-set name
 there, and restoring it puts it back in the Backup list under that
 name. Only the window empties the Trash; no MCP tool can.
 """
