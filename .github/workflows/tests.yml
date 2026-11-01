@@ -1,7 +1,7 @@
-# Runs the sidecar's pytest suite, the renderer's vitest suite and the
-# Playwright e2e suite (own job, see `e2e` below) on every branch push
-# and pull request, on Windows because that is the only platform the
-# app ships for. release.yml calls this same file (workflow_call)
+# Runs the sidecar's pytest suite, the renderer's vitest suite, the
+# typecheck and lint, and the Playwright e2e suite (own job, see `e2e`
+# below) on every branch push and pull request, on Windows because that
+# is the only platform the app ships for. release.yml calls this same file (workflow_call)
 # before it packs anything, so a tag build runs the tests on the tagged
 # commit and a red suite never becomes a release.
 #
@@ -78,6 +78,28 @@ jobs:
 
       - name: vitest
         run: npx vitest run
+
+  # Type errors and lint errors fail the build, so neither can pile up
+  # unseen again. Warnings (unused vars) still pass.
+  static:
+    name: Typecheck and lint
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node and node_modules
+        uses: ./.github/actions/setup-toolchain
+        with:
+          node: 'true'
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
 
   # The Playwright suite against the built Electron app. It launches
   # the dev build, which starts its sidecar from sidecar/.venv, so this

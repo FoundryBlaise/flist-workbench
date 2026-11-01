@@ -238,7 +238,9 @@ export async function seedCharacter(id: string, name: string, description: strin
   const dataDir = join(await mkdtemp(join(e2eEnv('FLIST_WB_E2E_ROOT'), 'seed-')), 'data')
   await mkdir(dataDir)
   execFileSync(python, [join(__dirname, 'fixtures', 'seed_character.py'), dataDir, id, name, description], {
-    stdio: 'inherit'
+    stdio: 'inherit',
+    // No console window that takes the focus (see global-setup.ts).
+    windowsHide: true
   })
   return dataDir
 }

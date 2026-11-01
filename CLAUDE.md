@@ -13,3 +13,7 @@ The five default labels: needs-triage, needs-info, ready-for-agent, ready-for-hu
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Worktrees
+
+Parallel work goes in `scripts/agent-worktree.sh add|remove` worktrees (shared `node_modules`: never `npm install` there); usage in its header.

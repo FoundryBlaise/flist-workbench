@@ -373,7 +373,6 @@ function EiconPopover({
         })
         .catch((e) => {
           if (controller.signal.aborted) return
-          // eslint-disable-next-line no-console
           console.warn('eicon search failed', e)
           setStatus('error')
         })

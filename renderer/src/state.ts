@@ -24,14 +24,8 @@ import {
   detectLiveDrift,
   emptyWorkingSlot,
   extractInlines as flistExtractInlines,
-  isInfotagPath,
-  normaliseNewlines as flistNormaliseNewlines,
-  pathLookup,
   seedWorkingFromLive,
-  selectWorkingSlot as flistSelectWorkingSlot,
-  WORKING_SCHEMA_VERSION,
   type FlistImportOutcome,
-  type FlistSaveStatus,
   type FlistWorkingSlot,
   type SetMeta,
   type WorkingPayload
@@ -4323,6 +4317,8 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({
       flistMapping: { ...s.flistMapping, status: 'loading', error: null }
     }))
+    // Assigned once, after the closure that reads it is created.
+    // eslint-disable-next-line prefer-const
     let resolvedPromise!: Promise<void>
     const work = (async () => {
       try {
@@ -5066,7 +5062,7 @@ function humanizeFetchError(err: unknown, name: string): string {
   // Network reach failures: fetch throws "Failed to fetch" / "TypeError"
   // on the renderer side when the sidecar is down.
   if (/Failed to fetch|NetworkError|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(raw)) {
-    return "Can't reach the sidecar. Is it running on port 27384?"
+    return "Can't reach the app's sidecar. Restart the app and try again."
   }
   if (/HTTP 5\d\d/.test(raw)) return 'F-list is having trouble right now. Try again in a moment.'
   if (/HTTP 4\d\d/.test(raw)) return `F-list refused that name (${raw.replace(/^HTTP \d+:\s*/, '')}).`

@@ -53,7 +53,6 @@ export function AliasLinkDialog({
       .filter((p) => !ownGroup.has(p.name))
       .filter((p) => !q || p.name.toLowerCase().includes(q))
       .sort((a, b) => a.name.localeCompare(b.name))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allPartners, filter, partner.name, partner.aliases.join('|')])
 
   const linkTo = async (other: PartnerEntry) => {

@@ -12,9 +12,6 @@ function initialFor(name: string): string {
   return trimmed.charAt(0).toUpperCase()
 }
 
-// 30 min — anything older we treat as stale and auto-pull on select.
-const STALE_AGE_SEC = 30 * 60
-
 function relativeAge(epoch: number | null | undefined): string {
   if (epoch === null || epoch === undefined) return 'Never'
   const seconds = Math.max(0, Date.now() / 1000 - epoch)
@@ -28,11 +25,6 @@ function relativeAge(epoch: number | null | undefined): string {
   const weeks = Math.floor(days / 7)
   if (weeks < 5) return `${weeks}w ago`
   return new Date(epoch * 1000).toLocaleDateString()
-}
-
-function isStale(epoch: number | null | undefined): boolean {
-  if (epoch === null || epoch === undefined) return true
-  return Date.now() / 1000 - epoch >= STALE_AGE_SEC
 }
 
 // Stable colour per-character so the same character always renders the

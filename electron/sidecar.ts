@@ -4,6 +4,9 @@ import { app } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DEV_SERVER_ORIGIN } from './appPage'
+import { assertPortFree, chooseSidecarPort } from './sidecarPort'
+
+export { SidecarPortTaken } from './sidecarPort'
 
 // Mirror main.ts's appendDiagLog so sidecar startup paints into the
 // same log file. We can't import from main.ts (circular) and we want
@@ -57,12 +60,10 @@ function installExitHandlers() {
   }
 }
 
-// One port for dev AND packaged. Picked in the upper-20k range so it
-// doesn't collide with the cluster of common ports around :8xxx that
-// dev tools fight over (vite, mongo, code-server forwards, etc). The
-// browser extension also hardcodes this — keep them aligned.
-const DEFAULT_PORT = 27384
-const PORT = Number(process.env['SIDECAR_PORT'] ?? DEFAULT_PORT)
+// The installed app and a dev build default to different ports
+// (sidecarPort.ts), so a dev run never reaches an installed sidecar.
+// Written back so main can hand the port to the preload.
+const PORT = chooseSidecarPort(process.env, app.isPackaged)
 process.env['SIDECAR_PORT'] = String(PORT)
 
 // Exposed so the main-process menu handlers can call the sidecar
@@ -118,6 +119,14 @@ export async function startSidecar(): Promise<void> {
     platform: process.platform,
     resourcesPath: app.isPackaged ? process.resourcesPath : null
   })
+  // Whatever already holds the port would answer the /health wait below,
+  // and the app would then talk to it. Stop here instead.
+  try {
+    await assertPortFree(PORT)
+  } catch (err) {
+    sidecarDiag('port-taken', err)
+    throw err
+  }
   if (app.isPackaged) {
     const exe = join(process.resourcesPath, 'sidecar.exe')
     sidecarDiag('spawn-packaged', { exe })
@@ -254,6 +263,9 @@ async function waitForHealth(port: number, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   let lastErr: unknown
   while (Date.now() < deadline) {
+    // Our sidecar is gone (e.g. it lost a race for the port), so a
+    // /health answer could only come from someone else's process.
+    if (proc === null) throw new Error('sidecar exited before it answered /health')
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`)
       if (res.ok) return

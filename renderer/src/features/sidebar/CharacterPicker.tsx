@@ -68,7 +68,6 @@ export function CharacterPicker() {
 
   const recentCount = useMemo(
     () => characters.filter((c) => hasNewActivity(c.name, c.mtime)).length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [characters, lastSeen]
   )
 

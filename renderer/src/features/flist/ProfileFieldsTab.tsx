@@ -3,8 +3,7 @@ import { selectWorkingSlot, useStore } from '../../state'
 import { pathLookup } from '../../state/flist'
 import {
   resolveInfotagDescriptors,
-  type InfotagDescriptor,
-  type InfotagGroupResolved
+  type InfotagDescriptor
 } from './infotagsResolver'
 import { ListField, NumberField, TextField, UnknownField } from './infotagFields/TextField'
 import { MappingListStaleness } from './MappingListStaleness'
