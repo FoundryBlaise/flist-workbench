@@ -9,6 +9,9 @@ import { selectWorkingSlot, useStore } from '../../state'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 
 const SETS = '/flist/character/99/sets'
+// The Workbench payload: activating a set makes it the Workbench, and
+// the window reads and saves it through the one Workbench endpoint.
+const BENCH = '/flist/character/99/workbench/payload'
 
 let fake: FakeApi
 
@@ -115,7 +118,7 @@ describe('flistLoadSets', () => {
     )
     fake.on(`POST ${SETS}/two/activate`, json({ active_set_id: 'two' }))
     fake.on(
-      `GET ${SETS}/two/payload`,
+      `GET ${BENCH}`,
       json({ payload: { character: { description: 'au' } }, etag: 'e1' })
     )
     await useStore.getState().flistLoadSets('99')
@@ -130,7 +133,7 @@ describe('flistLoadSets', () => {
     expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       `GET ${SETS}`,
       `POST ${SETS}/two/activate`,
-      `GET ${SETS}/two/payload`
+      `GET ${BENCH}?create=false`
     ])
   })
 
@@ -149,7 +152,7 @@ describe('flistCreateSet', () => {
     )
     fake.on(`POST ${SETS}/new1/activate`, json({ active_set_id: 'new1' }))
     fake.on(
-      `GET ${SETS}/new1/payload`,
+      `GET ${BENCH}`,
       json({ payload: { character: { description: 'seed' } }, etag: 'e-new' })
     )
     const meta = await useStore.getState().flistCreateSet('99', 'Working set 1')
@@ -226,7 +229,7 @@ describe('flistDeleteSet', () => {
     fake.on(`DELETE ${SETS}/a`, json({ active_set_id: 'b' }))
     fake.on(`POST ${SETS}/b/activate`, json({ active_set_id: 'b' }))
     fake.on(
-      `GET ${SETS}/b/payload`,
+      `GET ${BENCH}`,
       json({ payload: { character: { description: 'b' } }, etag: 'e-b' })
     )
     await useStore.getState().flistDeleteSet('99', 'a')
@@ -275,19 +278,19 @@ describe('flistActivateSet', () => {
       flistWorking: { '99': outgoingSlot }
     })
     // 1. flush of the outgoing set fires a PUT to /sets/old/payload
-    fake.on(`PUT ${SETS}/old/payload`, json({ etag: 'flushed' }))
+    fake.on(`PUT ${BENCH}`, json({ etag: 'flushed' }))
     // 2. activate the new set
     fake.on(`POST ${SETS}/new/activate`, json({ active_set_id: 'new' }))
     // 3. materialise the new set's payload
     fake.on(
-      `GET ${SETS}/new/payload`,
+      `GET ${BENCH}`,
       json({ payload: { character: { description: 'newly' } }, etag: 'e-new' })
     )
     await useStore.getState().flistActivateSet('99', 'new')
     const order = fake.requests.map((r) => `${r.method} ${r.path}`)
-    expect(order.filter((r) => r.startsWith('PUT'))).toEqual([`PUT ${SETS}/old/payload`])
+    expect(order.filter((r) => r.startsWith('PUT'))).toEqual([`PUT ${BENCH}`])
     expect(order.indexOf(`POST ${SETS}/new/activate`)).toBeGreaterThan(
-      order.indexOf(`PUT ${SETS}/old/payload`)
+      order.indexOf(`PUT ${BENCH}`)
     )
     expect(useStore.getState().flistActiveSetId['99']).toBe('new')
     expect(useStore.getState().flistSetWorking['new']?.etag).toBe('e-new')
@@ -314,12 +317,12 @@ describe('flistActivateFromFlist', () => {
       flistSetWorking: { 'cur': currentSlot },
       flistWorking: { '99': currentSlot }
     })
-    fake.on(`PUT ${SETS}/cur/payload`, json({ etag: 'flushed' }))
+    fake.on(`PUT ${BENCH}`, json({ etag: 'flushed' }))
     fake.on('POST /flist/character/99/from-flist/activate', json({ active_set_id: null }))
     await useStore.getState().flistActivateFromFlist('99')
     expect(useStore.getState().flistActiveSetId['99']).toBeNull()
     const puts = fake.requests.filter((r) => r.method === 'PUT')
-    expect(puts.map((r) => r.path)).toEqual([`${SETS}/cur/payload`])
+    expect(puts.map((r) => r.path)).toEqual([`${BENCH}`])
   })
 })
 

@@ -43,6 +43,7 @@ from archive_errors import (
     CharacterNotFound,
     InvalidCharacterId,
     NoLive,
+    WorkbenchConflict,
     WorkbenchNotKept,
 )
 from refusals import InvalidFileName
@@ -1721,32 +1722,113 @@ def resolve_workbench(
     return meta
 
 
-@dataclass(frozen=True)
-class WorkbenchReplaced:
-    """What a whole-Workbench replacement did.
+# ---- the one Workbench --------------------------------------------------
+#
+# How every caller reads and saves a character's Workbench, without
+# knowing where on disk it lives. Today it is the set `resolve_workbench`
+# picks; the on-disk migration swaps that for a `workbench/` folder here
+# and nowhere else.
 
-    `kept` is the `before-restore` Backup holding the Workbench that was
-    replaced, as `{filename, created_at}`; None when the character had
-    no Workbench yet, so there was nothing to keep.
+
+@dataclass(frozen=True)
+class WorkbenchRead:
+    """A Workbench payload and the etag a write must send back.
+
+    `created` is true when this very read made the Workbench from Live:
+    nobody can have edited it yet, so a caller holding its own copy of
+    Live may write over it.
     """
 
-    workbench: SetMeta
+    payload: dict[str, Any]
+    etag: str
+    created: bool = False
+
+
+class EtagRequired(EtagMismatch):
+    """A Workbench write that sent no etag: it has not seen what it
+    would replace, so it is refused like a stale one."""
+
+    def __init__(self, current_etag: str | None) -> None:
+        super().__init__(current_etag)
+        self.args = ("etag_required",)
+
+
+def read_workbench(
+    character_id: int | str, *, create: bool = False
+) -> WorkbenchRead | None:
+    """The character's Workbench, or None when it has none.
+
+    `create=True` makes it from Live first if needed; None then means
+    there is no Live to make it from.
+    """
+    bench = resolve_workbench(character_id, create=False)
+    created = False
+    if bench is None and create:
+        bench = resolve_workbench(character_id, create=True)
+        created = bench is not None
+    if bench is None:
+        return None
+    payload = read_set_payload(character_id, bench.id)
+    etag = set_payload_etag(character_id, bench.id)
+    if payload is None or etag is None:
+        return None
+    return WorkbenchRead(payload=payload, etag=etag, created=created)
+
+
+def workbench_etag(character_id: int | str) -> str | None:
+    """The etag of the character's Workbench; None when it has none."""
+    bench = resolve_workbench(character_id, create=False)
+    if bench is None:
+        return None
+    return set_payload_etag(character_id, bench.id)
+
+
+def write_workbench(
+    character_id: int | str,
+    payload: dict[str, Any],
+    *,
+    expected_etag: str | None,
+) -> str:
+    """Replace the character's Workbench; return the new etag.
+
+    The save contract: `expected_etag` must be the etag of what is on
+    disk now. Without one this raises `EtagRequired`, with a stale one
+    (or when there is no Workbench to replace) `EtagMismatch`; neither
+    touches the file. The write is atomic and announces the change.
+    Raises ValueError for a payload that is not a Workbench.
+    """
+    current = workbench_etag(character_id)
+    if expected_etag is None:
+        raise EtagRequired(current)
+    bench = resolve_workbench(character_id, create=False)
+    if bench is None:
+        raise EtagMismatch(None)
+    return write_set_payload(
+        character_id, bench.id, payload, expected_etag=expected_etag
+    )
+
+
+@dataclass(frozen=True)
+class WorkbenchReplaced:
+    """What a whole-Workbench replacement did: the new payload and its
+    etag, and `kept`, the `before-restore` Backup holding the Workbench
+    that was replaced, as `{filename, created_at}`. `kept` is None when
+    the character had no Workbench yet, so there was nothing to keep.
+    """
+
     payload: dict[str, Any]
     etag: str
     kept: dict[str, Any] | None
 
 
-def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any] | None:
+def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any]:
     """Save the Workbench as a Backup (source `workbench`, occasion
     `before-restore`) before something replaces all of it (ADR 0003).
 
     Always taken, never deduplicated: the Backup is the undo of the
-    replacement. A character with no Workbench yet has nothing to keep,
-    and gets no Backup. Raises `WorkbenchNotKept` when the Backup
-    cannot be written; the caller must then leave the Workbench alone.
+    replacement. Raises `WorkbenchNotKept` when the Backup cannot be
+    written; the caller must then leave the Workbench alone.
     """
-    if resolve_workbench(character_id, create=False) is None:
-        return None
     try:
         result = save_zip_backup(
             character_id,
@@ -1770,19 +1852,27 @@ def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any] 
 def _replace_workbench(
     character_id: int | str, payload: dict[str, Any]
 ) -> WorkbenchReplaced:
-    """Keep the Workbench as a Backup, then overwrite it with `payload`."""
-    kept = _keep_workbench_before_replacing(character_id)
-    bench = resolve_workbench(character_id)
-    if bench is None:
-        raise ValueError("no Live to make a Workbench from")
-    etag = write_set_payload(character_id, bench.id, payload, expected_etag=None)
-    meta = read_set_meta(character_id, bench.id)
-    return WorkbenchReplaced(
-        workbench=meta if meta is not None else bench,
-        payload=payload,
-        etag=etag,
-        kept=kept,
-    )
+    """Keep the Workbench as a Backup, then overwrite it with `payload`.
+
+    A Workbench this call had to make from Live holds no edits, so it
+    is not kept. The write goes against the etag read before the Backup:
+    a save that lands in between is refused as `WorkbenchConflict`
+    rather than lost, since the Backup would not hold it.
+    """
+    current = read_workbench(character_id, create=True)
+    if current is None:
+        raise NoLive("no Live to make a Workbench from")
+    kept = None if current.created else _keep_workbench_before_replacing(character_id)
+    try:
+        etag = write_workbench(character_id, payload, expected_etag=current.etag)
+    except EtagMismatch as exc:
+        raise WorkbenchConflict(
+            "etag_mismatch",
+            "The Workbench changed while it was being replaced, so it was"
+            " not replaced. Try again.",
+            exc.current_etag,
+        ) from exc
+    return WorkbenchReplaced(payload=payload, etag=etag, kept=kept)
 
 
 def reset_workbench_to_live(character_id: int | str) -> WorkbenchReplaced:

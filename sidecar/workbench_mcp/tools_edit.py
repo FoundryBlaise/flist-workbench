@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 import bbcode_rules
 import character_archive
-from archive_errors import WorkbenchNotKept
+from archive_errors import WorkbenchConflict, WorkbenchNotKept
 
 from ._context import (
     ToolError,
@@ -130,7 +130,7 @@ def load_backup_into_workbench(
         )
     except FileNotFoundError as exc:
         raise ToolError("backup_not_found", str(exc)) from exc
-    except WorkbenchNotKept as exc:
+    except (WorkbenchNotKept, WorkbenchConflict) as exc:
         raise ToolError(exc.code, exc.message) from exc
     except KeyError as exc:
         raise ToolError(
@@ -149,7 +149,7 @@ def load_backup_into_workbench(
     )
     return {
         "character": target.name,
-        "set": replaced.workbench.name,
+        "set": character_archive.WORKBENCH_SET_NAME,
         "loaded": backup,
         "kept_as": kept,
         "note": NO_PUSH_NOTE,

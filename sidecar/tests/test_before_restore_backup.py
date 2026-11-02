@@ -64,11 +64,9 @@ async def _edit_workbench(text: str) -> None:
 
 def _workbench(window) -> dict[str, Any]:
     """The Workbench payload as the window reads it."""
-    res = window.get(f"/flist/character/{CID}/workbench", params={"create": False})
-    assert res.status_code == 200, res.text
-    bench = res.json()["workbench"]
-    assert bench is not None, res.json()
-    res = window.get(f"/flist/character/{CID}/sets/{bench['id']}/payload")
+    res = window.get(
+        f"/flist/character/{CID}/workbench/payload", params={"create": False}
+    )
     assert res.status_code == 200, res.text
     return res.json()["payload"]
 

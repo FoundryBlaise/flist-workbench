@@ -52,3 +52,36 @@ class NoLive(Refusal, LookupError):
 
     status = 404
     code = "no_live"
+
+
+class NoWorkbench(Refusal, LookupError):
+    """A character with no Workbench, and none asked for or none that
+    can be made: there is no Live to make it from."""
+
+    status = 404
+    code = "no_workbench"
+    fixed_message = "this character has no Workbench yet"
+
+
+class WorkbenchConflict(Refusal):
+    """A Workbench write that has not seen what is on disk now: it sent
+    no etag (`etag_required`) or a stale one (`etag_mismatch`). The body
+    carries the current etag, so the caller can read again and decide."""
+
+    status = 409
+
+    def __init__(self, code: str, message: str, current_etag: str | None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.current_etag = current_etag
+
+    def body(self) -> dict[str, str | None]:  # type: ignore[override]
+        return {**super().body(), "current_etag": self.current_etag}
+
+
+class InvalidWorkbenchPayload(Refusal, ValueError):
+    """A payload that is not a Workbench: no touched-field overlay, or
+    none of the profile's content keys."""
+
+    status = 422
+    code = "invalid_workbench_payload"

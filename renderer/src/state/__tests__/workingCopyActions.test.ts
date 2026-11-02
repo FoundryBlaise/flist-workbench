@@ -49,17 +49,16 @@ afterEach(() => {
 })
 
 const SET_ID = 'aaaaaaaaaaaa'
-const BENCH_URL = `/flist/character/99/sets/${SET_ID}/payload`
+const BENCH_URL = '/flist/character/99/workbench/payload'
 const SAVE = `PUT ${BENCH_URL}`
 const AUTOSAVE_MS = 500
 
 const descOf = (body: unknown) =>
   ((body as { character?: { description?: string } }).character ?? {}).description
 
-const conflict = json(
-  { detail: { detail: 'etag_mismatch', current_etag: 'server-etag' } },
-  409
-)
+const refusal = (code: string, currentEtag: string | null) =>
+  json({ code, message: 'The Workbench changed since it was read.', current_etag: currentEtag }, 409)
+const conflict = refusal('etag_mismatch', 'server-etag')
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
   const slot = workingSlot(workbenchPayload(payload))
@@ -238,7 +237,7 @@ describe('typing while a save is in flight', () => {
     const answerLikeTheSidecar = () => {
       for (const p of fake.pending(SAVE)) {
         if (p.request.headers['If-Match'] !== current) {
-          p.resolve(json({ detail: { detail: 'etag_mismatch', current_etag: current } }, 409))
+          p.resolve(refusal('etag_mismatch', current))
           continue
         }
         current = `v${++version}`
@@ -438,18 +437,19 @@ describe('external-change resolution', () => {
   })
 })
 
+const noWorkbench = json({ code: 'no_workbench', message: 'this character has no Workbench yet' }, 404)
+
 describe('flistOpenWorking archive race (QA P1-3)', () => {
-  it('fetches Live + caches it before seeding the working copy on 404', async () => {
+  it('fetches Live + caches it before seeding the working copy when there is no Workbench', async () => {
     useStore.setState({ flistArchive: {}, flistRoster: [] })
     fake.on(
       'GET /flist/character/99/live',
       json({ character: { description: 'live-desc', id: '99' }, id: '99' })
     )
-    fake.on('GET /flist/character/99/workbench', json({ detail: 'no workbench' }, 404))
-    fake.on('GET /flist/character/99/working', json({ detail: 'no working copy' }, 404))
+    fake.on('GET /flist/character/99/workbench', json({ workbench: null, reason: 'not_created_yet' }))
+    fake.on(`GET ${BENCH_URL}?create=false`, noWorkbench)
     await useStore.getState().flistOpenWorking('99')
     expect(fake.requestsTo('GET /flist/character/99/live')).toHaveLength(1)
-    expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(1)
     const slot = useStore.getState().flistWorking['99']
     expect(slot).toBeDefined()
     const char = slot.payload.character as { description?: string } | undefined
@@ -458,8 +458,8 @@ describe('flistOpenWorking archive race (QA P1-3)', () => {
   })
 })
 
-describe('flistOpenWorking asks the server before legacy storage (working.json 409)', () => {
-  it('hydrates the real bench and reads its payload instead of working.json', async () => {
+describe('flistOpenWorking reads the one Workbench endpoint', () => {
+  it('reads the Workbench payload with its etag, and the row points at the Workbench', async () => {
     useStore.setState({
       flistArchive: {
         '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
@@ -471,11 +471,11 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
       json(workbenchRead('bbbbbbbbbbbb'))
     )
     fake.on(
-      'GET /flist/character/99/sets/bbbbbbbbbbbb/payload',
+      `GET ${BENCH_URL}?create=false`,
       json(payloadRead(workbenchPayload({ character: { description: 'bench-desc' } }), 'disk-etag'))
     )
     await useStore.getState().flistOpenWorking('99')
-    expect(fake.requestsTo('GET /flist/character/99/workbench?create=false')).toHaveLength(1)
+    expect(fake.requestsTo(`GET ${BENCH_URL}?create=false`)).toHaveLength(1)
     expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(0)
     expect(useStore.getState().flistActiveSetId['99']).toBe('bbbbbbbbbbbb')
     const slot = useStore.getState().flistWorking['99']
@@ -484,7 +484,7 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
     expect((slot.payload.character as { description?: string }).description).toBe('bench-desc')
   })
 
-  it('a character with no bench yet still falls through to the legacy read', async () => {
+  it('a character with no Workbench yet is seeded from Live in memory, and nothing is written', async () => {
     useStore.setState({
       flistArchive: {
         '99': archiveEntry(livePayload({ character: { description: 'live-desc' } }))
@@ -493,15 +493,126 @@ describe('flistOpenWorking asks the server before legacy storage (working.json 4
     })
     fake.on(
       'GET /flist/character/99/workbench?create=false',
-      json({ workbench: null, reason: 'no_workbench' })
+      json({ workbench: null, reason: 'not_created_yet' })
     )
-    fake.on('GET /flist/character/99/working', json({ detail: 'no working copy' }, 404))
+    fake.on(`GET ${BENCH_URL}?create=false`, noWorkbench)
     await useStore.getState().flistOpenWorking('99')
-    expect(fake.requestsTo('GET /flist/character/99/workbench?create=false')).toHaveLength(1)
-    expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(1)
     const slot = useStore.getState().flistWorking['99']
     expect((slot.payload.character as { description?: string }).description).toBe('live-desc')
     expect(slot.materialised).toBe(false)
+    expect(fake.requests.filter((r) => r.method !== 'GET')).toEqual([])
+  })
+})
+
+describe('the first edit of a character with no Workbench', () => {
+  function seedUnmaterialised() {
+    seedLive({ character: { description: 'published' } })
+    useStore.setState({
+      flistWorking: {
+        '99': workingSlot(workbenchPayload({ character: { description: 'published' } }), {
+          etag: null,
+          materialised: false
+        })
+      },
+      flistActiveSetId: {},
+      flistActiveCharacterId: '99',
+      editorReadOnly: false
+    })
+  }
+
+  it('makes the Workbench from Live, then saves over the etag that read handed out', async () => {
+    // With no Workbench yet the flush used to return early and write
+    // nothing, while saveStatus stayed 'idle' — so the UI showed no
+    // sign that the text was only in memory.
+    seedUnmaterialised()
+    fake.on(
+      `GET ${BENCH_URL}`,
+      json({
+        ...payloadRead(workbenchPayload({ character: { description: 'published' } }), 'fresh'),
+        created: true
+      })
+    )
+    fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead('bbbbbbbbbbbb')))
+    fake.on(SAVE, json({ etag: 'saved' }))
+
+    useStore.getState().setEditorContent('typed')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const puts = fake.requestsTo(SAVE)
+    expect(puts).toHaveLength(1)
+    expect(puts[0].headers['If-Match']).toBe('fresh')
+    expect(descOf(puts[0].body)).toBe('typed')
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.etag).toBe('saved')
+    expect(slot.unsavedDirty).toBe(false)
+    expect(useStore.getState().flistActiveSetId['99']).toBe('bbbbbbbbbbbb')
+  })
+
+  it('a Workbench something else made meanwhile is not overwritten: the edit waits for the user', async () => {
+    seedUnmaterialised()
+    fake.on(
+      `GET ${BENCH_URL}`,
+      json({
+        ...payloadRead(
+          workbenchPayload({
+            _overlay: ['character.description'],
+            character: { description: 'by the model' }
+          }),
+          'theirs'
+        ),
+        created: false
+      })
+    )
+    fake.on(SAVE, json({ etag: 'unexpected' }))
+
+    useStore.getState().setEditorContent('typed')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(fake.requestsTo(SAVE)).toHaveLength(0)
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.unsavedDirty).toBe(true)
+    expect(descOf(slot.payload)).toBe('typed')
+    expect(useStore.getState().flistExternalChange['99']?.etag).toBe('theirs')
+  })
+
+  it('a character never pulled keeps the edit in memory and says so', async () => {
+    seedUnmaterialised()
+    fake.on(`GET ${BENCH_URL}`, noWorkbench)
+
+    useStore.getState().setEditorContent('typed')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const slot = useStore.getState().flistWorking['99']
+    expect(slot.saveStatus).toBe('error')
+    expect(slot.unsavedDirty).toBe(true)
+    expect(slot.saveError).toMatch(/pull this character first/)
+    expect(fake.requestsTo(SAVE)).toHaveLength(0)
+  })
+})
+
+describe('the window addresses the Workbench, never a set', () => {
+  it('open, autosave and the close-time flush send no set id', async () => {
+    seedLive({ character: { description: 'published' } })
+    useStore.setState({ flistActiveSetId: {}, flistActiveCharacterId: '99', flistRoster: [] })
+    fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead(SET_ID)))
+    fake.on(
+      `GET ${BENCH_URL}?create=false`,
+      json(payloadRead(workbenchPayload({ character: { description: 'on disk' } }), 'e1'))
+    )
+    fake.on(SAVE, (req) => json({ etag: `after-${String(req.headers['If-Match'])}` }))
+
+    await useStore.getState().flistOpenWorking('99')
+    useStore.getState().setEditorContent('autosaved')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
+    useStore.getState().setEditorContent('flushed on close')
+    await useStore.getState().flistFlushAllWorking()
+
+    expect(fake.requestsTo(SAVE).map((r) => descOf(r.body))).toEqual([
+      'autosaved',
+      'flushed on close'
+    ])
+    expect(fake.requestsTo(SAVE).map((r) => r.headers['If-Match'])).toEqual(['e1', 'after-e1'])
+    expect(fake.requests.map((r) => r.path).filter((p) => p.includes('/sets/'))).toEqual([])
   })
 })
 
@@ -657,7 +768,7 @@ describe('undo of reset to Live never reverts a change made after the reset', ()
     let version = 0
     fake.on(SAVE, (req) => {
       if (req.headers['If-Match'] !== disk.etag) {
-        return json({ detail: { detail: 'etag_mismatch', current_etag: disk.etag } }, 409)
+        return refusal('etag_mismatch', disk.etag)
       }
       disk.etag = `disk-${++version}`
       disk.payload = req.body as typeof disk.payload
@@ -841,37 +952,6 @@ describe('reopening a character must not discard what was typed', () => {
     expect(descOf(puts[0].body)).toBe('typed just now')
     expect(useStore.getState().editorContent).toBe('typed just now')
   })
-
-  it('the first edit opens the Workbench instead of going nowhere', async () => {
-    // With no set active the flush used to return early and write
-    // nothing, while saveStatus stayed 'idle' — so the UI showed no
-    // sign that the text was only in memory.
-    seedSlot('99', { character: { description: 'before' } })
-    useStore.setState((s) => ({
-      flistActiveSetId: { ...s.flistActiveSetId, '99': null },
-      editorReadOnly: false
-    }))
-    const NEW_BENCH = '/flist/character/99/sets/bbbbbbbbbbbb'
-    // flistOpenWorkbench: resolve the bench, then activate it.
-    fake.on(
-      'GET /flist/character/99/workbench',
-      json({
-        workbench: { id: 'bbbbbbbbbbbb', name: 'Workbench', created_at: 1, updated_at: 2 },
-        active_set_id: 'bbbbbbbbbbbb'
-      })
-    )
-    fake.on(`POST ${NEW_BENCH}/activate`, json({ ok: true }))
-    fake.on(
-      `GET ${NEW_BENCH}/payload`,
-      json(payloadRead(workbenchPayload({ character: { description: 'typed' } }), 'e1'))
-    )
-    fake.on(`PUT ${NEW_BENCH}/payload`, json({ etag: 'saved' }))
-
-    useStore.getState().setEditorContent('typed')
-    await vi.advanceTimersByTimeAsync(2000)
-
-    expect(fake.requestsTo(`PUT ${NEW_BENCH}/payload`).length).toBeGreaterThan(0)
-  })
 })
 
 describe('coming back to a character shows the Workbench, not Live', () => {
@@ -983,7 +1063,7 @@ describe('opening a character never applies a stale read', () => {
   const BIRCH = '100'
   const AMBER_SET = 'aaaaaaaaaaaa'
   const BIRCH_SET = 'bbbbbbbbbbbb'
-  const benchUrl = (id: string, set: string) => `/flist/character/${id}/sets/${set}/payload`
+  const benchUrl = (id: string, _set: string) => `/flist/character/${id}/workbench/payload`
   const AMBER_READ = `GET ${benchUrl(AMBER, AMBER_SET)}`
   const BIRCH_READ = `GET ${benchUrl(BIRCH, BIRCH_SET)}`
   const AMBER_SAVE = `PUT ${benchUrl(AMBER, AMBER_SET)}`
