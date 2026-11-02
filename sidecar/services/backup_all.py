@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 import archive_backups
 import backup_origin
 import flist_api
-from refusals import CharacterBusy
+from refusals import INTERNAL_ERROR, CharacterBusy
 
 from . import events, jobs, sse
 from . import pull as pull_service
@@ -223,7 +223,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
         await client.aclose()
 
     if unexpected is not None:
-        yield sse.error("unknown", sse.INTERNAL_ERROR, repr(unexpected))
+        yield sse.error("unknown", INTERNAL_ERROR, repr(unexpected))
         return
 
     def count(status: str) -> int:

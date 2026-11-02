@@ -36,7 +36,7 @@ import archive_live
 import archive_registry
 import flist_activity
 import flist_api
-from refusals import CharacterBusy
+from refusals import INTERNAL_ERROR, CharacterBusy
 
 from . import events, image_trash, jobs, sse
 
@@ -445,6 +445,6 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         flist_activity.record(
             "pull-error", name=name, stage="unknown", error=repr(exc),
         )
-        yield sse.error("unknown", sse.INTERNAL_ERROR, repr(exc))
+        yield sse.error("unknown", INTERNAL_ERROR, repr(exc))
     finally:
         await client.aclose()

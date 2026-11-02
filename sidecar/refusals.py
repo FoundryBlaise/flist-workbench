@@ -22,6 +22,11 @@ from __future__ import annotations
 
 from typing import Any
 
+#: The `code` of a failure nothing turned into a refusal: the REST
+#: answer's 500, a job that stopped on something nothing expected, a
+#: stream's unexpected `error` event, and the MCP tool reporting it.
+INTERNAL_ERROR = "internal_error"
+
 
 class Refusal(Exception):
     """A request the sidecar turns down.
@@ -243,7 +248,7 @@ class NotPaired(Refusal):
 
     status = 401
     code = "not_paired"
-    fixed_message = "This browser extension is not paired with Workbench. Pair it in Settings."
+    fixed_message = "This browser extension is not paired with F-list Workbench. Pair it in Settings."
 
 
 class ValidationFailed(Refusal, ValueError):

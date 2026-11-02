@@ -6,14 +6,9 @@ from typing import Any
 
 from starlette.responses import StreamingResponse
 
-from refusals import Refusal
+from refusals import INTERNAL_ERROR, Refusal
 
 from . import jobs
-
-#: The `code` of a stream that stopped on something nothing expected,
-#: as the REST surface answers a 500.
-INTERNAL_ERROR = "internal_error"
-
 
 def event(event: str, data: dict | str) -> bytes:
     """Format one SSE message. Reuses the OpenAI streaming convention:

@@ -31,6 +31,7 @@ import archive_workbench
 import atomic_write
 import backup_origin
 from mcp.server.fastmcp import Context
+from refusals import INTERNAL_ERROR
 
 from services import jobs
 
@@ -59,7 +60,7 @@ def _job_failure(job: jobs.Job, fallback: str) -> ToolError:
     """A failed Pull's or Back up all's error as the tool's error: the
     job's code and details (`services.sse.error`), `stage` among them."""
     error = job.error or {}
-    code = str(error.get("code") or "internal_error")
+    code = str(error.get("code") or INTERNAL_ERROR)
     message = str(error.get("message") or fallback)
     if code == "not_signed_in":
         message += " The user signs in inside the app window (F-list → Sign in)."

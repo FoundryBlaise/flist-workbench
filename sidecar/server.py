@@ -19,7 +19,7 @@ import flist_activity
 import flist_api
 import workbench_mcp
 import workbench_migration
-from refusals import Refusal
+from refusals import INTERNAL_ERROR, Refusal
 from routers import (
     aliases,
     flist_session,
@@ -234,7 +234,7 @@ async def _internal_error(_request: Request, _exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=500,
         content={
-            "code": "internal_error",
+            "code": INTERNAL_ERROR,
             "message": "Something went wrong inside the sidecar; its log has the details.",
             "details": {},
         },
