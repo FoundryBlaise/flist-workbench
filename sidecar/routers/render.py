@@ -1,7 +1,8 @@
 """Rendering: the app draws, the sidecar hands the picture on."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
+from refusals import InvalidRequest, UnsupportedType
 from services import render as render_service
 
 router = APIRouter()
@@ -26,10 +27,10 @@ async def render_deliver(request_id: str, request: Request) -> dict:
     """The finished PNG, straight from the app's offscreen capture."""
     png = await request.body()
     if not png:
-        raise HTTPException(status_code=422, detail="empty body")
+        raise InvalidRequest(("body",), "empty body")
     mime = request.headers.get("content-type") or "image/png"
     if mime not in ("image/png", "image/jpeg"):
-        raise HTTPException(status_code=415, detail=f"unsupported type {mime}")
+        raise UnsupportedType(f"unsupported type {mime}")
     delivered = render_service.deliver(request_id, png, mime)
     return {"delivered": delivered, "bytes": len(png), "mime": mime}
 

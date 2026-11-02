@@ -33,6 +33,8 @@ from urllib.parse import quote
 
 import httpx
 
+from refusals import FlistRefused
+
 USER_AGENT = "flist-workbench/0.1.0 (+https://github.com/FoundryBlaise/flist-workbench)"
 
 BASE = "https://www.f-list.net"
@@ -81,6 +83,17 @@ class TicketRequired(FlistApiError):
 
 class RateLimited(FlistApiError):
     """Hourly cap would be exceeded; refuse rather than risk a ban."""
+
+
+def refusal(exc: FlistApiError) -> FlistRefused:
+    """How a caller hears `exc`: no session (or a rejected one) is
+    `not_signed_in`, the hourly cap `rate_limited`, anything else F-list
+    said `flist_error`, with F-list's own words as the message."""
+    if isinstance(exc, (TicketRequired, AuthFailure)):
+        return FlistRefused("not_signed_in", str(exc))
+    if isinstance(exc, RateLimited):
+        return FlistRefused("rate_limited", str(exc))
+    return FlistRefused("flist_error", str(exc))
 
 
 @dataclass(slots=True)

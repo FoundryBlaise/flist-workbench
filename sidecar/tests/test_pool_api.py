@@ -51,7 +51,8 @@ def test_image_upload_rejects_unsupported_type(client: TestClient) -> None:
 
 def test_image_upload_rejects_empty_body(client: TestClient) -> None:
     res = client.post("/flist/character/9999/images", content=b"")
-    assert res.status_code == 400
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid_request"
 
 
 def test_image_upload_then_list_round_trip(client: TestClient) -> None:

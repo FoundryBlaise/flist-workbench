@@ -1,6 +1,6 @@
 """The F-list session, the account's characters and their avatars."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -8,6 +8,7 @@ import character_archive
 import flist_activity
 import flist_api
 from logs import LogDirError, list_characters
+from refusals import FlistRefused, NoAvatar
 from services import avatars, password_idle
 from services import foreign as foreign_service
 
@@ -47,7 +48,7 @@ async def flist_session_create(body: FlistSignInRequest) -> dict:
         )
         # Pass F-list's error string through verbatim — see Tier 1
         # decision in PHASE7_TIER1_PLAN.md.
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise FlistRefused("sign_in_failed", str(exc)) from exc
     names = [c["name"] for c in result["characters"] if c.get("name")]
     flist_activity.record(
         "sign-in",
@@ -194,10 +195,8 @@ async def flist_mapping_list(force: bool = False) -> dict:
     cache_path = character_archive.cache_root() / "mapping-list.json"
     try:
         mapping = await flist_api.fetch_mapping_list(cache_path, force=force)
-    except flist_api.TicketRequired as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except flist_api.FlistApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise flist_api.refusal(exc) from exc
     # Decorate with cache metadata so the renderer can drive the staleness
     # chip (§2.4) without a second filesystem peek. `_etag` is the cache
     # key for the resolver memo (§3 step 3); `_fetched_at` is the file
@@ -228,15 +227,12 @@ async def flist_avatar(name: str) -> FileResponse:
     and the initial-circle fallback renders instead of an alien
     placeholder graphic.
     """
-    try:
-        dest = character_archive.avatar_path_for(name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dest = character_archive.avatar_path_for(name)
     if not dest.exists():
         try:
             await flist_api.download_to(flist_api.avatar_url(name), dest)
         except flist_api.FlistApiError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise NoAvatar(str(exc)) from exc
     try:
         size = dest.stat().st_size
     except OSError:
@@ -246,5 +242,5 @@ async def flist_avatar(name: str) -> FileResponse:
         # tiny and avoids re-fetching the same placeholder on every
         # request) but surface 404 so the renderer's onError fires and
         # the initial-circle fallback renders.
-        raise HTTPException(status_code=404, detail="no avatar uploaded")
+        raise NoAvatar("no avatar uploaded")
     return FileResponse(dest)

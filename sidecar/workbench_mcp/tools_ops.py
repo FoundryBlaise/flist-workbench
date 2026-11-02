@@ -48,6 +48,17 @@ WAIT_BUDGET_SEC = 600
 # --------------------------------------------------------------------
 
 
+def _stream_failure(failure: dict[str, Any], fallback: str) -> ToolError:
+    """A Pull's or Back up all's `error` event as the tool's error: the
+    event's code and details (`services.sse.error`), plus where it
+    stopped."""
+    code = str(failure.get("code") or "internal_error")
+    message = str(failure.get("message") or fallback)
+    if code == "not_signed_in":
+        message += " The user signs in inside the app window (F-list → Sign in)."
+    return ToolError(code, message, stage=failure.get("stage"), **(failure.get("details") or {}))
+
+
 @tool(tags=TAG_CHARACTER, title="Pull from F-list", open_world=True)
 async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     """Fetch a character's current profile and images from F-list into
@@ -91,15 +102,7 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
             summary = data
 
     if failure is not None:
-        stage = failure.get("stage")
-        message = str(failure.get("message") or "pull failed")
-        if stage == "ticket":
-            raise ToolError(
-                "not_signed_in",
-                f"{message} The user signs in inside the app "
-                "window (F-list → Sign in).",
-            )
-        raise ToolError("pull_failed", message, stage=stage)
+        raise _stream_failure(failure, "pull failed")
 
     if summary is None:
         raise ToolError("pull_failed", "the pull ended without a result")
@@ -143,7 +146,7 @@ def create_backup(
     if not result.get("saved"):
         if result.get("reason") == "no_live":
             raise ToolError(
-                "live_not_found",
+                "no_live",
                 f"No profile stored for {target.name}, so there is "
                 "nothing to back up. Pull the character first — its "
                 "Workbench starts from what was last fetched from F-list.",
@@ -210,8 +213,7 @@ async def backup_all_characters(ctx: Context) -> dict[str, Any]:
             summary = data
 
     if failure is not None:
-        message = str(failure.get("message") or "the sweep failed")
-        raise ToolError("backup_failed", message, stage=failure.get("stage"))
+        raise _stream_failure(failure, "the sweep failed")
 
     audit("backup_all_characters", **(summary or {}))
     return {"summary": summary or {}, "characters": rows}
@@ -449,7 +451,7 @@ def export_restore_zip(
     payload = character_archive.export_payload(target.id, from_live=resolved.is_live)
     if payload is None:
         raise ToolError(
-            "live_not_found",
+            "no_live",
             f"Nothing to export for {target.name} — pull the character first.",
         )
 

@@ -40,6 +40,7 @@ from ._context import (
     audit,
     resolve_conversation,
     resolve_log_character,
+    validation_failed,
 )
 from ._registry import TAG_CLASSIFY, TAG_LOGS, prompt, tool
 
@@ -461,8 +462,10 @@ def label_all_unlabeled(
     this way is found by search only after the next ingest_logs.
     """
     if label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
-        raise ToolError(
-            "invalid_label", f"label must be 'IC' or 'OOC', got {label!r}"
+        raise validation_failed(
+            "label",
+            f"must be IC or OOC, got {label!r}",
+            allowed=[labels_store.LABEL_IC, labels_store.LABEL_OOC],
         )
 
     conv = resolve_conversation(character, partner)

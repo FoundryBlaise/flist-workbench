@@ -13,8 +13,8 @@ Rules:
   newline, so `.match` with `^...$` lets "name\\n" through. Prefix
   checks on message text are the legitimate exception.
 * typed-refusal: the sidecar refuses with a `refusals.Refusal`
-  subclass (one handler answers `{code, message}`), not a bare
-  `HTTPException`.
+  subclass (one handler answers `{code, message, details}`), not a
+  bare `HTTPException`.
 * router-layering: every REST route lives in a router under
   `sidecar/routers/`; only `server.py` (app setup and router
   registration) imports routers, and nothing imports `server.py`.
@@ -137,47 +137,9 @@ def test_the_fullmatch_allowlist_has_no_stale_entries():
 # ---------------------------------------------------------------------------
 # typed-refusal
 
-# Bare HTTPException sites per (file, enclosing function) when the rule
-# was introduced. May only shrink: new refusals subclass
-# refusals.Refusal.
-HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
-    ("sidecar/routers/flist_session.py", "flist_avatar"): 3,
-    ("sidecar/routers/flist_session.py", "flist_mapping_list"): 2,
-    ("sidecar/routers/flist_session.py", "flist_session_create"): 1,
-    ("sidecar/routers/foreign.py", "_foreign_http"): 1,
-    ("sidecar/routers/foreign.py", "foreign_character_avatar"): 3,
-    ("sidecar/routers/foreign.py", "foreign_character_image"): 4,
-    ("sidecar/routers/images_trash.py", "flist_character_image"): 1,
-    ("sidecar/routers/images_trash.py", "flist_character_image_by_id"): 1,
-    ("sidecar/routers/images_trash.py", "flist_character_image_remove"): 1,
-    ("sidecar/routers/images_trash.py", "flist_character_image_upload"): 3,
-    ("sidecar/routers/images_trash.py", "flist_character_inline"): 1,
-    ("sidecar/routers/images_trash.py", "flist_character_trash_file"): 1,
-    ("sidecar/routers/index.py", "rag_job_cancel"): 1,
-    ("sidecar/routers/index.py", "rag_job_get"): 1,
-    ("sidecar/routers/index.py", "rag_lexical_rebuild"): 1,
-    ("sidecar/routers/labels.py", "labels_fill_unlabeled"): 1,
-    ("sidecar/routers/labels.py", "labels_override"): 1,
-    ("sidecar/routers/labels.py", "labels_override_many"): 1,
-    ("sidecar/routers/labels.py", "labels_rollup"): 1,
-    ("sidecar/routers/live.py", "flist_character_live"): 1,
-    ("sidecar/routers/logs.py", "logs_characters"): 1,
-    ("sidecar/routers/lookups.py", "profile"): 4,
-    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup"): 1,
-    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_delete"): 2,
-    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_download"): 1,
-    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_payload"): 4,
-    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_rename"): 3,
-    ("sidecar/routers/render.py", "render_deliver"): 2,
-    ("sidecar/routers/settings.py", "settings_update"): 2,
-    ("sidecar/routers/upload.py", "_require_restore_auth"): 1,
-    ("sidecar/routers/upload.py", "flist_character_export_zip"): 1,
-    ("sidecar/routers/upload.py", "restore_image_ids"): 2,
-    ("sidecar/routers/upload.py", "restore_saved"): 1,
-    ("sidecar/routers/upload.py", "restore_snapshot"): 1,
-    ("sidecar/routers/workbench.py", "flist_character_workbench_load_backup"): 3,
-    ("sidecar/routers/workbench.py", "flist_character_workbench_load_preflight"): 2,
-}
+# Bare HTTPException sites per (file, enclosing function). Emptied by
+# #69 (errors have one shape); may only stay empty.
+HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {}
 
 
 def http_exception_sites(path: str) -> dict[tuple[str, str], list[str]]:

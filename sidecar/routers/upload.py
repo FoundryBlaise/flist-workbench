@@ -9,11 +9,13 @@ import asyncio
 import sys
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel
 
 import character_archive
 import restore as restore_svc
+from archive_errors import CharacterNotFound, NoLive
+from refusals import BackupNotFound, InvalidRequest, NotPaired
 from services import pull as pull_service
 
 router = APIRouter()
@@ -37,10 +39,7 @@ async def flist_character_export_zip(character_id: str) -> Response:
 
     working = character_archive.export_payload(character_id)
     if working is None:
-        raise HTTPException(
-            status_code=404,
-            detail="no Workbench or Live to export",
-        )
+        raise NoLive("no Workbench or Live to export")
     name_for_file = "character"
     char = working.get("character")
     if isinstance(char, dict):
@@ -101,7 +100,7 @@ def _require_restore_auth(
     x_workbench_extension_version: str | None = Header(default=None),
 ) -> str:
     if not restore_svc.auth_token_valid(x_workbench_auth):
-        raise HTTPException(status_code=401, detail="not_paired")
+        raise NotPaired()
     restore_svc.note_extension_version(x_workbench_extension_version)
     return x_workbench_auth  # type: ignore[return-value]
 
@@ -177,7 +176,7 @@ def restore_snapshot(
 ) -> Response:
     data = restore_svc.fetch_snapshot_zip(character, snapshot_id)
     if data is None:
-        raise HTTPException(status_code=404, detail="snapshot_not_found")
+        raise BackupNotFound("no such Backup")
     return Response(content=data, media_type="application/zip")
 
 
@@ -196,6 +195,10 @@ class _RestoreSavedBody(BaseModel):
     #: been processed; pulling instantly would fetch the profile as it
     #: was.
     delay_seconds: float = 5.0
+
+
+def _character_required() -> InvalidRequest:
+    return InvalidRequest(("body", "character"), "character is required")
 
 
 class _RestoreImageIdsBody(BaseModel):
@@ -233,10 +236,10 @@ def restore_image_ids(
     """
     name = body.character.strip()
     if not name:
-        raise HTTPException(status_code=422, detail="character is required")
+        raise _character_required()
     character_id = restore_svc._character_id_for_name(name)
     if character_id is None:
-        raise HTTPException(status_code=404, detail="unknown character")
+        raise CharacterNotFound(name)
     return {"character": name, "deferred": True}
 
 
@@ -261,7 +264,7 @@ async def restore_saved(
     """
     name = body.character.strip()
     if not name:
-        raise HTTPException(status_code=422, detail="character is required")
+        raise _character_required()
     delay = max(0.0, min(60.0, float(body.delay_seconds)))
 
     async def pull_later() -> None:

@@ -22,7 +22,7 @@ import flist_activity
 import flist_api
 import zip_serialise
 
-from . import image_trash
+from . import image_trash, sse
 from . import pull as pull_service
 
 #: Event names `run()` can yield. `error` is fatal and ends the sweep;
@@ -33,7 +33,7 @@ EVENTS = (
     "queued",     # waiting on the pull lock
     "character",  # {name, status, filename?, message?, image_stats?}
     "done",       # {total, saved, unchanged, failed}
-    "error",      # fatal: no session, expired ticket, ...
+    "error",      # fatal: no session, expired ticket, ... `sse.error`
 )
 
 
@@ -152,12 +152,8 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
     store = flist_api.ticket_store()
     roster = store.characters()
     if not roster:
-        yield (
-            "error",
-            {
-                "stage": "session",
-                "message": "not signed in to F-list — sign in first",
-            },
+        yield sse.error(
+            "session", "not_signed_in", "not signed in to F-list — sign in first"
         )
         return
 
@@ -182,10 +178,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
             try:
                 await flist_api.ensure_fresh_ticket(client=client)
             except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:
-                yield (
-                    "error",
-                    {"stage": "ticket", "message": str(exc)},
-                )
+                yield sse.refused("ticket", flist_api.refusal(exc))
                 return
 
             for entry in roster:
@@ -218,10 +211,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
                         if isinstance(exc, flist_api.RateLimited)
                         else "ticket"
                     )
-                    yield (
-                        "error",
-                        {"stage": stage, "message": str(exc)},
-                    )
+                    yield sse.refused(stage, flist_api.refusal(exc))
                     return
                 except flist_api.FlistApiError as exc:
                     failed += 1
@@ -323,10 +313,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
         await client.aclose()
 
     if unexpected is not None:
-        yield (
-            "error",
-            {"stage": "unknown", "message": repr(unexpected)},
-        )
+        yield sse.error("unknown", sse.INTERNAL_ERROR, repr(unexpected))
         return
 
     yield (

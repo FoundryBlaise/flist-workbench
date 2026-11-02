@@ -95,7 +95,7 @@ def test_a_write_without_if_match_is_refused_and_changes_nothing(sidecar) -> Non
 
     assert res.status_code == 409
     assert res.json()["code"] == "etag_required"
-    assert res.json()["current_etag"] == before["etag"]
+    assert res.json()["details"]["current_etag"] == before["etag"]
     assert api.get(URL).json() == {**before, "created": False}
 
 
@@ -110,7 +110,7 @@ def test_a_write_with_a_stale_etag_is_refused_and_changes_nothing(sidecar) -> No
 
     assert res.status_code == 409
     assert res.json()["code"] == "etag_mismatch"
-    assert res.json()["current_etag"] == mine.json()["etag"]
+    assert res.json()["details"]["current_etag"] == mine.json()["etag"]
     assert api.get(URL).json() == saved
 
 
@@ -223,7 +223,7 @@ def test_a_character_without_live_has_no_workbench_to_read_or_write(
     assert read.json()["code"] == "no_workbench"
     assert write.status_code == 409
     assert write.json()["code"] == "etag_mismatch"
-    assert write.json()["current_etag"] is None
+    assert write.json()["details"]["current_etag"] is None
 
 
 def test_a_payload_that_is_not_a_workbench_is_refused(sidecar) -> None:

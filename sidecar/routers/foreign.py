@@ -5,33 +5,17 @@ is deliberately no route here that writes into the archive: no
 Workbench, no Backup, no export. The viewer reads.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
 import character_archive
 import flist_api
 import foreign_cache
+from refusals import ImageNotFound, NoAvatar, ProfileNotCached, UnsupportedType, ValidationFailed
 from services import avatars
 from services import foreign as foreign_service
 
 router = APIRouter()
-
-
-_FOREIGN_STATUS = {
-    "validation_failed": 400,
-    "not_signed_in": 401,
-    "not_found": 404,
-    "no_logs": 503,
-    "rate_limited": 429,
-    "flist_error": 502,
-}
-
-
-def _foreign_http(exc: foreign_service.ForeignError) -> HTTPException:
-    return HTTPException(
-        status_code=_FOREIGN_STATUS.get(exc.code, 500),
-        detail={"code": exc.code, "message": exc.message},
-    )
 
 
 @router.get("/foreign/search")
@@ -43,20 +27,14 @@ async def foreign_search(source: str, q: str = "") -> dict:
     costs nothing; `name` echoes the typed string back because F-list
     has no character search to call.
     """
-    try:
-        return await foreign_service.search(q, source)
-    except foreign_service.ForeignError as exc:
-        raise _foreign_http(exc) from exc
+    return await foreign_service.search(q, source)
 
 
 @router.get("/foreign/character/{name}")
 async def foreign_character(name: str, refresh: bool = False) -> dict:
     """One foreign profile. Served from cache while it is under the
     24-hour TTL; `refresh=true` is the viewer's reload button."""
-    try:
-        return await foreign_service.get_profile(name, refresh=refresh)
-    except foreign_service.ForeignError as exc:
-        raise _foreign_http(exc) from exc
+    return await foreign_service.get_profile(name, refresh=refresh)
 
 
 @router.get("/foreign/character/{name}/avatar")
@@ -71,18 +49,18 @@ async def foreign_character_avatar(name: str) -> FileResponse:
     try:
         dest = foreign_cache.avatar_path(name)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ValidationFailed("name", str(exc)) from exc
     if not dest.exists():
         try:
             await flist_api.download_to(flist_api.avatar_url(name), dest)
         except flist_api.FlistApiError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise NoAvatar(str(exc)) from exc
     try:
         size = dest.stat().st_size
     except OSError:
         size = -1
     if size == avatars.PLACEHOLDER_SIZE:
-        raise HTTPException(status_code=404, detail="no avatar uploaded")
+        raise NoAvatar("no avatar uploaded")
     return FileResponse(dest)
 
 
@@ -99,20 +77,18 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     character_archive.require_image_id(image_id)
     profile = foreign_cache.read_profile(name)
     if profile is None:
-        raise HTTPException(status_code=404, detail="profile not cached")
+        raise ProfileNotCached("profile not cached")
     cached = foreign_cache.find_image(name, image_id)
     if cached is not None:
         return FileResponse(cached)
     gallery = foreign_service.gallery_index(profile)
     raw_ext = gallery.get(image_id)
     if raw_ext is None:
-        raise HTTPException(
-            status_code=404, detail="image is not in this profile's gallery"
-        )
+        raise ImageNotFound("image is not in this profile's gallery")
     try:
         ext = character_archive.normalise_image_ext(raw_ext)
     except ValueError as exc:
-        raise HTTPException(status_code=415, detail=str(exc)) from exc
+        raise UnsupportedType(str(exc)) from exc
     url = f"{flist_api.STATIC_BASE}/images/charimage/{image_id}.{ext}"
     dest = foreign_cache.image_path(name, image_id, ext)
     try:
@@ -126,5 +102,5 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
                 rate_limiter=flist_api.unpaced_limiter(),
             )
     except flist_api.FlistApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise flist_api.refusal(exc) from exc
     return FileResponse(dest)

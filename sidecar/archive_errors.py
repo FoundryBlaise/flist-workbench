@@ -65,18 +65,15 @@ class NoWorkbench(Refusal, LookupError):
 
 class WorkbenchConflict(Refusal):
     """A Workbench write that has not seen what is on disk now: it sent
-    no etag (`etag_required`) or a stale one (`etag_mismatch`). The body
+    no etag (`etag_required`) or a stale one (`etag_mismatch`). `details`
     carries the current etag, so the caller can read again and decide."""
 
     status = 409
 
     def __init__(self, code: str, message: str, current_etag: str | None) -> None:
-        super().__init__(message)
+        super().__init__(message, details={"current_etag": current_etag})
         self.code = code
         self.current_etag = current_etag
-
-    def body(self) -> dict[str, str | None]:  # type: ignore[override]
-        return {**super().body(), "current_etag": self.current_etag}
 
 
 class InvalidWorkbenchPayload(Refusal, ValueError):

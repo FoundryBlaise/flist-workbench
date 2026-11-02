@@ -365,7 +365,7 @@ def test_log_partners_without_a_log_directory_says_so(
     foreign_service.reset_log_partner_cache()
     with pytest.raises(foreign_service.ForeignError) as excinfo:
         foreign_service.log_partners()
-    assert excinfo.value.code == "no_logs"
+    assert excinfo.value.code == "log_dir_unavailable"
     foreign_service.reset_log_partner_cache()
 
 
@@ -456,7 +456,7 @@ def test_route_maps_a_missing_session_to_401(
     monkeypatch.setattr(flist_api, "fetch_character_data", _boom)
     res = client.get("/foreign/character/Anexample Person")
     assert res.status_code == 401
-    assert res.json()["detail"]["code"] == "not_signed_in"
+    assert res.json()["code"] == "not_signed_in"
 
 
 def test_route_rejects_an_unknown_source(client: TestClient) -> None:
@@ -473,7 +473,7 @@ def test_image_route_refuses_an_id_the_gallery_does_not_list(
 
     res = client.get("/foreign/character/Anexample Person/image/999999")
     assert res.status_code == 404
-    assert "gallery" in res.json()["detail"]
+    assert "gallery" in res.json()["message"]
 
 
 def test_image_route_serves_a_cached_file_without_downloading(

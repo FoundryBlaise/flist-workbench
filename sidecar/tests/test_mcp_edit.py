@@ -791,7 +791,7 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
             if_match=read["etag"],
             confirm=True,
         )
-    assert "etag_conflict" in tool_error_text(result)
+    assert "etag_mismatch" in tool_error_text(result)
 
 
 # ---- concurrency -------------------------------------------------------

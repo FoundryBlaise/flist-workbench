@@ -24,7 +24,7 @@ import flist_activity
 import flist_api
 import settings as settings_store
 
-from . import image_trash
+from . import image_trash, sse
 
 #: F-list ids are integers in practice, but the value becomes a
 #: directory name under `<userdata>/characters/`, so the shape is
@@ -60,7 +60,7 @@ EVENTS = (
     "images",    # {total, downloaded, failed} — the image batch starts
     "image",     # {index, total, image_id} — per image
     "done",      # {character_id, changed, image_count, ...}
-    "error",     # {stage, message}
+    "error",     # {stage, code, message, details} (`sse.error`)
 )
 
 
@@ -88,15 +88,8 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             yield ("ticket", {})
             try:
                 await flist_api.ensure_fresh_ticket(client=client)
-            except flist_api.TicketRequired as exc:
-                yield (
-                    "error", {"stage": "ticket", "message": str(exc)}
-                )
-                return
-            except flist_api.AuthFailure as exc:
-                yield (
-                    "error", {"stage": "ticket", "message": str(exc)}
-                )
+            except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:
+                yield sse.refused("ticket", flist_api.refusal(exc))
                 return
 
             yield ("fetching", {"name": name})
@@ -105,17 +98,13 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                     name, client=client
                 )
             except flist_api.FlistApiError as exc:
-                yield (
-                    "error", {"stage": "fetching", "message": str(exc)}
-                )
+                yield sse.refused("fetching", flist_api.refusal(exc))
                 return
 
             try:
                 cid = character_id_from_payload(payload)
             except UnsafeCharacterId as exc:
-                yield (
-                    "error", {"stage": "fetching", "message": exc.detail}
-                )
+                yield sse.error("fetching", "invalid_character_id", str(exc))
                 return
 
             # Stamp fetch time and write Live before any image work
@@ -343,34 +332,26 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 "pull-error", name=name, stage="rate-limited",
                 error=str(exc),
             )
-            yield (
-                "error", {"stage": "rate-limited", "message": str(exc)}
-            )
+            yield sse.refused("rate-limited", flist_api.refusal(exc))
         except flist_api.AuthFailure as exc:
             # Auto-refresh during the pull could trip on a password
             # the user changed elsewhere. Surface cleanly.
             flist_activity.record(
                 "pull-error", name=name, stage="ticket", error=str(exc),
             )
-            yield (
-                "error", {"stage": "ticket", "message": str(exc)}
-            )
+            yield sse.refused("ticket", flist_api.refusal(exc))
         except flist_api.FlistApiError as exc:
             # Any other F-list error past the early stages — still
             # better than a class-repr to the user.
             flist_activity.record(
                 "pull-error", name=name, stage="fetching", error=str(exc),
             )
-            yield (
-                "error", {"stage": "fetching", "message": str(exc)}
-            )
+            yield sse.refused("fetching", flist_api.refusal(exc))
         except Exception as exc:  # noqa: BLE001 — last-resort
             flist_activity.record(
                 "pull-error", name=name, stage="unknown", error=repr(exc),
             )
-            yield (
-                "error", {"stage": "unknown", "message": repr(exc)}
-            )
+            yield sse.error("unknown", sse.INTERNAL_ERROR, repr(exc))
         finally:
             await client.aclose()
 
