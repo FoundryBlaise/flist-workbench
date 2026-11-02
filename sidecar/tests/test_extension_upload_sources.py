@@ -268,3 +268,41 @@ def test_a_draft_left_by_an_older_version_is_not_an_upload_source(paired) -> Non
 
     assert res.status_code == 404
     assert [s["id"] for s in _by_kind(_sources(extension, AMBER), "set")] == ["workbench"]
+
+
+def test_an_upload_from_a_backup_file_on_disk_still_works(paired, monkeypatch) -> None:
+    """The extension opens a Backup file from disk itself; the app only
+    sees the two calls around the Upload: the form kept as a Backup
+    first, then word that the user pressed Save on f-list.net."""
+    import time
+
+    from services import pull as pull_service
+
+    pulled: list[str] = []
+
+    async def fake_pull(name: str):
+        pulled.append(name)
+        return
+        yield  # an async generator, like the real one
+
+    monkeypatch.setattr(pull_service, "run", fake_pull)
+    _window, extension = paired
+    form = {
+        "character": {"id": "42", "name": AMBER, "description": "[b]On the page.[/b]"},
+        "settings": {},
+        "infotags": {},
+        "kinks": {},
+        "customKinks": [],
+    }
+
+    kept = extension.post("/restore/snapshot/fresh", json={"character": AMBER, "payload": form})
+    saved = extension.post("/restore/saved", json={"character": AMBER, "delay_seconds": 0})
+
+    assert kept.status_code == 200 and kept.json()["ok"] is True
+    (backup,) = _by_kind(_sources(extension, AMBER), "pre-restore")
+    assert backup["id"] == kept.json()["snapshot_id"]
+    assert saved.status_code == 200 and saved.json()["scheduled"] is True
+    deadline = time.monotonic() + 2.0
+    while not pulled and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert pulled == [AMBER]
