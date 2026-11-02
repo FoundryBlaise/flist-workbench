@@ -8,7 +8,8 @@ import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
  *  `flistArchive[activeId].zipBackups` (populated by
  *  `flistLoadArchive`). Right-click on a row → Browse / Load into
  *  Workbench / Download. A Backup that holds no profile (the one the
- *  move to one Workbench made of the older drafts and Pull copies)
+ *  move to one Workbench made of the older copies from before the
+ *  upgrade)
  *  offers only Download, and its row says why. When a Restore is turned
  *  down, the reason shows above the list.
  *
@@ -452,9 +453,9 @@ function BackupsFolder({
                   </span>
                   {!b.holds_profile && (
                     <span className="sb-backup-note">
-                      Holds the older drafts and Pull copies from the
-                      upgrade, kept so nothing is lost. Right-click to
-                      download it.
+                      Holds the older copies from before the upgrade,
+                      kept so nothing is lost. Right-click to download
+                      it.
                     </span>
                   )}
                 </div>

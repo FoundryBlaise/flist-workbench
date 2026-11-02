@@ -83,7 +83,7 @@ class BackupHoldsNoProfile(Refusal):
     status = 409
     code = "backup_holds_no_profile"
     fixed_message = (
-        "This Backup keeps the older drafts and Pull copies an earlier "
-        "version of the app left behind, not a profile, so there is "
+        "This Backup keeps the older copies an earlier version of the app "
+        "left behind before the upgrade, not a profile, so there is "
         "nothing in it to load or upload. Download it to look at them."
     )

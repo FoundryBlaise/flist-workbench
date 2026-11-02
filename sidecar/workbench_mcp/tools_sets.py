@@ -568,7 +568,7 @@ def list_images(
     `source_name` (the file name it was imported under, when known) and
     `referenced_by`: whether the Workbench's gallery and Live use it,
     how many Backups hold it (each with its own copy of the file), and
-    whether the older drafts kept from the upgrade name it
+    whether the older copies from before the upgrade name it
     (`migration_backup`; that Backup holds no image files).
     """
     from services import image_import

@@ -401,8 +401,8 @@ def references(character_id: int | str) -> dict[str, dict[str, Any]]:
     trashing a pool file costs none of them; that count says where else
     the picture is kept.
 
-    The migration Backup is not counted there: it keeps the older drafts
-    and Pull copies as JSON only, with no image files. An image named
+    The migration Backup is not counted there: it keeps the older copies
+    from before the upgrade as JSON only, with no image files. An image named
     only there is still referenced (`migration_backup`), but trashing
     its pool file loses the only copy of its bytes."""
 
