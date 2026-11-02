@@ -1768,6 +1768,92 @@ def resolve_workbench(
     return meta
 
 
+# ---- the one Workbench --------------------------------------------------
+#
+# How every caller reads and saves a character's Workbench, without
+# knowing where on disk it lives. Today it is the set `resolve_workbench`
+# picks; the on-disk migration swaps that for a `workbench/` folder here
+# and nowhere else.
+
+
+@dataclass(frozen=True)
+class WorkbenchRead:
+    """A Workbench payload and the etag a write must send back.
+
+    `created` is true when this very read made the Workbench from Live:
+    nobody can have edited it yet, so a caller holding its own copy of
+    Live may write over it.
+    """
+
+    payload: dict[str, Any]
+    etag: str
+    created: bool = False
+
+
+class EtagRequired(EtagMismatch):
+    """A Workbench write that sent no etag: it has not seen what it
+    would replace, so it is refused like a stale one."""
+
+    def __init__(self, current_etag: str | None) -> None:
+        super().__init__(current_etag)
+        self.args = ("etag_required",)
+
+
+def read_workbench(
+    character_id: int | str, *, create: bool = False
+) -> WorkbenchRead | None:
+    """The character's Workbench, or None when it has none.
+
+    `create=True` makes it from Live first if needed; None then means
+    there is no Live to make it from.
+    """
+    bench = resolve_workbench(character_id, create=False)
+    created = False
+    if bench is None and create:
+        bench = resolve_workbench(character_id, create=True)
+        created = bench is not None
+    if bench is None:
+        return None
+    payload = read_set_payload(character_id, bench.id)
+    etag = set_payload_etag(character_id, bench.id)
+    if payload is None or etag is None:
+        return None
+    return WorkbenchRead(payload=payload, etag=etag, created=created)
+
+
+def workbench_etag(character_id: int | str) -> str | None:
+    """The etag of the character's Workbench; None when it has none."""
+    bench = resolve_workbench(character_id, create=False)
+    if bench is None:
+        return None
+    return set_payload_etag(character_id, bench.id)
+
+
+def write_workbench(
+    character_id: int | str,
+    payload: dict[str, Any],
+    *,
+    expected_etag: str | None,
+) -> str:
+    """Replace the character's Workbench; return the new etag.
+
+    The save contract: `expected_etag` must be the etag of what is on
+    disk now. Without one this raises `EtagRequired`, with a stale one
+    (or when there is no Workbench to replace) `EtagMismatch`; neither
+    touches the file. The write is atomic and announces the change.
+    Raises ValueError for a payload that is not a Workbench.
+    """
+    current = workbench_etag(character_id)
+    if expected_etag is None:
+        raise EtagRequired(current)
+    bench = resolve_workbench(character_id, create=False)
+    if bench is None:
+        raise EtagMismatch(None)
+    return write_set_payload(
+        character_id, bench.id, payload, expected_etag=expected_etag
+    )
+
+
 def load_zip_backup_into_workbench(
     character_id: int | str, backup_filename: str
 ) -> SetMeta:

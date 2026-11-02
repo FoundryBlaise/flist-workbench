@@ -9,6 +9,7 @@ from http import HTTPStatus
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
     File,
@@ -41,7 +42,12 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from archive_errors import InvalidCharacterId
+from archive_errors import (
+    InvalidCharacterId,
+    InvalidWorkbenchPayload,
+    NoWorkbench,
+    WorkbenchConflict,
+)
 from refusals import InvalidFileName, LogNameRefused, Refusal
 from services import label_rollup, local_access, payload_ops
 from services import render as render_service
@@ -1067,6 +1073,58 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
         "workbench": _set_meta_to_json(meta),
         "active_set_id": character_archive.read_active_set_id(character_id),
     }
+
+
+@app.get("/flist/character/{character_id}/workbench/payload")
+async def flist_character_workbench_payload_get(
+    character_id: str, create: bool = True
+) -> dict:
+    """The Workbench payload and the etag a save must send back.
+
+    Made from Live when the character has none yet, and then `created`
+    says so: that copy holds nobody's edits. `create=false` reads
+    without making one (404 `no_workbench`).
+    """
+    read = character_archive.read_workbench(character_id, create=create)
+    if read is None:
+        raise NoWorkbench(character_id)
+    return {"payload": read.payload, "etag": read.etag, "created": read.created}
+
+
+@app.put("/flist/character/{character_id}/workbench/payload")
+async def flist_character_workbench_payload_put(
+    character_id: str,
+    payload: dict[str, Any] = Body(...),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict:
+    """Save the whole Workbench, against the etag the caller read.
+
+    No `If-Match` is a write by something that never read what it is
+    replacing: refused with 409 `etag_required`, like a stale etag
+    (409 `etag_mismatch`). A window that had seeded its editor from
+    Live once flattened a long draft down to the published text this
+    way, one keystroke at a time. Both carry the current etag.
+    """
+    try:
+        etag = character_archive.write_workbench(
+            character_id, payload, expected_etag=if_match
+        )
+    except character_archive.EtagRequired as exc:
+        raise WorkbenchConflict(
+            "etag_required",
+            "Read the Workbench and send its etag as If-Match; a write "
+            "that has not seen the current contents would overwrite them.",
+            exc.current_etag,
+        ) from exc
+    except character_archive.EtagMismatch as exc:
+        raise WorkbenchConflict(
+            "etag_mismatch",
+            "The Workbench changed since it was read.",
+            exc.current_etag,
+        ) from exc
+    except ValueError as exc:
+        raise InvalidWorkbenchPayload(str(exc)) from exc
+    return {"etag": etag}
 
 
 @app.post("/flist/character/{character_id}/workbench/load-backup")
