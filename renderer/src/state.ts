@@ -34,6 +34,7 @@ export type {
 } from './state/flist'
 
 export { selectWorkingSlot } from './state/flist'
+export { selectDiffSources, type DiffSource } from './state/diffSources'
 
 import {
   readAutoRefreshEnabled,
@@ -654,13 +655,11 @@ type State = {
    *  right-hand source, so the read-only Live row can be compared against
    *  the edits actually in the bench (not only against backups). */
   flistDiffLoadWorkbench: (characterId: string) => Promise<void>
-  /** Tier 4 — reset working copy to a chosen backup payload.
-   *  Re-uses Tier 2's reset-undo banner so the 5-second undo flow is
-   *  consistent across reset sources. */
-  flistResetWorkingToBackup: (
-    characterId: string,
-    backupFilename: string
-  ) => Promise<void>
+  /** The Diff tab's "reset to this": with Live picked, reset the
+   *  Workbench to Live; with a Backup picked, Restore that Backup. Both
+   *  are the same actions as elsewhere, so the sidecar keeps the
+   *  replaced Workbench as a `before-restore` Backup either way. */
+  flistDiffResetToSource: (characterId: string) => Promise<void>
 
   /** Right-click → Browse backup on a row in the Backups sidebar
    *  list. Loads the ZIP into the existing diff backup cache,
@@ -3095,7 +3094,7 @@ export const useStore = create<State>((set, get) => ({
       }
     }))
     try {
-      const payload = await api.flistSnapshotRead(characterId, filename)
+      const { payload } = await api.flistZipBackupPayload(characterId, filename)
       set((s) => ({
         flistDiffBackupCache: {
           ...s.flistDiffBackupCache,
@@ -3165,93 +3164,13 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async flistResetWorkingToBackup(characterId, backupFilename) {
-    const slot = get().flistWorking[characterId]
-    if (!slot) return
-    _cancelFlush(characterId)
-    // Drain any in-flight save before the PUT so a mid-flight save
-    // can't resurrect the pre-reset payload (mirrors Tier 2 §P2-3).
-    const inflight = _flushInflight.get(characterId)
-    if (inflight) await inflight.catch(() => {})
-    _cancelFlush(characterId)
-    let backupPayload: Record<string, unknown> | null = null
-    const cacheKey = `${characterId}:${backupFilename}`
-    backupPayload = get().flistDiffBackupCache[cacheKey] ?? null
-    if (!backupPayload) {
-      try {
-        backupPayload = await api.flistSnapshotRead(characterId, backupFilename)
-      } catch {
-        // Bail without mutating — surface the failure via saveError on
-        // the next flush attempt.
-        return
-      }
+  async flistDiffResetToSource(characterId) {
+    const source = get().flistDiffRightSource[characterId] ?? { kind: 'live' }
+    if (source.kind === 'live') {
+      await get().flistResetWorkingToLive(characterId)
+    } else if (source.kind === 'backup') {
+      await get().flistLoadBackupIntoWorkbench(characterId, source.filename)
     }
-    // A user keystroke during the backup-read await may have armed a
-    // fresh flush against the still-pre-reset slot — re-drain so the
-    // PUT we're about to issue isn't racing one (QA P2-1).
-    _cancelFlush(characterId)
-    const secondInflight = _flushInflight.get(characterId)
-    if (secondInflight) await secondInflight.catch(() => {})
-    _cancelFlush(characterId)
-    // The eager PUT after seeding replaces the Workbench over the etag
-    // the window holds, so nothing else written meanwhile is overwritten.
-    const priorEtag = slot.etag
-    // Build a fresh working payload from the backup. Backup data uses
-    // the same JSON-API shape as Live; pass through seedWorkingFromLive
-    // so CRLF normalisation + kinks-list-to-dict coercion apply.
-    const seeded = seedWorkingFromLive(backupPayload)
-    const expiresAt = Date.now() + RESET_UNDO_MS
-    set((s) => {
-      const fresh: FlistWorkingSlot = {
-        ...emptyWorkingSlot(),
-        payload: seeded,
-        // Inherit the pre-reset etag and treat the slot as materialised
-        // so the eager PUT below ships If-Match against the Workbench
-        // it replaces; a stale etag ends in the conflict banner.
-        etag: priorEtag,
-        materialised: true,
-        unsavedDirty: true
-      }
-      return {
-        flistWorking: { ...s.flistWorking, [characterId]: fresh },
-        flistResetUndo: {
-          characterId,
-          snapshot: slot,
-          expiresAt,
-          etag: priorEtag,
-          awaitingWrite: true,
-          conflict: false
-        }
-      }
-    })
-    const reloaded = get().flistWorking[characterId]
-    if (
-      reloaded &&
-      get().flistActiveCharacterId === characterId &&
-      !get().editorReadOnly
-    ) {
-      set({
-        editorContent: descriptionOf(reloaded.payload),
-        editorDirty: false
-      })
-    }
-    const prev = _resetUndoTimers.get(characterId)
-    if (prev) clearTimeout(prev)
-    const t = setTimeout(() => {
-      _resetUndoTimers.delete(characterId)
-      const undo = get().flistResetUndo
-      if (undo && undo.characterId === characterId && undo.expiresAt <= Date.now()) {
-        set({ flistResetUndo: null })
-      }
-    }, RESET_UNDO_MS + 50)
-    _resetUndoTimers.set(characterId, t)
-    // Eager-flush the seeded payload to disk so a crash before next
-    // edit doesn't lose the reset. Slot is already dirty + carries the
-    // prior etag, so flistFlushWorking handles a 409 through its
-    // conflict branch.
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
   },
 
   async flistOpenBrowseBackup(characterId, backupFilename) {

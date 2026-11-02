@@ -932,10 +932,6 @@ export const api = {
     get<{ character_id: string; snapshots: FlistSnapshotEntry[] }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/snapshots`
     ),
-  flistSnapshotRead: (characterId: string | number, filename: string) =>
-    get<Record<string, unknown>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/snapshots/${encodeURIComponent(filename)}`
-    ),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>

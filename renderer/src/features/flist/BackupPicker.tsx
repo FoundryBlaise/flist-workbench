@@ -1,5 +1,5 @@
-import { useStore } from '../../state'
-import type { FlistSnapshotEntry } from '../../lib/api'
+import { useMemo } from 'react'
+import { selectDiffSources, useStore } from '../../state'
 
 // Stable fallback — see DiffPane for the same identity guard.
 const DEFAULT_RIGHT_SOURCE = { kind: 'live' } as const
@@ -34,8 +34,11 @@ export function BackupPicker({ characterId }: { characterId: string }) {
   const loadWorkbench = useStore((s) => s.flistDiffLoadWorkbench)
   const archive = useStore((s) => s.flistArchive[characterId])
   const lastPullAt = archive?.lastPullAt
-  // Backup picker sort: newest first; Live always pinned at top.
-  const backups: FlistSnapshotEntry[] = archive?.snapshots ?? []
+  // Live first, then the Backups newest first.
+  const entries = useMemo(
+    () => selectDiffSources({ flistArchive: { [characterId]: archive } }, characterId),
+    [archive, characterId]
+  )
   const value =
     source.kind === 'live'
       ? '__live__'
@@ -44,7 +47,7 @@ export function BackupPicker({ characterId }: { characterId: string }) {
         : `b:${source.filename}`
   return (
     <label className="diff-backup-picker">
-      <span className="diff-backup-picker-label">Compare Working against</span>
+      <span className="diff-backup-picker-label">Compare with</span>
       <select
         className="diff-backup-picker-select"
         value={value}
@@ -72,13 +75,27 @@ export function BackupPicker({ characterId }: { characterId: string }) {
           }
         }}
       >
-        <option value="__live__">Live (pulled {relTime(lastPullAt)})</option>
-        <option value="__workbench__">the Workbench (your edits)</option>
-        {backups.map((b) => (
-          <option key={b.filename} value={`b:${b.filename}`}>
-            Backup · {isoDate(b.created_at)}
-          </option>
-        ))}
+        {entries.map((entry) => {
+          if (entry.kind === 'live') {
+            return (
+              <option key="__live__" value="__live__">
+                Live (pulled {relTime(entry.lastPullAt)})
+              </option>
+            )
+          }
+          if (entry.kind === 'workbench') {
+            return (
+              <option key="__workbench__" value="__workbench__">
+                the Workbench (your edits)
+              </option>
+            )
+          }
+          return (
+            <option key={entry.filename} value={`b:${entry.filename}`}>
+              Backup · {entry.name ?? isoDate(entry.createdAt)} · {entry.origin}
+            </option>
+          )
+        })}
       </select>
     </label>
   )

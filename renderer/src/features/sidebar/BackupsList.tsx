@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import type { FlistZipBackupEntry } from '../../lib/api'
+import { formatBackupOrigin } from '../../lib/backupOrigin'
 import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
 
 /** Per-character Backups list in the sidebar. Reads from
@@ -437,27 +438,6 @@ function BackupsFolder({
       )}
     </div>
   )
-}
-
-const SOURCE_LABEL: Record<'live' | 'workbench', string> = {
-  live: 'Live',
-  workbench: 'Workbench'
-}
-
-const OCCASION_LABEL: Record<NonNullable<FlistZipBackupEntry['occasion']>, string> = {
-  manual: 'manual',
-  'backup-all': 'Back up all',
-  'before-upload': 'before Upload',
-  'before-restore': 'before Restore',
-  migration: 'migration'
-}
-
-/** What a Backup holds and why it was made, e.g. "Live · Back up all".
- *  Backups from before the app recorded that say "Source unknown". */
-function formatBackupOrigin(b: FlistZipBackupEntry): string {
-  if (b.source !== 'live' && b.source !== 'workbench') return 'Source unknown'
-  const source = SOURCE_LABEL[b.source]
-  return b.occasion ? `${source} · ${OCCASION_LABEL[b.occasion]}` : source
 }
 
 function formatBackupDate(unixSeconds: number): string {

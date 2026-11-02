@@ -250,7 +250,6 @@ WORKING_SET_ALLOWED: dict[str, int] = {
 }
 
 SNAPSHOT_ALLOWED: dict[str, int] = {
-    "renderer/src/features/flist/DiffPane.tsx": 3,
     "renderer/src/features/flist/ExtensionPairModal.tsx": 2,
     "renderer/src/features/flist/imageUsage.ts": 3,
     "renderer/src/features/settings/SettingsModal.tsx": 2,

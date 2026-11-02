@@ -98,7 +98,7 @@ describe('DiffPane', () => {
     })
     const { queryByText } = render(<DiffPane characterId="99" />)
     // No-diff empty state — updated copy after UX P3 batch.
-    expect(queryByText(/Working copy matches Live/)).toBeTruthy()
+    expect(queryByText(/The Workbench matches Live/)).toBeTruthy()
   })
 
   it('Reset all button is disabled when overlay is empty', () => {
