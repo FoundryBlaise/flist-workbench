@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import aliases as aliases_store
+import backup_origin
 import character_archive
 import eicons as eicons_catalog
 import flist_activity
@@ -689,28 +690,23 @@ async def flist_character_snapshot(character_id: str) -> dict:
 async def flist_character_zip_backup(
     character_id: str,
     force: bool = True,
-    kind: str = "manual_single",
 ) -> dict:
-    """Pack the character into a userscript-restoreable ZIP at
-    `backups/<ISO>.zip`.
+    """A manual Backup: pack the character's Workbench into a
+    userscript-restoreable ZIP at `backups/<ISO>.zip`, recorded as
+    `source: workbench, occasion: manual`, so the user can park their
+    work. Live needs no manual Backup: Back up all and every Upload keep
+    it.
 
-    What goes in is the workbench if there is one, and Live otherwise —
-    a backup is for the state the user cares about, and once they have
-    started editing that is the bench. `force=True` is the default
-    because the explicit right-click asked for an artefact in hand and
-    dedup would be surprising; the bulk `/backup-all` flow calls
-    `save_zip_backup` directly with `force=False`.
-
-    `kind` lets a caller mark the provenance: `manual_single` (the
-    default — right-click Back-up-now), `import` (set when an
-    import flow triggers a follow-up backup).
-    The bulk path passes `manual_bulk` directly to `save_zip_backup`.
+    `force=True` is the default because the explicit right-click asked
+    for an artefact in hand and dedup would be surprising. A `kind`
+    query parameter, which older windows sent, is ignored.
     """
-    if kind not in ("manual_single", "manual_bulk", "import"):
-        kind = "manual_single"
     try:
         return character_archive.save_zip_backup(
-            character_id, force=force, kind=kind
+            character_id,
+            source=backup_origin.WORKBENCH,
+            occasion=backup_origin.MANUAL,
+            force=force,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1092,7 +1088,10 @@ async def flist_character_workbench_load_backup(
     saved_first: dict | None = None
     if body.back_up_first:
         result = character_archive.save_zip_backup(
-            character_id, kind="manual_single", force=True
+            character_id,
+            source=backup_origin.WORKBENCH,
+            occasion=backup_origin.BEFORE_RESTORE,
+            force=True,
         )
         if result.get("saved"):
             saved_first = {

@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import backup_origin
 import character_archive
 import rag_jobs
 from mcp.server.fastmcp import Context
@@ -119,17 +120,20 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
 def create_backup(
     character: str, note: str | None = None, force: bool = True
 ) -> dict[str, Any]:
-    """Write a ZIP backup of a character's current published profile,
-    including its images and avatar.
+    """Write a Backup of a character's Workbench, the user's edits, as
+    a ZIP including its images and avatar.
 
-    Backups are what `create_working_set(source="backup:...")` restores
-    from, and what the user can hand to the browser extension.
-    `force=false` skips the write when nothing changed since the last
-    backup.
+    It is recorded as `source: workbench, occasion: manual`. A Backup
+    can be restored into the Workbench later, or uploaded through the
+    browser extension. `force=false` skips the write when the newest
+    Backup of the Workbench already holds the same content.
     """
     target = resolve_character(character)
     result = character_archive.save_zip_backup(
-        target.id, force=force, kind="manual_single"
+        target.id,
+        source=backup_origin.WORKBENCH,
+        occasion=backup_origin.MANUAL,
+        force=force,
     )
     # A skip comes back as `{saved: False, reason: ...}` rather than an
     # exception. "no_live" is a real failure — there is nothing to pack
@@ -139,8 +143,8 @@ def create_backup(
             raise ToolError(
                 "live_not_found",
                 f"No profile stored for {target.name}, so there is "
-                "nothing to back up. Pull the character first — a "
-                "backup packs what was last fetched from F-list.",
+                "nothing to back up. Pull the character first — its "
+                "Workbench starts from what was last fetched from F-list.",
             )
         return {
             "character": target.name,
@@ -162,11 +166,13 @@ def create_backup(
 
 @tool(tags=TAG_CHARACTER, title="Back up every character", open_world=True)
 async def backup_all_characters(ctx: Context) -> dict[str, Any]:
-    """Pull and back up every character on the signed-in account.
+    """Pull every character on the signed-in account and keep each one's
+    Live, what F-list shows, as a Backup (`source: live, occasion:
+    backup-all`). Workbenches are neither read nor changed.
 
     Long: each character is a full pull, one at a time, at F-list's
-    rate limit. Characters whose content hasn't changed since their
-    last backup are skipped rather than re-zipped. Tell the user this
+    rate limit. Characters whose Live hasn't changed since their last
+    Backup of Live are skipped rather than re-zipped. Tell the user this
     will take a few minutes on a large account before starting it.
     """
     from services import backup_all as backup_all_service

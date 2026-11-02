@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import backup_origin
+
 
 # Working.json settings -> userscript-export settings rename map.
 # Workbench stores the F-list profile-form field names (snake_case);
@@ -95,6 +97,8 @@ def build_zip(
     backup_kind: str | None = None,
     backup_note: str | None = None,
     images_missing: bool = False,
+    backup_source: str | None = None,
+    backup_occasion: str | None = None,
 ) -> bytes:
     """Pack `character.json` + the gallery images + the avatar into a
     ZIP, returning the bytes. Skips entries whose `<image_id>.<ext>`
@@ -113,6 +117,10 @@ def build_zip(
 
     `images_missing` marks a Backup taken without its image files
     (packing them failed), so it is refused as an Upload source.
+
+    `backup_source` and `backup_occasion` record what the Backup holds
+    and why it was made (see `backup_origin`); give both or neither.
+    With them, `backup_kind` defaults to the occasion's own kind.
     """
     del character_id  # not yet used; signature reserved for later
 
@@ -177,12 +185,22 @@ def build_zip(
         # scheduled). `created_at` is the same UTC ISO basic form the
         # filename uses (with seconds + Z) so a user reading the file
         # without opening it sees a consistent time. `note` is reserved
-        # for future free-text annotations from the UI.
-        if backup_kind is not None:
-            meta = {
-                "kind": backup_kind,
-                "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-            }
+        # for future free-text annotations from the UI. `source` and
+        # `occasion` say whether it holds Live or the Workbench, and why.
+        if backup_occasion is not None or backup_source is not None:
+            meta = backup_origin.meta(
+                backup_source or "", backup_occasion or "", kind=backup_kind
+            )
+        elif backup_kind is not None:
+            meta = {"kind": backup_kind}
+        else:
+            meta = None
+        if meta is not None:
+            meta["created_at"] = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
             if backup_note:
                 meta["note"] = backup_note
             if images_missing:

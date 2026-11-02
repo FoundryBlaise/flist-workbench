@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import backup_origin
 import character_archive
 import paths
 import zip_serialise
@@ -510,6 +511,8 @@ def write_pre_restore_snapshot(
     The gallery and the avatar come from the archive: gallery edits can
     only reach F-list through a save, so Live's images are what the
     profile has. The form fields are the page's, unsaved edits included.
+    It is recorded as `source: live, occasion: before-upload`: what it
+    holds is what F-list shows, not the Workbench about to be uploaded.
     """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
@@ -524,7 +527,8 @@ def write_pre_restore_snapshot(
             working,
             images_dir=character_archive.images_dir(character_id),
             avatar_path=_avatar_path_for_name(character_name),
-            backup_kind=PRE_UPLOAD_BACKUP_KIND,
+            backup_source=backup_origin.LIVE,
+            backup_occasion=backup_origin.BEFORE_UPLOAD,
         )
     except Exception as exc:  # pylint: disable=broad-except
         # Without the image files if packing them fails: a partial
@@ -538,7 +542,8 @@ def write_pre_restore_snapshot(
                 character_id,
                 working,
                 images_dir=Path(no_images),
-                backup_kind=PRE_UPLOAD_BACKUP_KIND,
+                backup_source=backup_origin.LIVE,
+                backup_occasion=backup_origin.BEFORE_UPLOAD,
                 backup_note=f"{IMAGES_NOT_PACKED_NOTE} ({exc}); form fields only.",
                 images_missing=True,
             )

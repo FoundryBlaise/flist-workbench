@@ -236,7 +236,7 @@ async def test_backups_leave_the_trash_out(client, workbench) -> None:  # noqa: 
     seed_gallery(workbench, [keep])
     client.delete(f"/flist/character/42/images/{gone}")
 
-    backup = workbench.save_zip_backup("42", force=True)
+    backup = workbench.save_zip_backup("42", source="workbench", occasion="manual", force=True)
 
     names = zipfile.ZipFile(backup["path"]).namelist()
     assert any(keep in n for n in names), names

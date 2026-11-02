@@ -157,11 +157,11 @@ def test_save_zip_backup_dedups_unchanged_live(tmp_path):
             "fetched_at": 100,
         },
     )
-    first = character_archive.save_zip_backup(cid)
+    first = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert first["saved"] is True
     assert first["filename"].endswith(".zip")
     # Same content → unchanged.
-    second = character_archive.save_zip_backup(cid)
+    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert second == {"saved": False, "reason": "unchanged"}
 
 
@@ -176,7 +176,7 @@ def test_save_zip_backup_writes_when_content_differs(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     character_archive.write_live(
         cid,
         {
@@ -186,9 +186,9 @@ def test_save_zip_backup_writes_when_content_differs(tmp_path):
             "fetched_at": 200,
         },
     )
-    second = character_archive.save_zip_backup(cid)
+    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert second["saved"] is True
-    third = character_archive.save_zip_backup(cid)
+    third = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert third == {"saved": False, "reason": "unchanged"}
     assert len(character_archive.list_zip_backups(cid)) == 2
 
@@ -204,16 +204,16 @@ def test_save_zip_backup_force_bypasses_dedup(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     # Without force this would dedup.
-    second = character_archive.save_zip_backup(cid, force=True)
+    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
     assert second["saved"] is True
     assert len(character_archive.list_zip_backups(cid)) == 2
 
 
 def test_save_zip_backup_no_live(tmp_path):
     character_archive.create_character_dir("nope")
-    assert character_archive.save_zip_backup("nope") == {
+    assert character_archive.save_zip_backup("nope", source="live", occasion="backup-all") == {
         "saved": False,
         "reason": "no_live",
     }
@@ -235,9 +235,9 @@ def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid)
-    character_archive.save_zip_backup(cid, force=True)
-    character_archive.save_zip_backup(cid, force=True)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
     rows = character_archive.list_zip_backups(cid)
     # Highest-suffix first.
     assert rows[0]["filename"].endswith("-2.zip")
@@ -874,7 +874,7 @@ def test_rename_zip_backup_persists_in_names_json(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
     character_archive.rename_zip_backup(cid, fname, "Pre-overhaul")
     rows = character_archive.list_zip_backups(cid)
@@ -896,7 +896,7 @@ def test_forget_backup_name_drops_entry(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
     character_archive.rename_zip_backup(cid, fname, "label")
     character_archive.forget_backup_name(cid, fname)
@@ -920,7 +920,7 @@ def test_create_set_from_zip_backup_seeds_payload(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
     meta = character_archive.create_set_from_zip_backup(
         cid, fname, "From the backup"
