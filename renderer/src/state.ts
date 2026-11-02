@@ -1039,15 +1039,34 @@ function _noteSaveConflict(
 }
 
 /** Save what was typed into the Workbench now, instead of after the
- *  autosave's pause. For a switch that replaces the slot. A failed save
- *  leaves the slot dirty with its error. */
-async function _saveTypedEdits(get: () => State, characterId: string): Promise<void> {
-  if (!get().flistWorking[characterId]?.unsavedDirty) return
-  _cancelFlush(characterId)
-  try {
-    await get().flistFlushWorking(characterId)
-  } catch {
-    // saveError on the slot is the user's signal
+ *  autosave's pause, chained after any save still in flight. For
+ *  anything that replaces the slot or the Workbench (showing Live, a
+ *  Restore, reset to Live): the sidecar keeps the Workbench as a Backup
+ *  before replacing it, so that Backup has to hold what was typed.
+ *  False when typed text is still unsaved (a conflict, the sidecar
+ *  gone): the caller stops, since replacing now would lose it, and the
+ *  slot's save error already says why. */
+async function _saveTypedEdits(get: () => State, characterId: string): Promise<boolean> {
+  if (get().flistWorking[characterId]?.unsavedDirty) {
+    _cancelFlush(characterId)
+    try {
+      await get().flistFlushWorking(characterId)
+    } catch {
+      // saveError on the slot is the user's signal
+    }
+  }
+  return !get().flistWorking[characterId]?.unsavedDirty
+}
+
+/** The slot for a Workbench payload the sidecar answered with, and the
+ *  etag the next save goes over. */
+function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot {
+  return {
+    ...emptyWorkingSlot(),
+    payload,
+    overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
+    etag,
+    materialised: true
   }
 }
 
@@ -1060,13 +1079,7 @@ function _showWorkbench(
   payload: WorkingPayload,
   etag: string
 ): void {
-  const slot: FlistWorkingSlot = {
-    ...emptyWorkingSlot(),
-    payload,
-    overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-    etag,
-    materialised: true
-  }
+  const slot = _workbenchSlot(payload, etag)
   set((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
@@ -2342,14 +2355,7 @@ export const useStore = create<State>((set, get) => ({
     let read: FlistWorkingSlot | null
     try {
       const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
-      const payload = res.payload as WorkingPayload
-      read = {
-        ...emptyWorkingSlot(),
-        payload,
-        overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-        etag: res.etag,
-        materialised: true
-      }
+      read = _workbenchSlot(res.payload as WorkingPayload, res.etag)
     } catch (err) {
       if (err instanceof RefusalError && err.code === 'no_workbench') {
         const liveForSeed = get().flistArchive[characterId]?.live ?? null
@@ -2556,16 +2562,8 @@ export const useStore = create<State>((set, get) => ({
   async flistResetWorkingToLive(characterId) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
-    // The sidecar keeps the Workbench as a Backup before resetting it,
-    // so that Backup has to hold what was typed: save it first. The
-    // flush chains after any save still in flight. A save that does
-    // not land (a conflict, the sidecar gone) leaves the edits only in
-    // this window, and a reset now would lose them: stop, the save's
-    // own error is already showing.
-    await get().flistFlushWorking(characterId)
-    _cancelFlush(characterId)
+    if (!(await _saveTypedEdits(get, characterId))) return
     const current = get().flistWorking[characterId] ?? slot
-    if (current.unsavedDirty) return
 
     const expiresAt = Date.now() + RESET_UNDO_MS
     let fresh: FlistWorkingSlot
@@ -2574,13 +2572,8 @@ export const useStore = create<State>((set, get) => ({
     if (current.materialised) {
       try {
         const res = await api.flistWorkbenchResetToLive(characterId)
-        const payload = res.payload as WorkingPayload
         fresh = {
-          ...emptyWorkingSlot(),
-          payload,
-          overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-          etag: res.etag,
-          materialised: true,
+          ..._workbenchSlot(res.payload as WorkingPayload, res.etag),
           lastSavedAt: Date.now()
         }
         resetEtag = res.etag
@@ -2653,14 +2646,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistLoadBackupIntoWorkbench(characterId, filename) {
-    // The sidecar keeps the Workbench as a Backup before the Restore
-    // replaces it, so that Backup has to hold what was typed: save it
-    // first. Typed text that cannot be saved would be lost; stop.
-    if (get().flistWorking[characterId]) {
-      await get().flistFlushWorking(characterId)
-      _cancelFlush(characterId)
-      if (get().flistWorking[characterId]?.unsavedDirty) return false
-    }
+    if (!(await _saveTypedEdits(get, characterId))) return false
     try {
       const res = await api.flistWorkbenchLoadBackup(characterId, filename)
       set((s) => ({
@@ -2716,16 +2702,9 @@ export const useStore = create<State>((set, get) => ({
     try {
       const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
       const payload = res.payload as WorkingPayload
-      const overlay = Array.isArray(payload._overlay) ? payload._overlay : []
       const slot: FlistWorkingSlot = {
-        payload,
-        overlay,
-        etag: res.etag,
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: Date.now(),
-        materialised: true
+        ..._workbenchSlot(payload, res.etag),
+        lastSavedAt: Date.now()
       }
       set((s) => {
         const patch: Partial<State> = {
@@ -2781,10 +2760,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistShowLive(characterId) {
-    await _saveTypedEdits(get, characterId)
     // Edits that could not be saved stay on screen, with the slot's
     // save error saying why: the Live view replaces the slot.
-    if (get().flistWorking[characterId]?.unsavedDirty) return
+    if (!(await _saveTypedEdits(get, characterId))) return
     // Build a read-only view slot from the local live.json. The tabs
     // (Profile / Kinks / Images / Editor) read this slot; the editor
     // and any edit handlers honor editorReadOnly to block mutations.
