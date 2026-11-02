@@ -940,64 +940,6 @@ async def flist_character_live(character_id: str) -> dict:
     return payload
 
 
-@app.get("/flist/character/{character_id}/working")
-async def flist_character_working_get(character_id: str) -> dict:
-    """Return the on-disk working copy + its current sha256 etag.
-
-    The etag is returned even on a clean read so the renderer can pin it
-    for the next PUT's `If-Match`. `payload: null` means no file yet —
-    renderer seeds from Live, materialise-on-first-edit (Tier 2 §1.6).
-    Earlier this returned 404 for the same case, but Chrome's network
-    panel logs every 4xx unconditionally and the noise was scaring
-    users into thinking the app was broken. 200 + null payload is the
-    same signal, surfaced cleanly.
-    """
-    payload = character_archive.read_working(character_id)
-    if payload is None:
-        return {"payload": None, "etag": None}
-    etag = character_archive.working_etag(character_id)
-    return {"payload": payload, "etag": etag}
-
-
-@app.put("/flist/character/{character_id}/working")
-async def flist_character_working_put(
-    character_id: str,
-    request: Request,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-) -> dict:
-    """Persist the working copy atomically.
-
-    Body is the whole payload. Optional `If-Match: <sha256>` enables
-    optimistic concurrency — mismatch returns 409 with the current etag.
-    Renderer caches the returned etag and ships it on the next PUT.
-    """
-    try:
-        body = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-    try:
-        new_etag = character_archive.write_working(
-            character_id, body, expected_etag=if_match
-        )
-    except character_archive.EtagMismatch as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "detail": "etag_mismatch",
-                "current_etag": exc.current_etag,
-            },
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"etag": new_etag}
-
-
-@app.delete("/flist/character/{character_id}/working")
-async def flist_character_working_delete(character_id: str) -> dict:
-    """Drop the working copy. Idempotent — `deleted: false` on a no-op."""
-    return {"deleted": character_archive.delete_working(character_id)}
-
-
 # ---- working sets v2 -------------------------------------------------
 
 

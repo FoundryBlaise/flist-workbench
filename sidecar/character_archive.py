@@ -75,11 +75,10 @@ WORKING_SCHEMA_VERSION = 6
 
 
 class EtagMismatch(ValueError):
-    """Raised by write_working when expected_etag != current on-disk etag.
+    """Raised by a Workbench write when expected_etag != current on-disk etag.
 
-    The PUT /working endpoint translates this into a 409 with the
-    current etag so the renderer can show the refresh-or-overwrite modal
-    (Tier 2 §8.1).
+    The Workbench endpoint translates this into a 409 with the current
+    etag so the window can show the refresh-or-overwrite modal.
     """
 
     def __init__(self, current_etag: str | None) -> None:
@@ -1166,7 +1165,7 @@ def read_snapshot(character_id: int | str, filename: str) -> dict[str, Any] | No
         return None
 
 
-# ---- working-copy (offline edits, persisted to working.json) ---------
+# ---- legacy working copy (working.json, read only until migrated) -----
 
 
 def working_path(character_id: int | str) -> Path:
@@ -1182,16 +1181,6 @@ def _file_sha256(path: Path) -> str | None:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return None
-
-
-def working_etag(character_id: int | str) -> str | None:
-    """SHA-256 of working.json bytes on disk. None when absent.
-
-    Renderer holds this between GET and the next PUT and sends it as
-    `If-Match`; PUT returns the new etag on success. Used to detect a
-    second window racing the same file (Tier 2 §8.1).
-    """
-    return _file_sha256(working_path(character_id))
 
 
 def _migrate_working_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1291,54 +1280,6 @@ _WORKING_TOP_LEVEL_KEYS = {
     "images",
     "inlines",
 }
-
-
-def write_working(
-    character_id: int | str,
-    payload: dict[str, Any],
-    *,
-    expected_etag: str | None = None,
-) -> str:
-    """Persist `payload` atomically; return the new sha256 etag.
-
-    When `expected_etag` is provided, the on-disk etag must match (or
-    both must be None on a first write) or `EtagMismatch` is raised
-    carrying the current etag. Schema-version + `_overlay` are required;
-    at least one of the recognised top-level content keys must be
-    present (defensive — catches a renderer regression silently writing
-    an empty payload).
-    """
-    if not isinstance(payload, dict):
-        raise ValueError("working payload must be a dict")
-    payload = _migrate_working_payload(dict(payload))
-    overlay = payload.get("_overlay")
-    if not isinstance(overlay, list) or not all(isinstance(s, str) for s in overlay):
-        raise ValueError("_overlay must be a list of strings")
-    if not any(k in payload for k in _WORKING_TOP_LEVEL_KEYS):
-        raise ValueError(
-            "working payload must carry at least one of "
-            f"{sorted(_WORKING_TOP_LEVEL_KEYS)}"
-        )
-    p = working_path(character_id)
-    current = _file_sha256(p)
-    if expected_etag is not None and current != expected_etag:
-        raise EtagMismatch(current)
-    _atomic_write_json(p, payload)
-    new_etag = _file_sha256(p)
-    assert new_etag is not None
-    return new_etag
-
-
-def delete_working(character_id: int | str) -> bool:
-    """Remove working.json. Idempotent — returns whether it existed."""
-    p = working_path(character_id)
-    if not p.exists():
-        return False
-    try:
-        p.unlink()
-        return True
-    except OSError:
-        return False
 
 
 # ---- working sets v2 -------------------------------------------------
@@ -1521,8 +1462,7 @@ def write_set_payload(
 ) -> str:
     """Persist a set's payload atomically; return the new sha256 etag.
 
-    Mirrors `write_working`'s validation: `_overlay` must be a list of
-    strings; at least one recognised top-level content key must be
+    Validation: `_overlay` must be a list of strings; at least one recognised top-level content key must be
     present; schema version is stamped to v6.
     """
     if expected_etag is None:

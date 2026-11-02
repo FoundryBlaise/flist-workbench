@@ -9,6 +9,8 @@ and the tool listing pull history are gone, and a tool that takes
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -40,7 +42,9 @@ TAKES_WORKING_SET: dict[str, dict[str, Any]] = {
     "diff_working_set": {},
     "get_working_set_payload": {},
     "render_profile_image": {},
-    "export_restore_zip": {"path": "unused.zip"},
+    # Outside the source tree: a call that is wrongly let through must
+    # not leave a zip behind in the checkout.
+    "export_restore_zip": {"path": str(Path(tempfile.gettempdir()) / "never-written.zip")},
     "set_description": {"text": "x"},
     "edit_description": {"old_string": "a", "new_string": "b"},
     "append_description": {"text": "x"},

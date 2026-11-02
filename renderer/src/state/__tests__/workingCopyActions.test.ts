@@ -26,7 +26,6 @@ beforeEach(() => {
   fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
-    flistSetWorking: {},
     flistActiveSetId: {},
     flistSets: {},
     flistExternalChange: {},
@@ -82,7 +81,6 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
     // payload endpoint and silently no-ops when no set is active
     // (that's F-list read-only mode). Without this the autosave
     // assertions below can never see a PUT.
-    flistSetWorking: { ...s.flistSetWorking, [SET_ID]: slot },
     flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistActiveCharacterId: characterId
   }))
