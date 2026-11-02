@@ -94,6 +94,8 @@ def rename_zip_backup(
     else:
         names.pop(filename, None)
     _write_backup_names(character_id, names)
+    events = archive_registry._events()
+    archive_registry._publish(events.BACKUPS_CHANGED, character_id=str(character_id))
 
 
 def backup_name(character_id: int | str, filename: str) -> str | None:
@@ -176,7 +178,10 @@ def write_new_backup(folder: Path, data: bytes) -> Path:
 def write_backup_zip(character_id: int | str, data: bytes) -> Path:
     """Store `data` as a new Backup of the character, under the Backup
     file name the list recognises, and return where it went."""
-    return write_new_backup(backups_dir(character_id), data)
+    target = write_new_backup(backups_dir(character_id), data)
+    events = archive_registry._events()
+    archive_registry._publish(events.BACKUPS_CHANGED, character_id=str(character_id))
+    return target
 
 
 #: The name earlier versions gave the Backup before an Upload, which the

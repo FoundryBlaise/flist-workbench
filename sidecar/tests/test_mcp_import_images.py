@@ -56,16 +56,11 @@ def gradient_png(size: tuple[int, int], *, alpha: int | None = None) -> bytes:
 @pytest.fixture
 def outputs(tmp_path: Path, workbench) -> Path:  # noqa: F811
     """A folder the user has cleared for import."""
-    import settings as settings_store
-    from services import image_import
+    from services import settings as settings_service
 
     folder = tmp_path / "Outputs"
     folder.mkdir()
-    conn = settings_store.connect()
-    try:
-        image_import.save_import_roots(conn, [str(folder)])
-    finally:
-        conn.close()
+    settings_service.update({"image_import_roots": [str(folder)]})
     return folder
 
 

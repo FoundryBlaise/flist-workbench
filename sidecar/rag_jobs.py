@@ -1,8 +1,8 @@
-"""Background ingest jobs — parse → resolve labels → chunk → embed → upsert.
+"""The Index's ingest: parse → resolve labels → chunk → embed → upsert.
 
-Mirrors the shape of labels_jobs.JobRegistry so the renderer can poll
-both kinds with the same code shape (state machine, progress event,
-cancel between batches).
+`run(job)` is the work of one ingest job; `services.index.start_ingest`
+starts it as a job holding the Index (`services.jobs`), so status and
+cancel go through the one job model and only one ingest runs at a time.
 
 One job processes one scope (one partner, one character, or all
 characters). The worker iterates partner-by-partner; each partner is
@@ -12,19 +12,16 @@ The embedding model + dimension are detected on the first probe call
 and persisted in the rag_meta manifest. If the user changes embedding
 models between ingests, the next job detects the dim mismatch and
 either:
-  - returns to the renderer with `state='failed'` + `model_swap=True`
-    so the UI can offer "wipe + re-ingest" with explicit confirmation
+  - fails with `embedding_model_changed` so the UI can offer "wipe +
+    re-ingest" with explicit confirmation
   - or, when the job was created with `force_rewipe=True`, drops the
     collection and starts fresh.
 """
 
 from __future__ import annotations
 
-import threading
-import time
-import uuid
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass
+from typing import Any
 
 import aliases as aliases_store
 import chunker
@@ -34,8 +31,14 @@ import rag as rag_settings
 import rag_embed
 import rag_lexical
 import rag_store
+from services.jobs import Job
 
-JobState = Literal["pending", "running", "done", "cancelled", "failed"]
+#: The job kind, as `services.jobs` lists it.
+KIND = "ingest"
+
+#: The error code of an ingest stopped because the Index was built with
+#: another embedding model; the UI offers wipe + re-ingest on it.
+MODEL_CHANGED = "embedding_model_changed"
 
 EMBED_BATCH = 16
 
@@ -58,105 +61,24 @@ class IngestProgress:
     total_chunks: int = 0
     current_partner: str | None = None
     last_error: str | None = None
-
-
-@dataclass(slots=True)
-class IngestJob:
-    id: str
-    scope: dict
-    include_ooc: bool = False
-    force_rewipe: bool = False
-    state: JobState = "pending"
-    progress: IngestProgress = field(default_factory=IngestProgress)
-    error: str | None = None
-    # When a dim mismatch is detected and force_rewipe is False, the
-    # job stops in `failed` state with this flag set so the UI can
-    # surface "your model changed; confirm wipe?" without parsing
-    # error strings.
-    model_swap: bool = False
     embed_model: str | None = None
     embed_dimension: int | None = None
-    created_at: float = field(default_factory=time.time)
-    finished_at: float | None = None
-    _cancel: threading.Event = field(default_factory=threading.Event)
-    _thread: threading.Thread | None = None
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "scope": self.scope,
-            "include_ooc": self.include_ooc,
-            "force_rewipe": self.force_rewipe,
-            "state": self.state,
-            "chunked": self.progress.chunked,
-            "embedded": self.progress.embedded,
-            "upserted": self.progress.upserted,
-            "skipped_existing": self.progress.skipped_existing,
-            "removed": self.progress.removed,
-            "failed": self.progress.failed,
-            "total_chunks": self.progress.total_chunks,
-            "skipped_unlabeled": self.progress.skipped_unlabeled,
-            "current_partner": self.progress.current_partner,
-            "last_error": self.progress.last_error,
-            "error": self.error,
-            "model_swap": self.model_swap,
-            "embed_model": self.embed_model,
-            "embed_dimension": self.embed_dimension,
-            "created_at": self.created_at,
-            "finished_at": self.finished_at,
-        }
 
 
-class JobRegistry:
-    def __init__(self, retention_seconds: float = 300.0) -> None:
-        self._jobs: dict[str, IngestJob] = {}
-        self._lock = threading.Lock()
-        self.retention_seconds = retention_seconds
-
-    def create(
-        self, scope: dict, *, include_ooc: bool = False, force_rewipe: bool = False
-    ) -> IngestJob:
-        job_id = uuid.uuid4().hex[:12]
-        job = IngestJob(
-            id=job_id, scope=scope, include_ooc=include_ooc, force_rewipe=force_rewipe
-        )
-        with self._lock:
-            self._sweep_locked()
-            self._jobs[job_id] = job
-        return job
-
-    def get(self, job_id: str) -> IngestJob | None:
-        with self._lock:
-            return self._jobs.get(job_id)
-
-    def list(self) -> list[IngestJob]:
-        with self._lock:
-            return list(self._jobs.values())
-
-    def cancel(self, job_id: str) -> bool:
-        with self._lock:
-            job = self._jobs.get(job_id)
-        if job is None:
-            return False
-        job._cancel.set()
-        return True
-
-    def _sweep_locked(self) -> None:
-        now = time.time()
-        stale = [
-            jid
-            for jid, j in self._jobs.items()
-            if j.finished_at is not None and (now - j.finished_at) > self.retention_seconds
-        ]
-        for jid in stale:
-            del self._jobs[jid]
+def params(scope: dict, *, include_ooc: bool, force_rewipe: bool) -> dict[str, Any]:
+    """An ingest job's parameters, as the job reports them."""
+    return {"scope": scope, "include_ooc": include_ooc, "force_rewipe": force_rewipe}
 
 
-_registry = JobRegistry()
-
-
-def registry() -> JobRegistry:
-    return _registry
+def summary(progress: IngestProgress) -> dict[str, Any]:
+    """What an ingest did, as its job's result."""
+    return {
+        "chunks_indexed": progress.upserted,
+        "chunks_already_present": progress.skipped_existing,
+        "chunks_removed": progress.removed,
+        "skipped_unlabeled": progress.skipped_unlabeled,
+        "failed": progress.failed,
+    }
 
 
 def _resolve_targets(scope: dict) -> list[tuple[str, str]]:
@@ -231,28 +153,26 @@ def _delete_rebuild_scope(
     lex.delete_scope({"character": character, "partners": partners})
 
 
-def _run_job(job: IngestJob) -> None:
-    job.state = "running"
+def run(job: Job) -> dict[str, Any] | None:
+    """The work of one ingest job (`services.jobs`): `job.params` as
+    `params` builds them, `job.progress` an `IngestProgress`. Returns
+    the `summary` unless it failed."""
+    scope: dict = job.params["scope"]
+    force_rewipe = bool(job.params.get("force_rewipe"))
+    progress: IngestProgress = job.progress
     try:
-        targets = _resolve_targets(job.scope)
+        targets = _resolve_targets(scope)
     except logs_store.LogDirError as exc:
-        job.error = str(exc)
-        job.state = "failed"
-        job.finished_at = time.time()
-        return
+        job.fail("log_dir_unavailable", str(exc))
+        return None
 
     if not targets:
         # Nothing matched the scope — finish with state=done so the UI
         # closes cleanly. Not an error: an empty character folder is a
         # valid state on first launch.
-        job.state = "done"
-        job.finished_at = time.time()
-        return
+        return summary(progress)
 
     labels_conn = labels_store.connect()
-    # Hoisted so the `finally` block can still see the settings if the
-    # settings load below raises before rag_set gets bound inside try.
-    rag_set: rag_settings.RagSettings | None = None
     try:
         label_settings = labels_store.load_settings()
         rag_set = rag_settings.load_settings()
@@ -264,12 +184,14 @@ def _run_job(job: IngestJob) -> None:
         try:
             dimension, _vec = rag_embed.probe(rag_set, timeout=60.0)
         except rag_embed.EmbedError as exc:
-            job.error = f"embedding probe failed: {exc}"
-            job.state = "failed"
-            job.finished_at = time.time()
-            return
-        job.embed_model = rag_set.embed_model
-        job.embed_dimension = dimension
+            job.fail(
+                "embedding_failed",
+                f"The embedding model could not be used: {exc}",
+                model=rag_set.embed_model,
+            )
+            return None
+        progress.embed_model = rag_set.embed_model
+        progress.embed_dimension = dimension
 
         manifest = rag_store.read_manifest()
         with rag_store.RagStore() as store, rag_lexical.LexicalStore() as lex:
@@ -286,13 +208,11 @@ def _run_job(job: IngestJob) -> None:
             )
 
             # Also catch the manifest-empty-but-collection-exists case:
-            # ensure_collection raises DimensionMismatchError, but the
-            # bare `Exception` handler used to swallow it as a generic
-            # failure (no model_swap flag, no actionable UI path). Trap
-            # it here as the same model_swap signal so the UI can
-            # surface the Wipe + re-ingest button.
+            # ensure_collection raises DimensionMismatchError. Trap it
+            # here as the same model change so the UI can surface the
+            # Wipe + re-ingest button.
             try:
-                if mismatch and job.force_rewipe:
+                if mismatch and force_rewipe:
                     # Dim/model change confirmed → nuke the world. Per-
                     # conversation wipe wouldn't help because every old
                     # chunk's vector is the wrong dim.
@@ -300,19 +220,21 @@ def _run_job(job: IngestJob) -> None:
                     rag_store.clear_manifest()
                     lex.wipe()
                 elif mismatch:
-                    job.model_swap = True
-                    job.error = (
+                    job.fail(
+                        MODEL_CHANGED,
                         f"embedding model changed from "
                         f"{manifest.embed_model} (dim "
                         f"{manifest.embed_dimension}) to "
                         f"{rag_set.embed_model} (dim {dimension}). "
                         "Existing vectors are incompatible — confirm "
-                        "wipe to re-ingest."
+                        "wipe to re-ingest.",
+                        indexed_model=manifest.embed_model,
+                        indexed_dimension=manifest.embed_dimension,
+                        model=rag_set.embed_model,
+                        dimension=dimension,
                     )
-                    job.state = "failed"
-                    job.finished_at = time.time()
-                    return
-                elif job.force_rewipe:
+                    return None
+                elif force_rewipe:
                     # No dim mismatch, user explicitly asked for a
                     # rebuild. It deletes only the scope it was asked
                     # for (one conversation, or every conversation of
@@ -321,8 +243,8 @@ def _run_job(job: IngestJob) -> None:
                     # Index. Safe because chunks only reference others
                     # within the same (character, partner) via
                     # prev/next pointers.
-                    if job.scope.get("character"):
-                        _delete_rebuild_scope(job.scope, store=store, lex=lex)
+                    if scope.get("character"):
+                        _delete_rebuild_scope(scope, store=store, lex=lex)
                         store.ensure_collection(vector_size=dimension)
                     else:
                         # Unscoped: empty the whole Index first,
@@ -336,18 +258,20 @@ def _run_job(job: IngestJob) -> None:
                 # Fresh install with an orphaned 768-dim Qdrant
                 # collection while the manifest is empty — the
                 # mismatch check above didn't fire because both
-                # manifest fields were None. Surface as model_swap so
-                # the dialog offers the same Wipe + re-ingest button.
-                job.model_swap = True
-                job.error = (
+                # manifest fields were None. Surface as a model change
+                # so the dialog offers the same Wipe + re-ingest button.
+                job.fail(
+                    MODEL_CHANGED,
                     f"existing vector index has dimension {exc.actual} "
                     f"but the embedding model now returns {exc.expected}. "
                     "The index needs to be wiped and rebuilt — confirm "
-                    "wipe below or use Settings → RAG → Re-ingest all."
+                    "wipe below or use Settings → RAG → Re-ingest all.",
+                    indexed_model=None,
+                    indexed_dimension=exc.actual,
+                    model=rag_set.embed_model,
+                    dimension=exc.expected,
                 )
-                job.state = "failed"
-                job.finished_at = time.time()
-                return
+                return None
 
             # Persist manifest now so a crash mid-ingest still records
             # the model/dim — partial collections aren't useful but at
@@ -358,10 +282,10 @@ def _run_job(job: IngestJob) -> None:
             )
 
             for char, partner in targets:
-                if job._cancel.is_set():
+                if job.cancel_requested:
                     job.state = "cancelled"
                     break
-                job.progress.current_partner = f"{char} / {partner}"
+                progress.current_partner = f"{char} / {partner}"
                 _ingest_one_partner(
                     char,
                     partner,
@@ -374,22 +298,16 @@ def _run_job(job: IngestJob) -> None:
                 )
                 if job.state == "cancelled":
                     break
-
-            if job.state == "running":
-                job.state = "done"
-    except Exception as exc:  # noqa: BLE001 — worker top-level guard
-        job.error = repr(exc)
-        job.state = "failed"
     finally:
         labels_conn.close()
-        job.finished_at = time.time()
+    return summary(progress)
 
 
 def _ingest_one_partner(
     character: str,
     partner: str,
     *,
-    job: IngestJob,
+    job: Job,
     store: rag_store.RagStore,
     lex: rag_lexical.LexicalStore,
     labels_conn,
@@ -427,7 +345,7 @@ def _ingest_one_partner(
         partner=partner,
         labels_by_hash=by_hash,
         label_settings=label_settings,
-        include_ooc=job.include_ooc,
+        include_ooc=bool(job.params.get("include_ooc")),
         speaker_aliases=alias_group,
         max_chars=rag_set.chunk_max_chars,
         soft_split=rag_set.chunk_soft_split_chars,
@@ -482,7 +400,7 @@ def _ingest_one_partner(
     )
 
     for i in range(0, len(pending), EMBED_BATCH):
-        if job._cancel.is_set():
+        if job.cancel_requested:
             job.state = "cancelled"
             return
         batch = pending[i : i + EMBED_BATCH]
@@ -506,7 +424,7 @@ def _ingest_one_partner(
 
 
 def _mirror_lexical(
-    chunks: list[dict], *, lex: rag_lexical.LexicalStore, job: IngestJob, where: str
+    chunks: list[dict], *, lex: rag_lexical.LexicalStore, job: Job, where: str
 ) -> None:
     """Write chunks to the lexical Index. Cheap (no network). A failure
     here should not abort the dense upsert the user already paid for, so
@@ -518,13 +436,3 @@ def _mirror_lexical(
         lex.upsert_chunks(chunks)
     except Exception as exc:  # noqa: BLE001 — lexical mirror is best-effort
         job.progress.last_error = f"{where}: lexical mirror failed: {exc}"
-
-
-def start(
-    scope: dict, *, include_ooc: bool = False, force_rewipe: bool = False
-) -> IngestJob:
-    job = registry().create(scope, include_ooc=include_ooc, force_rewipe=force_rewipe)
-    thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
-    job._thread = thread
-    thread.start()
-    return job

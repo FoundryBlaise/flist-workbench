@@ -144,8 +144,11 @@ def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
 
         return async_wrapper
 
+    # A call is one change to the window, however many files it writes
+    # (an import of several images, a Backup and its name). Only the
+    # quick ones: a streaming tool (a Pull, Back up all) groups its own.
     def call(*args: Any, **kwargs: Any) -> Any:
-        with events.origin(f"mcp:{tool_name}"):
+        with events.origin(f"mcp:{tool_name}"), events.coalesced():
             try:
                 return fn(*args, **kwargs)
             except Refusal as exc:

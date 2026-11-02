@@ -120,10 +120,17 @@ type State = {
         forceRewipe: boolean
       }
     | null
+  /** Bumped whenever the sidecar says the Index changed (an ingest
+   *  started or ended, a wipe). Views that show the Index status
+   *  re-read it when this moves. */
+  indexRevision: number
 
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
+  /** Counts settings changes made outside this window. An open
+   *  Settings re-reads them when it moves. */
+  settingsRevision: number
 
   editorContent: string
   editorTitle: string
@@ -422,12 +429,18 @@ type State = {
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
+  /** Something outside this window changed settings (the
+   *  `settings-changed` event); `fields` names them, as the sidecar's
+   *  settings service does (`labels.threshold_chars`, `rag.top_k`). */
+  noteSettingsChanged: (fields: string[]) => void
   openIngest: (
     scope: { character?: string | null; partner?: string | null },
     label: string,
     opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
+  /** The Index changed elsewhere: views showing its status re-read. */
+  noteIndexChanged: () => void
   /** One message by hash, or every message in a set of hashes. */
   applyLabelOverride: (
     char: string,
@@ -532,6 +545,9 @@ type State = {
   /** Ask the sidecar whether the character has a Workbench yet and
    *  when it last changed, for the Workbench row. Creates nothing. */
   flistLoadWorkbenchInfo: (characterId: string) => Promise<void>
+  /** Re-read the character's Backup list, after a Backup this window
+   *  did not make. A failure leaves the list as it was. */
+  flistLoadBackups: (characterId: string) => Promise<void>
   /** Show the character's Live, read-only, in place of its Workbench.
    *  Saves pending Workbench edits first. */
   flistShowLive: (characterId: string) => Promise<void>
@@ -821,12 +837,12 @@ function _cancelAllPendingTimers(): void {
 let _flistAccountSweepInFlight = false
 
 /** Re-read a character's Backup list so a Backup the sidecar just
- *  wrote shows up. Fire-and-forget: a failure leaves the list stale. */
+ *  wrote shows up. A failure leaves the list stale. */
 function _refreshBackupList(
   characterId: string,
   set: (fn: (s: State) => Partial<State>) => void
-): void {
-  void api
+): Promise<void> {
+  return api
     .flistZipBackups(characterId)
     .then((r) => {
       set((s) => {
@@ -1432,10 +1448,12 @@ export const useStore = create<State>((set, get) => ({
   activePartner: null,
 
   ingestTarget: null,
+  indexRevision: 0,
 
   messagesByPartner: {},
   messagesStatus: {},
   messagesError: {},
+  settingsRevision: 0,
 
   editorContent: '',
   editorTitle: '',
@@ -2625,7 +2643,7 @@ export const useStore = create<State>((set, get) => ({
     }, RESET_UNDO_MS + 50)
     _resetUndoTimers.set(characterId, t)
     // The Backup the sidecar just kept belongs in the list.
-    if (kept) _refreshBackupList(characterId, set)
+    if (kept) void _refreshBackupList(characterId, set)
   },
 
   // ---- The Live and Workbench rows ----------------------------------
@@ -2640,6 +2658,10 @@ export const useStore = create<State>((set, get) => ({
     } catch {
       // The row keeps what it showed; nothing to correct.
     }
+  },
+
+  flistLoadBackups(characterId) {
+    return _refreshBackupList(characterId, set)
   },
 
   async flistLoadBackupIntoWorkbench(characterId, filename) {
@@ -4087,6 +4109,17 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  noteSettingsChanged(fields) {
+    set((s) => ({ settingsRevision: s.settingsRevision + 1 }))
+    // The OOC threshold is applied when a Log is read, so the open
+    // Log's Labels are only current after a re-read.
+    const { activeCharacter: char, activePartner: partner } = get()
+    if (fields.includes('labels.threshold_chars') && char && partner) {
+      get().invalidateMessages(char, partner)
+      void get().loadMessages(char, partner, { force: true })
+    }
+  },
+
   openIngest(scope, label, opts) {
     set({
       ingestTarget: { scope, label, forceRewipe: opts?.forceRewipe ?? false }
@@ -4095,6 +4128,10 @@ export const useStore = create<State>((set, get) => ({
 
   closeIngest() {
     set({ ingestTarget: null })
+  },
+
+  noteIndexChanged() {
+    set((s) => ({ indexRevision: s.indexRevision + 1 }))
   },
 
   // Patches one message's label fields in place, or those of every

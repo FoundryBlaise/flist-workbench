@@ -26,7 +26,7 @@ import flist_activity
 import flist_api
 import zip_serialise
 
-from . import sse
+from . import events, sse
 from . import pull as pull_service
 
 #: Event names `run()` can yield. `error` is fatal and ends the sweep;
@@ -198,9 +198,12 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
                     {"name": name, "status": "fetching"},
                 )
                 try:
-                    pull_result = await _pull_one_character_for_backup_all(
-                        name, client=client
-                    )
+                    # Announced per character as each Pull ends, not
+                    # per picture and not all at the end of the sweep.
+                    with events.coalesced():
+                        pull_result = await _pull_one_character_for_backup_all(
+                            name, client=client
+                        )
                 except (
                     flist_api.TicketRequired,
                     flist_api.AuthFailure,

@@ -239,7 +239,7 @@ def amber_has_logs(workbench, tmp_path: Path) -> None:  # noqa: ARG001
 async def test_ingest_can_run_in_the_background(
     amber_has_logs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import rag_jobs
+    from services import index as index_service
 
     started: dict[str, Any] = {}
 
@@ -253,7 +253,7 @@ async def test_ingest_can_run_in_the_background(
         )
         return _FakeJob()
 
-    monkeypatch.setattr(rag_jobs, "start", fake_start)
+    monkeypatch.setattr(index_service, "start_ingest", fake_start)
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
@@ -271,31 +271,31 @@ async def test_ingest_reports_skipped_unlabeled_and_what_to_do(
 ) -> None:
     """Silently indexing half a log and reporting success is the
     failure mode this guards against."""
-    import rag_jobs
+    from services import index as index_service
 
     snapshot = {
         "id": "job1",
         "state": "done",
-        "upserted": 4,
-        "skipped_existing": 0,
-        "skipped_unlabeled": 120,
-        "failed": 0,
+        "progress": {"last_error": None},
+        "result": {
+            "chunks_indexed": 4,
+            "chunks_already_present": 0,
+            "chunks_removed": 0,
+            "skipped_unlabeled": 120,
+            "failed": 0,
+        },
         "error": None,
     }
 
     class _Job:
         id = "job1"
         state = "done"
+        finished = True
 
         def to_dict(self):
             return snapshot
 
-    class _Registry:
-        def get(self, job_id):
-            return _Job()
-
-    monkeypatch.setattr(rag_jobs, "start", lambda *a, **k: _Job())
-    monkeypatch.setattr(rag_jobs, "registry", lambda: _Registry())
+    monkeypatch.setattr(index_service, "start_ingest", lambda *a, **k: _Job())
 
     async with mcp_client("logs") as session:
         _, body = await call_tool(
@@ -460,7 +460,7 @@ async def test_changing_the_embedding_model_warns_about_the_index(
     another's — silently leaving it in place looks like data loss."""
     async with mcp_client("character") as session:
         _, body = await call_tool(
-            session, "update_settings", embed_model="some-other-model"
+            session, "update_settings", embed_model="org/some-other-model"
         )
     assert "wipe_search_index" in body["warning"]
 

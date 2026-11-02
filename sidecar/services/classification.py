@@ -22,6 +22,7 @@ from typing import Any, Iterable
 
 import aliases as aliases_store
 import labels as labels_store
+import logs as log_store
 
 #: Neighbours shown on each side of the message being judged. One is
 #: usually enough to tell "yes" (an IC reply) from "yes" (an OOC
@@ -194,6 +195,35 @@ def collect_pending(
         already_labelled=already_labelled,
         decided_by_rules=decided_by_rules,
     )
+
+
+def pending(
+    character: str,
+    partner: str,
+    *,
+    limit: int = 40,
+    cursor: int = 0,
+    context_before: int = DEFAULT_CONTEXT_BEFORE,
+    context_after: int = DEFAULT_CONTEXT_AFTER,
+) -> PendingBatch:
+    """`collect_pending` over one conversation's Log, read from disk,
+    against the stored Labels and the current rule threshold."""
+    messages = list(log_store.read_messages(character, partner))
+    conn = labels_store.connect()
+    try:
+        return collect_pending(
+            messages,
+            conn,
+            character,
+            partner,
+            labels_store.load_settings(),
+            limit=limit,
+            cursor=cursor,
+            context_before=context_before,
+            context_after=context_after,
+        )
+    finally:
+        conn.close()
 
 
 def guidelines(language: str = "de") -> dict[str, Any]:

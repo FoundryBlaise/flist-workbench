@@ -314,6 +314,9 @@ window gets for the same situation:
 | `workbench_not_kept` | loading a Backup would replace the Workbench, but the Backup of it could not be written first, so nothing was replaced |
 | `backup_too_old` | the Backup comes from before the app stored a loadable profile in it; it can only be downloaded |
 | `no_index` | nothing ingested yet |
+| `index_busy` | an ingest (or a wipe) is changing the Index; details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
+| `index_unreadable` | the Index is there but could not be read; not the same as empty |
+| `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |
 

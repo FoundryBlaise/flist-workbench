@@ -22,6 +22,10 @@ Rules:
 * router-layering: every REST route lives in a router under
   `sidecar/routers/`; only `server.py` (app setup and router
   registration) imports routers, and nothing imports `server.py`.
+* label-layering: SQL on the labels table lives only in the Label
+  store (`labels.py`) and the Labels service (`services/labels.py`);
+  REST routers and MCP tools take only pure names from the store and
+  reach Labels through the service.
 * retired-term: user-facing prose (sidecar strings, MCP tool
   descriptions, renderer and main-process strings and JSX text) does
   not use a term GLOSSARY.md retired or avoids. Only text with a space
@@ -307,6 +311,114 @@ def test_the_entry_module_declares_no_routes():
 
 
 # ---------------------------------------------------------------------------
+# label-layering
+
+LABEL_SQL_HOMES = {"sidecar/labels.py", "sidecar/services/labels.py"}
+ADAPTER_PREFIXES = ("sidecar/routers/", "sidecar/workbench_mcp/")
+#: What a router or MCP tool may take from the Label store: names and
+#: pure helpers that touch no database, and the rule settings (#70 owns
+#: those). Reading or writing Labels goes through services/labels.py.
+LABEL_STORE_PURE = {
+    "LABEL_IC",
+    "LABEL_OOC",
+    "LABEL_UNLABELED",
+    "COMPACT_RULES",
+    "PROMPT_PRESETS",
+    "DEFAULT_THRESHOLD_CHARS",
+    "LabelsSettings",
+    "msg_hash",
+    "resolve",
+    "load_settings",
+}
+_LABEL_SQL = re.compile(r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+labels\b", re.IGNORECASE)
+
+
+def label_sql_sites(path: str, tree: ast.Module | None = None) -> list[str]:
+    return [
+        f"{path}:{node.lineno}: SQL on the labels table (rule label-layering)"
+        for node in ast.walk(tree or parse(path))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _LABEL_SQL.search(node.value)
+    ]
+
+
+def label_store_uses(path: str, tree: ast.Module | None = None) -> list[str]:
+    """Uses of the Label store (`labels.py`) in `path` beyond its pure
+    names, however the module was imported."""
+    tree = tree or parse(path)
+    bound: set[str] = set()
+    sites = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound.update(a.asname or a.name for a in node.names if a.name == "labels")
+        elif isinstance(node, ast.ImportFrom) and node.module == "labels" and not node.level:
+            sites.extend(
+                f"{path}:{node.lineno}: imports labels.{a.name} (rule label-layering)"
+                for a in node.names
+                if a.name not in LABEL_STORE_PURE
+            )
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in bound
+            and node.attr not in LABEL_STORE_PURE
+        ):
+            sites.append(f"{path}:{node.lineno}: labels.{node.attr} (rule label-layering)")
+    return sites
+
+
+def test_label_sql_lives_in_the_label_store_and_service():
+    """Only the Label store and the Labels service speak SQL to the
+    labels table, so a Label behaviour cannot be implemented twice."""
+    sites = [
+        site
+        for path in sidecar_sources()
+        if path not in LABEL_SQL_HOMES
+        for site in label_sql_sites(path)
+    ]
+    assert not sites, report("label-layering", sites)
+
+
+def test_routes_and_tools_reach_labels_through_the_service():
+    """REST routes and MCP tools neither open the Label store nor call
+    its readers and writers: they parse, call services/labels.py and
+    shape the answer, so REST and MCP give the same result."""
+    sites = [
+        site
+        for path in sidecar_sources()
+        if path.startswith(ADAPTER_PREFIXES)
+        for site in label_store_uses(path)
+    ]
+    assert not sites, report("label-layering", sites)
+
+
+def test_the_label_layering_check_sees_store_calls_and_sql():
+    """The rule's scanners find what they are for (guards the guard)."""
+    import textwrap
+
+    src = textwrap.dedent(
+        """
+        import labels as store
+        from labels import upsert_label, msg_hash
+        store.LABEL_IC
+        store.connect()
+        conn.execute("DELETE FROM labels WHERE hash = ?")
+        """
+    )
+    path = "sidecar/workbench_mcp/_example.py"
+    tree = ast.parse(src)
+    uses = label_store_uses(path, tree)
+    sql = label_sql_sites(path, tree)
+    assert [u.split(": ", 1)[1] for u in uses] == [
+        "imports labels.upsert_label (rule label-layering)",
+        "labels.connect (rule label-layering)",
+    ]
+    assert len(sql) == 1
+
+
+# ---------------------------------------------------------------------------
 # retired-term
 
 def _word(pattern: str) -> re.Pattern[str]:
@@ -360,9 +472,7 @@ CLASSIFICATION_ALLOWED: dict[str, int] = {
     "sidecar/workbench_mcp/tools_ops.py": 2,
 }
 
-TRANSCRIPT_ALLOWED: dict[str, int] = {
-    "sidecar/workbench_mcp/tools_ops.py": 1,
-}
+TRANSCRIPT_ALLOWED: dict[str, int] = {}
 
 RETIRED_TERM_ALLOWED: dict[str, dict[str, int]] = {
     "working set": WORKING_SET_ALLOWED,
