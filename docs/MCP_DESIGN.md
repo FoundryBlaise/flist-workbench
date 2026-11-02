@@ -488,8 +488,13 @@ server-side job any more — it is a client loop (§3.9).
 Structured tool errors with a stable `code`: `not_signed_in`,
 `no_active_set`, `set_not_found`, `character_not_found`,
 `partner_not_found`, `validation_failed {field, reason, allowed}`,
-`etag_conflict`, `rate_limited {retry_after}`, `confirm_required`,
+`etag_mismatch {current_etag}`, `rate_limited {retry_after}`, `confirm_required`,
 `embedding_unreachable`, `unknown_hash`.
+
+Since #69 a tool error carries the same code and details as the REST
+error for the same situation (`{code, message, details}`,
+`sidecar/refusals.py`): a `Refusal` raised under a tool reaches the
+model unchanged.
 
 ---
 
