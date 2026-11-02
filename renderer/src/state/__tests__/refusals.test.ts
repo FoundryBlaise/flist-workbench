@@ -1,6 +1,6 @@
-// The sidecar answers every refusal as `{code, message}` (#28). These
-// cases pin that the window shows the sidecar's reason, and gets its
-// code, rather than a bare HTTP status.
+// The sidecar answers every error as `{code, message, details}` (#28,
+// #69). These cases pin that the window shows the sidecar's reason, and
+// gets its code and details, rather than a bare HTTP status.
 
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { api, RefusalError } from '../../lib/api'
@@ -21,7 +21,7 @@ afterEach(() => {
 it('shows the reason a Log was refused', async () => {
   fake.on(
     'GET /logs/messages',
-    json({ code: 'log_not_found', message: 'no such log' }, 404)
+    json({ code: 'log_not_found', message: 'no such log', details: {} }, 404)
   )
 
   await useStore.getState().loadMessages('me', 'stranger')
@@ -33,7 +33,7 @@ it('shows the reason a Log was refused', async () => {
 it('hands the refusal code to the caller', async () => {
   fake.on(
     'GET /flist/character/7/zip-backups/bad.zip/payload',
-    json({ code: 'invalid_file_name', message: 'invalid backup filename' }, 400)
+    json({ code: 'invalid_file_name', message: 'invalid backup filename', details: {} }, 400)
   )
 
   const err = await api.flistZipBackupPayload('7', 'bad.zip').catch((e: unknown) => e)
@@ -44,7 +44,27 @@ it('hands the refusal code to the caller', async () => {
   expect((err as RefusalError).status).toBe(400)
 })
 
-it('still reads a message the sidecar nests in `detail`', async () => {
+it('hands the details to the caller', async () => {
+  fake.on(
+    'PUT /settings',
+    json(
+      {
+        code: 'validation_failed',
+        message: 'fchat_data_dir: directory does not exist: X:\nowhere',
+        details: { field: 'fchat_data_dir', reason: 'directory does not exist: X:\nowhere' }
+      },
+      400
+    )
+  )
+
+  const err = await api.settingsUpdate({ fchat_data_dir: 'X:\nowhere' }).catch((e: unknown) => e)
+
+  expect(err).toBeInstanceOf(RefusalError)
+  expect((err as RefusalError).code).toBe('validation_failed')
+  expect((err as RefusalError).details.field).toBe('fchat_data_dir')
+})
+
+it('no longer reads a reason nested in the retired `detail` field', async () => {
   fake.on(
     'GET /foreign/character/Nobody',
     json({ detail: { code: 'not_found', message: 'no such character' } }, 404)
@@ -52,7 +72,7 @@ it('still reads a message the sidecar nests in `detail`', async () => {
 
   const err = await api.foreignProfile('Nobody').catch((e: unknown) => e)
 
-  expect(err).toBeInstanceOf(RefusalError)
-  expect((err as RefusalError).message).toBe('HTTP 404: no such character')
-  expect((err as RefusalError).code).toBe('not_found')
+  expect(err).toBeInstanceOf(Error)
+  expect(err).not.toBeInstanceOf(RefusalError)
+  expect((err as Error).message).not.toContain('no such character')
 })

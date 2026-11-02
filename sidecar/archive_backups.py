@@ -20,7 +20,14 @@ import archive_workbench
 import atomic_write
 import backup_origin
 from archive_errors import NoLive, WorkbenchConflict, WorkbenchNotKept
-from refusals import BackupHoldsNoProfile, BackupTooOld, InvalidFileName
+from refusals import (
+    BackupHoldsNoProfile,
+    BackupNotFound,
+    BackupTooOld,
+    BackupUnreadable,
+    InvalidFileName,
+    Refusal,
+)
 
 
 def backups_dir(character_id: int | str) -> Path:
@@ -69,6 +76,7 @@ def _write_backup_names(
     )
 
 
+@archive_registry.under_character_lock
 def rename_zip_backup(
     character_id: int | str, filename: str, name: str
 ) -> None:
@@ -79,7 +87,7 @@ def rename_zip_backup(
     require_backup_filename(filename)
     target = backups_dir(character_id) / filename
     if not target.exists():
-        raise FileNotFoundError(str(target))
+        raise BackupNotFound(f"no such Backup: {filename}")
     names = _read_backup_names(character_id)
     if name.strip():
         names[filename] = name.strip()
@@ -95,6 +103,7 @@ def backup_name(character_id: int | str, filename: str) -> str | None:
     return _read_backup_names(character_id).get(filename) or None
 
 
+@archive_registry.under_character_lock
 def forget_backup_name(character_id: int | str, filename: str) -> None:
     """Drop the user-set name for a backup that's about to be deleted.
     Called by the DELETE endpoint so `_names.json` doesn't carry
@@ -165,6 +174,7 @@ def write_new_backup(folder: Path, data: bytes) -> Path:
     return atomic_write.write_new(_backup_paths(folder, stem), data)
 
 
+@archive_registry.under_character_lock
 def write_backup_zip(character_id: int | str, data: bytes) -> Path:
     """Store `data` as a new Backup of the character, under the Backup
     file name the list recognises, and return where it went."""
@@ -353,6 +363,35 @@ def require_backup_holds_profile(character_id: int | str, filename: str) -> None
         raise BackupHoldsNoProfile(filename)
 
 
+def read_backup_profile(character_id: int | str, filename: str) -> dict[str, Any]:
+    """The profile a Backup stores (its `working.json`), as Browse and
+    Restore read it. Refuses, the same way for both: `BackupNotFound`,
+    `BackupHoldsNoProfile` for the migration Backup, `BackupTooOld` for
+    one from before the profile was stored in it, `BackupUnreadable`
+    for a zip or profile that cannot be read."""
+    import zipfile
+
+    require_backup_filename(filename)
+    target = backups_dir(character_id) / filename
+    if not target.is_file():
+        raise BackupNotFound(f"no such Backup: {filename}")
+    require_backup_holds_profile(character_id, filename)
+    try:
+        with zipfile.ZipFile(target, "r") as zf:
+            raw = zf.read("working.json").decode("utf-8")
+    except KeyError as exc:
+        raise BackupTooOld(filename) from exc
+    except (zipfile.BadZipFile, UnicodeDecodeError) as exc:
+        raise BackupUnreadable(f"corrupt backup file: {exc}") from exc
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise BackupUnreadable("backup working.json is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise BackupUnreadable("backup working.json is not an object")
+    return payload
+
+
 def latest_zip_backup_content_hash(
     character_id: int | str, source: str | None = None
 ) -> str | None:
@@ -411,6 +450,7 @@ def _zip_payload_content_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+@archive_registry.under_character_lock
 def save_zip_backup(
     character_id: int | str,
     *,
@@ -569,6 +609,7 @@ def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any]:
     return {"filename": result["filename"], "created_at": result["created_at"]}
 
 
+@archive_registry.under_character_lock
 def _replace_workbench(
     character_id: int | str, payload: dict[str, Any]
 ) -> WorkbenchReplaced:
@@ -595,6 +636,7 @@ def _replace_workbench(
     return WorkbenchReplaced(payload=payload, etag=etag, kept=kept)
 
 
+@archive_registry.under_character_lock
 def reset_workbench_to_live(character_id: int | str) -> WorkbenchReplaced:
     """Throw away every edit: the Workbench becomes a fresh copy of Live.
 
@@ -617,23 +659,15 @@ def load_zip_backup_into_workbench(
     replaces kept as a `before-restore` Backup, and only once that is
     written is the Workbench overwritten. Raises `BackupHoldsNoProfile`
     for the migration Backup, and `BackupTooOld` for a Backup from
-    before the profile payload was stored in it.
+    before the profile payload was stored in it (`read_backup_profile`).
     """
-    import zipfile
-
-    require_backup_filename(backup_filename)
-    target = backups_dir(character_id) / backup_filename
-    if not target.exists() or not target.is_file():
-        raise FileNotFoundError(str(target))
-    require_backup_holds_profile(character_id, backup_filename)
+    payload = archive_workbench.backup_payload(
+        read_backup_profile(character_id, backup_filename)
+    )
     try:
-        with zipfile.ZipFile(target, "r") as zf:
-            raw = zf.read("working.json").decode("utf-8")
-    except zipfile.BadZipFile as exc:
-        raise ValueError(f"corrupt backup file: {exc}") from exc
-    except KeyError as exc:
-        raise BackupTooOld(backup_filename) from exc
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError("backup working.json is not an object")
-    return _replace_workbench(character_id, archive_workbench.backup_payload(payload))
+        return _replace_workbench(character_id, payload)
+    except Refusal:
+        raise
+    except ValueError as exc:
+        # Not a payload the Workbench takes (`write_workbench` checks).
+        raise BackupUnreadable(f"the profile in this Backup cannot be loaded: {exc}") from exc

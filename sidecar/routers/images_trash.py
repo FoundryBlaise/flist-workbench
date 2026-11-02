@@ -4,13 +4,13 @@ The Trash routes cover all three kinds it holds: images, Backups and
 cleared Labels, per character and, for Labels, across all of them.
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import archive_images
 import archive_registry
-from refusals import InvalidFileName
+from refusals import ImageNotFound, InvalidFileName, InvalidRequest, TooLarge, UnsupportedType
 from services import backup_trash as backup_trash_service
 from services import image_import as image_import_service
 from services import image_trash as image_trash_service
@@ -27,7 +27,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
     archive_images.require_image_filename(filename)
     path = archive_images.images_dir(character_id) / filename
     if not path.exists():
-        raise HTTPException(status_code=404, detail="image not found")
+        raise ImageNotFound("image not found")
     return FileResponse(path)
 
 
@@ -57,7 +57,7 @@ async def flist_character_image_by_id(
         candidate = d / f"{image_id}.{ext}"
         if candidate.exists():
             return FileResponse(candidate)
-    raise HTTPException(status_code=404, detail="image not found")
+    raise ImageNotFound("image not found")
 
 
 @router.post("/flist/character/{character_id}/images")
@@ -75,17 +75,14 @@ async def flist_character_image_upload(
     id and skip re-writing the file."""
     body = await request.body()
     if not body:
-        raise HTTPException(status_code=400, detail="empty body")
+        raise InvalidRequest(("body",), "empty body")
     if len(body) > 16 * 1024 * 1024:
         # F-list itself caps images well below this; the bound is here
         # to keep a hostile body from blocking the loop on disk write.
-        raise HTTPException(status_code=413, detail="image too large")
+        raise TooLarge("image too large")
     row = archive_images.add_uploaded_image(character_id, body)
     if row is None:
-        raise HTTPException(
-            status_code=415,
-            detail="unsupported image type (png/jpg/gif only)",
-        )
+        raise UnsupportedType("unsupported image type (png/jpg/gif only)")
     return row
 
 
@@ -113,7 +110,7 @@ async def flist_character_image_remove(
     any gallery row pointing at it."""
     result = image_trash_service.trash_images(character_id, [image_id])
     if not result["trashed"]:
-        raise HTTPException(status_code=404, detail="image not found")
+        raise ImageNotFound("image not found")
     return {"trashed": True, "image_id": image_id}
 
 
@@ -154,7 +151,7 @@ async def flist_character_trash_file(character_id: str, filename: str) -> FileRe
         raise InvalidFileName("invalid image filename")
     path = image_trash_service.trash_dir(character_id) / filename
     if not path.exists():
-        raise HTTPException(status_code=404, detail="image not found")
+        raise ImageNotFound("image not found")
     return FileResponse(path)
 
 
@@ -234,7 +231,7 @@ async def flist_character_inline(character_id: str, filename: str) -> FileRespon
     archive_images.require_image_filename(filename)
     path = archive_images.inlines_dir(character_id) / filename
     if not path.exists():
-        raise HTTPException(status_code=404, detail="inline not found")
+        raise ImageNotFound("inline not found")
     return FileResponse(path)
 
 

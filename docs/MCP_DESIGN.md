@@ -454,8 +454,8 @@ over `services/`.
   kink ids validated against the mapping list; infotag values
   validated per type (§3.5).
 - Writes only to an existing set; `live` is never writable.
-- `If-Match` used on every write (read etag → mutate → put), retried
-  once on 409 with a fresh read.
+- `If-Match` used on every write (read etag → mutate → put), all
+  under the character's lock (spec #4), so no save lands in between.
 
 ### 4.3 UI ↔ MCP concurrency (needs real work)
 
@@ -488,8 +488,13 @@ server-side job any more — it is a client loop (§3.9).
 Structured tool errors with a stable `code`: `not_signed_in`,
 `no_active_set`, `set_not_found`, `character_not_found`,
 `partner_not_found`, `validation_failed {field, reason, allowed}`,
-`etag_conflict`, `rate_limited {retry_after}`, `confirm_required`,
+`etag_mismatch {current_etag}`, `rate_limited {retry_after}`, `confirm_required`,
 `embedding_unreachable`, `unknown_hash`.
+
+Since #69 a tool error carries the same code and details as the REST
+error for the same situation (`{code, message, details}`,
+`sidecar/refusals.py`): a `Refusal` raised under a tool reaches the
+model unchanged.
 
 ---
 

@@ -21,8 +21,6 @@ import archive_backups
 import archive_images
 import archive_workbench
 import bbcode_rules
-from archive_errors import WorkbenchConflict, WorkbenchNotKept
-from refusals import BackupHoldsNoProfile, BackupTooOld
 
 from ._context import (
     ToolError,
@@ -74,10 +72,9 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
         raise ToolError("validation_failed", str(exc)) from exc
     except archive_workbench.EtagMismatch as exc:
         raise ToolError(
-            "etag_conflict",
-            "The app window saved the Workbench while the edit was in "
-            "flight, twice in a row. Read the field again and redo the "
-            "change.",
+            "etag_mismatch",
+            "The Workbench changed while the edit was in flight. Read "
+            "the field again and redo the change.",
             current_etag=exc.current_etag,
         ) from exc
 
@@ -127,18 +124,7 @@ def load_backup_into_workbench(
             "Workbench; the Workbench is saved as a Backup first. Call "
             "this again with confirm=true.",
         )
-    try:
-        replaced = archive_backups.load_zip_backup_into_workbench(
-            target.id, backup
-        )
-    except FileNotFoundError as exc:
-        raise ToolError("backup_not_found", str(exc)) from exc
-    except (
-        WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile, BackupTooOld
-    ) as exc:
-        raise ToolError(exc.code, exc.message) from exc
-    except ValueError as exc:
-        raise ToolError("validation_failed", str(exc)) from exc
+    replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
     kept = replaced.kept["filename"] if replaced.kept else None
     audit(
         "load_backup_into_workbench",
@@ -1323,12 +1309,14 @@ def get_working_set_payload(
     """
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = load_payload(resolved)
-    etag = (
-        None
-        if resolved.is_live
-        else archive_workbench.workbench_etag(target.id)
-    )
+    if resolved.is_live:
+        payload, etag = load_payload(resolved), None
+    else:
+        # The payload and its etag from one read, so the etag a model
+        # sends back names exactly what it was shown.
+        bench = archive_workbench.read_workbench(target.id)
+        payload = bench.payload if bench is not None else load_payload(resolved)
+        etag = bench.etag if bench is not None else None
     return {
         "character": target.name,
         "set": resolved.name,
@@ -1377,7 +1365,7 @@ def put_working_set_payload(
         )
     except archive_workbench.EtagMismatch as exc:
         raise ToolError(
-            "etag_conflict",
+            "etag_mismatch",
             "The Workbench changed since you read it. Read it again and redo "
             "the change.",
             current_etag=exc.current_etag,

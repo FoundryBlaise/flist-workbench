@@ -302,7 +302,7 @@ def test_a_preflight_from_origin_null_gets_no_grant(
         },
     )
     assert _refused_origin(res)
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
 
 
 def test_a_preflight_from_a_foreign_origin_gets_no_grant(stranger: TestClient) -> None:
@@ -384,7 +384,7 @@ def test_the_app_window_origin_cannot_start_a_handshake(
     client: TestClient = request.getfixturevalue(caller)
     res = client.post("/restore/handshake", headers={"Origin": APP_ORIGIN})
     assert res.status_code == 403
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
     assert res.json()["code"] == "forbidden_origin"
     assert "access-control-allow-origin" not in res.headers
     assert app_window.get("/restore/handshake/pending").json() == {"pending": []}

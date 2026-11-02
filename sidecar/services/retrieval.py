@@ -22,9 +22,10 @@ import rag_embed
 import rag_lexical
 import rag_query
 import rag_store
+from refusals import NoIndex
 
 
-class NoIndexError(RuntimeError):
+class NoIndexError(NoIndex, RuntimeError):
     """The vector index has not been built yet."""
 
 

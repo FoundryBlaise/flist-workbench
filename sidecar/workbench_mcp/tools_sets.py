@@ -95,7 +95,7 @@ def get_live_profile(
     live = archive_live.read_live(target.id)
     if live is None:
         raise ToolError(
-            "live_not_found",
+            "no_live",
             f"No profile has been pulled for {target.name} yet. "
             "Run pull_character first.",
         )

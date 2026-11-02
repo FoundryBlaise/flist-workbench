@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Header
 from pydantic import BaseModel
 
 import archive_backups
@@ -13,6 +13,7 @@ from archive_errors import (
     NoWorkbench,
     WorkbenchConflict,
 )
+from refusals import BackupNotFound, InvalidRequest
 
 router = APIRouter()
 
@@ -105,6 +106,10 @@ async def flist_character_workbench_payload_put(
     return {"etag": etag}
 
 
+def _filename_required(where: str) -> InvalidRequest:
+    return InvalidRequest((where, "filename"), "filename is required")
+
+
 @router.post("/flist/character/{character_id}/workbench/load-backup")
 async def flist_character_workbench_load_backup(
     character_id: str, body: _LoadBackupBody
@@ -123,18 +128,11 @@ async def flist_character_workbench_load_backup(
     """
     filename = (body.filename or "").strip()
     if not filename:
-        raise HTTPException(status_code=422, detail="filename is required")
+        raise _filename_required("body")
     # A bad name is refused as such, not as an unreadable Backup.
     archive_backups.require_backup_filename(filename)
 
-    try:
-        replaced = archive_backups.load_zip_backup_into_workbench(
-            character_id, filename
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    replaced = archive_backups.load_zip_backup_into_workbench(character_id, filename)
 
     info = archive_workbench.workbench_info(character_id)
     return {
@@ -179,7 +177,7 @@ async def flist_character_workbench_load_preflight(
     """
     filename = (filename or "").strip()
     if not filename:
-        raise HTTPException(status_code=422, detail="filename is required")
+        raise _filename_required("query")
     entry = next(
         (
             e
@@ -189,7 +187,7 @@ async def flist_character_workbench_load_preflight(
         None,
     )
     if entry is None:
-        raise HTTPException(status_code=404, detail="no such backup")
+        raise BackupNotFound("no such Backup")
 
     bench = archive_workbench.read_workbench(character_id)
     bench_has_edits = bench is not None and bool(bench.payload.get("_overlay"))
