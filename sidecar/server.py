@@ -257,11 +257,11 @@ for _area in (
     app.include_router(_area.router)
 
 
-# Entry point for the PyInstaller-frozen build. In dev we run via
-# `uv run uvicorn server:app` which imports `app` directly, so this
-# block is unreached. The packaged Electron app spawns sidecar.exe
-# (this script frozen) and reads SIDECAR_PORT from the environment.
+# Entry point: the packaged app spawns sidecar.exe (this script frozen),
+# a dev build runs `python server.py`; both read SIDECAR_PORT from the
+# environment. Run this way, `POST /shutdown` can end the server loop.
+# A hand-started `uvicorn server:app` imports `app` and skips this.
 if __name__ == "__main__":
-    import uvicorn
+    from services import lifecycle
 
-    uvicorn.run(app, host="127.0.0.1", port=SIDECAR_PORT, log_level="info")
+    lifecycle.serve(app, SIDECAR_PORT)

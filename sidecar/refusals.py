@@ -101,3 +101,16 @@ class BackupHoldsNoProfile(Refusal):
         "left behind before the upgrade, not a profile, so there is "
         "nothing in it to load or upload. Download it to look at them."
     )
+
+
+class NotStoppable(Refusal):
+    """A stop asked of a sidecar that runs without the app's server loop
+    (in tests, or a hand-started `uvicorn server:app`): there is nothing
+    of ours to end, so it keeps running."""
+
+    status = 409
+    code = "not_stoppable"
+    fixed_message = (
+        "This sidecar was not started by F-list Workbench, so it cannot stop "
+        "itself. Stop it where it was started."
+    )
