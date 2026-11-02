@@ -6,6 +6,8 @@ export default tseslint.config(
     ignores: [
       'out/**',
       'dist/**',
+      // electron-builder's output (electron-builder.yml), packed app included.
+      'dist-electron/**',
       'release/**',
       'node_modules/**',
       'sidecar/**',

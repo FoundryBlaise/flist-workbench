@@ -15,14 +15,12 @@ Rules:
 * typed-refusal: the sidecar refuses with a `refusals.Refusal`
   subclass (one handler answers `{code, message}`), not a bare
   `HTTPException`.
-* retired-term: user-facing text (sidecar strings, MCP tool
-  descriptions, renderer and main-process text outside comments) does
-  not use a term GLOSSARY.md retired or avoids.
-
-Not checked yet: "snapshot" and "bundle" (retired in GLOSSARY.md) still
-name live routes, payload fields and MCP tools until docs/CLEANUP_PLAN.md
-step 5 removes them, so a text scan cannot tell a leftover word from a
-field name. Add them here once those are gone.
+* retired-term: user-facing prose (sidecar strings, MCP tool
+  descriptions, renderer and main-process strings and JSX text) does
+  not use a term GLOSSARY.md retired or avoids. Only text with a space
+  in it counts as prose, so a route, field or MCP tool still named
+  "snapshot" or "bundle" is not a hit until docs/CLEANUP_PLAN.md
+  removes it, but "Live snapshot" in a message is.
 """
 
 from __future__ import annotations
@@ -33,6 +31,8 @@ import subprocess
 from collections import Counter, defaultdict
 from functools import cache
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -222,18 +222,34 @@ def test_refusals_are_typed():
 # ---------------------------------------------------------------------------
 # retired-term
 
-# GLOSSARY.md: the Electron window is "the app window"; a bare
-# "Workbench" is the editable copy.
-WORKBENCH_WINDOW = re.compile(r"\bWorkbench\s+window\b", re.IGNORECASE)
-# GLOSSARY.md, Retired terms: replaced by Workbench. With the space it
-# cannot be an identifier (`working_set`, `workingSet`, `working-sets/`).
-WORKING_SET = re.compile(r"\bworking\s+sets?\b", re.IGNORECASE)
+def _word(pattern: str) -> re.Pattern[str]:
+    return re.compile(rf"\b{pattern}\b", re.IGNORECASE)
 
-RETIRED_TERMS = {"Workbench window": WORKBENCH_WINDOW, "working set": WORKING_SET}
 
-# User-facing "working set" left over until docs/CLEANUP_PLAN.md step 5
-# (MCP surface) and the renderer's remaining set UI are reworked, per
-# file. May only shrink. "Workbench window" has no allowance.
+# Term -> pattern. Each is a GLOSSARY.md retired term or an _Avoid_
+# word that cannot mean anything else in this app's prose.
+RETIRED_TERMS: dict[str, re.Pattern[str]] = {
+    # The Electron window is "the app window"; a bare "Workbench" is the
+    # editable copy.
+    "Workbench window": _word(r"Workbench\s+window"),
+    # Retired terms.
+    "working set": _word(r"working\s+sets?"),
+    "snapshot": _word(r"snapshots?"),
+    "bundle": _word(r"bundles?"),
+    # _Avoid_ for Label.
+    "verdict": _word(r"verdicts?"),
+    "classification": _word(r"classifications?"),
+    # _Avoid_ for Log, Trash and Index.
+    "transcript": _word(r"transcripts?"),
+    "chat history": _word(r"chat\s+histor(?:y|ies)"),
+    "recycle bin": _word(r"recycle\s+bins?"),
+    "vector DB": _word(r"vector\s+(?:db|database)s?"),
+    "RAG store": _word(r"rag\s+stores?"),
+}
+
+# Prose left over, per term and file, until docs/CLEANUP_PLAN.md steps 3
+# and 5 (one Workbench, the MCP surface) rework it. May only shrink. A
+# term not listed here has no allowance.
 WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/components/ExternalChangeBanner.tsx": 1,
     "renderer/src/features/flist/FlistCharacterZone.tsx": 1,
@@ -253,6 +269,55 @@ WORKING_SET_ALLOWED: dict[str, int] = {
     "sidecar/workbench_mcp/tools_foreign.py": 1,
     "sidecar/workbench_mcp/tools_ops.py": 7,
     "sidecar/workbench_mcp/tools_sets.py": 7,
+}
+
+SNAPSHOT_ALLOWED: dict[str, int] = {
+    "renderer/src/features/flist/DiffPane.tsx": 3,
+    "renderer/src/features/flist/ExtensionPairModal.tsx": 2,
+    "renderer/src/features/flist/imageUsage.ts": 3,
+    "renderer/src/features/settings/SettingsModal.tsx": 3,
+    "sidecar/character_archive.py": 3,
+    "sidecar/server.py": 2,
+    "sidecar/workbench_mcp/tools_sets.py": 3,
+}
+
+BUNDLE_ALLOWED: dict[str, int] = {
+    "renderer/src/features/flist/FlistCharacterZone.tsx": 1,
+    "renderer/src/features/flist/working-sets/CrossCharacterImportModal.tsx": 1,
+    "renderer/src/lib/api.ts": 1,
+    "renderer/src/state.ts": 3,
+    "sidecar/set_bundle.py": 7,
+    "sidecar/workbench_mcp/tools_ops.py": 5,
+}
+
+VERDICT_ALLOWED: dict[str, int] = {
+    "renderer/src/features/logs/LogViewer.tsx": 5,
+    "renderer/src/features/settings/SettingsModal.tsx": 1,
+    "sidecar/labels.py": 3,
+    "sidecar/workbench_mcp/tools_classify.py": 15,
+    "sidecar/workbench_mcp/tools_logs.py": 4,
+    "sidecar/workbench_mcp/tools_ops.py": 2,
+    "sidecar/workbench_mcp/tools_rag.py": 2,
+}
+
+CLASSIFICATION_ALLOWED: dict[str, int] = {
+    "sidecar/labels.py": 2,
+    "sidecar/services/retrieval.py": 1,
+    "sidecar/workbench_mcp/tools_classify.py": 2,
+    "sidecar/workbench_mcp/tools_ops.py": 2,
+}
+
+TRANSCRIPT_ALLOWED: dict[str, int] = {
+    "sidecar/workbench_mcp/tools_ops.py": 1,
+}
+
+RETIRED_TERM_ALLOWED: dict[str, dict[str, int]] = {
+    "working set": WORKING_SET_ALLOWED,
+    "snapshot": SNAPSHOT_ALLOWED,
+    "bundle": BUNDLE_ALLOWED,
+    "verdict": VERDICT_ALLOWED,
+    "classification": CLASSIFICATION_ALLOWED,
+    "transcript": TRANSCRIPT_ALLOWED,
 }
 
 
@@ -349,14 +414,47 @@ def strip_ts_comments(src: str) -> str:
     return "".join(out)
 
 
+# A string literal, or JSX text: what sits between a tag's `>` and the
+# next `<` or `{`. An arrow's `=>` opens no text, and a run holding
+# `=`, `;`, `|` or `&` is code after a type's closing `>`, not text. A
+# backtick ends the run too: a template literal spans lines, so a run
+# that swallowed its opening one would pair every later literal wrongly.
+_TS_TEXT = re.compile(
+    r"""(?<![=-])>(?P<jsx>[^<>{}=;|&`]*)(?=[<{])"""
+    r"""|'(?P<sq>(?:[^'\\\n]|\\.)*)'"""
+    r"""|"(?P<dq>(?:[^"\\\n]|\\.)*)\""""
+    r"""|`(?P<bt>(?:[^`\\]|\\.)*)`"""
+)
+
+
+def ts_texts(src: str) -> list[tuple[int, str]]:
+    """(line, text) of every string literal and JSX text in `src`,
+    whose comments are already blanked."""
+    texts = []
+    for m in _TS_TEXT.finditer(src):
+        group = m.lastgroup
+        assert group is not None
+        start = m.start(group)
+        texts.append((src.count("\n", 0, start) + 1, m.group(group)))
+    return texts
+
+
+def is_prose(text: str) -> bool:
+    """Words with a space between them; never an identifier, key or path."""
+    return any(c.isspace() for c in text.strip())
+
+
+@cache
 def retired_term_sites() -> dict[str, dict[str, list[str]]]:
     """term -> file -> sites."""
     found: dict[str, dict[str, list[str]]] = {t: defaultdict(list) for t in RETIRED_TERMS}
 
-    def scan(path: str, line: int, text: str, base: int = 0) -> None:
+    def scan(path: str, line: int, text: str) -> None:
+        if not is_prose(text):
+            return
         for term, rx in RETIRED_TERMS.items():
             for m in rx.finditer(text):
-                at = line + text.count("\n", 0, m.start()) - base
+                at = line + text.count("\n", 0, m.start())
                 found[term][path].append(
                     f'{path}:{at}: "{m.group(0)}" in user-facing text (rule retired-term,'
                     " see GLOSSARY.md)"
@@ -366,17 +464,17 @@ def retired_term_sites() -> dict[str, dict[str, list[str]]]:
         for line, text in python_texts(parse(path)):
             scan(path, line, text)
     for path in ui_sources():
-        scan(path, 1, strip_ts_comments((ROOT / path).read_text(encoding="utf-8")))
+        src = strip_ts_comments((ROOT / path).read_text(encoding="utf-8"))
+        for line, text in ts_texts(src):
+            scan(path, line, text)
     return found
 
 
-def test_no_workbench_window_in_user_facing_text():
-    sites = [s for per_file in retired_term_sites()["Workbench window"].values() for s in per_file]
-    assert not sites, report("retired-term", sites)
-
-
-def test_working_set_only_where_it_is_still_allowlisted():
-    check_ratchet("retired-term", dict(retired_term_sites()["working set"]), WORKING_SET_ALLOWED)
+@pytest.mark.parametrize("term", sorted(RETIRED_TERMS))
+def test_retired_terms_only_where_still_allowlisted(term: str):
+    check_ratchet(
+        f"retired-term ({term})", dict(retired_term_sites()[term]), RETIRED_TERM_ALLOWED.get(term, {})
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +497,20 @@ def test_comment_stripping_keeps_text_and_drops_comments():
     assert "working set" in lines[3]
     assert "working set" in lines[4]
     assert "working" not in lines[5]
+
+
+def test_only_prose_in_strings_and_jsx_text_counts():
+    src = strip_ts_comments(
+        "const snapshot = load('snapshot')\n"
+        "type Archive = Record<string, unknown> | null\n"
+        "  snapshots: Entry[]\n"
+        "const url = `/character/${id}/snapshots`\n"
+        "const msg = 'Pull a Live snapshot first'\n"
+        "<p>Don't open a snapshot here</p>\n"
+        "<b>{count}</b>\n"
+    )
+    prose = [(line, text.strip()) for line, text in ts_texts(src) if is_prose(text)]
+    assert prose == [(5, "Pull a Live snapshot first"), (6, "Don't open a snapshot here")]
 
 
 def test_private_docstrings_are_not_user_facing_but_tool_descriptions_are():
