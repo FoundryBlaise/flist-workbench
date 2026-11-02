@@ -316,43 +316,26 @@ def _character_id_for_name(name: str) -> str | None:
 
 
 def list_snapshots(character_name: str) -> list[dict[str, Any]]:
-    """Everything the extension can push into the F-list form:
+    """Everything the extension can push into the F-list form, its
+    Upload sources:
 
-    1. **Live on F-List** — `live.json`, what the website currently has.
-       Pushing this reverts the profile to the last pull.
-    2. **The Workbench** — the character's one editable copy. This is
+    1. **The Workbench** — the character's one editable copy. This is
        what a user means when they say "put my changes up".
-    3. **Backups** — full ZIP archives under `backups/`, including the
-       ones taken before an Upload by `/restore/snapshot/fresh`.
+    2. **Backups**, newest first — full ZIP archives under `backups/`,
+       including the ones taken before an Upload by
+       `/restore/snapshot/fresh`.
 
-    Drafts the user never sees are not offered. A character used to be
-    able to hold several named working sets, and the extension listed
-    them all — which meant choosing between things the window did not
-    show and the user could not name. Extra drafts left behind by an
-    older version stay on disk and stay out of this list.
+    Live is not one: it already is what the site shows.
 
-    Order: Live first (it reverts), then the bench, then backups
-    newest-first.
+    Any archived character's sources can be listed, not only the one
+    whose edit page is open: one profile can serve as the template for
+    another.
     """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
         return []
 
     out: list[dict[str, Any]] = []
-
-    live = character_archive.read_live(character_id)
-    if live is not None:
-        live_images = live.get("images") if isinstance(live.get("images"), list) else []
-        out.append({
-            "id": "live",
-            "kind": "live",
-            "label": "Live on F-List (what the website has now)",
-            "created_at": _iso_from_path(
-                character_archive.character_dir(character_id) / "live.json"
-            ),
-            "image_count": len(live_images),
-            "upload_refused": None,
-        })
 
     # `create=False`: listing what can be pushed must not bring a
     # workbench into existence as a side effect.
@@ -413,15 +396,6 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
     return out
 
 
-def _iso_from_path(p: Path) -> str | None:
-    try:
-        mtime = p.stat().st_mtime
-    except OSError:
-        return None
-    import datetime as _dt
-    return _dt.datetime.fromtimestamp(mtime, tz=_dt.timezone.utc).isoformat()
-
-
 def _iso_from_unix(ts: float | int | None) -> str | None:
     if ts is None:
         return None
@@ -436,18 +410,6 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
 
     images_dir = character_archive.images_dir(character_id)
     avatar = _avatar_path_for_name(character_name)
-
-    if snapshot_id == "live":
-        live = character_archive.read_live(character_id)
-        if live is None:
-            return None
-        working_shape = character_archive._seed_payload_from_live(live)
-        return zip_serialise.build_zip(
-            character_id,
-            working_shape,
-            images_dir=images_dir,
-            avatar_path=avatar,
-        )
 
     if snapshot_id.startswith("set:"):
         set_id = snapshot_id[len("set:"):]
