@@ -2,14 +2,14 @@
 
 from fastapi import APIRouter, HTTPException
 
-import character_archive
+import archive_live
 
 router = APIRouter()
 
 
 @router.get("/flist/character/{character_id}/live")
 async def flist_character_live(character_id: str) -> dict:
-    payload = character_archive.read_live(character_id)
+    payload = archive_live.read_live(character_id)
     if payload is None:
         raise HTTPException(status_code=404, detail="no Live yet")
     return payload

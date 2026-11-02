@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import aliases as aliases_store
+import archive_registry
 import atomic_write
-import character_archive
 import labels as labels_store
 import paths
 from services import trash_ledger
@@ -93,7 +93,7 @@ def _owned(trash_id: str, character: str | None) -> dict[str, Any] | None:
     entry = _read(trash_id)
     if entry is None or (
         character is not None
-        and not character_archive.same_character_name(entry.get("character"), character)
+        and not archive_registry.same_character_name(entry.get("character"), character)
     ):
         return None
     return entry

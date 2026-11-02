@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import archive_registry
 from sidecar_client import app_client, character_routes, disk_tree, error_code, sweep
 
 NAME = "Mira Thornfield"
@@ -35,13 +36,13 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
     import restore as restore_svc
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
-    character_archive.root()
-    yield character_archive
+    archive_registry.root()
+    yield
     restore_svc.revoke_token()
 
 
@@ -137,7 +138,7 @@ def test_an_unknown_id_is_not_found_even_with_a_valid_body(client: TestClient, t
 
 
 def _character_folder(archive) -> Path:  # noqa: ANN001
-    return archive.root() / NAME
+    return archive_registry.root() / NAME
 
 
 def test_the_first_pull_creates_the_character(client: TestClient, archive, fake_flist) -> None:  # noqa: ANN001
@@ -212,7 +213,7 @@ def _zip_with_working(payload: dict) -> bytes:
 def test_a_legacy_id_named_folder_keeps_working(client: TestClient, archive) -> None:  # noqa: ANN001
     """Folders from before the name registry are named by id. One with
     no Live is never migrated, and must still be found."""
-    backups = archive.root() / "123" / "backups"
+    backups = archive_registry.root() / "123" / "backups"
     backups.mkdir(parents=True)
     (backups / "2026-10-01T120000Z.zip").write_bytes(_zip_with_working({}))
 

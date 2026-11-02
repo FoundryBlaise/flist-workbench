@@ -36,7 +36,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-import character_archive
+import archive_workbench
 
 #: Top-level payload keys that hold content, as opposed to bookkeeping.
 CONTAINER_KEYS = (
@@ -112,7 +112,7 @@ def edit(
     fields.
     """
     for attempt in (1, 2):
-        bench = character_archive.read_workbench(character_id)
+        bench = archive_workbench.read_workbench(character_id)
         if bench is None:
             raise PayloadError("the Workbench has no payload on disk")
         payload = bench.payload
@@ -121,10 +121,10 @@ def edit(
         _finalise(payload, result.changed)
 
         try:
-            new_etag = character_archive.write_workbench(
+            new_etag = archive_workbench.write_workbench(
                 character_id, payload, expected_etag=bench.etag
             )
-        except character_archive.EtagMismatch:
+        except archive_workbench.EtagMismatch:
             if attempt == 1:
                 continue
             raise

@@ -25,6 +25,8 @@ import pytest
 from mcp.shared.exceptions import McpError
 from pydantic import AnyUrl
 
+import archive_live
+import archive_registry
 from mcp_helpers import call_tool, mcp_client
 from sidecar_client import disk_tree
 from test_mcp_reads import MAPPING
@@ -47,17 +49,17 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN202
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
     # Seed the mapping-list cache so no network call is attempted.
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
-    character_archive.root()
+    archive_registry.root()
 
     import server
     import settings as settings_store
@@ -66,16 +68,15 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN202
     importlib.reload(settings_store)
     mapping_service.invalidate()
     importlib.reload(server)
-    return character_archive
 
 
 @pytest.fixture
 def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     """An archive holding one pulled character, so "unknown" means
     unknown among others rather than an empty archive."""
-    character_archive = _seed(tmp_path, monkeypatch)
-    character_archive.register_character("42", KNOWN)
-    character_archive.write_live(
+    _seed(tmp_path, monkeypatch)
+    archive_registry.register_character("42", KNOWN)
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": KNOWN, "description": "[b]Published.[/b]"},
@@ -87,7 +88,7 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
             "fetched_at": 1700000000,
         },
     )
-    yield character_archive
+    yield
     from services import mapping as mapping_service
 
     mapping_service.invalidate()
@@ -95,8 +96,8 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
 
 @pytest.fixture
 def empty_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
-    character_archive = _seed(tmp_path, monkeypatch)
-    yield character_archive
+    _seed(tmp_path, monkeypatch)
+    yield
     from services import mapping as mapping_service
 
     mapping_service.invalidate()
@@ -237,7 +238,7 @@ async def test_pull_character_creates_a_character_it_has_not_seen(
         assert not result.isError, body
         assert body["character_id"] == str(CID)
         _, live = await call_tool(session, "get_live_profile", character=NAME)
-    assert (empty_archive.root() / NAME).is_dir()
+    assert (archive_registry.root() / NAME).is_dir()
     assert live["character"] == NAME
 
 
@@ -248,5 +249,5 @@ async def test_backup_all_characters_creates_a_character_it_has_not_seen(
         result, body = await call_tool(session, "backup_all_characters")
         assert not result.isError, body
         _, backups = await call_tool(session, "list_backups", character=NAME)
-    assert (empty_archive.root() / NAME).is_dir()
+    assert (archive_registry.root() / NAME).is_dir()
     assert len(backups["backups"]) == 1

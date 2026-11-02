@@ -6,6 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import archive_live
+import archive_registry
+import archive_workbench
 from sidecar_client import app_client
 
 
@@ -15,17 +18,17 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     from server import app
 
-    return app_client(app), character_archive
+    return app_client(app)
 
 
-def _seed(archive, cid: str = "42") -> None:
-    archive.register_character(cid, "Lady Amber Blaise")
-    archive.write_live(
+def _seed(cid: str = "42") -> None:
+    archive_registry.register_character(cid, "Lady Amber Blaise")
+    archive_live.write_live(
         cid,
         {
             "character": {
@@ -61,8 +64,8 @@ def _description(api, cid: str = "42") -> str:
 
 
 def test_asking_for_the_workbench_creates_it_from_live(client) -> None:
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
 
     body = api.get("/flist/character/42/workbench").json()
 
@@ -72,8 +75,8 @@ def test_asking_for_the_workbench_creates_it_from_live(client) -> None:
 
 
 def test_a_read_only_render_can_ask_without_creating_one(client) -> None:
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
 
     body = api.get("/flist/character/42/workbench?create=false").json()
     assert body["workbench"] is None
@@ -85,8 +88,8 @@ def test_a_read_only_render_can_ask_without_creating_one(client) -> None:
 
 
 def test_a_character_never_pulled_has_nothing_to_seed_from(client) -> None:
-    api, archive = client
-    archive.register_character("99", "Ghost")
+    api = client
+    archive_registry.register_character("99", "Ghost")
 
     body = api.get("/flist/character/99/workbench").json()
     assert body["workbench"] is None
@@ -94,10 +97,10 @@ def test_a_character_never_pulled_has_nothing_to_seed_from(client) -> None:
 
 
 def test_a_save_moves_the_workbench_last_changed(client) -> None:
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
     first = api.get("/flist/character/42/workbench").json()["workbench"]
-    meta = archive.workbench_dir("42") / "meta.json"
+    meta = archive_workbench.workbench_dir("42") / "meta.json"
     meta.write_text('{"created_at": 10, "updated_at": 10}', encoding="utf-8")
 
     _edit(api, "edited")
@@ -108,8 +111,8 @@ def test_a_save_moves_the_workbench_last_changed(client) -> None:
 
 
 def test_loading_a_backup_replaces_the_bench_in_place(client) -> None:
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
     _edit(api, "worth keeping")
     saved = api.post("/flist/character/42/zip-backup").json()
     filename = saved.get("filename") or saved["backup"]["filename"]
@@ -126,8 +129,8 @@ def test_loading_a_backup_replaces_the_bench_in_place(client) -> None:
 
 
 def test_loading_a_missing_backup_is_a_404(client) -> None:
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
     api.get("/flist/character/42/workbench")
 
     res = api.post(
@@ -141,8 +144,8 @@ def test_preflight_reports_that_f_list_has_moved_on(client) -> None:
     """The warning the user asked for: this backup is older than the
     profile now on F-list, so loading it is a step backwards. Reported,
     not enforced — wanting it anyway is legitimate."""
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
     _edit(api, "edited")
     saved = api.post("/flist/character/42/zip-backup").json()
     filename = saved.get("filename") or saved["backup"]["filename"]
@@ -155,9 +158,9 @@ def test_preflight_reports_that_f_list_has_moved_on(client) -> None:
     assert before["workbench_has_edits"] is True
 
     # A later pull from F-list: the backup now predates what is live.
-    live = archive.read_live("42")
+    live = archive_live.read_live("42")
     live["fetched_at"] = int(before["backup_created_at"]) + 3600
-    archive.write_live("42", live)
+    archive_live.write_live("42", live)
 
     after = api.get(
         "/flist/character/42/workbench/load-backup/preflight",
@@ -167,8 +170,8 @@ def test_preflight_reports_that_f_list_has_moved_on(client) -> None:
 
 
 def test_preflight_on_an_unknown_backup_is_a_404(client) -> None:
-    api, archive = client
-    _seed(archive)
+    api = client
+    _seed()
     res = api.get(
         "/flist/character/42/workbench/load-backup/preflight",
         params={"filename": "nope.zip"},

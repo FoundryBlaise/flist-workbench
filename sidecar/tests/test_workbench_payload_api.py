@@ -27,15 +27,16 @@ def sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    character_archive.register_character("42", NAME)
-    character_archive.write_live(
+    archive_registry.register_character("42", NAME)
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": NAME, "description": "[b]Published.[/b]"},
@@ -190,9 +191,9 @@ def test_a_character_without_live_has_no_workbench_to_read_or_write(
     sidecar,
 ) -> None:
     api, _ = sidecar
-    import character_archive
+    import archive_registry
 
-    character_archive.register_character("43", "Moss Fernley")
+    archive_registry.register_character("43", "Moss Fernley")
     url = "/flist/character/43/workbench/payload"
 
     read = api.get(url)
@@ -226,9 +227,9 @@ def test_the_legacy_working_copy_routes_are_gone(sidecar, method: str) -> None:
     build left on disk is not read, replaced or removed through the old
     routes; the one-time migration takes care of it."""
     api, data_dir = sidecar
-    import character_archive
+    import archive_registry
 
-    legacy = character_archive.character_dir("42") / "working.json"
+    legacy = archive_registry.character_dir("42") / "working.json"
     legacy.write_text('{"_overlay": [], "character": {}}', encoding="utf-8")
     before = legacy.read_bytes()
 
