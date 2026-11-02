@@ -233,16 +233,11 @@ async def test_uploading_bytes_the_pool_already_holds_changes_nothing(client) ->
 
 
 async def test_a_model_importing_several_images_is_one_change(workbench, tmp_path) -> None:  # noqa: F811
-    import settings as settings_store
-    from services import image_import
+    from services import settings as settings_service
 
     folder = tmp_path / "Outputs"
     folder.mkdir()
-    conn = settings_store.connect()
-    try:
-        image_import.save_import_roots(conn, [str(folder)])
-    finally:
-        conn.close()
+    settings_service.update({"image_import_roots": [str(folder)]})
     sources = []
     for n in (1, 2, 3):
         src = folder / f"pic{n}.png"
