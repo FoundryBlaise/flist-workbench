@@ -489,6 +489,14 @@ def forget_backup_name(character_id: int | str, filename: str) -> None:
 # ---- live read/write ---------------------------------------------------
 
 
+def _events() -> Any:
+    """The event bus module, for its event names. Imported lazily, like
+    `_publish` does, so the archive imports without `services`."""
+    from services import events
+
+    return events
+
+
 def _publish(event: str, **data: Any) -> None:
     """Announce a change on the event bus, if one is running.
 
@@ -552,7 +560,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
     _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
-    _publish("live-changed", character_id=str(character_id))
+    _publish(_events().LIVE_CHANGED, character_id=str(character_id))
 
 
 def read_live(character_id: int | str) -> dict[str, Any] | None:
@@ -1155,13 +1163,8 @@ def _store_workbench(
     )
     etag = _file_sha256(path)
     assert etag is not None
-    _publish("sets-changed", character_id=str(character_id))
-    _publish(
-        "set-payload-changed",
-        character_id=str(character_id),
-        set_id=WORKBENCH_DIRNAME,
-        etag=etag,
-    )
+    _publish(_events().SETS_CHANGED, character_id=str(character_id))
+    _publish(_events().SET_PAYLOAD_CHANGED, character_id=str(character_id), etag=etag)
     return etag
 
 

@@ -284,7 +284,7 @@ type State = {
    *  take theirs, or keep mine. */
   flistExternalChange: Record<
     string,
-    { setId: string; etag: string | null; origin: string; at: number } | null
+    { etag: string | null; origin: string; at: number } | null
   >
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
@@ -548,7 +548,7 @@ type State = {
    *  made ourselves. */
   flistNoteExternalChange: (
     characterId: string,
-    change: { setId: string; etag: string | null; origin: string }
+    change: { etag: string | null; origin: string }
   ) => void
   /** Take the other writer's version, discarding unsaved local edits. */
   flistReloadAfterExternalChange: (characterId: string) => Promise<void>
@@ -1029,7 +1029,6 @@ function _noteSaveConflict(
       flistExternalChange: {
         ...s.flistExternalChange,
         [characterId]: {
-          setId: '',
           etag: currentEtag,
           origin: 'unknown',
           at: Date.now()

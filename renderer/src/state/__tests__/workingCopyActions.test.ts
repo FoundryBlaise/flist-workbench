@@ -45,7 +45,6 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const SET_ID = 'aaaaaaaaaaaa'
 const BENCH_URL = '/flist/character/99/workbench/payload'
 const SAVE = `PUT ${BENCH_URL}`
 const RESET = 'POST /flist/character/99/workbench/reset-to-live'
@@ -342,7 +341,6 @@ describe('external-change resolution', () => {
     // Our own write comes back over the event stream too.
     seedSlot('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: 'seed-etag',
       origin: 'mcp:set_description'
     })
@@ -352,7 +350,6 @@ describe('external-change resolution', () => {
   it('raises a banner for a change made by something else', () => {
     seedSlot('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
@@ -363,7 +360,6 @@ describe('external-change resolution', () => {
   it('reload takes their version and clears the banner', async () => {
     seedSlot('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
@@ -386,7 +382,6 @@ describe('external-change resolution', () => {
     seedSlot('99', { character: { description: 'Lady Amber Blaise, as I left her' } })
     useStore.setState({ editorContent: 'Lady Amber Blaise, as I left her' })
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
@@ -414,7 +409,6 @@ describe('external-change resolution', () => {
   it('keep-mine writes against their etag, which is what makes it win', async () => {
     seedSlot('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
@@ -431,7 +425,6 @@ describe('external-change resolution', () => {
   it('a failed keep-mine leaves the banner up', async () => {
     seedSlot('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: 'theirs',
       origin: 'mcp:set_description'
     })
@@ -895,7 +888,6 @@ describe('undo of reset to Live never reverts a change made after the reset', ()
     // tells the window, which reloads it (no unsaved edits here).
     const modelEtag = bench.write('Amber keeps wasps now.')
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: modelEtag,
       origin: 'mcp:set_description'
     })
@@ -943,7 +935,6 @@ describe('undo of reset to Live never reverts a change made after the reset', ()
     await useStore.getState().flistResetWorkingToLive('99')
     const modelEtag = bench.write('Amber keeps wasps now.')
     useStore.getState().flistNoteExternalChange('99', {
-      setId: SET_ID,
       etag: modelEtag,
       origin: 'mcp:set_description'
     })
