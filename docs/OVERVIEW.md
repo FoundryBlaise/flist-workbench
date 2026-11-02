@@ -19,7 +19,7 @@ out of date.
    The extension does report that step back: when the user presses
    Save on f-list.net it calls `/restore/saved`, and the app re-pulls
    so its read-only Live copy matches the site again. That pull writes
-   Live, images and a snapshot — never a working set. The Workbench
+   Live and images — never the Workbench. The Workbench
    may well have moved on while the upload happened, and overwriting
    the user's draft with what they just published is not something
    "the upload finished" should ever mean.
@@ -58,7 +58,7 @@ it rather than beside it.
 | `sidecar/workbench_mcp/` | the MCP server: tool registry + tool modules |
 | `sidecar/services/render.py` | parks a render request until the app draws it |
 | `electron/renderProfile.ts` | offscreen capture of a profile, for `render_profile_image` |
-| `sidecar/character_archive.py` | on-disk character archive (working sets, snapshots, backups) |
+| `sidecar/character_archive.py` | on-disk character archive (Live, the Workbench, Backups, images) |
 | `sidecar/foreign_cache.py` | read-only cache of *other people's* profiles, under its own root |
 | `sidecar/labels.py` | IC/OOC verdicts + the read-time rule resolver |
 | `sidecar/rag_*.py`, `chunker.py` | chunking, embedding, Qdrant, BM25, reranking |
@@ -74,7 +74,10 @@ Per character under `%APPDATA%\flist-workbench\characters\<Folder>\`:
   is still the working-set format, and a character can technically hold
   several; the window shows exactly one and calls it the **Workbench**.
   `active_set.json` says which one that is.
-- `snapshots/`, `backups/*.zip`, `images/`, `inlines/`
+- `backups/*.zip` (the Backups), `images/`, `inlines/`. Older
+  versions kept a copy of Live per Pull in a folder of its own; Pulls
+  no longer write one, and the files wait there for the one-time
+  migration to pack them into a Backup.
 
 Working sets were once a user-facing concept — create, name, keep
 several, pick an active one. Testers could not say what one was or how
