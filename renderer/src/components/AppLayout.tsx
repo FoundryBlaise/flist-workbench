@@ -217,8 +217,10 @@ export function AppLayout() {
           }
           break
         case 'sets-changed':
-        case 'active-set-changed':
-          if (event.character_id) void store.flistLoadSets(event.character_id)
+          // The Workbench's metadata moved: its row's "last changed".
+          // Which row the window shows is its own choice and does not
+          // follow anything on disk.
+          if (event.character_id) void store.flistLoadWorkbenchInfo(event.character_id)
           break
         case 'live-changed':
           if (event.character_id) void store.flistLoadArchive(event.character_id)

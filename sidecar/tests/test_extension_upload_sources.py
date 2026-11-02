@@ -77,8 +77,7 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def _edit_workbench(window, character_id: str, description: str) -> None:
     """Write the character's Workbench the way the window does."""
-    bench = window.get(f"/flist/character/{character_id}/workbench").json()["workbench"]
-    url = f"/flist/character/{character_id}/sets/{bench['id']}/payload"
+    url = f"/flist/character/{character_id}/workbench/payload"
     current = window.get(url).json()
     payload = current["payload"]
     payload["character"]["description"] = description

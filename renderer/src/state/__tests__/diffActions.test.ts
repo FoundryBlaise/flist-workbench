@@ -17,7 +17,6 @@ import {
 
 let fake: FakeApi
 
-const SET_ID = 'aaaaaaaaaaaa'
 const BENCH = '/flist/character/99/workbench/payload'
 const SAVE = `PUT ${BENCH}`
 const SNAPSHOT_111 = 'GET /flist/character/99/snapshots/111.json'
@@ -34,7 +33,6 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     // Working sets v2: writes route through the active set's payload
     // endpoint, so a slot without an active set can never produce a PUT.
-    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistArchive: {
       ...s.flistArchive,
       [characterId]: archiveEntry(livePayload({ character: { description: 'live' } }), {
@@ -52,8 +50,6 @@ beforeEach(() => {
   fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
-    flistActiveSetId: {},
-    flistSets: {},
     flistArchive: {},
     flistDiffRightSource: {},
     flistDiffBackupCache: {},

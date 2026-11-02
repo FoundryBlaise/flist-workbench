@@ -140,7 +140,6 @@ def test_the_fullmatch_allowlist_has_no_stale_entries():
 HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "_foreign_http"): 1,
     ("sidecar/server.py", "_require_restore_auth"): 1,
-    ("sidecar/server.py", "_require_valid_set_id"): 1,
     ("sidecar/server.py", "flist_avatar"): 3,
     ("sidecar/server.py", "flist_character_export_zip"): 1,
     ("sidecar/server.py", "flist_character_image"): 1,
@@ -149,22 +148,12 @@ HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "flist_character_image_upload"): 3,
     ("sidecar/server.py", "flist_character_inline"): 1,
     ("sidecar/server.py", "flist_character_live"): 1,
-    ("sidecar/server.py", "flist_character_set_export"): 1,
-    ("sidecar/server.py", "flist_character_set_import"): 3,
-    ("sidecar/server.py", "flist_character_set_payload_get"): 1,
-    ("sidecar/server.py", "flist_character_set_payload_put"): 5,
-    ("sidecar/server.py", "flist_character_sets_activate"): 1,
-    ("sidecar/server.py", "flist_character_sets_create"): 2,
-    ("sidecar/server.py", "flist_character_sets_delete"): 1,
-    ("sidecar/server.py", "flist_character_sets_duplicate"): 2,
-    ("sidecar/server.py", "flist_character_sets_rename"): 2,
     ("sidecar/server.py", "flist_character_snapshot"): 1,
     ("sidecar/server.py", "flist_character_snapshot_read"): 1,
     ("sidecar/server.py", "flist_character_trash_file"): 1,
     ("sidecar/server.py", "flist_character_workbench_load_backup"): 4,
     ("sidecar/server.py", "flist_character_workbench_load_preflight"): 2,
     ("sidecar/server.py", "flist_character_zip_backup"): 1,
-    ("sidecar/server.py", "flist_character_zip_backup_create_set"): 3,
     ("sidecar/server.py", "flist_character_zip_backup_delete"): 2,
     ("sidecar/server.py", "flist_character_zip_backup_download"): 1,
     ("sidecar/server.py", "flist_character_zip_backup_payload"): 4,
@@ -251,14 +240,11 @@ RETIRED_TERMS: dict[str, re.Pattern[str]] = {
 # term not listed here has no allowance.
 WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/components/ExternalChangeBanner.tsx": 1,
-    "renderer/src/features/flist/FlistCharacterZone.tsx": 1,
     "renderer/src/features/flist/ImagesTab.tsx": 2,
     "renderer/src/features/flist/UserscriptHelpModal.tsx": 2,
     "renderer/src/features/flist/imageUsage.ts": 1,
-    "renderer/src/features/flist/working-sets/CrossCharacterImportModal.tsx": 1,
     "renderer/src/features/foreign/ForeignWorkspace.tsx": 1,
     "renderer/src/features/sidebar/UnifiedCharacterPicker.tsx": 1,
-    "renderer/src/state.ts": 2,
     "sidecar/character_archive.py": 1,
     "sidecar/services/payload_ops.py": 1,
 }
@@ -272,13 +258,7 @@ SNAPSHOT_ALLOWED: dict[str, int] = {
     "sidecar/server.py": 2,
 }
 
-BUNDLE_ALLOWED: dict[str, int] = {
-    "renderer/src/features/flist/FlistCharacterZone.tsx": 1,
-    "renderer/src/features/flist/working-sets/CrossCharacterImportModal.tsx": 1,
-    "renderer/src/lib/api.ts": 1,
-    "renderer/src/state.ts": 3,
-    "sidecar/set_bundle.py": 7,
-}
+BUNDLE_ALLOWED: dict[str, int] = {}
 
 VERDICT_ALLOWED: dict[str, int] = {
     "renderer/src/features/logs/LogViewer.tsx": 5,

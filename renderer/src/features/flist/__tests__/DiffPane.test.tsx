@@ -34,7 +34,6 @@ function seed(state: {
   }
   useStore.setState({
     flistWorking: { '99': slot },
-    flistActiveSetId: { '99': 'set99' },
     flistArchive: {
       '99': {
         live: (state.live ?? null) as Record<string, unknown> | null,
@@ -57,7 +56,6 @@ function seed(state: {
 beforeEach(() => {
   useStore.setState({
     flistWorking: {},
-    flistActiveSetId: {},
     flistArchive: {},
     flistMapping: {
       status: 'idle',

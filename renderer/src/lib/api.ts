@@ -214,38 +214,13 @@ export type ForeignProfileResult = {
   refresh_error?: string
 }
 
-// ---- Working-sets v2 wire types -------------------------------------
-//
-// Snake_case at the wire layer matches the sidecar contract; the store
-// converts to camelCase via _setMetaFromWire so in-memory `SetMeta`
-// stays consistent with the rest of the slice (e.g. `lastSavedAt`).
-
+/** The Workbench's metadata as the sidecar sends it. The window reads
+ *  only `updated_at`, for the Workbench row's "last changed". */
 export type SetMetaWire = {
   id: string
   name: string
   created_at: number
   updated_at: number
-}
-
-export type FlistSetImportResult = {
-  set: SetMetaWire
-  source: {
-    character_id: string
-    character_name: string
-    set_id: string
-    set_name: string
-  }
-  image_stats: { added: number; skipped: number }
-  cross_character: boolean
-}
-
-export type SetsListResponseWire = {
-  sets: SetMetaWire[]
-  active_set_id: string | null
-}
-
-export type SetActivateResponseWire = {
-  active_set_id: string | null
 }
 
 export type FlistPullHandlers = {
@@ -543,17 +518,6 @@ export class RefusalError extends Error {
     this.name = 'RefusalError'
     this.code = code
     this.status = status
-  }
-}
-
-/** The bundle comes from another character; importing it needs the user's confirmation. */
-export class CrossCharacterImportRefusal extends RefusalError {
-  readonly source: { characterId: string; characterName: string; setName: string }
-
-  constructor(source: CrossCharacterImportRefusal['source']) {
-    super('requires_cross_character_confirmation', 422, 'requires_cross_character_confirmation')
-    this.name = 'CrossCharacterImportRefusal'
-    this.source = source
   }
 }
 
@@ -1177,183 +1141,6 @@ export const api = {
         body: JSON.stringify({ filename })
       }
     ),
-  // ---- F-list working sets v2 (sets list + per-set payload) ----
-  flistSetsList: (characterId: string | number) =>
-    get<SetsListResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets`
-    ),
-  flistSetCreate: (characterId: string | number, body: { name: string }) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  /** Create a new working set seeded from an existing backup ZIP's
-   *  embedded working.json. Distinct from flistSetImport (which
-   *  expects the userscript-bundle manifest.json shape); this hits
-   *  a dedicated sidecar endpoint that reads working.json directly
-   *  out of the backup. 410 Gone when the backup predates the
-   *  working.json write (older than 2026-06-17). */
-  flistSetCreateFromBackup: (
-    characterId: string | number,
-    backupFilename: string,
-    body: { name: string }
-  ) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(backupFilename)}/create-set`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  flistSetRename: (
-    characterId: string | number,
-    setId: string,
-    body: { name: string }
-  ) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}`,
-      { method: 'PATCH', body: JSON.stringify(body) }
-    ),
-  flistSetDelete: (characterId: string | number, setId: string) =>
-    request<SetActivateResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}`,
-      { method: 'DELETE' }
-    ),
-  flistSetDuplicate: (
-    characterId: string | number,
-    setId: string,
-    body: { name: string }
-  ) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/duplicate`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  flistSetActivate: (characterId: string | number, setId: string) =>
-    request<SetActivateResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/activate`,
-      { method: 'POST' }
-    ),
-  flistFromFlistActivate: (characterId: string | number) =>
-    request<SetActivateResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/from-flist/activate`,
-      { method: 'POST' }
-    ),
-  flistSetPayloadRead: (characterId: string | number, setId: string) =>
-    get<{ payload: Record<string, unknown>; etag: string | null }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`
-    ),
-  /** Download the Workbench-native bundle for a working set. Returns
-   *  the raw bytes + the suggested filename pulled out of the
-   *  `Content-Disposition` header so the caller can hand a clean
-   *  default-name to the save dialog. */
-  flistSetExport: async (
-    characterId: string | number,
-    setId: string
-  ): Promise<{ bytes: Uint8Array; suggestedFilename: string }> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/export`
-    )
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const buf = new Uint8Array(await res.arrayBuffer())
-    // Parse `filename="…"` out of Content-Disposition. Falls back to a
-    // generic name; the renderer will overlay the character + set name
-    // on top of that anyway.
-    const cd = res.headers.get('content-disposition') ?? ''
-    const m = /filename="([^"]+)"/.exec(cd)
-    return {
-      bytes: buf,
-      suggestedFilename: m ? m[1] : 'workbench-set.zip'
-    }
-  },
-  /** Upload a bundle and create a new working set under
-   *  `characterId`. The cross-character handshake is a 422 with
-   *  `detail.code === 'requires_cross_character_confirmation'`; the
-   *  caller catches that, shows a confirm modal, and retries with
-   *  `confirmCrossCharacter: true`. */
-  flistSetImport: async (
-    characterId: string | number,
-    zipBytes: Uint8Array,
-    body: { name: string; confirmCrossCharacter?: boolean }
-  ): Promise<FlistSetImportResult> => {
-    const form = new FormData()
-    form.append(
-      'zip',
-      new Blob([new Uint8Array(zipBytes)], { type: 'application/zip' }),
-      'bundle.zip'
-    )
-    form.append('name', body.name)
-    form.append(
-      'confirm_cross_character',
-      body.confirmCrossCharacter ? 'true' : 'false'
-    )
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/import`,
-      { method: 'POST', body: form }
-    )
-    if (res.status === 422) {
-      const errBody = (await res.json().catch(() => null)) as
-        | {
-            detail?:
-              | string
-              | {
-                  code?: string
-                  source?: {
-                    character_id?: string
-                    character_name?: string
-                    set_name?: string
-                  }
-                }
-          }
-        | null
-      const detail = errBody?.detail
-      if (
-        detail &&
-        typeof detail === 'object' &&
-        detail.code === 'requires_cross_character_confirmation'
-      ) {
-        throw new CrossCharacterImportRefusal({
-          characterId: String(detail.source?.character_id ?? ''),
-          characterName: String(detail.source?.character_name ?? ''),
-          setName: String(detail.source?.set_name ?? '')
-        })
-      }
-      const msg = typeof detail === 'string' ? detail : 'invalid bundle'
-      throw new Error(msg)
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    return (await res.json()) as FlistSetImportResult
-  },
-  flistSetPayloadPut: async (
-    characterId: string | number,
-    setId: string,
-    payload: Record<string, unknown>,
-    etag: string | null
-  ): Promise<{ etag: string }> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
-    if (etag) headers['If-Match'] = etag
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`,
-      { method: 'PUT', headers, body: JSON.stringify(payload) }
-    )
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => null)) as
-        | { detail?: { detail: string; current_etag: string | null } }
-        | null
-      const current = body?.detail?.current_etag ?? null
-      const err = new Error('etag_mismatch') as Error & {
-        currentEtag: string | null
-      }
-      err.currentEtag = current
-      throw err
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    return (await res.json()) as { etag: string }
-  },
   flistAvatarUrl: (name: string) =>
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>

@@ -111,7 +111,6 @@ def character(client: TestClient) -> str:
         ("GET", "zip-backups/{name}/download", None),
         ("DELETE", "zip-backups/{name}", None),
         ("PATCH", "zip-backups/{name}", {"name": "renamed"}),
-        ("POST", "zip-backups/{name}/create-set", {"name": "from backup"}),
         ("POST", "workbench/load-backup", {"filename": "{name}"}),
     ],
 )

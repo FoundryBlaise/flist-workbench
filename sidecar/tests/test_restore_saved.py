@@ -116,9 +116,8 @@ def fake_flist(httpx_mock):
 
 
 def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) -> None:
-    client, _archive, _server = paired
-    bench = client.get("/flist/character/42/workbench").json()["workbench"]
-    payload_url = f"/flist/character/42/sets/{bench['id']}/payload"
+    client, archive, _server = paired
+    payload_url = "/flist/character/42/workbench/payload"
     current = client.get(payload_url).json()
     draft = current["payload"]
     draft["_overlay"] = ["character.description"]
@@ -148,8 +147,8 @@ def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) 
     live = client.get("/flist/character/42/live").json()
     assert live["description"] == "[b]Just saved on f-list.net.[/b]"
     assert client.get(payload_url).json() == before
-    sets = client.get("/flist/character/42/sets").json()
-    assert [s["id"] for s in sets["sets"]] == [bench["id"]]
+    # The Pull made no second copy beside the Workbench.
+    assert len(archive.list_sets("42")) == 1
 
 
 def test_it_needs_the_pairing_token(paired) -> None:
