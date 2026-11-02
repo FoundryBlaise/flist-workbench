@@ -496,8 +496,8 @@ def forget_backup_name(character_id: int | str, filename: str) -> None:
 
 
 def _events() -> Any:
-    """The event bus module, for its event names. Imported lazily, like
-    `_publish` does, so the archive imports without `services`."""
+    """The event bus module. Imported lazily, so the archive imports
+    without `services`."""
     from services import events
 
     return events
@@ -513,9 +513,7 @@ def _publish(event: str, **data: Any) -> None:
     must stay importable in tests that don't run a loop.
     """
     try:
-        from services import events
-
-        events.publish(event, **data)
+        _events().publish(event, **data)
     except Exception:  # noqa: BLE001
         pass
 

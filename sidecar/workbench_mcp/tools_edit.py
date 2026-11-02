@@ -34,10 +34,10 @@ from ._registry import TAG_CHARACTER, tool
 from .tools_session import NO_PUSH_NOTE
 
 
-def _writable(character: str, set_ref: str | None):  # noqa: ANN202
+def _writable(character: str, workbench_or_live: str | None):  # noqa: ANN202
     """Resolve a character and its Workbench for writing, refusing `live`."""
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, set_ref, for_write=True)
+    resolved = resolve_workbench_or_live(target, workbench_or_live, for_write=True)
     return target, resolved
 
 

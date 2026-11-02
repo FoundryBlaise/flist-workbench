@@ -421,8 +421,9 @@ def references(character_id: int | str) -> dict[str, dict[str, Any]]:
         out[image_id]["workbench"] = True
     for image_id in _image_ids(character_archive.read_live(character_id)):
         out[image_id]["live"] = True
+    backups = character_archive.backups_dir(character_id)
     for backup in character_archive.list_zip_backups(character_id):  # newest first
-        ids = _ids_in_backup(character_archive.backups_dir(character_id) / backup["filename"])
+        ids = _ids_in_backup(backups / backup["filename"])
         if not backup["holds_profile"]:
             for image_id in ids:
                 out[image_id]["migration_backup"] = True

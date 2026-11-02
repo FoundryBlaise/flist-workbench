@@ -160,7 +160,7 @@ def workbench_target(character: ResolvedCharacter) -> WorkbenchOrLive:
 
 def resolve_workbench_or_live(
     character: ResolvedCharacter,
-    set_ref: str | None,
+    workbench_or_live: str | None,
     *,
     allow_live: bool = True,
     for_write: bool = False,
@@ -173,7 +173,9 @@ def resolve_workbench_or_live(
     `for_write=True` refuses Live. `param` is the argument's name, for
     the error message.
     """
-    needle = "" if set_ref is None else str(set_ref).strip().lower()
+    needle = (
+        "" if workbench_or_live is None else str(workbench_or_live).strip().lower()
+    )
 
     if needle == LIVE:
         if not allow_live or for_write:
@@ -188,7 +190,7 @@ def resolve_workbench_or_live(
     if needle not in ("", WORKBENCH):
         raise ToolError(
             "validation_failed",
-            f"{param}: got {str(set_ref).strip()!r}, but "
+            f"{param}: got {str(workbench_or_live).strip()!r}, but "
             f"{character.name} has one Workbench beside its Live and "
             f"nothing else to name. Leave {param} out (or pass "
             "'workbench') for the Workbench, or pass 'live' for Live.",
