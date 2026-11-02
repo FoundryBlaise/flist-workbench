@@ -240,6 +240,11 @@ export function AppLayout() {
           }
           break
         }
+        case 'settings-changed':
+          // A model changed settings; an open Settings and the open
+          // Log (the OOC threshold) pick them up.
+          store.noteSettingsChanged(Object.keys(event.changed ?? {}))
+          break
         default:
           break
       }

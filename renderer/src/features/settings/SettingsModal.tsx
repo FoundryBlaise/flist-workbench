@@ -136,6 +136,25 @@ function buildDraft(state: SettingsState): Draft {
   }
 }
 
+// Move the draft onto settings changed elsewhere: a field the user has
+// not touched takes the new value, an edited one keeps the user's.
+function rebaseDraft(draft: Draft, oldBase: Draft, newBase: Draft): Draft {
+  const pick = <T,>(mine: T, old: T, next: T): T => (mine === old ? next : mine)
+  const labels = { ...draft.labels }
+  for (const k of Object.keys(labels) as (keyof Draft['labels'])[]) {
+    labels[k] = pick(draft.labels[k], oldBase.labels[k], newBase.labels[k])
+  }
+  const rag = { ...draft.rag }
+  for (const k of Object.keys(rag) as (keyof Draft['rag'])[]) {
+    rag[k] = pick(draft.rag[k], oldBase.rag[k], newBase.rag[k]) as never
+  }
+  return {
+    fchat_data_dir: pick(draft.fchat_data_dir, oldBase.fchat_data_dir, newBase.fchat_data_dir),
+    labels,
+    rag
+  }
+}
+
 // Diff each section vs. its baseline to drive the rail dirty dots.
 // Strings everywhere → cheap === comparison; we don't need deep-equal
 // helpers for nested objects.
@@ -235,6 +254,36 @@ export function SettingsModal({
       discoverCache.clear()
     }
   }, [])
+
+  // A model changed settings while this is open: show its values, but
+  // keep any field the user has edited and not saved yet.
+  const settingsRevision = useStore((s) => s.settingsRevision)
+  const seenRevisionRef = useRef(settingsRevision)
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+  useEffect(() => {
+    if (settingsRevision === seenRevisionRef.current) return
+    seenRevisionRef.current = settingsRevision
+    let cancelled = false
+    api
+      .settingsGet()
+      .then((next) => {
+        if (cancelled) return
+        const prev = stateRef.current
+        setState(next)
+        setDraft((d) =>
+          d && prev ? rebaseDraft(d, buildDraft(prev), buildDraft(next)) : buildDraft(next)
+        )
+      })
+      .catch(() => {
+        // The next save or reopen reads them again.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsRevision])
 
   const baseline = useMemo(() => (state ? buildDraft(state) : null), [state])
   const dirtyByDraft = useMemo(
