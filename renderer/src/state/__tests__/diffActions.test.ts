@@ -1,6 +1,6 @@
 // Tier 4 — flistResetWorkingToBackup integration. Covers:
 // - lazy backup load via api.flistSnapshotRead when cache miss
-// - DELETE working then PUT seeded-from-backup, with undo snapshot
+// - PUT seeded-from-backup over the Workbench's etag, with undo stashed
 // - drain in-flight save so a mid-flight PUT can't resurrect the
 //   pre-reset payload (parity with reset-to-Live).
 
@@ -22,6 +22,9 @@ const BENCH = '/flist/character/99/workbench/payload'
 const SAVE = `PUT ${BENCH}`
 const SNAPSHOT_111 = 'GET /flist/character/99/snapshots/111.json'
 
+const descOf = (body: unknown) =>
+  ((body as { character?: { description?: string } } | undefined)?.character ?? {}).description
+
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
   const slot = workingSlot(
     workbenchPayload({ _overlay: ['character.description'], ...payload }),
@@ -31,7 +34,6 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     // Working sets v2: writes route through the active set's payload
     // endpoint, so a slot without an active set can never produce a PUT.
-    flistSetWorking: { ...s.flistSetWorking, [SET_ID]: slot },
     flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistArchive: {
       ...s.flistArchive,
@@ -50,7 +52,6 @@ beforeEach(() => {
   fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
-    flistSetWorking: {},
     flistActiveSetId: {},
     flistSets: {},
     flistArchive: {},
@@ -132,37 +133,21 @@ describe('flistDiffLoadWorkbench', () => {
 })
 
 describe('flistResetWorkingToBackup', () => {
-  it('DELETEs working and seeds from backup, with undo snapshot stashed', async () => {
+  it('saves the Backup over the Workbench it replaces, with undo stashed, and never touches the legacy working-copy route', async () => {
     seedSlot('99', { character: { description: 'edited' } })
     fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
-    fake.on('DELETE /flist/character/99/working', json({ deleted: true }))
-    // The PUT after the seed.
     fake.on(SAVE, json({ etag: 'restored' }))
     await useStore.getState().flistResetWorkingToBackup('99', '111.json')
     // Let the scheduled flush fire so the eager-PUT lands.
     await vi.advanceTimersByTimeAsync(1000)
-    expect(fake.requestsTo('DELETE /flist/character/99/working')).toHaveLength(1)
-    const slot = useStore.getState().flistWorking['99']
-    const charDesc = (slot.payload.character as { description?: string } | undefined)
-      ?.description
-    expect(charDesc).toBe('snapshot')
-    expect(useStore.getState().flistResetUndo?.characterId).toBe('99')
-  })
-
-  it('survives DELETE failure: eager PUT carries the prior etag so on-disk file is overwritten cleanly (QA P1-1)', async () => {
-    seedSlot('99', { character: { description: 'edited' } })
-    fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
-    // The DELETE fails (server transient error).
-    fake.on('DELETE /flist/character/99/working', json({ detail: 'transient' }, 500))
-    // PUT with If-Match: 'seed' succeeds because the file is still there.
-    fake.on(SAVE, json({ etag: 'overwritten' }))
-    await useStore.getState().flistResetWorkingToBackup('99', '111.json')
-    await vi.advanceTimersByTimeAsync(1000)
     const [put] = fake.requestsTo(SAVE)
-    expect(put).toBeDefined()
-    // The eager PUT must carry If-Match against the pre-reset etag so
-    // an unsuccessful DELETE doesn't leave disk out-of-sync with local.
     expect(put?.headers['If-Match']).toBe('seed')
+    expect(descOf(put?.body)).toBe('snapshot')
+    expect(fake.requests.map((r) => r.path).filter((p) => p.endsWith('/working'))).toEqual([])
+    const slot = useStore.getState().flistWorking['99']
+    expect(descOf(slot.payload)).toBe('snapshot')
+    expect(slot.etag).toBe('restored')
+    expect(useStore.getState().flistResetUndo?.characterId).toBe('99')
   })
 })
 

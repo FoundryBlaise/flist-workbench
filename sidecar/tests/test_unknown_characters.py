@@ -126,7 +126,11 @@ def test_an_unknown_id_is_not_found_even_with_a_valid_body(client: TestClient, t
     """The answer does not depend on how far a request gets: a complete
     request for an unknown character is refused the same way."""
     before = disk_tree(tmp_path)
-    res = client.put("/flist/character/123/working", json={"character": {}})
+    res = client.put(
+        "/flist/character/123/workbench/payload",
+        json={"_overlay": [], "character": {}},
+        headers={"If-Match": "0" * 64},
+    )
     assert _not_found(res), res.text
     res = client.post(
         "/flist/character/123/workbench/load-backup", json={"filename": "a.zip"}

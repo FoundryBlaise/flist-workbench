@@ -239,3 +239,23 @@ def test_a_payload_that_is_not_a_workbench_is_refused(sidecar) -> None:
     assert res.status_code == 422
     assert res.json()["code"] == "invalid_workbench_payload"
     assert api.get(URL).json()["etag"] == before["etag"]
+
+
+@pytest.mark.parametrize("method", ["GET", "PUT", "DELETE"])
+def test_the_legacy_working_copy_routes_are_gone(sidecar, method: str) -> None:
+    """The Workbench endpoint is the one way in. A working copy an older
+    build left on disk is not read, replaced or removed through the old
+    routes; the one-time migration takes care of it."""
+    api, data_dir = sidecar
+    import character_archive
+
+    legacy = character_archive.character_dir("42") / "working.json"
+    legacy.write_text('{"_overlay": [], "character": {}}', encoding="utf-8")
+    before = legacy.read_bytes()
+
+    res = api.request(
+        method, "/flist/character/42/working", json=_edited("Old route.")
+    )
+
+    assert res.status_code == 404
+    assert legacy.read_bytes() == before
