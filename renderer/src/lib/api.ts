@@ -1141,40 +1141,6 @@ export const api = {
         body: JSON.stringify({ filename })
       }
     ),
-  flistSetPayloadRead: (characterId: string | number, setId: string) =>
-    get<{ payload: Record<string, unknown>; etag: string | null }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`
-    ),
-  flistSetPayloadPut: async (
-    characterId: string | number,
-    setId: string,
-    payload: Record<string, unknown>,
-    etag: string | null
-  ): Promise<{ etag: string }> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
-    if (etag) headers['If-Match'] = etag
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`,
-      { method: 'PUT', headers, body: JSON.stringify(payload) }
-    )
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => null)) as
-        | { detail?: { detail: string; current_etag: string | null } }
-        | null
-      const current = body?.detail?.current_etag ?? null
-      const err = new Error('etag_mismatch') as Error & {
-        currentEtag: string | null
-      }
-      err.currentEtag = current
-      throw err
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    return (await res.json()) as { etag: string }
-  },
   flistAvatarUrl: (name: string) =>
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>
