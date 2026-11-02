@@ -686,38 +686,12 @@ def upsert_label(
     column is effectively dead weight. Leaving it in place avoids a
     migration; no callers read it anymore.
     """
-    if label not in (LABEL_IC, LABEL_OOC):
-        raise ValueError(f"invalid label: {label!r}")
-    if source not in ("mcp", "manual", "llm"):
-        raise ValueError(f"invalid source: {source!r}")
-    existing = conn.execute(
-        "SELECT label, source FROM labels WHERE hash = ?", (hash,)
-    ).fetchone()
-    prior_label = existing["label"] if existing else None
-    prior_source = existing["source"] if existing else None
-    conn.execute(
-        """
-        INSERT INTO labels (
-            hash, character, partner, ts, speaker, label,
-            confidence, reason, source, prior_label, prior_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET
-            label = excluded.label,
-            confidence = excluded.confidence,
-            reason = excluded.reason,
-            source = excluded.source,
-            prior_label = excluded.prior_label,
-            prior_source = excluded.prior_source,
-            updated_at = excluded.updated_at
-        """,
-        (
-            hash, character, partner, ts, speaker, label,
-            1.0, reason, source, prior_label, prior_source, time.time(),
-        ),
-    )
-    conn.commit()
-    _publish(
-        "labels-changed", character=character, partner=partner, hashes=1
+    upsert_verdicts(
+        conn,
+        [(hash, ts, speaker, label, reason)],
+        character=character,
+        partner=partner,
+        source=source,
     )
 
 
@@ -736,13 +710,37 @@ def upsert_labels_many(
     multi-select: the user picks rows scattered through a conversation
     and gives them all the same verdict. Each row still keeps its own
     prior label for the badge tooltip."""
-    if label not in (LABEL_IC, LABEL_OOC):
-        raise ValueError(f"invalid label: {label!r}")
+    return upsert_verdicts(
+        conn,
+        [(h, ts, speaker, label, reason) for h, ts, speaker in items],
+        character=character,
+        partner=partner,
+        source=source,
+    )
+
+
+def upsert_verdicts(
+    conn: sqlite3.Connection,
+    items: Iterable[tuple[str, int, str, str, str | None]],
+    *,
+    character: str,
+    partner: str,
+    source: str,
+) -> int:
+    """Store `(hash, ts, speaker, label, reason)` verdicts, each with its
+    own label and reason, in one transaction and one `labels-changed`
+    event. Every row snapshots the label it replaces as its prior one.
+    Returns how many messages were written."""
     if source not in ("mcp", "manual", "llm"):
         raise ValueError(f"invalid source: {source!r}")
     # One row per hash, the last mention winning, so a doubled entry
     # cannot snapshot its own new label as the prior one.
-    rows = {h: (ts, speaker) for h, ts, speaker in items if h}
+    rows: dict[str, tuple[int, str, str, str | None]] = {}
+    for h, ts, speaker, label, reason in items:
+        if label not in (LABEL_IC, LABEL_OOC):
+            raise ValueError(f"invalid label: {label!r}")
+        if h:
+            rows[h] = (ts, speaker, label, reason)
     if not rows:
         return 0
     prior: dict[str, tuple[str | None, str | None]] = {}
@@ -776,7 +774,7 @@ def upsert_labels_many(
                 h, character, partner, ts, speaker, label,
                 1.0, reason, source, *prior.get(h, (None, None)), now,
             )
-            for h, (ts, speaker) in rows.items()
+            for h, (ts, speaker, label, reason) in rows.items()
         ],
     )
     conn.commit()
@@ -784,6 +782,23 @@ def upsert_labels_many(
         "labels-changed", character=character, partner=partner, hashes=len(rows)
     )
     return len(rows)
+
+
+def label_row(conn: sqlite3.Connection, hash: str) -> dict | None:
+    """The stored Label of one message as a dict of `LABEL_COLUMNS`, or
+    None when it has none."""
+    row = conn.execute(
+        f"SELECT {', '.join(LABEL_COLUMNS)} FROM labels WHERE hash = ?", (hash,)
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def count_by_source(conn: sqlite3.Connection, source: str) -> int:
+    """How many stored Labels came from `source` ('manual', 'mcp', 'llm')."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM labels WHERE source = ?", (source,)
+    ).fetchone()
+    return int(row[0] or 0)
 
 
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
