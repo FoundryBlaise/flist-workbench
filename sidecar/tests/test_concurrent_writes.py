@@ -161,3 +161,53 @@ def test_a_window_save_and_a_model_edit_never_overwrite_each_other_silently(
     for etag, description in seen:
         by_etag.setdefault(etag, set()).add(description)
     assert {e: d for e, d in by_etag.items() if len(d) > 1} == {}
+
+
+def test_making_the_workbench_from_live_never_overwrites_a_save(sidecar) -> None:
+    """The first look at a character makes its Workbench from Live. A
+    second look arriving at the same moment must not make it again over
+    a save that landed in between."""
+    import archive_live
+    import archive_registry
+
+    ids = [str(100 + n) for n in range(12)]
+    for cid in ids:
+        archive_registry.register_character(cid, f"Char {cid}")
+        archive_live.write_live(
+            cid,
+            {
+                "character": {"id": int(cid), "name": f"Char {cid}", "description": "live"},
+                "images": [],
+                "fetched_at": 1700000000,
+            },
+        )
+    api = app_client(sidecar.app)
+    saved: dict[str, str] = {}
+
+    def window(cid: str) -> None:
+        url = f"/flist/character/{cid}/workbench/payload"
+        read = api.get(url).json()
+        payload = read["payload"]
+        payload["character"]["description"] = f"edited {cid}"
+        payload["_overlay"] = ["character.description"]
+        res = api.put(url, json=payload, headers={"If-Match": read["etag"]})
+        if res.status_code == 200:
+            saved[cid] = payload["character"]["description"]
+        else:
+            assert res.json()["code"] == "etag_mismatch", res.text
+
+    def first_look(cid: str) -> None:
+        assert api.get(f"/flist/character/{cid}/workbench").status_code == 200
+
+    with threads_taking_turns_often(), ThreadPoolExecutor(8) as pool:
+        futures = []
+        for cid in ids:
+            futures += [pool.submit(first_look, cid), pool.submit(window, cid)]
+            futures += [pool.submit(first_look, cid) for _ in range(2)]
+        for future in futures:
+            future.result()
+
+    assert saved, "no save went through"
+    for cid, description in saved.items():
+        payload = api.get(f"/flist/character/{cid}/workbench/payload").json()["payload"]
+        assert payload["character"]["description"] == description, cid
