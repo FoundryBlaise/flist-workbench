@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -34,9 +35,9 @@ BUSY_TIMEOUT_S = 15.0
 
 Migration = Callable[[sqlite3.Connection], None]
 
-#: One migration run at a time in this process; `BEGIN IMMEDIATE`
-#: below covers another process opening the same file.
-_MIGRATE_LOCK = threading.Lock()
+#: One switch to WAL or migration run at a time in this process;
+#: `BEGIN IMMEDIATE` below covers another process opening the same file.
+_SETUP_LOCK = threading.Lock()
 
 
 def statements(*sql: str) -> Migration:
@@ -61,9 +62,11 @@ def connect(path: Path, migrations: Sequence[Migration]) -> sqlite3.Connection:
     try:
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_S * 1000)}")
-        conn.execute("PRAGMA journal_mode = WAL")
+        if conn.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+            with _SETUP_LOCK:
+                _use_wal(conn, path)
         if user_version(conn) < len(migrations):
-            with _MIGRATE_LOCK:
+            with _SETUP_LOCK:
                 _migrate(conn, path, migrations)
     except BaseException:
         conn.close()
@@ -73,6 +76,28 @@ def connect(path: Path, migrations: Sequence[Migration]) -> sqlite3.Connection:
 
 def user_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
+def _use_wal(conn: sqlite3.Connection, path: Path) -> None:
+    """Switch the file to WAL; it stays WAL for every later connection.
+
+    The switch needs the file to itself and SQLite does not wait for
+    that through the busy timeout, so it is retried here while other
+    connections finish what they are reading.
+    """
+    deadline = time.monotonic() + BUSY_TIMEOUT_S
+    while True:
+        try:
+            if conn.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal":
+                return
+        except sqlite3.OperationalError:
+            pass
+        if time.monotonic() > deadline:
+            # Still usable without WAL, just with more waiting; the next
+            # connection tries again.
+            log.warning("could not switch %s to WAL", path.name)
+            return
+        time.sleep(0.05)
 
 
 def _migrate(conn: sqlite3.Connection, path: Path, migrations: Sequence[Migration]) -> None:
