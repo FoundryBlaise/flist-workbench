@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 import aliases as aliases_store  # noqa: F401  (kept for parity with server)
+import backup_origin
 import character_archive
 import flist_activity
 import flist_api
@@ -147,10 +148,10 @@ async def _pull_one_character_for_backup_all(
 
 
 async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
-    """Back up every character on the signed-in account.
-
-    Each ZIP's backup-meta.json is tagged `manual_bulk` so the sidebar
-    can bucket them.
+    """Back up every character on the signed-in account: pull it, then
+    keep its Live as a Backup recorded as `source: live, occasion:
+    backup-all` (kind `manual_bulk` for the extension). A character
+    whose Live matches its newest Backup of Live is left as it is.
     """
 
     store = flist_api.ticket_store()
@@ -271,8 +272,13 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
                     "failed": pull_result["failed_images"],
                 }
                 try:
+                    # Live, as just pulled: Back up all keeps what was on
+                    # F-list, whatever the Workbench holds.
                     result = character_archive.save_zip_backup(
-                        cid, force=False, kind="manual_bulk"
+                        cid,
+                        source=backup_origin.LIVE,
+                        occasion=backup_origin.BACKUP_ALL,
+                        force=False,
                     )
                 except OSError as exc:
                     failed += 1

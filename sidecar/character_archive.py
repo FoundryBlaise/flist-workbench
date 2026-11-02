@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+import backup_origin
 import paths
 from archive_errors import CharacterNotFound, InvalidCharacterId
 from refusals import InvalidFileName
@@ -881,7 +882,10 @@ def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
 
 def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     """List ZIP backups newest first. Each entry:
-    `{filename, created_at, size, kind, name}`. Filenames are the
+    `{filename, created_at, size, kind, source, occasion, name}`.
+    `source` and `occasion` come from `backup-meta.json` too; a Backup
+    that does not record them is listed with source "unknown" and
+    occasion null (see `backup_origin.read`). Filenames are the
     ISO-basic form written by `save_zip_backup`. `kind` comes from
     the embedded `backup-meta.json` (added 2026-06-17); older backups
     without that file get `"unknown"` so the UI can still bucket
@@ -932,6 +936,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
         # missing meta — listing every backup must be fast even when
         # there are hundreds, so we don't load other ZIP entries here.
         kind = "unknown"
+        meta: Any = None
         try:
             with zipfile.ZipFile(entry, "r") as zf:
                 raw = zf.read("backup-meta.json").decode("utf-8")
@@ -947,6 +952,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
                 "_suffix": suffix,
                 "size": stat.st_size,
                 "kind": kind,
+                **backup_origin.read(meta),
                 "name": names.get(entry.name),
             }
         )
@@ -970,15 +976,23 @@ def zip_backup_meta(character_id: int | str, filename: str) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
-def latest_zip_backup_content_hash(character_id: int | str) -> str | None:
+def latest_zip_backup_content_hash(
+    character_id: int | str, source: str | None = None
+) -> str | None:
     """Hash of the most recent ZIP backup's `character.json`, in the same
     canonical-JSON shape used by `_live_content_hash`. Used by
     `save_zip_backup` to dedup against an unchanged Live so two
-    Back-up-all clicks in a row don't write two identical ZIPs."""
+    Back-up-all clicks in a row don't write two identical ZIPs.
+
+    With `source`, only Backups holding that source count: a Backup of
+    Live is compared with the newest Backup of Live, not with a manual
+    Backup of the Workbench taken in between."""
     import hashlib
     import zipfile
 
     rows = list_zip_backups(character_id)
+    if source is not None:
+        rows = [r for r in rows if r.get("source") == source]
     if not rows:
         return None
     target = backups_dir(character_id) / rows[0]["filename"]
@@ -1023,63 +1037,58 @@ def _zip_payload_content_hash(payload: dict[str, Any]) -> str:
 def save_zip_backup(
     character_id: int | str,
     *,
+    source: str,
+    occasion: str,
     force: bool = False,
-    kind: str = "manual_single",
+    kind: str | None = None,
     note: str | None = None,
 ) -> dict[str, Any]:
-    """Pack the current Live into `<character>/backups/<ISO>.zip` —
-    userscript-restoreable, includes every gallery image still on disk
-    plus the avatar.
+    """Pack the character's Live or Workbench into
+    `<character>/backups/<ISO>.zip` — userscript-restoreable, includes
+    every gallery image still on disk plus the avatar.
 
-    Distinct from `save_snapshot` (JSON-only, cheap, auto-fires on
-    every pull) — *backup* is the explicit "user clicked Back up"
-    artefact that bundles bytes.
+    `source` is what the Backup holds: `live` (what F-list showed at the
+    last Pull) or `workbench` (the user's edits; a Workbench not created
+    yet holds what Live seeds it with). `occasion` is why it was made:
+    `manual`, `before-upload`, `before-restore`, `migration` or
+    `backup-all` (see `backup_origin`). Both go into the ZIP's
+    `backup-meta.json`, together with the older `kind` the extension
+    sorts by — the occasion's own unless `kind` is given.
 
-    Dedup: if the latest existing ZIP's `character.json` matches what
-    we'd serialise now, returns `{saved: False, reason: 'unchanged'}`
-    so a no-op Back-up-all doesn't bloat the directory. Pass
-    `force=True` to bypass (used by the explicit per-character action;
-    the bulk sweep dedups by default).
-
-    `kind` is the backup provenance and ends up in the ZIP's
-    `backup-meta.json`. Valid values:
-      - `manual_single` — right-click → Back up now on a character
-      - `manual_bulk`   — Tools → Back up all
-      - `import`        — auto-fires when a character import completes
-      - `scheduled`     — no longer written; older Backups may carry it
-    `note` is reserved for a future free-text annotation surface.
+    Dedup: unless `force`, nothing is written when the newest Backup of
+    the same source already holds this content; that returns
+    `{saved: False, reason: 'unchanged'}`. `note` is reserved for a
+    future free-text annotation surface.
 
     Returns one of:
-      `{saved: True, path, filename, created_at, size, kind}`
+      `{saved: True, path, filename, created_at, size, kind, source, occasion}`
       `{saved: False, reason: 'unchanged'}`
       `{saved: False, reason: 'no_live'}`
     """
     import zip_serialise
 
-    live = read_live(character_id)
-    if live is None:
-        return {"saved": False, "reason": "no_live"}
+    origin = backup_origin.meta(source, occasion, kind=kind)
 
-    # What a backup is for: Live can be fetched from F-list again at any
-    # time, the workbench cannot. So the ZIP carries the bench — the
-    # user's unpublished work — and falls back to Live only when there
-    # is no bench yet. Live's own history is not lost by this; it has
-    # always lived separately under snapshots/.
     # Heal before packing. `build_zip` drops gallery rows whose file is
     # missing, so a backup taken over a broken gallery silently lacks
     # the images — and the extension then deletes them from the profile
     # for not being in the backup. That chain cost a user their gallery
     # once; a backup must never be the weak link in it.
-    try:
-        repair_gallery(character_id)
-    except Exception as exc:  # noqa: BLE001 - never block a backup
-        print(f"gallery repair before backup failed: {exc}", file=sys.stderr)
+    live = read_live(character_id)
+    if live is not None:
+        try:
+            repair_gallery(character_id)
+        except Exception as exc:  # noqa: BLE001 - never block a backup
+            print(f"gallery repair before backup failed: {exc}", file=sys.stderr)
 
     working = None
-    bench = resolve_workbench(character_id, create=False)
-    if bench is not None:
-        working = read_set_payload(character_id, bench.id)
+    if source == backup_origin.WORKBENCH:
+        bench = resolve_workbench(character_id, create=False)
+        if bench is not None:
+            working = read_set_payload(character_id, bench.id)
     if working is None:
+        if live is None:
+            return {"saved": False, "reason": "no_live"}
         working = _live_to_zip_payload(live)
     image_extensions: dict[str, str] = {}
     img_dir = images_dir(character_id)
@@ -1097,7 +1106,7 @@ def save_zip_backup(
 
     if not force:
         candidate_hash = _zip_payload_content_hash(candidate_payload)
-        prior_hash = latest_zip_backup_content_hash(character_id)
+        prior_hash = latest_zip_backup_content_hash(character_id, source)
         if prior_hash == candidate_hash:
             return {"saved": False, "reason": "unchanged"}
 
@@ -1118,8 +1127,10 @@ def save_zip_backup(
         working,
         images_dir=img_dir,
         avatar_path=avatar_path,
-        backup_kind=kind,
+        backup_kind=origin.get("kind"),
         backup_note=note,
+        backup_source=source,
+        backup_occasion=occasion,
     )
 
     target = write_backup_zip(character_id, data)
@@ -1129,7 +1140,9 @@ def save_zip_backup(
         "filename": target.name,
         "created_at": int(time.time()),
         "size": len(data),
-        "kind": kind,
+        "kind": origin.get("kind", "unknown"),
+        "source": source,
+        "occasion": occasion,
     }
 
 

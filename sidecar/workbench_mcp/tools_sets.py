@@ -592,6 +592,11 @@ def list_snapshots(character: str) -> dict[str, Any]:
 def list_backups(character: str) -> dict[str, Any]:
     """ZIP backups of a character, newest first.
 
+    Each entry says what it holds, `source`: `live` or `workbench`
+    (`unknown` for older Backups), and why it was made, `occasion`:
+    `manual`, `before-upload`, `before-restore`, `migration` or
+    `backup-all` (null for older Backups).
+
     Backups include images and the avatar, and can be restored into a
     new working set with create_working_set(source="backup:<file>").
     """

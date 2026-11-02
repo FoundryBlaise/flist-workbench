@@ -25,7 +25,7 @@ TRASH = f"/flist/character/{CID}/trash"
 @pytest.fixture
 def backup(workbench) -> dict:  # noqa: F811
     """A Backup the user named, on disk before the test starts."""
-    saved = workbench.save_zip_backup(CID, force=True)
+    saved = workbench.save_zip_backup(CID, source="workbench", occasion="manual", force=True)
     workbench.rename_zip_backup(CID, saved["filename"], "Before the big rewrite")
     return saved
 
@@ -87,9 +87,9 @@ def test_a_deleted_backup_goes_to_the_trash_and_comes_back_under_its_name(
     reason="a human emptying the Trash is the one deletion the rule allows",
 )
 def test_only_the_window_deletes_a_trashed_backup_for_good(client, workbench) -> None:  # noqa: F811
-    first = workbench.save_zip_backup(CID, force=True)["filename"]
+    first = workbench.save_zip_backup(CID, source="workbench", occasion="manual", force=True)["filename"]
     client.delete(f"{BACKUPS}/{first}")
-    second = workbench.save_zip_backup(CID, force=True)["filename"]
+    second = workbench.save_zip_backup(CID, source="workbench", occasion="manual", force=True)["filename"]
     client.delete(f"{BACKUPS}/{second}")
     ids = {b["filename"]: b["id"] for b in trashed(client)}
 

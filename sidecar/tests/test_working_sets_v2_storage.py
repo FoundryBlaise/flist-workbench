@@ -501,7 +501,7 @@ def test_loading_a_backup_overwrites_the_one_bench(isolated_userdata) -> None:
         character={"id": "123", "name": "Probe", "description": "edited since"}
     )
     ca.write_set_payload("123", bench.id, edited, expected_etag=None)
-    saved = ca.save_zip_backup("123", kind="manual_single")
+    saved = ca.save_zip_backup("123", source="workbench", occasion="manual")
 
     later = _payload(
         character={"id": "123", "name": "Probe", "description": "later change"}
@@ -541,7 +541,7 @@ def test_a_backup_captures_the_workbench_not_live(isolated_userdata) -> None:
         expected_etag=None,
     )
 
-    saved = ca.save_zip_backup("123", kind="manual_single")
+    saved = ca.save_zip_backup("123", source="workbench", occasion="manual")
     with zipfile.ZipFile(saved["path"], "r") as zf:
         stored = json.loads(zf.read("working.json").decode("utf-8"))
     assert stored["character"]["description"] == "unpublished work"
@@ -561,7 +561,7 @@ def test_a_backup_falls_back_to_live_when_there_is_no_bench_yet(
     ca.register_character("123", "Lady Amber Blaise")
     _seed_live(ca)
 
-    saved = ca.save_zip_backup("123", kind="manual_single")
+    saved = ca.save_zip_backup("123", source="workbench", occasion="manual")
     with zipfile.ZipFile(saved["path"], "r") as zf:
         stored = json.loads(zf.read("working.json").decode("utf-8"))
     assert stored["character"]["description"] == "[b]hi[/b]"
