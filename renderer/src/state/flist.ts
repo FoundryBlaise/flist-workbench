@@ -401,7 +401,7 @@ export function descriptionOf(payload: WorkingPayload): string {
 /** Shape the selector reads. The store's full State extends this; isolating
  *  the dependency keeps `selectWorkingSlot` testable without importing the
  *  whole store contract. */
-export interface FlistWorkingSetsState {
+export interface FlistWorkbenchSlotState {
   /** The one Workbench slot per character: the editor edits it and
    *  autosave writes it through the Workbench endpoint. */
   flistWorking: Record<string, FlistWorkingSlot>
@@ -409,7 +409,7 @@ export interface FlistWorkingSetsState {
 
 /** Resolve the editable working slot for `characterId`. */
 export function selectWorkingSlot(
-  s: FlistWorkingSetsState,
+  s: FlistWorkbenchSlotState,
   characterId: string
 ): FlistWorkingSlot | undefined {
   return s.flistWorking[characterId]

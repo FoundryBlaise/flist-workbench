@@ -20,7 +20,7 @@ from ._context import (
     ToolError,
     load_payload,
     resolve_character,
-    resolve_set,
+    resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CORE, tool
 from .tools_session import NO_PUSH_NOTE
@@ -134,7 +134,7 @@ async def get_working_set(
     through it.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     sections = [s.strip().lower() for s in (include or ["summary"])]
     unknown = [s for s in sections if s not in SET_SECTIONS]
@@ -247,7 +247,7 @@ def get_description(
     currently published.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     char = payload.get("character") if isinstance(payload.get("character"), dict) else {}
     text = (char or {}).get("description") or ""
@@ -283,7 +283,7 @@ async def list_profile_fields(
     value; `group` and `query` filter by category and by name.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     values = payload.get("infotags") or {}
 
@@ -345,7 +345,7 @@ async def list_kinks(
     separately — they are free text the user wrote.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     chosen = payload.get("kinks") or {}
 
@@ -508,8 +508,8 @@ async def diff_working_set(
     read both with get_description if the text itself matters.
     """
     target = resolve_character(character)
-    left = resolve_set(target, working_set)
-    right = resolve_set(target, against, param="against")
+    left = resolve_workbench_or_live(target, working_set)
+    right = resolve_workbench_or_live(target, against, param="against")
     if left.is_live == right.is_live:
         raise ToolError(
             "validation_failed",
@@ -574,7 +574,7 @@ def list_images(
     from services import image_import
 
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
 
     gallery = [

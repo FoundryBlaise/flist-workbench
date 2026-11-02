@@ -145,7 +145,7 @@ SOURCES = (WORKBENCH, LIVE)
 
 
 @dataclass(frozen=True)
-class ResolvedSet:
+class WorkbenchOrLive:
     """A character's Workbench, or its read-only Live."""
 
     character: ResolvedCharacter
@@ -153,19 +153,19 @@ class ResolvedSet:
     is_live: bool = False
 
 
-def workbench_target(character: ResolvedCharacter) -> ResolvedSet:
+def workbench_target(character: ResolvedCharacter) -> WorkbenchOrLive:
     """The character's Workbench, under the one name a model sees."""
-    return ResolvedSet(character=character, name=character_archive.WORKBENCH_NAME)
+    return WorkbenchOrLive(character=character, name=character_archive.WORKBENCH_NAME)
 
 
-def resolve_set(
+def resolve_workbench_or_live(
     character: ResolvedCharacter,
     set_ref: str | None,
     *,
     allow_live: bool = True,
     for_write: bool = False,
     param: str = "working_set",
-) -> ResolvedSet:
+) -> WorkbenchOrLive:
     """Resolve `working_set`: omitted (or `"workbench"`) is the
     character's Workbench, `"live"` is Live. Anything else is refused:
     a character has one Workbench, so there is nothing else to name.
@@ -183,7 +183,7 @@ def resolve_set(
                 f"never edited. Leave {param} out to edit the "
                 "Workbench instead.",
             )
-        return ResolvedSet(character=character, name=LIVE, is_live=True)
+        return WorkbenchOrLive(character=character, name=LIVE, is_live=True)
 
     if needle not in ("", WORKBENCH):
         raise ToolError(
@@ -210,7 +210,7 @@ def resolve_set(
     return workbench_target(character)
 
 
-def load_payload(target: ResolvedSet) -> dict[str, Any]:
+def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:
     """Read the payload behind a resolved Workbench or Live."""
     if target.is_live:
         live = character_archive.read_live(target.character.id)

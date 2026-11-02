@@ -32,7 +32,7 @@ from ._context import (
     audit,
     resolve_character,
     resolve_ingest_scope,
-    resolve_set,
+    resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 from .tools_session import NO_PUSH_NOTE
@@ -445,7 +445,7 @@ def export_restore_zip(
     import zip_serialise
 
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = character_archive.export_payload(target.id, from_live=resolved.is_live)
     if payload is None:
         raise ToolError(
