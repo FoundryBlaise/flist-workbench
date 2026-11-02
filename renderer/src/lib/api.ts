@@ -73,13 +73,29 @@ export type FlistZipBackupKind =
   | 'manual_bulk'
   | 'import'
   | 'scheduled'
+  | 'pre_upload'
   | 'unknown'
+
+/** What a Backup holds: the Live or the Workbench of its moment.
+ *  Backups from before the app recorded it come back as `'unknown'`. */
+export type FlistBackupSource = 'live' | 'workbench' | 'unknown'
+
+/** Why a Backup was made; `null` for Backups from before the app
+ *  recorded it. */
+export type FlistBackupOccasion =
+  | 'manual'
+  | 'before-upload'
+  | 'before-restore'
+  | 'migration'
+  | 'backup-all'
 
 export type FlistZipBackupEntry = {
   filename: string
   created_at: number
   size: number
   kind: FlistZipBackupKind
+  source: FlistBackupSource
+  occasion: FlistBackupOccasion | null
   /** User-set name from `_names.json`. `null` when the user hasn't
    *  renamed this backup yet — the UI then derives a default label
    *  from the timestamp. */

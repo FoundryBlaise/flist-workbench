@@ -518,6 +518,13 @@ body {
   color: var(--text-dim);
   flex: 0;
 }
+.sb-backup-origin {
+  font-size: 0.85em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .sb-backup-size {
   color: var(--text-dim);
   font-size: 0.85em;
