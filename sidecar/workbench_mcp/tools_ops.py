@@ -1,7 +1,7 @@
 """Long-running and file-touching operations (design §3.8, §3.10, §3.11).
 
-Pulling from F-list, backing up, ingesting logs, moving bundles on and
-off disk, and the settings the rest of it reads.
+Pulling from F-list, backing up, ingesting logs, writing the file the
+user uploads, and the settings the rest of it reads.
 
 Two things run long enough to need progress: a pull walks a
 character's whole image set, and the backup sweep pulls every
@@ -9,10 +9,10 @@ character on the account. Both report through `Context.report_progress`
 so a client can show something moving, and both are bounded by
 F-list's rate limit rather than by anything here.
 
-On file paths: the export and import tools read and write wherever the
-user running Workbench can. That is the same reach the app already has
-through its own file dialogs, and narrowing it would mean a model
-couldn't put a bundle where the user asked for it.
+On file paths: the export tool writes wherever the user running the app
+can. That is the same reach the app already has through its own file
+dialogs, and narrowing it would mean a model couldn't put the file
+where the user asked for it.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     the local archive.
 
     This is a *download*. It refreshes `live` — the record of what is
-    published — and leaves working sets alone. Needs the user to be
+    published — and leaves the Workbench alone. Needs the user to be
     signed in, which happens in the app window; there is no
     sign-in tool, because credentials never travel through MCP.
 
@@ -110,7 +110,7 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
         "backup": summary.get("backup_path"),
         "note": (
             "This updated the local copy of what is published. Edits "
-            "live in working sets and were not touched. " + NO_PUSH_NOTE
+            "live in the Workbench and were not touched. " + NO_PUSH_NOTE
         ),
     }
 
@@ -122,8 +122,8 @@ def create_backup(
     """Write a ZIP backup of a character's current published profile,
     including its images and avatar.
 
-    Backups are what `create_working_set(source="backup:...")` restores
-    from, and what the user can hand to the browser extension.
+    Backups are what `load_backup_into_workbench` restores from, and
+    what the user can hand to the browser extension.
     `force=false` skips the write when nothing changed since the last
     backup.
     """
@@ -419,93 +419,8 @@ def test_embedding_connection() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------
-# Bundles and exports
+# Exports
 # --------------------------------------------------------------------
-
-
-@tool(tags=TAG_CHARACTER, title="Export a working set")
-def export_working_set_bundle(
-    character: str, path: str, working_set: str | None = None
-) -> dict[str, Any]:
-    """Save a working set as a Workbench bundle at `path`.
-
-    A bundle round-trips between Workbench installs: it carries the
-    payload verbatim plus every image it references. This is *not* the
-    file to upload to F-list — that is export_restore_zip.
-    """
-    import set_bundle
-
-    target = resolve_character(character)
-    resolved = resolve_set(target, working_set, allow_live=False)
-    try:
-        data, manifest = set_bundle.build_set_bundle(
-            target.id, resolved.id or ""
-        )
-    except FileNotFoundError as exc:
-        raise ToolError("set_not_found", str(exc)) from exc
-
-    written = _write_file(path, data, suffix=".zip")
-    audit("export_working_set_bundle", character=target.name, path=str(written))
-    return {
-        "character": target.name,
-        "set": resolved.name,
-        "path": str(written),
-        "bytes": len(data),
-        "manifest": manifest.get("source"),
-    }
-
-
-@tool(tags=TAG_CHARACTER, title="Import a working set")
-def import_working_set_bundle(
-    character: str,
-    path: str,
-    name: str | None = None,
-    confirm_cross_character: bool = False,
-) -> dict[str, Any]:
-    """Load a Workbench bundle from `path` as a new working set.
-
-    Importing a bundle exported from a *different* character needs
-    `confirm_cross_character=true` — the payload carries that
-    character's identity, and copying it over is occasionally what
-    someone wants and usually a mistake.
-    """
-    import set_bundle
-
-    target = resolve_character(character)
-    source = Path(path).expanduser()
-    if not source.is_file():
-        raise ToolError("file_not_found", f"No file at {source}")
-
-    try:
-        result = set_bundle.import_set_bundle(
-            target.id,
-            source.read_bytes(),
-            name=(name or "").strip() or f"Imported {source.stem}"[:80],
-            confirm_cross_character=confirm_cross_character,
-        )
-    except set_bundle.CrossCharacterConfirmationRequired as exc:
-        origin = (exc.source or {}).get("character_name") or "another character"
-        raise ToolError(
-            "cross_character_import",
-            f"This bundle was exported from {origin!r}, not "
-            f"{target.name!r}. Importing it copies that character's "
-            "profile over. Ask the user, then call again with "
-            "confirm_cross_character=true.",
-            source=exc.source,
-        ) from exc
-    except set_bundle.BundleError as exc:
-        raise ToolError("bad_bundle", str(exc)) from exc
-    except ValueError as exc:
-        raise ToolError("validation_failed", str(exc)) from exc
-
-    meta = result.get("set")
-    audit("import_working_set_bundle", character=target.name, path=str(source))
-    return {
-        "character": target.name,
-        "set": getattr(meta, "name", None) or (meta or {}).get("name"),
-        "source": result.get("source"),
-        "images": result.get("image_stats"),
-    }
 
 
 @tool(tags=TAG_CHARACTER, title="Export for upload to F-list")
@@ -534,7 +449,7 @@ def export_restore_zip(
             raise ToolError(
                 "live_not_found",
                 f"Nothing to export for {target.name} — pull the "
-                "character or create a working set first.",
+                "character first.",
             )
         from services import payload_ops
 
