@@ -35,29 +35,14 @@ from pathlib import Path
 
 import labels as labels_store
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS partner_aliases (
-    character     TEXT NOT NULL,
-    name          TEXT NOT NULL,
-    primary_name  TEXT NOT NULL,
-    created_at    REAL NOT NULL,
-    PRIMARY KEY (character, name)
-);
-CREATE INDEX IF NOT EXISTS idx_aliases_primary
-    ON partner_aliases(character, primary_name);
-"""
-
-
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    """Open the labels.db connection and ensure the alias table exists.
+    """Open labels.db, where the alias table lives (labels.py migrates it).
 
     Returns the same connection labels_store.connect() returns so a
     caller doing both labels + alias work in one request reuses one
     connection. Callers that don't need labels can just call this.
     """
-    conn = labels_store.connect(root)
-    conn.executescript(SCHEMA)
-    return conn
+    return labels_store.connect(root)
 
 
 # ---- read paths --------------------------------------------------------
