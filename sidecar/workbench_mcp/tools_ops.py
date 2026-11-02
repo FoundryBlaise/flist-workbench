@@ -24,6 +24,7 @@ from typing import Any
 
 import archive_backups
 import archive_images
+import archive_registry
 import archive_workbench
 import atomic_write
 import backup_origin
@@ -441,19 +442,24 @@ def export_restore_zip(
 
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = archive_workbench.export_payload(target.id, from_live=resolved.is_live)
-    if payload is None:
-        raise ToolError(
-            "no_live",
-            f"Nothing to export for {target.name} — pull the character first.",
+    # Payload and images in one step under the character's lock, as the
+    # window's export does.
+    with archive_registry.character_lock(target.id):
+        payload = archive_workbench.export_payload(
+            target.id, from_live=resolved.is_live
         )
+        if payload is None:
+            raise ToolError(
+                "no_live",
+                f"Nothing to export for {target.name} — pull the character first.",
+            )
 
-    data = zip_serialise.build_zip(
-        target.id,
-        payload,
-        images_dir=archive_images.images_dir(target.id),
-        avatar_path=archive_images.avatar_path_for(target.name),
-    )
+        data = zip_serialise.build_zip(
+            target.id,
+            payload,
+            images_dir=archive_images.images_dir(target.id),
+            avatar_path=archive_images.avatar_path_for(target.name),
+        )
     written = _write_file(path, data, suffix=".zip")
     audit("export_restore_zip", character=target.name, path=str(written))
     return {

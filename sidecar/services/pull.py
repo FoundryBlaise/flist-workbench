@@ -19,9 +19,12 @@ import re
 import sys
 from typing import Any, AsyncIterator
 
+from starlette.concurrency import run_in_threadpool
+
 import archive_errors
 import archive_images
 import archive_live
+import archive_registry
 import flist_activity
 import flist_api
 import settings as settings_store
@@ -78,6 +81,89 @@ def _differs_from_live(cid: str, payload: dict[str, Any]) -> bool:
     return archive_live.live_content_hash(payload) != archive_live.live_content_hash(live)
 
 
+# The disk steps of a Pull, each run in the threadpool: they hash
+# images and wait for the character's lock, and the event loop serves
+# the window and MCP meanwhile.
+
+
+def _store_live(cid: str, payload: dict[str, Any]) -> bool:
+    """Write a fetched profile as Live, stamped with the fetch time, and
+    say whether it differs from the Live it replaces (the fetch time
+    left out). One step under the character's lock."""
+    import time as _t
+
+    with archive_registry.character_lock(cid):
+        changed = _differs_from_live(cid, payload)
+        live_payload = dict(payload)
+        live_payload["fetched_at"] = int(_t.time())
+        archive_live.write_live(cid, live_payload)
+    return changed
+
+
+def clear_stale_siblings(cid: str, image_id: str, target_name: str) -> bool:
+    """Move any stale-ext sibling of `image_id` to the Trash, so a
+    downloaded .jpg doesn't sit next to an old .png and the old bytes
+    stay recoverable. Only png/jpg/gif siblings are touched; debris like
+    a temp file from an in-flight write is left alone. Says whether the
+    image itself is already cached."""
+    images_dir_path = archive_images.images_dir(cid)
+    for sibling in images_dir_path.glob(f"{image_id}.*"):
+        if sibling.name == target_name:
+            continue
+        if sibling.suffix.lstrip(".").lower() not in {"png", "jpg", "jpeg", "gif"}:
+            continue
+        try:
+            image_trash.trash_pool_file(cid, sibling)
+        except OSError:
+            pass
+    return (images_dir_path / target_name).exists()
+
+
+def _store_image(cid: str, image_id: str, ext: str, data: bytes) -> None:
+    """Write a downloaded image, then fold away a local upload of the
+    same bytes."""
+    archive_images.write_character_image(cid, image_id, ext, data)
+    # If the user uploaded these exact bytes locally before pushing
+    # them to F-list, the local-<sha8> file is still on disk and would
+    # show up as a phantom pool entry. Collapse the duplicate.
+    try:
+        archive_images.dedupe_local_after_pull(cid, image_id, data)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
+
+
+def _seal(
+    cid: str, image_list: list[dict[str, str]], started_at: int
+) -> dict[str, Any]:
+    """Repair the gallery, mark the manifest finished and report the
+    Pull's status."""
+    import time as _t
+
+    # A pull is exactly when image ids change under us: the extension
+    # deletes and re-uploads a gallery, F-list mints new ids, and what
+    # we just downloaded is byte-identical to files we already hold
+    # under ids the site has forgotten. Left alone, the Workbench keeps
+    # naming the dead ones and the same picture shows in the pool and
+    # on the profile at once. Repair compares bytes, so it recognises
+    # them.
+    try:
+        archive_images.repair_gallery(cid)
+    except Exception as exc:  # noqa: BLE001 — never fail a pull
+        print(f"gallery repair after pull failed: {exc}", file=sys.stderr)
+
+    # Seal the manifest: finished_at marks the loop ran to completion
+    # (success or with per-image failures). The absence of this write
+    # is what compute_pull_status uses to distinguish "interrupted"
+    # from "partial".
+    archive_images.write_pull_state(
+        cid,
+        image_list,
+        started_at=started_at,
+        finished_at=int(_t.time()),
+    )
+    return archive_images.compute_pull_status(cid)
+
+
 async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Pull `name`'s profile. Yields `(event, data)`; see EVENTS.
 
@@ -123,11 +209,7 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # JSON and can retry the gallery later. Whether F-list
             # changed is judged against the Live this replaces, with
             # the fetch time left out.
-            import time as _t
-            changed = _differs_from_live(cid, payload)
-            live_payload = dict(payload)
-            live_payload["fetched_at"] = int(_t.time())
-            archive_live.write_live(cid, live_payload)
+            changed = await run_in_threadpool(_store_live, cid, payload)
 
             # Avatar — deterministic URL, no rate-limit-bucket cost
             # against the API. Fire-and-forget; failures are
@@ -165,7 +247,8 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # incomplete — N missing" on next launch.
             import time as _t
             pull_started_at = int(_t.time())
-            archive_images.write_pull_state(
+            await run_in_threadpool(
+                archive_images.write_pull_state,
                 cid,
                 image_list,
                 started_at=pull_started_at,
@@ -183,7 +266,6 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # same image_id (F-list rarely changes ext for an existing
             # id, but a manual file replace can leave a `.png` next to
             # the `.jpg` we're about to download).
-            images_dir_path = archive_images.images_dir(cid)
             downloaded = 0
             cached = 0
             failed = 0
@@ -194,22 +276,9 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                     ext = archive_images.normalise_image_ext(raw_ext)
                 except ValueError:
                     ext = raw_ext.lower().lstrip(".")
-                target = images_dir_path / f"{image_id}.{ext}"
-                # Move any stale-ext sibling for the same image_id to
-                # the Trash so a downloaded .jpg doesn't sit next to an
-                # old .png, and the old bytes stay recoverable.
-                # Only touch png/jpg/gif siblings — leave debris like
-                # .tmp from an in-flight write alone.
-                for sibling in images_dir_path.glob(f"{image_id}.*"):
-                    if sibling.name == target.name:
-                        continue
-                    if sibling.suffix.lstrip(".").lower() not in {"png", "jpg", "jpeg", "gif"}:
-                        continue
-                    try:
-                        image_trash.trash_pool_file(cid, sibling)
-                    except OSError:
-                        pass
-                if target.exists():
+                if await run_in_threadpool(
+                    clear_stale_siblings, cid, image_id, f"{image_id}.{ext}"
+                ):
                     cached += 1
                     yield (
                         "image",
@@ -228,19 +297,7 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 )
                 try:
                     data = await flist_api.fetch_bytes(url, client=client)
-                    archive_images.write_character_image(
-                        cid, image_id, ext, data
-                    )
-                    # If the user uploaded these exact bytes locally
-                    # before pushing them to F-list, the local-<sha8>
-                    # file is still on disk and would show up as a
-                    # phantom pool entry. Collapse the duplicate.
-                    try:
-                        archive_images.dedupe_local_after_pull(
-                            cid, image_id, data
-                        )
-                    except Exception:  # noqa: BLE001 — best-effort
-                        pass
+                    await run_in_threadpool(_store_image, cid, image_id, ext, data)
                     downloaded += 1
                     yield (
                         "image",
@@ -286,29 +343,9 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # source of truth for what shows on-profile, and only
             # the explicit pool-delete UI removes bytes.
 
-            # A pull is exactly when image ids change under us: the
-            # extension deletes and re-uploads a gallery, F-list mints
-            # new ids, and what we just downloaded is byte-identical to
-            # files we already hold under ids the site has forgotten.
-            # Left alone, the Workbench keeps naming the dead ones
-            # and the same picture shows in the pool and on the profile
-            # at once. Repair compares bytes, so it recognises them.
-            try:
-                archive_images.repair_gallery(cid)
-            except Exception as exc:  # noqa: BLE001 — never fail a pull
-                print(f"gallery repair after pull failed: {exc}", file=sys.stderr)
-
-            # Seal the manifest: finished_at marks the loop ran to
-            # completion (success or with per-image failures). The
-            # absence of this write is what compute_pull_status uses
-            # to distinguish "interrupted" from "partial".
-            archive_images.write_pull_state(
-                cid,
-                image_list,
-                started_at=pull_started_at,
-                finished_at=int(_t.time()),
+            pull_status = await run_in_threadpool(
+                _seal, cid, image_list, pull_started_at
             )
-            pull_status = archive_images.compute_pull_status(cid)
             flist_activity.record(
                 "pull-done",
                 name=payload.get("name") or name,

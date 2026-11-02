@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator
 
+from starlette.concurrency import run_in_threadpool
+
 import aliases as aliases_store  # noqa: F401  (kept for parity with server)
 import archive_backups
 import archive_images
@@ -24,7 +26,7 @@ import flist_activity
 import flist_api
 import zip_serialise
 
-from . import events, image_trash, sse
+from . import events, sse
 from . import pull as pull_service
 
 #: Event names `run()` can yield. `error` is fatal and ends the sweep;
@@ -61,7 +63,9 @@ async def _pull_one_character_for_backup_all(
 
     live_payload = dict(payload)
     live_payload["fetched_at"] = int(_t.time())
-    archive_live.write_live(cid, live_payload)
+    # Disk steps run in the threadpool, as the Pull's do: they wait for
+    # the character's lock, and the event loop serves everyone else.
+    await run_in_threadpool(archive_live.write_live, cid, live_payload)
 
     # Avatar — non-fatal.
     try:
@@ -88,11 +92,14 @@ async def _pull_one_character_for_backup_all(
             )
 
     pull_started_at = int(_t.time())
-    archive_images.write_pull_state(
-        cid, image_list, started_at=pull_started_at, finished_at=None
+    await run_in_threadpool(
+        archive_images.write_pull_state,
+        cid,
+        image_list,
+        started_at=pull_started_at,
+        finished_at=None,
     )
 
-    images_dir_path = archive_images.images_dir(cid)
     downloaded = 0
     cached = 0
     failed_images = 0
@@ -103,19 +110,11 @@ async def _pull_one_character_for_backup_all(
             ext = archive_images.normalise_image_ext(raw_ext)
         except ValueError:
             ext = raw_ext.lower().lstrip(".")
-        target = images_dir_path / f"{image_id}.{ext}"
-        # Stale-ext cleanup mirrors the per-character pull endpoint:
-        # the old file goes to the Trash.
-        for sibling in images_dir_path.glob(f"{image_id}.*"):
-            if sibling.name == target.name:
-                continue
-            if sibling.suffix.lstrip(".").lower() not in {"png", "jpg", "jpeg", "gif"}:
-                continue
-            try:
-                image_trash.trash_pool_file(cid, sibling)
-            except OSError:
-                pass
-        if target.exists():
+        # Stale-ext cleanup is the per-character Pull's: the old file
+        # goes to the Trash.
+        if await run_in_threadpool(
+            pull_service.clear_stale_siblings, cid, image_id, f"{image_id}.{ext}"
+        ):
             cached += 1
             continue
         url = (
@@ -124,12 +123,15 @@ async def _pull_one_character_for_backup_all(
         )
         try:
             data = await flist_api.fetch_bytes(url, client=client)
-            archive_images.write_character_image(cid, image_id, ext, data)
+            await run_in_threadpool(
+                archive_images.write_character_image, cid, image_id, ext, data
+            )
             downloaded += 1
         except (ValueError, flist_api.FlistApiError):
             failed_images += 1
 
-    archive_images.write_pull_state(
+    await run_in_threadpool(
+        archive_images.write_pull_state,
         cid,
         image_list,
         started_at=pull_started_at,
@@ -264,7 +266,10 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 try:
                     # Live, as just pulled: Back up all keeps what was on
                     # F-list, whatever the Workbench holds.
-                    result = archive_backups.save_zip_backup(
+                    # In the threadpool: it repairs the gallery and
+                    # builds the zip under the character's lock.
+                    result = await run_in_threadpool(
+                        archive_backups.save_zip_backup,
                         cid,
                         source=backup_origin.LIVE,
                         occasion=backup_origin.BACKUP_ALL,

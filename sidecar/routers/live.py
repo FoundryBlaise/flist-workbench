@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 @router.get("/flist/character/{character_id}/live")
-async def flist_character_live(character_id: str) -> dict:
+def flist_character_live(character_id: str) -> dict:
     payload = archive_live.read_live(character_id)
     if payload is None:
         raise NoLive("no Live yet")

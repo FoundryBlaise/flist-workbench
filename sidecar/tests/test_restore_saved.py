@@ -72,9 +72,12 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     hs = restore_svc.begin_handshake()
     restore_svc.accept_handshake(hs["handshake_id"])
-    client = app_client(server.app)
-    client.headers.update({"X-Workbench-Auth": hs["token"]})
-    yield client, server
+    # One event loop for the whole test, as the running sidecar has: the
+    # post-save Pull outlives the request that scheduled it.
+    importlib.reload(server)
+    with app_client(server.app) as client:
+        client.headers.update({"X-Workbench-Auth": hs["token"]})
+        yield client, server
     # The pairing lives in module state; leave the next test unpaired.
     restore_svc.revoke_token()
 

@@ -45,7 +45,7 @@ async def flist_character_pull(name: str) -> StreamingResponse:
 
 
 @router.post("/flist/character/{character_id}/zip-backup")
-async def flist_character_zip_backup(
+def flist_character_zip_backup(
     character_id: str,
     force: bool = True,
 ) -> dict:
@@ -72,7 +72,7 @@ async def flist_character_zip_backup(
 
 
 @router.get("/flist/character/{character_id}/zip-backups")
-async def flist_character_zip_backups(character_id: str) -> dict:
+def flist_character_zip_backups(character_id: str) -> dict:
     return {
         "character_id": character_id,
         "backups": archive_backups.list_zip_backups(character_id),
@@ -83,7 +83,7 @@ async def flist_character_zip_backups(character_id: str) -> dict:
     "/flist/character/{character_id}/zip-backups/{filename}",
     status_code=204,
 )
-async def flist_character_zip_backup_delete(
+def flist_character_zip_backup_delete(
     character_id: str, filename: str
 ) -> None:
     """Move a single Backup to the character's Trash, user-set name and
@@ -104,7 +104,7 @@ class _ZipBackupRename(BaseModel):
 
 
 @router.patch("/flist/character/{character_id}/zip-backups/{filename}")
-async def flist_character_zip_backup_rename(
+def flist_character_zip_backup_rename(
     character_id: str, filename: str, body: _ZipBackupRename
 ) -> dict:
     """Rename a single backup. The ZIP file itself isn't modified;
@@ -124,7 +124,7 @@ async def flist_character_zip_backup_rename(
 @router.get(
     "/flist/character/{character_id}/zip-backups/{filename}/download"
 )
-async def flist_character_zip_backup_download(
+def flist_character_zip_backup_download(
     character_id: str, filename: str
 ) -> FileResponse:
     """Stream the raw ZIP bytes for a saved backup. Used by Sidebar
@@ -147,7 +147,7 @@ async def flist_character_zip_backup_download(
 @router.get(
     "/flist/character/{character_id}/zip-backups/{filename}/payload"
 )
-async def flist_character_zip_backup_payload(
+def flist_character_zip_backup_payload(
     character_id: str, filename: str
 ) -> dict:
     """Read the embedded working.json out of a ZIP backup for the

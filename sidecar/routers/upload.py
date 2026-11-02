@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel
 
 import archive_images
+import archive_registry
 import archive_workbench
 import restore as restore_svc
 from archive_errors import CharacterNotFound, NoLive
@@ -27,7 +28,7 @@ EXTENSION = "extension"
 
 
 @router.get("/flist/character/{character_id}/export.zip")
-async def flist_character_export_zip(character_id: str) -> Response:
+def flist_character_export_zip(character_id: str) -> Response:
     """Build the userscript-compatible restore ZIP (Tier 6).
 
     Bundles `character.json` + every image referenced by the
@@ -42,26 +43,29 @@ async def flist_character_export_zip(character_id: str) -> Response:
     """
     import zip_serialise
 
-    working = archive_workbench.export_payload(character_id)
-    if working is None:
-        raise NoLive("no Workbench or Live to export")
-    name_for_file = "character"
-    char = working.get("character")
-    if isinstance(char, dict):
-        nm = char.get("name")
-        if isinstance(nm, str) and nm:
-            name_for_file = nm
-    avatar_path = (
-        archive_images.avatar_path_for(name_for_file)
-        if name_for_file != "character"
-        else None
-    )
-    data = zip_serialise.build_zip(
-        character_id,
-        working,
-        images_dir=archive_images.images_dir(character_id),
-        avatar_path=avatar_path,
-    )
+    # One step under the character's lock: the gallery the zip packs is
+    # the one the payload names, not one a repair renamed in between.
+    with archive_registry.character_lock(character_id):
+        working = archive_workbench.export_payload(character_id)
+        if working is None:
+            raise NoLive("no Workbench or Live to export")
+        name_for_file = "character"
+        char = working.get("character")
+        if isinstance(char, dict):
+            nm = char.get("name")
+            if isinstance(nm, str) and nm:
+                name_for_file = nm
+        avatar_path = (
+            archive_images.avatar_path_for(name_for_file)
+            if name_for_file != "character"
+            else None
+        )
+        data = zip_serialise.build_zip(
+            character_id,
+            working,
+            images_dir=archive_images.images_dir(character_id),
+            avatar_path=avatar_path,
+        )
     import time as _t
 
     download_name = (

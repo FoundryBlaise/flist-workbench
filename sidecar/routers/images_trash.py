@@ -7,6 +7,7 @@ cleared Labels, per character and, for Labels, across all of them.
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import archive_images
 import archive_registry
@@ -20,7 +21,7 @@ router = APIRouter()
 
 
 @router.get("/flist/character/{character_id}/images/{filename}")
-async def flist_character_image(character_id: str, filename: str) -> FileResponse:
+def flist_character_image(character_id: str, filename: str) -> FileResponse:
     """Serve `images/<image_id>.<ext>`. The filename shape is validated
     against the safe-name regex so a hostile renderer call can't path-
     traverse out of the images directory."""
@@ -32,7 +33,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
 
 
 @router.get("/flist/character/{character_id}/images")
-async def flist_character_images_list(character_id: str) -> dict:
+def flist_character_images_list(character_id: str) -> dict:
     """List the files in `images/`. Each row: `{image_id, extension,
     size, added_at}`. Renderer pairs these with description/sort_order
     from the Workbench to decide which are on the profile vs. in the
@@ -44,7 +45,7 @@ async def flist_character_images_list(character_id: str) -> dict:
 
 
 @router.get("/flist/character/{character_id}/image/{image_id}")
-async def flist_character_image_by_id(
+def flist_character_image_by_id(
     character_id: str, image_id: str
 ) -> FileResponse:
     """Serve `images/<image_id>.<ext>` without the renderer having to
@@ -80,14 +81,16 @@ async def flist_character_image_upload(
         # F-list itself caps images well below this; the bound is here
         # to keep a hostile body from blocking the loop on disk write.
         raise TooLarge("image too large")
-    row = archive_images.add_uploaded_image(character_id, body)
+    # Off the loop: matching the bytes against the pool hashes every
+    # image the character holds.
+    row = await run_in_threadpool(archive_images.add_uploaded_image, character_id, body)
     if row is None:
         raise UnsupportedType("unsupported image type (png/jpg/gif only)")
     return row
 
 
 @router.post("/flist/character/{character_id}/images/repair")
-async def flist_character_images_repair(character_id: str) -> dict:
+def flist_character_images_repair(character_id: str) -> dict:
     """Put the gallery back together when entries have lost their bytes.
 
     Called when the Images tab opens. A slot pointing at a file that is
@@ -102,7 +105,7 @@ async def flist_character_images_repair(character_id: str) -> dict:
 
 
 @router.delete("/flist/character/{character_id}/images/{image_id}")
-async def flist_character_image_remove(
+def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> dict:
     """Move `images/<image_id>.<ext>` into the character's trash, where
@@ -119,21 +122,21 @@ class _ImageIdsBody(BaseModel):
 
 
 @router.post("/flist/character/{character_id}/images/trash")
-async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
+def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
     """Move several pool files into the trash at once."""
     return image_trash_service.trash_images(character_id, body.image_ids)
 
 
 # Not under /images/: that prefix is taken by the `{filename}` route.
 @router.get("/flist/character/{character_id}/image-references")
-async def flist_character_image_references(character_id: str) -> dict:
+def flist_character_image_references(character_id: str) -> dict:
     """Where each image id is still used — the Workbench, Live and
     Backups — so the window can warn before trashing one."""
     return image_import_service.references(character_id)
 
 
 @router.get("/flist/character/{character_id}/trash")
-async def flist_character_trash_list(character_id: str) -> dict:
+def flist_character_trash_list(character_id: str) -> dict:
     return {
         "character_id": character_id,
         "items": image_trash_service.list_trash(character_id),
@@ -143,7 +146,7 @@ async def flist_character_trash_list(character_id: str) -> dict:
 
 
 @router.get("/flist/character/{character_id}/trash/{filename}")
-async def flist_character_trash_file(character_id: str, filename: str) -> FileResponse:
+def flist_character_trash_file(character_id: str, filename: str) -> FileResponse:
     """Serve a trashed file, for the trash view's thumbnails."""
     archive_images.require_image_filename(filename)
     if filename.endswith(".json"):
@@ -156,7 +159,7 @@ async def flist_character_trash_file(character_id: str, filename: str) -> FileRe
 
 
 @router.post("/flist/character/{character_id}/trash/restore")
-async def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) -> dict:
+def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) -> dict:
     """Put trashed files back into the pool (not onto the profile)."""
     return image_trash_service.restore_images(character_id, body.image_ids)
 
@@ -166,7 +169,7 @@ class _TrashIdsBody(BaseModel):
 
 
 @router.post("/flist/character/{character_id}/trash/backups/restore")
-async def flist_character_trash_backups_restore(
+def flist_character_trash_backups_restore(
     character_id: str, body: _TrashIdsBody
 ) -> dict:
     """Put trashed Backups back in the Backup list, under their names."""
@@ -185,7 +188,7 @@ def _trash_owner(character_id: str) -> str:
 
 
 @router.post("/flist/character/{character_id}/trash/labels/restore")
-async def flist_character_trash_labels_restore(
+def flist_character_trash_labels_restore(
     character_id: str, body: _TrashIdsBody
 ) -> dict:
     """Put cleared Labels back. A message labelled again since keeps
@@ -197,26 +200,26 @@ async def flist_character_trash_labels_restore(
 # it, so a model can never make a picture, a Backup or cleared Labels
 # unrecoverable.
 @router.post("/flist/character/{character_id}/trash/purge")
-async def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
+def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> dict:
     return image_trash_service.purge_images(character_id, body.image_ids)
 
 
 @router.post("/flist/character/{character_id}/trash/backups/purge")
-async def flist_character_trash_backups_purge(
+def flist_character_trash_backups_purge(
     character_id: str, body: _TrashIdsBody
 ) -> dict:
     return backup_trash_service.purge_backups(character_id, body.ids)
 
 
 @router.post("/flist/character/{character_id}/trash/labels/purge")
-async def flist_character_trash_labels_purge(
+def flist_character_trash_labels_purge(
     character_id: str, body: _TrashIdsBody
 ) -> dict:
     return label_trash_service.purge(_trash_owner(character_id), body.ids)
 
 
 @router.delete("/flist/character/{character_id}/trash")
-async def flist_character_trash_empty(character_id: str) -> dict:
+def flist_character_trash_empty(character_id: str) -> dict:
     """Empty the whole Trash: images, Backups and cleared Labels."""
     owner = _trash_owner(character_id)
     return {
@@ -227,7 +230,7 @@ async def flist_character_trash_empty(character_id: str) -> dict:
 
 
 @router.get("/flist/character/{character_id}/inlines/{filename}")
-async def flist_character_inline(character_id: str, filename: str) -> FileResponse:
+def flist_character_inline(character_id: str, filename: str) -> FileResponse:
     archive_images.require_image_filename(filename)
     path = archive_images.inlines_dir(character_id) / filename
     if not path.exists():
