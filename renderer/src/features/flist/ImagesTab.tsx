@@ -714,8 +714,8 @@ export function ImagesTab({
       {!readOnly && (
         <footer className="flist-images-tab__footer">
           <span className="flist-images-tab__footer-hint">
-            Done curating? Export the working set as a ZIP for restore via the
-            flistcharexporter userscript.
+            Done curating? Download the Workbench as a ZIP and upload it
+            with the flistcharexporter userscript.
           </span>
           <button
             type="button"
@@ -723,7 +723,7 @@ export function ImagesTab({
             onClick={() => openExportRestore(characterId)}
             data-testid="flist-images-tab-export"
           >
-            ⬇ Export for restore…
+            ⬇ Download for Upload…
           </button>
         </footer>
       )}

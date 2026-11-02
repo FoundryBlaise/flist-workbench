@@ -65,7 +65,7 @@ export function ExternalChangeBanner() {
         data-testid="external-change-banner"
       >
         <span>
-          <strong>This working set changed outside the editor</strong>
+          <strong>The Workbench changed outside the editor</strong>
           {by ? ` — ${by}.` : '.'}{' '}
           You have unsaved edits here, so one of the two versions has to
           win.

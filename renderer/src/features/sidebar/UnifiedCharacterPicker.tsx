@@ -541,7 +541,7 @@ export function UnifiedCharacterPicker() {
               </ul>
             </>
           )}
-          <div className="char-picker-section-h" title="A stand-in slot for reading somebody else's profile. It is not one of your characters: no working set, no pull, no backup.">
+          <div className="char-picker-section-h" title="A stand-in slot for reading somebody else's profile. It is not one of your characters: no Workbench, no Pull, no Backup.">
             Other people
           </div>
           <ul className="char-picker-unified-list">
