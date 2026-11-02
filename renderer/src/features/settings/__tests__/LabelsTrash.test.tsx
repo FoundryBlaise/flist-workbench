@@ -26,7 +26,6 @@ const SETTINGS = {
     chunk_soft_split_chars: 1500,
     chunk_overlap_msgs: 1
   },
-  backups: { scheduled_interval_days: 7, scheduled_keep_last_n: 5 },
   image_import_roots: []
 }
 
