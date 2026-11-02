@@ -52,6 +52,7 @@ archive = [
   "sidecar/tests/test_foreign.py",
   "sidecar/tests/test_settings.py",
   "sidecar/tests/test_events.py",
+  "sidecar/tests/test_writer_events.py",
   "sidecar/tests/test_health.py",
   "sidecar/tests/test_render.py",
   "sidecar/tests/test_flist_activity.py",
