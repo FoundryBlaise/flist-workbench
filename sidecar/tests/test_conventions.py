@@ -149,7 +149,7 @@ HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "flist_character_inline"): 1,
     ("sidecar/server.py", "flist_character_live"): 1,
     ("sidecar/server.py", "flist_character_trash_file"): 1,
-    ("sidecar/server.py", "flist_character_workbench_load_backup"): 4,
+    ("sidecar/server.py", "flist_character_workbench_load_backup"): 3,
     ("sidecar/server.py", "flist_character_workbench_load_preflight"): 2,
     ("sidecar/server.py", "flist_character_zip_backup"): 1,
     ("sidecar/server.py", "flist_character_zip_backup_delete"): 2,

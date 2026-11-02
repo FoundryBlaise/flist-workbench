@@ -51,7 +51,7 @@ from archive_errors import (
     WorkbenchConflict,
     WorkbenchNotKept,
 )
-from refusals import BackupHoldsNoProfile, InvalidFileName
+from refusals import BackupHoldsNoProfile, BackupTooOld, InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -1327,8 +1327,8 @@ def load_zip_backup_into_workbench(
     The Backup is read and checked first; only then is the Workbench it
     replaces kept as a `before-restore` Backup, and only once that is
     written is the Workbench overwritten. Raises `BackupHoldsNoProfile`
-    for the migration Backup, and KeyError for a Backup from before the
-    profile payload was stored in it.
+    for the migration Backup, and `BackupTooOld` for a Backup from
+    before the profile payload was stored in it.
     """
     import zipfile
 
@@ -1342,6 +1342,8 @@ def load_zip_backup_into_workbench(
             raw = zf.read("working.json").decode("utf-8")
     except zipfile.BadZipFile as exc:
         raise ValueError(f"corrupt backup file: {exc}") from exc
+    except KeyError as exc:
+        raise BackupTooOld(backup_filename) from exc
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
