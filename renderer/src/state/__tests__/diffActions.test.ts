@@ -136,6 +136,27 @@ describe('the Diff picker', () => {
     ])
   })
 
+  it('leaves out the Backup of the files an earlier version left behind, which holds no profile', async () => {
+    fake.on('GET /flist/character/99/live', json(livePayload({ fetched_at: 1790000500 })))
+    fake.on(
+      BACKUPS,
+      json({
+        backups: [
+          backupRow(NEWER, { source: 'workbench', occasion: 'migration', kind: 'unknown' }),
+          backupRow(OLDER, { source: 'workbench', occasion: 'manual' })
+        ]
+      })
+    )
+
+    await useStore.getState().flistLoadArchive('99')
+
+    expect(
+      selectDiffSources(useStore.getState(), '99').flatMap((e) =>
+        e.kind === 'backup' ? [e.filename] : []
+      )
+    ).toEqual([OLDER])
+  })
+
   it('offers Live alone while the Backup list has not loaded', () => {
     seedSlot('99', {})
     expect(selectDiffSources(useStore.getState(), '99')).toEqual([
