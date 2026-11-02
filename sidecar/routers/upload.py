@@ -15,9 +15,13 @@ from pydantic import BaseModel
 import archive_images
 import archive_workbench
 import restore as restore_svc
+from services import events
 from services import pull as pull_service
 
 router = APIRouter()
+
+#: Who the extension's writes are attributed to on the event bus.
+EXTENSION = "extension"
 
 
 @router.get("/flist/character/{character_id}/export.zip")
@@ -187,7 +191,10 @@ def restore_snapshot_fresh(
     body: _PreRestoreSnapshotBody,
     _auth: str = Depends(_require_restore_auth),
 ) -> dict[str, Any]:
-    return restore_svc.write_pre_restore_snapshot(body.character, body.payload)
+    # The extension's writes are not the window's: attributed to the
+    # default `ui`, the window would skip them as its own echo.
+    with events.origin(EXTENSION):
+        return restore_svc.write_pre_restore_snapshot(body.character, body.payload)
 
 
 class _RestoreSavedBody(BaseModel):
@@ -269,8 +276,9 @@ async def restore_saved(
         if delay:
             await asyncio.sleep(delay)
         try:
-            async for _event, _data in pull_service.run(name):
-                pass
+            with events.origin(EXTENSION):
+                async for _event, _data in pull_service.run(name):
+                    pass
         except Exception as exc:  # noqa: BLE001 - background task
             print(f"post-save pull failed for {name}: {exc}", file=sys.stderr)
 

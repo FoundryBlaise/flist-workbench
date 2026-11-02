@@ -240,8 +240,11 @@ def register_character(character_id: int | str, name: str) -> str:
         # Brand-new character with no legacy folder. `write_live`
         # creates it right after registering.
         entry = {"name": name, "folder": new_slug}
+    changed = reg.get(cid) != entry
     reg[cid] = entry
     save_registry(reg)
+    if changed:
+        _publish(_events().CHARACTERS_CHANGED, character_id=cid)
     return entry["folder"]
 
 

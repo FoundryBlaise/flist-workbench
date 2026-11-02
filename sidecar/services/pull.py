@@ -26,7 +26,7 @@ import flist_activity
 import flist_api
 import settings as settings_store
 
-from . import image_trash
+from . import events, image_trash
 
 #: F-list ids are integers in practice, but the value becomes a
 #: directory name under `<userdata>/characters/`, so the shape is
@@ -79,7 +79,16 @@ def _differs_from_live(cid: str, payload: dict[str, Any]) -> bool:
 
 
 async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-    """Pull `name`'s profile. Yields `(event, data)`; see EVENTS."""
+    """Pull `name`'s profile. Yields `(event, data)`; see EVENTS.
+
+    The window hears of the Pull once it ends: one event per thing it
+    changed (Live, the pool, the roster), not one per picture."""
+    with events.coalesced():
+        async for item in _pull(name):
+            yield item
+
+
+async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     # Send queued event immediately so the renderer's row badge can
     # flip to "queued" before the lock is acquired.
     yield ("queued", {"name": name})

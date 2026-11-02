@@ -1067,7 +1067,7 @@ def _import_batch(
     working_set: str | None,
     convert_to_jpeg: bool,
 ) -> dict[str, Any]:
-    from services import events, image_import, payload_ops
+    from services import image_import, payload_ops
 
     target = resolve_character(character)
     if not items:
@@ -1122,8 +1122,6 @@ def _import_batch(
         stored = [image_import.store(target.id, p) for p in prepared]
     except image_import.ImportRefused as exc:
         raise ToolError(exc.code, exc.message, **exc.details) from exc
-    if any(not row["deduplicated"] for row in stored):
-        events.publish(events.IMAGES_CHANGED, character_id=str(target.id))
 
     replaced: dict[int, str] = {}
     if touches_gallery:
