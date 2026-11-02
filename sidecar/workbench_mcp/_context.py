@@ -149,19 +149,13 @@ class ResolvedSet:
     """A character's Workbench, or its read-only Live."""
 
     character: ResolvedCharacter
-    id: str | None  # None => live.json; else the Workbench's storage id
     name: str
-
-    @property
-    def is_live(self) -> bool:
-        return self.id is None
+    is_live: bool = False
 
 
-def workbench_target(character: ResolvedCharacter, meta: Any) -> ResolvedSet:
-    """The Workbench behind `meta`, under the one name a model sees."""
-    return ResolvedSet(
-        character=character, id=meta.id, name=character_archive.WORKBENCH_SET_NAME
-    )
+def workbench_target(character: ResolvedCharacter) -> ResolvedSet:
+    """The character's Workbench, under the one name a model sees."""
+    return ResolvedSet(character=character, name=character_archive.WORKBENCH_NAME)
 
 
 def resolve_set(
@@ -189,7 +183,7 @@ def resolve_set(
                 f"never edited. Leave {param} out to edit the "
                 "Workbench instead.",
             )
-        return ResolvedSet(character=character, id=None, name=LIVE)
+        return ResolvedSet(character=character, name=LIVE, is_live=True)
 
     if needle not in ("", WORKBENCH):
         raise ToolError(
@@ -206,15 +200,14 @@ def resolve_set(
     # Live the first time anything asks: for a read this is harmless,
     # and it spares every caller a "create one first" step the window
     # does not have either.
-    meta = character_archive.resolve_workbench(character.id)
-    if meta is None:
+    if character_archive.read_workbench(character.id, create=True) is None:
         raise ToolError(
             "nothing_to_edit",
             f"{character.name} has never been pulled from F-list, so "
             "there is nothing to copy into a Workbench. Pull the "
             "character first.",
         )
-    return workbench_target(character, meta)
+    return workbench_target(character)
 
 
 def load_payload(target: ResolvedSet) -> dict[str, Any]:
@@ -228,7 +221,8 @@ def load_payload(target: ResolvedSet) -> dict[str, Any]:
                 "Run pull_character first.",
             )
         return live
-    payload = character_archive.read_set_payload(target.character.id, target.id or "")
+    bench = character_archive.read_workbench(target.character.id)
+    payload = bench.payload if bench is not None else None
     if payload is None:
         raise ToolError(
             "workbench_not_found",

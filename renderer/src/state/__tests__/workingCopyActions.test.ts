@@ -472,7 +472,7 @@ describe('flistOpenWorking reads the one Workbench endpoint', () => {
     })
     fake.on(
       'GET /flist/character/99/workbench?create=false',
-      json(workbenchRead('bbbbbbbbbbbb'))
+      json(workbenchRead())
     )
     fake.on(
       `GET ${BENCH_URL}?create=false`,
@@ -535,7 +535,7 @@ describe('the first edit of a character with no Workbench', () => {
         created: true
       })
     )
-    fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead('bbbbbbbbbbbb')))
+    fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead()))
     fake.on(SAVE, json({ etag: 'saved' }))
 
     useStore.getState().setEditorContent('typed')
@@ -597,7 +597,7 @@ describe('the window addresses the Workbench, never a set', () => {
   it('open, autosave and the close-time flush send no set id', async () => {
     seedLive({ character: { description: 'published' } })
     useStore.setState({ flistActiveCharacterId: '99', flistRoster: [] })
-    fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead(SET_ID)))
+    fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead()))
     fake.on(
       `GET ${BENCH_URL}?create=false`,
       json(payloadRead(workbenchPayload({ character: { description: 'on disk' } }), 'e1'))
@@ -778,14 +778,13 @@ describe('Restore from the window', () => {
     fake.on(
       LOAD,
       json({
-        workbench: { id: SET_ID, kind: 'bench', name: 'Workbench' },
+        workbench: { name: 'Workbench', created_at: 100, updated_at: 300 },
         payload: workbenchPayload({ character: { description: 'restored' } }),
         etag: 'after-restore',
         loaded: FILENAME,
         backed_up_first: null
       })
     )
-    fake.on(`POST /flist/character/99/sets/${SET_ID}/activate`, json({ active_set_id: SET_ID }))
     fake.on(
       `GET ${BENCH_URL}`,
       json(payloadRead(workbenchPayload({ character: { description: 'restored' } }), 'after-restore'))

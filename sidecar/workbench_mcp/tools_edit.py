@@ -66,7 +66,7 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
     from services import payload_ops
 
     try:
-        return payload_ops.edit(target.id, resolved.id or "", mutate)
+        return payload_ops.edit(target.id, mutate)
     except payload_ops.PayloadError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
     except character_archive.EtagMismatch as exc:
@@ -135,8 +135,9 @@ def load_backup_into_workbench(
     except KeyError as exc:
         raise ToolError(
             "backup_too_old",
-            "That backup predates the stored profile payload, so there "
-            "is nothing in it to load into the Workbench.",
+            "That Backup holds no profile to load into the Workbench: "
+            "it predates the stored profile payload, or keeps the files "
+            "an earlier version of the app left behind.",
         ) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
@@ -149,7 +150,7 @@ def load_backup_into_workbench(
     )
     return {
         "character": target.name,
-        "set": character_archive.WORKBENCH_SET_NAME,
+        "set": character_archive.WORKBENCH_NAME,
         "loaded": backup,
         "kept_as": kept,
         "note": NO_PUSH_NOTE,
@@ -1226,10 +1227,9 @@ def _set_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
     editing."""
     if working_set is not None:
         return resolve_set(target, working_set)
-    meta = character_archive.resolve_workbench(target.id, create=False)
-    if meta is None:
+    if character_archive.read_workbench(target.id) is None:
         return None
-    return workbench_target(target, meta)
+    return workbench_target(target)
 
 
 @tool(tags=TAG_CHARACTER, title="Import images into the pool")
@@ -1331,7 +1331,7 @@ def get_working_set_payload(
     etag = (
         None
         if resolved.is_live
-        else character_archive.set_payload_etag(target.id, resolved.id or "")
+        else character_archive.workbench_etag(target.id)
     )
     return {
         "character": target.name,
@@ -1371,9 +1371,13 @@ def put_working_set_payload(
     if not isinstance(payload, dict):
         raise ToolError("validation_failed", "payload must be an object")
 
+    if if_match is None:
+        # Without `if_match` this overwrites whatever is there, as the
+        # docstring warns: the caller has confirmed it.
+        if_match = character_archive.workbench_etag(target.id)
     try:
-        etag = character_archive.write_set_payload(
-            target.id, resolved.id or "", payload, expected_etag=if_match
+        etag = character_archive.write_workbench(
+            target.id, payload, expected_etag=if_match
         )
     except character_archive.EtagMismatch as exc:
         raise ToolError(

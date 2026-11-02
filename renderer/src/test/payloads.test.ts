@@ -96,10 +96,9 @@ describe('sidecar replies', () => {
     })
   })
 
-  it('workbenchRead names the bench and makes it active', () => {
-    expect(workbenchRead('bbbbbbbbbbbb')).toEqual({
-      workbench: { id: 'bbbbbbbbbbbb', kind: 'bench', name: 'Workbench' },
-      active_set_id: 'bbbbbbbbbbbb'
+  it('workbenchRead names the Workbench and when it last changed', () => {
+    expect(workbenchRead(300)).toEqual({
+      workbench: { name: 'Workbench', created_at: 100, updated_at: 300 }
     })
   })
 })

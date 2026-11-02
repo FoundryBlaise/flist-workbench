@@ -70,12 +70,10 @@ TAKES_WORKING_SET: dict[str, dict[str, Any]] = {
 
 
 def _old_archive_with_a_second_draft(archive) -> str:
-    """The Workbench plus a second draft an older version left behind,
-    the way an archive from before one-Workbench looks. Returns the
-    second draft's id."""
-    archive.resolve_workbench("42")
-    other = archive.create_set_from_live("42", "Main")
-    return other.id
+    """The Workbench, and the id a second draft had in an older version
+    (since moved into a Backup at startup). Returns that id."""
+    archive.read_workbench("42", create=True)
+    return "bbbbbbbbbbbb"
 
 
 @pytest.mark.parametrize("name", REMOVED_TOOLS)
@@ -137,9 +135,8 @@ async def test_diff_against_a_set_name_is_refused(workbench) -> None:  # noqa: F
 async def test_reading_and_editing_without_a_set_reference_use_the_workbench(
     workbench,  # noqa: F811
 ) -> None:
-    """With an old second draft still on disk, the omitted reference is
-    the Workbench the window shows, and the draft's name never comes
-    back to the model."""
+    """The omitted reference is the Workbench the window shows, and an
+    old draft's name never comes back to the model."""
     _old_archive_with_a_second_draft(workbench)
     async with mcp_client("character") as session:
         _, wrote = await call_tool(

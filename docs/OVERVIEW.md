@@ -70,23 +70,23 @@ Per character under `%APPDATA%\flist-workbench\characters\<Folder>\`:
 
 - `live.json` — the last profile pulled from F-list. Read-only. The
   window calls it **Live on F-List**.
-- `sets/<12hex>/{payload,meta}.json` — the editable copy. On disk this
-  is still the working-set format, and a character can technically hold
-  several; the window shows exactly one and calls it the **Workbench**.
-  `active_set.json` says which one that is.
-- `backups/*.zip` (the Backups), `images/`, `inlines/`. Older
-  versions kept a copy of Live per Pull in a folder of its own; Pulls
-  no longer write one, and the files wait there for the one-time
-  migration to pack them into a Backup.
+- `workbench/payload.json` and `workbench/meta.json` — the
+  **Workbench**, the one editable copy, and when it was made and last
+  saved. Every reader and writer goes through
+  `character_archive.read_workbench` / `write_workbench`.
+- `backups/*.zip` (the Backups), `images/`, `inlines/`, `trash/`.
+- `layout.json` — written once the folder has this shape.
 
-Working sets were once a user-facing concept — create, name, keep
-several, pick an active one. Testers could not say what one was or how
-it differed from the read-only row above it, so the concept stayed on
-disk and left the vocabulary. `character_archive.resolve_workbench()`
-picks the bench: the active set, else the most recently changed, else a
-new one seeded from Live. Extra sets an older version left behind stay
-on disk, out of the window, and are logged once when chosen — there is
-no migration step to remove later.
+Older versions kept several drafts per character with a pointer to the
+active one, a copy of Live per Pull, and before that one working-copy
+file. At startup `workbench_migration` moves each character once (ADR
+0001): the draft the window showed (the active one, else the most
+recently changed) becomes `workbench/`, and every old file goes
+verbatim into one Backup (source `workbench`, occasion `migration`),
+verified before the originals are removed. `layout.json` is written
+last; a folder without it is redone from the start, and one whose
+Backup could not be written keeps its old files until the next start.
+A character with no drafts gets its Workbench from Live on first use.
 
 The working payload (schema v6) carries `_overlay` — the dotted paths
 the user has touched — so a later pull can refresh untouched fields
@@ -146,7 +146,7 @@ that was 1.9 s, against 0.07-0.14 s through one
 pull, the backup-all run), where nothing waits on any single image.
 
 The slot is not a character. It has no id, no archive entry, no
-working set and never sets `flistActiveCharacterId` — which is what
+Workbench and never sets `flistActiveCharacterId` — which is what
 leaves every edit, pull, backup and export path with nothing to act
 on. The sidebar hides the per-character zones while it is selected,
 and a `read-only` badge sits in the panel's header, because the panel

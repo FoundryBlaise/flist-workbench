@@ -159,7 +159,7 @@ export type FlistImageReferences = {
 // character-data.php response the archive stores as live.json, so the
 // panes that render a Live profile read this without a translation
 // layer. Nothing here writes: there is no endpoint that turns one of
-// these into a working set, and that is deliberate.
+// these into a Workbench, and that is deliberate.
 
 /** Where the viewer's candidate names come from. `name` is free text
  *  taken as an exact character name — F-list has no search endpoint. */
@@ -206,8 +206,7 @@ export type ForeignProfileResult = {
 
 /** The Workbench's metadata as the sidecar sends it. The window reads
  *  only `updated_at`, for the Workbench row's "last changed". */
-export type SetMetaWire = {
-  id: string
+export type WorkbenchInfoWire = {
   name: string
   created_at: number
   updated_at: number
@@ -1008,19 +1007,15 @@ export const api = {
       }
     >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
   // ---- The workbench --------------------------------------------
-  // A character has one editable copy of its profile, always present,
-  // seeded from Live when first needed. "Working sets" — several named
-  // drafts with one active — stayed on disk and left the vocabulary:
-  // testers could not say what one was or how it related to the
-  // read-only F-list row above it.
+  // A character has one editable copy of its profile beside Live,
+  // seeded from Live when first needed (ADR 0001).
   /** Resolve the character's workbench, creating it from Live if it
    *  does not exist. `create: false` asks without making one, which is
    *  what a read-only render wants — merely looking at a character
    *  should not bring a bench into being. */
   flistWorkbench: (characterId: string | number, create = true) =>
     get<{
-      workbench: SetMetaWire | null
-      active_set_id?: string | null
+      workbench: WorkbenchInfoWire | null
       reason?: string
     }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
@@ -1107,7 +1102,7 @@ export const api = {
    *  replaced: a `workbench_not_kept` refusal. */
   flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
     request<{
-      workbench: SetMetaWire
+      workbench: WorkbenchInfoWire
       payload: Record<string, unknown>
       etag: string
       loaded: string

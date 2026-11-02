@@ -47,7 +47,9 @@ def sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     api = app_client(server.app)
     # A Workbench and a Backup exist, so a 404 means the route is gone,
     # not that there was nothing for it to act on.
-    bench_id = character_archive.resolve_workbench(CID).id
+    character_archive.read_workbench(CID, create=True)
+    # The id a draft had in older versions, as an old window would send it.
+    bench_id = "aaaaaaaaaaaa"
     backup = character_archive.save_zip_backup(
         CID, source="workbench", occasion="manual", force=True
     )

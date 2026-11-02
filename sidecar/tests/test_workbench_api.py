@@ -1,11 +1,5 @@
-"""The workbench REST surface (one editable copy per character).
-
-Working sets were a user-facing concept — create, name, keep several,
-pick an active one — and testers could not explain what one was, how it
-related to "From F-list", or why backups were a third thing beside both.
-The concept stays on disk and leaves the vocabulary: one bench per
-character, always there, seeded from Live when first needed.
-"""
+"""The Workbench REST surface: one editable copy per character, beside
+its Live, made from Live when first needed (ADR 0001)."""
 
 from __future__ import annotations
 
@@ -50,21 +44,20 @@ def _seed(archive, cid: str = "42") -> None:
     )
 
 
-def _edit(archive, cid: str, set_id: str, description: str) -> None:
-    archive.write_set_payload(
-        cid,
-        set_id,
-        {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
-            "_overlay": ["character.description"],
-            "character": {
-                "id": cid,
-                "name": "Lady Amber Blaise",
-                "description": description,
-            },
-        },
-        expected_etag=None,
-    )
+def _edit(api, description: str, cid: str = "42") -> None:
+    """Save an edit the way the window does: over the etag it read."""
+    url = f"/flist/character/{cid}/workbench/payload"
+    current = api.get(url).json()
+    payload = current["payload"]
+    payload["character"]["description"] = description
+    payload["_overlay"] = ["character.description"]
+    res = api.put(url, json=payload, headers={"If-Match": current["etag"]})
+    assert res.status_code == 200, res.text
+
+
+def _description(api, cid: str = "42") -> str:
+    url = f"/flist/character/{cid}/workbench/payload?create=false"
+    return api.get(url).json()["payload"]["character"]["description"]
 
 
 def test_asking_for_the_workbench_creates_it_from_live(client) -> None:
@@ -72,9 +65,10 @@ def test_asking_for_the_workbench_creates_it_from_live(client) -> None:
     _seed(archive)
 
     body = api.get("/flist/character/42/workbench").json()
-    assert body["workbench"]["name"] == archive.WORKBENCH_SET_NAME
-    assert body["active_set_id"] == body["workbench"]["id"]
-    assert len(archive.list_sets("42")) == 1
+
+    assert body["workbench"]["name"] == "Workbench"
+    assert body["workbench"]["updated_at"] >= body["workbench"]["created_at"]
+    assert _description(api) == "[b]Published.[/b]"
 
 
 def test_a_read_only_render_can_ask_without_creating_one(client) -> None:
@@ -86,7 +80,8 @@ def test_a_read_only_render_can_ask_without_creating_one(client) -> None:
     # Not the same nothing as "never pulled": the window offers the row
     # in this case and hides it in the other.
     assert body["reason"] == "not_created_yet"
-    assert archive.list_sets("42") == []
+    read = api.get("/flist/character/42/workbench/payload?create=false")
+    assert read.status_code == 404
 
 
 def test_a_character_never_pulled_has_nothing_to_seed_from(client) -> None:
@@ -98,14 +93,27 @@ def test_a_character_never_pulled_has_nothing_to_seed_from(client) -> None:
     assert body["reason"] == "no_live"
 
 
+def test_a_save_moves_the_workbench_last_changed(client) -> None:
+    api, archive = client
+    _seed(archive)
+    first = api.get("/flist/character/42/workbench").json()["workbench"]
+    meta = archive.workbench_dir("42") / "meta.json"
+    meta.write_text('{"created_at": 10, "updated_at": 10}', encoding="utf-8")
+
+    _edit(api, "edited")
+
+    after = api.get("/flist/character/42/workbench?create=false").json()["workbench"]
+    assert after["created_at"] == 10
+    assert after["updated_at"] >= first["updated_at"] > 10
+
+
 def test_loading_a_backup_replaces_the_bench_in_place(client) -> None:
     api, archive = client
     _seed(archive)
-    bench = archive.resolve_workbench("42")
-    _edit(archive, "42", bench.id, "worth keeping")
+    _edit(api, "worth keeping")
     saved = api.post("/flist/character/42/zip-backup").json()
     filename = saved.get("filename") or saved["backup"]["filename"]
-    _edit(archive, "42", bench.id, "a mistake")
+    _edit(api, "a mistake")
 
     body = api.post(
         "/flist/character/42/workbench/load-backup",
@@ -113,15 +121,14 @@ def test_loading_a_backup_replaces_the_bench_in_place(client) -> None:
     ).json()
 
     assert body["loaded"] == filename
-    assert len(archive.list_sets("42")) == 1, "must not add a second draft"
-    payload = archive.read_set_payload("42", bench.id)
-    assert payload["character"]["description"] == "worth keeping"
+    assert body["workbench"]["name"] == "Workbench"
+    assert _description(api) == "worth keeping"
 
 
 def test_loading_a_missing_backup_is_a_404(client) -> None:
     api, archive = client
     _seed(archive)
-    archive.resolve_workbench("42")
+    api.get("/flist/character/42/workbench")
 
     res = api.post(
         "/flist/character/42/workbench/load-backup",
@@ -136,8 +143,7 @@ def test_preflight_reports_that_f_list_has_moved_on(client) -> None:
     not enforced — wanting it anyway is legitimate."""
     api, archive = client
     _seed(archive)
-    bench = archive.resolve_workbench("42")
-    _edit(archive, "42", bench.id, "edited")
+    _edit(api, "edited")
     saved = api.post("/flist/character/42/zip-backup").json()
     filename = saved.get("filename") or saved["backup"]["filename"]
 

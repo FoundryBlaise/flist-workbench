@@ -446,11 +446,8 @@ def export_restore_zip(
 
     target = resolve_character(character)
     resolved = resolve_set(target, working_set)
-    payload = (
-        character_archive.read_set_payload(target.id, resolved.id or "")
-        if not resolved.is_live
-        else None
-    )
+    bench = None if resolved.is_live else character_archive.read_workbench(target.id)
+    payload = bench.payload if bench is not None else None
     if payload is None:
         live = character_archive.read_live(target.id)
         if live is None:

@@ -15,6 +15,7 @@ import pytest
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
+from workbench_state import put_workbench, workbench_payload
 
 
 @pytest.fixture
@@ -67,9 +68,9 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def payload_of(archive) -> dict[str, Any]:
     """The workbench payload. There is one per character, so nothing to
     address it by."""
-    bench = archive.resolve_workbench("42", create=False)
+    bench = archive.read_workbench("42")
     assert bench is not None, "no workbench yet"
-    return archive.read_set_payload("42", bench.id) or {}
+    return bench.payload
 
 
 async def open_workbench(session) -> dict[str, Any]:
@@ -560,12 +561,11 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
     published profile."""
     async with mcp_client("character") as session:
         await open_workbench(session)
-        meta = next(m for m in workbench.list_sets("42"))
-        payload = workbench.read_set_payload("42", meta.id)
+        payload = workbench_payload(workbench, "42")
         payload["custom_kinks"] = {
             "7788": {"name": "From F-list", "description": "", "choice": "yes"}
         }
-        workbench.write_set_payload("42", meta.id, payload, expected_etag=None)
+        put_workbench(workbench, "42", payload)
 
         _, deleted = await call_tool(
             session,
@@ -639,13 +639,12 @@ async def test_reorder_custom_kinks_requires_the_complete_list(
 
 
 def seed_gallery(archive, image_ids: list[str]) -> None:
-    meta = next(m for m in archive.list_sets("42"))
-    payload = archive.read_set_payload("42", meta.id)
+    payload = workbench_payload(archive, "42")
     payload["images"] = [
         {"image_id": i, "description": "", "sort_order": n}
         for n, i in enumerate(image_ids)
     ]
-    archive.write_set_payload("42", meta.id, payload, expected_etag=None)
+    put_workbench(archive, "42", payload)
 
 
 async def test_reordering_the_gallery_renumbers_from_zero(workbench) -> None:
@@ -806,28 +805,23 @@ async def test_an_edit_retries_once_when_the_ui_saves_underneath(
     two are usually touching different fields."""
     from services import payload_ops
 
-    meta_id = None
-
     async with mcp_client("character") as session:
         await open_workbench(session)
-        meta_id = next(m.id for m in workbench.list_sets("42"))
 
         original = payload_ops.edit
         calls = {"n": 0}
 
-        def racing_edit(character_id, set_id, mutate):  # noqa: ANN001
+        def racing_edit(character_id, mutate):  # noqa: ANN001
             def wrapper(payload):
                 calls["n"] += 1
                 if calls["n"] == 1:
                     # Simulate the UI saving between our read and write.
-                    other = workbench.read_set_payload("42", meta_id)
+                    other = workbench_payload(workbench, "42")
                     other["settings"] = {"public": True}
-                    workbench.write_set_payload(
-                        "42", meta_id, other, expected_etag=None
-                    )
+                    put_workbench(workbench, "42", other)
                 return mutate(payload)
 
-            return original(character_id, set_id, wrapper)
+            return original(character_id, wrapper)
 
         payload_ops.edit = racing_edit
         try:

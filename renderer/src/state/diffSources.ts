@@ -35,7 +35,9 @@ export function selectDiffSources(s: DiffSourcesState, characterId: string): Dif
   return [
     { kind: 'live', lastPullAt: archive?.lastPullAt ?? null },
     { kind: 'workbench' },
-    ...backups.map(
+    // The migration Backup keeps the files an earlier version left
+    // behind, not a profile: there is nothing in it to compare.
+    ...backups.filter((b) => b.occasion !== 'migration').map(
       (b): DiffSource => ({
         kind: 'backup',
         filename: b.filename,

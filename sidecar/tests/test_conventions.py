@@ -242,8 +242,6 @@ WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/features/flist/UserscriptHelpModal.tsx": 2,
     "renderer/src/features/foreign/ForeignWorkspace.tsx": 1,
     "renderer/src/features/sidebar/UnifiedCharacterPicker.tsx": 1,
-    "sidecar/character_archive.py": 1,
-    "sidecar/services/payload_ops.py": 1,
 }
 
 SNAPSHOT_ALLOWED: dict[str, int] = {

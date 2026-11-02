@@ -110,10 +110,7 @@ describe('the Workbench row', () => {
   it('knows when the Workbench was last changed, without a list of drafts', async () => {
     fake.on(
       `GET /flist/character/${CID}/workbench?create=false`,
-      json({
-        workbench: { id: 'b1', name: 'Workbench', created_at: 100, updated_at: 200 },
-        active_set_id: 'b1'
-      })
+      json({ workbench: { name: 'Workbench', created_at: 100, updated_at: 200 } })
     )
 
     await useStore.getState().flistLoadWorkbenchInfo(CID)
