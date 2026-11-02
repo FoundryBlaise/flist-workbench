@@ -14,6 +14,8 @@
 #   audit    verdict before spec #9: the October 2026 audit runs for A and L;
 #            R and A06 re-measured with this tool on main 77d79c4 (the
 #            audit's renderer log was lost, and A06 did not apply then)
+#            Entries re-anchored for spec #3 (A01 A02 A04 A08 A09 A13 A15,
+#            R01 R03 R04 R07 R10 R23) re-measured on spec/3-one-workbench.
 #   spec     the spec whose tests should kill it if it survives
 #            (9 = should already be killed by spec #9's fixtures)
 #
@@ -220,7 +222,7 @@ suite = "sidecar"
 file = "sidecar/services/image_trash.py"
 breaks = "Restoring an image from the Trash overwrites a different image of the same name in the pool."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 2
 # audit: M9 trash restore overwrites a different pool file
 find = '''
@@ -311,7 +313,7 @@ suite = "sidecar"
 file = "sidecar/restore.py"
 breaks = "The Upload source list leaves out the Workbench."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 3
 # audit: M15 extension source list drops the Workbench
 find = '''
@@ -664,7 +666,7 @@ suite = "renderer"
 file = "renderer/src/state.ts"
 breaks = "A save that lands marks the Workbench clean although the user typed while it was in flight; those keystrokes are never saved."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 9
 # audit: M03 save success clears dirty even if user typed during PUT
 find = '''
@@ -969,7 +971,7 @@ suite = "renderer"
 file = "renderer/src/state.ts"
 breaks = "Two saves of the same Workbench can be in flight at once and race."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 9
 # audit: M23 flush no longer registers single-flight (overlapping PUTs race)
 find = '''
