@@ -382,8 +382,8 @@ def character_dir(character_id: int | str) -> Path:
 
 def create_character_dir(character_id: int | str) -> Path:
     """Create a character's folder: the moment a character comes into
-    the archive. A Pull (`write_live`) and a set-bundle import call
-    this; every other path finds the character with `character_dir`."""
+    the archive. Only a Pull (`write_live`) calls this; every other path
+    finds the character with `character_dir`."""
     p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -1340,14 +1340,15 @@ def load_zip_backup_into_workbench(
 
 
 def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    """Build a fresh working payload from a Live snapshot.
+    """Build a fresh Workbench payload from Live.
 
-    The one implementation on the Python side — `services.payload_ops`
-    re-exports it as `seed_from_live`, and both the set-create path and
-    the export fallback go through that. It mirrors the renderer's
-    `seedWorkingFromLive`; the two have to stay in step, because a set
-    created in the sidecar and one created in the UI must be the same
-    shape."""
+    The one implementation on the Python side: making the Workbench on
+    its first read, reset to Live and the export of a character without
+    a Workbench all go through it (`services.payload_ops` re-exports it
+    as `seed_from_live`). It mirrors the renderer's
+    `seedWorkingFromLive`; the two have to stay in step, because a
+    Workbench the sidecar makes and one the window seeds must be the
+    same shape."""
     out: dict[str, Any] = {
         "_schema_version": WORKING_SCHEMA_VERSION,
         "_overlay": [],

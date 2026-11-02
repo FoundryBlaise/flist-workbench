@@ -396,7 +396,7 @@ export function descriptionOf(payload: WorkingPayload): string {
   return normaliseNewlines(v)
 }
 
-// ---- Working-sets v2 selector ---------------------------------------
+// ---- The Workbench slot selector -----------------------------------
 
 /** Shape the selector reads. The store's full State extends this; isolating
  *  the dependency keeps `selectWorkingSlot` testable without importing the
