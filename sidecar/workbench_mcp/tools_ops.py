@@ -598,56 +598,29 @@ def update_settings(
 ) -> dict[str, Any]:
     """Change Workbench settings. Omitted values are left alone.
 
-    The embedding API key is deliberately not settable here — a secret
-    should be typed into Settings, not passed through a tool call that
-    ends up in a transcript. Changing `embed_model` invalidates the
+    Numbers out of range are clamped; `changed` reports what was
+    stored. An empty model name resets it to the default. The window
+    shows the change at once. Changing `embed_model` invalidates the
     search index: it was built with the old model's vectors.
     """
-    import rag as rag_settings
-    import settings as settings_store
+    from services import settings as settings_service
 
-    conn = settings_store.connect()
-    changed: dict[str, Any] = {}
-    try:
-        if ooc_threshold_chars is not None:
-            value = max(1, int(ooc_threshold_chars))
-            settings_store.set_value(
-                conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(value)
-            )
-            changed["ooc_threshold_chars"] = value
-        if embed_model is not None:
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_EMBED_MODEL, str(embed_model)
-            )
-            changed["embed_model"] = embed_model
-        if top_k is not None:
-            value = max(1, min(50, int(top_k)))
-            settings_store.set_value(conn, settings_store.KEY_RAG_TOP_K, str(value))
-            changed["top_k"] = value
-        if neighbors is not None:
-            value = max(0, min(5, int(neighbors)))
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_NEIGHBORS, str(value)
-            )
-            changed["neighbors"] = value
-        if rerank_model is not None:
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_RERANK_MODEL, str(rerank_model)
-            )
-            changed["rerank_model"] = rerank_model
-        if hybrid_enabled is not None:
-            settings_store.set_value(
-                conn,
-                settings_store.KEY_RAG_HYBRID_ENABLED,
-                "1" if hybrid_enabled else "0",
-            )
-            changed["hybrid_enabled"] = bool(hybrid_enabled)
-    finally:
-        conn.close()
-
-    if not changed:
+    given = {
+        "ooc_threshold_chars": ooc_threshold_chars,
+        "embed_model": embed_model,
+        "top_k": top_k,
+        "neighbors": neighbors,
+        "rerank_model": rerank_model,
+        "hybrid_enabled": hybrid_enabled,
+    }
+    given = {param: value for param, value in given.items() if value is not None}
+    if not given:
         raise ToolError("validation_failed", "nothing to change")
 
+    stored = settings_service.update(
+        {_SETTINGS_FIELDS[param]: value for param, value in given.items()}
+    )
+    changed = {param: stored[_SETTINGS_FIELDS[param]] for param in given}
     audit("update_settings", **changed)
     out: dict[str, Any] = {"changed": changed}
     if "embed_model" in changed:
@@ -656,8 +629,18 @@ def update_settings(
             "vectors and can't be searched with this one. Run "
             "wipe_search_index then ingest_logs."
         )
-    del rag_settings  # imported for the settings-key names only
     return out
+
+
+#: `update_settings` parameters -> the settings service's field names.
+_SETTINGS_FIELDS = {
+    "ooc_threshold_chars": "labels.threshold_chars",
+    "embed_model": "rag.embed_model",
+    "top_k": "rag.top_k",
+    "neighbors": "rag.neighbors",
+    "rerank_model": "rag.rerank_model",
+    "hybrid_enabled": "rag.hybrid_enabled",
+}
 
 
 # --------------------------------------------------------------------

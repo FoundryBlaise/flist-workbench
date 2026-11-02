@@ -264,16 +264,12 @@ async def test_a_model_can_trash_pool_images_but_not_gallery_ones(
 def test_the_trash_remembers_where_an_import_came_from(
     client, workbench, tmp_path: Path  # noqa: F811
 ) -> None:
-    import settings as settings_store
     from services import image_import
+    from services import settings as settings_service
 
     folder = tmp_path / "Outputs"
     folder.mkdir()
-    conn = settings_store.connect()
-    try:
-        image_import.save_import_roots(conn, [str(folder)])
-    finally:
-        conn.close()
+    settings_service.update({"image_import_roots": [str(folder)]})
     src = folder / "Profil_final_03.png"
     src.write_bytes(png(10))
     prepared = image_import.prepare(str(src), roots=image_import.import_roots())

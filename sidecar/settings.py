@@ -15,7 +15,7 @@ import paths
 import sqlite_db
 
 # Keys we know about. Untyped here intentionally — keeps the table
-# trivial; the API layer is where shape validation happens.
+# trivial; services/settings.py validates every change, REST or MCP.
 KEY_FCHAT_DATA_DIR = "fchat_data_dir"
 
 # Labels settings (see sidecar/labels.py for defaults + resolver).
@@ -182,6 +182,21 @@ def set_value(conn: sqlite3.Connection, key: str, value: str) -> None:
 def clear(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM settings WHERE key = ?", (key,))
     conn.commit()
+
+
+def write_many(conn: sqlite3.Connection, values: dict[str, str | None]) -> None:
+    """Store several keys in one transaction: all of them land or none.
+    None deletes the key (it reads as its default again)."""
+    with conn:
+        for key, value in values.items():
+            if value is None:
+                conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
 
 
 def all_settings(conn: sqlite3.Connection) -> dict[str, str]:

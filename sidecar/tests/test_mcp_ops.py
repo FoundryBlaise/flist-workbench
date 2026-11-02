@@ -460,7 +460,7 @@ async def test_changing_the_embedding_model_warns_about_the_index(
     another's — silently leaving it in place looks like data loss."""
     async with mcp_client("character") as session:
         _, body = await call_tool(
-            session, "update_settings", embed_model="some-other-model"
+            session, "update_settings", embed_model="org/some-other-model"
         )
     assert "wipe_search_index" in body["warning"]
 

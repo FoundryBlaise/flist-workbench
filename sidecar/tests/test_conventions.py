@@ -360,9 +360,7 @@ CLASSIFICATION_ALLOWED: dict[str, int] = {
     "sidecar/workbench_mcp/tools_ops.py": 2,
 }
 
-TRANSCRIPT_ALLOWED: dict[str, int] = {
-    "sidecar/workbench_mcp/tools_ops.py": 1,
-}
+TRANSCRIPT_ALLOWED: dict[str, int] = {}
 
 RETIRED_TERM_ALLOWED: dict[str, dict[str, int]] = {
     "working set": WORKING_SET_ALLOWED,
