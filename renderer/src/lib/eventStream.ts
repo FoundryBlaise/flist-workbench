@@ -19,6 +19,9 @@ export type WorkbenchEvent = {
   etag?: string | null
   character?: string
   partner?: string
+  /** `settings-changed`: each changed field as stored, keyed by the
+   *  settings service's names (`rag.top_k`); null = back to default. */
+  changed?: Record<string, unknown>
 }
 
 export type EventHandler = (event: WorkbenchEvent) => void

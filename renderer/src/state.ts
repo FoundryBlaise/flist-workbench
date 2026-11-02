@@ -124,6 +124,9 @@ type State = {
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
+  /** Counts settings changes made outside this window. An open
+   *  Settings re-reads them when it moves. */
+  settingsRevision: number
 
   editorContent: string
   editorTitle: string
@@ -422,6 +425,10 @@ type State = {
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
+  /** Something outside this window changed settings (the
+   *  `settings-changed` event); `fields` names them, as the sidecar's
+   *  settings service does (`labels.threshold_chars`, `rag.top_k`). */
+  noteSettingsChanged: (fields: string[]) => void
   openIngest: (
     scope: { character?: string | null; partner?: string | null },
     label: string,
@@ -1436,6 +1443,7 @@ export const useStore = create<State>((set, get) => ({
   messagesByPartner: {},
   messagesStatus: {},
   messagesError: {},
+  settingsRevision: 0,
 
   editorContent: '',
   editorTitle: '',
@@ -4085,6 +4093,17 @@ export const useStore = create<State>((set, get) => ({
       void __
       return { messagesByPartner: byPartner, messagesStatus: status }
     })
+  },
+
+  noteSettingsChanged(fields) {
+    set((s) => ({ settingsRevision: s.settingsRevision + 1 }))
+    // The OOC threshold is applied when a Log is read, so the open
+    // Log's Labels are only current after a re-read.
+    const { activeCharacter: char, activePartner: partner } = get()
+    if (fields.includes('labels.threshold_chars') && char && partner) {
+      get().invalidateMessages(char, partner)
+      void get().loadMessages(char, partner, { force: true })
+    }
   },
 
   openIngest(scope, label, opts) {

@@ -8,8 +8,8 @@ from pydantic import BaseModel
 import labels as labels_store
 import rag as rag_settings
 import settings as settings_store
-from refusals import ValidationFailed
 from services import image_import as image_import_service
+from services import settings as settings_service
 
 router = APIRouter()
 
@@ -25,17 +25,14 @@ def _settings_db():
 class LabelsSettingsUpdate(BaseModel):
     # Only the rule threshold is left — the classifier's endpoint,
     # model, prompt and context window went away with the in-app LLM.
-    # None means "leave untouched"; below 1 is clamped silently.
+    # None means "leave untouched"; services.settings clamps the value.
     threshold_chars: int | None = None
 
 
 class RagSettingsUpdate(BaseModel):
     # Same convention as LabelsSettingsUpdate: empty string clears
-    # (falls back to default on read), None leaves untouched. Prefixes
-    # are special — an empty string for them is a real value (not a
-    # default), but we still accept it as "clear" since the default
-    # also happens to be empty.
-    # "local" (in-process ONNX) or "endpoint" (OpenAI-compatible server).
+    # (falls back to default on read), None leaves untouched.
+    # A fastembed model id, "org/name".
     embed_model: str | None = None
     # Retrieval fields. None = untouched; "" = reset to default.
     # Numeric fields are int|None — empty string isn't meaningful for an
@@ -157,106 +154,23 @@ def settings_get(conn=Depends(_settings_db)) -> dict:
 
 @router.put("/settings")
 def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
-    if body.fchat_data_dir is not None:
-        value = body.fchat_data_dir.strip()
-        if value:
-            # Reject obviously bogus paths up front so the UI gets a
-            # clean 400 rather than a "characters: []" reply later.
-            from pathlib import Path
-
-            p = Path(value).expanduser()
-            if not p.exists() or not p.is_dir():
-                raise ValidationFailed("fchat_data_dir", f"directory does not exist: {value}")
-            settings_store.set_value(conn, settings_store.KEY_FCHAT_DATA_DIR, str(p))
-        else:
-            settings_store.clear(conn, settings_store.KEY_FCHAT_DATA_DIR)
-
-    if body.labels is not None:
-        _apply_labels_update(conn, body.labels)
-
-    if body.rag is not None:
-        _apply_rag_update(conn, body.rag)
-
-    if body.image_import_roots is not None:
-        try:
-            image_import_service.save_import_roots(conn, body.image_import_roots)
-        except ValueError as exc:
-            raise ValidationFailed("image_import_roots", str(exc)) from exc
-
+    settings_service.update(_changes(body), conn)
     return _settings_dict(conn)
 
 
-def _apply_labels_update(conn, update: LabelsSettingsUpdate) -> None:
-    """Persist each labels field that was supplied.
-
-    None means "leave untouched". threshold_chars below 1 is clamped to
-    1 — zero or negative would make every message OOC and is almost
-    certainly a typo.
-    """
-    if update.threshold_chars is not None:
-        n = max(1, int(update.threshold_chars))
-        settings_store.set_value(conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(n))
-
-
-def _apply_rag_update(conn, update: RagSettingsUpdate) -> None:
-    """Persist each RAG field that was supplied.
-
-    Same convention as _apply_labels_update: None leaves the field
-    untouched, empty string clears (falls back to default on read).
-    """
-    for field, key in (
-        ("embed_model", settings_store.KEY_RAG_EMBED_MODEL),
-        ("rerank_model", settings_store.KEY_RAG_RERANK_MODEL),
-    ):
-        value = getattr(update, field)
-        if value is None:
-            continue
-        if value == "":
-            settings_store.clear(conn, key)
-        else:
-            settings_store.set_value(conn, key, value)
-
-    # Numeric fields: int|None. Clamp + store as string.
-    if update.rerank_candidates is not None:
-        n = max(1, min(200, int(update.rerank_candidates)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_RERANK_CANDIDATES, str(n))
-    if update.top_k is not None:
-        n = max(1, min(50, int(update.top_k)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_TOP_K, str(n))
-    if update.neighbors is not None:
-        n = max(0, min(5, int(update.neighbors)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_NEIGHBORS, str(n))
-    if update.rerank_min_ratio is not None:
-        # Stored as the literal float string ("0.5"); _coerce_float on
-        # read handles the parse + clamp.
-        ratio = max(0.0, min(1.0, float(update.rerank_min_ratio)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_RERANK_MIN_RATIO, str(ratio))
-    if update.hybrid_enabled is not None:
-        # Bools stored as "1" / "0" so the settings table stays TEXT.
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_RAG_HYBRID_ENABLED,
-            "1" if update.hybrid_enabled else "0",
-        )
-    if update.hybrid_bm25_candidates is not None:
-        n = max(1, min(200, int(update.hybrid_bm25_candidates)))
-        settings_store.set_value(
-            conn, settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES, str(n)
-        )
-    if update.chunk_max_chars is not None:
-        n = max(500, min(20000, int(update.chunk_max_chars)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS, str(n))
-    if update.chunk_soft_split_chars is not None:
-        # Clamp against the saved (or just-saved) max to keep
-        # soft_split < max — same invariant the loader enforces.
-        # Re-read so an in-same-request max change is honoured.
-        max_raw = settings_store.get(conn, settings_store.KEY_RAG_CHUNK_MAX_CHARS)
-        try:
-            cur_max = int(max_raw) if max_raw else rag_settings.DEFAULT_CHUNK_MAX_CHARS
-        except (TypeError, ValueError):
-            cur_max = rag_settings.DEFAULT_CHUNK_MAX_CHARS
-        n = max(400, min(max(500, cur_max - 100), int(update.chunk_soft_split_chars)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_SOFT_SPLIT_CHARS, str(n))
-    if update.chunk_overlap_msgs is not None:
-        n = max(0, min(5, int(update.chunk_overlap_msgs)))
-        settings_store.set_value(conn, settings_store.KEY_RAG_CHUNK_OVERLAP_MSGS, str(n))
+def _changes(body: SettingsUpdate) -> dict:
+    """The request as the settings service's field names. A field the
+    window left out (or sent as null, for the numbers) stays out, so it
+    is left as it is; the service validates and clamps the rest."""
+    changes: dict = {}
+    # null clears the F-Chat folder, like an empty string; only a
+    # missing key leaves it alone.
+    if "fchat_data_dir" in body.model_fields_set:
+        changes["fchat_data_dir"] = body.fchat_data_dir
+    for prefix, part in (("labels", body.labels), ("rag", body.rag)):
+        if part is not None:
+            for name, value in part.model_dump(exclude_none=True).items():
+                changes[f"{prefix}.{name}"] = value
+    if body.image_import_roots is not None:
+        changes["image_import_roots"] = body.image_import_roots
+    return changes

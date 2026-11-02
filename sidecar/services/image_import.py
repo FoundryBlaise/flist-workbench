@@ -94,9 +94,10 @@ def import_roots(conn: Any = None) -> list[Path]:
     return [Path(v) for v in values if isinstance(v, str) and v.strip()]
 
 
-def save_import_roots(conn: Any, roots: list[str]) -> list[str]:
-    """Validate and store the folder list. Raises ValueError naming the
-    first entry that is not an existing absolute directory."""
+def clean_import_roots(roots: list[str]) -> list[str]:
+    """The folder list as it is stored: blanks and repeats dropped.
+    Raises ValueError naming the first entry that is not an existing
+    absolute directory."""
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in roots:
@@ -113,12 +114,6 @@ def save_import_roots(conn: Any, roots: list[str]) -> list[str]:
             continue
         seen.add(key)
         cleaned.append(str(p))
-    if cleaned:
-        settings_store.set_value(
-            conn, settings_store.KEY_IMAGE_IMPORT_ROOTS, json.dumps(cleaned)
-        )
-    else:
-        settings_store.clear(conn, settings_store.KEY_IMAGE_IMPORT_ROOTS)
     return cleaned
 
 
