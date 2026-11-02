@@ -9,10 +9,7 @@ character, always there, seeded from Live when first needed.
 
 from __future__ import annotations
 
-import json
-import zipfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 from sidecar_client import app_client
@@ -116,36 +113,9 @@ def test_loading_a_backup_replaces_the_bench_in_place(client) -> None:
     ).json()
 
     assert body["loaded"] == filename
-    assert body["backed_up_first"] is None
     assert len(archive.list_sets("42")) == 1, "must not add a second draft"
     payload = archive.read_set_payload("42", bench.id)
     assert payload["character"]["description"] == "worth keeping"
-
-
-def test_backing_up_first_is_the_users_third_button(client) -> None:
-    """Cancel / load / back up and load. The safety net is offered, never
-    imposed — which is the point: the decision is the user's."""
-    api, archive = client
-    _seed(archive)
-    bench = archive.resolve_workbench("42")
-    _edit(archive, "42", bench.id, "first state")
-    saved = api.post("/flist/character/42/zip-backup").json()
-    filename = saved.get("filename") or saved["backup"]["filename"]
-    _edit(archive, "42", bench.id, "about to be replaced")
-
-    body = api.post(
-        "/flist/character/42/workbench/load-backup",
-        json={"filename": filename, "back_up_first": True},
-    ).json()
-
-    assert body["backed_up_first"] is not None
-    rescued = body["backed_up_first"]["filename"]
-    assert rescued != filename
-    with zipfile.ZipFile(
-        archive.backups_dir("42") / rescued, "r"
-    ) as zf:
-        stored: dict[str, Any] = json.loads(zf.read("working.json").decode("utf-8"))
-    assert stored["character"]["description"] == "about to be replaced"
 
 
 def test_loading_a_missing_backup_is_a_404(client) -> None:

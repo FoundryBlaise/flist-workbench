@@ -50,6 +50,7 @@ afterEach(() => {
 const SET_ID = 'aaaaaaaaaaaa'
 const BENCH_URL = '/flist/character/99/workbench/payload'
 const SAVE = `PUT ${BENCH_URL}`
+const RESET = 'POST /flist/character/99/workbench/reset-to-live'
 const AUTOSAVE_MS = 500
 
 const descOf = (body: unknown) =>
@@ -58,6 +59,19 @@ const descOf = (body: unknown) =>
 const refusal = (code: string, currentEtag: string | null) =>
   json({ code, message: 'The Workbench changed since it was read.', current_etag: currentEtag }, 409)
 const conflict = refusal('etag_mismatch', 'server-etag')
+
+/** What the sidecar answers to reset to Live: the fresh copy of Live,
+ *  its etag, and the Backup it kept of the Workbench it replaced. */
+const resetAnswer = (
+  description: string,
+  etag: string,
+  kept: { filename: string; created_at: number } | null = null
+) =>
+  json({
+    payload: workbenchPayload({ character: { description } }),
+    etag,
+    backed_up_first: kept
+  })
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
   const slot = workingSlot(workbenchPayload(payload))
@@ -614,98 +628,134 @@ describe('the window addresses the Workbench, never a set', () => {
   })
 })
 
-describe('flistResetWorkingToLive writes the bench, not working.json', () => {
-  it('replaces the bench on disk with Live, against the etag the window holds', async () => {
-    seedLive({
-      character: { description: 'live' },
-      images: [
-        { image_id: '1', description: '', sort_order: 0 },
-        { image_id: '2', description: '', sort_order: 1 }
-      ]
-    })
+describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup first', () => {
+  it('saves what was typed, then has the sidecar reset, and adopts the payload and etag it answers', async () => {
+    seedLive({ character: { description: 'live' } })
     seedSlot('99', {
       character: { description: 'edited' },
-      images: [
-        { image_id: '2', description: '', sort_order: 0 },
-        { image_id: '1', description: '', sort_order: 1 },
-        { image_id: 'local-abc', description: '', sort_order: 2 }
-      ],
-      _overlay: ['character.description', 'images']
+      _overlay: ['character.description']
     })
-    fake.on(SAVE, json({ etag: 'after-reset' }))
+    fake.on(SAVE, json({ etag: 'typed-saved' }))
+    fake.on(RESET, resetAnswer('live', 'after-reset'))
 
+    // Typed, and reset before the autosave fired: the Backup the
+    // sidecar keeps must hold this text, so it is saved first.
+    useStore.getState().setEditorContent('edited, not saved yet')
     await useStore.getState().flistResetWorkingToLive('99')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
 
-    expect(fake.requests.length).toBe(1)
-    const [put] = fake.requests
-    expect(put.method).toBe('PUT')
-    expect(put.path).toBe(BENCH_URL)
-    expect(put.headers['If-Match']).toBe('seed-etag')
-    expect(descOf(put.body)).toBe('live')
-    const images = (put.body as { images: { image_id: string }[] }).images
-    expect(images.map((i) => i.image_id)).toEqual(['1', '2'])
-    expect((put.body as { _overlay: string[] })._overlay).toEqual([])
+    expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([SAVE, RESET])
+    expect(descOf(fake.requests[0].body)).toBe('edited, not saved yet')
 
     const slot = useStore.getState().flistWorking['99']
+    expect(descOf(slot.payload)).toBe('live')
     expect(slot.etag).toBe('after-reset')
     expect(slot.unsavedDirty).toBe(false)
     expect(slot.materialised).toBe(true)
     expect(slot.overlay).toEqual([])
+    expect(useStore.getState().editorContent).toBe('live')
+    const undo = useStore.getState().flistResetUndo
+    expect(undo?.etag).toBe('after-reset')
+    expect(undo?.awaitingWrite).toBe(false)
+    expect(descOf(undo?.snapshot.payload)).toBe('edited, not saved yet')
   })
 
-  it('a follow-up flush armed before the reset never ships the pre-reset payload', async () => {
-    seedLive({ character: { description: 'live' } })
-    seedSlot('99', { character: { description: 'edited' } })
-    fake.once(SAVE, json({ etag: 'next' }))
-    fake.once(SAVE, json({ etag: 'after-reset' }))
-    fake.on(SAVE, json({ etag: 'unexpected' }))
-    // A save lands, then a newer edit arms the success branch's
-    // follow-up flush; the reset arrives before that timer fires.
-    useStore.getState().flistSetWorkingField('99', 'character.description', 'edited+')
-    await vi.advanceTimersByTimeAsync(500)
-    useStore.getState().flistSetWorkingField('99', 'character.description', 'edited++')
-    await useStore.getState().flistResetWorkingToLive('99')
-    await vi.advanceTimersByTimeAsync(1000)
-
-    const puts = fake.requestsTo(SAVE)
-    expect(puts.map((p) => descOf(p.body))).toEqual(['edited+', 'live'])
-    // The reset writes over the etag the landed save left, not the
-    // one the slot carried before it.
-    expect(puts[1].headers['If-Match']).toBe('next')
-    expect(fake.requests.some((r) => r.path.includes('/working'))).toBe(false)
-    expect(useStore.getState().flistWorking['99'].etag).toBe('after-reset')
-  })
-
-  it('drains a save still in flight, then writes Live over the etag that save returned', async () => {
-    // The reset is pressed while an autosave is on the wire. Writing
-    // straight away would race it: whichever lands second wins, and
-    // the reset's If-Match would name an etag the save is about to
-    // replace.
+  it('drains a save still in flight before asking for the reset', async () => {
     seedLive({ character: { description: 'live' } })
     seedSlot('99', { character: { description: 'edited' } })
     fake.hold(SAVE)
+    fake.on(RESET, resetAnswer('live', 'after-reset'))
 
     useStore.getState().setEditorContent('edited, still saving')
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     const [inFlight] = fake.pending(SAVE)
-    expect(descOf(inFlight.request.body)).toBe('edited, still saving')
 
     const reset = useStore.getState().flistResetWorkingToLive('99')
     await vi.advanceTimersByTimeAsync(0)
-    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+    expect(fake.requestsTo(RESET)).toHaveLength(0)
 
     inFlight.resolve(json({ etag: 'landed' }))
-    await vi.advanceTimersByTimeAsync(0)
-    const [resetWrite] = fake.pending(SAVE)
-    expect(descOf(resetWrite.request.body)).toBe('live')
-    expect(resetWrite.request.headers['If-Match']).toBe('landed')
-
-    resetWrite.resolve(json({ etag: 'after-reset' }))
     await reset
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
-    expect(fake.requestsTo(SAVE)).toHaveLength(2)
+    expect(fake.requestsTo(RESET)).toHaveLength(1)
+    expect(fake.requestsTo(SAVE)).toHaveLength(1)
     expect(useStore.getState().flistWorking['99'].etag).toBe('after-reset')
     expect(useStore.getState().editorContent).toBe('live')
+  })
+
+  it('typed text that cannot be saved stops the reset: no Backup would hold it', async () => {
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', { character: { description: 'edited' } })
+    fake.on(SAVE, conflict)
+    fake.on(RESET, resetAnswer('live', 'after-reset'))
+
+    useStore.getState().setEditorContent('typed, and the save is refused')
+    await useStore.getState().flistResetWorkingToLive('99')
+
+    expect(fake.requestsTo(RESET)).toHaveLength(0)
+    const slot = useStore.getState().flistWorking['99']
+    expect(descOf(slot.payload)).toBe('typed, and the save is refused')
+    expect(slot.unsavedDirty).toBe(true)
+    expect(useStore.getState().flistResetUndo).toBeNull()
+  })
+
+  it('shows the new Backup in the list when the sidecar kept one', async () => {
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', { character: { description: 'edited' } })
+    const kept = { filename: '2026-11-02T120000Z.zip', created_at: 1793620800 }
+    fake.on(RESET, resetAnswer('live', 'after-reset', kept))
+    fake.on(
+      'GET /flist/character/99/zip-backups',
+      json({
+        backups: [
+          {
+            ...kept,
+            size: 10,
+            kind: 'manual_single',
+            source: 'workbench',
+            occasion: 'before-restore',
+            name: null
+          }
+        ]
+      })
+    )
+
+    await useStore.getState().flistResetWorkingToLive('99')
+    await vi.advanceTimersByTimeAsync(0)
+
+    const listed = useStore.getState().flistArchive['99'].zipBackups ?? []
+    expect(listed.map((b) => b.filename)).toEqual([kept.filename])
+  })
+
+  it('when the sidecar cannot keep the Workbench, nothing is reset and the window says why', async () => {
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', {
+      character: { description: 'edited' },
+      _overlay: ['character.description']
+    })
+    useStore.setState({ editorContent: 'edited' })
+    fake.on(
+      RESET,
+      json(
+        {
+          code: 'workbench_not_kept',
+          message:
+            'The Workbench could not be saved as a Backup first, so it was not replaced: disk full'
+        },
+        500
+      )
+    )
+
+    await useStore.getState().flistResetWorkingToLive('99')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
+
+    const slot = useStore.getState().flistWorking['99']
+    expect(descOf(slot.payload)).toBe('edited')
+    expect(slot.etag).toBe('seed-etag')
+    expect(slot.saveError).toContain('not replaced')
+    expect(useStore.getState().editorContent).toBe('edited')
+    expect(useStore.getState().flistResetUndo).toBeNull()
+    expect(fake.requestsTo(SAVE)).toHaveLength(0)
   })
 
   it('a slot that was never materialised is reseeded in memory only', async () => {
@@ -717,7 +767,6 @@ describe('flistResetWorkingToLive writes the bench, not working.json', () => {
         '99': { ...s.flistWorking['99'], materialised: false, etag: null }
       }
     }))
-    fake.on(SAVE, json({ etag: 'unexpected' }))
 
     await useStore.getState().flistResetWorkingToLive('99')
     await vi.advanceTimersByTimeAsync(1000)
@@ -727,24 +776,74 @@ describe('flistResetWorkingToLive writes the bench, not working.json', () => {
   })
 })
 
+describe('Restore from the window', () => {
+  const LOAD = 'POST /flist/character/99/workbench/load-backup'
+  const FILENAME = '2026-10-30T120000Z.zip'
+
+  it('saves what was typed first, so the Backup the sidecar keeps holds it, and offers no choice about that Backup', async () => {
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', { character: { description: 'edited' } })
+    fake.on(SAVE, json({ etag: 'typed-saved' }))
+    fake.on(
+      LOAD,
+      json({
+        workbench: { id: SET_ID, kind: 'bench', name: 'Workbench' },
+        payload: workbenchPayload({ character: { description: 'restored' } }),
+        etag: 'after-restore',
+        loaded: FILENAME,
+        backed_up_first: null
+      })
+    )
+    fake.on(`POST /flist/character/99/sets/${SET_ID}/activate`, json({ active_set_id: SET_ID }))
+    fake.on(
+      `GET ${BENCH_URL}`,
+      json(payloadRead(workbenchPayload({ character: { description: 'restored' } }), 'after-restore'))
+    )
+
+    useStore.getState().setEditorContent('typed just before the Restore')
+    const ok = await useStore.getState().flistLoadBackupIntoWorkbench('99', FILENAME)
+
+    expect(ok).toBe(true)
+    const [save, load] = fake.requests
+    expect(`${save.method} ${save.path}`).toBe(SAVE)
+    expect(descOf(save.body)).toBe('typed just before the Restore')
+    expect(`${load.method} ${load.path}`).toBe(LOAD)
+    expect(load.body).toEqual({ filename: FILENAME })
+    expect(fake.requestsTo(SAVE)).toHaveLength(1)
+  })
+
+  it('typed text that cannot be saved stops the Restore', async () => {
+    seedLive({ character: { description: 'live' } })
+    seedSlot('99', { character: { description: 'edited' } })
+    fake.on(SAVE, conflict)
+
+    useStore.getState().setEditorContent('typed, and the save is refused')
+    const ok = await useStore.getState().flistLoadBackupIntoWorkbench('99', FILENAME)
+
+    expect(ok).toBe(false)
+    expect(fake.requestsTo(LOAD)).toHaveLength(0)
+    expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe(
+      'typed, and the save is refused'
+    )
+  })
+})
+
 describe('flistResetWorkingToLive + undo round-trip', () => {
-  it('undo writes the snapshot back into the bench over the reset\'s etag', async () => {
+  it('undo writes the snapshot back into the bench over the reset etag', async () => {
     seedLive({ character: { description: 'live' } })
     seedSlot('99', {
       character: { description: 'edited' },
       _overlay: ['character.description']
     })
-    fake.once(SAVE, json({ etag: 'after-reset' }))
+    fake.on(RESET, resetAnswer('live', 'after-reset'))
     fake.once(SAVE, json({ etag: 'after-undo' }))
 
     await useStore.getState().flistResetWorkingToLive('99')
     expect(useStore.getState().flistResetUndo).not.toBeNull()
     await useStore.getState().flistUndoResetWorking()
 
-    expect(fake.requests.length).toBe(2)
+    expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([RESET, SAVE])
     const undoPut = fake.requests[1]
-    expect(undoPut.method).toBe('PUT')
-    expect(undoPut.path).toBe(BENCH_URL)
     expect(undoPut.headers['If-Match']).toBe('after-reset')
     expect(descOf(undoPut.body)).toBe('edited')
 
@@ -773,6 +872,12 @@ describe('undo of reset to Live never reverts a change made after the reset', ()
       return json({ etag: disk.etag })
     })
     fake.on(`GET ${BENCH_URL}`, () => json(payloadRead(disk.payload, disk.etag)))
+    // Reset to Live, done by the sidecar: Live replaces what is on disk.
+    fake.on(RESET, () => {
+      disk.etag = `disk-${++version}`
+      disk.payload = workbenchPayload({ character: { description: 'Amber on F-list' } })
+      return json({ payload: disk.payload, etag: disk.etag, backed_up_first: null })
+    })
     return {
       disk,
       write(text: string) {

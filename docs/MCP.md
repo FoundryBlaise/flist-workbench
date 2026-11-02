@@ -303,6 +303,7 @@ Tool errors carry a stable code as their first word:
 | `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
 | `etag_conflict` | the window saved while the edit was in flight |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
+| `workbench_not_kept` | loading a Backup would replace the Workbench, but the Backup of it could not be written first, so nothing was replaced |
 | `no_index` | nothing ingested yet |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |

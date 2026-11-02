@@ -2,15 +2,11 @@ import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import type { FlistZipBackupEntry } from '../../lib/api'
 
-/** Three-way confirm for overwriting the workbench with a backup.
+/** Confirm a Restore: overwriting the Workbench with a Backup.
  *
- *  Cancel, load, or back up and load. The third button exists because
- *  the bench holds work that is not published anywhere: a misclick here
- *  would be the one action in the app that destroys something
- *  irreplaceable. It is offered rather than done automatically —
- *  whether the current contents are worth a backup is the user's call,
- *  and quietly writing a ZIP on their behalf every time would fill the
- *  list with rescues nobody asked for.
+ *  Cancel or load. The sidecar always saves the Workbench as a Backup
+ *  before a Restore replaces it (ADR 0003), so a misclick here costs
+ *  nothing: restoring that Backup undoes it. The dialog says so.
  *
  *  Two things the user cannot see for themselves come from the
  *  preflight: whether the bench actually holds edits, and whether
@@ -27,7 +23,7 @@ export function LoadIntoWorkbenchDialog({
   characterId: string
   backup: FlistZipBackupEntry
   onCancel: () => void
-  onConfirm: (backUpFirst: boolean) => void
+  onConfirm: () => void
 }) {
   const [preflight, setPreflight] = useState<{
     live_diverged: boolean
@@ -73,7 +69,8 @@ export function LoadIntoWorkbenchDialog({
         <h2 id="load-wb-title">Load “{label}” into the Workbench?</h2>
         <p>
           Everything currently in the Workbench will be replaced by this
-          backup.
+          backup. The Workbench is saved as a Backup first, so you can
+          restore it if you change your mind.
         </p>
         {preflight?.workbench_has_edits === false && (
           <p className="modal-note" data-testid="load-wb-no-edits">
@@ -93,15 +90,8 @@ export function LoadIntoWorkbenchDialog({
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(true)}
-            data-testid="load-wb-backup-first"
-          >
-            Back up first, then load
-          </button>
-          <button
-            type="button"
             className="danger"
-            onClick={() => onConfirm(false)}
+            onClick={() => onConfirm()}
             data-testid="load-wb-load"
           >
             Load

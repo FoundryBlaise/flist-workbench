@@ -36,6 +36,24 @@ class CharacterNotFound(Refusal, LookupError):
     fixed_message = "no such character in the archive"
 
 
+class WorkbenchNotKept(Refusal, OSError):
+    """A whole-Workbench replacement (Restore, reset to Live) whose
+    Backup of the Workbench it would replace could not be written. The
+    Workbench is left as it was; the message says why the Backup
+    failed."""
+
+    status = 500
+    code = "workbench_not_kept"
+
+
+class NoLive(Refusal, LookupError):
+    """An action that needs the character's Live, on a character never
+    pulled."""
+
+    status = 404
+    code = "no_live"
+
+
 class NoWorkbench(Refusal, LookupError):
     """A character with no Workbench, and none asked for or none that
     can be made: there is no Live to make it from."""
