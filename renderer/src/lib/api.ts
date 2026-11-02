@@ -84,6 +84,10 @@ export type FlistZipBackupEntry = {
   kind: FlistZipBackupKind
   source: FlistBackupSource
   occasion: FlistBackupOccasion | null
+  /** False for a Backup that holds no profile: the one the move to one
+   *  Workbench made of the older drafts and Pull copies. The sidecar
+   *  refuses to restore, browse or upload it; it can be downloaded. */
+  holds_profile: boolean
   /** User-set name from `_names.json`. `null` when the user hasn't
    *  renamed this backup yet — the UI then derives a default label
    *  from the timestamp. */

@@ -14,7 +14,14 @@ function backup(
   filename: string,
   origin: Pick<FlistZipBackupEntry, 'kind' | 'source' | 'occasion'>
 ): FlistZipBackupEntry {
-  return { filename, created_at: 1793361600, size: 4096, name: null, ...origin }
+  return {
+    filename,
+    created_at: 1793361600,
+    size: 4096,
+    name: null,
+    holds_profile: origin.occasion !== 'migration',
+    ...origin
+  }
 }
 
 const BACKUPS: FlistZipBackupEntry[] = [

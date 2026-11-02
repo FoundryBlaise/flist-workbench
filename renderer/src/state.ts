@@ -340,7 +340,7 @@ type State = {
    *  Ephemeral (no disk persistence — default = Live each session). */
   flistDiffRightSource: Record<
     string,
-    { kind: 'live' } | { kind: 'backup'; filename: string } | { kind: 'workbench' }
+    { kind: 'live' } | { kind: 'backup'; filename: string }
   >
   /** Tier 4 — lazy-loaded backup payloads. Keyed by
    *  `${characterId}:${filename}`. Read-only and rarely re-opened, so
@@ -641,14 +641,10 @@ type State = {
   /** Tier 4 — set the Diff tab's right-hand source. */
   flistDiffSetRightSource: (
     characterId: string,
-    source: { kind: 'live' } | { kind: 'backup'; filename: string } | { kind: 'workbench' }
+    source: { kind: 'live' } | { kind: 'backup'; filename: string }
   ) => void
   /** Tier 4 — fetch + cache a backup payload (idempotent). */
   flistDiffLoadBackup: (characterId: string, filename: string) => Promise<void>
-  /** Tier 4 — fetch + cache the current Workbench payload as a Diff
-   *  right-hand source, so the read-only Live row can be compared against
-   *  the edits actually in the bench (not only against backups). */
-  flistDiffLoadWorkbench: (characterId: string) => Promise<void>
   /** The Diff tab's "reset to this": with Live picked, reset the
    *  Workbench to Live; with a Backup picked, Restore that Backup. Both
    *  are the same actions as elsewhere, so the sidecar keeps the
@@ -3090,52 +3086,6 @@ export const useStore = create<State>((set, get) => ({
       // DiffPane reads `flistDiffBackupStatus` to distinguish "still
       // loading" from "404 / disk error" — gives the user a real
       // signal vs the previous indefinite spinner (UX P1-3).
-      set((s) => ({
-        flistDiffBackupStatus: {
-          ...s.flistDiffBackupStatus,
-          [cacheKey]: 'error'
-        }
-      }))
-    }
-  },
-
-  async flistDiffLoadWorkbench(characterId) {
-    const cacheKey = `${characterId}:__workbench__`
-    if (get().flistDiffBackupCache[cacheKey]) return
-    if (get().flistDiffBackupStatus[cacheKey] === 'loading') return
-    set((s) => ({
-      flistDiffBackupStatus: {
-        ...s.flistDiffBackupStatus,
-        [cacheKey]: 'loading'
-      }
-    }))
-    try {
-      // create=false so merely opening the Diff never brings a
-      // Workbench into being under a read-only Live view. None on disk
-      // is a refusal: the catch below marks it as an error, since there
-      // is nothing to compare but Live itself.
-      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
-      const payload = res?.payload ?? null
-      if (!payload) {
-        set((s) => ({
-          flistDiffBackupStatus: {
-            ...s.flistDiffBackupStatus,
-            [cacheKey]: 'error'
-          }
-        }))
-        return
-      }
-      set((s) => ({
-        flistDiffBackupCache: {
-          ...s.flistDiffBackupCache,
-          [cacheKey]: payload
-        },
-        flistDiffBackupStatus: {
-          ...s.flistDiffBackupStatus,
-          [cacheKey]: 'loaded'
-        }
-      }))
-    } catch {
       set((s) => ({
         flistDiffBackupStatus: {
           ...s.flistDiffBackupStatus,
