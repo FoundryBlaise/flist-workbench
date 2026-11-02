@@ -81,3 +81,28 @@ def test_mapping_list_propagates_ticket_required_as_401(
     monkeypatch.setattr(flist_api, "fetch_mapping_list", _raise)
     res = client.get("/flist/mapping-list")
     assert res.status_code == 401
+
+
+# ---- F-list unreachable -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["connect", "read"],
+)
+def test_an_unreachable_flist_is_the_flist_refusal(
+    client: TestClient, httpx_mock, failure: str  # noqa: ANN001
+) -> None:
+    """Offline, or F-list stops answering halfway: the window hears the
+    F-list refusal (502 `flist_error`), not an error inside the sidecar."""
+    import httpx
+
+    import flist_api
+    from sidecar_client import is_refusal_shaped
+
+    exc = httpx.ConnectError("offline") if failure == "connect" else httpx.ReadTimeout("slow")
+    httpx_mock.add_exception(exc, url=flist_api.MAPPING_LIST_URL, method="POST")
+    res = client.get("/flist/mapping-list")
+    assert res.status_code == 502, res.text
+    assert is_refusal_shaped(res)
+    assert res.json()["code"] == "flist_error"
