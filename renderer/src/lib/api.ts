@@ -936,14 +936,6 @@ export const api = {
     get<Record<string, unknown>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/snapshots/${encodeURIComponent(filename)}`
     ),
-  /** Capture the current Live JSON into a new snapshot. POST'd by the
-   *  diff/history flow when the user wants an explicit checkpoint
-   *  beyond what the auto-on-pull dedup gives them. */
-  flistSaveSnapshot: (characterId: string | number) =>
-    request<{ path: string; created_at: number; filename: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/snapshot`,
-      { method: 'POST' }
-    ),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
@@ -1036,49 +1028,6 @@ export const api = {
         _fetched_at: number | null
       }
     >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
-  // ---- F-list working copy (Tier 2: §1 persistence) ----
-  flistWorkingRead: (characterId: string | number) =>
-    get<{ payload: Record<string, unknown> | null; etag: string | null }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/working`
-    ),
-  flistWorkingWrite: async (
-    characterId: string | number,
-    payload: Record<string, unknown>,
-    opts?: { etag?: string | null }
-  ): Promise<{ etag: string }> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
-    if (opts?.etag) headers['If-Match'] = opts.etag
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/working`,
-      {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify(payload)
-      }
-    )
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => null)) as
-        | { detail?: { detail: string; current_etag: string | null } }
-        | null
-      const current = body?.detail?.current_etag ?? null
-      const err = new Error('etag_mismatch') as Error & {
-        currentEtag: string | null
-      }
-      err.currentEtag = current
-      throw err
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    return (await res.json()) as { etag: string }
-  },
-  flistWorkingDelete: (characterId: string | number) =>
-    request<{ deleted: boolean }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/working`,
-      { method: 'DELETE' }
-    ),
   // ---- The workbench --------------------------------------------
   // A character has one editable copy of its profile, always present,
   // seeded from Live when first needed. "Working sets" — several named
@@ -1141,6 +1090,20 @@ export const api = {
     }
     return (await res.json()) as { etag: string }
   },
+  /** Reset to Live: the sidecar saves the Workbench as a Backup
+   *  (`backed_up_first`, null when there was no Workbench yet), then
+   *  makes it a fresh copy of Live and answers with that payload and
+   *  its etag. When the Backup cannot be written nothing is replaced:
+   *  a `workbench_not_kept` refusal. */
+  flistWorkbenchResetToLive: (characterId: string | number) =>
+    request<{
+      payload: Record<string, unknown>
+      etag: string
+      backed_up_first: { filename: string; created_at: number } | null
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
+      { method: 'POST' }
+    ),
   /** What the confirm dialog needs before overwriting the bench:
    *  whether it holds unpublished edits, and whether F-list has moved
    *  on since this backup was taken. */
@@ -1159,16 +1122,15 @@ export const api = {
         + `/workbench/load-backup/preflight?filename=`
         + encodeURIComponent(filename)
     ),
-  /** Replace the workbench contents with a backup's. `backUpFirst` is
-   *  the dialog's third button — the safety net is offered, never
-   *  imposed. */
-  flistWorkbenchLoadBackup: (
-    characterId: string | number,
-    filename: string,
-    backUpFirst: boolean
-  ) =>
+  /** Restore: replace the Workbench contents with a Backup's. The
+   *  sidecar saves the Workbench as a Backup first (`backed_up_first`,
+   *  null when there was no Workbench yet); when it cannot, nothing is
+   *  replaced: a `workbench_not_kept` refusal. */
+  flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
     request<{
       workbench: SetMetaWire
+      payload: Record<string, unknown>
+      etag: string
       loaded: string
       backed_up_first: { filename: string; created_at: number } | null
     }>(
@@ -1176,7 +1138,7 @@ export const api = {
         + `/workbench/load-backup`,
       {
         method: 'POST',
-        body: JSON.stringify({ filename, back_up_first: backUpFirst })
+        body: JSON.stringify({ filename })
       }
     ),
   flistSetPayloadRead: (characterId: string | number, setId: string) =>

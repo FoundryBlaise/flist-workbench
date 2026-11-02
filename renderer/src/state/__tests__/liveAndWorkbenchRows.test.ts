@@ -184,20 +184,21 @@ describe('Restore', () => {
       `POST /flist/character/${CID}/workbench/load-backup`,
       json({
         workbench: { id: 'b1', name: 'Workbench', created_at: 100, updated_at: 300 },
+        ...payloadRead(described('from the Backup'), 'e9'),
         loaded: '2026-10-01T120000Z.zip',
         backed_up_first: null
       })
     )
-    fake.on(READ, json(payloadRead(described('from the Backup'), 'e9')))
 
     const ok = await useStore
       .getState()
-      .flistLoadBackupIntoWorkbench(CID, '2026-10-01T120000Z.zip', false)
+      .flistLoadBackupIntoWorkbench(CID, '2026-10-01T120000Z.zip')
 
     expect(ok).toBe(true)
     const s = useStore.getState()
     expect(s.editorContent).toBe('from the Backup')
     expect(s.flistWorking[CID].etag).toBe('e9')
+    expect(s.flistWorkbenchInfo[CID]).toEqual({ updatedAt: 300 })
     expect(s.flistViewingLive[CID]).toBe(false)
     expect(s.editorReadOnly).toBe(false)
   })
@@ -207,14 +208,14 @@ describe('Restore', () => {
       `POST /flist/character/${CID}/workbench/load-backup`,
       json({
         workbench: { id: 'b1', name: 'Workbench', created_at: 100, updated_at: 300 },
+        ...payloadRead(described('from the Backup'), 'e9'),
         loaded: '2026-10-01T120000Z.zip',
         backed_up_first: null
       })
     )
-    fake.on(READ, json(payloadRead(described('from the Backup'), 'e9')))
     await useStore.getState().flistShowLive(CID)
 
-    await useStore.getState().flistLoadBackupIntoWorkbench(CID, '2026-10-01T120000Z.zip', false)
+    await useStore.getState().flistLoadBackupIntoWorkbench(CID, '2026-10-01T120000Z.zip')
 
     const s = useStore.getState()
     expect(s.flistViewingLive[CID]).toBe(false)

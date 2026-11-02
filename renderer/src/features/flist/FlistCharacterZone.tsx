@@ -42,14 +42,6 @@ export function FlistCharacterZone() {
   const backupCharacter = useStore((s) => s.flistBackupCharacter)
   const resetWorkingToLive = useStore((s) => s.flistResetWorkingToLive)
 
-  // TODO(working-sets v2): the three actions below were the inline-button
-  // surfaces removed from area 2 (Export for restore, Save snapshot, Open
-  // backup). The store actions are kept while we decide whether to bring
-  // them back in a later round.
-  void useStore.getState().flistOpenExportRestore
-  void useStore.getState().flistSaveSnapshot
-  void useStore.getState().flistOpenBackup
-
   useEffect(() => {
     if (!activeId) return
     if (workbenchInfo === undefined) void loadWorkbenchInfo(activeId)

@@ -226,7 +226,7 @@ def test_a_preflight_from_the_app_window_origin_needs_no_secret(
     stranger: TestClient,
 ) -> None:
     res = stranger.options(
-        "/flist/character/1/working",
+        "/flist/character/1/workbench/payload",
         headers={
             "Origin": APP_ORIGIN,
             "Access-Control-Request-Method": "PUT",
@@ -283,7 +283,7 @@ def test_origin_null_is_refused_on_every_route(server) -> None:  # noqa: ANN001
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("PUT", "/flist/character/1/working"),
+        ("PUT", "/flist/character/1/workbench/payload"),
         ("GET", "/settings"),
         ("POST", "/restore/handshake"),
         ("GET", "/restore/handshake-status"),

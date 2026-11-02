@@ -32,12 +32,8 @@ function seed(state: {
     lastSavedAt: null,
     materialised: true
   }
-  // Working-sets v2: consumers read via selectWorkingSlot, which routes
-  // through the active-set pointer. Seed both shapes so the same fixture
-  // satisfies the legacy direct-read paths AND the new selector.
   useStore.setState({
     flistWorking: { '99': slot },
-    flistSetWorking: { 'set99': slot },
     flistArchive: {
       '99': {
         live: (state.live ?? null) as Record<string, unknown> | null,
@@ -60,7 +56,6 @@ function seed(state: {
 beforeEach(() => {
   useStore.setState({
     flistWorking: {},
-    flistSetWorking: {},
     flistArchive: {},
     flistMapping: {
       status: 'idle',

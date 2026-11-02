@@ -36,7 +36,6 @@ beforeEach(() => {
   )
   useStore.setState({
     flistWorking: { [CID]: slot },
-    flistSetWorking: { set42: slot },
     flistCharacterImages: { [CID]: { byId, status: 'ready' } },
     flistRoster: []
   } as never)

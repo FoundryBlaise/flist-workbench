@@ -402,11 +402,8 @@ export function descriptionOf(payload: WorkingPayload): string {
  *  the dependency keeps `selectWorkingSlot` testable without importing the
  *  whole store contract. */
 export interface FlistWorkingSetsState {
-  flistSetWorking: Record<string, FlistWorkingSlot>
-  /** The active view slot — mirrors whichever set is active (or live in
-   *  read-only mode). Edit machinery from Tier 2 still writes here; the
-   *  activate flow synchronises with `flistSetWorking[setId]` and the
-   *  per-set payload on disk. */
+  /** The one Workbench slot per character: the editor edits it and
+   *  autosave writes it through the Workbench endpoint. */
   flistWorking: Record<string, FlistWorkingSlot>
 }
 

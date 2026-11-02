@@ -883,77 +883,18 @@ async def flist_character_live(character_id: str) -> dict:
     return payload
 
 
-@app.get("/flist/character/{character_id}/working")
-async def flist_character_working_get(character_id: str) -> dict:
-    """Return the on-disk working copy + its current sha256 etag.
-
-    The etag is returned even on a clean read so the renderer can pin it
-    for the next PUT's `If-Match`. `payload: null` means no file yet —
-    renderer seeds from Live, materialise-on-first-edit (Tier 2 §1.6).
-    Earlier this returned 404 for the same case, but Chrome's network
-    panel logs every 4xx unconditionally and the noise was scaring
-    users into thinking the app was broken. 200 + null payload is the
-    same signal, surfaced cleanly.
-    """
-    payload = character_archive.read_working(character_id)
-    if payload is None:
-        return {"payload": None, "etag": None}
-    etag = character_archive.working_etag(character_id)
-    return {"payload": payload, "etag": etag}
-
-
-@app.put("/flist/character/{character_id}/working")
-async def flist_character_working_put(
-    character_id: str,
-    request: Request,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-) -> dict:
-    """Persist the working copy atomically.
-
-    Body is the whole payload. Optional `If-Match: <sha256>` enables
-    optimistic concurrency — mismatch returns 409 with the current etag.
-    Renderer caches the returned etag and ships it on the next PUT.
-    """
-    try:
-        body = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-    try:
-        new_etag = character_archive.write_working(
-            character_id, body, expected_etag=if_match
-        )
-    except character_archive.EtagMismatch as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "detail": "etag_mismatch",
-                "current_etag": exc.current_etag,
-            },
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"etag": new_etag}
-
-
-@app.delete("/flist/character/{character_id}/working")
-async def flist_character_working_delete(character_id: str) -> dict:
-    """Drop the working copy. Idempotent — `deleted: false` on a no-op."""
-    return {"deleted": character_archive.delete_working(character_id)}
-
-
 # ---- working sets v2 -------------------------------------------------
 
 
 class _LoadBackupBody(BaseModel):
-    """Load a backup into the workbench.
+    """Restore a Backup into the Workbench.
 
-    `back_up_first` is the window's third button — cancel, load, or back
-    up and load. Whether the current bench is worth keeping is the
-    user's call, not a default we pick for them.
+    `back_up_first` is still accepted from older windows and ignored:
+    the Workbench is always kept as a Backup first (ADR 0003).
     """
 
     filename: str
-    back_up_first: bool = False
+    back_up_first: bool = True
 
 
 def _set_meta_to_json(meta: character_archive.SetMeta) -> dict:
@@ -1042,12 +983,12 @@ async def flist_character_workbench_payload_put(
 async def flist_character_workbench_load_backup(
     character_id: str, body: _LoadBackupBody
 ) -> dict:
-    """Replace the workbench contents with a backup's.
+    """Restore: replace the Workbench contents with a Backup's.
 
-    Destructive by design, so the window asks first — cancel, load, or
-    back up and load. `back_up_first` is that third button: it saves
-    what is currently on the bench before overwriting it, which is the
-    only way the user can be sure a misclick costs nothing.
+    The Workbench it replaces is saved as a `before-restore` Backup
+    first, always; `backed_up_first` names it (null when there was no
+    Workbench yet). When that Backup cannot be written, nothing is
+    replaced and the caller hears 500 `workbench_not_kept`.
 
     `live_diverged` is reported back rather than enforced. A backup can
     be older than the profile now on F-list, and loading it anyway is a
@@ -1057,26 +998,11 @@ async def flist_character_workbench_load_backup(
     filename = (body.filename or "").strip()
     if not filename:
         raise HTTPException(status_code=422, detail="filename is required")
-    # Checked here as well as in the archive: `back_up_first` writes a
-    # Backup before the archive would get to refuse the name.
+    # A bad name is refused as such, not as an unreadable Backup.
     character_archive.require_backup_filename(filename)
 
-    saved_first: dict | None = None
-    if body.back_up_first:
-        result = character_archive.save_zip_backup(
-            character_id,
-            source=backup_origin.WORKBENCH,
-            occasion=backup_origin.BEFORE_RESTORE,
-            force=True,
-        )
-        if result.get("saved"):
-            saved_first = {
-                "filename": result.get("filename"),
-                "created_at": result.get("created_at"),
-            }
-
     try:
-        meta = character_archive.load_zip_backup_into_workbench(
+        replaced = character_archive.load_zip_backup_into_workbench(
             character_id, filename
         )
     except FileNotFoundError as exc:
@@ -1092,10 +1018,35 @@ async def flist_character_workbench_load_backup(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # `workbench` is for windows that still re-open the Workbench by id.
+    bench = character_archive.resolve_workbench(character_id, create=False)
     return {
-        "workbench": _set_meta_to_json(meta),
+        "workbench": _set_meta_to_json(bench) if bench is not None else None,
+        "payload": replaced.payload,
+        "etag": replaced.etag,
         "loaded": filename,
-        "backed_up_first": saved_first,
+        "backed_up_first": replaced.kept,
+    }
+
+
+@app.post("/flist/character/{character_id}/workbench/reset-to-live")
+async def flist_character_workbench_reset_to_live(character_id: str) -> dict:
+    """Reset to Live: the Workbench becomes a fresh copy of Live.
+
+    Done here rather than in the window so the Workbench it replaces is
+    saved as a `before-restore` Backup first, whoever asks; that Backup
+    is `backed_up_first` (null when there was no Workbench yet). When it
+    cannot be written nothing is replaced: 500 `workbench_not_kept`. A
+    character never pulled has no Live: 404 `no_live`.
+
+    Answers with the new payload and its etag, which the window adopts
+    as the Workbench it saves over next.
+    """
+    replaced = character_archive.reset_workbench_to_live(character_id)
+    return {
+        "payload": replaced.payload,
+        "etag": replaced.etag,
+        "backed_up_first": replaced.kept,
     }
 
 

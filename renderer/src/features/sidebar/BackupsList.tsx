@@ -197,16 +197,12 @@ export function BackupsList() {
           characterId={activeId}
           backup={loadTarget}
           onCancel={() => setLoadTarget(null)}
-          onConfirm={(backUpFirst) => {
+          onConfirm={() => {
             const target = loadTarget
             setLoadTarget(null)
             void useStore
               .getState()
-              .flistLoadBackupIntoWorkbench(
-                activeId,
-                target.filename,
-                backUpFirst
-              )
+              .flistLoadBackupIntoWorkbench(activeId, target.filename)
           }}
         />
       )}
