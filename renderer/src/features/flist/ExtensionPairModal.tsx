@@ -132,9 +132,9 @@ function ExtensionPairModal({
           </p>
           <p className="settings-help">
             The token grants read-only access to the Workbench and Backups,
-            and the right to save a Backup before an Upload. It does <em>not</em> let the extension
-            sign you in, change your F-list account, or pull data from
-            F-list itself. Revoke anytime from{' '}
+            and the right to save a Backup before an Upload. It does{' '}
+            <em>not</em> let the extension sign you in, change your F-list
+            account, or pull data from F-list itself. Revoke anytime from{' '}
             <strong>Settings → Security</strong>.
           </p>
           {error && (
