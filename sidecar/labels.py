@@ -34,6 +34,7 @@ from typing import Iterable
 import paths
 import settings as settings_store
 import sqlite_db
+from services import events
 
 # Three-state result the resolver returns. The labels table only ever
 # stores IC or OOC; "Unlabeled" is what the resolver returns when no
@@ -531,21 +532,6 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     return sqlite_db.connect(db_path(root), MIGRATIONS)
 
 
-def _publish(event: str, **data) -> None:
-    """Announce a label change on the event bus, if one is running.
-
-    Here rather than in the callers so the manual override from the
-    log viewer and a model's verdict through MCP both reach the
-    window. Never fails a write.
-    """
-    try:
-        from services import events
-
-        events.publish(event, **data)
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def msg_hash(msg: dict) -> str:
     h = hashlib.sha1(f"{msg['ts']}|{msg['speaker']}|{msg['raw']}".encode("utf-8"))
     return h.hexdigest()[:16]
@@ -778,8 +764,8 @@ def upsert_verdicts(
         ],
     )
     conn.commit()
-    _publish(
-        "labels-changed", character=character, partner=partner, hashes=len(rows)
+    events.publish(
+        events.LABELS_CHANGED, character=character, partner=partner, hashes=len(rows)
     )
     return len(rows)
 
@@ -806,7 +792,7 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     cur = conn.execute("DELETE FROM labels WHERE hash = ?", (hash,))
     conn.commit()
     if cur.rowcount:
-        _publish("labels-changed", hashes=cur.rowcount)
+        events.publish(events.LABELS_CHANGED, hashes=cur.rowcount)
     return cur.rowcount > 0
 
 
@@ -827,8 +813,8 @@ def delete_labels_for_partner(
         (character, *names),
     )
     conn.commit()
-    _publish(
-        "labels-changed",
+    events.publish(
+        events.LABELS_CHANGED,
         character=character,
         partner=partner,
         deleted=cur.rowcount,
@@ -902,7 +888,7 @@ def restore_labels(
     conn.commit()
     per_conversation = Counter((r["character"], r["partner"]) for r in todo)
     for (character, partner), n in sorted(per_conversation.items()):
-        _publish("labels-changed", character=character, partner=partner, hashes=n)
+        events.publish(events.LABELS_CHANGED, character=character, partner=partner, hashes=n)
     return len(todo), [h for h in wanted if h in present]
 
 
@@ -983,8 +969,8 @@ def fill_unlabeled(
     )
     conn.commit()
     if targets:
-        _publish(
-            "labels-changed",
+        events.publish(
+            events.LABELS_CHANGED,
             character=character,
             partner=partner,
             hashes=len(targets),
@@ -1022,8 +1008,8 @@ def delete_labels_by_hash(
         removed += cur.rowcount
     conn.commit()
     if removed:
-        _publish(
-            "labels-changed",
+        events.publish(
+            events.LABELS_CHANGED,
             character=character,
             partner=partner,
             deleted=removed,

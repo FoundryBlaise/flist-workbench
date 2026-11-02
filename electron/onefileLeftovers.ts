@@ -50,8 +50,8 @@ export async function imageInUse(file: string): Promise<boolean> {
   }
 }
 
-/** Whether a runtime folder came from a Workbench sidecar. */
-function isWorkbenchRuntime(entries: string[]): boolean {
+/** Whether a runtime folder came from our sidecar. */
+function isOurRuntime(entries: string[]): boolean {
   const has = (re: RegExp): boolean => entries.some((e) => re.test(e))
   // Every one-file release carried the embedded vector store and the
   // reranker; another PyInstaller app with both is not to be expected.
@@ -76,7 +76,7 @@ export async function removeOnefileLeftoversOnce(opts: LeftoverOptions): Promise
   for (const name of names) {
     const dir = join(opts.tempDir, name)
     try {
-      if (!isWorkbenchRuntime(await readdir(dir))) continue
+      if (!isOurRuntime(await readdir(dir))) continue
       if ((await stat(dir)).mtimeMs > Date.now() - UNPACKING_MS) continue
       // Checked before anything is deleted: removing files one by one
       // would get past the locked DLL and break the running sidecar.

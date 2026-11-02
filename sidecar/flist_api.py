@@ -447,6 +447,12 @@ def reset_mcp_budget() -> None:
 # ---- HTTP helpers ------------------------------------------------------
 
 
+def _unreachable(url: str, exc: httpx.HTTPError) -> FlistApiError:
+    """A request that got no answer from F-list (offline, refused,
+    timed out, cut off) as the F-list error a caller already handles."""
+    return FlistApiError(f"F-list could not be reached ({type(exc).__name__}) for {url}")
+
+
 def _default_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(30.0, connect=10.0),
@@ -465,7 +471,10 @@ async def _post_json(
     c = client or _default_client()
     try:
         await _LIMITER.acquire()
-        res = await c.post(url, data=data)
+        try:
+            res = await c.post(url, data=data)
+        except httpx.HTTPError as exc:
+            raise _unreachable(url, exc) from exc
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} from {url}")
         try:
@@ -786,7 +795,10 @@ async def download_to(
     c = client or _default_client()
     try:
         await rl.acquire()
-        res = await c.get(url)
+        try:
+            res = await c.get(url)
+        except httpx.HTTPError as exc:
+            raise _unreachable(url, exc) from exc
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} fetching {url}")
         data = res.content
@@ -811,7 +823,10 @@ async def fetch_bytes(
     c = client or _default_client()
     try:
         await rl.acquire()
-        res = await c.get(url)
+        try:
+            res = await c.get(url)
+        except httpx.HTTPError as exc:
+            raise _unreachable(url, exc) from exc
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} fetching {url}")
         return res.content

@@ -229,7 +229,6 @@ type JobStreamHandlers = {
 }
 
 export type FlistPullHandlers = JobStreamHandlers & {
-  onQueued?: () => void
   onTicket?: () => void
   onFetching?: () => void
   onImages?: (info: { total: number }) => void
@@ -264,7 +263,6 @@ export type FlistBackupAllCharacterEvent = {
 
 export type FlistBackupAllHandlers = JobStreamHandlers & {
   onStart?: (info: { total: number }) => void
-  onQueued?: () => void
   onCharacter?: (info: FlistBackupAllCharacterEvent) => void
   onDone?: (info: {
     total: number
@@ -1302,58 +1300,35 @@ export const api = {
    *  surfaced as `character` events the renderer's progress banner
    *  renders. It runs as a job: aborting `opts.signal` only stops
    *  following; `jobCancel` stops the sweep. */
-  flistBackupAll: async (
-    handlers: FlistBackupAllHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/flist/backup-all`, {
-      method: 'POST',
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
-    await readEventStream(res, (block) => dispatchBackupAllStream(block, handlers))
-  },
+  flistBackupAll: (handlers: FlistBackupAllHandlers, opts?: ApiOptions): Promise<void> =>
+    followStream(`${base()}/flist/backup-all`, { method: 'POST', signal: opts?.signal }, (block) =>
+      dispatchBackupAllStream(block, handlers)
+    ),
   /** Starts a Pull of `name` and follows its progress (SSE). A job, like
    *  Back up all: aborting `opts.signal` only stops following. */
-  flistPull: async (
-    name: string,
-    handlers: FlistPullHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/flist/character/${encodeURIComponent(name)}/pull`, {
-      method: 'POST',
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
-    await readEventStream(res, (block) => dispatchPullStream(block, handlers))
-  },
+  flistPull: (name: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
+    followStream(
+      `${base()}/flist/character/${encodeURIComponent(name)}/pull`,
+      { method: 'POST', signal: opts?.signal },
+      (block) => dispatchPullStream(block, handlers)
+    ),
   /** Every job the sidecar remembers: running ones, and finished ones
    *  for a few minutes. A reopened window finds its Pulls here. */
   jobsList: (opts?: ApiOptions) => get<{ jobs: Job[] }>('/jobs', opts),
   /** Follow a running Pull from the start of its events. */
-  flistPullFollow: async (
-    jobId: string,
-    handlers: FlistPullHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/jobs/${encodeURIComponent(jobId)}/events`, {
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
-    await readEventStream(res, (block) => dispatchPullStream(block, handlers))
-  },
+  flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
+    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
+      dispatchPullStream(block, handlers)
+    ),
   /** Follow a running Back up all from the start of its events. */
-  flistBackupAllFollow: async (
+  flistBackupAllFollow: (
     jobId: string,
     handlers: FlistBackupAllHandlers,
     opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/jobs/${encodeURIComponent(jobId)}/events`, {
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
-    await readEventStream(res, (block) => dispatchBackupAllStream(block, handlers))
-  },
+  ): Promise<void> =>
+    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
+      dispatchBackupAllStream(block, handlers)
+    ),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () =>
@@ -1380,6 +1355,21 @@ export const api = {
    *  call. Null until the extension has made one since the app started. */
   restoreExtensionSeen: () =>
     request<{ version: string | null; seen_at: number | null }>('/restore/extension')
+}
+
+function jobEventsUrl(jobId: string): string {
+  return `${base()}/jobs/${encodeURIComponent(jobId)}/events`
+}
+
+/** Open an SSE route and hand each block to `onBlock` until the stream
+ *  ends. A refused start (busy, not signed in) throws its RefusalError. */
+async function followStream(
+  url: string,
+  init: Pick<RequestInit, 'method' | 'signal'>,
+  onBlock: (block: string) => void
+): Promise<void> {
+  const res = await fetch(url, { ...init, headers: { Accept: 'text/event-stream' } })
+  await readEventStream(res, onBlock)
 }
 
 /** Read an SSE response block by block until it ends. */
@@ -1446,9 +1436,6 @@ function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
   const { event, data: parsed } = parseBlock(block)
   if (!event || dispatchJobEvent(event, parsed, handlers)) return
   switch (event) {
-    case 'queued':
-      handlers.onQueued?.()
-      break
     case 'ticket':
       handlers.onTicket?.()
       break
@@ -1479,9 +1466,6 @@ function dispatchBackupAllStream(
   switch (event) {
     case 'start':
       handlers.onStart?.(parsed as { total: number })
-      break
-    case 'queued':
-      handlers.onQueued?.()
       break
     case 'character':
       handlers.onCharacter?.(parsed as FlistBackupAllCharacterEvent)

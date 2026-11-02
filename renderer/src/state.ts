@@ -127,6 +127,9 @@ type State = {
    *  started or ended, a wipe). Views that show the Index status
    *  re-read it when this moves. */
   indexRevision: number
+  /** Bumped whenever another writer changed Labels (a model labelled
+   *  or cleared them). Views listing cleared Labels re-read it. */
+  labelsRevision: number
 
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
@@ -449,6 +452,8 @@ type State = {
   closeIngest: () => void
   /** The Index changed elsewhere: views showing its status re-read. */
   noteIndexChanged: () => void
+  /** Labels changed elsewhere: views listing cleared Labels re-read. */
+  noteLabelsChanged: () => void
   /** One message by hash, or every message in a set of hashes. */
   applyLabelOverride: (
     char: string,
@@ -495,7 +500,14 @@ type State = {
   flistLoadRoster: () => Promise<void>
   flistSelectCharacter: (characterId: string | null) => Promise<void>
   flistLoadArchive: (characterId: string) => Promise<void>
-  flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
+  /** Pull a character from F-list into its slot. `skipWhenBusy`: when
+   *  a job already holds the character, leave the slot without an
+   *  error (Refresh all) instead of saying so. */
+  flistPullCharacter: (
+    name: string,
+    characterId?: string | null,
+    opts?: { skipWhenBusy?: boolean }
+  ) => Promise<void>
   /** Cancel the character's running Pull (a job): it stops at its next
    *  step, keeping what it already wrote. */
   flistCancelPull: (characterId: string) => Promise<void>
@@ -851,7 +863,7 @@ function _cancelAllPendingTimers(): void {
 // Tracks whether an account-wide sweep is in flight. Shared between
 // the sign-in auto-refresh and the picker's manual "↻ Refresh all",
 // so a second trigger while one is running is a no-op rather than
-// stacking two passes onto pull_lock.
+// running two passes over the same characters.
 let _flistAccountSweepInFlight = false
 
 /** Re-read a character's Backup list so a Backup the sidecar just
@@ -1138,15 +1150,25 @@ const IDLE_BACKUP_ALL_STATUS: State['flistBackupAllStatus'] = {
   jobId: null
 }
 
+/** The job holding a character that a Pull or Back up all was refused
+ *  for (`character_busy`), or null when `err` is another failure. */
+function _characterBusyWith(err: unknown): 'pull' | 'backup-all' | null {
+  if (!(err instanceof RefusalError) || err.code !== 'character_busy') return null
+  return err.details.kind === 'backup-all' ? 'backup-all' : 'pull'
+}
+
 /** Follow a Pull job into the character's slot: its progress, its job
  *  id (for Cancel), and on `done` the reloads a finished Pull needs.
  *  `open` starts the Pull or follows one already running; aborting the
- *  signal (sign-out) only stops following, the job runs on. */
+ *  signal (sign-out) only stops following, the job runs on. A Pull
+ *  refused because a job holds the character says so in plain words,
+ *  or with `skipWhenBusy` leaves the slot idle, its stage `busy`. */
 async function _followPull(
   get: () => State,
   set: StoreSet,
   targetId: string | null,
-  open: (handlers: FlistPullHandlers, signal: AbortSignal) => Promise<void>
+  open: (handlers: FlistPullHandlers, signal: AbortSignal) => Promise<void>,
+  opts: { skipWhenBusy?: boolean } = {}
 ): Promise<void> {
   const setStatus = (
     patch: Partial<{
@@ -1179,7 +1201,6 @@ async function _followPull(
       onJob: (job) => setStatus({ pullJobId: job.id }),
       onCancelled: () =>
         setStatus({ pullStatus: 'idle', pullStage: 'cancelled', pullError: null, pullJobId: null }),
-      onQueued: () => setStatus({ pullStatus: 'queued', pullStage: 'queued' }),
       onTicket: () =>
         setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
       onFetching: () =>
@@ -1291,8 +1312,19 @@ async function _followPull(
     // AbortError = user-initiated (sign-out / explicit cancel).
     // Don't surface as a scary error to the user.
     const raw = err instanceof Error ? err.message : String(err)
+    const busyWith = _characterBusyWith(err)
     if (err instanceof Error && err.name === 'AbortError') {
       setStatus({ pullStatus: 'idle', pullError: null })
+    } else if (busyWith && opts.skipWhenBusy) {
+      setStatus({ pullStatus: 'idle', pullStage: 'busy', pullError: null })
+    } else if (busyWith) {
+      setStatus({
+        pullStatus: 'error',
+        pullError:
+          busyWith === 'backup-all'
+            ? 'Back up all is running; it pulls this character too.'
+            : 'This character is already being pulled.'
+      })
     } else {
       setStatus({ pullStatus: 'error', pullError: raw })
     }
@@ -1329,14 +1361,6 @@ async function _followBackupAll(
       onStart: ({ total }) => {
         set((s) => ({
           flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
-        }))
-      },
-      onQueued: () => {
-        set((s) => ({
-          flistBackupAllStatus: {
-            ...s.flistBackupAllStatus,
-            currentName: 'waiting for another pull to finish…'
-          }
         }))
       },
       onCharacter: (info) => {
@@ -1417,7 +1441,13 @@ async function _followBackupAll(
       }
     })
   } catch (err) {
-    const message = (err as Error).message ?? 'backup-all failed'
+    const busyWith = _characterBusyWith(err)
+    const message =
+      busyWith === 'pull'
+        ? 'A Pull is running. Start Back up all again once it has finished.'
+        : busyWith === 'backup-all'
+          ? 'Back up all is already running.'
+          : ((err as Error).message ?? 'backup-all failed')
     set((s) => ({
       flistBackupAllStatus: {
         ...s.flistBackupAllStatus,
@@ -1499,6 +1529,9 @@ async function _flistAccountSweep(
       // Bail if the user signed out mid-sweep so we don't keep firing
       // pulls against a session that no longer exists.
       if (!get().flistSession.active) break
+      // Already being pulled, and this window follows it.
+      const status = get().flistArchive[t.id]?.pullStatus
+      if (status === 'queued' || status === 'running') continue
       if (thresholdSec !== null) {
         const age =
           t.lastPulledAt === null
@@ -1508,10 +1541,10 @@ async function _flistAccountSweep(
       }
       // selectCharacter would change the active character; we want
       // a silent background refresh, so go straight to the pull.
-      // The pull endpoint's pull_lock serialises us behind any
-      // manual single-character ↻ Refresh the user kicked off.
+      // One Pull at a time here; a character another job holds (a
+      // Pull the user started by hand, Back up all) is skipped.
       try {
-        await get().flistPullCharacter(t.name, t.id)
+        await get().flistPullCharacter(t.name, t.id, { skipWhenBusy: true })
       } catch {
         // Per-character failures are surfaced via the picker badge
         // (slot.pullError). Don't abort the rest of the sweep.
@@ -1813,6 +1846,7 @@ export const useStore = create<State>((set, get) => ({
 
   ingestTarget: null,
   indexRevision: 0,
+  labelsRevision: 0,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -2099,8 +2133,8 @@ export const useStore = create<State>((set, get) => ({
       // for every account character whose local copy is older than
       // the user's configured threshold (Settings → F-list). 0
       // minutes = always re-pull. The picker's per-row badges show
-      // progress; pull_lock serialises so a manual ↻ Refresh
-      // interleaves cleanly. Fire-and-forget.
+      // progress; a character already being pulled (a manual ↻
+      // Refresh) is skipped as busy. Fire-and-forget.
       void _flistAutoRefreshOnLogin(get)
     } catch (err) {
       // The modal shows "Invalid account name or password", not
@@ -2348,9 +2382,13 @@ export const useStore = create<State>((set, get) => ({
     await _flistAccountSweep(get, null)
   },
 
-  async flistPullCharacter(name, characterId) {
-    await _followPull(get, set, characterId ?? null, (handlers, signal) =>
-      api.flistPull(name, handlers, { signal })
+  async flistPullCharacter(name, characterId, opts) {
+    await _followPull(
+      get,
+      set,
+      characterId ?? null,
+      (handlers, signal) => api.flistPull(name, handlers, { signal }),
+      opts
     )
   },
 
@@ -4281,6 +4319,10 @@ export const useStore = create<State>((set, get) => ({
 
   noteIndexChanged() {
     set((s) => ({ indexRevision: s.indexRevision + 1 }))
+  },
+
+  noteLabelsChanged() {
+    set((s) => ({ labelsRevision: s.labelsRevision + 1 }))
   },
 
   // Patches one message's label fields in place, or those of every

@@ -297,16 +297,17 @@ suite = "sidecar"
 file = "sidecar/archive_live.py"
 breaks = "Writing Live (a Pull) publishes no change event, so open windows keep the old Live."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 4
 # audit: M13 write_live no longer publishes live-changed
-# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
+# Killed since spec #4 (#67, test_writer_events.py); re-measured on spec/4-review-fixes.
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules;
+# again after the review: archive_registry.publish / write_json are public.
 find = '''
-    archive_registry._atomic_write_json(folder / archive_registry.LIVE_FILENAME, payload)
-    events = archive_registry._events()
-    archive_registry._publish(events.LIVE_CHANGED, character_id=str(character_id))'''
+    archive_registry.write_json(folder / archive_registry.LIVE_FILENAME, payload)
+    archive_registry.publish(events.LIVE_CHANGED, character_id)'''
 replace = '''
-    archive_registry._atomic_write_json(folder / archive_registry.LIVE_FILENAME, payload)'''
+    archive_registry.write_json(folder / archive_registry.LIVE_FILENAME, payload)'''
 
 [[mutation]]
 id = "A14"
@@ -314,9 +315,10 @@ suite = "sidecar"
 file = "sidecar/services/image_trash.py"
 breaks = "Moving images to or from the Trash publishes no change event, so the image pool view goes stale."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 4
 # audit: M14 trash/restore no longer announce images-changed
+# Killed since spec #4 (#67, test_writer_events.py); re-measured on spec/4-review-fixes.
 find = '''
     events.publish(events.IMAGES_CHANGED, character_id=str(character_id))'''
 replace = '''

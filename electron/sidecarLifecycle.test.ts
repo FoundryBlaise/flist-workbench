@@ -44,7 +44,7 @@ const onefileSidecar = (created = '2026-11-01T10:00:01Z'): ProcessInfo =>
   proc('sidecar.exe', `${INSTALLED}\\resources\\sidecar.exe`, `"${INSTALLED}\\resources\\sidecar.exe"`, created)
 const devSidecar = (args: string, created = '2026-11-01T10:00:01Z'): ProcessInfo =>
   proc('python.exe', 'C:\\Users\\u\\uv\\python\\cpython-3.12\\python.exe', `"C:\\repo\\sidecar\\.venv\\Scripts\\python.exe" ${args}`, created)
-const workbenchApp = (created = '2026-11-01T10:00:00Z'): ProcessInfo =>
+const appProcess = (created = '2026-11-01T10:00:00Z'): ProcessInfo =>
   proc('F-list Workbench.exe', `${INSTALLED}\\F-list Workbench.exe`, `"${INSTALLED}\\F-list Workbench.exe"`, created)
 
 describe('classifyPortHolder', () => {
@@ -72,22 +72,22 @@ describe('classifyPortHolder', () => {
     }
   })
 
-  it('leaves alone the sidecar of a Workbench that is still running and not older', () => {
+  it('leaves alone the sidecar of another copy of the app that is still running and not older', () => {
     for (const health of [HEALTH_SAME, { status: 'ok', version: '0.3.0' }]) {
-      expect(classifyPortHolder(health, [onedirSidecar(), workbenchApp()], OWN)).toEqual({
-        kind: 'workbench-running',
+      expect(classifyPortHolder(health, [onedirSidecar(), appProcess()], OWN)).toEqual({
+        kind: 'app-running',
         version: health.version
       })
     }
     const dev = devSidecar('server.py')
     const launcher = proc('python.exe', 'C:\\repo\\sidecar\\.venv\\Scripts\\python.exe', 'python.exe server.py', '2026-11-01T10:00:00.5Z')
     const electron = proc('electron.exe', 'C:\\repo\\node_modules\\electron\\dist\\electron.exe', 'electron.exe .', '2026-11-01T10:00:00Z')
-    expect(classifyPortHolder(HEALTH_SAME, [dev, launcher, electron], OWN)).toMatchObject({ kind: 'workbench-running' })
+    expect(classifyPortHolder(HEALTH_SAME, [dev, launcher, electron], OWN)).toMatchObject({ kind: 'app-running' })
   })
 
   it('replaces an older sidecar even while its app still runs', () => {
     const listener = onedirSidecar()
-    expect(classifyPortHolder(HEALTH_OLD, [listener, workbenchApp()], OWN)).toMatchObject({
+    expect(classifyPortHolder(HEALTH_OLD, [listener, appProcess()], OWN)).toMatchObject({
       kind: 'stale',
       pid: listener.pid
     })
@@ -95,27 +95,27 @@ describe('classifyPortHolder', () => {
 
   it('does not take a later process that reused the parent pid for the running app', () => {
     const listener = onedirSidecar('2026-11-01T10:00:01Z')
-    const reused = workbenchApp('2026-11-02T09:00:00Z')
+    const reused = appProcess('2026-11-02T09:00:00Z')
     expect(classifyPortHolder(HEALTH_SAME, [listener, reused], OWN)).toMatchObject({ kind: 'stale' })
   })
 
-  it('calls anything else foreign, however it answers', () => {
+  it('calls anything else another program, however it answers', () => {
     const node = proc('node.exe', 'C:\\Program Files\\nodejs\\node.exe', 'node server.js', '2026-11-01T10:00:00Z')
     // Answers like a sidecar, is not one.
-    expect(classifyPortHolder(HEALTH_OLD, [node], OWN)).toEqual({ kind: 'foreign' })
+    expect(classifyPortHolder(HEALTH_OLD, [node], OWN)).toEqual({ kind: 'other-program' })
     // Is named like one, does not answer like one.
-    expect(classifyPortHolder(null, [onedirSidecar()], OWN)).toEqual({ kind: 'foreign' })
-    expect(classifyPortHolder({ status: 'ok' }, [onedirSidecar()], OWN)).toEqual({ kind: 'foreign' })
-    expect(classifyPortHolder('<html>', [onedirSidecar()], OWN)).toEqual({ kind: 'foreign' })
+    expect(classifyPortHolder(null, [onedirSidecar()], OWN)).toEqual({ kind: 'other-program' })
+    expect(classifyPortHolder({ status: 'ok' }, [onedirSidecar()], OWN)).toEqual({ kind: 'other-program' })
+    expect(classifyPortHolder('<html>', [onedirSidecar()], OWN)).toEqual({ kind: 'other-program' })
     // A sidecar.exe of some other program.
     const other = proc('sidecar.exe', 'C:\\Tools\\sidecar.exe', 'sidecar.exe', '2026-11-01T10:00:00Z')
-    expect(classifyPortHolder(HEALTH_OLD, [other], OWN)).toEqual({ kind: 'foreign' })
+    expect(classifyPortHolder(HEALTH_OLD, [other], OWN)).toEqual({ kind: 'other-program' })
     // Some other python program.
     const python = devSidecar('-m http.server 27384')
-    expect(classifyPortHolder(HEALTH_OLD, [python], OWN)).toEqual({ kind: 'foreign' })
+    expect(classifyPortHolder(HEALTH_OLD, [python], OWN)).toEqual({ kind: 'other-program' })
     // The owner could not be found out: never kill what is not known to be ours.
-    expect(classifyPortHolder(HEALTH_OLD, null, OWN)).toEqual({ kind: 'foreign' })
-    expect(classifyPortHolder(HEALTH_OLD, [], OWN)).toEqual({ kind: 'foreign' })
+    expect(classifyPortHolder(HEALTH_OLD, null, OWN)).toEqual({ kind: 'other-program' })
+    expect(classifyPortHolder(HEALTH_OLD, [], OWN)).toEqual({ kind: 'other-program' })
   })
 })
 

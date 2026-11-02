@@ -91,7 +91,6 @@ async def test_pull_reports_progress_and_returns_a_summary(
     from services import pull as pull_service
 
     async def fake_run(name: str):
-        yield "queued", {"name": name}
         yield "ticket", {}
         yield "fetching", {"name": name}
         yield "images", {"total": 2, "downloaded": 0, "failed": 0}
@@ -117,7 +116,7 @@ async def test_a_pull_failure_surfaces_its_stage(
     from services import pull as pull_service
 
     async def fake_run(name: str):
-        yield "queued", {"name": name}
+        yield "ticket", {}
         yield "error", {
             "stage": "fetching",
             "code": "flist_error",
@@ -519,14 +518,16 @@ def test_the_pull_route_still_streams_sse(
     importlib.reload(server)
 
     async def fake_run(name: str):
-        yield "queued", {"name": name}
+        yield "ticket", {}
         yield "done", {"character_id": "42", "image_count": 0}
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     client = app_client(server.app)
     with client.stream("POST", "/flist/character/Someone/pull") as resp:
         body = b"".join(resp.iter_bytes()).decode("utf-8")
-    assert "event: queued" in body
+    # The stream follows the Pull's job: the job first, then its events.
+    assert body.startswith("event: job\n")
+    assert "event: ticket" in body
     assert "event: done" in body
     assert '"character_id": "42"' in body or '"character_id":"42"' in body
 

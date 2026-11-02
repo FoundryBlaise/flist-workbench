@@ -52,10 +52,12 @@ it('a character coming into the archive reloads the character list', async () =>
   ])
 })
 
-it('a Pull reloads Live and the Backups', async () => {
+it('a Pull reloads Live, the Backups and the character list’s pull status', async () => {
+  // The roster row's badge says whether the last Pull got every image.
   expect(await rereads(event('live-changed', 'extension'))).toEqual([
     'GET /flist/character/77/live',
-    'GET /flist/character/77/zip-backups'
+    'GET /flist/character/77/zip-backups',
+    'GET /flist/characters'
   ])
 })
 

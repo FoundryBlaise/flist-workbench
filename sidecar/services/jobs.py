@@ -40,7 +40,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Iterator, Literal
 
-from refusals import JobNotFound, Refusal, ResourceBusy
+from refusals import INTERNAL_ERROR, JobNotFound, Refusal, ResourceBusy
 
 log = logging.getLogger(__name__)
 
@@ -49,10 +49,6 @@ FINISHED: tuple[JobState, ...] = ("done", "cancelled", "failed")
 
 #: How long a finished job stays pollable.
 RETENTION_SECONDS = 300.0
-
-#: The `code` of a job that stopped on something nothing expected, as
-#: the REST surface answers a 500.
-INTERNAL_ERROR = "internal_error"
 
 #: The events that end a stream job's events: it finished, failed or
 #: was cancelled.
@@ -233,7 +229,7 @@ class JobRegistry:
             raise JobNotFound(
                 f"Unknown job {job_id!r}. Jobs are kept in memory: a finished "
                 "one is forgotten after a few minutes, and none survive a "
-                "restart of Workbench.",
+                "restart of the app.",
                 details={"job_id": job_id},
             )
         return job

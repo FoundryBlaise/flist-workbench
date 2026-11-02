@@ -358,6 +358,39 @@ def test_a_reopened_progress_view_follows_the_job_from_its_start(
     assert events[-1][1]["character_id"] == CID
 
 
+def test_a_pull_while_flist_is_unreachable_fails_with_the_flist_refusal(
+    client: TestClient, httpx_mock, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    import httpx
+
+    import flist_api
+
+    fast = flist_api.RateLimiter(per_second=1000.0, per_hour_cap=1_000_000)
+    monkeypatch.setattr(flist_api, "_LIMITER", fast)
+    flist_api.ticket_store().set(
+        flist_api.Ticket(
+            account="corin-account",
+            value="test-ticket",
+            password="test-password",
+            acquired_at=time.monotonic(),
+        ),
+        characters=[{"id": int(CID), "name": NAME}],
+    )
+    httpx_mock.add_exception(
+        httpx.ConnectError("offline"), url=flist_api.CHARACTER_DATA_URL, method="POST"
+    )
+    try:
+        with client.stream("POST", f"/flist/character/{NAME}/pull") as res:
+            events = sse_events("".join(res.iter_text()))
+    finally:
+        flist_api.ticket_store().clear()
+    name, data = events[-1]
+    assert name == "error"
+    assert (data["stage"], data["code"]) == ("fetching", "flist_error")
+    job = client.get(f"/jobs/{events[0][1]['id']}").json()
+    assert job["error"]["code"] == "flist_error"
+
+
 # ---- cancel by id ------------------------------------------------------------
 
 

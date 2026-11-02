@@ -16,11 +16,11 @@ export type ProcessInfo = {
 
 /** Who holds the sidecar's port when the app starts. */
 export type PortHolder =
-  /** Not a Workbench sidecar, or not known to be one: never touched. */
-  | { kind: 'foreign' }
-  /** The sidecar of a Workbench that still runs, and is not older than this one. */
-  | { kind: 'workbench-running'; version: string }
-  /** A Workbench sidecar to stop and replace: older, or left behind by its app. */
+  /** Another program, or a process not known to be our sidecar: never touched. */
+  | { kind: 'other-program' }
+  /** The sidecar of another copy of the app that still runs, and is not older than this one. */
+  | { kind: 'app-running'; version: string }
+  /** Our sidecar to stop and replace: older, or left behind by its app. */
   | { kind: 'stale'; pid: number; version: string }
 
 const VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/
@@ -46,8 +46,8 @@ export function compareVersions(a: string, b: string): number | null {
   return preA < preB ? -1 : 1
 }
 
-/** `/health` as every Workbench sidecar has answered it: `{status: 'ok', version}`. */
-function workbenchHealthVersion(health: unknown): string | null {
+/** `/health` as every one of our sidecars has answered it: `{status: 'ok', version}`. */
+function appHealthVersion(health: unknown): string | null {
   if (typeof health !== 'object' || health === null) return null
   const { status, version } = health as Record<string, unknown>
   return status === 'ok' && typeof version === 'string' ? version : null
@@ -58,12 +58,12 @@ function baseName(path: string): string {
 }
 
 /**
- * A process that runs Workbench sidecar code: the packaged exe from an
+ * A process that runs our sidecar's code: the packaged exe from an
  * app's `resources` folder (folder build or the older one-file build,
  * whose bootloader and child share the exe), or a dev build's python
  * running the sidecar's server module.
  */
-export function isWorkbenchSidecarProcess(p: ProcessInfo): boolean {
+export function isOurSidecarProcess(p: ProcessInfo): boolean {
   const name = p.name.toLowerCase()
   const path = (p.path ?? '').toLowerCase().replace(/\//g, '\\')
   if (name === 'sidecar.exe') {
@@ -77,7 +77,7 @@ export function isWorkbenchSidecarProcess(p: ProcessInfo): boolean {
 }
 
 /** The Electron process of an F-list Workbench, packaged or a dev build. */
-function isWorkbenchApp(p: ProcessInfo): boolean {
+function isAppProcess(p: ProcessInfo): boolean {
   const name = baseName(p.name).toLowerCase()
   return name === 'f-list workbench.exe' || name === 'f-list workbench' || name === 'electron.exe' || name === 'electron'
 }
@@ -99,7 +99,7 @@ function appStillRuns(chain: ProcessInfo[]): boolean {
     if (!startedBefore(ancestor, child)) return false
     // A one-file bootloader or a venv launcher between the app and the
     // listener: look past it.
-    if (!isWorkbenchSidecarProcess(ancestor)) return isWorkbenchApp(ancestor)
+    if (!isOurSidecarProcess(ancestor)) return isAppProcess(ancestor)
     child = ancestor
   }
   return false
@@ -111,25 +111,25 @@ function appStillRuns(chain: ProcessInfo[]): boolean {
  * `health` is what it answered on `/health` (parsed JSON, or null when
  * it answered nothing useful); `chain` is the listening process followed
  * by its ancestors, or null when the OS could not tell. Only a process
- * that both answers like a Workbench sidecar and runs Workbench sidecar
- * code is ever stopped. An older one is replaced, so new UI never runs
+ * that both answers like our sidecar and runs our sidecar's code is
+ * ever stopped. An older one is replaced, so new UI never runs
  * against old logic; one whose app is gone is replaced whatever its
  * version, as it does not know this launch's secret. The sidecar of a
- * Workbench that still runs and is not older is left alone.
+ * copy of the app that still runs and is not older is left alone.
  */
 export function classifyPortHolder(
   health: unknown,
   chain: ProcessInfo[] | null,
   ownVersion: string
 ): PortHolder {
-  const version = workbenchHealthVersion(health)
+  const version = appHealthVersion(health)
   const listener = chain?.[0]
-  if (version === null || !chain || !listener || !isWorkbenchSidecarProcess(listener)) {
-    return { kind: 'foreign' }
+  if (version === null || !chain || !listener || !isOurSidecarProcess(listener)) {
+    return { kind: 'other-program' }
   }
   const order = compareVersions(version, ownVersion)
   if (appStillRuns(chain) && (order === null || order >= 0)) {
-    return { kind: 'workbench-running', version }
+    return { kind: 'app-running', version }
   }
   return { kind: 'stale', pid: listener.pid, version }
 }

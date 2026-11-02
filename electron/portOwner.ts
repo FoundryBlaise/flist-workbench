@@ -47,7 +47,7 @@ function asProcessInfo(value: unknown): ProcessInfo | null {
  * The process listening on `port` on this machine, followed by its
  * parents; `[]` when nothing listens; null when the OS could not tell
  * (and on platforms other than Windows, which the app does not ship
- * for). A null owner is never treated as a Workbench sidecar.
+ * for). A null owner is never treated as our sidecar.
  */
 export function portOwnerChain(port: number): Promise<ProcessInfo[] | null> {
   if (process.platform !== 'win32' || !Number.isInteger(port)) return Promise.resolve(null)
