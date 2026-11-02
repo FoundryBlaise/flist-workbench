@@ -7,7 +7,7 @@ from sidecar_client import app_client
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    # Pin the documents DB to a tmp dir AND clear FCHAT_DATA_DIR so
+    # Pin the settings DB to a tmp dir AND clear FCHAT_DATA_DIR so
     # the settings store, not the env var, drives the resolved path.
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path / "wb"))
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
