@@ -57,20 +57,21 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import importlib
     import json
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import flist_api
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
     # Seed the mapping-list cache so no network call is attempted.
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {
@@ -93,14 +94,14 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     mapping_service.invalidate()
     importlib.reload(server)
-    yield character_archive
+    yield
     mapping_service.invalidate()
 
 
 def _seed_workbench(archive, **payload: Any) -> None:
-    body = workbench_payload(archive, "42")
+    body = workbench_payload("42")
     body.update(payload)
-    put_workbench(archive, "42", body)
+    put_workbench("42", body)
 
 
 # ---- characters & sets -------------------------------------------------
@@ -169,9 +170,9 @@ async def test_naming_no_set_means_the_workbench(workbench) -> None:
 
 
 async def test_a_character_never_pulled_has_nothing_to_open(workbench) -> None:
-    import character_archive
+    import archive_registry
 
-    character_archive.register_character("99", "Ghost")
+    archive_registry.register_character("99", "Ghost")
     async with mcp_client() as session:
         result, _ = await call_tool(
             session, "get_description", character="Ghost"
@@ -192,9 +193,9 @@ async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:
 
 
 async def test_get_description_pages_through_a_long_text(workbench) -> None:
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
     payload["character"]["description"] = "ABCDEFGHIJ"
-    put_workbench(workbench, "42", payload)
+    put_workbench("42", payload)
 
     async with mcp_client() as session:
         _, head = await call_tool(
@@ -218,9 +219,9 @@ async def test_get_description_pages_through_a_long_text(workbench) -> None:
 
 
 async def test_profile_fields_resolve_names_and_options(workbench) -> None:
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
     payload["infotags"] = {"2": "Elf", "3": "11"}
-    put_workbench(workbench, "42", payload)
+    put_workbench("42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(
@@ -271,9 +272,9 @@ async def test_profile_fields_filter_by_group_and_query(workbench) -> None:
 
 
 async def test_unmapped_fields_are_surfaced_separately(workbench) -> None:
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
     payload["infotags"] = {"999": "something F-list no longer describes"}
-    put_workbench(workbench, "42", payload)
+    put_workbench("42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(
@@ -292,13 +293,13 @@ async def test_unmapped_fields_are_surfaced_separately(workbench) -> None:
 
 
 async def test_list_kinks_resolves_names_and_counts_choices(workbench) -> None:
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
     payload["kinks"] = {"100": "fave", "101": "no"}
     payload["custom_kinks"] = {
         "local:abc": {"name": "Thunderstorms", "description": "", "choice": "yes"},
         "local:dead": {"name": "Gone", "choice": "no", "_deleted": True},
     }
-    put_workbench(workbench, "42", payload)
+    put_workbench("42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(
@@ -315,9 +316,9 @@ async def test_list_kinks_resolves_names_and_counts_choices(workbench) -> None:
 
 
 async def test_list_kinks_can_filter_to_one_choice(workbench) -> None:
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
     payload["kinks"] = {"100": "fave", "101": "no"}
-    put_workbench(workbench, "42", payload)
+    put_workbench("42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(

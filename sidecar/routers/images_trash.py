@@ -8,7 +8,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-import character_archive
+import archive_images
+import archive_registry
 from refusals import InvalidFileName
 from services import backup_trash as backup_trash_service
 from services import image_import as image_import_service
@@ -23,8 +24,8 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
     """Serve `images/<image_id>.<ext>`. The filename shape is validated
     against the safe-name regex so a hostile renderer call can't path-
     traverse out of the images directory."""
-    character_archive.require_image_filename(filename)
-    path = character_archive.images_dir(character_id) / filename
+    archive_images.require_image_filename(filename)
+    path = archive_images.images_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="image not found")
     return FileResponse(path)
@@ -38,7 +39,7 @@ async def flist_character_images_list(character_id: str) -> dict:
     pool view."""
     return {
         "character_id": character_id,
-        "images": character_archive.list_character_images(character_id),
+        "images": archive_images.list_character_images(character_id),
     }
 
 
@@ -50,8 +51,8 @@ async def flist_character_image_by_id(
     know the extension. Tries the supported set in order; 404 when none
     exists. Lets the gallery render thumbnails reliably without a
     separate round-trip to look up extensions."""
-    character_archive.require_image_id(image_id)
-    d = character_archive.images_dir(character_id)
+    archive_images.require_image_id(image_id)
+    d = archive_images.images_dir(character_id)
     for ext in ("png", "jpg", "gif"):
         candidate = d / f"{image_id}.{ext}"
         if candidate.exists():
@@ -79,7 +80,7 @@ async def flist_character_image_upload(
         # F-list itself caps images well below this; the bound is here
         # to keep a hostile body from blocking the loop on disk write.
         raise HTTPException(status_code=413, detail="image too large")
-    row = character_archive.add_uploaded_image(character_id, body)
+    row = archive_images.add_uploaded_image(character_id, body)
     if row is None:
         raise HTTPException(
             status_code=415,
@@ -100,7 +101,7 @@ async def flist_character_images_repair(character_id: str) -> dict:
 
     Cheap: it hashes the character's own image files and nothing else.
     """
-    return character_archive.repair_gallery(character_id)
+    return archive_images.repair_gallery(character_id)
 
 
 @router.delete("/flist/character/{character_id}/images/{image_id}")
@@ -147,7 +148,7 @@ async def flist_character_trash_list(character_id: str) -> dict:
 @router.get("/flist/character/{character_id}/trash/{filename}")
 async def flist_character_trash_file(character_id: str, filename: str) -> FileResponse:
     """Serve a trashed file, for the trash view's thumbnails."""
-    character_archive.require_image_filename(filename)
+    archive_images.require_image_filename(filename)
     if filename.endswith(".json"):
         # The trash's own metadata sits next to the files.
         raise InvalidFileName("invalid image filename")
@@ -182,8 +183,8 @@ def _trash_owner(character_id: str) -> str:
     the archive does not hold with `character_not_found` (404). A
     character without a name owns no cleared Labels: its listing shows
     none and a restore or purge finds none (`""` matches no entry)."""
-    character_archive.character_dir(character_id)
-    return character_archive.character_name(character_id) or ""
+    archive_registry.character_dir(character_id)
+    return archive_registry.character_name(character_id) or ""
 
 
 @router.post("/flist/character/{character_id}/trash/labels/restore")
@@ -230,8 +231,8 @@ async def flist_character_trash_empty(character_id: str) -> dict:
 
 @router.get("/flist/character/{character_id}/inlines/{filename}")
 async def flist_character_inline(character_id: str, filename: str) -> FileResponse:
-    character_archive.require_image_filename(filename)
-    path = character_archive.inlines_dir(character_id) / filename
+    archive_images.require_image_filename(filename)
+    path = archive_images.inlines_dir(character_id) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="inline not found")
     return FileResponse(path)

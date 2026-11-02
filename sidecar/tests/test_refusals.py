@@ -23,9 +23,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     import server
 
     return app_client(server.app)
@@ -96,11 +96,12 @@ def character(client: TestClient) -> str:
     """A character in the archive, with an empty backups folder."""
     import json
 
-    import character_archive
+    import archive_backups
+    import archive_registry
 
-    char = character_archive.create_character_dir("123")
+    char = archive_registry.create_character_dir("123")
     (char / "live.json").write_text(json.dumps({"id": 123, "name": "Someone"}), encoding="utf-8")
-    character_archive.backups_dir("123")
+    archive_backups.backups_dir("123")
     return "123"
 
 
@@ -133,10 +134,10 @@ def test_a_backup_from_before_the_stored_profile_is_refused_as_too_old(
 ) -> None:
     import zipfile
 
-    import character_archive
+    import archive_backups
 
     name = "2026-01-01T000000Z.zip"
-    with zipfile.ZipFile(character_archive.backups_dir(character) / name, "w") as zf:
+    with zipfile.ZipFile(archive_backups.backups_dir(character) / name, "w") as zf:
         zf.writestr("character.json", "{}")
 
     res = client.post(

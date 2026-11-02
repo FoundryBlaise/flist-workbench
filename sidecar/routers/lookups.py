@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 
-import character_archive
+import archive_registry
 import eicons as eicons_catalog
 import flist_api
 
@@ -69,7 +69,7 @@ async def profile(name: str) -> dict:
     if isinstance(infotags, dict) and infotags:
         try:
             mapping = await flist_api.fetch_mapping_list(
-                character_archive.cache_root() / "mapping-list.json"
+                archive_registry.cache_root() / "mapping-list.json"
             )
             stats = _resolve_infotag_stats(infotags, mapping)
         except flist_api.FlistApiError:

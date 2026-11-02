@@ -91,16 +91,17 @@ def old(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OldArchive:
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
     import restore
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore)
-    character_archive.register_character(CID, NAME)
-    character_archive.write_live(CID, _live())
-    return OldArchive(character_archive.character_dir(CID))
+    archive_registry.register_character(CID, NAME)
+    archive_live.write_live(CID, _live())
+    return OldArchive(archive_registry.character_dir(CID))
 
 
 def start(old: OldArchive) -> dict:
@@ -231,7 +232,7 @@ def test_old_copies_of_live_go_into_the_backup_with_the_drafts(old: OldArchive) 
 
 
 def test_a_character_with_only_live_gets_its_workbench_from_live(old: OldArchive) -> None:
-    import character_archive
+    import archive_workbench
 
     before = old.files()
 
@@ -247,7 +248,7 @@ def test_a_character_with_only_live_gets_its_workbench_from_live(old: OldArchive
 
     made = app_client(server.app).get(f"/flist/character/{CID}/workbench/payload").json()
     assert made["created"] is True
-    assert made["payload"] == character_archive._seed_payload_from_live(_live())
+    assert made["payload"] == archive_workbench._seed_payload_from_live(_live())
 
 
 def test_a_leftover_working_copy_goes_into_the_backup(old: OldArchive) -> None:

@@ -13,6 +13,9 @@ import hashlib
 from pathlib import Path
 
 import pytest
+import archive_images
+import archive_live
+import archive_workbench
 from workbench_state import put_workbench, workbench_payload
 
 
@@ -21,11 +24,12 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
 
-    importlib.reload(character_archive)
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    importlib.reload(archive_registry)
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": "Lady Amber Blaise", "description": "x"},
@@ -37,7 +41,6 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "fetched_at": 1000,
         },
     )
-    return character_archive
 
 
 def png(seed: bytes) -> bytes:
@@ -50,10 +53,9 @@ def local_id_for(data: bytes) -> str:
 
 def set_gallery(archive, *image_ids: str) -> None:
     put_workbench(
-        archive,
         "42",
         {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_schema_version": archive_workbench.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [
@@ -65,7 +67,7 @@ def set_gallery(archive, *image_ids: str) -> None:
 
 
 def gallery(archive) -> list[str]:
-    payload = workbench_payload(archive, "42")
+    payload = workbench_payload("42")
     return [row["image_id"] for row in payload.get("images", [])]
 
 
@@ -75,10 +77,10 @@ def test_a_dead_local_entry_is_relinked_to_the_same_bytes(archive) -> None:
     # carries the hash, so the two can be matched without downloading
     # anything or asking the user.
     data = png(b"a")
-    archive.write_character_image("42", "46992674", "png", data)
+    archive_images.write_character_image("42", "46992674", "png", data)
     set_gallery(archive, local_id_for(data))
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["46992674"]
     assert result["relinked"] == [
@@ -89,13 +91,13 @@ def test_a_dead_local_entry_is_relinked_to_the_same_bytes(archive) -> None:
 
 def test_the_slot_keeps_its_place_and_description(archive) -> None:
     first, second = png(b"a"), png(b"b")
-    archive.write_character_image("42", "46992674", "png", first)
-    archive.write_character_image("42", "46992670", "png", second)
+    archive_images.write_character_image("42", "46992674", "png", first)
+    archive_images.write_character_image("42", "46992670", "png", second)
     set_gallery(archive, local_id_for(first), local_id_for(second))
 
-    archive.repair_gallery("42")
+    archive_images.repair_gallery("42")
 
-    payload = workbench_payload(archive, "42")
+    payload = workbench_payload("42")
     assert [(r["image_id"], r["description"]) for r in payload["images"]] == [
         ("46992674", "slot 0"),
         ("46992670", "slot 1"),
@@ -106,10 +108,10 @@ def test_the_same_picture_cannot_hold_three_slots(archive) -> None:
     # Seen in the field: one image filling positions 8, 9 and 10 while
     # the pictures that belonged there sat in the pool.
     data = png(b"a")
-    archive.write_character_image("42", "47002195", "png", data)
+    archive_images.write_character_image("42", "47002195", "png", data)
     set_gallery(archive, "47002195", "47002195", "47002195")
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["47002195"]
     assert result["duplicates_removed"] == ["47002195", "47002195"]
@@ -120,7 +122,7 @@ def test_an_entry_it_cannot_resolve_is_reported_not_deleted(archive) -> None:
     # order on a hunch. Say so and leave it.
     set_gallery(archive, "99999999")
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["99999999"]
     assert result["unresolved"] == ["99999999"]
@@ -129,10 +131,10 @@ def test_an_entry_it_cannot_resolve_is_reported_not_deleted(archive) -> None:
 
 def test_a_healthy_gallery_is_left_alone(archive) -> None:
     data = png(b"a")
-    archive.write_character_image("42", "46992674", "png", data)
+    archive_images.write_character_image("42", "46992674", "png", data)
     set_gallery(archive, "46992674")
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["46992674"]
     assert result["repaired"] is False
@@ -141,11 +143,11 @@ def test_a_healthy_gallery_is_left_alone(archive) -> None:
 
 def test_running_it_again_finds_nothing_left_to_do(archive) -> None:
     data = png(b"a")
-    archive.write_character_image("42", "46992674", "png", data)
+    archive_images.write_character_image("42", "46992674", "png", data)
     set_gallery(archive, local_id_for(data))
 
-    archive.repair_gallery("42")
-    second = archive.repair_gallery("42")
+    archive_images.repair_gallery("42")
+    second = archive_images.repair_gallery("42")
 
     assert second["repaired"] is False
     assert second["relinked"] == []
@@ -155,10 +157,10 @@ def test_a_local_image_that_still_has_its_file_is_untouched(archive) -> None:
     # Not every local id is broken — an upload that has never been
     # pushed to F-list is perfectly normal.
     data = png(b"c")
-    row = archive.add_uploaded_image("42", data)
+    row = archive_images.add_uploaded_image("42", data)
     set_gallery(archive, row["image_id"])
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == [row["image_id"]]
     assert result["repaired"] is False
@@ -168,7 +170,7 @@ def test_a_local_image_that_still_has_its_file_is_untouched(archive) -> None:
 
 
 def live_with(archive, *image_ids: str) -> None:
-    archive.write_live(
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": "Lady Amber Blaise", "description": "x"},
@@ -194,60 +196,60 @@ def test_a_slot_follows_its_bytes_to_the_new_id(archive) -> None:
     as dead is that Live no longer lists it.
     """
     data = png(b"a")
-    archive.write_character_image("42", "46992661", "png", data)
-    archive.write_character_image("42", "47002719", "png", data)
+    archive_images.write_character_image("42", "46992661", "png", data)
+    archive_images.write_character_image("42", "47002719", "png", data)
     live_with(archive, "47002719")
     set_gallery(archive, "46992661")
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["47002719"]
     assert result["relinked"] == [{"from": "46992661", "to": "47002719"}]
     # The leftover file would otherwise sit in the pool for good.
     assert result["stale_removed"] == ["46992661"]
-    assert not (archive.images_dir("42") / "46992661.png").exists()
+    assert not (archive_images.images_dir("42") / "46992661.png").exists()
 
 
 def test_an_id_live_still_lists_is_left_alone(archive) -> None:
     # F-list can hold the same picture twice. When it still knows the
     # id in the gallery, that slot is correct and nothing is stale.
     data = png(b"a")
-    archive.write_character_image("42", "47002195", "png", data)
-    archive.write_character_image("42", "47002721", "png", data)
+    archive_images.write_character_image("42", "47002195", "png", data)
+    archive_images.write_character_image("42", "47002721", "png", data)
     live_with(archive, "47002195", "47002721")
     set_gallery(archive, "47002195")
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["47002195"]
     assert result["repaired"] is False
-    assert (archive.images_dir("42") / "47002195.png").exists()
+    assert (archive_images.images_dir("42") / "47002195.png").exists()
 
 
 def test_without_a_pull_nothing_is_assumed(archive) -> None:
     # An empty Live means "we have not looked", not "the profile is
     # empty". Treating it as evidence would delete the user's images.
     data = png(b"a")
-    archive.write_character_image("42", "46992661", "png", data)
-    archive.write_character_image("42", "47002719", "png", data)
+    archive_images.write_character_image("42", "46992661", "png", data)
+    archive_images.write_character_image("42", "47002719", "png", data)
     set_gallery(archive, "46992661")
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == ["46992661"]
     assert result["repaired"] is False
-    assert (archive.images_dir("42") / "46992661.png").exists()
+    assert (archive_images.images_dir("42") / "46992661.png").exists()
 
 
 def test_a_local_upload_not_yet_on_f_list_survives(archive) -> None:
     # Not in Live and no twin that is — perfectly normal for something
     # the user has not pushed yet.
-    row = archive.add_uploaded_image("42", png(b"fresh"))
+    row = archive_images.add_uploaded_image("42", png(b"fresh"))
     live_with(archive, "47002719")
-    archive.write_character_image("42", "47002719", "png", png(b"other"))
+    archive_images.write_character_image("42", "47002719", "png", png(b"other"))
     set_gallery(archive, row["image_id"])
 
-    result = archive.repair_gallery("42")
+    result = archive_images.repair_gallery("42")
 
     assert gallery(archive) == [row["image_id"]]
     assert result["repaired"] is False

@@ -43,15 +43,16 @@ def sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    character_archive.register_character(CID, NAME)
-    character_archive.write_live(
+    archive_registry.register_character(CID, NAME)
+    archive_live.write_live(
         CID,
         {
             "character": {"id": 42, "name": NAME, "description": "[b]Published.[/b]"},

@@ -126,7 +126,7 @@ def build_zip(
 
     # Walk images/ once so the serialiser knows each image_id's
     # extension. This mirrors `list_character_images` without going
-    # through character_archive — keeps the serialiser pure / testable.
+    # through the archive modules — keeps the serialiser pure / testable.
     image_extensions: dict[str, str] = {}
     if images_dir.exists():
         for entry in images_dir.iterdir():

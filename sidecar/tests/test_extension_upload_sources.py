@@ -45,19 +45,21 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_images
+    import archive_live
+    import archive_registry
     import paths
     import restore as restore_svc
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
 
     for cid, name in (("42", AMBER), ("77", CORVIN)):
-        character_archive.register_character(cid, name)
-        character_archive.write_live(cid, _live(int(cid), name, f"[b]{name}, as published.[/b]"))
-        (character_archive.images_dir(cid) / "5551001.png").write_bytes(PNG)
+        archive_registry.register_character(cid, name)
+        archive_live.write_live(cid, _live(int(cid), name, f"[b]{name}, as published.[/b]"))
+        (archive_images.images_dir(cid) / "5551001.png").write_bytes(PNG)
 
     hs = restore_svc.begin_handshake()
     restore_svc.accept_handshake(hs["handshake_id"])

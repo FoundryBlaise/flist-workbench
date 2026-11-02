@@ -28,8 +28,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import archive_backups
+import archive_images
+import archive_live
+import archive_registry
+import archive_workbench
 import atomic_write
-import character_archive
 import settings as settings_store
 
 #: F-list's upload limits, as the user reports them: under 2.0 MB and
@@ -265,7 +269,7 @@ def prepare(
         data = path.read_bytes()
     except OSError as exc:
         raise ImportRefused("source_unreadable", f"Cannot read '{source_path}'.") from exc
-    ext = character_archive.detect_image_ext(data)
+    ext = archive_images.detect_image_ext(data)
     if ext is None:
         raise ImportRefused(
             "not_an_image",
@@ -299,7 +303,7 @@ def prepare(
 def store(character_id: int | str, prepared: PreparedImage) -> dict[str, Any]:
     """Put prepared bytes into the character's image folder (or find the
     identical file already there) and remember where they came from."""
-    row = character_archive.add_uploaded_image(character_id, prepared.data)
+    row = archive_images.add_uploaded_image(character_id, prepared.data)
     if row is None:
         # prepare() already sniffed the format; this is a disk problem.
         raise ImportRefused("store_failed", f"Could not store {prepared.source_name}.")
@@ -318,7 +322,7 @@ def store(character_id: int | str, prepared: PreparedImage) -> dict[str, Any]:
 
 
 def _meta_path(character_id: int | str) -> Path:
-    return character_archive.character_dir(character_id) / META_FILENAME
+    return archive_registry.character_dir(character_id) / META_FILENAME
 
 
 def read_meta(character_id: int | str) -> dict[str, dict[str, Any]]:
@@ -414,13 +418,13 @@ def references(character_id: int | str) -> dict[str, dict[str, Any]]:
         }
 
     out: dict[str, dict[str, Any]] = defaultdict(empty)
-    bench = character_archive.read_workbench(character_id)
+    bench = archive_workbench.read_workbench(character_id)
     for image_id in _image_ids(bench.payload if bench else None):
         out[image_id]["workbench"] = True
-    for image_id in _image_ids(character_archive.read_live(character_id)):
+    for image_id in _image_ids(archive_live.read_live(character_id)):
         out[image_id]["live"] = True
-    backups = character_archive.backups_dir(character_id)
-    for backup in character_archive.list_zip_backups(character_id):  # newest first
+    backups = archive_backups.backups_dir(character_id)
+    for backup in archive_backups.list_zip_backups(character_id):  # newest first
         ids = _ids_in_backup(backups / backup["filename"])
         if not backup["holds_profile"]:
             for image_id in ids:

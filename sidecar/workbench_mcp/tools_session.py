@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import character_archive
+import archive_registry
 import flist_activity
 import flist_api
 import rag_store
@@ -42,7 +42,7 @@ def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
         "api_calls_this_hour": flist_api.api_rate_limiter().hourly_count(),
     }
 
-    characters = character_archive.list_archived_characters()
+    characters = archive_registry.list_archived_characters()
 
     try:
         log_chars = [c.name for c in list_characters()]

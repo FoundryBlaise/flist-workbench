@@ -5,7 +5,9 @@ from typing import Any
 from fastapi import APIRouter, Body, Header, HTTPException
 from pydantic import BaseModel
 
-import character_archive
+import archive_backups
+import archive_live
+import archive_workbench
 from archive_errors import (
     InvalidWorkbenchPayload,
     NoWorkbench,
@@ -35,8 +37,8 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
     which is what a read-only render wants.
     """
     if create:
-        character_archive.read_workbench(character_id, create=True)
-    info = character_archive.workbench_info(character_id)
+        archive_workbench.read_workbench(character_id, create=True)
+    info = archive_workbench.workbench_info(character_id)
     if info is None:
         # Two different nothings, and the window renders them
         # differently: a character never pulled has nothing to copy
@@ -44,7 +46,7 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
         # offers to start.
         reason = (
             "no_live"
-            if character_archive.read_live(character_id) is None
+            if archive_live.read_live(character_id) is None
             else "not_created_yet"
         )
         return {"workbench": None, "reason": reason}
@@ -61,7 +63,7 @@ async def flist_character_workbench_payload_get(
     says so: that copy holds nobody's edits. `create=false` reads
     without making one (404 `no_workbench`).
     """
-    read = character_archive.read_workbench(character_id, create=create)
+    read = archive_workbench.read_workbench(character_id, create=create)
     if read is None:
         raise NoWorkbench(character_id)
     return {"payload": read.payload, "etag": read.etag, "created": read.created}
@@ -82,17 +84,17 @@ async def flist_character_workbench_payload_put(
     way, one keystroke at a time. Both carry the current etag.
     """
     try:
-        etag = character_archive.write_workbench(
+        etag = archive_workbench.write_workbench(
             character_id, payload, expected_etag=if_match
         )
-    except character_archive.EtagRequired as exc:
+    except archive_workbench.EtagRequired as exc:
         raise WorkbenchConflict(
             "etag_required",
             "Read the Workbench and send its etag as If-Match; a write "
             "that has not seen the current contents would overwrite them.",
             exc.current_etag,
         ) from exc
-    except character_archive.EtagMismatch as exc:
+    except archive_workbench.EtagMismatch as exc:
         raise WorkbenchConflict(
             "etag_mismatch",
             "The Workbench changed since it was read.",
@@ -123,10 +125,10 @@ async def flist_character_workbench_load_backup(
     if not filename:
         raise HTTPException(status_code=422, detail="filename is required")
     # A bad name is refused as such, not as an unreadable Backup.
-    character_archive.require_backup_filename(filename)
+    archive_backups.require_backup_filename(filename)
 
     try:
-        replaced = character_archive.load_zip_backup_into_workbench(
+        replaced = archive_backups.load_zip_backup_into_workbench(
             character_id, filename
         )
     except FileNotFoundError as exc:
@@ -134,7 +136,7 @@ async def flist_character_workbench_load_backup(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    info = character_archive.workbench_info(character_id)
+    info = archive_workbench.workbench_info(character_id)
     return {
         "workbench": info.to_dict() if info is not None else None,
         "payload": replaced.payload,
@@ -157,7 +159,7 @@ async def flist_character_workbench_reset_to_live(character_id: str) -> dict:
     Answers with the new payload and its etag, which the window adopts
     as the Workbench it saves over next.
     """
-    replaced = character_archive.reset_workbench_to_live(character_id)
+    replaced = archive_backups.reset_workbench_to_live(character_id)
     return {
         "payload": replaced.payload,
         "etag": replaced.etag,
@@ -181,7 +183,7 @@ async def flist_character_workbench_load_preflight(
     entry = next(
         (
             e
-            for e in character_archive.list_zip_backups(character_id)
+            for e in archive_backups.list_zip_backups(character_id)
             if e.get("filename") == filename
         ),
         None,
@@ -189,14 +191,14 @@ async def flist_character_workbench_load_preflight(
     if entry is None:
         raise HTTPException(status_code=404, detail="no such backup")
 
-    bench = character_archive.read_workbench(character_id)
+    bench = archive_workbench.read_workbench(character_id)
     bench_has_edits = bench is not None and bool(bench.payload.get("_overlay"))
 
     # "Diverged" means the profile on F-list was pulled after this
     # backup was taken, so the backup is not a picture of what is up
     # there now. Cheap and honest: a timestamp comparison, not a diff.
     live_pulled_at = None
-    live = character_archive.read_live(character_id)
+    live = archive_live.read_live(character_id)
     if isinstance(live, dict):
         fetched = live.get("fetched_at")
         if isinstance(fetched, (int, float)):
