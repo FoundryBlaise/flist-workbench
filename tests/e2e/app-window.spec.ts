@@ -237,9 +237,9 @@ test('a request that outlives the closing page goes without the launch secret', 
     // Keepalive requests sent from `beforeunload` outlive the page, and
     // Electron reports them without a frame, so nothing places them on
     // the app's page. The app saves before the page unloads instead
-    // (unsaved-edits.spec.ts); these, a working-copy PUT among them,
+    // (unsaved-edits.spec.ts); these, a Workbench save among them,
     // must leave without the secret, so the sidecar refuses them.
-    const workingUrl = `${sidecarUrl}/flist/character/123/working`
+    const workingUrl = `${sidecarUrl}/flist/character/123/workbench/payload`
     const otherUrl = `${sidecarUrl}/flist/character/123/snapshot`
     await window.evaluate(
       ([working, other]) => {
