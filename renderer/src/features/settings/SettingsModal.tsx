@@ -4,11 +4,11 @@ import {
   type FlistTrashedLabels,
   type LabelsSettings,
   type McpInfo,
-  type RagSettings,
-  type RagStatus
+  type RagSettings
 } from '../../lib/api'
 import { useStore } from '../../state'
 import { TrashedLabels } from '../flist/TrashedEntries'
+import { IndexStatus } from '../rag/IndexStatus'
 
 type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
 
@@ -571,23 +571,7 @@ function GeneralPane({
   onChange: (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) => void
   firstFieldRef: React.RefObject<HTMLInputElement>
 }) {
-  const [indexStatus, setIndexStatus] = useState<RagStatus | null>(null)
   const envLocked = state.fchat_data_dir_env_locked
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .ragStatus()
-      .then((s) => {
-        if (!cancelled) setIndexStatus(s)
-      })
-      .catch(() => {
-        // Best-effort; status failure shouldn't block the form.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const pick = async () => {
     const picker = window.workbench?.selectDirectory
@@ -660,21 +644,7 @@ function GeneralPane({
 
       <div className="settings-section">
         <h3 className="settings-section-title">RAG index status</h3>
-        {indexStatus === null ? (
-          <p className="settings-meta">Loading status…</p>
-        ) : indexStatus.chunk_count > 0 ? (
-          <p className="settings-meta" data-testid="rag-index-status">
-            <strong>{indexStatus.chunk_count.toLocaleString()}</strong> chunks
-            indexed · model <code>{indexStatus.embed_model}</code> (dim{' '}
-            {indexStatus.embed_dimension})
-          </p>
-        ) : (
-          <p className="settings-meta" data-testid="rag-index-status">
-            No chunks indexed yet. Use{' '}
-            <strong>Logs → Ingest All Characters (RAG)…</strong> to build the
-            vector index.
-          </p>
-        )}
+        <IndexStatus />
       </div>
     </>
   )

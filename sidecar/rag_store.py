@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -182,6 +183,21 @@ def clear_manifest(conn: sqlite3.Connection | None = None, root: Path | None = N
 # -- vector store --------------------------------------------------------
 
 
+#: How long opening the store waits for another opener in this process
+#: to close it. Status reads and searches hold it for milliseconds; an
+#: ingest holds it for its whole run, and `services.index` refuses
+#: those callers as busy before they get here.
+OPEN_WAIT_SECONDS = 10.0
+
+_OPEN_LOCKS: dict[Path, threading.Lock] = {}
+_OPEN_LOCKS_GUARD = threading.Lock()
+
+
+def _open_lock(path: Path) -> threading.Lock:
+    with _OPEN_LOCKS_GUARD:
+        return _OPEN_LOCKS.setdefault(path.resolve(), threading.Lock())
+
+
 class RagStore:
     """Thin wrapper around an embedded QdrantClient.
 
@@ -194,7 +210,19 @@ class RagStore:
 
     def __init__(self, *, path: Path | None = None, root: Path | None = None) -> None:
         self._path = path or qdrant_dir(root)
-        self._client = QdrantClient(path=str(self._path))
+        # Qdrant refuses a second open of the folder outright; waiting
+        # for the one in this process to close turns a status read that
+        # overlaps the start of an ingest into a short wait, not a
+        # failed ingest.
+        self._open = _open_lock(self._path)
+        if not self._open.acquire(timeout=OPEN_WAIT_SECONDS):
+            raise RuntimeError(f"the vector store at {self._path} stayed open elsewhere")
+        try:
+            self._client = QdrantClient(path=str(self._path))
+        except BaseException:
+            self._open.release()
+            raise
+        self._held = True
 
     @property
     def path(self) -> Path:
@@ -208,6 +236,9 @@ class RagStore:
             self._client.close()
         except Exception:  # noqa: BLE001 — close should never block teardown
             pass
+        if self._held:
+            self._held = False
+            self._open.release()
 
     def __enter__(self) -> RagStore:
         return self

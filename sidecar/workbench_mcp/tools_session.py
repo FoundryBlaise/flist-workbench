@@ -7,7 +7,6 @@ from typing import Any
 import archive_registry
 import flist_activity
 import flist_api
-import rag_store
 from logs import LogDirError, list_characters
 from paths import user_data_dir
 
@@ -51,14 +50,15 @@ def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
         log_chars = []
         log_error = str(exc)
 
-    manifest = rag_store.read_manifest()
-    chunk_count = 0
-    if manifest.embed_dimension is not None:
-        try:
-            with rag_store.RagStore() as store:
-                chunk_count = store.count() if store.collection_exists() else 0
-        except Exception:  # noqa: BLE001 — status must always answer
-            chunk_count = 0
+    from refusals import IndexUnreadable
+    from services import index as index_service
+
+    # The status of everything else must not fail with the Index: an
+    # Index that cannot be read is reported as its error instead.
+    try:
+        vector_index: dict[str, Any] = index_service.status()
+    except IndexUnreadable as exc:
+        vector_index = {"error": exc.body()}
 
     out: dict[str, Any] = {
         "data_dir": str(user_data_dir()),
@@ -74,12 +74,7 @@ def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
         ],
         "log_characters": log_chars,
         "log_dir_error": log_error,
-        "vector_index": {
-            "embed_model": manifest.embed_model,
-            "embed_dimension": manifest.embed_dimension,
-            "chunk_count": chunk_count,
-            "last_ingest_at": manifest.last_ingest_at,
-        },
+        "vector_index": vector_index,
         "note": NO_PUSH_NOTE,
     }
 

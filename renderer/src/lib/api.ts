@@ -381,16 +381,31 @@ export type IngestJobScope = {
   partner?: string | null
 }
 
-export type IngestJob = {
+export type JobState = 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+
+/** Long work the sidecar runs as a job, of any kind: started by its
+ *  own route, then polled and cancelled by id (`/jobs/{id}`). `error`
+ *  is set when it failed. */
+export type Job<Params = Record<string, unknown>, Progress = Record<string, unknown>, Result = Record<string, unknown>> = {
   id: string
-  scope: { character?: string; partner?: string }
-  include_ooc: boolean
-  force_rewipe: boolean
-  state: 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+  kind: string
+  resource: string
+  state: JobState
+  params: Params
+  progress: Progress
+  result: Result | null
+  error: ErrorBody | null
+  cancel_requested: boolean
+  created_at: number
+  finished_at: number | null
+}
+
+export type IngestProgress = {
   chunked: number
   embedded: number
   upserted: number
   skipped_existing: number
+  removed: number
   /** Messages dropped for lack of an IC/OOC verdict. A high count
    *  means the classification flow should run first — an unjudged
    *  message could be either IC prose or OOC chatter, and indexing OOC
@@ -398,21 +413,34 @@ export type IngestJob = {
   skipped_unlabeled: number
   failed: number
   total_chunks: number
-  current_partner?: string | null
-  last_error?: string | null
-  error?: string | null
-  model_swap: boolean
-  embed_model?: string | null
-  embed_dimension?: number | null
-  created_at: number
-  finished_at?: number | null
+  current_partner: string | null
+  last_error: string | null
+  embed_model: string | null
+  embed_dimension: number | null
 }
+
+export type IngestJob = Job<
+  {
+    scope: { character?: string; partner?: string }
+    include_ooc: boolean
+    force_rewipe: boolean
+  },
+  IngestProgress
+>
+
+/** The `error.code` of an ingest stopped because the Index was built
+ *  with another embedding model; the dialog offers wipe + re-ingest. */
+export const EMBEDDING_MODEL_CHANGED = 'embedding_model_changed'
 
 export type RagStatus = {
   embed_model: string | null
   embed_dimension: number | null
   last_ingest_at: number | null
-  chunk_count: number
+  /** A job (an ingest, a wipe) holds the Index right now: `job` is it,
+   *  and `chunk_count` is null because the Index can't be counted. */
+  busy: boolean
+  job: Job | null
+  chunk_count: number | null
 }
 
 /** One MCP endpoint the sidecar serves. `all` carries every tool; the
@@ -888,13 +916,12 @@ export const api = {
         force_rewipe: opts.force_rewipe ?? false
       })
     }),
-  ragJobGet: (id: string, opts?: ApiOptions) =>
-    get<IngestJob>(`/rag/jobs/${encodeURIComponent(id)}`, opts),
-  ragJobCancel: (id: string) =>
-    request<{ id: string; cancel_requested: boolean }>(
-      `/rag/jobs/${encodeURIComponent(id)}`,
-      { method: 'DELETE' }
-    ),
+  /** Any job by id, whatever its kind. */
+  jobGet: <J extends Job = Job>(id: string, opts?: ApiOptions) =>
+    get<J>(`/jobs/${encodeURIComponent(id)}`, opts),
+  /** Ask a job to stop; answers the job as it stands. */
+  jobCancel: <J extends Job = Job>(id: string) =>
+    request<J>(`/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   ragStatus: () => get<RagStatus>('/rag/status'),
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */

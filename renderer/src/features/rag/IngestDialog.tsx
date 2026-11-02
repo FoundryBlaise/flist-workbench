@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, type IngestJob, type IngestJobScope } from '../../lib/api'
+import {
+  api,
+  EMBEDDING_MODEL_CHANGED,
+  type IngestJob,
+  type IngestJobScope
+} from '../../lib/api'
 
 const POLL_MS = 500
 
@@ -38,7 +43,7 @@ export function IngestDialog({
   const [error, setError] = useState<string | null>(null)
   const [pulseCancel, setPulseCancel] = useState(false)
   // When the sidecar detects a model swap it bounces us with state=failed
-  // and model_swap=true; track whether we've already asked the user to
+  // and error code embedding_model_changed; track whether we've already asked the user to
   // confirm the wipe so the dialog doesn't loop.
   const [wipeOffered, setWipeOffered] = useState(false)
   const pollTimer = useRef<number | null>(null)
@@ -75,7 +80,7 @@ export function IngestDialog({
     if (pollTimer.current !== null) window.clearInterval(pollTimer.current)
     pollTimer.current = window.setInterval(() => {
       api
-        .ragJobGet(id)
+        .jobGet<IngestJob>(id)
         .then((next) => {
           setJob(next)
           if (isTerminal(next.state)) {
@@ -95,7 +100,7 @@ export function IngestDialog({
     const id = jobIdRef.current
     if (!id || !job || isTerminal(job.state)) return
     try {
-      await api.ragJobCancel(id)
+      await api.jobCancel(id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -108,15 +113,17 @@ export function IngestDialog({
 
   const isDone = job ? isTerminal(job.state) : false
   const canClose = phase === 'configuring' || isDone || (!!error && !job)
+  const progress = job?.progress
+  const modelSwap = job?.error?.code === EMBEDDING_MODEL_CHANGED
   const showModelSwapPrompt =
-    !!job && job.state === 'failed' && job.model_swap && !wipeOffered
+    !!job && job.state === 'failed' && modelSwap && !wipeOffered
   // Total stays at 0 during the partner-enumeration phase of an
   // "all characters" run; show an indeterminate bar so the user
   // doesn't think it's stuck.
   const isEnumerating =
-    job?.state === 'running' && job.total_chunks === 0 && job.upserted === 0
-  const denom = job?.total_chunks ?? 0
-  const num = job?.upserted ?? 0
+    job?.state === 'running' && progress?.total_chunks === 0 && progress?.upserted === 0
+  const denom = progress?.total_chunks ?? 0
+  const num = progress?.upserted ?? 0
   const pct = denom > 0 ? Math.min(100, Math.round((num / denom) * 100)) : 0
 
   useEffect(() => {
@@ -222,47 +229,47 @@ export function IngestDialog({
                     <strong>{num.toLocaleString()}</strong> /{' '}
                     {denom.toLocaleString()} ({pct}%) embedded ·{' '}
                     <StatePill state={job.state} />
-                    {job.failed > 0 && (
-                      <span className="classify-fail"> · {job.failed} failed</span>
+                    {job.progress.failed > 0 && (
+                      <span className="classify-fail"> · {job.progress.failed} failed</span>
                     )}
                   </>
                 )}
               </p>
-              {job.current_partner && job.state === 'running' && (
+              {job.progress.current_partner && job.state === 'running' && (
                 <p className="classify-current">
-                  Working on: <code>{job.current_partner}</code>
+                  Working on: <code>{job.progress.current_partner}</code>
                 </p>
               )}
-              {job.skipped_existing > 0 && (
+              {job.progress.skipped_existing > 0 && (
                 <p className="settings-meta">
-                  Skipped {job.skipped_existing.toLocaleString()} already-indexed
+                  Skipped {job.progress.skipped_existing.toLocaleString()} already-indexed
                   chunks — re-runs are cheap.
                 </p>
               )}
-              {job.embed_model && job.embed_dimension && (
+              {job.progress.embed_model && job.progress.embed_dimension && (
                 <p className="settings-meta">
-                  Embedding model: <code>{job.embed_model}</code> (dim{' '}
-                  {job.embed_dimension})
+                  Embedding model: <code>{job.progress.embed_model}</code> (dim{' '}
+                  {job.progress.embed_dimension})
                 </p>
               )}
-              {job.last_error && (
+              {job.progress.last_error && (
                 <p className="settings-meta classify-last-error">
-                  Last error: {job.last_error}
+                  Last error: {job.progress.last_error}
                 </p>
               )}
               {showModelSwapPrompt && (
                 <p className="settings-error">
-                  {job.error}
+                  {job.error?.message}
                 </p>
               )}
-              {job.state === 'failed' && !job.model_swap && job.error && (
-                <p className="settings-error">Job failed: {job.error}</p>
+              {job.state === 'failed' && !modelSwap && job.error && (
+                <p className="settings-error">Job failed: {job.error.message}</p>
               )}
-              {isDone && !job.model_swap && (
+              {isDone && !modelSwap && (
                 <p className="classify-summary" data-testid="ingest-summary">
-                  <strong>Indexed {job.upserted.toLocaleString()}</strong> new
-                  chunks · {job.failed.toLocaleString()} failed ·{' '}
-                  {job.skipped_existing.toLocaleString()} skipped
+                  <strong>Indexed {job.progress.upserted.toLocaleString()}</strong> new
+                  chunks · {job.progress.failed.toLocaleString()} failed ·{' '}
+                  {job.progress.skipped_existing.toLocaleString()} skipped
                   {job.state === 'cancelled' && ' (cancelled)'}
                 </p>
               )}

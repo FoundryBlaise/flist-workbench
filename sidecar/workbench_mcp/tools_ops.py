@@ -27,7 +27,6 @@ import archive_images
 import archive_workbench
 import atomic_write
 import backup_origin
-import rag_jobs
 from mcp.server.fastmcp import Context
 
 from ._context import (
@@ -263,7 +262,8 @@ async def ingest_logs(
 
     Embedding runs in-process by default, so nothing needs to be
     installed. `wait=false` returns a job id to poll with get_job
-    instead of blocking.
+    instead of blocking. One ingest at a time: another is refused with
+    `index_busy`.
     """
     # Resolve to the on-disk spelling like every other conversation
     # tool: the Labels and alias links are keyed on it, so a different
@@ -272,7 +272,9 @@ async def ingest_logs(
     if include_channels:
         scope["include_channels"] = True
 
-    job = rag_jobs.start(scope, include_ooc=include_ooc, force_rewipe=rebuild)
+    from services import index as index_service
+
+    job = index_service.start_ingest(scope, include_ooc=include_ooc, force_rewipe=rebuild)
     audit(
         "ingest_logs",
         character=scope.get("character"),
@@ -288,45 +290,37 @@ async def ingest_logs(
 
     started = time.monotonic()
     last_reported = -1
-    while True:
-        current = rag_jobs.registry().get(job.id)
-        if current is None:
-            raise ToolError("job_lost", f"job {job.id} disappeared")
-        snapshot = current.to_dict()
-        if snapshot.get("state") in ("done", "cancelled", "failed"):
-            return _ingest_summary(snapshot)
-        done = int(snapshot.get("embedded") or 0)
-        if done != last_reported:
+    while not job.finished:
+        progress = job.progress
+        if progress.embedded != last_reported:
             await ctx.report_progress(
-                done,
-                int(snapshot.get("total_chunks") or 0) or None,
-                str(snapshot.get("current_partner") or "indexing"),
+                progress.embedded,
+                progress.total_chunks or None,
+                progress.current_partner or "indexing",
             )
-            last_reported = done
+            last_reported = progress.embedded
         if time.monotonic() - started > WAIT_BUDGET_SEC:
             return {
                 "job_id": job.id,
-                "state": snapshot.get("state"),
+                "state": job.state,
                 "note": (
                     "Still running after 10 minutes — left in the "
                     "background. Poll get_job for progress."
                 ),
             }
         await asyncio.sleep(0.5)
+    return _ingest_summary(job.to_dict())
 
 
-def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
     out = {
-        "job_id": snapshot.get("id"),
-        "state": snapshot.get("state"),
-        "chunks_indexed": snapshot.get("upserted"),
-        "chunks_already_present": snapshot.get("skipped_existing"),
-        "chunks_removed": snapshot.get("removed"),
-        "skipped_unlabeled": snapshot.get("skipped_unlabeled"),
-        "failed": snapshot.get("failed"),
-        "error": snapshot.get("error") or snapshot.get("last_error"),
+        "job_id": job["id"],
+        "state": job["state"],
+        **(job["result"] or {}),
+        "error": job["error"],
+        "last_error": job["progress"].get("last_error"),
     }
-    if out["skipped_unlabeled"]:
+    if out.get("skipped_unlabeled"):
         out["note"] = (
             f"{out['skipped_unlabeled']} message(s) were skipped for "
             "having no IC/OOC verdict — they aren't searchable. Run the "
@@ -335,9 +329,9 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
     elif out["state"] == "failed":
         out["note"] = (
-            "The embedding model failed to load — see `last_error`. "
-            "test_embedding_connection reports the same failure on its "
-            "own, which is the quicker way to see what went wrong."
+            "The ingest failed — see `error`. test_embedding_connection "
+            "reports an embedding model that will not load on its own, "
+            "which is the quicker way to see what went wrong there."
         )
     return out
 
@@ -348,26 +342,26 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     read_only=True,
 )
 def get_job(job_id: str) -> dict[str, Any]:
-    """Progress of a background ingest started with wait=false."""
-    job = rag_jobs.registry().get(job_id)
-    if job is None:
-        raise ToolError(
-            "job_not_found",
-            f"No job {job_id!r}. Finished jobs are forgotten after a "
-            "few minutes.",
-        )
-    return job.to_dict()
+    """Progress of a job started with wait=false, of any kind: `state`,
+    `progress`, `result` once done, `error` ({code, message, details})
+    if it failed. Jobs are kept in memory, so an id from before a
+    restart is `job_not_found`."""
+    from services import jobs
+
+    return jobs.registry().get(job_id).to_dict()
 
 
 @tool(tags=(TAG_CORE, TAG_LOGS), title="Cancel a job")
 def cancel_job(job_id: str) -> dict[str, Any]:
-    """Ask a running ingest to stop. Chunks already written stay
-    indexed; the job stops at the next partner boundary."""
-    ok = rag_jobs.registry().cancel(job_id)
-    if not ok:
-        raise ToolError("job_not_found", f"No job {job_id!r}.")
+    """Ask a running job to stop, whatever its kind. It stops at its
+    next safe point (an ingest between batches; what it already wrote
+    stays) — poll get_job to see it end. A finished job is left as it
+    ended."""
+    from services import jobs
+
+    job = jobs.registry().cancel(job_id)
     audit("cancel_job", job=job_id)
-    return {"job_id": job_id, "cancel_requested": True}
+    return job.to_dict()
 
 
 @tool(tags=TAG_LOGS, title="Wipe the search index", destructive=True)
@@ -376,7 +370,8 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     untouched; only the search index goes.
 
     Needed when switching embedding models — an index built with one
-    model can't be searched with another.
+    model can't be searched with another. Refused with `index_busy`
+    while an ingest runs.
     """
     if not confirm:
         raise ToolError(
@@ -385,14 +380,9 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
             "re-embedding every message, which takes a while. Ask the "
             "user, then call again with confirm=true.",
         )
-    import rag_lexical
-    import rag_store
+    from services import index as index_service
 
-    with rag_store.RagStore() as store:
-        store.wipe()
-    rag_store.clear_manifest()
-    with rag_lexical.LexicalStore() as lex:
-        lex.wipe()
+    index_service.wipe()
     audit("wipe_search_index")
     return {"wiped": True, "note": "Run ingest_logs to rebuild."}
 

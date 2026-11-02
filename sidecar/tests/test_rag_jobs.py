@@ -20,6 +20,8 @@ import rag_embed
 import rag_jobs
 import rag_store
 import two_characters as tc
+from services import index as index_service
+from services import jobs
 from fchat_logs import chat, parsed, utc, write_log
 from two_characters import two_characters  # noqa: F401  (the fixture is used by name)
 
@@ -43,10 +45,9 @@ def _wait_until(predicate, timeout: float = 5.0) -> None:
 
 
 @pytest.fixture
-def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> rag_jobs.JobRegistry:
-    fresh = rag_jobs.JobRegistry()
-    monkeypatch.setattr(rag_jobs, "_registry", fresh)
-    monkeypatch.setattr(rag_jobs, "registry", lambda: fresh)
+def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> jobs.JobRegistry:
+    fresh = jobs.JobRegistry()
+    monkeypatch.setattr(jobs, "_registry", fresh)
     return fresh
 
 
@@ -110,7 +111,7 @@ def _stub_embedding(
 def test_job_runs_single_partner_to_done(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     long = "y" * 300
     # Two IC messages on the same day → one chunk after grouping.
@@ -138,10 +139,10 @@ def test_job_runs_single_partner_to_done(
     finally:
         labels_conn.close()
 
-    job = rag_jobs.start({"character": "Char", "partner": "Partner"})
+    job = index_service.start_ingest({"character": "Char", "partner": "Partner"})
     _wait_until(lambda: job.state in ("done", "failed", "cancelled"))
     assert job.state == "done", job.error
-    assert job.embed_dimension == 8
+    assert job.progress.embed_dimension == 8
     assert job.progress.chunked == 1
     assert job.progress.embedded == 1
     assert job.progress.upserted == 1
@@ -175,7 +176,7 @@ REPLY_MARK = "Marmalade"
 def index_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
+    isolated_registry: jobs.JobRegistry,  # noqa: ARG001
 ):
     """The sidecar from outside over one fixture conversation: REST for
     Labels and ingest, the retrieval service for search. Embedding and
@@ -246,10 +247,10 @@ def _ingest(
     assert res.status_code == 202, res.text
     job_id = res.json()["id"]
     _wait_until(
-        lambda: client.get(f"/rag/jobs/{job_id}").json()["state"]
+        lambda: client.get(f"/jobs/{job_id}").json()["state"]
         in ("done", "failed", "cancelled"),
     )
-    job = client.get(f"/rag/jobs/{job_id}").json()
+    job = client.get(f"/jobs/{job_id}").json()
     assert job["state"] == "done", job
     return job
 
@@ -349,12 +350,12 @@ def test_a_re_ingest_with_nothing_changed_embeds_nothing(index_window) -> None:
     ])
     _label(client, OPENING, "IC")
     _label(client, REPLY, "IC")
-    assert _ingest(client)["embedded"] == 2
+    assert _ingest(client)["progress"]["embedded"] == 2
 
     again = _ingest(client)
 
-    assert again["embedded"] == 0
-    assert again["skipped_existing"] == 2
+    assert again["progress"]["embedded"] == 0
+    assert again["result"]["chunks_already_present"] == 2
     assert _found_as_ic(REPLY_MARK)
     assert _found_as_ic("lighthouse")
 
@@ -370,7 +371,7 @@ def test_a_new_day_embeds_only_that_day(index_window) -> None:
     _label(client, REPLY, "IC")
     job = _ingest(client)
 
-    assert job["embedded"] == 1
+    assert job["progress"]["embedded"] == 1
     assert _found_as_ic(REPLY_MARK)
     assert _found_as_ic("lighthouse")
 
@@ -378,7 +379,7 @@ def test_a_new_day_embeds_only_that_day(index_window) -> None:
 def test_job_writes_manifest_after_first_ingest(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     msgs = [_msg(1735689600, "x" * 300)]
     _stub_one_partner(monkeypatch, "Char", "Partner", msgs)
@@ -398,7 +399,7 @@ def test_job_writes_manifest_after_first_ingest(
     finally:
         labels_conn.close()
 
-    job = rag_jobs.start({"character": "Char", "partner": "Partner"})
+    job = index_service.start_ingest({"character": "Char", "partner": "Partner"})
     _wait_until(lambda: job.state == "done", timeout=3.0)
     manifest = rag_store.read_manifest()
     assert manifest.embed_dimension == 12
@@ -411,7 +412,7 @@ def test_job_writes_manifest_after_first_ingest(
 def test_job_fails_when_probe_fails(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     msgs = [_msg(1735689600, "x" * 300)]
     _stub_one_partner(monkeypatch, "Char", "Partner", msgs)
@@ -420,17 +421,18 @@ def test_job_fails_when_probe_fails(
         raise rag_embed.EmbedError("model not loaded")
 
     monkeypatch.setattr(rag_embed, "probe", boom)
-    job = rag_jobs.start({"character": "Char", "partner": "Partner"})
+    job = index_service.start_ingest({"character": "Char", "partner": "Partner"})
     _wait_until(lambda: job.state in ("done", "failed", "cancelled"))
     assert job.state == "failed"
-    assert "model not loaded" in (job.error or "")
+    assert job.error["code"] == "embedding_failed"
+    assert "model not loaded" in job.error["message"]
     assert job.progress.upserted == 0
 
 
 def test_job_detects_dim_mismatch_and_aborts(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     # Seed an old manifest with dim 16.
     rag_store.write_manifest(embed_model="old-model", embed_dimension=16)
@@ -453,17 +455,17 @@ def test_job_detects_dim_mismatch_and_aborts(
     finally:
         labels_conn.close()
 
-    job = rag_jobs.start({"character": "Char", "partner": "Partner"})
+    job = index_service.start_ingest({"character": "Char", "partner": "Partner"})
     _wait_until(lambda: job.state in ("done", "failed", "cancelled"))
     assert job.state == "failed"
-    assert job.model_swap is True
-    assert "embedding model changed" in (job.error or "")
+    assert job.error["code"] == "embedding_model_changed"
+    assert "embedding model changed" in job.error["message"]
 
 
 def test_job_detects_orphan_collection_as_model_swap(
     workbench_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     """Manifest is empty but a 768-dim Qdrant collection survives from
     a previous build at a different dim. ensure_collection raises
@@ -500,17 +502,17 @@ def test_job_detects_orphan_collection_as_model_swap(
     finally:
         labels_conn.close()
 
-    job = rag_jobs.start({"character": "Char", "partner": "Partner"})
+    job = index_service.start_ingest({"character": "Char", "partner": "Partner"})
     _wait_until(lambda: job.state in ("done", "failed", "cancelled"), timeout=5.0)
     assert job.state == "failed"
-    assert job.model_swap is True
-    assert "vector index has dimension 4" in (job.error or "")
+    assert job.error["code"] == "embedding_model_changed"
+    assert "vector index has dimension 4" in job.error["message"]
 
 
 def test_job_scoped_force_rewipe_deletes_only_that_scope(
     workbench_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     """A per-conversation force_rewipe must only delete that
     conversation's chunks, not nuke the whole collection. Verifies the
@@ -593,7 +595,7 @@ def test_job_scoped_force_rewipe_deletes_only_that_scope(
     finally:
         labels_conn.close()
 
-    job = rag_jobs.start(
+    job = index_service.start_ingest(
         {"character": "Char", "partner": "A"}, force_rewipe=True
     )
     _wait_until(lambda: job.state in ("done", "failed", "cancelled"), timeout=5.0)
@@ -616,7 +618,7 @@ def test_job_scoped_force_rewipe_deletes_only_that_scope(
 def test_job_with_force_rewipe_recreates_collection(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,
+    isolated_registry: jobs.JobRegistry,
 ) -> None:
     rag_store.write_manifest(embed_model="old-model", embed_dimension=16)
 
@@ -638,7 +640,7 @@ def test_job_with_force_rewipe_recreates_collection(
     finally:
         labels_conn.close()
 
-    job = rag_jobs.start(
+    job = index_service.start_ingest(
         {"character": "Char", "partner": "Partner"}, force_rewipe=True
     )
     _wait_until(lambda: job.state in ("done", "failed", "cancelled"), timeout=5.0)
@@ -658,7 +660,7 @@ AMBER_SCOPE = {"character": tc.AMBER, "partner": tc.PARTNER}
 def two_labelled(
     two_characters: tc.TwoCharacters,
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
+    isolated_registry: jobs.JobRegistry,  # noqa: ARG001
 ) -> tc.TwoCharacters:
     """The two-character scenario with one lighthouse line per own
     character labelled IC, nothing indexed yet."""
@@ -815,7 +817,7 @@ async def test_mcp_ingest_of_an_unknown_name_is_refused(
         result, _ = await call_tool(session, "ingest_logs", **scope)
 
     assert code in tool_error_text(result)
-    assert rag_jobs.registry().list() == [], "no job was started"
+    assert jobs.registry().list() == [], "no job was started"
 
 
 def test_an_ingest_from_the_window_resolves_scope_names(
@@ -842,17 +844,17 @@ def test_an_ingest_from_the_window_of_an_unknown_name_is_refused(
     assert res.status_code == 404, res.text
     assert res.json()["code"] == code
     assert res.json()["message"]
-    assert rag_jobs.registry().list() == [], "no job was started"
+    assert jobs.registry().list() == [], "no job was started"
 
 
-# ---- /rag/ingest + /rag/jobs HTTP shape --------------------------------
+# ---- /rag/ingest + /jobs HTTP shape --------------------------------
 
 
 @pytest.fixture
 def api_client(
     workbench_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
-    isolated_registry: rag_jobs.JobRegistry,  # noqa: ARG001
+    isolated_registry: jobs.JobRegistry,  # noqa: ARG001
 ) -> TestClient:
     # The route resolves scope names against the Logs, so Char and
     # Partner need a Log; the tests stub what is read from it.
@@ -902,17 +904,17 @@ def test_ingest_endpoint_returns_job_id(
     assert job["state"] in ("pending", "running", "done")
 
     _wait_until(
-        lambda: rag_jobs.registry().get(job["id"]).state
+        lambda: jobs.registry().get(job["id"]).state
         in ("done", "failed", "cancelled"),
         timeout=3.0,
     )
-    finished = api_client.get(f"/rag/jobs/{job['id']}").json()
+    finished = api_client.get(f"/jobs/{job['id']}").json()
     assert finished["state"] == "done"
 
 
 def test_get_unknown_job_returns_404(api_client: TestClient) -> None:
-    assert api_client.get("/rag/jobs/zzz").status_code == 404
-    assert api_client.delete("/rag/jobs/zzz").status_code == 404
+    assert api_client.get("/jobs/zzz").status_code == 404
+    assert api_client.delete("/jobs/zzz").status_code == 404
 
 
 def test_rag_status_blank_install(api_client: TestClient) -> None:
@@ -947,7 +949,7 @@ def test_rag_status_after_ingest(
         "/rag/ingest", json={"character": "Char", "partner": "Partner"}
     ).json()
     _wait_until(
-        lambda: rag_jobs.registry().get(res["id"]).state
+        lambda: jobs.registry().get(res["id"]).state
         in ("done", "failed", "cancelled"),
         timeout=3.0,
     )

@@ -120,6 +120,10 @@ type State = {
         forceRewipe: boolean
       }
     | null
+  /** Bumped whenever the sidecar says the Index changed (an ingest
+   *  started or ended, a wipe). Views that show the Index status
+   *  re-read it when this moves. */
+  indexRevision: number
 
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
@@ -435,6 +439,8 @@ type State = {
     opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
+  /** The Index changed elsewhere: views showing its status re-read. */
+  noteIndexChanged: () => void
   /** One message by hash, or every message in a set of hashes. */
   applyLabelOverride: (
     char: string,
@@ -1439,6 +1445,7 @@ export const useStore = create<State>((set, get) => ({
   activePartner: null,
 
   ingestTarget: null,
+  indexRevision: 0,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -4114,6 +4121,10 @@ export const useStore = create<State>((set, get) => ({
 
   closeIngest() {
     set({ ingestTarget: null })
+  },
+
+  noteIndexChanged() {
+    set((s) => ({ indexRevision: s.indexRevision + 1 }))
   },
 
   // Patches one message's label fields in place, or those of every
