@@ -32,6 +32,8 @@ INDEX_FILENAME = "index.json"
 # Same shape as an image in the pool: `<image_id>.<ext>`.
 _FILE_RE = re.compile(r"^([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$")
 
+#: Taken inside the character's lock (`archive_registry.character_lock`),
+#: which every public function here holds first.
 _lock = threading.Lock()
 
 
@@ -132,6 +134,7 @@ def _trash_locked(
     return entry
 
 
+@archive_registry.under_character_lock
 def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any]:
     """Move pool files into the trash. Ids not in the pool come back
     under `not_found` rather than failing the rest."""
@@ -152,6 +155,7 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
     return {"trashed": trashed, "not_found": not_found}
 
 
+@archive_registry.under_character_lock
 def trash_pool_file(character_id: int | str, path: Path) -> dict[str, Any] | None:
     """Move one particular file out of `images/` into the Trash: the
     old file a Pull replaces, a stale copy gallery repair drops. None
@@ -203,6 +207,7 @@ def list_trash(character_id: int | str) -> list[dict[str, Any]]:
     return rows
 
 
+@archive_registry.under_character_lock
 def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Put trashed files back into the pool — not onto the profile. When
     the pool already holds the same bytes (a pull fetched the picture
@@ -246,6 +251,7 @@ def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, A
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
 
 
+@archive_registry.under_character_lock
 def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Delete trashed files for good. The window's call only."""
     def drop(trash_id: str, path: Path) -> None:
@@ -260,6 +266,7 @@ def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any
     return result
 
 
+@archive_registry.under_character_lock
 def empty_trash(character_id: int | str) -> int:
     """Delete everything in the trash for good. The window's call only."""
     files = _files(trash_dir(character_id))

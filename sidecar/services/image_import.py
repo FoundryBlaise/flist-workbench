@@ -334,6 +334,7 @@ def read_meta(character_id: int | str) -> dict[str, dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
+@archive_registry.under_character_lock
 def record_source(character_id: int | str, sha: str, source_name: str) -> None:
     """Remember the name a file was imported under. The first name wins:
     importing the same bytes again under another name changes nothing."""

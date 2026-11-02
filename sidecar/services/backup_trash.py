@@ -21,6 +21,7 @@ from typing import Any
 
 import archive_backups
 import archive_images
+import archive_registry
 from services import image_trash, trash_ledger
 
 FOLDER = "backups"
@@ -28,6 +29,8 @@ INDEX_FILENAME = "index.json"
 
 _TRASH_SUFFIX_RE = re.compile(r"~\d+(?=\.zip$)")
 
+#: Taken inside the character's lock (`archive_registry.character_lock`),
+#: which every public function here holds first.
 _lock = threading.Lock()
 
 
@@ -76,6 +79,7 @@ def _list_filename(trash_id: str, filename: str) -> str | None:
     return None
 
 
+@archive_registry.under_character_lock
 def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
     """Move one Backup into the Trash. Raises FileNotFoundError when the
     Backup list has no such file."""
@@ -144,6 +148,7 @@ def list_backups(character_id: int | str) -> list[dict[str, Any]]:
     return rows
 
 
+@archive_registry.under_character_lock
 def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     """Put trashed Backups back in the Backup list, under the file name
     and user-set name they had. When the list already holds the same
@@ -188,6 +193,7 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
 
 
+@archive_registry.under_character_lock
 def purge_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     """Delete trashed Backups for good. The window's call only."""
     def drop(trash_id: str, _row: dict[str, Any]) -> None:
@@ -203,6 +209,7 @@ def purge_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     return result
 
 
+@archive_registry.under_character_lock
 def empty(character_id: int | str) -> int:
     """Delete every trashed Backup for good. The window's call only."""
     ids = [r["id"] for r in list_backups(character_id)]

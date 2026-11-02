@@ -343,3 +343,30 @@ def test_a_refused_adoption_puts_a_renamed_file_back(
     on_disk = sorted(p.name for p in archive_images.images_dir("42").iterdir())
     assert on_disk == [f"{local_id}.png"]
     assert _gallery_and_files_agree() == []
+
+
+# ---- Backups ------------------------------------------------------------
+
+
+def test_naming_several_backups_at_once_keeps_every_name(sidecar) -> None:
+    """The names live in one file beside the Backups; each rename reads
+    it, changes one entry and writes it back."""
+    api = app_client(sidecar.app)
+    filenames = [
+        api.post("/flist/character/42/zip-backup").json()["filename"] for _ in range(8)
+    ]
+
+    def rename(filename: str) -> None:
+        res = api.patch(
+            f"/flist/character/42/zip-backups/{filename}", json={"name": f"named {filename}"}
+        )
+        assert res.status_code == 200, res.text
+
+    with threads_taking_turns_often(), ThreadPoolExecutor(8) as pool:
+        for future in [pool.submit(rename, f) for f in filenames]:
+            future.result()
+
+    rows = api.get("/flist/character/42/zip-backups").json()["backups"]
+    assert {r["filename"]: r["name"] for r in rows} == {
+        f: f"named {f}" for f in filenames
+    }
