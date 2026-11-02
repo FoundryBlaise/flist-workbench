@@ -236,16 +236,18 @@ class RateLimiter:
     """Token bucket at 1 req/s plus a rolling 1-hour counter.
 
     Async-friendly — `await acquire()` sleeps until the next slot is
-    free. Concurrent callers serialise through the asyncio.Lock so two
-    pulls hitting the limiter at the same instant can't burn through
-    the per-second budget.
+    free. Each caller claims its slot under a thread lock before it
+    sleeps, so two pulls hitting the limiter at the same instant get
+    consecutive slots and can't burn through the per-second budget.
+    The lock is never held across an await, so the limiter belongs to
+    no event loop and any thread's loop may share it.
     """
 
     per_second: float = HARD_PER_SECOND
     per_hour_cap: int = HARD_PER_HOUR
     _last_call: float = 0.0
     _hourly_calls: list[float] = field(default_factory=list)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _prune(self, now: float) -> None:
         cutoff = now - 3600.0
@@ -254,7 +256,7 @@ class RateLimiter:
             self._hourly_calls.pop(0)
 
     async def acquire(self) -> None:
-        async with self._lock:
+        with self._lock:
             now = time.monotonic()
             self._prune(now)
             if len(self._hourly_calls) >= self.per_hour_cap:
@@ -262,17 +264,16 @@ class RateLimiter:
                     f"F-list API hourly cap reached ({self.per_hour_cap} "
                     "requests). Wait a bit before trying again."
                 )
-            min_interval = 1.0 / self.per_second
-            wait = max(0.0, (self._last_call + min_interval) - now)
-            if wait > 0:
-                await asyncio.sleep(wait)
-                now = time.monotonic()
-            self._last_call = now
-            self._hourly_calls.append(now)
+            slot = max(now, self._last_call + 1.0 / self.per_second)
+            self._last_call = slot
+            self._hourly_calls.append(slot)
+        if slot > now:
+            await asyncio.sleep(slot - now)
 
     def hourly_count(self) -> int:
-        self._prune(time.monotonic())
-        return len(self._hourly_calls)
+        with self._lock:
+            self._prune(time.monotonic())
+            return len(self._hourly_calls)
 
 
 _LIMITER = RateLimiter()
@@ -435,6 +436,12 @@ def mcp_character_budget() -> HourlyBudget:
     """The share of `character-data.php` calls an MCP client may spend
     per hour. The app window charges nothing against it."""
     return _MCP_CHARACTER_BUDGET
+
+
+def reset_mcp_budget() -> None:
+    """Give MCP its full share back, as a restart does. Tests use it."""
+    with _MCP_CHARACTER_BUDGET._lock:
+        _MCP_CHARACTER_BUDGET._calls.clear()
 
 
 _PULL_LOCK = asyncio.Lock()

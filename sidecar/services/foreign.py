@@ -255,7 +255,10 @@ async def get_profile(
         }
 
     if budget is not None:
-        budget.charge()
+        try:
+            budget.charge()
+        except flist_api.RateLimited as exc:
+            raise ForeignError("rate_limited", str(exc)) from exc
     try:
         payload = await flist_api.fetch_character_data(clean)
     except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:

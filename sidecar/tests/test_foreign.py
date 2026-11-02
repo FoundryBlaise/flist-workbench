@@ -372,59 +372,111 @@ def test_log_partners_without_a_log_directory_says_so(
 # ---- the MCP budget ---------------------------------------------------
 
 
-def test_the_mcp_share_is_a_quarter_of_the_hourly_cap() -> None:
+@pytest.fixture
+def mcp_budget(data_dir: Path):
+    """A model's full hourly share, as a freshly started sidecar has.
+    The share outlives a test otherwise: it is the sidecar's, not one
+    connection's."""
     import flist_api
 
-    assert flist_api.MCP_PER_HOUR == flist_api.HARD_PER_HOUR // 4 == 50
+    flist_api.reset_mcp_budget()
+    yield
+    flist_api.reset_mcp_budget()
 
 
-def test_the_budget_runs_out_and_refunds_a_call_that_never_happened() -> None:
+def _stub_any_profile(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """character-data.php answering for whichever name is asked."""
     import flist_api
 
-    budget = flist_api.HourlyBudget(cap=2, label="test")
-    budget.charge()
-    budget.charge()
-    assert budget.remaining() == 0
-    with pytest.raises(flist_api.RateLimited):
-        budget.charge()
+    calls: list[str] = []
 
-    budget.refund()
-    assert budget.remaining() == 1
+    async def _stub(name: str, *, client=None):
+        calls.append(name)
+        return _profile(name)
+
+    monkeypatch.setattr(flist_api, "fetch_character_data", _stub)
+    return calls
 
 
-@pytest.mark.anyio
-async def test_a_spent_mcp_budget_leaves_the_window_working(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+async def _model_opens(session, name: str) -> tuple[Any, Any]:
+    from mcp_helpers import call_tool
+
+    return await call_tool(session, "get_foreign_profile", character=name)
+
+
+def _window():
+    import httpx
+
+    from server import app
+
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url=BASE_URL,
+        headers={SECRET_HEADER: TEST_LAUNCH_SECRET},
+    )
+
+
+async def test_a_model_may_spend_a_quarter_of_the_hourly_cap_and_the_window_keeps_working(
+    mcp_budget: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The point of the separate budget: MCP stops, the user does not."""
+    """The point of the separate share: a model walking someone's
+    friend list runs out long before the user can no longer pull."""
     import flist_api
-    from services import foreign as foreign_service
+    from mcp_helpers import mcp_client, tool_error_text
 
-    _stub_fetch(monkeypatch, _profile())
-    spent = flist_api.HourlyBudget(cap=0, label="MCP")
+    _stub_any_profile(monkeypatch)
+    share = flist_api.HARD_PER_HOUR // 4
 
-    with pytest.raises(flist_api.RateLimited):
-        await foreign_service.get_profile("Anexample Person", budget=spent)
+    async with mcp_client() as session:
+        opened = []
+        for i in range(share):
+            result, body = await _model_opens(session, f"Visitor {i}")
+            assert not result.isError, body
+            opened.append(body["budget_remaining"])
+        refused, _ = await _model_opens(session, "One Too Many")
 
-    # No budget passed = the app window. Still fine.
-    result = await foreign_service.get_profile("Anexample Person")
-    assert result["from_cache"] is False
+    assert opened[0] == share - 1
+    assert opened[-1] == 0
+    assert "rate_limited:" in tool_error_text(refused)
+    async with _window() as window:
+        res = await window.get("/foreign/character/One Too Many")
+    assert res.status_code == 200, res.text
+    assert res.json()["from_cache"] is False
 
 
-@pytest.mark.anyio
-async def test_a_cache_hit_does_not_charge_the_budget(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_cache_hit_costs_a_model_nothing(
+    mcp_budget: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp_helpers import mcp_client
+
+    calls = _stub_any_profile(monkeypatch)
+
+    async with mcp_client() as session:
+        _, first = await _model_opens(session, "Anexample Person")
+        _, again = await _model_opens(session, "Anexample Person")
+
+    assert again["from_cache"] is True
+    assert again["budget_remaining"] == first["budget_remaining"]
+    assert calls == ["Anexample Person"]
+
+
+async def test_a_lookup_that_never_reached_f_list_costs_a_model_nothing(
+    mcp_budget: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import flist_api
-    from services import foreign as foreign_service
+    from mcp_helpers import mcp_client, tool_error_text
 
-    _stub_fetch(monkeypatch, _profile())
-    budget = flist_api.HourlyBudget(cap=5, label="MCP")
+    async def _signed_out(name: str, *, client=None):
+        raise flist_api.TicketRequired("sign in first")
 
-    await foreign_service.get_profile("Anexample Person", budget=budget)
-    assert budget.remaining() == 4
-    await foreign_service.get_profile("Anexample Person", budget=budget)
-    assert budget.remaining() == 4
+    async with mcp_client() as session:
+        monkeypatch.setattr(flist_api, "fetch_character_data", _signed_out)
+        refused, _ = await _model_opens(session, "Anexample Person")
+        _stub_any_profile(monkeypatch)
+        _, body = await _model_opens(session, "Anexample Person")
+
+    assert "not_signed_in:" in tool_error_text(refused)
+    assert body["budget_remaining"] == flist_api.HARD_PER_HOUR // 4 - 1
 
 
 # ---- routes -----------------------------------------------------------
@@ -531,16 +583,6 @@ async def test_a_gallery_loads_several_images_at_once_but_never_more_than_the_ca
 
     import flist_api
     from server import app
-
-    # Fresh limiters: their locks bind to the event loop that first
-    # waits on them, and this test is the one that makes them wait.
-    for name in ("_UNPACED_LIMITER", "_CDN_LIMITER"):
-        old = getattr(flist_api, name)
-        monkeypatch.setattr(
-            flist_api,
-            name,
-            flist_api.RateLimiter(per_second=old.per_second, per_hour_cap=old.per_hour_cap),
-        )
 
     cap = flist_api.FOREIGN_IMAGE_CONCURRENCY
     ids = [str(900 + i) for i in range(cap + 4)]
