@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 import bbcode_rules
 import character_archive
+from archive_errors import WorkbenchNotKept
 
 from ._context import (
     ToolError,
@@ -107,38 +108,50 @@ async def _catalogue():  # noqa: ANN202
 def load_backup_into_workbench(
     character: str, backup: str, confirm: bool = False
 ) -> dict[str, Any]:
-    """Replace the workbench contents with a backup's.
+    """Restore: replace the Workbench contents with a Backup's.
 
-    Overwrites whatever is in the bench, so it needs `confirm=true`.
-    Nothing is saved first — if the current edits matter, call
-    `create_backup` before this. `backup` is a filename from
-    `list_backups`.
+    Overwrites everything in the Workbench, so it needs `confirm=true`.
+    The Workbench it replaces is always saved as a Backup first
+    (occasion `before-restore`), named in `kept_as`; restoring that
+    Backup undoes this. If that Backup cannot be written, nothing is
+    replaced. `backup` is a filename from `list_backups`.
     """
     target = resolve_character(character)
     if not confirm:
         raise ToolError(
             "confirm_required",
             "Loading a backup replaces everything currently in the "
-            "workbench. If those edits matter, call create_backup "
-            "first, then call this again with confirm=true.",
+            "Workbench; the Workbench is saved as a Backup first. Call "
+            "this again with confirm=true.",
         )
     try:
-        meta = character_archive.load_zip_backup_into_workbench(target.id, backup)
+        replaced = character_archive.load_zip_backup_into_workbench(
+            target.id, backup
+        )
     except FileNotFoundError as exc:
         raise ToolError("backup_not_found", str(exc)) from exc
+    except WorkbenchNotKept as exc:
+        raise ToolError(exc.code, exc.message) from exc
     except KeyError as exc:
         raise ToolError(
             "backup_too_old",
             "That backup predates the stored profile payload, so there "
-            "is nothing in it to load into the bench.",
+            "is nothing in it to load into the Workbench.",
         ) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
-    audit("load_backup_into_workbench", character=target.name, backup=backup)
+    kept = replaced.kept["filename"] if replaced.kept else None
+    audit(
+        "load_backup_into_workbench",
+        character=target.name,
+        backup=backup,
+        kept_as=kept,
+    )
     return {
         "character": target.name,
-        "set": meta.name,
+        "set": replaced.workbench.name,
         "loaded": backup,
+        "kept_as": kept,
         "note": NO_PUSH_NOTE,
     }
 

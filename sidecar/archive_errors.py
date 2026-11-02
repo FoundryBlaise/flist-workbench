@@ -34,3 +34,13 @@ class CharacterNotFound(Refusal, LookupError):
     status = 404
     code = "character_not_found"
     fixed_message = "no such character in the archive"
+
+
+class WorkbenchNotKept(Refusal, OSError):
+    """A whole-Workbench replacement (Restore, reset to Live) whose
+    Backup of the Workbench it would replace could not be written. The
+    Workbench is left as it was; the message says why the Backup
+    failed."""
+
+    status = 500
+    code = "workbench_not_kept"

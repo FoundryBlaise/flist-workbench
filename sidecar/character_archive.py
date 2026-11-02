@@ -39,7 +39,7 @@ from typing import Any, Iterable
 
 import backup_origin
 import paths
-from archive_errors import CharacterNotFound, InvalidCharacterId
+from archive_errors import CharacterNotFound, InvalidCharacterId, WorkbenchNotKept
 from refusals import InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
@@ -1716,19 +1716,92 @@ def resolve_workbench(
     return meta
 
 
+@dataclass(frozen=True)
+class WorkbenchReplaced:
+    """What a whole-Workbench replacement did.
+
+    `kept` is the `before-restore` Backup holding the Workbench that was
+    replaced, as `{filename, created_at}`; None when the character had
+    no Workbench yet, so there was nothing to keep.
+    """
+
+    workbench: SetMeta
+    etag: str | None
+    kept: dict[str, Any] | None
+
+
+def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any] | None:
+    """Save the Workbench as a Backup (source `workbench`, occasion
+    `before-restore`) before something replaces all of it (ADR 0003).
+
+    Always taken, never deduplicated: the Backup is the undo of the
+    replacement. A character with no Workbench yet has nothing to keep,
+    and gets no Backup. Raises `WorkbenchNotKept` when the Backup
+    cannot be written; the caller must then leave the Workbench alone.
+    """
+    if resolve_workbench(character_id, create=False) is None:
+        return None
+    try:
+        result = save_zip_backup(
+            character_id,
+            source=backup_origin.WORKBENCH,
+            occasion=backup_origin.BEFORE_RESTORE,
+            force=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - any failure means "not kept"
+        raise WorkbenchNotKept(
+            "The Workbench could not be saved as a Backup first, so it"
+            f" was not replaced: {exc}"
+        ) from exc
+    if not result.get("saved"):
+        raise WorkbenchNotKept(
+            "The Workbench could not be saved as a Backup first, so it"
+            f" was not replaced: {result.get('reason')}"
+        )
+    return {"filename": result["filename"], "created_at": result["created_at"]}
+
+
+def _replace_workbench(
+    character_id: int | str, payload: dict[str, Any]
+) -> WorkbenchReplaced:
+    """Keep the Workbench as a Backup, then overwrite it with `payload`."""
+    kept = _keep_workbench_before_replacing(character_id)
+    bench = resolve_workbench(character_id)
+    if bench is None:
+        raise ValueError("no Live to make a Workbench from")
+    etag = write_set_payload(character_id, bench.id, payload, expected_etag=None)
+    meta = read_set_meta(character_id, bench.id)
+    return WorkbenchReplaced(
+        workbench=meta if meta is not None else bench, etag=etag, kept=kept
+    )
+
+
+def reset_workbench_to_live(character_id: int | str) -> WorkbenchReplaced:
+    """Throw away every edit: the Workbench becomes a fresh copy of Live.
+
+    The Workbench it replaces is kept as a `before-restore` Backup
+    first; see `_keep_workbench_before_replacing`. Raises LookupError
+    when the character has no Live to reset to.
+    """
+    live = read_live(character_id)
+    if live is None:
+        raise LookupError("no Live to reset the Workbench to")
+    return _replace_workbench(character_id, _seed_payload_from_live(live))
+
+
 def load_zip_backup_into_workbench(
     character_id: int | str, backup_filename: str
-) -> SetMeta:
-    """Replace the workbench's payload with a backup's contents.
+) -> WorkbenchReplaced:
+    """Restore: replace the Workbench's payload with a Backup's contents.
 
     The old path for this made a *new* set from the backup, which is
     how the user ended up with several and stopped knowing which one
     they were editing. Now it overwrites the one bench, in place, so
     "load this backup" means what it says.
 
-    Backing up the current contents first is the caller's decision and
-    the caller's call — see the three-way prompt in the window. This
-    function only loads.
+    The Backup is read and checked first; only then is the Workbench it
+    replaces kept as a `before-restore` Backup, and only once that is
+    written is the Workbench overwritten.
     """
     import zipfile
 
@@ -1745,14 +1818,7 @@ def load_zip_backup_into_workbench(
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
-    payload = backup_payload(payload)
-
-    bench = resolve_workbench(character_id)
-    if bench is None:
-        raise ValueError("no live snapshot to seed a workbench from")
-    write_set_payload(character_id, bench.id, payload, expected_etag=None)
-    meta = read_set_meta(character_id, bench.id)
-    return meta if meta is not None else bench
+    return _replace_workbench(character_id, backup_payload(payload))
 
 
 def create_set_from_zip_backup(
