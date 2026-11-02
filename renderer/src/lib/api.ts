@@ -1177,6 +1177,20 @@ export const api = {
     }
     return (await res.json()) as { etag: string }
   },
+  /** Reset to Live: the sidecar saves the Workbench as a Backup
+   *  (`backed_up_first`, null when there was no Workbench yet), then
+   *  makes it a fresh copy of Live and answers with that payload and
+   *  its etag. When the Backup cannot be written nothing is replaced:
+   *  a `workbench_not_kept` refusal. */
+  flistWorkbenchResetToLive: (characterId: string | number) =>
+    request<{
+      payload: Record<string, unknown>
+      etag: string
+      backed_up_first: { filename: string; created_at: number } | null
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
+      { method: 'POST' }
+    ),
   /** What the confirm dialog needs before overwriting the bench:
    *  whether it holds unpublished edits, and whether F-list has moved
    *  on since this backup was taken. */
@@ -1195,16 +1209,15 @@ export const api = {
         + `/workbench/load-backup/preflight?filename=`
         + encodeURIComponent(filename)
     ),
-  /** Replace the workbench contents with a backup's. `backUpFirst` is
-   *  the dialog's third button — the safety net is offered, never
-   *  imposed. */
-  flistWorkbenchLoadBackup: (
-    characterId: string | number,
-    filename: string,
-    backUpFirst: boolean
-  ) =>
+  /** Restore: replace the Workbench contents with a Backup's. The
+   *  sidecar saves the Workbench as a Backup first (`backed_up_first`,
+   *  null when there was no Workbench yet); when it cannot, nothing is
+   *  replaced: a `workbench_not_kept` refusal. */
+  flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
     request<{
       workbench: SetMetaWire
+      payload: Record<string, unknown>
+      etag: string
       loaded: string
       backed_up_first: { filename: string; created_at: number } | null
     }>(
@@ -1212,7 +1225,7 @@ export const api = {
         + `/workbench/load-backup`,
       {
         method: 'POST',
-        body: JSON.stringify({ filename, back_up_first: backUpFirst })
+        body: JSON.stringify({ filename })
       }
     ),
   // ---- F-list working sets v2 (sets list + per-set payload) ----
