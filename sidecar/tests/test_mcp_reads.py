@@ -177,7 +177,7 @@ async def test_a_character_never_pulled_has_nothing_to_open(workbench) -> None:
         result, _ = await call_tool(
             session, "get_description", character="Ghost"
         )
-    assert "nothing_to_edit" in tool_error_text(result)
+    assert "no_workbench" in tool_error_text(result)
 
 
 async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:

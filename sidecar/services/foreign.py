@@ -26,6 +26,8 @@ from typing import Any
 import flist_api
 import foreign_cache
 import logs as log_store
+from logs import LogDirUnavailable
+from refusals import FlistRefused, ValidationFailed
 
 #: Where a list of candidate names can come from. `name` is the free
 #: text case — F-list has no character-search endpoint, so the typed
@@ -53,13 +55,16 @@ _log_partner_cache: list[str] | None = None
 _log_partner_cached_at: float = 0.0
 
 
-class ForeignError(Exception):
-    """Something the caller should see as a message, not a traceback."""
+class ForeignError(FlistRefused):
+    """Something the caller should see as a message, not a traceback:
+    F-list's own refusals, plus a bad request and an unreadable Log
+    folder, each with the status it has everywhere else."""
 
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        self.message = message
-        super().__init__(message)
+    STATUS_BY_CODE = {
+        **FlistRefused.STATUS_BY_CODE,
+        "validation_failed": ValidationFailed.status,
+        "log_dir_unavailable": LogDirUnavailable.status,
+    }
 
 
 def _trim(names: list[str], query: str) -> list[str]:
@@ -120,7 +125,7 @@ def _scan_log_partner_names(root: Path) -> list[str]:
     try:
         top = os.scandir(root)
     except OSError as exc:
-        raise ForeignError("no_logs", f"cannot read {root}: {exc}") from exc
+        raise ForeignError("log_dir_unavailable", f"cannot read {root}: {exc}") from exc
     with top:
         for char_entry in top:
             if char_entry.name.startswith(".") or not char_entry.is_dir():
@@ -162,9 +167,9 @@ def log_partners(*, force: bool = False) -> list[str]:
     try:
         root = log_store.data_dir()
     except log_store.LogDirError as exc:
-        raise ForeignError("no_logs", str(exc)) from exc
+        raise ForeignError("log_dir_unavailable", str(exc)) from exc
     if not root.exists():
-        raise ForeignError("no_logs", f"F-Chat data directory not found: {root}")
+        raise ForeignError("log_dir_unavailable", f"F-Chat data directory not found: {root}")
     names = _scan_log_partner_names(root)
     _log_partner_cache = names
     _log_partner_cached_at = time.monotonic()

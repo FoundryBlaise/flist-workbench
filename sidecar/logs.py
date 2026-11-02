@@ -55,6 +55,15 @@ class LogDirError(Exception):
     pass
 
 
+class LogDirUnavailable(LogDirError, Refusal):
+    """The F-Chat data folder is not there (or not where Settings
+    points). A caller hears 503 `log_dir_unavailable`, as MCP tools say
+    it too."""
+
+    status = 503
+    code = "log_dir_unavailable"
+
+
 class LogNotFound(LogDirError, Refusal):
     """No Log by that name: an unknown character or partner. A caller
     hears 404 `log_not_found` with a fixed message: the names are not
@@ -123,7 +132,7 @@ class CharacterEntry:
 def list_characters(root: Path | None = None) -> list[CharacterEntry]:
     base = root or data_dir()
     if not base.exists():
-        raise LogDirError(f"F-Chat data directory not found: {base}")
+        raise LogDirUnavailable(f"F-Chat data directory not found: {base}")
     out: list[CharacterEntry] = []
     for entry in sorted(base.iterdir(), key=lambda e: e.name):
         if not entry.is_dir() or entry.name.startswith("."):

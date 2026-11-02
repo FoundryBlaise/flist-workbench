@@ -38,7 +38,7 @@ it('shows no backups, not an error, for a character never pulled', async () => {
 
 it('still reports a backups list that fails for another reason', async () => {
   fake.fallback(notFound)
-  fake.on('GET /flist/character/77/zip-backups', json({ detail: 'disk on fire' }, 500))
+  fake.on('GET /flist/character/77/zip-backups', json({ code: 'internal_error', message: 'disk on fire', details: {} }, 500))
 
   await useStore.getState().flistLoadArchive('77')
 

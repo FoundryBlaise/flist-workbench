@@ -18,6 +18,7 @@ import archive_registry
 import archive_workbench
 import flist_activity
 import logs as log_store
+from refusals import Refusal
 
 #: Sentinel a `working_set` argument can carry to address the read-only
 #: `live.json` pulled from F-list rather than the editable Workbench.
@@ -31,6 +32,10 @@ class ToolError(Exception):
     only payload is the string form, so the code and details have to
     survive in the text. Models read this, so it stays readable:
     `not_signed_in: ... {"detail": ...}`.
+
+    Codes and details are the REST error's for the same situation
+    (`refusals`); a `Refusal` raised under a tool reaches the model as
+    this, unchanged (`from_refusal`, applied in `_registry`).
     """
 
     def __init__(self, code: str, message: str, **details: Any) -> None:
@@ -41,6 +46,10 @@ class ToolError(Exception):
         if details:
             rendered += " " + json.dumps(details, ensure_ascii=False, default=str)
         super().__init__(rendered)
+
+    @classmethod
+    def from_refusal(cls, exc: Refusal) -> ToolError:
+        return cls(exc.code, exc.message, **exc.details)
 
 
 def not_signed_in() -> ToolError:
@@ -206,7 +215,7 @@ def resolve_workbench_or_live(
     # does not have either.
     if archive_workbench.read_workbench(character.id, create=True) is None:
         raise ToolError(
-            "nothing_to_edit",
+            "no_workbench",
             f"{character.name} has never been pulled from F-list, so "
             "there is nothing to copy into a Workbench. Pull the "
             "character first.",
@@ -220,7 +229,7 @@ def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:
         live = archive_live.read_live(target.character.id)
         if live is None:
             raise ToolError(
-                "live_not_found",
+                "no_live",
                 f"No live profile stored for {target.character.name}. "
                 "Run pull_character first.",
             )
@@ -229,7 +238,7 @@ def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:
     payload = bench.payload if bench is not None else None
     if payload is None:
         raise ToolError(
-            "workbench_not_found",
+            "no_workbench",
             f"{target.character.name}'s Workbench has no payload on disk.",
         )
     return payload

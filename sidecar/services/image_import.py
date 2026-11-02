@@ -35,6 +35,7 @@ import archive_registry
 import archive_workbench
 import atomic_write
 import settings as settings_store
+from refusals import Refusal
 
 #: F-list's upload limits, as the user reports them: under 2.0 MB and
 #: under 4000 px on either side. A file over them is still imported —
@@ -53,15 +54,18 @@ META_FILENAME = "image_meta.json"
 _meta_lock = threading.Lock()
 
 
-class ImportRefused(Exception):
+class ImportRefused(Refusal):
     """A source that cannot be imported, with a stable code the MCP
-    layer turns into a ToolError."""
+    layer turns into a ToolError. A source the sidecar may not or
+    cannot read is the caller's to fix (400); one it could not store
+    is not (500)."""
+
+    STATUS_BY_CODE = {"store_failed": 500}
 
     def __init__(self, code: str, message: str, **details: Any) -> None:
-        super().__init__(f"{code}: {message}")
+        super().__init__(message, details=details)
         self.code = code
-        self.message = message
-        self.details = details
+        self.status = self.STATUS_BY_CODE.get(code, 400)
 
 
 # --------------------------------------------------------------------

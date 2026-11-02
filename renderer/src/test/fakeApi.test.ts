@@ -59,7 +59,7 @@ it('matches the query string only when the route names one', async () => {
 })
 
 it('carries status codes so the app sees errors', async () => {
-  fake.on('GET /gone', json({ detail: 'nope' }, 404))
+  fake.on('GET /gone', json({ code: 'http_404', message: 'nope', details: {} }, 404))
   const res = await fetch(`${BASE}/gone`)
   expect(res.ok).toBe(false)
   expect(res.status).toBe(404)

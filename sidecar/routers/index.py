@@ -2,7 +2,7 @@
 
 import dataclasses
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 import rag as rag_settings
@@ -10,7 +10,7 @@ import rag_embed
 import rag_jobs
 import rag_lexical
 import rag_store
-from refusals import LogNameRefused
+from refusals import JobNotFound, LogNameRefused, NoIndex
 
 router = APIRouter()
 
@@ -96,7 +96,7 @@ def rag_ingest_start(body: RagIngestRequest) -> dict:
     try:
         scope = resolve_ingest_scope(body.character, body.partner)
     except ToolError as exc:
-        raise LogNameRefused(exc.message, code=exc.code) from exc
+        raise LogNameRefused(exc.message, code=exc.code, details=exc.details) from exc
     job = rag_jobs.start(
         scope, include_ooc=body.include_ooc, force_rewipe=body.force_rewipe
     )
@@ -112,7 +112,7 @@ def rag_jobs_list() -> dict:
 def rag_job_get(job_id: str) -> dict:
     job = rag_jobs.registry().get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+        raise JobNotFound(f"unknown job: {job_id}")
     return job.to_dict()
 
 
@@ -120,7 +120,7 @@ def rag_job_get(job_id: str) -> dict:
 def rag_job_cancel(job_id: str) -> dict:
     ok = rag_jobs.registry().cancel(job_id)
     if not ok:
-        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+        raise JobNotFound(f"unknown job: {job_id}")
     return {"id": job_id, "cancel_requested": True}
 
 
@@ -152,12 +152,9 @@ def rag_lexical_rebuild() -> dict:
     """
     with rag_store.RagStore() as store:
         if not store.collection_exists():
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "No chunks indexed yet — run Ingest first. The lexical "
-                    "index mirrors the dense store and has nothing to copy."
-                ),
+            raise NoIndex(
+                "No chunks indexed yet — run Ingest first. The lexical "
+                "index mirrors the dense store and has nothing to copy."
             )
         with rag_lexical.LexicalStore() as lex:
             # Wipe first so the rebuild is authoritative — otherwise a

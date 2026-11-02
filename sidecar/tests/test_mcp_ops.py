@@ -118,7 +118,12 @@ async def test_a_pull_failure_surfaces_its_stage(
 
     async def fake_run(name: str):
         yield "queued", {"name": name}
-        yield "error", {"stage": "fetching", "message": "HTTP 503"}
+        yield "error", {
+            "stage": "fetching",
+            "code": "flist_error",
+            "message": "HTTP 503",
+            "details": {},
+        }
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     async with mcp_client("character") as session:
@@ -126,8 +131,9 @@ async def test_a_pull_failure_surfaces_its_stage(
             session, "pull_character", character="Lady Amber Blaise"
         )
     text = tool_error_text(result)
-    assert "pull_failed" in text
+    assert "flist_error" in text
     assert "HTTP 503" in text
+    assert '"stage": "fetching"' in text
 
 
 # ---- backups -----------------------------------------------------------
@@ -203,7 +209,7 @@ async def test_backing_up_a_character_never_pulled(workbench) -> None:
             session, "create_backup", character="Ghost Character"
         )
     text = tool_error_text(result)
-    assert "live_not_found" in text
+    assert "no_live" in text
     assert "Pull the character first" in text
 
 

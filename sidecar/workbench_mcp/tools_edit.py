@@ -21,8 +21,6 @@ import archive_backups
 import archive_images
 import archive_workbench
 import bbcode_rules
-from archive_errors import WorkbenchConflict, WorkbenchNotKept
-from refusals import BackupHoldsNoProfile, BackupTooOld
 
 from ._context import (
     ToolError,
@@ -74,7 +72,7 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
         raise ToolError("validation_failed", str(exc)) from exc
     except archive_workbench.EtagMismatch as exc:
         raise ToolError(
-            "etag_conflict",
+            "etag_mismatch",
             "The app window saved the Workbench while the edit was in "
             "flight, twice in a row. Read the field again and redo the "
             "change.",
@@ -127,18 +125,7 @@ def load_backup_into_workbench(
             "Workbench; the Workbench is saved as a Backup first. Call "
             "this again with confirm=true.",
         )
-    try:
-        replaced = archive_backups.load_zip_backup_into_workbench(
-            target.id, backup
-        )
-    except FileNotFoundError as exc:
-        raise ToolError("backup_not_found", str(exc)) from exc
-    except (
-        WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile, BackupTooOld
-    ) as exc:
-        raise ToolError(exc.code, exc.message) from exc
-    except ValueError as exc:
-        raise ToolError("validation_failed", str(exc)) from exc
+    replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
     kept = replaced.kept["filename"] if replaced.kept else None
     audit(
         "load_backup_into_workbench",
@@ -1379,7 +1366,7 @@ def put_working_set_payload(
         )
     except archive_workbench.EtagMismatch as exc:
         raise ToolError(
-            "etag_conflict",
+            "etag_mismatch",
             "The Workbench changed since you read it. Read it again and redo "
             "the change.",
             current_etag=exc.current_etag,

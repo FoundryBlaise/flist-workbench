@@ -2,12 +2,13 @@
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 import labels as labels_store
 import rag as rag_settings
 import settings as settings_store
+from refusals import ValidationFailed
 from services import image_import as image_import_service
 
 router = APIRouter()
@@ -165,10 +166,7 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
 
             p = Path(value).expanduser()
             if not p.exists() or not p.is_dir():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"directory does not exist: {value}",
-                )
+                raise ValidationFailed("fchat_data_dir", f"directory does not exist: {value}")
             settings_store.set_value(conn, settings_store.KEY_FCHAT_DATA_DIR, str(p))
         else:
             settings_store.clear(conn, settings_store.KEY_FCHAT_DATA_DIR)
@@ -183,7 +181,7 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
         try:
             image_import_service.save_import_roots(conn, body.image_import_roots)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ValidationFailed("image_import_roots", str(exc)) from exc
 
     return _settings_dict(conn)
 
