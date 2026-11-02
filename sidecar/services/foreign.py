@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from starlette.concurrency import run_in_threadpool
+
 import flist_api
 import foreign_cache
 import logs as log_store
@@ -212,7 +214,9 @@ async def search(query: str, source: str) -> dict[str, Any]:
         lists = await social_lists()
         pool = lists.get(source, [])
     else:
-        pool = log_partners()
+        # In the threadpool: when the cache is cold this walks every
+        # Log folder, and the event loop serves everyone else meanwhile.
+        pool = await run_in_threadpool(log_partners)
     results = _trim(pool, q)
     return {
         "source": source,

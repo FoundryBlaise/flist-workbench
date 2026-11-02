@@ -30,7 +30,7 @@ class _LoadBackupBody(BaseModel):
 
 
 @router.get("/flist/character/{character_id}/workbench")
-async def flist_character_workbench(character_id: str, create: bool = True) -> dict:
+def flist_character_workbench(character_id: str, create: bool = True) -> dict:
     """The character's one editable copy, created from Live if needed:
     `{workbench: {name, created_at, updated_at}}`.
 
@@ -55,7 +55,7 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
 
 
 @router.get("/flist/character/{character_id}/workbench/payload")
-async def flist_character_workbench_payload_get(
+def flist_character_workbench_payload_get(
     character_id: str, create: bool = True
 ) -> dict:
     """The Workbench payload and the etag a save must send back.
@@ -71,7 +71,7 @@ async def flist_character_workbench_payload_get(
 
 
 @router.put("/flist/character/{character_id}/workbench/payload")
-async def flist_character_workbench_payload_put(
+def flist_character_workbench_payload_put(
     character_id: str,
     payload: dict[str, Any] = Body(...),
     if_match: str | None = Header(default=None, alias="If-Match"),
@@ -111,7 +111,7 @@ def _filename_required(where: str) -> InvalidRequest:
 
 
 @router.post("/flist/character/{character_id}/workbench/load-backup")
-async def flist_character_workbench_load_backup(
+def flist_character_workbench_load_backup(
     character_id: str, body: _LoadBackupBody
 ) -> dict:
     """Restore: replace the Workbench contents with a Backup's.
@@ -145,7 +145,7 @@ async def flist_character_workbench_load_backup(
 
 
 @router.post("/flist/character/{character_id}/workbench/reset-to-live")
-async def flist_character_workbench_reset_to_live(character_id: str) -> dict:
+def flist_character_workbench_reset_to_live(character_id: str) -> dict:
     """Reset to Live: the Workbench becomes a fresh copy of Live.
 
     Done here rather than in the window so the Workbench it replaces is
@@ -166,7 +166,7 @@ async def flist_character_workbench_reset_to_live(character_id: str) -> dict:
 
 
 @router.get("/flist/character/{character_id}/workbench/load-backup/preflight")
-async def flist_character_workbench_load_preflight(
+def flist_character_workbench_load_preflight(
     character_id: str, filename: str
 ) -> dict:
     """What the confirm dialog needs to say before overwriting the bench.

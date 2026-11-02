@@ -169,7 +169,7 @@ async def flist_session_get() -> dict:
 
 
 @router.get("/flist/characters")
-async def flist_characters() -> dict:
+def flist_characters() -> dict:
     """Roster union: account roster (if signed in) + archived characters
     + characters with local F-Chat logs. Each entry carries flags so the
     picker can render status badges.
