@@ -297,9 +297,10 @@ suite = "sidecar"
 file = "sidecar/archive_live.py"
 breaks = "Writing Live (a Pull) publishes no change event, so open windows keep the old Live."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 4
 # audit: M13 write_live no longer publishes live-changed
+# Killed since spec #4 (#67, test_writer_events.py); re-measured on spec/4-review-fixes.
 # Re-anchored for spec #4 (#65): the archive split into archive_* modules;
 # again after the review: archive_registry.publish / write_json are public.
 find = '''
@@ -314,9 +315,10 @@ suite = "sidecar"
 file = "sidecar/services/image_trash.py"
 breaks = "Moving images to or from the Trash publishes no change event, so the image pool view goes stale."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 4
 # audit: M14 trash/restore no longer announce images-changed
+# Killed since spec #4 (#67, test_writer_events.py); re-measured on spec/4-review-fixes.
 find = '''
     events.publish(events.IMAGES_CHANGED, character_id=str(character_id))'''
 replace = '''
