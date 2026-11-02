@@ -3,7 +3,9 @@
 
 from fastapi import APIRouter
 
-from services import jobs
+from starlette.responses import StreamingResponse
+
+from services import jobs, sse
 
 router = APIRouter()
 
@@ -24,3 +26,12 @@ def job_cancel(job_id: str) -> dict:
     job as it stands, with `cancel_requested` set unless it had already
     finished."""
     return jobs.registry().cancel(job_id).to_dict()
+
+
+@router.get("/jobs/{job_id}/events")
+async def job_events(job_id: str) -> StreamingResponse:
+    """Follow a Pull or Back up all as server-sent events: the `job`,
+    every event it has sent so far, then each new one until it ends.
+    How a reopened progress view picks up a running job; closing the
+    stream leaves the job running."""
+    return sse.follow(jobs.registry().get(job_id))

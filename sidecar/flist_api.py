@@ -444,16 +444,6 @@ def reset_mcp_budget() -> None:
         _MCP_CHARACTER_BUDGET._calls.clear()
 
 
-_PULL_LOCK = asyncio.Lock()
-
-
-def pull_lock() -> asyncio.Lock:
-    """Serialises full character pulls so two concurrent requests don't
-    interleave their image-download bursts and starve each other on the
-    rate limiter."""
-    return _PULL_LOCK
-
-
 # ---- HTTP helpers ------------------------------------------------------
 
 

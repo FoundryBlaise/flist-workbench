@@ -208,6 +208,13 @@ class IndexBusy(ResourceBusy):
     what = "The Index"
 
 
+class CharacterBusy(ResourceBusy):
+    """A Pull holds the character, or Back up all holds every character."""
+
+    code = "character_busy"
+    what = "The character"
+
+
 class IndexUnreadable(Refusal):
     """The Index is there but could not be read (its folder is held by
     another program, or damaged): not the same as an empty one."""
