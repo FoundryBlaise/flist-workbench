@@ -446,19 +446,12 @@ def export_restore_zip(
 
     target = resolve_character(character)
     resolved = resolve_set(target, working_set)
-    bench = None if resolved.is_live else character_archive.read_workbench(target.id)
-    payload = bench.payload if bench is not None else None
+    payload = character_archive.export_payload(target.id, from_live=resolved.is_live)
     if payload is None:
-        live = character_archive.read_live(target.id)
-        if live is None:
-            raise ToolError(
-                "live_not_found",
-                f"Nothing to export for {target.name} — pull the "
-                "character first.",
-            )
-        from services import payload_ops
-
-        payload = payload_ops.seed_from_live(live)
+        raise ToolError(
+            "live_not_found",
+            f"Nothing to export for {target.name} — pull the character first.",
+        )
 
     data = zip_serialise.build_zip(
         target.id,

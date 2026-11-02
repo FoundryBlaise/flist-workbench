@@ -1342,13 +1342,25 @@ def load_zip_backup_into_workbench(
     return _replace_workbench(character_id, backup_payload(payload))
 
 
+def export_payload(
+    character_id: int | str, *, from_live: bool = False
+) -> dict[str, Any] | None:
+    """What an export of the character packs: its Workbench, else (or
+    with `from_live`) a fresh copy of Live. Never makes a Workbench.
+    None when the character has neither."""
+    bench = None if from_live else read_workbench(character_id)
+    if bench is not None:
+        return bench.payload
+    live = read_live(character_id)
+    return _seed_payload_from_live(live) if live is not None else None
+
+
 def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
     """Build a fresh Workbench payload from Live.
 
     The one implementation on the Python side: making the Workbench on
-    its first read, reset to Live and the export of a character without
-    a Workbench all go through it (`services.payload_ops` re-exports it
-    as `seed_from_live`). It mirrors the renderer's
+    its first read, reset to Live and `export_payload` all go through
+    it. It mirrors the renderer's
     `seedWorkingFromLive`; the two have to stay in step, because a
     Workbench the sidecar makes and one the window seeds must be the
     same shape."""

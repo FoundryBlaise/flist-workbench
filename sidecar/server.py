@@ -47,7 +47,7 @@ from archive_errors import (
     WorkbenchConflict,
 )
 from refusals import InvalidFileName, LogNameRefused, Refusal
-from services import label_rollup, local_access, payload_ops
+from services import label_rollup, local_access
 from services import render as render_service
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
@@ -1315,16 +1315,12 @@ async def flist_character_export_zip(character_id: str) -> Response:
     """
     import zip_serialise
 
-    bench = character_archive.read_workbench(character_id)
-    working = bench.payload if bench is not None else None
+    working = character_archive.export_payload(character_id)
     if working is None:
-        live = character_archive.read_live(character_id)
-        if live is None:
-            raise HTTPException(
-                status_code=404,
-                detail="no Workbench or Live to export",
-            )
-        working = payload_ops.seed_from_live(live)
+        raise HTTPException(
+            status_code=404,
+            detail="no Workbench or Live to export",
+        )
     name_for_file = "character"
     char = working.get("character")
     if isinstance(char, dict):
