@@ -193,6 +193,12 @@ export function AppLayout() {
     return () => window.removeEventListener('flist-session-expired', onExpired)
   }, [])
 
+  // A Pull or Back up all outlives the window that started it (they are
+  // sidecar jobs): after a reload, show their progress again.
+  useEffect(() => {
+    void useStore.getState().flistResumeJobs()
+  }, [])
+
   // Watch the sidecar for changes this window didn't make and re-read
   // what they touched (see state/workbenchEvents).
   useEffect(() => {

@@ -220,7 +220,15 @@ export type WorkbenchInfoWire = {
   updated_at: number
 }
 
-export type FlistPullHandlers = {
+/** A Pull or Back up all runs as a job: the stream's first event is the
+ *  job (its id is what Cancel and a reopened view use), and a cancel by
+ *  id ends the events with `cancelled`. */
+type JobStreamHandlers = {
+  onJob?: (job: Job) => void
+  onCancelled?: () => void
+}
+
+export type FlistPullHandlers = JobStreamHandlers & {
   onQueued?: () => void
   onTicket?: () => void
   onFetching?: () => void
@@ -254,7 +262,7 @@ export type FlistBackupAllCharacterEvent = {
   message?: string
 }
 
-export type FlistBackupAllHandlers = {
+export type FlistBackupAllHandlers = JobStreamHandlers & {
   onStart?: (info: { total: number }) => void
   onQueued?: () => void
   onCharacter?: (info: FlistBackupAllCharacterEvent) => void
@@ -1287,12 +1295,13 @@ export const api = {
     ),
   flistExportZipUrl: (characterId: string | number) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
-  /** Streams the Backup-all SSE protocol. Tools → "Back up all
-   *  characters" walks the signed-in account roster, pulls each
+  /** Starts Back up all and follows its progress (SSE). Tools → "Back
+   *  up all characters" walks the signed-in account roster, pulls each
    *  character, and keeps its Live as a Backup when the F-list
    *  content has actually changed. Per-character status is
    *  surfaced as `character` events the renderer's progress banner
-   *  renders. */
+   *  renders. It runs as a job: aborting `opts.signal` only stops
+   *  following; `jobCancel` stops the sweep. */
   flistBackupAll: async (
     handlers: FlistBackupAllHandlers,
     opts?: ApiOptions
@@ -1302,33 +1311,10 @@ export const api = {
       headers: { Accept: 'text/event-stream' },
       signal: opts?.signal
     })
-    if (!res.ok) throw await failure(res)
-    if (!res.body) throw new Error(`HTTP ${res.status}: no body`)
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchBackupAllStream(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) dispatchBackupAllStream(buffer, handlers)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
+    await readEventStream(res, (block) => dispatchBackupAllStream(block, handlers))
   },
+  /** Starts a Pull of `name` and follows its progress (SSE). A job, like
+   *  Back up all: aborting `opts.signal` only stops following. */
   flistPull: async (
     name: string,
     handlers: FlistPullHandlers,
@@ -1339,32 +1325,34 @@ export const api = {
       headers: { Accept: 'text/event-stream' },
       signal: opts?.signal
     })
-    if (!res.ok) throw await failure(res)
-    if (!res.body) throw new Error(`HTTP ${res.status}: no body`)
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchPullStream(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) dispatchPullStream(buffer, handlers)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
+    await readEventStream(res, (block) => dispatchPullStream(block, handlers))
+  },
+  /** Every job the sidecar remembers: running ones, and finished ones
+   *  for a few minutes. A reopened window finds its Pulls here. */
+  jobsList: (opts?: ApiOptions) => get<{ jobs: Job[] }>('/jobs', opts),
+  /** Follow a running Pull from the start of its events. */
+  flistPullFollow: async (
+    jobId: string,
+    handlers: FlistPullHandlers,
+    opts?: ApiOptions
+  ): Promise<void> => {
+    const res = await fetch(`${base()}/jobs/${encodeURIComponent(jobId)}/events`, {
+      headers: { Accept: 'text/event-stream' },
+      signal: opts?.signal
+    })
+    await readEventStream(res, (block) => dispatchPullStream(block, handlers))
+  },
+  /** Follow a running Back up all from the start of its events. */
+  flistBackupAllFollow: async (
+    jobId: string,
+    handlers: FlistBackupAllHandlers,
+    opts?: ApiOptions
+  ): Promise<void> => {
+    const res = await fetch(`${base()}/jobs/${encodeURIComponent(jobId)}/events`, {
+      headers: { Accept: 'text/event-stream' },
+      signal: opts?.signal
+    })
+    await readEventStream(res, (block) => dispatchBackupAllStream(block, handlers))
   },
 
   // ---- Browser-extension pairing (restore flow) -------------------------
@@ -1394,20 +1382,69 @@ export const api = {
     request<{ version: string | null; seen_at: number | null }>('/restore/extension')
 }
 
-function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
+/** Read an SSE response block by block until it ends. */
+async function readEventStream(res: Response, onBlock: (block: string) => void): Promise<void> {
+  if (!res.ok) throw await failure(res)
+  if (!res.body) throw new Error(`HTTP ${res.status}: no body`)
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let sep
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const block = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + 2)
+        onBlock(block)
+      }
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) onBlock(buffer)
+  } finally {
+    try {
+      reader.releaseLock()
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/** One SSE block as its event name and JSON data. */
+function parseBlock(block: string): { event: string | null; data: unknown } {
   let event: string | null = null
   const dataLines: string[] = []
   for (const line of block.split('\n')) {
     if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
     else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
   }
-  if (!event) return
-  let parsed: unknown = {}
+  let data: unknown = {}
   try {
-    parsed = JSON.parse(dataLines.join('\n'))
+    data = JSON.parse(dataLines.join('\n'))
   } catch {
-    parsed = {}
+    data = {}
   }
+  return { event, data }
+}
+
+/** The events every job stream carries. True when `event` was one. */
+function dispatchJobEvent(event: string, data: unknown, handlers: JobStreamHandlers): boolean {
+  if (event === 'job') {
+    handlers.onJob?.(data as Job)
+    return true
+  }
+  if (event === 'cancelled') {
+    handlers.onCancelled?.()
+    return true
+  }
+  return false
+}
+
+function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
+  const { event, data: parsed } = parseBlock(block)
+  if (!event || dispatchJobEvent(event, parsed, handlers)) return
   switch (event) {
     case 'queued':
       handlers.onQueued?.()
@@ -1437,20 +1474,8 @@ function dispatchBackupAllStream(
   block: string,
   handlers: FlistBackupAllHandlers
 ): void {
-  let event: string | null = null
-  const dataLines: string[] = []
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
-    else if (line.startsWith('data:'))
-      dataLines.push(line.slice('data:'.length).trim())
-  }
-  if (!event) return
-  let parsed: unknown = {}
-  try {
-    parsed = JSON.parse(dataLines.join('\n'))
-  } catch {
-    parsed = {}
-  }
+  const { event, data: parsed } = parseBlock(block)
+  if (!event || dispatchJobEvent(event, parsed, handlers)) return
   switch (event) {
     case 'start':
       handlers.onStart?.(parsed as { total: number })

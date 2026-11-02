@@ -24,6 +24,7 @@ export function FlistCharacterZone() {
   const archive = useStore((s) => s.flistArchive)
   const roster = useStore((s) => s.flistRoster)
   const pull = useStore((s) => s.flistPullCharacter)
+  const cancelPull = useStore((s) => s.flistCancelPull)
 
   // When the Workbench last changed; null while it has none, absent
   // until asked.
@@ -149,6 +150,17 @@ export function FlistCharacterZone() {
                 ? `${pullStage ?? '…'} ${pullProgress.done}/${pullProgress.total}`
                 : (pullStage ?? '…')
               : '↻ Refresh'}
+          </button>
+        )}
+        {inFlight && slot?.pullJobId && (
+          <button
+            type="button"
+            className="flist-zone-pull-cancel"
+            onClick={() => void cancelPull(activeId)}
+            data-testid="flist-zone-pull-cancel"
+            title="Stop this pull. What it already downloaded stays."
+          >
+            Cancel
           </button>
         )}
       </div>
