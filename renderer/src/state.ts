@@ -851,7 +851,7 @@ function _cancelAllPendingTimers(): void {
 // Tracks whether an account-wide sweep is in flight. Shared between
 // the sign-in auto-refresh and the picker's manual "↻ Refresh all",
 // so a second trigger while one is running is a no-op rather than
-// stacking two passes onto pull_lock.
+// running two passes over the same characters.
 let _flistAccountSweepInFlight = false
 
 /** Re-read a character's Backup list so a Backup the sidecar just
@@ -1179,7 +1179,6 @@ async function _followPull(
       onJob: (job) => setStatus({ pullJobId: job.id }),
       onCancelled: () =>
         setStatus({ pullStatus: 'idle', pullStage: 'cancelled', pullError: null, pullJobId: null }),
-      onQueued: () => setStatus({ pullStatus: 'queued', pullStage: 'queued' }),
       onTicket: () =>
         setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
       onFetching: () =>
@@ -1329,14 +1328,6 @@ async function _followBackupAll(
       onStart: ({ total }) => {
         set((s) => ({
           flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
-        }))
-      },
-      onQueued: () => {
-        set((s) => ({
-          flistBackupAllStatus: {
-            ...s.flistBackupAllStatus,
-            currentName: 'waiting for another pull to finish…'
-          }
         }))
       },
       onCharacter: (info) => {
@@ -1508,8 +1499,8 @@ async function _flistAccountSweep(
       }
       // selectCharacter would change the active character; we want
       // a silent background refresh, so go straight to the pull.
-      // The pull endpoint's pull_lock serialises us behind any
-      // manual single-character ↻ Refresh the user kicked off.
+      // One Pull at a time here; a character whose Pull the user
+      // started by hand (or Back up all) is busy and is skipped.
       try {
         await get().flistPullCharacter(t.name, t.id)
       } catch {
@@ -2099,8 +2090,8 @@ export const useStore = create<State>((set, get) => ({
       // for every account character whose local copy is older than
       // the user's configured threshold (Settings → F-list). 0
       // minutes = always re-pull. The picker's per-row badges show
-      // progress; pull_lock serialises so a manual ↻ Refresh
-      // interleaves cleanly. Fire-and-forget.
+      // progress; a character already being pulled (a manual ↻
+      // Refresh) is skipped as busy. Fire-and-forget.
       void _flistAutoRefreshOnLogin(get)
     } catch (err) {
       // The modal shows "Invalid account name or password", not
