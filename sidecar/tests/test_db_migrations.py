@@ -79,3 +79,60 @@ def test_an_unversioned_label_database_migrates_with_its_data_intact(
     assert [h.chunk_id for h in hits] == ["Ayla|Brin|2023-11-14|0"]
 
     assert _user_version(path) == labels_store.SCHEMA_VERSION > 0
+
+
+# ---- settings.db -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("release", RELEASES)
+def test_an_unversioned_settings_database_migrates_with_its_data_intact(
+    release: str, tmp_path: Path
+) -> None:
+    path = _restore(release, "settings", tmp_path)
+
+    conn = settings_store.connect(tmp_path)
+    try:
+        kept = settings_store.all_settings(conn)
+    finally:
+        conn.close()
+
+    assert kept["fchat_data_dir"] == "C:/FChat/data"
+    assert kept["labels.threshold_chars"] == "40"
+    assert "rag.embed_model" in kept
+    # Keys of removed features are gone, the old API key included.
+    assert not set(kept) & set(settings_store.RETIRED_KEYS)
+    assert _user_version(path) == settings_store.SCHEMA_VERSION > 0
+
+
+# ---- once only -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["labels", "settings"])
+def test_a_second_connect_leaves_a_migrated_database_untouched(
+    name: str, tmp_path: Path
+) -> None:
+    path = _restore("v0.1.10", name, tmp_path)
+    connect = {"labels": labels_store.connect, "settings": settings_store.connect}[name]
+    connect(tmp_path).close()
+    migrated = path.read_bytes()
+
+    connect(tmp_path).close()
+
+    assert path.read_bytes() == migrated
+
+
+def test_a_finished_migration_does_not_run_again(tmp_path: Path) -> None:
+    """A row an old step would remove, written after it ran (an older
+    release run in between, say), stays: steps run once, by version."""
+    _restore("v0.2.16", "settings", tmp_path)
+    settings_store.connect(tmp_path).close()
+    raw = sqlite3.connect(settings_store.db_path(tmp_path))
+    raw.execute("INSERT INTO settings VALUES ('backups.scheduled_interval_days', '3')")
+    raw.commit()
+    raw.close()
+
+    conn = settings_store.connect(tmp_path)
+    try:
+        assert settings_store.get(conn, "backups.scheduled_interval_days") == "3"
+    finally:
+        conn.close()
