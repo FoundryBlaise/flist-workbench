@@ -12,14 +12,14 @@ import {
   livePayload,
   payloadRead,
   workbenchPayload,
-  workbenchRead,
   workingSlot
 } from '../../test/payloads'
 
 let fake: FakeApi
 
 const SET_ID = 'aaaaaaaaaaaa'
-const SAVE = `PUT /flist/character/99/sets/${SET_ID}/payload`
+const BENCH = '/flist/character/99/workbench/payload'
+const SAVE = `PUT ${BENCH}`
 const SNAPSHOT_111 = 'GET /flist/character/99/snapshots/111.json'
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
@@ -100,29 +100,28 @@ describe('flistDiffLoadBackup', () => {
 
 describe('flistDiffLoadWorkbench', () => {
   it(
-    'resolves the bench set, reads its payload, caches under __workbench__',
+    'reads the Workbench payload and caches it under __workbench__',
     async () => {
       seedSlot('99', { character: { description: 'edited' } })
       const onDisk = workbenchPayload({
         _overlay: ['character.description'],
         character: { description: 'on disk' }
       })
-      fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead(SET_ID)))
-      fake.on(`GET /flist/character/99/sets/${SET_ID}/payload`, json(payloadRead(onDisk, 'p')))
+      fake.on(`GET ${BENCH}?create=false`, json(payloadRead(onDisk, 'p')))
       await useStore.getState().flistDiffLoadWorkbench('99')
       expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
       // Idempotent on second call: fetch is not re-invoked, and the
       // cached Workbench is still the one that was read.
       await useStore.getState().flistDiffLoadWorkbench('99')
-      expect(fake.requests).toHaveLength(2)
+      expect(fake.requests).toHaveLength(1)
       expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
     }
   )
   it('marks error (not a spinner) when there is no bench', async () => {
     seedSlot('99', { character: { description: 'edited' } })
     fake.on(
-      'GET /flist/character/99/workbench?create=false',
-      json({ workbench: null, active_set_id: null })
+      `GET ${BENCH}?create=false`,
+      json({ code: 'no_workbench', message: 'this character has no Workbench yet' }, 404)
     )
     await useStore.getState().flistDiffLoadWorkbench('99')
     expect(useStore.getState().flistDiffBackupStatus['99:__workbench__']).toBe('error')

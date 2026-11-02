@@ -1151,6 +1151,49 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
         + (create ? '' : '?create=false')
     ),
+  /** The character's Workbench payload and the etag a save must send
+   *  back. Made from Live when there is none yet, and `created` then
+   *  says this read made it, so nobody has edited it. `create: false`
+   *  reads without making one: a 404 `no_workbench` refusal. */
+  flistWorkbenchPayloadRead: (
+    characterId: string | number,
+    opts: { create?: boolean } = {}
+  ) =>
+    get<{ payload: Record<string, unknown>; etag: string; created: boolean }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
+        + (opts.create === false ? '?create=false' : '')
+    ),
+  /** Save the whole Workbench over the etag it was read with. A 409
+   *  (no etag, or a stale one) throws `Error('etag_mismatch')` carrying
+   *  the etag on disk as `currentEtag`. */
+  flistWorkbenchPayloadPut: async (
+    characterId: string | number,
+    payload: Record<string, unknown>,
+    etag: string | null
+  ): Promise<{ etag: string }> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    }
+    if (etag) headers['If-Match'] = etag
+    const res = await fetch(
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
+      { method: 'PUT', headers, body: JSON.stringify(payload) }
+    )
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => null)) as
+        | { code?: string; current_etag?: string | null }
+        | null
+      const err = new Error('etag_mismatch') as Error & {
+        currentEtag: string | null
+      }
+      err.currentEtag = body?.current_etag ?? null
+      throw err
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    return (await res.json()) as { etag: string }
+  },
   /** What the confirm dialog needs before overwriting the bench:
    *  whether it holds unpublished edits, and whether F-list has moved
    *  on since this backup was taken. */

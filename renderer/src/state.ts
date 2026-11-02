@@ -1017,42 +1017,65 @@ async function _flushWorkingNow(
     _cancelFlush(characterId)
     return
   }
-  // Every PUT routes through the active set's payload endpoint. If
-  // nothing is active yet but the user has typed, the Workbench has
-  // simply never been opened for this character — so open it now and
-  // save into it. Materialise-on-first-edit, the same doctrine the
-  // legacy working.json followed (Tier 2 §1.6): looking at a
-  // character creates nothing, the first edit does.
+  // Every save sends the etag the window read; the sidecar refuses a
+  // write without one. A slot that was never materialised has no etag:
+  // the window found no Workbench when it opened the character and
+  // seeded the editor from Live (materialise-on-first-edit: looking at
+  // a character creates nothing, the first edit does). Ask for the
+  // Workbench now, which makes it from Live, and save over that. If it
+  // already existed, something else made it since the window looked,
+  // and it may hold edits this slot never saw: that is a conflict, not
+  // a copy to overwrite.
   //
   // This used to return early and drop the write. Nothing said so —
   // saveStatus stayed 'idle' — and the edits died with the next
   // character switch.
-  let activeSetId = get().flistActiveSetId[characterId]
-  if (!activeSetId) {
-    const bench = await get().flistOpenWorkbench(characterId)
-    activeSetId = bench?.id ?? get().flistActiveSetId[characterId] ?? null
-  }
-  if (!activeSetId) {
-    // No Live to seed a Workbench from — a character that was never
-    // pulled. Keep the edits in memory and say so, rather than
-    // pretending they were saved.
-    set((st) => {
-      const existing = st.flistWorking[characterId]
-      if (!existing) return {}
-      return {
-        flistWorking: {
-          ...st.flistWorking,
-          [characterId]: {
-            ...existing,
-            saveStatus: 'error',
-            saveError: 'No Workbench yet — pull this character first.'
+  let baseEtag = slot.materialised ? slot.etag : null
+  if (!slot.materialised) {
+    let bench: Awaited<ReturnType<typeof api.flistWorkbenchPayloadRead>> | null = null
+    let readError = ''
+    try {
+      bench = await api.flistWorkbenchPayloadRead(characterId)
+    } catch (err) {
+      // `no_workbench`: no Live to make one from, a character that was
+      // never pulled. Anything else is the read itself failing.
+      readError =
+        err instanceof RefusalError && err.code === 'no_workbench'
+          ? 'No Workbench yet — pull this character first.'
+          : err instanceof Error
+            ? err.message
+            : String(err)
+    }
+    if (!bench) {
+      // Keep the edits in memory and say so, rather than pretending
+      // they were saved.
+      set((st) => {
+        const existing = st.flistWorking[characterId]
+        if (!existing) return {}
+        return {
+          flistWorking: {
+            ...st.flistWorking,
+            [characterId]: {
+              ...existing,
+              saveStatus: 'error',
+              saveError: readError
+            }
           }
         }
-      }
-    })
-    _cancelFlush(characterId)
-    return
+      })
+      _cancelFlush(characterId)
+      return
+    }
+    if (!bench.created) {
+      _noteSaveConflict(characterId, bench.etag, set)
+      return
+    }
+    baseEtag = bench.etag
+    // The window's Workbench row follows the server's pointer, which
+    // asking for the Workbench just set.
+    await _hydrateWorkbenchPointer(characterId, set)
   }
+  const activeSetId = get().flistActiveSetId[characterId] ?? null
   // Pin the exact payload we're shipping so the success branch can
   // tell whether new edits arrived during the round-trip.
   const sentPayload = slot.payload
@@ -1067,12 +1090,7 @@ async function _flushWorkingNow(
     }
   })
   try {
-    const { etag } = await api.flistSetPayloadPut(
-      characterId,
-      activeSetId,
-      sentPayload,
-      slot.materialised ? slot.etag : null
-    )
+    const { etag } = await api.flistWorkbenchPayloadPut(characterId, sentPayload, baseEtag)
     set((s) => {
       const existing = s.flistWorking[characterId]
       if (!existing) return {}
@@ -1106,18 +1124,22 @@ async function _flushWorkingNow(
       return {
         ...(resetWrite ? { flistResetUndo: { ...undo, etag, awaitingWrite: false } } : {}),
         flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
-        flistSetWorking: {
-          ...s.flistSetWorking,
-          [activeSetId]: nextSlot
-        },
-        flistSets: {
-          ...s.flistSets,
-          [characterId]: setsList.map((m) =>
-            m.id === activeSetId
-              ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
-              : m
-          )
-        }
+        ...(activeSetId
+          ? {
+              flistSetWorking: {
+                ...s.flistSetWorking,
+                [activeSetId]: nextSlot
+              },
+              flistSets: {
+                ...s.flistSets,
+                [characterId]: setsList.map((m) =>
+                  m.id === activeSetId
+                    ? { ...m, updatedAt: Math.floor(Date.now() / 1000) }
+                    : m
+                )
+              }
+            }
+          : {})
       }
     })
     // If a newer payload is waiting, schedule a follow-up flush so
@@ -1130,45 +1152,78 @@ async function _flushWorkingNow(
       })
     }
   } catch (err) {
+    if (err instanceof Error && err.message === 'etag_mismatch') {
+      const errWith = err as Error & { currentEtag?: string | null }
+      _noteSaveConflict(characterId, errWith.currentEtag ?? null, set)
+      return
+    }
     const raw = err instanceof Error ? err.message : String(err)
-    const conflict = err instanceof Error && err.message === 'etag_mismatch'
-    const errWith = err as Error & { currentEtag?: string | null }
     set((s) => {
       const existing = s.flistWorking[characterId]
       if (!existing) return {}
-      const patch: Partial<State> = {
+      return {
         flistWorking: {
           ...s.flistWorking,
-          [characterId]: {
-            ...existing,
-            saveStatus: 'error',
-            saveError: conflict
-              ? 'Someone else changed this set. Choose whose version to keep.'
-              : raw,
-            // The server etag is deliberately NOT adopted on a
-            // conflict. Adopting it would let the next keystroke's
-            // autosave succeed and silently overwrite the other
-            // writer; keeping the stale one makes every retry
-            // conflict until the user decides.
-            etag: existing.etag,
-            unsavedDirty: true
-          }
+          [characterId]: { ...existing, saveStatus: 'error', saveError: raw, unsavedDirty: true }
         }
       }
-      if (conflict) {
-        patch.flistExternalChange = {
-          ...s.flistExternalChange,
-          [characterId]: {
-            setId: activeSetId,
-            etag: errWith.currentEtag ?? null,
-            origin: 'unknown',
-            at: Date.now()
-          }
-        }
-      }
-      return patch
     })
   }
+}
+
+/** A save the sidecar refused because the Workbench on disk is not the
+ *  one the window read: something else wrote it. The edits stay in the
+ *  slot and the banner asks whose version to keep. */
+function _noteSaveConflict(
+  characterId: string,
+  currentEtag: string | null,
+  set: (fn: (s: State) => Partial<State>) => void
+): void {
+  set((s) => {
+    const existing = s.flistWorking[characterId]
+    if (!existing) return {}
+    return {
+      flistWorking: {
+        ...s.flistWorking,
+        [characterId]: {
+          ...existing,
+          saveStatus: 'error',
+          saveError: 'Someone else changed this Workbench. Choose whose version to keep.',
+          // The server etag is deliberately NOT adopted on a
+          // conflict. Adopting it would let the next keystroke's
+          // autosave succeed and silently overwrite the other
+          // writer; keeping the stale one makes every retry
+          // conflict until the user decides.
+          etag: existing.etag,
+          unsavedDirty: true
+        }
+      },
+      flistExternalChange: {
+        ...s.flistExternalChange,
+        [characterId]: {
+          setId: s.flistActiveSetId[characterId] ?? '',
+          etag: currentEtag,
+          origin: 'unknown',
+          at: Date.now()
+        }
+      }
+    }
+  })
+}
+
+/** Point the window's Workbench row at the character's Workbench. The
+ *  row still follows the server's pointer; reading the Workbench sets
+ *  that pointer, and this brings the window's copy of it up to date. */
+async function _hydrateWorkbenchPointer(
+  characterId: string,
+  set: (fn: (s: State) => Partial<State>) => void
+): Promise<void> {
+  const resolved = await api.flistWorkbench(characterId, false).catch(() => null)
+  const benchId = resolved?.workbench?.id ?? null
+  if (!benchId) return
+  set((s) => ({
+    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: benchId }
+  }))
 }
 
 /** Pull every account character on the current roster.
@@ -2523,70 +2578,47 @@ export const useStore = create<State>((set, get) => ({
         }))
       }
     }
-    // Load the persisted working copy. On 404 the slot is seeded from
-    // Live in memory but not flushed to disk — first edit then PUTs
-    // (Tier 2 §1.6 materialise-on-first-edit).
-    //
-    // When a set is active, its payload is the truth and the legacy
-    // `working.json` endpoint is not written at all — asking it would
-    // 404 on every character switch. Read the set instead.
-    let activeSetId = get().flistActiveSetId[characterId] ?? null
     // The client-side pointer can lag the server: pull-completion and
     // browse-restore call this before anything has hydrated
-    // flistActiveSetId. An unhydrated pointer used to fall through to
-    // the legacy `working.json`, and a slot seeded from that stale file
-    // carries an etag that can never match the character's real bench
-    // (sets/<id>/payload.json) — so the first edit 409'd against a file
-    // nobody had touched. Ask the server where the Workbench is before
-    // choosing legacy storage; `create: false` keeps a mere open from
-    // materialising a bench.
-    if (!activeSetId) {
-      const resolved = await api.flistWorkbench(characterId, false).catch(() => null)
-      const benchId = resolved?.workbench?.id ?? null
-      if (benchId) {
-        activeSetId = benchId
-        set((s) => ({
-          flistActiveSetId: { ...s.flistActiveSetId, [characterId]: benchId }
-        }))
-      }
+    // flistActiveSetId, and the window's Workbench row follows it.
+    if (!get().flistActiveSetId[characterId]) {
+      await _hydrateWorkbenchPointer(characterId, set)
     }
+    const activeSetId = get().flistActiveSetId[characterId] ?? null
     // What the slot held when the read went out. Anything that replaces
     // it meanwhile (a keystroke, a save landing with its new etag) is
     // newer than what the read can bring back.
     const before = get().flistWorking[characterId]
+    // The Workbench itself, fetched fresh. This used to seed from Live
+    // whenever the window had not hydrated its pointer, on the theory
+    // that the slot was only a mirror nobody displayed. The editor
+    // displays it: after switching away and back, the Workbench row was
+    // selected while the panel showed the published profile. No
+    // Workbench yet (`create: false` keeps a mere open from making one):
+    // the slot is seeded from Live in memory and not written, and the
+    // first edit makes the Workbench (materialise-on-first-edit).
     let read: FlistWorkingSlot | null
-    if (activeSetId) {
-      // The set's own payload, fetched fresh — the same thing
-      // flistActivateSet reads when the user clicks the row. This used
-      // to seed from Live instead, on the theory that the slot was
-      // only a mirror nobody displayed. The editor displays it: after
-      // switching away and back, the Workbench row was selected while
-      // the panel showed the published profile, and only a detour
-      // through Live and back fixed it. The edits were never in
-      // danger — the window was reading the wrong file.
-      let payload: WorkingPayload
-      let etag: string | null = null
-      try {
-        const res = await api.flistSetPayloadRead(characterId, activeSetId)
-        payload = res.payload as WorkingPayload
-        etag = res.etag
-      } catch {
-        // No payload on disk yet: the bench exists but has never been
-        // written to. Live is the right seed for that one case.
-        const liveForSeed = get().flistArchive[characterId]?.live ?? null
-        payload = liveForSeed
-          ? seedWorkingFromLive(liveForSeed)
-          : { ...emptyWorkingSlot().payload }
-      }
+    try {
+      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
+      const payload = res.payload as WorkingPayload
       read = {
         ...emptyWorkingSlot(),
         payload,
         overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-        etag,
-        materialised: etag !== null
+        etag: res.etag,
+        materialised: true
       }
-    } else {
-      read = await _readLegacyWorking(get, characterId)
+    } catch (err) {
+      if (err instanceof RefusalError && err.code === 'no_workbench') {
+        const liveForSeed = get().flistArchive[characterId]?.live ?? null
+        read = {
+          ...emptyWorkingSlot(),
+          payload: liveForSeed ? seedWorkingFromLive(liveForSeed) : { ...emptyWorkingSlot().payload },
+          materialised: false
+        }
+      } else {
+        read = null
+      }
     }
     if (!_isNewestOpen(characterId, token)) return
     // Never reseed over unsaved edits, and decide that only now, after
@@ -3087,13 +3119,12 @@ export const useStore = create<State>((set, get) => ({
       // Server rejected (404 / 409). Leave the prior active id in place.
       return
     }
-    // Fetch the new set's payload fresh from disk every time — each
-    // set has its own payload.json so this is what gives them
-    // byte-isolated identity.
+    // Fetch the Workbench fresh from disk every time: activating just
+    // made this the character's Workbench.
     let payload: WorkingPayload
     let etag: string | null = null
     try {
-      const res = await api.flistSetPayloadRead(characterId, setId)
+      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
       payload = res.payload as WorkingPayload
       etag = res.etag
     } catch {
@@ -3147,7 +3178,7 @@ export const useStore = create<State>((set, get) => ({
     if (!change) return
     _cancelFlush(characterId)
     try {
-      const res = await api.flistSetPayloadRead(characterId, change.setId)
+      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
       const payload = res.payload as WorkingPayload
       const overlay = Array.isArray(payload._overlay) ? payload._overlay : []
       const slot: FlistWorkingSlot = {
@@ -3163,7 +3194,9 @@ export const useStore = create<State>((set, get) => ({
       set((s) => {
         const patch: Partial<State> = {
           flistWorking: { ...s.flistWorking, [characterId]: slot },
-          flistSetWorking: { ...s.flistSetWorking, [change.setId]: slot },
+          ...(change.setId
+            ? { flistSetWorking: { ...s.flistSetWorking, [change.setId]: slot } }
+            : {}),
           flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
         }
         if (s.flistActiveCharacterId === characterId) {
@@ -3185,12 +3218,7 @@ export const useStore = create<State>((set, get) => ({
     try {
       // Write against the etag the other writer left, which is what
       // makes this an overwrite rather than another conflict.
-      const { etag } = await api.flistSetPayloadPut(
-        characterId,
-        change.setId,
-        slot.payload,
-        change.etag
-      )
+      const { etag } = await api.flistWorkbenchPayloadPut(characterId, slot.payload, change.etag)
       set((s) => {
         const existing = s.flistWorking[characterId]
         if (!existing) return {}
@@ -3205,7 +3233,9 @@ export const useStore = create<State>((set, get) => ({
         }
         return {
           flistWorking: { ...s.flistWorking, [characterId]: next },
-          flistSetWorking: { ...s.flistSetWorking, [change.setId]: next },
+          ...(change.setId
+            ? { flistSetWorking: { ...s.flistSetWorking, [change.setId]: next } }
+            : {}),
           flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
         }
       })
@@ -3880,22 +3910,11 @@ export const useStore = create<State>((set, get) => ({
       }
     }))
     try {
-      // Resolve which set is the bench — the active one, else the most
-      // recently changed. create=false so merely opening the Diff never
-      // brings a bench into being under a read-only Live view.
-      const bench = await api.flistWorkbench(characterId, false)
-      const setId = bench?.workbench?.id ?? bench?.active_set_id ?? null
-      if (!setId) {
-        // No bench on disk: it is Live by definition → nothing to diff.
-        set((s) => ({
-          flistDiffBackupStatus: {
-            ...s.flistDiffBackupStatus,
-            [cacheKey]: 'error'
-          }
-        }))
-        return
-      }
-      const res = await api.flistSetPayloadRead(characterId, setId)
+      // create=false so merely opening the Diff never brings a
+      // Workbench into being under a read-only Live view. None on disk
+      // is a refusal: the catch below marks it as an error, since there
+      // is nothing to compare but Live itself.
+      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
       const payload = res?.payload ?? null
       if (!payload) {
         set((s) => ({
