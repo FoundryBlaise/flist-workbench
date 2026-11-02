@@ -5,9 +5,11 @@ user uploads, and the settings the rest of it reads.
 
 Two things run long enough to need progress: a pull walks a
 character's whole image set, and the backup sweep pulls every
-character on the account. Both report through `Context.report_progress`
-so a client can show something moving, and both are bounded by
-F-list's rate limit rather than by anything here.
+character on the account. Both run as jobs (`services.jobs`): waiting,
+they report through `Context.report_progress` so a client can show
+something moving; with `wait=false` they answer a job id for `get_job`
+and `cancel_job`. Both are bounded by F-list's rate limit rather than by
+anything here.
 
 On file paths: the export tool writes wherever the user running the app
 can. That is the same reach the app already has through its own file
@@ -30,6 +32,8 @@ import atomic_write
 import backup_origin
 from mcp.server.fastmcp import Context
 
+from services import jobs
+
 from ._context import (
     ToolError,
     audit,
@@ -51,19 +55,54 @@ WAIT_BUDGET_SEC = 600
 # --------------------------------------------------------------------
 
 
-def _stream_failure(failure: dict[str, Any], fallback: str) -> ToolError:
-    """A Pull's or Back up all's `error` event as the tool's error: the
-    event's code and details (`services.sse.error`), plus where it
-    stopped."""
-    code = str(failure.get("code") or "internal_error")
-    message = str(failure.get("message") or fallback)
+def _job_failure(job: jobs.Job, fallback: str) -> ToolError:
+    """A failed Pull's or Back up all's error as the tool's error: the
+    job's code and details (`services.sse.error`), `stage` among them."""
+    error = job.error or {}
+    code = str(error.get("code") or "internal_error")
+    message = str(error.get("message") or fallback)
     if code == "not_signed_in":
         message += " The user signs in inside the app window (F-list → Sign in)."
-    return ToolError(code, message, stage=failure.get("stage"), **(failure.get("details") or {}))
+    return ToolError(code, message, **(error.get("details") or {}))
+
+
+def _started(job: jobs.Job) -> dict[str, Any]:
+    """The answer of a tool asked not to wait (or done waiting)."""
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "state": job.state,
+        "note": (
+            "Running in the background. Poll get_job for progress and the "
+            "result; cancel_job stops it."
+        ),
+    }
+
+
+async def _follow(job: jobs.Job, on_event: Any) -> bool:
+    """Follow a job's events into `on_event(event, data)` until it ends.
+    False when it still runs after WAIT_BUDGET_SEC: the caller answers
+    with the job id then. Leaving early never stops the job."""
+    try:
+        async with asyncio.timeout(WAIT_BUDGET_SEC):
+            async for event, data in jobs.follow(job):
+                await on_event(event, data)
+    except TimeoutError:
+        return False
+    return True
+
+
+def _cancelled(job: jobs.Job) -> dict[str, Any]:
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "state": job.state,
+        "note": "Cancelled. What it wrote before the cancel stays.",
+    }
 
 
 @tool(tags=TAG_CHARACTER, title="Pull from F-list", open_world=True)
-async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
+async def pull_character(character: str, ctx: Context, wait: bool = True) -> dict[str, Any]:
     """Fetch a character's current profile and images from F-list into
     the local archive.
 
@@ -74,7 +113,9 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     sign-in tool, because credentials never travel through MCP.
 
     Takes a while: F-list is rate-limited to one request a second and
-    every gallery image is a request.
+    every gallery image is a request. `wait=false` returns a job id at
+    once, to poll with get_job (or stop with cancel_job). One Pull per
+    character at a time: another is refused `character_busy`.
     """
     from services import pull as pull_service
 
@@ -82,14 +123,15 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     if not name:
         raise ToolError("validation_failed", "character is empty")
 
-    summary: dict[str, Any] | None = None
-    failure: dict[str, Any] | None = None
+    job = pull_service.start(name)
+    audit("pull_character", character=name, job=job.id)
+    if not wait:
+        return _started(job)
+
     images_total = 0
 
-    async for event, data in pull_service.run(name):
-        if event == "error":
-            failure = data
-            break
+    async def report(event: str, data: dict[str, Any]) -> None:
+        nonlocal images_total
         if event == "images":
             images_total = int(data.get("total") or 0)
             await ctx.report_progress(0, images_total or None, "downloading images")
@@ -101,21 +143,23 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
             )
         elif event == "fetching":
             await ctx.info(f"fetching {name} from F-list")
-        elif event == "done":
-            summary = data
 
-    if failure is not None:
-        raise _stream_failure(failure, "pull failed")
-
+    if not await _follow(job, report):
+        return _started(job)
+    if job.state == "cancelled":
+        return _cancelled(job)
+    if job.state == "failed":
+        raise _job_failure(job, "pull failed")
+    summary = job.result
     if summary is None:
         raise ToolError("pull_failed", "the pull ended without a result")
 
-    audit("pull_character", character=name)
     return {
         "character": name,
         "character_id": summary.get("character_id"),
         "images": summary.get("image_count"),
         "changed": summary.get("changed"),
+        "job_id": job.id,
         "note": (
             "This updated the local copy of what is published. Edits "
             "live in the Workbench and were not touched. " + NO_PUSH_NOTE
@@ -173,7 +217,7 @@ def create_backup(
 
 
 @tool(tags=TAG_CHARACTER, title="Back up every character", open_world=True)
-async def backup_all_characters(ctx: Context) -> dict[str, Any]:
+async def backup_all_characters(ctx: Context, wait: bool = True) -> dict[str, Any]:
     """Pull every character on the signed-in account and keep each one's
     Live, what F-list shows, as a Backup (`source: live, occasion:
     backup-all`). Workbenches are neither read nor changed.
@@ -181,45 +225,44 @@ async def backup_all_characters(ctx: Context) -> dict[str, Any]:
     Long: each character is a full pull, one at a time, at F-list's
     rate limit. Characters whose Live hasn't changed since their last
     Backup of Live are skipped rather than re-zipped. Tell the user this
-    will take a few minutes on a large account before starting it.
+    will take a few minutes on a large account before starting it, or
+    pass `wait=false` for a job id to poll with get_job (cancel_job
+    stops it). Refused `character_busy` while a Pull runs.
     """
     from services import backup_all as backup_all_service
 
-    summary: dict[str, Any] | None = None
-    failure: dict[str, Any] | None = None
+    job = backup_all_service.start()
+    audit("backup_all_characters", job=job.id)
+    if not wait:
+        return _started(job)
+
     total = 0
-    seen = 0
     rows: list[dict[str, Any]] = []
 
-    async for event, data in backup_all_service.run():
-        if event == "error":
-            failure = data
-            break
+    async def report(event: str, data: dict[str, Any]) -> None:
+        nonlocal total
         if event == "start":
             total = int(data.get("total") or 0)
             await ctx.report_progress(0, total or None, "starting")
-        elif event == "character":
-            if data.get("status") in ("saved", "unchanged", "error"):
-                seen += 1
-                rows.append(
-                    {
-                        "character": data.get("name"),
-                        "status": data.get("status"),
-                        "filename": data.get("filename"),
-                        "message": data.get("message"),
-                    }
-                )
-                await ctx.report_progress(
-                    seen, total or None, str(data.get("name") or "")
-                )
-        elif event == "done":
-            summary = data
+        elif event == "character" and data.get("status") in ("saved", "unchanged", "error"):
+            rows.append(
+                {
+                    "character": data.get("name"),
+                    "status": data.get("status"),
+                    "filename": data.get("filename"),
+                    "message": data.get("message"),
+                }
+            )
+            await ctx.report_progress(len(rows), total or None, str(data.get("name") or ""))
 
-    if failure is not None:
-        raise _stream_failure(failure, "the sweep failed")
-
-    audit("backup_all_characters", **(summary or {}))
-    return {"summary": summary or {}, "characters": rows}
+    if not await _follow(job, report):
+        return _started(job)
+    if job.state == "cancelled":
+        return {**_cancelled(job), "characters": rows}
+    if job.state == "failed":
+        raise _job_failure(job, "the sweep failed")
+    summary = {k: v for k, v in (job.result or {}).items() if k != "characters"}
+    return {"summary": summary, "characters": rows, "job_id": job.id}
 
 
 # --------------------------------------------------------------------

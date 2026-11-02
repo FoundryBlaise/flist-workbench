@@ -1,11 +1,12 @@
 """Pull, Backups and Back up all.
 
-Pull and Back up all stream their progress as server-sent events; the
-work itself lives in `services/pull.py` and `services/backup_all.py`.
+Pull and Back up all run as jobs (`services.jobs`) and stream their
+progress as server-sent events; the work itself lives in
+`services/pull.py` and `services/backup_all.py`.
 """
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 import archive_backups
@@ -14,34 +15,32 @@ import backup_origin
 from refusals import BackupNotFound, BackupNotWritten, NotTrashed
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
+from services import jobs
 from services import pull as pull_service
 from services import sse
 
 router = APIRouter()
 
 
-@router.post("/flist/character/{name}/pull")
-async def flist_character_pull(name: str) -> StreamingResponse:
-    """Pull live character data + images for `name`, as an SSE stream.
+@router.post("/flist/character/{name}/pull", response_model=None)
+def flist_character_pull(name: str, wait: bool = True) -> Response:
+    """Pull live character data + images for `name`, as a job.
 
-    The orchestration lives in `services/pull.py` so the MCP
-    `pull_character` tool runs exactly the same sequence; this only
-    frames its events for the renderer. Event names and payloads are
-    documented there.
+    Answers with the job's progress as an SSE stream (`sse.follow`),
+    or with `wait=false` the job itself (202), to follow later through
+    `/jobs/{id}/events`. Closing the stream leaves the Pull running;
+    `DELETE /jobs/{id}` cancels it. 409 `character_busy` while another
+    job holds the character. The work lives in `services/pull.py`, so
+    the MCP `pull_character` tool runs exactly the same job; event
+    names and payloads are documented there.
     """
+    return _answer(pull_service.start(name), wait)
 
-    async def producer():
-        async for event, data in pull_service.run(name):
-            yield sse.event(event, data)
 
-    return StreamingResponse(
-        producer(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
+def _answer(job: jobs.Job, wait: bool) -> Response:
+    if not wait:
+        return JSONResponse(job.to_dict(), status_code=202)
+    return sse.follow(job)
 
 
 @router.post("/flist/character/{character_id}/zip-backup")
@@ -174,26 +173,14 @@ def flist_character_zip_backup_payload(
     return {"payload": payload, "filename": filename, "meta": meta}
 
 
-@router.post("/flist/backup-all")
-async def flist_backup_all() -> StreamingResponse:
-    """Back up every character on the signed-in account, as an SSE
-    stream.
+@router.post("/flist/backup-all", response_model=None)
+def flist_backup_all(wait: bool = True) -> Response:
+    """Back up every character on the signed-in account, as a job.
 
-    The sweep lives in `services/backup_all.py` so the MCP
-    `backup_all_characters` tool runs the same one; this only frames
-    its events for the renderer. Event names and payloads are
-    documented there.
+    Answers like a Pull (`flist_character_pull`): the progress stream,
+    or with `wait=false` the job. One Back up all at a time, and none
+    while a Pull runs (409 `character_busy`). The sweep lives in
+    `services/backup_all.py` so the MCP `backup_all_characters` tool
+    runs the same one; event names and payloads are documented there.
     """
-
-    async def producer():
-        async for event, data in backup_all_service.run():
-            yield sse.event(event, data)
-
-    return StreamingResponse(
-        producer(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _answer(backup_all_service.start(), wait)

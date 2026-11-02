@@ -8,8 +8,15 @@ pattern instead of one per operation.
 A job holds one resource (the Index, a character) and at most one job
 holds a resource at a time: a second start on a held resource is
 refused with that resource's busy refusal (`refusals.ResourceBusy`),
-naming the job that holds it. Short work that must not overlap a job
-(wiping the Index) holds the resource the same way, through `hold`.
+naming the job that holds it. Resources nest by `:`: a job holding
+`character` holds every `character:<id>` too, so neither can start
+while the other runs. Short work that must not overlap a job (wiping
+the Index) holds the resource the same way, through `hold`.
+
+Work that reports as it goes (a Pull, Back up all) is an async stream
+of `(event, data)` pairs, started with `start_stream`: the job keeps
+every event, and `follow` replays them and then the new ones as they
+come, so a progress view can close and open again on one job.
 
 Jobs run on their own thread and are not tied to the client connection
 that started them: closing a window or a stream does not stop one, only
@@ -22,6 +29,7 @@ minutes, and none survive a restart: an id from before one is unknown
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import dataclasses
@@ -30,7 +38,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, AsyncIterator, Callable, Iterator, Literal
 
 from refusals import JobNotFound, Refusal, ResourceBusy
 
@@ -45,6 +53,17 @@ RETENTION_SECONDS = 300.0
 #: The `code` of a job that stopped on something nothing expected, as
 #: the REST surface answers a 500.
 INTERNAL_ERROR = "internal_error"
+
+#: The events that end a stream job's events: it finished, failed or
+#: was cancelled.
+DONE, ERROR, CANCELLED = "done", "error", "cancelled"
+
+#: How often a stream job looks for a cancel, and a follower for new
+#: events.
+POLL_SECONDS = 0.05
+
+#: A stream job's work: an async iterator of `(event, data)` pairs.
+Stream = AsyncIterator[tuple[str, dict[str, Any]]]
 
 
 @dataclass(eq=False)
@@ -68,6 +87,7 @@ class Job:
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     _cancel: threading.Event = field(default_factory=threading.Event, repr=False)
+    _events: list[tuple[str, dict[str, Any]]] = field(default_factory=list, repr=False)
 
     @property
     def cancel_requested(self) -> bool:
@@ -81,6 +101,14 @@ class Job:
         """Stop as failed with `{code, message, details}`."""
         self.error = {"code": code, "message": message, "details": details}
         self.state = "failed"
+
+    def emit(self, event: str, data: dict[str, Any]) -> None:
+        """Keep one progress event for `follow`."""
+        self._events.append((event, data))
+
+    def events_since(self, index: int) -> list[tuple[str, dict[str, Any]]]:
+        """The events kept after the first `index`."""
+        return self._events[index:]
 
     def to_dict(self) -> dict[str, Any]:
         progress = self.progress
@@ -137,6 +165,40 @@ class JobRegistry:
         )
         thread.start()
         return job
+
+    def start_stream(
+        self,
+        kind: str,
+        resource: str,
+        stream: Callable[[], Stream],
+        *,
+        busy: type[ResourceBusy],
+        params: dict[str, Any] | None = None,
+        progress: Any = None,
+        observe: Callable[[Job, str, dict[str, Any]], None] | None = None,
+        on_finish: Callable[[Job], None] | None = None,
+    ) -> Job:
+        """`start` for work that reports as it goes: `stream()` is an
+        async iterator of `(event, data)`, run on the job's own event
+        loop. Every event is kept for `follow`, and `observe(job, event,
+        data)` may sum it up in `job.progress`.
+
+        A `done` event's data is the job's result; an `error` event
+        (`services.sse.error`: stage, code, message, details) fails the
+        job with its code and message, the stage among the details. A
+        cancel stops the stream at the await it is in (a download, a
+        pause between requests), never inside a write, and ends the
+        events with `cancelled`.
+        """
+        return self.start(
+            kind,
+            resource,
+            lambda job: asyncio.run(_drive(job, stream, observe)),
+            busy=busy,
+            params=params,
+            progress=progress,
+            on_finish=on_finish,
+        )
 
     @contextlib.contextmanager
     def hold(
@@ -195,7 +257,7 @@ class JobRegistry:
 
     def _active_locked(self, resource: str) -> Job | None:
         for job in self._jobs.values():
-            if job.resource == resource and not job.finished:
+            if _overlap(job.resource, resource) and not job.finished:
                 return job
         return None
 
@@ -258,6 +320,83 @@ class JobRegistry:
         ]
         for jid in stale:
             del self._jobs[jid]
+
+
+def _overlap(a: str, b: str) -> bool:
+    """Whether jobs holding `a` and `b` would hold something twice: the
+    same resource, or one nested in the other (`character` and
+    `character:5150`)."""
+    return a == b or a.startswith(b + ":") or b.startswith(a + ":")
+
+
+async def _drive(
+    job: Job,
+    stream: Callable[[], Stream],
+    observe: Callable[[Job, str, dict[str, Any]], None] | None,
+) -> dict[str, Any] | None:
+    """Run a stream job's events into the job until they end or a cancel
+    arrives (see `JobRegistry.start_stream`)."""
+    result: dict[str, Any] | None = None
+
+    async def consume() -> None:
+        nonlocal result
+        async for event, data in stream():
+            job.emit(event, data)
+            if observe is not None:
+                observe(job, event, data)
+            if event == DONE:
+                result = data
+            elif event == ERROR:
+                details = dict(data.get("details") or {})
+                details["stage"] = data.get("stage")
+                job.fail(
+                    str(data.get("code") or INTERNAL_ERROR),
+                    str(data.get("message") or ""),
+                    **details,
+                )
+
+    task = asyncio.ensure_future(consume())
+    while not task.done():
+        await asyncio.wait({task}, timeout=POLL_SECONDS)
+        if job.cancel_requested and not task.done():
+            task.cancel()
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        job.state = "cancelled"
+        job.emit(CANCELLED, {})
+        return None
+    except Refusal as exc:
+        job.emit(ERROR, {"stage": "unknown", **exc.body()})
+        raise
+    except Exception as exc:
+        job.emit(
+            ERROR,
+            {
+                "stage": "unknown",
+                "code": INTERNAL_ERROR,
+                "message": f"{type(exc).__name__}: {exc}",
+                "details": {},
+            },
+        )
+        raise
+    return result
+
+
+async def follow(job: Job) -> Stream:
+    """A stream job's events: those it has kept so far, then each new
+    one as it comes, until the job has finished. A follower that leaves
+    early (a closed progress view) leaves the job running."""
+    seen = 0
+    while True:
+        finished = job.finished
+        new = job.events_since(seen)
+        seen += len(new)
+        for item in new:
+            yield item
+        if finished:
+            return
+        await asyncio.sleep(POLL_SECONDS)
 
 
 _registry = JobRegistry()

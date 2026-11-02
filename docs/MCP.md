@@ -183,6 +183,10 @@ retrieved, and this one never scored. Ask about the *thing* instead —
 
 **Operations** — `pull_character`, `create_backup`,
 `backup_all_characters`, `ingest_logs`, `export_restore_zip`.
+A Pull, Back up all and an ingest are jobs: they wait and report
+progress by default, and with `wait=false` return a `job_id` at once,
+to poll with `get_job` and stop with `cancel_job` (the same two calls
+for every kind). A job runs on when the call that started it ends.
 
 ## The classification loop
 
@@ -315,6 +319,7 @@ window gets for the same situation:
 | `backup_too_old` | the Backup comes from before the app stored a loadable profile in it; it can only be downloaded |
 | `no_index` | nothing ingested yet |
 | `index_busy` | an ingest (or a wipe) is changing the Index; details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
+| `character_busy` | a Pull of that character, or Back up all, is running (one at a time); details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `index_unreadable` | the Index is there but could not be read; not the same as empty |
 | `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
