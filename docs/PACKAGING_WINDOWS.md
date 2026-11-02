@@ -57,10 +57,26 @@
 > you ever move it; to try the extension against a dev build, quit the
 > installed app and start dev with `SIDECAR_PORT=27384`. The
 > `SIDECAR_PORT` env var overrides either default at runtime. If the
-> port is already taken, start-up stops: the reason goes to stderr and
-> `main-diag.log` (`sidecar:port-taken`), the packaged app shows it in
-> an error box, and the app quits instead of talking to whatever holds
-> the port.
+> port is already taken, the app asks the holder's `/health` and looks
+> up the process that owns the port (`electron/portOwner.ts`). A
+> Workbench sidecar (`sidecar.exe` from an app's `resources` folder, or
+> a dev build's python running `server.py` / `uvicorn server:app`) that
+> is older than the app, or whose app is gone, is killed and replaced
+> (`sidecar:replace-stale`). Anything else, or the sidecar of another
+> Workbench that still runs and is not older, stops start-up: the
+> reason goes to stderr and `main-diag.log` (`sidecar:port-taken`),
+> the packaged app shows it in an error box naming the port, and the
+> app quits instead of talking to whatever holds the port. The rules
+> are in `electron/sidecarLifecycle.ts`.
+>
+> **Sidecar lifecycle:** a sidecar that exits unexpectedly is
+> restarted after 1 s, waiting twice as long after each crash that
+> follows within a minute of its start, up to 15 s; after five such
+> crashes in a row the app stops trying and says so. At quit the app
+> asks the sidecar to stop over `POST /shutdown` (launch secret only,
+> ADR 0002); open requests get a second, then it exits on its own. The
+> app kills it (`taskkill /T /F`) only if it is still running after
+> 6 s (`sidecar:stopped` in `main-diag.log` says `clean` or `forced`).
 >
 > The rest of this doc is the original implementation spec, kept for
 > reference. The "Things that will probably bite you" section near the
