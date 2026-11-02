@@ -13,7 +13,8 @@ Two things to hold onto before anything else:
    upload it yourself in the browser, with the userscript or the
    paired extension. A model that tells you a change is live on F-list
    is wrong.
-2. **`live` is read-only.** It is the record of what is published.
+2. **`live` is read-only.** It is the character's profile as it was
+   last pulled from F-list.
    Editing happens in the character's *Workbench*, its one local
    editable copy. Tools work on the Workbench when `working_set` is
    left out; `working_set="live"` reads Live. Nothing else is

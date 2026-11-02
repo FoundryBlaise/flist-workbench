@@ -590,8 +590,9 @@ export function ImagesTab({
               <div className="flist-images-avatar-meta">
                 <div className="flist-images-avatar-label">Avatar</div>
                 <div className="flist-images-avatar-hint">
-                  Pulled from F-list. Edit on the F-list website; Workbench
-                  bundles whatever’s on disk into the restore ZIP.
+                  Pulled from F-list. Change it on the F-list website; the
+                  app puts the copy it has on disk into the zip for an
+                  Upload.
                 </div>
               </div>
             </div>
