@@ -154,8 +154,8 @@ export function onSidecarGaveUp(handler: (crashes: number) => void): void {
 
 /**
  * Starts the sidecar on its port. Rejects with SidecarPortTaken when the
- * port belongs to something the app must not replace; a Workbench
- * sidecar that is older, or left behind by its app, is stopped first and
+ * port belongs to something the app must not replace; our sidecar
+ * that is older, or left behind by its app, is stopped first and
  * replaced. From then on a sidecar that exits unexpectedly is restarted
  * with a backoff.
  */
@@ -193,8 +193,8 @@ async function claimPort(): Promise<void> {
     health,
     chain: chain?.map(({ pid, name, path }) => ({ pid, name, path })) ?? null
   })
-  if (holder.kind === 'foreign') throw new SidecarPortTaken(PORT)
-  if (holder.kind === 'workbench-running') throw new SidecarPortTaken(PORT, holder.version)
+  if (holder.kind === 'other-program') throw new SidecarPortTaken(PORT)
+  if (holder.kind === 'app-running') throw new SidecarPortTaken(PORT, holder.version)
   // Older, or left behind by its app. It cannot be asked to stop (no
   // shutdown route before this version, and it does not know this
   // launch's secret), so it is killed: that process and its children

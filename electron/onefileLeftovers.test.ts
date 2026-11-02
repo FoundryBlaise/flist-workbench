@@ -24,7 +24,7 @@ afterEach(async () => {
 })
 
 /** A runtime folder as an older onefile sidecar left it after a forced kill. */
-async function workbenchRuntime(name: string, ageMs = 24 * HOUR): Promise<string> {
+async function ourRuntime(name: string, ageMs = 24 * HOUR): Promise<string> {
   const dir = join(tempDir, name)
   await mkdir(join(dir, 'fastembed-0.8.0.dist-info'), { recursive: true })
   await mkdir(join(dir, 'qdrant_client-1.18.0.dist-info'))
@@ -52,8 +52,8 @@ async function age(dir: string, ageMs: number): Promise<void> {
 }
 
 describe('removeOnefileLeftoversOnce', () => {
-  it('removes stale Workbench runtime folders and leaves everything else', async () => {
-    const ours = [await workbenchRuntime('_MEI490042'), await workbenchRuntime('_MEI20242')]
+  it('removes our stale runtime folders and leaves everything else', async () => {
+    const ours = [await ourRuntime('_MEI490042'), await ourRuntime('_MEI20242')]
     const other = await otherAppRuntime('_MEI777772')
     const unrelated = join(tempDir, 'some-other-folder')
     await mkdir(join(unrelated, 'fastembed-0.8.0.dist-info'), { recursive: true })
@@ -67,18 +67,18 @@ describe('removeOnefileLeftoversOnce', () => {
   })
 
   it('runs only once, even when a later start finds new leftovers', async () => {
-    await workbenchRuntime('_MEI1')
+    await ourRuntime('_MEI1')
     await removeOnefileLeftoversOnce({ tempDir, markerPath })
 
-    const later = await workbenchRuntime('_MEI2')
+    const later = await ourRuntime('_MEI2')
     await removeOnefileLeftoversOnce({ tempDir, markerPath })
 
     expect(existsSync(later)).toBe(true)
   })
 
   it('keeps the folder of a one-file sidecar that is still running', async () => {
-    const running = await workbenchRuntime('_MEI1')
-    const stale = await workbenchRuntime('_MEI2')
+    const running = await ourRuntime('_MEI1')
+    const stale = await ourRuntime('_MEI2')
 
     await removeOnefileLeftoversOnce({
       tempDir,
@@ -94,8 +94,8 @@ describe('removeOnefileLeftoversOnce', () => {
 
   it('keeps a folder a one-file sidecar is unpacking into right now', async () => {
     // Its python DLL is not loaded until unpacking ends.
-    const unpacking = await workbenchRuntime('_MEI1', 5_000)
-    const stale = await workbenchRuntime('_MEI2')
+    const unpacking = await ourRuntime('_MEI1', 5_000)
+    const stale = await ourRuntime('_MEI2')
 
     await removeOnefileLeftoversOnce({ tempDir, markerPath })
 
@@ -118,7 +118,7 @@ describe('removeOnefileLeftoversOnce', () => {
 
   it('goes on past an entry it cannot read', async () => {
     await writeFile(join(tempDir, '_MEI1'), 'a file, not a folder')
-    const stale = await workbenchRuntime('_MEI2')
+    const stale = await ourRuntime('_MEI2')
 
     const sweep = await removeOnefileLeftoversOnce({ tempDir, markerPath })
 

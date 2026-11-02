@@ -27,19 +27,19 @@ export function chooseSidecarPort(env: NodeJS.ProcessEnv, isPackaged: boolean): 
 /**
  * Something the app must not replace holds the port the sidecar needs:
  * another program, or the sidecar of another F-list Workbench that is
- * still running and not older than this one (`workbenchVersion`).
+ * still running and not older than this one (`otherAppVersion`).
  */
 export class SidecarPortTaken extends Error {
   constructor(
     readonly port: number,
-    readonly workbenchVersion?: string
+    readonly otherAppVersion?: string
   ) {
     super(
-      workbenchVersion === undefined
+      otherAppVersion === undefined
         ? `Another program is using port ${port} on this computer, so F-list Workbench ` +
             'cannot start its sidecar there. Close that program, or start F-list Workbench ' +
             'with SIDECAR_PORT set to a free port.'
-        : `Another F-list Workbench (version ${workbenchVersion}) is running and uses ` +
+        : `Another F-list Workbench (version ${otherAppVersion}) is running and uses ` +
             `port ${port}. Close it, then start this one again.`
     )
     this.name = 'SidecarPortTaken'
