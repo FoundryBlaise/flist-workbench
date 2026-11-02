@@ -12,13 +12,10 @@ from fastapi import (
     Body,
     Depends,
     FastAPI,
-    File,
-    Form,
     Header,
     HTTPException,
     Request,
     Response,
-    UploadFile,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -44,7 +41,6 @@ import rag_store
 import settings as settings_store
 import workbench_mcp
 from archive_errors import (
-    InvalidCharacterId,
     InvalidWorkbenchPayload,
     NoWorkbench,
     WorkbenchConflict,
@@ -114,28 +110,16 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
 _MCP_SERVERS = workbench_mcp.build_mcp_servers()
 
 
-#: `{character_id}` routes that bring a character into the archive, so
-#: they may name one it does not hold yet. The Pull is keyed by name and
-#: needs no entry here.
-_CREATES_CHARACTER = {("POST", "/flist/character/{character_id}/sets/import")}
-
-
 def _known_character(request: Request) -> None:
     """Every route with a `{character_id}` names a character the archive
-    already holds, except the few in `_CREATES_CHARACTER`.
+    already holds. Only the Pull, keyed by name, brings one in.
 
     Checked before the route's own parameters and body, so an unknown
     id is refused the same way however complete the request is, and
-    before anything could create a folder for it. A creating route
-    still gets a malformed id refused here.
+    before anything could create a folder for it.
     """
     character_id = request.path_params.get("character_id")
     if character_id is None:
-        return
-    route = request.scope.get("route")
-    if (request.method, getattr(route, "path", None)) in _CREATES_CHARACTER:
-        _require_valid_character_id(character_id)
-        character_archive.require_character_id(character_id)
         return
     character_archive.character_dir(character_id)
 
@@ -726,47 +710,6 @@ async def flist_character_zip_backups(character_id: str) -> dict:
     }
 
 
-class _CreateSetFromBackupBody(BaseModel):
-    name: str
-
-
-@app.post(
-    "/flist/character/{character_id}/zip-backups/{filename}/create-set",
-    status_code=201,
-)
-async def flist_character_zip_backup_create_set(
-    character_id: str,
-    filename: str,
-    body: _CreateSetFromBackupBody,
-) -> dict:
-    """Create a new working set seeded from the backup's embedded
-    `working.json`. Used by Sidebar → Backups → right-click → Create
-    working set from backup. Distinct from the userscript-import path
-    (POST /sets/import) — that one expects a manifest.json-style
-    bundle and rejects backups for missing it. This path goes
-    straight from the backup's payload to a new set."""
-    try:
-        meta = character_archive.create_set_from_zip_backup(
-            character_id, filename, body.name
-        )
-    except Refusal:
-        # A bad backup name answers as itself, not as a bad set name.
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "This backup predates working.json support. "
-                "Click Back up now and the new backup will be importable."
-            ),
-        ) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
 @app.delete(
     "/flist/character/{character_id}/zip-backups/{filename}",
     status_code=204,
@@ -1013,33 +956,8 @@ class _LoadBackupBody(BaseModel):
     back_up_first: bool = False
 
 
-class _SetNameBody(BaseModel):
-    name: str
-
-
 def _set_meta_to_json(meta: character_archive.SetMeta) -> dict:
     return meta.to_dict()
-
-
-def _require_valid_set_id(set_id: str) -> None:
-    """Path-traversal guard before any disk touch on an id-bearing route."""
-    if not character_archive._is_valid_set_id(set_id):
-        raise HTTPException(status_code=404, detail="set not found")
-
-
-_CHARACTER_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,32}$")
-
-
-def _require_valid_character_id(character_id: str) -> None:
-    """The id shape a route that creates a character accepts: an F-list
-    id (digits) or a name slug, at most 32 characters. Every other
-    `{character_id}` route needs no check of its own, because
-    `_known_character` only lets ids through that the archive holds.
-    """
-    if not isinstance(character_id, str) or not _CHARACTER_ID_RE.fullmatch(
-        character_id
-    ):
-        raise InvalidCharacterId(character_id)
 
 
 @app.get("/flist/character/{character_id}/workbench")
@@ -1236,249 +1154,6 @@ async def flist_character_workbench_load_preflight(
         "live_diverged": live_diverged,
         "workbench_has_edits": bench_has_edits,
     }
-
-
-@app.get("/flist/character/{character_id}/sets")
-async def flist_character_sets_list(character_id: str) -> dict:
-    sets = character_archive.list_sets(character_id)
-    return {
-        "sets": [_set_meta_to_json(m) for m in sets],
-        "active_set_id": character_archive.read_active_set_id(character_id),
-    }
-
-
-@app.post("/flist/character/{character_id}/sets", status_code=201)
-async def flist_character_sets_create(
-    character_id: str, body: _SetNameBody
-) -> dict:
-    try:
-        clean = character_archive.validate_set_name(body.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        meta = character_archive.create_set_from_live(character_id, clean)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
-@app.patch("/flist/character/{character_id}/sets/{set_id}")
-async def flist_character_sets_rename(
-    character_id: str, set_id: str, body: _SetNameBody
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        clean = character_archive.validate_set_name(body.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        meta = character_archive.rename_set(character_id, set_id, clean)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
-@app.delete("/flist/character/{character_id}/sets/{set_id}")
-async def flist_character_sets_delete(
-    character_id: str, set_id: str
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        character_archive.delete_set(character_id, set_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {
-        "deleted": True,
-        "active_set_id": character_archive.read_active_set_id(character_id),
-    }
-
-
-@app.post(
-    "/flist/character/{character_id}/sets/{set_id}/duplicate",
-    status_code=201,
-)
-async def flist_character_sets_duplicate(
-    character_id: str, set_id: str, body: _SetNameBody
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        clean = character_archive.validate_set_name(body.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        meta = character_archive.duplicate_set(character_id, set_id, clean)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
-@app.post("/flist/character/{character_id}/sets/{set_id}/activate")
-async def flist_character_sets_activate(
-    character_id: str, set_id: str
-) -> dict:
-    _require_valid_set_id(set_id)
-    meta = character_archive.read_set_meta(character_id, set_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="set not found")
-    character_archive.set_active_set_id(character_id, set_id)
-    return {"active_set_id": set_id}
-
-
-@app.post("/flist/character/{character_id}/from-flist/activate")
-async def flist_character_from_flist_activate(character_id: str) -> dict:
-    character_archive.clear_active_set_id(character_id)
-    return {"active_set_id": None}
-
-
-@app.get("/flist/character/{character_id}/sets/{set_id}/payload")
-async def flist_character_set_payload_get(
-    character_id: str, set_id: str
-) -> dict:
-    _require_valid_set_id(set_id)
-    payload = character_archive.read_set_payload(character_id, set_id)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="set not found")
-    etag = character_archive.set_payload_etag(character_id, set_id)
-    return {"payload": payload, "etag": etag}
-
-
-@app.put("/flist/character/{character_id}/sets/{set_id}/payload")
-async def flist_character_set_payload_put(
-    character_id: str,
-    set_id: str,
-    request: Request,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        body = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-    # A write with no If-Match is a write by something that never read
-    # what it is replacing. That is fine for the first one — the file
-    # does not exist yet, which is how materialise-on-first-edit works
-    # — and is never fine afterwards. A window that had seeded its
-    # editor from Live once flattened a 556-character draft down to the
-    # 41 published characters this way, one keystroke at a time, and
-    # the blind PUT is what carried it out.
-    if if_match is None:
-        existing = character_archive.set_payload_etag(character_id, set_id)
-        if existing is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "detail": "etag_required",
-                    "current_etag": existing,
-                    "message": (
-                        "This set already has a payload. Read it and send "
-                        "its etag as If-Match; a write that has not seen "
-                        "the current contents would overwrite them."
-                    ),
-                },
-            )
-    try:
-        new_etag = character_archive.write_set_payload(
-            character_id, set_id, body, expected_etag=if_match
-        )
-    except character_archive.EtagMismatch as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "detail": "etag_mismatch",
-                "current_etag": exc.current_etag,
-            },
-        ) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"etag": new_etag}
-
-
-@app.get("/flist/character/{character_id}/sets/{set_id}/export")
-async def flist_character_set_export(
-    character_id: str, set_id: str
-) -> Response:
-    """Bundle the named working set into a Workbench-native ZIP.
-
-    Distinct from `/export.zip` (the userscript restore ZIP) — this one
-    round-trips between Workbench installs and carries the v6 payload
-    verbatim plus every referenced image's bytes. Renderer triggers a
-    save dialog with the suggested filename derived from character + set.
-    """
-    _require_valid_set_id(set_id)
-    import set_bundle as _set_bundle
-
-    try:
-        data, manifest = _set_bundle.build_set_bundle(character_id, set_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    source = manifest.get("source") or {}
-    char_part = _safe_filename_part(str(source.get("character_name") or "character"))
-    set_part = _safe_filename_part(str(source.get("set_name") or "set"))
-    import time as _t
-
-    download_name = (
-        f"workbench-set-{char_part}-{set_part}-{int(_t.time())}.zip"
-    )
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{download_name}"'
-        },
-    )
-
-
-@app.post("/flist/character/{character_id}/sets/import", status_code=201)
-async def flist_character_set_import(
-    character_id: str,
-    zip: UploadFile = File(...),
-    name: str = Form(...),
-    confirm_cross_character: str = Form(default="false"),
-) -> dict:
-    """Materialise a Workbench-native bundle into a new working set.
-
-    Cross-character handshake: the first POST omits / sets
-    `confirm_cross_character` to false. If the bundle's source character
-    doesn't match `character_id`, the sidecar returns 422 with the
-    source manifest so the renderer can show the warning modal. The
-    second POST (after user clicks confirm) sends the same multipart
-    payload with `confirm_cross_character=true` and the import proceeds.
-
-    The renderer chooses `name` (auto-`Imported set N` or user-supplied);
-    duplicate names are permitted per the working-sets v2 design — the
-    set_id is the unique identity.
-    """
-    import set_bundle as _set_bundle
-
-    try:
-        zip_bytes = await zip.read()
-    finally:
-        await zip.close()
-
-    confirmed = confirm_cross_character.lower() in ("true", "1", "yes")
-    try:
-        result = _set_bundle.import_set_bundle(
-            character_id,
-            zip_bytes,
-            name=name,
-            confirm_cross_character=confirmed,
-        )
-    except _set_bundle.CrossCharacterConfirmationRequired as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "requires_cross_character_confirmation",
-                "source": exc.source,
-            },
-        ) from exc
-    except _set_bundle.BundleError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return result
 
 
 @app.get("/flist/character/{character_id}/snapshots")

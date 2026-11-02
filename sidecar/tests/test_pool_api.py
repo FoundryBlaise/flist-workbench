@@ -116,8 +116,7 @@ def _seed_workbench_with_gallery(
             "fetched_at": 1,
         },
     )
-    bench = client.get(f"/flist/character/{character_id}/workbench").json()
-    url = f"/flist/character/{character_id}/sets/{bench['workbench']['id']}/payload"
+    url = f"/flist/character/{character_id}/workbench/payload"
     current = client.get(url).json()
     payload = current["payload"]
     payload["images"] = images
@@ -183,8 +182,7 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
             "fetched_at": 1,
         },
     )
-    bench = client.get("/flist/character/9999/workbench").json()["workbench"]
-    url = f"/flist/character/9999/sets/{bench['id']}/payload"
+    url = "/flist/character/9999/workbench/payload"
     current = client.get(url).json()
     payload = current["payload"]
     payload["character"]["description"] = "Workbench description"

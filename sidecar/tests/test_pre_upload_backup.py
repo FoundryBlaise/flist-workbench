@@ -119,8 +119,7 @@ async def test_mcp_lists_the_backup_taken_before_an_upload(paired) -> None:
 
 
 def _workbench_payload(client) -> dict:
-    bench = client.get("/flist/character/42/workbench").json()["workbench"]
-    return client.get(f"/flist/character/42/sets/{bench['id']}/payload").json()["payload"]
+    return client.get("/flist/character/42/workbench/payload").json()["payload"]
 
 
 def test_the_backup_taken_before_an_upload_restores_into_the_workbench(paired) -> None:

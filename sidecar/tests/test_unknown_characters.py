@@ -3,8 +3,7 @@
 A character comes into the archive when it is pulled from F-list,
 whether by the window's Pull, by Back up all, or by the re-pull the
 extension asks for after the user saves on f-list.net (which on a
-fresh install is the first Pull too), or when a set bundle exported on
-another install is imported for it. Every other route that names a
+fresh install is the first Pull too). Every route that names a
 character by id only finds it. An id the archive does not know, even a
 perfectly safe one, answers 404 `character_not_found` and leaves the
 disk as it was, so which characters exist never depends on which URLs
@@ -29,11 +28,6 @@ from sidecar_client import app_client, character_routes, disk_tree, error_code, 
 NAME = "Mira Thornfield"
 CID = 4242
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
-
-#: Character routes that bring a character into the archive (tested
-#: below), so an unknown id is not refused there.
-CREATES = {("POST", "/flist/character/{character_id}/sets/import")}
-
 
 @pytest.fixture
 def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
@@ -116,7 +110,7 @@ def test_an_unknown_id_is_not_found_on_every_character_route_and_creates_nothing
     client: TestClient, tmp_path: Path, cid: str
 ) -> None:
     before = disk_tree(tmp_path)
-    routes = [r for r in character_routes(client.app) if (r.method, r.path) not in CREATES]
+    routes = character_routes(client.app)
     assert len(routes) > 30
     assert sweep(client, routes, _not_found, json={}, character_id=cid) == []
     assert disk_tree(tmp_path) == before
@@ -167,68 +161,6 @@ def test_back_up_all_creates_a_character_it_has_not_seen(
     assert _character_folder(archive).is_dir()
     backups = client.get(f"/flist/character/{CID}/zip-backups").json()["backups"]
     assert len(backups) == 1
-
-
-def _bundle(source_id: int, payload: dict) -> bytes:
-    """A working-set bundle as another install's Export writes it."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(
-            "manifest.json",
-            json.dumps(
-                {
-                    "format": "flist-workbench-set",
-                    "format_version": 1,
-                    "source": {
-                        "character_id": str(source_id),
-                        "character_name": NAME,
-                        "set_id": "s-elsewhere",
-                        "set_name": "Draft from the laptop",
-                    },
-                }
-            ),
-        )
-        zf.writestr("working.json", json.dumps(payload))
-        zf.writestr("images/local-0a1b2c3d.png", PNG)
-    return buf.getvalue()
-
-
-def _import(client: TestClient, cid: int | str, data: bytes, **form: str):  # noqa: ANN202
-    return client.post(
-        f"/flist/character/{cid}/sets/import",
-        files={"zip": ("set.zip", data, "application/zip")},
-        data={"name": "Imported set 1", **form},
-    )
-
-
-def test_importing_a_set_bundle_onto_a_fresh_install_creates_the_character(
-    client: TestClient,
-) -> None:
-    """A bundle carried over from another install is a way a character
-    comes into the app, like its first Pull."""
-    bundle = _bundle(CID, {"character": {"id": CID, "name": NAME}, "description": "[i]Carried over.[/i]"})
-
-    res = _import(client, CID, bundle)
-    assert res.status_code == 201, res.text
-
-    sets = client.get(f"/flist/character/{CID}/sets")
-    assert sets.status_code == 200
-    assert [s["name"] for s in sets.json()["sets"]] == ["Imported set 1"]
-    images = client.get(f"/flist/character/{CID}/images")
-    assert images.status_code == 200, images.text
-
-
-def test_a_refused_import_onto_a_fresh_install_creates_nothing(
-    client: TestClient, tmp_path: Path
-) -> None:
-    before = disk_tree(tmp_path)
-    broken = _import(client, CID, b"not a zip")
-    assert broken.status_code == 422, broken.text
-    other = _import(client, CID, _bundle(999, {"character": {"id": 999}}))
-    assert other.status_code == 422
-    assert error_code(other) == "requires_cross_character_confirmation"
-    assert disk_tree(tmp_path) == before
-    assert client.get(f"/flist/character/{CID}/sets").status_code == 404
 
 
 def test_a_save_on_flist_onto_a_fresh_install_creates_the_character(
