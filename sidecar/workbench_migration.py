@@ -190,7 +190,7 @@ def _old_files(folder: Path) -> list[Path]:
         p for p in sorted(folder.iterdir())
         if p.is_file() and _LEGACY_WORKING_RE.fullmatch(p.name)
     )
-    loose = folder / "backups"
+    loose = folder / character_archive.BACKUPS_DIRNAME
     if loose.is_dir():
         out.extend(
             p for p in sorted(loose.iterdir())
@@ -223,7 +223,7 @@ def _holds(zip_path: Path, folder: Path, old: list[Path]) -> bool:
 def _covering_backup(folder: Path, old: list[Path]) -> Path | None:
     """A migration Backup an interrupted earlier run already wrote that
     holds every old file left, so a second one is not needed."""
-    backups = folder / "backups"
+    backups = folder / character_archive.BACKUPS_DIRNAME
     if not backups.is_dir():
         return None
     for entry in sorted(backups.glob("*.zip"), reverse=True):
@@ -242,7 +242,7 @@ def _covering_backup(folder: Path, old: list[Path]) -> Path | None:
 def _write_migration_backup(folder: Path, old: list[Path]) -> Path:
     """Pack the old files into a new Backup, verified before it gets its
     Backup name. Raises when it cannot be written or read back."""
-    backups = folder / "backups"
+    backups = folder / character_archive.BACKUPS_DIRNAME
     backups.mkdir(parents=True, exist_ok=True)
     target = character_archive.free_backup_path(backups)
     scratch = target.with_name(target.name + ".tmp")

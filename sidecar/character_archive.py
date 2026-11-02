@@ -401,10 +401,16 @@ def inlines_dir(character_id: int | str) -> Path:
     return p
 
 
+#: The folder of a character's Backups, below its character folder.
+#: Code that walks folders without an id (the startup migration) joins
+#: it on; everything else asks `backups_dir`.
+BACKUPS_DIRNAME = "backups"
+
+
 def backups_dir(character_id: int | str) -> Path:
     """Per-character `backups/` dir — full ZIP backups, restorable via
     the userscript. Created lazily by `save_zip_backup`."""
-    p = character_dir(character_id) / "backups"
+    p = character_dir(character_id) / BACKUPS_DIRNAME
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -673,7 +679,7 @@ def adopt_old_pre_upload_backups() -> int:
     """
     adopted = 0
     for folder in root().iterdir():
-        backups = folder / "backups"
+        backups = folder / BACKUPS_DIRNAME
         if not backups.is_dir():
             continue
         for entry in list(backups.iterdir()):
@@ -756,7 +762,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
 
     names = _read_backup_names(character_id)
     out: list[dict[str, Any]] = []
-    p = character_dir(character_id) / "backups"
+    p = character_dir(character_id) / BACKUPS_DIRNAME
     if not p.exists():
         return out
     for entry in p.iterdir():
@@ -2375,7 +2381,7 @@ def list_archived_characters() -> list[dict[str, Any]]:
         name = (
             char.get("name") if isinstance(char, dict) else None
         ) or live.get("name")
-        zip_dir = character_dir(cid) / "backups"
+        zip_dir = character_dir(cid) / BACKUPS_DIRNAME
         if zip_dir.exists():
             backup_count = sum(
                 1
