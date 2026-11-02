@@ -500,7 +500,14 @@ type State = {
   flistLoadRoster: () => Promise<void>
   flistSelectCharacter: (characterId: string | null) => Promise<void>
   flistLoadArchive: (characterId: string) => Promise<void>
-  flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
+  /** Pull a character from F-list into its slot. `skipWhenBusy`: when
+   *  a job already holds the character, leave the slot without an
+   *  error (Refresh all) instead of saying so. */
+  flistPullCharacter: (
+    name: string,
+    characterId?: string | null,
+    opts?: { skipWhenBusy?: boolean }
+  ) => Promise<void>
   /** Cancel the character's running Pull (a job): it stops at its next
    *  step, keeping what it already wrote. */
   flistCancelPull: (characterId: string) => Promise<void>
@@ -1143,15 +1150,25 @@ const IDLE_BACKUP_ALL_STATUS: State['flistBackupAllStatus'] = {
   jobId: null
 }
 
+/** The job holding a character that a Pull or Back up all was refused
+ *  for (`character_busy`), or null when `err` is another failure. */
+function _characterBusyWith(err: unknown): 'pull' | 'backup-all' | null {
+  if (!(err instanceof RefusalError) || err.code !== 'character_busy') return null
+  return err.details.kind === 'backup-all' ? 'backup-all' : 'pull'
+}
+
 /** Follow a Pull job into the character's slot: its progress, its job
  *  id (for Cancel), and on `done` the reloads a finished Pull needs.
  *  `open` starts the Pull or follows one already running; aborting the
- *  signal (sign-out) only stops following, the job runs on. */
+ *  signal (sign-out) only stops following, the job runs on. A Pull
+ *  refused because a job holds the character says so in plain words,
+ *  or with `skipWhenBusy` leaves the slot idle, its stage `busy`. */
 async function _followPull(
   get: () => State,
   set: StoreSet,
   targetId: string | null,
-  open: (handlers: FlistPullHandlers, signal: AbortSignal) => Promise<void>
+  open: (handlers: FlistPullHandlers, signal: AbortSignal) => Promise<void>,
+  opts: { skipWhenBusy?: boolean } = {}
 ): Promise<void> {
   const setStatus = (
     patch: Partial<{
@@ -1295,8 +1312,19 @@ async function _followPull(
     // AbortError = user-initiated (sign-out / explicit cancel).
     // Don't surface as a scary error to the user.
     const raw = err instanceof Error ? err.message : String(err)
+    const busyWith = _characterBusyWith(err)
     if (err instanceof Error && err.name === 'AbortError') {
       setStatus({ pullStatus: 'idle', pullError: null })
+    } else if (busyWith && opts.skipWhenBusy) {
+      setStatus({ pullStatus: 'idle', pullStage: 'busy', pullError: null })
+    } else if (busyWith) {
+      setStatus({
+        pullStatus: 'error',
+        pullError:
+          busyWith === 'backup-all'
+            ? 'Back up all is running; it pulls this character too.'
+            : 'This character is already being pulled.'
+      })
     } else {
       setStatus({ pullStatus: 'error', pullError: raw })
     }
@@ -1413,7 +1441,13 @@ async function _followBackupAll(
       }
     })
   } catch (err) {
-    const message = (err as Error).message ?? 'backup-all failed'
+    const busyWith = _characterBusyWith(err)
+    const message =
+      busyWith === 'pull'
+        ? 'A Pull is running. Start Back up all again once it has finished.'
+        : busyWith === 'backup-all'
+          ? 'Back up all is already running.'
+          : ((err as Error).message ?? 'backup-all failed')
     set((s) => ({
       flistBackupAllStatus: {
         ...s.flistBackupAllStatus,
@@ -1495,6 +1529,9 @@ async function _flistAccountSweep(
       // Bail if the user signed out mid-sweep so we don't keep firing
       // pulls against a session that no longer exists.
       if (!get().flistSession.active) break
+      // Already being pulled, and this window follows it.
+      const status = get().flistArchive[t.id]?.pullStatus
+      if (status === 'queued' || status === 'running') continue
       if (thresholdSec !== null) {
         const age =
           t.lastPulledAt === null
@@ -1504,10 +1541,10 @@ async function _flistAccountSweep(
       }
       // selectCharacter would change the active character; we want
       // a silent background refresh, so go straight to the pull.
-      // One Pull at a time here; a character whose Pull the user
-      // started by hand (or Back up all) is busy and is skipped.
+      // One Pull at a time here; a character another job holds (a
+      // Pull the user started by hand, Back up all) is skipped.
       try {
-        await get().flistPullCharacter(t.name, t.id)
+        await get().flistPullCharacter(t.name, t.id, { skipWhenBusy: true })
       } catch {
         // Per-character failures are surfaced via the picker badge
         // (slot.pullError). Don't abort the rest of the sweep.
@@ -2345,9 +2382,13 @@ export const useStore = create<State>((set, get) => ({
     await _flistAccountSweep(get, null)
   },
 
-  async flistPullCharacter(name, characterId) {
-    await _followPull(get, set, characterId ?? null, (handlers, signal) =>
-      api.flistPull(name, handlers, { signal })
+  async flistPullCharacter(name, characterId, opts) {
+    await _followPull(
+      get,
+      set,
+      characterId ?? null,
+      (handlers, signal) => api.flistPull(name, handlers, { signal }),
+      opts
     )
   },
 

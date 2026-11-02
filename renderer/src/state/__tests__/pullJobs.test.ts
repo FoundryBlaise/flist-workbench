@@ -166,3 +166,92 @@ describe('a reopened window', () => {
     expect(fake.requestsTo('GET /jobs/old/events')).toEqual([])
   })
 })
+
+/** The sidecar's refusal while a job holds the character. */
+function busy(kind: 'pull' | 'backup-all', jobId = 'other') {
+  return json(
+    {
+      code: 'character_busy',
+      message: `The character is busy: a ${kind} job (${jobId}) is running. Wait for it to finish (get_job) or cancel it (cancel_job), then try again.`,
+      details: { job_id: jobId, kind, resource: kind === 'pull' ? `character:${CID}` : 'character' }
+    },
+    409
+  )
+}
+
+describe('a busy character', () => {
+  it('a Pull refused while Back up all runs says so plainly', async () => {
+    fake.on(`POST /flist/character/${encodeURIComponent(NAME)}/pull`, busy('backup-all'))
+
+    await useStore.getState().flistPullCharacter(NAME, CID)
+
+    const slot = useStore.getState().flistArchive[CID]
+    expect(slot.pullStatus).toBe('error')
+    expect(slot.pullError).toMatch(/^Back up all is running/)
+    expect(slot.pullError).not.toMatch(/HTTP|job|cancel_job/)
+  })
+
+  it('a Pull refused while another Pull of it runs says so plainly', async () => {
+    fake.on(`POST /flist/character/${encodeURIComponent(NAME)}/pull`, busy('pull'))
+
+    await useStore.getState().flistPullCharacter(NAME, CID)
+
+    const slot = useStore.getState().flistArchive[CID]
+    expect(slot.pullError).toMatch(/already being pulled/)
+    expect(slot.pullError).not.toMatch(/HTTP|job|cancel_job/)
+  })
+
+  it('Back up all refused while a Pull runs says so plainly', async () => {
+    fake.on('POST /flist/backup-all', busy('pull'))
+
+    await useStore.getState().flistBackupAll()
+
+    const status = useStore.getState().flistBackupAllStatus
+    expect(status.phase).toBe('error')
+    expect(status.errorMessage).toMatch(/Pull is running/)
+    expect(status.errorMessage).not.toMatch(/HTTP|job|cancel_job/)
+  })
+
+  it('Refresh all skips a busy character instead of marking it failed', async () => {
+    const OTHER_CID = '5151'
+    const OTHER = 'Daelan Envale'
+    useStore.setState({
+      flistSession: { active: true, account: 'a' } as never,
+      flistRoster: [
+        { id: Number(CID), name: NAME, on_account: true, has_archive: true, last_pulled_at: null } as never,
+        { id: Number(OTHER_CID), name: OTHER, on_account: true, has_archive: true, last_pulled_at: null } as never
+      ]
+    })
+    fake.on(`POST /flist/character/${encodeURIComponent(NAME)}/pull`, busy('pull'))
+    fake.on(
+      `POST /flist/character/${encodeURIComponent(OTHER)}/pull`,
+      sse(['job', job('j2', 'pull')], ['done', { character_id: OTHER_CID, name: OTHER, image_count: 0, image_failed: 0 }])
+    )
+    fake
+      .on(`GET /flist/character/${OTHER_CID}/live`, json({ name: OTHER, fetched_at: 1 }))
+      .on(`GET /flist/character/${OTHER_CID}/zip-backups`, json({ character_id: OTHER_CID, backups: [] }))
+      .on(`GET /flist/character/${OTHER_CID}/images`, json({ images: [] }))
+
+    await useStore.getState().flistRefreshAllAccount()
+
+    const skipped = useStore.getState().flistArchive[CID]
+    expect(skipped.pullStatus).not.toBe('error')
+    expect(skipped.pullError).toBeNull()
+    expect(skipped.pullStage).toBe('busy')
+    expect(useStore.getState().flistArchive[OTHER_CID].pullStatus).toBe('done')
+  })
+})
+
+it('Refresh all leaves alone a character whose Pull this window is following', async () => {
+  useStore.setState({
+    flistSession: { active: true, account: 'a' } as never,
+    flistArchive: {
+      [CID]: { live: null, pullStatus: 'running', pullStage: 'images', pullJobId: 'j1' } as never
+    }
+  })
+
+  await useStore.getState().flistRefreshAllAccount()
+
+  expect(fake.requestsTo(`POST /flist/character/${encodeURIComponent(NAME)}/pull`)).toEqual([])
+  expect(useStore.getState().flistArchive[CID]).toMatchObject({ pullStatus: 'running', pullJobId: 'j1' })
+})
