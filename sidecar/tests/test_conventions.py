@@ -15,6 +15,9 @@ Rules:
 * typed-refusal: the sidecar refuses with a `refusals.Refusal`
   subclass (one handler answers `{code, message}`), not a bare
   `HTTPException`.
+* router-layering: every REST route lives in a router under
+  `sidecar/routers/`; only `server.py` (app setup and router
+  registration) imports routers, and nothing imports `server.py`.
 * retired-term: user-facing prose (sidecar strings, MCP tool
   descriptions, renderer and main-process strings and JSX text) does
   not use a term GLOSSARY.md retired or avoids. Only text with a space
@@ -203,6 +206,60 @@ def test_refusals_are_typed():
     for path in sidecar_sources():
         found.update(http_exception_sites(path))
     check_ratchet("typed-refusal", found, HTTP_EXCEPTION_ALLOWED)
+
+
+# ---------------------------------------------------------------------------
+# router-layering
+
+ENTRY_MODULE = "sidecar/server.py"
+ROUTE_DECORATORS = {"get", "post", "put", "patch", "delete", "api_route", "websocket", "route"}
+
+
+def imported_names(path: str) -> list[tuple[int, str]]:
+    """(line, dotted name) of everything `path` imports; `from a import b`
+    gives both `a` and `a.b`, and a relative import gives `.`."""
+    names = []
+    for node in ast.walk(parse(path)):
+        if isinstance(node, ast.Import):
+            names.extend((node.lineno, alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                names.append((node.lineno, "."))
+                continue
+            names.append((node.lineno, node.module or ""))
+            names.extend((node.lineno, f"{node.module}.{alias.name}") for alias in node.names)
+    return names
+
+
+def test_only_the_entry_module_imports_routers():
+    """A router never imports another router, and nothing below the REST
+    surface (services, the archive, MCP tools) imports a router or the
+    entry module: what two routers share lives in services/."""
+    sites = [
+        f"{path}:{line}: imports {name} (rule router-layering)"
+        for path in sidecar_sources()
+        if path != ENTRY_MODULE
+        for line, name in imported_names(path)
+        if name in ("server", "routers")
+        or name.startswith(("server.", "routers."))
+        or (name == "." and path.startswith("sidecar/routers/"))
+    ]
+    assert not sites, report("router-layering", sites)
+
+
+def test_the_entry_module_declares_no_routes():
+    """server.py holds app setup, middleware, error handlers and router
+    registration; every route lives in a router under routers/."""
+    sites = [
+        f"{ENTRY_MODULE}:{node.lineno}: route {node.name} (rule router-layering)"
+        for node in ast.walk(parse(ENTRY_MODULE))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for deco in node.decorator_list
+        if isinstance(deco, ast.Call)
+        and isinstance(deco.func, ast.Attribute)
+        and deco.func.attr in ROUTE_DECORATORS
+    ]
+    assert not sites, report("router-layering", sites)
 
 
 # ---------------------------------------------------------------------------
