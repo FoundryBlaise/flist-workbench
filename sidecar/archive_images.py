@@ -316,6 +316,8 @@ def write_character_image(
         raise ValueError(f"unsafe image_id: {image_id!r}")
     ext_n = normalise_image_ext(ext)
     atomic_write.write_bytes(images_dir(character_id) / f"{image_id}.{ext_n}", data)
+    events = archive_registry._events()
+    archive_registry._publish(events.IMAGES_CHANGED, character_id=str(character_id))
 
 
 def find_image_with_sha(
@@ -409,7 +411,7 @@ def collapse_local_duplicates(character_id: int | str) -> int:
     # listing itself silently invalidates open windows' etags.
     from services import events  # lazy, same reason as archive_registry._publish
 
-    with events.origin("internal:image-dedupe"):
+    with events.origin("internal:image-dedupe"), events.coalesced():
         result = adopt_flist_image_ids(character_id, mapping)
     return len(result["renamed"]) + len(result["dropped_duplicate"])
 
@@ -455,7 +457,7 @@ def dedupe_local_after_pull(
     local_id = f"local-{sha8}"
     from services import events  # lazy, same reason as archive_registry._publish
 
-    with events.origin("internal:dedupe-after-pull"):
+    with events.origin("internal:dedupe-after-pull"), events.coalesced():
         result = adopt_flist_image_ids(character_id, {local_id: pulled_image_id})
     if result["renamed"] or result["dropped_duplicate"]:
         return local_id
@@ -502,6 +504,8 @@ def add_uploaded_image(
     target = images_dir(character_id) / f"{image_id}.{ext}"
     if not target.exists():
         atomic_write.write_bytes(target, data)
+        events = archive_registry._events()
+        archive_registry._publish(events.IMAGES_CHANGED, character_id=str(character_id))
     try:
         stat = target.stat()
         added_at = int(stat.st_mtime)
@@ -531,7 +535,7 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
     """
     from services import events  # lazy, same reason as archive_registry._publish
 
-    with events.origin("internal:gallery-repair"):
+    with events.origin("internal:gallery-repair"), events.coalesced():
         return _repair_gallery(character_id)
 
 
@@ -824,6 +828,9 @@ def adopt_flist_image_ids(
             image_trash.trash_pool_file(character_id, src)
             trashed.append(old_id)
 
+    if renamed or dropped_duplicate:
+        events = archive_registry._events()
+        archive_registry._publish(events.IMAGES_CHANGED, character_id=str(character_id))
     return {
         "renamed": renamed,
         "dropped_duplicate": dropped_duplicate,

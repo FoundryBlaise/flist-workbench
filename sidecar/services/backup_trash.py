@@ -22,7 +22,7 @@ from typing import Any
 import archive_backups
 import archive_images
 import archive_registry
-from services import image_trash, trash_ledger
+from services import events, image_trash, trash_ledger
 
 FOLDER = "backups"
 INDEX_FILENAME = "index.json"
@@ -79,6 +79,10 @@ def _list_filename(trash_id: str, filename: str) -> str | None:
     return None
 
 
+def _announce(character_id: int | str) -> None:
+    events.publish(events.BACKUPS_CHANGED, character_id=str(character_id))
+
+
 @archive_registry.under_character_lock
 def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
     """Move one Backup into the Trash. Raises FileNotFoundError when the
@@ -117,6 +121,7 @@ def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
         index[trash_id] = entry
         _write_index(character_id, index)
     archive_backups.forget_backup_name(character_id, filename)
+    _announce(character_id)
     return entry
 
 
@@ -159,7 +164,8 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     `conflicts`."""
     restored: list[str] = []
     conflicts: list[str] = []
-    with _lock:
+    # One change, however many Backups come back under their names.
+    with _lock, events.coalesced():
         rows = {r["id"]: r for r in list_backups(character_id)}
         index = _read_index(character_id)
         folder = _dir(character_id)
@@ -190,6 +196,8 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
                 archive_backups.rename_zip_backup(character_id, filename, name)
             restored.append(filename)
         _write_index(character_id, index)
+        if restored:
+            _announce(character_id)
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
 
 
@@ -206,6 +214,8 @@ def purge_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
         folder = _dir(character_id)
         result = trash_ledger.purge(ids, rows.get, drop)
         _write_index(character_id, index)
+    if result["purged"]:
+        _announce(character_id)
     return result
 
 

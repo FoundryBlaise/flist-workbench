@@ -56,7 +56,7 @@ it('reads the status again when the Index changes', async () => {
     'No chunks indexed yet'
   )
 
-  // What AppLayout does on `index-changed`.
+  // What applyWorkbenchEvent does on `index-changed`.
   act(() => useStore.getState().noteIndexChanged())
   expect((await screen.findByText(/being updated/)).textContent).toContain('ingest')
 

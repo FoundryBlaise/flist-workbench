@@ -263,6 +263,8 @@ def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any
         index = _read_index(character_id)
         result = trash_ledger.purge(trash_ids, files.get, drop)
         _write_index(character_id, index)
+    if result["purged"]:
+        _announce(character_id)
     return result
 
 

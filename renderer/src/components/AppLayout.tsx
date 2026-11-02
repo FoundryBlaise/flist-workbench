@@ -27,6 +27,7 @@ import { IngestDialog } from '../features/rag/IngestDialog'
 import { useStore } from '../state'
 import { api } from '../lib/api'
 import { subscribeToWorkbenchEvents } from '../lib/eventStream'
+import { applyWorkbenchEvent } from '../state/workbenchEvents'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
 import type { MenuAction } from '../App'
 
@@ -192,68 +193,13 @@ export function AppLayout() {
     return () => window.removeEventListener('flist-session-expired', onExpired)
   }, [])
 
-  // Watch the sidecar for changes this window didn't make. A model
-  // connected over MCP writes the same Workbench, labels the same
-  // logs and changes the same settings — and so do the app's own
-  // maintenance passes (gallery repair after a pull, image-id folding
-  // when the Images tab lists files), which the sidecar now marks
-  // internal:* instead of leaving them as 'ui'. Without this the window
-  // shows a stale draft and then autosaves it back over the other
-  // writer's work.
+  // Watch the sidecar for changes this window didn't make and re-read
+  // what they touched (see state/workbenchEvents).
   useEffect(() => {
     const base = window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
-    return subscribeToWorkbenchEvents(base, (event) => {
-      // Our own writes come back too; nothing to do about those.
-      if (event.origin === 'ui') return
-      const store = useStore.getState()
-      switch (event.event) {
-        case 'set-payload-changed':
-          if (event.character_id) {
-            store.flistNoteExternalChange(event.character_id, {
-              etag: event.etag ?? null,
-              origin: event.origin
-            })
-          }
-          break
-        case 'sets-changed':
-          // The Workbench's metadata moved: its row's "last changed".
-          // Which row the window shows is its own choice and does not
-          // follow anything on disk.
-          if (event.character_id) void store.flistLoadWorkbenchInfo(event.character_id)
-          break
-        case 'live-changed':
-          if (event.character_id) void store.flistLoadArchive(event.character_id)
-          break
-        case 'images-changed':
-          // A model imported files into the pool; no payload changed,
-          // so nothing else would make the Images tab list them.
-          if (event.character_id) void store.flistLoadCharacterImages(event.character_id)
-          break
-        case 'index-changed':
-          // An ingest started or ended, or the Index was wiped: views
-          // showing its status read it again.
-          store.noteIndexChanged()
-          break
-        case 'labels-changed': {
-          // Label chips are rendered from the cached message list, so
-          // the cache has to go before they can refresh.
-          const char = store.activeCharacter
-          const partner = store.activePartner
-          if (char && partner) {
-            store.invalidateMessages(char, partner)
-            void store.loadMessages(char, partner, { force: true })
-          }
-          break
-        }
-        case 'settings-changed':
-          // A model changed settings; an open Settings and the open
-          // Log (the OOC threshold) pick them up.
-          store.noteSettingsChanged(Object.keys(event.changed ?? {}))
-          break
-        default:
-          break
-      }
-    })
+    return subscribeToWorkbenchEvents(base, (event) =>
+      applyWorkbenchEvent(event, useStore.getState())
+    )
   }, [])
 
   // First-run detection: a non-blocking toast pointing at Settings →
