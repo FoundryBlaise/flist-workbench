@@ -793,7 +793,7 @@ const current = slot'''
 [[mutation]]
 id = "R10"
 suite = "renderer"
-file = "renderer/src/components/AppLayout.tsx"
+file = "renderer/src/state/workbenchEvents.ts"
 breaks = "A Workbench change event reaches the window without its etag, so keeping my version after the external change saves without an etag and is refused."
 tests = ["@renderer"]
 audit = "survived"
@@ -801,10 +801,11 @@ spec = 7
 # audit: M10 event wiring: set-payload-changed passes character id as set id
 # Re-anchored for spec #3: the event carries no set id any more; the same
 # wiring bug now drops the etag it carries.
+# Re-anchored for spec #4 (#67): the event switch moved out of AppLayout.
 find = '''
-              etag: event.etag ?? null,'''
+      if (id) store.flistNoteExternalChange(id, { etag: event.etag ?? null, origin: event.origin })'''
 replace = '''
-              etag: null,'''
+      if (id) store.flistNoteExternalChange(id, { etag: null, origin: event.origin })'''
 
 [[mutation]]
 id = "R11"
@@ -815,8 +816,9 @@ tests = ["@renderer"]
 audit = "survived"
 spec = 7
 # audit: M11 event stream no longer subscribes set-payload-changed
+# Re-anchored for spec #4 (#67): the names moved to WORKBENCH_EVENT_NAMES.
 find = '''
-    'set-payload-changed',
+  'set-payload-changed',
 '''
 replace = '''
 '''
