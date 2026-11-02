@@ -209,9 +209,9 @@ type State = {
     /** 'loading' → backup ZIP being fetched and parsed.
      *  'ready'   → payload available, tabs can render.
      *  'error'   → fetch failed, header pill shows reason. The most
-     *              common error is HTTP 410 — backup predates the
-     *              Browse-support write that bundles working.json
-     *              into the ZIP. */
+     *              common error is 409 `backup_too_old` — backup
+     *              predates the Browse-support write that bundles
+     *              working.json into the ZIP. */
     status: 'loading' | 'ready' | 'error'
     /** The decoded working.json payload from the ZIP. Set when
      *  status === 'ready'; null otherwise. */
