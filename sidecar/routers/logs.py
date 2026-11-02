@@ -4,9 +4,6 @@ from dataclasses import asdict
 
 from fastapi import APIRouter
 
-import aliases as aliases_store
-import labels as labels_store
-import settings as settings_store
 from logs import (
     find_contacts,
     list_characters,
@@ -15,6 +12,7 @@ from logs import (
     search_all_partners,
     search_messages,
 )
+from services import labels as label_service
 
 router = APIRouter()
 
@@ -36,41 +34,28 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
 
     # Resolve each message's IC/OOC/Unlabeled label live — labels are
     # rule-on-read, so settings changes (e.g. threshold) take effect
-    # immediately without rebuilding the DB.
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        # Folding label rows from any linked alternate names — labels
-        # written under "Daelan Envale" pre-rename still apply when
-        # the user opens the merged "Asmira" conversation.
-        alias_group = aliases_store.all_names_for(labels_conn, char, partner)
-        by_hash = labels_store.labels_for_partner(
-            labels_conn, char, partner, partner_aliases=alias_group
-        )
-        for m in messages:
-            h = labels_store.msg_hash(m)
-            # Send the hash so the renderer can call /labels/override
-            # without re-implementing sha1(ts|speaker|raw) client-side.
-            m["hash"] = h
-            row = by_hash.get(h)
-            m["label"] = labels_store.resolve(m, row, lab_settings)
-            if row is not None:
-                m["label_source"] = row["source"]
-                # Surface the labeller's own reason string in the badge
-                # tooltip so the user can audit why a label was chosen.
-                if row["reason"]:
-                    m["label_reason"] = row["reason"]
-                # Carry the prior snapshot so the UI can show "the model
-                # said IC; you changed it to OOC" on manual overrides.
-                if row["prior_label"] is not None:
-                    m["prior_label"] = row["prior_label"]
-                    m["prior_source"] = row["prior_source"]
-            # Otherwise no source is attached — the UI infers "rule
-            # or unlabeled" from absence of label_source.
-    finally:
-        settings_conn.close()
-        labels_conn.close()
+    # immediately without rebuilding the DB. Label rows written under
+    # any linked alternate name count too.
+    for item in label_service.label_messages(char, partner, messages):
+        m = item.message
+        # Send the hash so the renderer can call /labels/override
+        # without re-implementing sha1(ts|speaker|raw) client-side.
+        m["hash"] = item.hash
+        m["label"] = item.label
+        row = item.stored
+        if row is not None:
+            m["label_source"] = row["source"]
+            # Surface the labeller's own reason string in the badge
+            # tooltip so the user can audit why a label was chosen.
+            if row["reason"]:
+                m["label_reason"] = row["reason"]
+            # Carry the prior snapshot so the UI can show "the model
+            # said IC; you changed it to OOC" on manual overrides.
+            if row["prior_label"] is not None:
+                m["prior_label"] = row["prior_label"]
+                m["prior_source"] = row["prior_source"]
+        # Otherwise no source is attached — the UI infers "rule
+        # or unlabeled" from absence of label_source.
 
     return {"character": char, "partner": partner, "offset": offset, "messages": messages}
 

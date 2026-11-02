@@ -66,6 +66,7 @@ logs = [
   "sidecar/tests/test_aliases.py",
   "sidecar/tests/test_aliases_api.py",
   "sidecar/tests/test_labels.py",
+  "sidecar/tests/test_label_service.py",
   "sidecar/tests/test_chunker.py",
   "sidecar/tests/test_rag_*.py",
 ]
@@ -610,20 +611,20 @@ next_cursor = batch[-1][0] if'''
 [[mutation]]
 id = "L16"
 suite = "sidecar"
-file = "sidecar/workbench_mcp/tools_classify.py"
-breaks = "The Unlabeled count over MCP ignores the partner's aliases."
+file = "sidecar/services/labels.py"
+breaks = "Label counts, REST and MCP alike (the Unlabeled count after a write included), ignore the partner's aliases."
 tests = ["@logs", "@mcp"]
 audit = "survived"
 spec = 9
-# audit: M16 unlabeled_remaining ignores alias group
+# audit: M16 unlabeled_remaining ignores alias group (moved to the Labels service, #71)
 find = '''
-            labels_conn, character, partner, partner_aliases=alias_group
-        )
-        return sum('''
+        partner_aliases=aliases_store.all_names_for(conn, character, partner),
+    )
+    return {'''
 replace = '''
-            labels_conn, character, partner, partner_aliases=None
-        )
-        return sum('''
+        partner_aliases=None,
+    )
+    return {'''
 
 [[mutation]]
 id = "L17"

@@ -84,9 +84,9 @@ def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
     }
 
     if include_label_rollup:
-        from services import label_rollup
+        from services import labels as label_service
 
-        out["label_rollup"] = label_rollup.rollup()
+        out["label_rollup"] = label_service.rollup()
 
     return out
 
