@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+import archive_images
+import archive_live
+import archive_registry
 from sidecar_client import app_client
 
-import character_archive
 
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -23,12 +25,12 @@ _GIF = b"GIF89a" + b"\x00" * 32
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
-    import character_archive
+    import archive_registry
     from server import app
 
     # The characters these tests use, as a Pull would have left them.
     for cid in ("7777", "8888", "9999"):
-        character_archive.create_character_dir(cid)
+        archive_registry.create_character_dir(cid)
     return app_client(app)
 
 
@@ -107,7 +109,7 @@ def _seed_workbench_with_gallery(
     the export route has something to bundle. Caller is responsible for
     placing the actual image bytes in <char>/images/ via
     write_character_image."""
-    character_archive.write_live(
+    archive_live.write_live(
         character_id,
         {
             "id": character_id,
@@ -129,10 +131,10 @@ def test_export_zip_includes_character_json_and_images(
     client: TestClient,
 ) -> None:
     # F-list-pulled image goes to images/<id>.png via write_character_image.
-    character_archive.write_character_image("9999", "30012128", "png", _PNG)
+    archive_images.write_character_image("9999", "30012128", "png", _PNG)
     # User-uploaded image lands as local-<sha8> directly via add_uploaded_image
     # — v5 has no separate pool to materialise from.
-    row = character_archive.add_uploaded_image("9999", _PNG_VARIANT)
+    row = archive_images.add_uploaded_image("9999", _PNG_VARIANT)
     assert row is not None
     local_id = row["image_id"]
     _seed_workbench_with_gallery(
@@ -170,9 +172,9 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
 ) -> None:
     """The export modal counts the Workbench, so the download has to be
     the Workbench: its description, its gallery and its image files."""
-    character_archive.write_character_image("9999", "42", "png", _PNG)
-    character_archive.write_character_image("9999", "43", "png", _PNG_VARIANT)
-    character_archive.write_live(
+    archive_images.write_character_image("9999", "42", "png", _PNG)
+    archive_images.write_character_image("9999", "43", "png", _PNG_VARIANT)
+    archive_live.write_live(
         "9999",
         {
             "id": "9999",
@@ -194,7 +196,7 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
     saved = client.put(url, json=payload, headers={"If-Match": current["etag"]})
     assert saved.status_code == 200
     # A legacy working copy left on disk from an older build.
-    (character_archive.character_dir("9999") / "working.json").write_text(
+    (archive_registry.character_dir("9999") / "working.json").write_text(
         json.dumps(
             {
                 "_schema_version": 1,
@@ -222,8 +224,8 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
 def test_export_zip_of_a_character_with_no_workbench_is_live(
     client: TestClient,
 ) -> None:
-    character_archive.write_character_image("8888", "42", "png", _PNG)
-    character_archive.write_live(
+    archive_images.write_character_image("8888", "42", "png", _PNG)
+    archive_live.write_live(
         "8888",
         {
             "id": "8888",

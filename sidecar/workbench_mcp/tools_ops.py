@@ -22,9 +22,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+import archive_backups
+import archive_images
+import archive_workbench
 import atomic_write
 import backup_origin
-import character_archive
 import rag_jobs
 from mcp.server.fastmcp import Context
 
@@ -132,7 +134,7 @@ def create_backup(
     Workbench already holds the same content.
     """
     target = resolve_character(character)
-    result = character_archive.save_zip_backup(
+    result = archive_backups.save_zip_backup(
         target.id,
         source=backup_origin.WORKBENCH,
         occasion=backup_origin.MANUAL,
@@ -162,7 +164,7 @@ def create_backup(
     if note:
         filename = result.get("filename")
         if filename:
-            character_archive.rename_zip_backup(target.id, filename, str(note))
+            archive_backups.rename_zip_backup(target.id, filename, str(note))
     audit("create_backup", character=target.name, filename=result.get("filename"))
     return {"character": target.name, **result}
 
@@ -447,7 +449,7 @@ def export_restore_zip(
 
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = character_archive.export_payload(target.id, from_live=resolved.is_live)
+    payload = archive_workbench.export_payload(target.id, from_live=resolved.is_live)
     if payload is None:
         raise ToolError(
             "live_not_found",
@@ -457,8 +459,8 @@ def export_restore_zip(
     data = zip_serialise.build_zip(
         target.id,
         payload,
-        images_dir=character_archive.images_dir(target.id),
-        avatar_path=character_archive.avatar_path_for(target.name),
+        images_dir=archive_images.images_dir(target.id),
+        avatar_path=archive_images.avatar_path_for(target.name),
     )
     written = _write_file(path, data, suffix=".zip")
     audit("export_restore_zip", character=target.name, path=str(written))

@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 
+import archive_registry
+import archive_workbench
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_edit import payload_of, workbench  # noqa: F401 — the fixture
 
@@ -72,7 +74,7 @@ TAKES_WORKING_SET: dict[str, dict[str, Any]] = {
 def _old_archive_with_a_second_draft(archive) -> str:
     """The Workbench, and the id a second draft had in an older version
     (since moved into a Backup at startup). Returns that id."""
-    archive.read_workbench("42", create=True)
+    archive_workbench.read_workbench("42", create=True)
     return "bbbbbbbbbbbb"
 
 
@@ -194,7 +196,7 @@ async def test_list_characters_does_not_count_drafts(workbench) -> None:  # noqa
 
 
 async def test_no_character_listing_counts_old_copies_of_live(workbench) -> None:  # noqa: F811
-    old_copy = workbench.character_dir("42") / "snapshots" / "1000.json"
+    old_copy = archive_registry.character_dir("42") / "snapshots" / "1000.json"
     old_copy.parent.mkdir()
     old_copy.write_text("{}", encoding="utf-8")
     async with mcp_client() as session:

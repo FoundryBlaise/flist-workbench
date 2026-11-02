@@ -10,8 +10,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+import archive_backups
+import archive_workbench
 import backup_origin
-import character_archive
 from refusals import Refusal
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
@@ -61,7 +62,7 @@ async def flist_character_zip_backup(
     query parameter, which older windows sent, is ignored.
     """
     try:
-        return character_archive.save_zip_backup(
+        return archive_backups.save_zip_backup(
             character_id,
             source=backup_origin.WORKBENCH,
             occasion=backup_origin.MANUAL,
@@ -75,7 +76,7 @@ async def flist_character_zip_backup(
 async def flist_character_zip_backups(character_id: str) -> dict:
     return {
         "character_id": character_id,
-        "backups": character_archive.list_zip_backups(character_id),
+        "backups": archive_backups.list_zip_backups(character_id),
     }
 
 
@@ -90,7 +91,7 @@ async def flist_character_zip_backup_delete(
     all; it can be restored from there until the Trash is emptied.
     Filename validated against the ISO-basic format so a crafted `../`
     path moves nothing. 404 if the Backup isn't there."""
-    character_archive.require_backup_filename(filename)
+    archive_backups.require_backup_filename(filename)
     try:
         backup_trash_service.trash_backup(character_id, filename)
     except FileNotFoundError as exc:
@@ -116,7 +117,7 @@ async def flist_character_zip_backup_rename(
     entry for the renamed backup so the renderer can update its
     in-memory list without a separate /zip-backups re-fetch."""
     try:
-        character_archive.rename_zip_backup(character_id, filename, body.name)
+        archive_backups.rename_zip_backup(character_id, filename, body.name)
     except Refusal:
         # A bad backup name answers as itself, not as a bad set name.
         raise
@@ -125,7 +126,7 @@ async def flist_character_zip_backup_rename(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="backup not found") from exc
     # Return the freshly-read entry so the client can patch its row.
-    for row in character_archive.list_zip_backups(character_id):
+    for row in archive_backups.list_zip_backups(character_id):
         if row["filename"] == filename:
             return row
     raise HTTPException(status_code=404, detail="backup not found")
@@ -143,8 +144,8 @@ async def flist_character_zip_backup_download(
     parsing must match the ISO-basic backup filename format; we
     reject anything else so this endpoint can't be turned into an
     arbitrary-file-read by crafting a `../` path."""
-    character_archive.require_backup_filename(filename)
-    p = character_archive.backups_dir(character_id) / filename
+    archive_backups.require_backup_filename(filename)
+    p = archive_backups.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
     return FileResponse(
@@ -178,11 +179,11 @@ async def flist_character_zip_backup_payload(
     """
     import zipfile
 
-    character_archive.require_backup_filename(filename)
-    p = character_archive.backups_dir(character_id) / filename
+    archive_backups.require_backup_filename(filename)
+    p = archive_backups.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
-    character_archive.require_backup_holds_profile(character_id, filename)
+    archive_backups.require_backup_holds_profile(character_id, filename)
     meta: dict | None = None
     try:
         with zipfile.ZipFile(p, "r") as zf:
@@ -216,7 +217,7 @@ async def flist_character_zip_backup_payload(
             status_code=500, detail="backup working.json is not valid JSON"
         ) from exc
     if isinstance(payload, dict):
-        payload = character_archive.backup_payload(payload)
+        payload = archive_workbench.backup_payload(payload)
     return {"payload": payload, "filename": filename, "meta": meta}
 
 

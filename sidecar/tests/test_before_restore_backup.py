@@ -33,15 +33,16 @@ def window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    character_archive.register_character(CID, NAME)
-    character_archive.write_live(
+    archive_registry.register_character(CID, NAME)
+    archive_live.write_live(
         CID,
         {
             "name": NAME,
@@ -178,9 +179,9 @@ def disk_full(monkeypatch: pytest.MonkeyPatch):
         raise OSError(28, "No space left on device")
 
     def fill() -> None:
-        import character_archive
+        import archive_backups
 
-        monkeypatch.setattr(character_archive, "write_backup_zip", refuse)
+        monkeypatch.setattr(archive_backups, "write_backup_zip", refuse)
 
     return fill
 
@@ -246,9 +247,9 @@ async def test_with_no_workbench_yet_there_is_nothing_to_keep(window) -> None:
 
 
 def test_a_character_never_pulled_has_no_live_to_reset_to(window) -> None:
-    import character_archive
+    import archive_registry
 
-    character_archive.register_character("77", "Tobin Ashgrove")
+    archive_registry.register_character("77", "Tobin Ashgrove")
     res = window.post("/flist/character/77/workbench/reset-to-live")
     assert res.status_code == 404, res.text
     assert res.json()["code"] == "no_live"

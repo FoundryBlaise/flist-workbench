@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+import archive_backups
+import archive_registry
 from sidecar_client import app_client
 
 from mcp_helpers import call_tool, mcp_client
@@ -25,8 +27,8 @@ TRASH = f"/flist/character/{CID}/trash"
 @pytest.fixture
 def backup(workbench) -> dict:  # noqa: F811
     """A Backup the user named, on disk before the test starts."""
-    saved = workbench.save_zip_backup(CID, source="workbench", occasion="manual", force=True)
-    workbench.rename_zip_backup(CID, saved["filename"], "Before the big rewrite")
+    saved = archive_backups.save_zip_backup(CID, source="workbench", occasion="manual", force=True)
+    archive_backups.rename_zip_backup(CID, saved["filename"], "Before the big rewrite")
     return saved
 
 
@@ -69,7 +71,7 @@ def test_a_deleted_backup_goes_to_the_trash_and_comes_back_under_its_name(
     assert entry["name"] == "Before the big rewrite"
     assert entry["deleted_by"] == "ui"
     assert entry["size"] == len(original)
-    trash = workbench.character_dir(CID) / "trash"
+    trash = archive_registry.character_dir(CID) / "trash"
     assert sha(original) in files_under(trash)
 
     restored = client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]})
@@ -87,9 +89,9 @@ def test_a_deleted_backup_goes_to_the_trash_and_comes_back_under_its_name(
     reason="a human emptying the Trash is the one deletion the rule allows",
 )
 def test_only_the_window_deletes_a_trashed_backup_for_good(client, workbench) -> None:  # noqa: F811
-    first = workbench.save_zip_backup(CID, source="workbench", occasion="manual", force=True)["filename"]
+    first = archive_backups.save_zip_backup(CID, source="workbench", occasion="manual", force=True)["filename"]
     client.delete(f"{BACKUPS}/{first}")
-    second = workbench.save_zip_backup(CID, source="workbench", occasion="manual", force=True)["filename"]
+    second = archive_backups.save_zip_backup(CID, source="workbench", occasion="manual", force=True)["filename"]
     client.delete(f"{BACKUPS}/{second}")
     ids = {b["filename"]: b["id"] for b in trashed(client)}
 
@@ -132,7 +134,7 @@ def test_a_restore_onto_a_different_backup_under_the_same_name_keeps_both(
     filename = backup["filename"]
     original = Path(backup["path"]).read_bytes()
     client.delete(f"{BACKUPS}/{filename}")
-    newer = workbench.backups_dir(CID) / filename
+    newer = archive_backups.backups_dir(CID) / filename
     newer.write_bytes(b"another Backup that took the same file name")
     [entry] = trashed(client)
 
@@ -155,7 +157,7 @@ def test_trashing_the_same_bytes_again_keeps_the_name_the_earlier_entry_had(
     client.delete(f"{BACKUPS}/{filename}")
     # The very same Backup turns up in the list again, without its name
     # (copied back by hand, say), and is deleted too.
-    (workbench.backups_dir(CID) / filename).write_bytes(original)
+    (archive_backups.backups_dir(CID) / filename).write_bytes(original)
     client.delete(f"{BACKUPS}/{filename}")
 
     [entry] = trashed(client)
@@ -170,8 +172,8 @@ def test_trashing_the_same_bytes_under_another_name_keeps_both_names(
     filename = backup["filename"]
     original = Path(backup["path"]).read_bytes()
     client.delete(f"{BACKUPS}/{filename}")
-    (workbench.backups_dir(CID) / filename).write_bytes(original)
-    workbench.rename_zip_backup(CID, filename, "After the big rewrite")
+    (archive_backups.backups_dir(CID) / filename).write_bytes(original)
+    archive_backups.rename_zip_backup(CID, filename, "After the big rewrite")
     client.delete(f"{BACKUPS}/{filename}")
 
     assert sorted(r["name"] for r in trashed(client)) == [
@@ -185,7 +187,7 @@ def test_two_deleted_backups_under_one_file_name_are_both_kept(
 ) -> None:
     filename = backup["filename"]
     client.delete(f"{BACKUPS}/{filename}")
-    (workbench.backups_dir(CID) / filename).write_bytes(b"a second Backup, same file name")
+    (archive_backups.backups_dir(CID) / filename).write_bytes(b"a second Backup, same file name")
 
     client.delete(f"{BACKUPS}/{filename}")
 

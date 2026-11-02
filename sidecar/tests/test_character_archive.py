@@ -1,7 +1,7 @@
 """Character-archive store tests.
 
-Covers the parts of `character_archive` that are easy to get wrong in
-ways that would hurt real users:
+Covers the parts of the archive modules (`archive_*`) that are easy to
+get wrong in ways that would hurt real users:
 
 - avatar_path_for must never raise on Unicode names (F-list allows
   them); we hash-fallback when the lowercased name leaves the
@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-import character_archive
+import archive_backups
+import archive_errors
+import archive_images
+import archive_live
+import archive_registry
+import archive_workbench
 from workbench_state import put_workbench, workbench_payload
 
 
@@ -26,14 +31,14 @@ def isolated_userdata(tmp_path, monkeypatch):
 
 
 def test_avatar_path_ascii_uses_slug():
-    p = character_archive.avatar_path_for("Lady Amber Blaise")
+    p = archive_images.avatar_path_for("Lady Amber Blaise")
     assert p.name == "lady_amber_blaise.png"
 
 
 def test_avatar_path_unicode_hashes_instead_of_raising():
     # F-list permits Unicode names; the old code raised ValueError
     # and the /flist/avatar/{name} endpoint translated that to a 400.
-    p = character_archive.avatar_path_for("Café Noir")
+    p = archive_images.avatar_path_for("Café Noir")
     assert p.suffix == ".png"
     # 40-char hex sha1 → 40-char stem.
     assert len(p.stem) == 40
@@ -43,38 +48,38 @@ def test_avatar_path_unicode_hashes_instead_of_raising():
 def test_avatar_path_unicode_is_case_insensitive():
     # Matches merge_roster's lowercase keying so two cased variants
     # of the same name land on the same avatar file.
-    a = character_archive.avatar_path_for("Café Noir")
-    b = character_archive.avatar_path_for("café noir")
+    a = archive_images.avatar_path_for("Café Noir")
+    b = archive_images.avatar_path_for("café noir")
     assert a == b
 
 
 def test_image_path_rejects_path_traversal():
     with pytest.raises(ValueError):
-        character_archive.image_path("123", "../etc", "png")
+        archive_images.image_path("123", "../etc", "png")
     with pytest.raises(ValueError):
-        character_archive.image_path("123", "foo/bar", "png")
+        archive_images.image_path("123", "foo/bar", "png")
     with pytest.raises(ValueError):
-        character_archive.image_path("123", "ok", "png/../etc")
+        archive_images.image_path("123", "ok", "png/../etc")
 
 
 def test_image_path_safe_stays_under_images_dir():
-    character_archive.create_character_dir("12345")
-    p = character_archive.image_path("12345", "30012128", "png")
+    archive_registry.create_character_dir("12345")
+    p = archive_images.image_path("12345", "30012128", "png")
     # Resolve relative to the character's images dir — if the safe
     # check ever lets a traversal through, relative_to raises.
-    p.relative_to(character_archive.images_dir("12345"))
+    p.relative_to(archive_images.images_dir("12345"))
 
 
 def test_inline_path_rejects_unsafe_basename():
     with pytest.raises(ValueError):
-        character_archive.inline_path("123", "..")
+        archive_images.inline_path("123", "..")
     with pytest.raises(ValueError):
-        character_archive.inline_path("123", "foo/bar.png")
+        archive_images.inline_path("123", "foo/bar.png")
 
 
 def test_save_zip_backup_dedups_unchanged_live(tmp_path):
     cid = "5555"
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Z", "description": "v1"},
@@ -83,17 +88,17 @@ def test_save_zip_backup_dedups_unchanged_live(tmp_path):
             "fetched_at": 100,
         },
     )
-    first = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    first = archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
     assert first["saved"] is True
     assert first["filename"].endswith(".zip")
     # Same content → unchanged.
-    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    second = archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
     assert second == {"saved": False, "reason": "unchanged"}
 
 
 def test_save_zip_backup_writes_when_content_differs(tmp_path):
     cid = "5556"
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Z", "description": "v1"},
@@ -102,8 +107,8 @@ def test_save_zip_backup_writes_when_content_differs(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
-    character_archive.write_live(
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Z", "description": "v2"},
@@ -112,16 +117,16 @@ def test_save_zip_backup_writes_when_content_differs(tmp_path):
             "fetched_at": 200,
         },
     )
-    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    second = archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
     assert second["saved"] is True
-    third = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    third = archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
     assert third == {"saved": False, "reason": "unchanged"}
-    assert len(character_archive.list_zip_backups(cid)) == 2
+    assert len(archive_backups.list_zip_backups(cid)) == 2
 
 
 def test_save_zip_backup_force_bypasses_dedup(tmp_path):
     cid = "5557"
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Z", "description": "v1"},
@@ -130,16 +135,16 @@ def test_save_zip_backup_force_bypasses_dedup(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
     # Without force this would dedup.
-    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    second = archive_backups.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
     assert second["saved"] is True
-    assert len(character_archive.list_zip_backups(cid)) == 2
+    assert len(archive_backups.list_zip_backups(cid)) == 2
 
 
 def test_save_zip_backup_no_live(tmp_path):
-    character_archive.create_character_dir("nope")
-    assert character_archive.save_zip_backup("nope", source="live", occasion="backup-all") == {
+    archive_registry.create_character_dir("nope")
+    assert archive_backups.save_zip_backup("nope", source="live", occasion="backup-all") == {
         "saved": False,
         "reason": "no_live",
     }
@@ -152,7 +157,7 @@ def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
     *truly* most-recent ZIP. Lex order alone would surface the
     no-suffix file (the oldest) because `.` > `-` in ASCII."""
     cid = "5558"
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Z", "description": "a"},
@@ -161,10 +166,10 @@ def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
-    character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
-    character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
-    rows = character_archive.list_zip_backups(cid)
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    rows = archive_backups.list_zip_backups(cid)
     # Highest-suffix first.
     assert rows[0]["filename"].endswith("-2.zip")
     assert rows[1]["filename"].endswith("-1.zip")
@@ -176,7 +181,7 @@ def test_merge_roster_keeps_case_only_distinct_ids():
     # F-list permits two characters whose names differ only in case.
     # Old lowercased-name keying silently collapsed them into one row
     # with the wrong id surviving. With id-keying both rows persist.
-    rows = character_archive.merge_roster(
+    rows = archive_registry.merge_roster(
         [{"name": "Foo", "id": 1}, {"name": "foo", "id": 2}],
         [],
     )
@@ -189,8 +194,8 @@ def test_merge_roster_keeps_case_only_distinct_ids():
 def test_merge_roster_same_id_dedupes_across_sources():
     # An account char and an archive entry that share an id are the same
     # character — they must merge, not duplicate.
-    character_archive.write_live("42", {"name": "Bar", "fetched_at": 0})
-    rows = character_archive.merge_roster(
+    archive_live.write_live("42", {"name": "Bar", "fetched_at": 0})
+    rows = archive_registry.merge_roster(
         [{"name": "Bar", "id": "42"}],
         [],
     )
@@ -204,8 +209,8 @@ def test_merge_roster_dedupes_int_account_id_vs_str_archive_id():
     # the archive's registry stores id as str. Without normalisation the
     # same character renders twice — once under "On your F-list account"
     # and once under "Logs only".
-    character_archive.write_live("99", {"name": "Quux", "fetched_at": 0})
-    rows = character_archive.merge_roster(
+    archive_live.write_live("99", {"name": "Quux", "fetched_at": 0})
+    rows = archive_registry.merge_roster(
         [{"name": "Quux", "id": 99}],
         [],
     )
@@ -215,8 +220,8 @@ def test_merge_roster_dedupes_int_account_id_vs_str_archive_id():
 
 
 def test_compute_pull_status_never_pulled():
-    character_archive.create_character_dir("404")
-    s = character_archive.compute_pull_status("404")
+    archive_registry.create_character_dir("404")
+    s = archive_images.compute_pull_status("404")
     assert s["status"] == "never_pulled"
     assert s["missing_image_ids"] == []
     assert s["expected"] == 0
@@ -224,22 +229,22 @@ def test_compute_pull_status_never_pulled():
 
 def test_compute_pull_status_complete():
     cid = "100"
-    character_archive.write_live(cid, {
+    archive_live.write_live(cid, {
         "name": "Test", "fetched_at": 100,
         "images": [{"image_id": "a1", "extension": "png"},
                    {"image_id": "b2", "extension": "jpg"}],
     })
     # Drop both image files into images_dir to simulate a successful pull
-    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
-    (character_archive.images_dir(cid) / "b2.jpg").write_bytes(b"\xff\xd8\xff\xe0")
-    character_archive.write_pull_state(
+    (archive_images.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    (archive_images.images_dir(cid) / "b2.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+    archive_images.write_pull_state(
         cid,
         [{"image_id": "a1", "extension": "png"},
          {"image_id": "b2", "extension": "jpg"}],
         started_at=100,
         finished_at=150,
     )
-    s = character_archive.compute_pull_status(cid)
+    s = archive_images.compute_pull_status(cid)
     assert s["status"] == "complete"
     assert s["missing_image_ids"] == []
     assert s["expected"] == 2
@@ -252,9 +257,9 @@ def test_compute_pull_status_interrupted_mid_pull():
     # only some images on disk. Renderer should see "interrupted" so the
     # user can resume.
     cid = "200"
-    character_archive.write_live(cid, {"name": "Test", "fetched_at": 100, "images": []})
-    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
-    character_archive.write_pull_state(
+    archive_live.write_live(cid, {"name": "Test", "fetched_at": 100, "images": []})
+    (archive_images.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    archive_images.write_pull_state(
         cid,
         [{"image_id": "a1", "extension": "png"},
          {"image_id": "b2", "extension": "jpg"},
@@ -262,7 +267,7 @@ def test_compute_pull_status_interrupted_mid_pull():
         started_at=100,
         finished_at=None,
     )
-    s = character_archive.compute_pull_status(cid)
+    s = archive_images.compute_pull_status(cid)
     assert s["status"] == "interrupted"
     assert len(s["missing_image_ids"]) == 2
     assert s["present"] == 1
@@ -273,16 +278,16 @@ def test_compute_pull_status_partial_after_failures():
     # Pull ran to completion but some images failed mid-loop. Loop sealed
     # the manifest with finished_at, but disk is short two images.
     cid = "300"
-    character_archive.write_live(cid, {"name": "Test", "fetched_at": 100, "images": []})
-    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
-    character_archive.write_pull_state(
+    archive_live.write_live(cid, {"name": "Test", "fetched_at": 100, "images": []})
+    (archive_images.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    archive_images.write_pull_state(
         cid,
         [{"image_id": "a1", "extension": "png"},
          {"image_id": "b2", "extension": "jpg"}],
         started_at=100,
         finished_at=120,
     )
-    s = character_archive.compute_pull_status(cid)
+    s = archive_images.compute_pull_status(cid)
     assert s["status"] == "partial"
     assert len(s["missing_image_ids"]) == 1
     assert s["missing_image_ids"][0]["image_id"] == "b2"
@@ -292,32 +297,32 @@ def test_compute_pull_status_legacy_archive_no_manifest():
     # Archives created before pull_state.json shipped — derive from
     # live.json.images vs disk so users still get the "incomplete" surface.
     cid = "400"
-    character_archive.write_live(cid, {
+    archive_live.write_live(cid, {
         "name": "Test", "fetched_at": 100,
         "images": [{"image_id": "a1", "extension": "png"},
                    {"image_id": "b2", "extension": "jpg"}],
     })
-    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
-    s = character_archive.compute_pull_status(cid)
+    (archive_images.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    s = archive_images.compute_pull_status(cid)
     assert s["status"] == "partial"
     assert len(s["missing_image_ids"]) == 1
 
 
 def test_compute_pull_status_legacy_archive_complete():
     cid = "500"
-    character_archive.write_live(cid, {
+    archive_live.write_live(cid, {
         "name": "Test", "fetched_at": 100,
         "images": [{"image_id": "a1", "extension": "png"}],
     })
-    (character_archive.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
-    s = character_archive.compute_pull_status(cid)
+    (archive_images.images_dir(cid) / "a1.png").write_bytes(b"\x89PNG\x00")
+    s = archive_images.compute_pull_status(cid)
     assert s["status"] == "complete"
 
 
 def test_merge_roster_log_attaches_to_id_row_by_name():
     # A log directory's only signal is the lowercased name; it should
     # attach to the matching id-keyed row, not spawn a duplicate.
-    rows = character_archive.merge_roster(
+    rows = archive_registry.merge_roster(
         [{"name": "Baz", "id": 7}],
         ["baz"],
     )
@@ -336,11 +341,11 @@ _JPG_HEADER = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 
 def test_write_character_image_lands_in_images_only():
     cid = "508"
-    character_archive.create_character_dir(cid)
-    character_archive.write_character_image(cid, "30012128", "png", _PNG_HEADER)
-    assert (character_archive.images_dir(cid) / "30012128.png").exists()
+    archive_registry.create_character_dir(cid)
+    archive_images.write_character_image(cid, "30012128", "png", _PNG_HEADER)
+    assert (archive_images.images_dir(cid) / "30012128.png").exists()
     # v5: no parallel pool/ store, ever.
-    assert not (character_archive.character_dir(cid) / "pool").exists()
+    assert not (archive_registry.character_dir(cid) / "pool").exists()
 
 
 def test_write_character_image_normalises_jpeg_to_jpg():
@@ -348,29 +353,29 @@ def test_write_character_image_normalises_jpeg_to_jpg():
     # extension; if write_character_image stored ".jpeg" the cache would
     # miss for an existing file.
     cid = "508a"
-    character_archive.create_character_dir(cid)
-    character_archive.write_character_image(cid, "99", "jpeg", _JPG_HEADER)
-    assert (character_archive.images_dir(cid) / "99.jpg").exists()
+    archive_registry.create_character_dir(cid)
+    archive_images.write_character_image(cid, "99", "jpeg", _JPG_HEADER)
+    assert (archive_images.images_dir(cid) / "99.jpg").exists()
 
 
 def test_add_uploaded_image_creates_local_id():
     cid = "509"
-    character_archive.create_character_dir(cid)
-    row = character_archive.add_uploaded_image(cid, _PNG_HEADER)
+    archive_registry.create_character_dir(cid)
+    row = archive_images.add_uploaded_image(cid, _PNG_HEADER)
     assert row is not None
     assert row["image_id"].startswith("local-")
     assert row["extension"] == "png"
-    assert (character_archive.images_dir(cid) / f"{row['image_id']}.png").exists()
+    assert (archive_images.images_dir(cid) / f"{row['image_id']}.png").exists()
 
 
 def test_add_uploaded_image_is_idempotent_on_identical_bytes():
     cid = "510"
-    character_archive.create_character_dir(cid)
-    a = character_archive.add_uploaded_image(cid, _PNG_HEADER)
-    b = character_archive.add_uploaded_image(cid, _PNG_HEADER)
+    archive_registry.create_character_dir(cid)
+    a = archive_images.add_uploaded_image(cid, _PNG_HEADER)
+    b = archive_images.add_uploaded_image(cid, _PNG_HEADER)
     assert a is not None and b is not None
     assert a["image_id"] == b["image_id"]
-    files = list(character_archive.images_dir(cid).glob("local-*.png"))
+    files = list(archive_images.images_dir(cid).glob("local-*.png"))
     assert len(files) == 1
 
 
@@ -381,12 +386,12 @@ def test_add_uploaded_image_reuses_existing_real_id_file():
     showing the same image twice once the real-id slot is dragged off
     profile — the bug seen 2026-06-14."""
     cid = "509b"
-    character_archive.create_character_dir(cid)
-    character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
-    row = character_archive.add_uploaded_image(cid, _PNG_HEADER)
+    archive_registry.create_character_dir(cid)
+    archive_images.write_character_image(cid, "45755545", "png", _PNG_HEADER)
+    row = archive_images.add_uploaded_image(cid, _PNG_HEADER)
     assert row is not None
     assert row["image_id"] == "45755545"
-    files = list(character_archive.images_dir(cid).iterdir())
+    files = list(archive_images.images_dir(cid).iterdir())
     assert len(files) == 1
 
 
@@ -398,14 +403,14 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
     pointing at bytes that are gone is what turns a profile image into
     a black placeholder."""
     cid = "509c"
-    character_archive.create_character_dir(cid)
+    archive_registry.create_character_dir(cid)
     # Pre-existing dupe state on disk: same bytes under two ids.
-    character_archive.write_character_image(cid, "45755545", "png", _PNG_HEADER)
-    character_archive.write_character_image(
+    archive_images.write_character_image(cid, "45755545", "png", _PNG_HEADER)
+    archive_images.write_character_image(
         cid, "local-deadbeef", "png", _PNG_HEADER
     )
     # The gallery lives in the character's Workbench.
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": cid, "name": "X", "description": ""},
@@ -418,20 +423,19 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
         },
     )
     put_workbench(
-        character_archive,
         cid,
         {
-            "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
+            "_schema_version": archive_workbench.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"id": cid, "name": "X"},
             "images": [{"image_id": "local-deadbeef", "description": "mine"}],
         },
     )
 
-    rows = character_archive.list_character_images(cid)
+    rows = archive_images.list_character_images(cid)
     ids = sorted(r["image_id"] for r in rows)
     assert ids == ["45755545"]
-    payload = workbench_payload(character_archive, cid)
+    payload = workbench_payload(cid)
     assert payload is not None
     # The slot keeps its place and its description; only the id moves.
     assert payload["images"] == [
@@ -441,19 +445,19 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
 
 def test_add_uploaded_image_rejects_non_image_bytes():
     cid = "511"
-    character_archive.create_character_dir(cid)
-    row = character_archive.add_uploaded_image(cid, b"not an image")
+    archive_registry.create_character_dir(cid)
+    row = archive_images.add_uploaded_image(cid, b"not an image")
     assert row is None
-    assert not character_archive.images_dir(cid).exists() or not any(
-        character_archive.images_dir(cid).iterdir()
+    assert not archive_images.images_dir(cid).exists() or not any(
+        archive_images.images_dir(cid).iterdir()
     )
 
 
 def test_list_character_images_includes_added_at():
     cid = "514"
-    character_archive.create_character_dir(cid)
-    character_archive.write_character_image(cid, "333", "png", _PNG_HEADER)
-    rows = character_archive.list_character_images(cid)
+    archive_registry.create_character_dir(cid)
+    archive_images.write_character_image(cid, "333", "png", _PNG_HEADER)
+    rows = archive_images.list_character_images(cid)
     assert len(rows) == 1
     assert rows[0]["image_id"] == "333"
     assert rows[0]["extension"] == "png"
@@ -464,9 +468,9 @@ def test_normalise_image_ext_jpeg_to_jpg():
     # Pinned because the pull cache check depends on this normalisation
     # to match what write_character_image stores. If F-list ever returns
     # "jpeg" the pull must hit the cache for an existing .jpg file.
-    assert character_archive.normalise_image_ext("jpeg") == "jpg"
-    assert character_archive.normalise_image_ext("JPEG") == "jpg"
-    assert character_archive.normalise_image_ext(".png") == "png"
+    assert archive_images.normalise_image_ext("jpeg") == "jpg"
+    assert archive_images.normalise_image_ext("JPEG") == "jpg"
+    assert archive_images.normalise_image_ext(".png") == "png"
 
 
 # ---- name-keyed folder registry ----------------------------------------
@@ -475,7 +479,7 @@ def test_normalise_image_ext_jpeg_to_jpg():
 def _make_id_folder(cid: str, name: str):
     """Helper: create a legacy <id>/ character folder with live.json."""
     import json as _json
-    d = character_archive.root() / cid
+    d = archive_registry.root() / cid
     d.mkdir(parents=True, exist_ok=True)
     (d / "live.json").write_text(_json.dumps({"id": int(cid), "name": name}), encoding="utf-8")
     (d / "images").mkdir(parents=True, exist_ok=True)
@@ -485,20 +489,20 @@ def _make_id_folder(cid: str, name: str):
 
 def _reset_registry_state():
     """Force the next load_registry() to re-run migration."""
-    character_archive._REGISTRY_MIGRATED = False
-    character_archive._invalidate_registry_cache()
+    archive_registry._REGISTRY_MIGRATED = False
+    archive_registry._invalidate_registry_cache()
 
 
 def test_slug_for_filesystem_safe_name_passthrough():
-    assert character_archive._slug_for("Spielwiesending") == "Spielwiesending"
-    assert character_archive._slug_for("Cleo Thouvenin") == "Cleo Thouvenin"
-    assert character_archive._slug_for("a.b-c_d") == "a.b-c_d"
+    assert archive_registry._slug_for("Spielwiesending") == "Spielwiesending"
+    assert archive_registry._slug_for("Cleo Thouvenin") == "Cleo Thouvenin"
+    assert archive_registry._slug_for("a.b-c_d") == "a.b-c_d"
 
 
 def test_slug_for_unicode_or_illegal_falls_back_to_hash():
-    s1 = character_archive._slug_for("Café Noir")
-    s2 = character_archive._slug_for("a/b<c>d")
-    s3 = character_archive._slug_for("CON")
+    s1 = archive_registry._slug_for("Café Noir")
+    s2 = archive_registry._slug_for("a/b<c>d")
+    s3 = archive_registry._slug_for("CON")
     for s in (s1, s2, s3):
         assert s.startswith("c_")
         assert len(s) == 18  # "c_" + 16 hex
@@ -506,13 +510,13 @@ def test_slug_for_unicode_or_illegal_falls_back_to_hash():
 
 def test_slug_strips_leading_trailing_whitespace():
     # " leading-space " → "leading-space" after strip, which is fs-safe.
-    assert character_archive._slug_for(" leading-space ") == "leading-space"
+    assert archive_registry._slug_for(" leading-space ") == "leading-space"
 
 
 def test_slug_is_stable_for_same_lowercased_name():
     # Lowercase normalization keeps "Café Noir" and "café noir" colliding —
     # F-list character names are case-insensitive unique anyway.
-    assert character_archive._slug_for("Café Noir") == character_archive._slug_for("café noir")
+    assert archive_registry._slug_for("Café Noir") == archive_registry._slug_for("café noir")
 
 
 def test_migration_renames_numeric_folders_to_name_slugs(tmp_path):
@@ -521,12 +525,12 @@ def test_migration_renames_numeric_folders_to_name_slugs(tmp_path):
     _make_id_folder("4076218", "Cleo Thouvenin")
     _make_id_folder("999", "Café Noir")
 
-    reg = character_archive.load_registry()
+    reg = archive_registry.load_registry()
     assert reg["5070222"] == {"name": "Spielwiesending", "folder": "Spielwiesending"}
     assert reg["4076218"] == {"name": "Cleo Thouvenin", "folder": "Cleo Thouvenin"}
     assert reg["999"]["folder"].startswith("c_")
 
-    root = character_archive.root()
+    root = archive_registry.root()
     folders = sorted(p.name for p in root.iterdir() if p.is_dir())
     assert "5070222" not in folders
     assert "Spielwiesending" in folders
@@ -536,9 +540,9 @@ def test_migration_renames_numeric_folders_to_name_slugs(tmp_path):
 def test_character_dir_resolves_via_registry(tmp_path):
     _reset_registry_state()
     _make_id_folder("5070222", "Spielwiesending")
-    character_archive.load_registry()  # trigger migration
+    archive_registry.load_registry()  # trigger migration
 
-    p = character_archive.character_dir("5070222")
+    p = archive_registry.character_dir("5070222")
     assert p.name == "Spielwiesending"
     # Image bytes survived the rename.
     assert (p / "images" / "demo.png").exists()
@@ -546,38 +550,38 @@ def test_character_dir_resolves_via_registry(tmp_path):
 
 def test_character_dir_falls_back_to_id_when_not_in_registry(tmp_path):
     _reset_registry_state()
-    (character_archive.root() / "999999").mkdir()
-    p = character_archive.character_dir("999999")
+    (archive_registry.root() / "999999").mkdir()
+    p = archive_registry.character_dir("999999")
     assert p.name == "999999"
 
 
 def test_character_dir_finds_and_never_creates(tmp_path):
     _reset_registry_state()
-    with pytest.raises(character_archive.CharacterNotFound):
-        character_archive.character_dir("999998")
-    assert not (character_archive.root() / "999998").exists()
-    created = character_archive.create_character_dir("999998")
-    assert character_archive.character_dir("999998") == created
+    with pytest.raises(archive_errors.CharacterNotFound):
+        archive_registry.character_dir("999998")
+    assert not (archive_registry.root() / "999998").exists()
+    created = archive_registry.create_character_dir("999998")
+    assert archive_registry.character_dir("999998") == created
 
 
 def test_migration_is_idempotent(tmp_path):
     _reset_registry_state()
     _make_id_folder("5070222", "Spielwiesending")
-    reg1 = character_archive.load_registry()
+    reg1 = archive_registry.load_registry()
     _reset_registry_state()
-    reg2 = character_archive.load_registry()
+    reg2 = archive_registry.load_registry()
     assert reg1 == reg2
 
 
 def test_migration_handles_collision(tmp_path):
     _reset_registry_state()
     # Pre-create a folder that would collide with the migration target.
-    blocker = character_archive.root() / "Spielwiesending"
+    blocker = archive_registry.root() / "Spielwiesending"
     blocker.mkdir(parents=True, exist_ok=True)
     (blocker / "marker").write_text("untouched", encoding="utf-8")
     _make_id_folder("5070222", "Spielwiesending")
 
-    reg = character_archive.load_registry()
+    reg = archive_registry.load_registry()
     # Registry should record the legacy id-named folder, not clobber.
     assert reg["5070222"]["folder"] == "5070222"
     assert (blocker / "marker").read_text(encoding="utf-8") == "untouched"
@@ -586,27 +590,27 @@ def test_migration_handles_collision(tmp_path):
 def test_write_live_renames_folder_on_name_change(tmp_path):
     _reset_registry_state()
     _make_id_folder("5070222", "OldName")
-    character_archive.load_registry()
-    assert (character_archive.root() / "OldName").exists()
+    archive_registry.load_registry()
+    assert (archive_registry.root() / "OldName").exists()
 
-    character_archive.write_live("5070222", {"id": 5070222, "name": "NewName"})
+    archive_live.write_live("5070222", {"id": 5070222, "name": "NewName"})
 
-    assert not (character_archive.root() / "OldName").exists()
-    assert (character_archive.root() / "NewName" / "live.json").exists()
-    assert character_archive.load_registry()["5070222"]["folder"] == "NewName"
+    assert not (archive_registry.root() / "OldName").exists()
+    assert (archive_registry.root() / "NewName" / "live.json").exists()
+    assert archive_registry.load_registry()["5070222"]["folder"] == "NewName"
 
 
 def test_write_live_first_pull_creates_name_folder(tmp_path):
     _reset_registry_state()
-    character_archive.write_live("9999999", {"id": 9999999, "name": "Brand New"})
-    assert (character_archive.root() / "Brand New" / "live.json").exists()
-    assert character_archive.load_registry()["9999999"]["folder"] == "Brand New"
+    archive_live.write_live("9999999", {"id": 9999999, "name": "Brand New"})
+    assert (archive_registry.root() / "Brand New" / "live.json").exists()
+    assert archive_registry.load_registry()["9999999"]["folder"] == "Brand New"
 
 
 
 def test_rename_zip_backup_persists_in_names_json(tmp_path):
     cid = "8010"
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Renamy", "description": "v1"},
@@ -615,20 +619,20 @@ def test_rename_zip_backup_persists_in_names_json(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
+    res = archive_backups.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
-    character_archive.rename_zip_backup(cid, fname, "Pre-overhaul")
-    rows = character_archive.list_zip_backups(cid)
+    archive_backups.rename_zip_backup(cid, fname, "Pre-overhaul")
+    rows = archive_backups.list_zip_backups(cid)
     assert rows[0]["name"] == "Pre-overhaul"
     # Empty string clears.
-    character_archive.rename_zip_backup(cid, fname, "")
-    rows = character_archive.list_zip_backups(cid)
+    archive_backups.rename_zip_backup(cid, fname, "")
+    rows = archive_backups.list_zip_backups(cid)
     assert rows[0]["name"] is None
 
 
 def test_forget_backup_name_drops_entry(tmp_path):
     cid = "8011"
-    character_archive.write_live(
+    archive_live.write_live(
         cid,
         {
             "character": {"id": int(cid), "name": "Renamy", "description": "v1"},
@@ -637,10 +641,10 @@ def test_forget_backup_name_drops_entry(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
+    res = archive_backups.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
-    character_archive.rename_zip_backup(cid, fname, "label")
-    character_archive.forget_backup_name(cid, fname)
+    archive_backups.rename_zip_backup(cid, fname, "label")
+    archive_backups.forget_backup_name(cid, fname)
     # After forget, list shows no name on that row.
-    rows = character_archive.list_zip_backups(cid)
+    rows = archive_backups.list_zip_backups(cid)
     assert rows[0]["name"] is None

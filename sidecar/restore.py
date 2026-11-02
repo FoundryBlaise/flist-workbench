@@ -31,9 +31,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import archive_backups
+import archive_images
+import archive_live
+import archive_registry
+import archive_workbench
 import atomic_write
 import backup_origin
-import character_archive
 import paths
 import zip_serialise
 from refusals import BackupHoldsNoProfile, BackupNotUploadable, Refusal
@@ -51,7 +55,7 @@ def _upload_refused(character_id: str, filename: str) -> Refusal | None:
     can be one. One that holds no profile is refused as everywhere
     else. One taken without its image files lists no image in
     character.json, which an Upload reads as "remove every image"."""
-    meta = character_archive.zip_backup_meta(character_id, filename)
+    meta = archive_backups.zip_backup_meta(character_id, filename)
     if not backup_origin.holds_profile(meta):
         return BackupHoldsNoProfile(filename)
     note = meta.get("note")
@@ -267,7 +271,7 @@ def list_archived_characters() -> list[dict[str, Any]]:
     """Names of every character with an archive on disk. Lets the
     extension show a cross-character source picker — "edit Spielwiesending
     but load MainChar's Workbench."""
-    root = character_archive.root()
+    root = archive_registry.root()
     if not root.exists():
         return []
     out: list[dict[str, Any]] = []
@@ -301,7 +305,7 @@ def _character_id_for_name(name: str) -> str | None:
     "character" for the userscript export shape; in-archive storage
     keeps the flat F-list shape.)
     """
-    root = character_archive.root()
+    root = archive_registry.root()
     if not root.exists():
         return None
     for entry in root.iterdir():
@@ -315,7 +319,7 @@ def _character_id_for_name(name: str) -> str | None:
         except (OSError, ValueError):
             continue
         char_name = payload.get("name")
-        if isinstance(char_name, str) and character_archive.same_character_name(
+        if isinstance(char_name, str) and archive_registry.same_character_name(
             char_name, name
         ):
             return entry.name
@@ -358,7 +362,7 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
             "upload_refused": None,
         })
 
-    for entry in character_archive.list_zip_backups(character_id):
+    for entry in archive_backups.list_zip_backups(character_id):
         filename = entry.get("filename") if isinstance(entry, dict) else None
         if not filename:
             continue
@@ -414,8 +418,8 @@ def _workbench(character_id: str) -> _UploadableWorkbench | None:
     """The character's Workbench, or None when it has none yet. Never
     creates one: listing or fetching what can be uploaded must not bring
     a Workbench into existence."""
-    bench = character_archive.read_workbench(character_id)
-    info = character_archive.workbench_info(character_id)
+    bench = archive_workbench.read_workbench(character_id)
+    info = archive_workbench.workbench_info(character_id)
     if bench is None or info is None:
         return None
     return _UploadableWorkbench(updated_at=info.updated_at, payload=bench.payload)
@@ -433,7 +437,7 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     if character_id is None:
         return None
 
-    images_dir = character_archive.images_dir(character_id)
+    images_dir = archive_images.images_dir(character_id)
     avatar = _avatar_path_for_name(character_name)
 
     if snapshot_id == WORKBENCH_SOURCE_ID:
@@ -452,11 +456,11 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     # onto backups/ as given it could name any zip on the disk.
     listed = {
         entry.get("filename")
-        for entry in character_archive.list_zip_backups(character_id)
+        for entry in archive_backups.list_zip_backups(character_id)
     }
     if snapshot_id not in listed:
         return None
-    candidate = character_archive.backups_dir(character_id) / snapshot_id
+    candidate = archive_backups.backups_dir(character_id) / snapshot_id
     if not candidate.is_file():
         return None
     refused = _upload_refused(character_id, snapshot_id)
@@ -477,10 +481,10 @@ def _with_form_state_translated(data: bytes) -> bytes:
             working = json.loads(zf.read("working.json").decode("utf-8"))
     except (KeyError, ValueError, zipfile.BadZipFile):
         return data
-    if not isinstance(working, dict) or not character_archive.is_form_state(working):
+    if not isinstance(working, dict) or not archive_workbench.is_form_state(working):
         return data
     return zip_serialise.repack_with_payload(
-        data, character_archive.payload_from_form_state(working)
+        data, archive_workbench.payload_from_form_state(working)
     )
 
 
@@ -489,7 +493,7 @@ def _avatar_path_for_name(character_name: str) -> Path | None:
     (keyed by character name, not character id). Earlier this function
     looked under `avatars/<id>.<ext>` which always missed, so the
     extension's apply path never received an avatar and was a no-op."""
-    p = character_archive.avatar_path_for(character_name)
+    p = archive_images.avatar_path_for(character_name)
     if p.exists():
         return p
     return None
@@ -518,14 +522,14 @@ def write_pre_restore_snapshot(
     if character_id is None:
         return {"ok": False, "error": "unknown_character"}
 
-    working = character_archive.payload_from_form_state(
-        payload, character_archive.read_live(character_id)
+    working = archive_workbench.payload_from_form_state(
+        payload, archive_live.read_live(character_id)
     )
     try:
         zip_bytes = zip_serialise.build_zip(
             character_id,
             working,
-            images_dir=character_archive.images_dir(character_id),
+            images_dir=archive_images.images_dir(character_id),
             avatar_path=_avatar_path_for_name(character_name),
             backup_source=backup_origin.LIVE,
             backup_occasion=backup_origin.BEFORE_UPLOAD,
@@ -548,7 +552,7 @@ def write_pre_restore_snapshot(
                 images_missing=True,
             )
 
-    target = character_archive.write_backup_zip(character_id, zip_bytes)
+    target = archive_backups.write_backup_zip(character_id, zip_bytes)
 
     return {
         "ok": True,

@@ -33,12 +33,12 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
     import paths
     import restore as restore_svc
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
     yield data
     restore_svc.revoke_token()
@@ -118,9 +118,9 @@ def pull(client: TestClient) -> dict:
 
 
 def folder() -> Path:
-    import character_archive
+    import archive_registry
 
-    return character_archive.character_dir(CID)
+    return archive_registry.character_dir(CID)
 
 
 def profile_files() -> set[str]:

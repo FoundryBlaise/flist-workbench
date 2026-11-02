@@ -16,8 +16,10 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 import aliases as aliases_store  # noqa: F401  (kept for parity with server)
+import archive_backups
+import archive_images
+import archive_live
 import backup_origin
-import character_archive
 import flist_activity
 import flist_api
 import zip_serialise
@@ -59,13 +61,13 @@ async def _pull_one_character_for_backup_all(
 
     live_payload = dict(payload)
     live_payload["fetched_at"] = int(_t.time())
-    character_archive.write_live(cid, live_payload)
+    archive_live.write_live(cid, live_payload)
 
     # Avatar — non-fatal.
     try:
         await flist_api.download_to(
             flist_api.avatar_url(name),
-            character_archive.avatar_path_for(name),
+            archive_images.avatar_path_for(name),
             client=client,
         )
     except (flist_api.FlistApiError, ValueError):
@@ -86,11 +88,11 @@ async def _pull_one_character_for_backup_all(
             )
 
     pull_started_at = int(_t.time())
-    character_archive.write_pull_state(
+    archive_images.write_pull_state(
         cid, image_list, started_at=pull_started_at, finished_at=None
     )
 
-    images_dir_path = character_archive.images_dir(cid)
+    images_dir_path = archive_images.images_dir(cid)
     downloaded = 0
     cached = 0
     failed_images = 0
@@ -98,7 +100,7 @@ async def _pull_one_character_for_backup_all(
         image_id = img["image_id"]
         raw_ext = img["extension"]
         try:
-            ext = character_archive.normalise_image_ext(raw_ext)
+            ext = archive_images.normalise_image_ext(raw_ext)
         except ValueError:
             ext = raw_ext.lower().lstrip(".")
         target = images_dir_path / f"{image_id}.{ext}"
@@ -122,12 +124,12 @@ async def _pull_one_character_for_backup_all(
         )
         try:
             data = await flist_api.fetch_bytes(url, client=client)
-            character_archive.write_character_image(cid, image_id, ext, data)
+            archive_images.write_character_image(cid, image_id, ext, data)
             downloaded += 1
         except (ValueError, flist_api.FlistApiError):
             failed_images += 1
 
-    character_archive.write_pull_state(
+    archive_images.write_pull_state(
         cid,
         image_list,
         started_at=pull_started_at,
@@ -269,7 +271,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 try:
                     # Live, as just pulled: Back up all keeps what was on
                     # F-list, whatever the Workbench holds.
-                    result = character_archive.save_zip_backup(
+                    result = archive_backups.save_zip_backup(
                         cid,
                         source=backup_origin.LIVE,
                         occasion=backup_origin.BACKUP_ALL,

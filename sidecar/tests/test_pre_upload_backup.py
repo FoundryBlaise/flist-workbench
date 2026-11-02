@@ -51,17 +51,19 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_images
+    import archive_live
+    import archive_registry
     import paths
     import restore as restore_svc
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
 
-    character_archive.register_character("42", NAME)
-    character_archive.write_live(
+    archive_registry.register_character("42", NAME)
+    archive_live.write_live(
         "42",
         {
             "name": NAME,
@@ -76,8 +78,8 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "fetched_at": 1000,
         },
     )
-    (character_archive.images_dir("42") / "17924625.png").write_bytes(PNG)
-    avatar = character_archive.avatar_path_for(NAME)
+    (archive_images.images_dir("42") / "17924625.png").write_bytes(PNG)
+    avatar = archive_images.avatar_path_for(NAME)
     avatar.parent.mkdir(parents=True, exist_ok=True)
     avatar.write_bytes(AVATAR)
 
@@ -259,10 +261,10 @@ def _old_pre_upload_backup() -> bytes:
 
 @pytest.fixture
 def old_backup_on_disk(paired):
-    import character_archive
+    import archive_backups
 
     data = _old_pre_upload_backup()
-    (character_archive.backups_dir("42") / OLD_NAME).write_bytes(data)
+    (archive_backups.backups_dir("42") / OLD_NAME).write_bytes(data)
     return data
 
 
@@ -282,15 +284,15 @@ def started(paired, old_backup_on_disk):
 def test_an_old_backup_taken_before_an_upload_is_listed_after_startup(
     started, old_backup_on_disk
 ) -> None:
-    import character_archive
+    import archive_backups
 
     listed = started.get("/flist/character/42/zip-backups").json()["backups"]
 
     assert [b["filename"] for b in listed] == [ADOPTED_NAME]
     # Not a byte lost: the file is the one that was there, renamed.
-    adopted = character_archive.backups_dir("42") / ADOPTED_NAME
+    adopted = archive_backups.backups_dir("42") / ADOPTED_NAME
     assert adopted.read_bytes() == old_backup_on_disk
-    assert not (character_archive.backups_dir("42") / OLD_NAME).exists()
+    assert not (archive_backups.backups_dir("42") / OLD_NAME).exists()
 
 
 def test_an_old_backup_taken_before_an_upload_restores(started) -> None:
