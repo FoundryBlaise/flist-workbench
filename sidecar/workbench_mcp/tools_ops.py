@@ -67,17 +67,17 @@ def _job_failure(job: jobs.Job, fallback: str) -> ToolError:
     return ToolError(code, message, **(error.get("details") or {}))
 
 
+def _job_answer(job: jobs.Job, note: str) -> dict[str, Any]:
+    return {"job_id": job.id, "kind": job.kind, "state": job.state, "note": note}
+
+
 def _started(job: jobs.Job) -> dict[str, Any]:
     """The answer of a tool asked not to wait (or done waiting)."""
-    return {
-        "job_id": job.id,
-        "kind": job.kind,
-        "state": job.state,
-        "note": (
-            "Running in the background. Poll get_job for progress and the "
-            "result; cancel_job stops it."
-        ),
-    }
+    return _job_answer(
+        job,
+        "Running in the background. Poll get_job for progress and the "
+        "result; cancel_job stops it.",
+    )
 
 
 async def _follow(job: jobs.Job, on_event: Any) -> bool:
@@ -94,12 +94,7 @@ async def _follow(job: jobs.Job, on_event: Any) -> bool:
 
 
 def _cancelled(job: jobs.Job) -> dict[str, Any]:
-    return {
-        "job_id": job.id,
-        "kind": job.kind,
-        "state": job.state,
-        "note": "Cancelled. What it wrote before the cancel stays.",
-    }
+    return _job_answer(job, "Cancelled. What it wrote before the cancel stays.")
 
 
 @tool(tags=TAG_CHARACTER, title="Pull from F-list", open_world=True)
@@ -133,16 +128,16 @@ async def pull_character(character: str, ctx: Context, wait: bool = True) -> dic
 
     async def report(event: str, data: dict[str, Any]) -> None:
         nonlocal images_total
-        if event == "images":
+        if event == pull_service.IMAGES:
             images_total = int(data.get("total") or 0)
             await ctx.report_progress(0, images_total or None, "downloading images")
-        elif event == "image":
+        elif event == pull_service.IMAGE:
             await ctx.report_progress(
                 int(data.get("index") or 0),
                 images_total or None,
                 f"image {data.get('index')}/{images_total}",
             )
-        elif event == "fetching":
+        elif event == pull_service.FETCHING:
             await ctx.info(f"fetching {name} from F-list")
 
     if not await _follow(job, report):
@@ -242,10 +237,10 @@ async def backup_all_characters(ctx: Context, wait: bool = True) -> dict[str, An
 
     async def report(event: str, data: dict[str, Any]) -> None:
         nonlocal total
-        if event == "start":
+        if event == backup_all_service.START:
             total = int(data.get("total") or 0)
             await ctx.report_progress(0, total or None, "starting")
-        elif event == "character" and data.get("status") in ("saved", "unchanged", "error"):
+        elif event == backup_all_service.CHARACTER and data.get("status") in ("saved", "unchanged", "error"):
             rows.append(
                 {
                     "character": data.get("name"),

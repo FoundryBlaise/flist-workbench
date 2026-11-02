@@ -97,17 +97,17 @@ def resource_for_name(name: str) -> str:
     return resource(f"name:{name.strip().lower()}")
 
 
-#: Event names `run()` can yield, in the order a successful pull emits
-#: them. `error` can replace any of them and ends the stream; the job
-#: adds `cancelled` when a cancel stopped it.
-EVENTS = (
-    "ticket",    # acquiring or refreshing the F-list ticket
-    "fetching",  # calling character-data.php
-    "images",    # {total, downloaded, failed} — the image batch starts
-    "image",     # {index, total, image_id} — per image
-    "done",      # {character_id, changed, image_count, ...}
-    "error",     # {stage, code, message, details} (`sse.error`)
-)
+#: Event names `run()` can yield.
+TICKET = "ticket"  # acquiring or refreshing the F-list ticket
+FETCHING = "fetching"  # calling character-data.php
+IMAGES = "images"  # {total, downloaded, failed}: the image batch starts
+IMAGE = "image"  # {index, total, image_id}: per image
+
+#: In the order a successful pull emits them; `jobs.DONE` carries
+#: {character_id, changed, image_count, ...}. `jobs.ERROR` ({stage,
+#: code, message, details}, `sse.error`) can replace any of them and
+#: ends the stream; the job adds `jobs.CANCELLED` when a cancel stopped it.
+EVENTS = (TICKET, FETCHING, IMAGES, IMAGE, jobs.DONE, jobs.ERROR)
 
 
 def start(name: str, *, delay: float = 0.0) -> jobs.Job:
@@ -137,11 +137,11 @@ def _observe(job: jobs.Job, event: str, data: dict[str, Any]) -> None:
     images of how many it has been through."""
     progress = dict(job.progress)
     progress["stage"] = event
-    if event == "images":
+    if event == IMAGES:
         progress.update(images_total=data.get("total", 0), images_done=0)
-    elif event == "image":
+    elif event == IMAGE:
         progress["images_done"] = data.get("index", 0)
-    elif event == "done":
+    elif event == jobs.DONE:
         progress["character_id"] = data.get("character_id")
     job.progress = progress
 
@@ -322,19 +322,19 @@ async def pull_images(
         row = {"index": i, "total": total, "image_id": image_id}
         if await run_in_threadpool(clear_stale_siblings, cid, image_id, f"{image_id}.{ext}"):
             counts.cached += 1
-            yield ("image", {**row, "ok": True, "cached": True})
+            yield (IMAGE, {**row, "ok": True, "cached": True})
             continue
         url = f"{flist_api.STATIC_BASE}/images/charimage/{image_id}.{ext}"
         try:
             data = await flist_api.fetch_bytes(url, client=client)
             await run_in_threadpool(_store_image, cid, image_id, ext, data)
             counts.downloaded += 1
-            yield ("image", {**row, "ok": True})
+            yield (IMAGE, {**row, "ok": True})
         except (ValueError, flist_api.FlistApiError) as exc:
             # An unsupported extension counts like a download failure,
             # so the pull keeps going.
             counts.failed += 1
-            yield ("image", {**row, "ok": False, "error": str(exc)})
+            yield (IMAGE, {**row, "ok": False, "error": str(exc)})
 
     # Under the v5 unified store, pulls no longer delete images/ files
     # that F-list dropped — the bytes stay on disk and surface in the
@@ -359,28 +359,28 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     flist_activity.record("pull-start", name=name)
     client = flist_api._default_client()
     try:
-        yield ("ticket", {})
+        yield (TICKET, {})
         try:
             await flist_api.ensure_fresh_ticket(client=client)
         except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:
-            yield sse.refused("ticket", flist_api.refusal(exc))
+            yield sse.refused(TICKET, flist_api.refusal(exc))
             return
 
-        yield ("fetching", {"name": name})
+        yield (FETCHING, {"name": name})
         try:
             payload = await flist_api.fetch_character_data(name, client=client)
         except flist_api.FlistApiError as exc:
-            yield sse.refused("fetching", flist_api.refusal(exc))
+            yield sse.refused(FETCHING, flist_api.refusal(exc))
             return
 
         try:
             cid, changed = await store_live(name, payload, client=client)
         except UnsafeCharacterId as exc:
-            yield sse.error("fetching", "invalid_character_id", str(exc))
+            yield sse.error(FETCHING, "invalid_character_id", str(exc))
             return
 
         images = image_list(payload)
-        yield ("images", {"total": len(images), "downloaded": 0, "failed": 0})
+        yield (IMAGES, {"total": len(images), "downloaded": 0, "failed": 0})
         counts = ImageCounts()
         async for item in pull_images(cid, images, counts, client=client):
             yield item
@@ -398,7 +398,7 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             missing=len(pull_status["missing_image_ids"]),
         )
         yield (
-            "done",
+            jobs.DONE,
             {
                 "character_id": cid,
                 "name": payload.get("name") or name,
@@ -426,14 +426,14 @@ async def _pull(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         flist_activity.record(
             "pull-error", name=name, stage="ticket", error=str(exc),
         )
-        yield sse.refused("ticket", flist_api.refusal(exc))
+        yield sse.refused(TICKET, flist_api.refusal(exc))
     except flist_api.FlistApiError as exc:
         # Any other F-list error past the early stages — still better
         # than a class-repr to the user.
         flist_activity.record(
             "pull-error", name=name, stage="fetching", error=str(exc),
         )
-        yield sse.refused("fetching", flist_api.refusal(exc))
+        yield sse.refused(FETCHING, flist_api.refusal(exc))
     except asyncio.CancelledError:
         # Cancelled by job id: what landed stays, and the manifest
         # without `finished_at` marks the Pull as interrupted.

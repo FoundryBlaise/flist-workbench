@@ -32,16 +32,16 @@ from . import pull as pull_service
 #: The job kind of Back up all.
 KIND = "backup-all"
 
-#: Event names `run()` can yield. `error` is fatal and ends the sweep;
-#: a per-character failure comes through as a `character` event with
-#: `status: "error"` and the sweep continues. The job adds `cancelled`
-#: when a cancel stopped it.
-EVENTS = (
-    "start",      # {total}
-    "character",  # {name, status, filename?, message?, image_stats?}
-    "done",       # {total, saved, unchanged, failed, characters}
-    "error",      # fatal: no session, expired ticket, ... `sse.error`
-)
+#: Event names `run()` can yield.
+START = "start"  # {total}
+CHARACTER = "character"  # {name, status, filename?, message?, image_stats?}
+
+#: `jobs.DONE` carries {total, saved, unchanged, failed, characters}.
+#: `jobs.ERROR` is fatal (no session, expired ticket, ... `sse.error`)
+#: and ends the sweep; a per-character failure comes through as a
+#: CHARACTER event with `status: "error"` and the sweep continues. The
+#: job adds `jobs.CANCELLED` when a cancel stopped it.
+EVENTS = (START, CHARACTER, jobs.DONE, jobs.ERROR)
 
 
 def start() -> jobs.Job:
@@ -50,7 +50,7 @@ def start() -> jobs.Job:
     return jobs.registry().start_stream(
         KIND,
         pull_service.CHARACTERS,
-        lambda: run(),
+        run,
         busy=CharacterBusy,
         progress={"total": 0, "done": 0, "saved": 0, "unchanged": 0, "failed": 0},
         observe=_observe,
@@ -61,9 +61,9 @@ def _observe(job: jobs.Job, event: str, data: dict[str, Any]) -> None:
     """Sum the sweep up in `job.progress`: characters done of how many,
     by outcome, and the one being pulled."""
     progress = dict(job.progress)
-    if event == "start":
+    if event == START:
         progress["total"] = data.get("total", 0)
-    elif event == "character":
+    elif event == CHARACTER:
         status = data.get("status")
         if status == "fetching":
             progress["current"] = data.get("name")
@@ -112,12 +112,12 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
         )
         return
 
-    yield ("start", {"total": len(roster)})
+    yield (START, {"total": len(roster)})
     rows: list[dict[str, Any]] = []
 
     def row(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         rows.append(data)
-        return ("character", data)
+        return (CHARACTER, data)
 
     # One client for the entire sweep so we reuse the connection pool.
     client = flist_api._default_client()
@@ -126,7 +126,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
         try:
             await flist_api.ensure_fresh_ticket(client=client)
         except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:
-            yield sse.refused("ticket", flist_api.refusal(exc))
+            yield sse.refused(pull_service.TICKET, flist_api.refusal(exc))
             return
 
         for entry in roster:
@@ -137,7 +137,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
             name = entry.get("name") if isinstance(entry, dict) else None
             if not isinstance(name, str) or not name:
                 continue
-            yield ("character", {"name": name, "status": "fetching"})
+            yield (CHARACTER, {"name": name, "status": "fetching"})
             try:
                 # Announced per character as each Pull ends, not per
                 # picture and not all at the end of the sweep.
@@ -230,7 +230,7 @@ async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
         return sum(1 for r in rows if r["status"] == status)
 
     yield (
-        "done",
+        jobs.DONE,
         {
             "total": len(roster),
             "saved": count("saved"),
