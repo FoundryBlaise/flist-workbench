@@ -4,12 +4,6 @@ A simple key/value table — used today for the FCHAT data-dir override
 (picked from the UI's Settings modal) and a natural home for future
 single-user prefs. The env var `FCHAT_DATA_DIR` still wins when set so
 the devcontainer + tests don't depend on UI state.
-
-History: prior to the Snippets removal (2026-06-17) this module shared
-the documents.db file. When documents.py died, settings moved into its
-own settings.db. The first-launch migration in `connect()` copies any
-pre-existing rows out of documents.db and then drops that file —
-existing installs lose nothing.
 """
 
 from __future__ import annotations
@@ -70,31 +64,6 @@ KEY_RAG_CHUNK_MAX_CHARS = "rag.chunk_max_chars"
 KEY_RAG_CHUNK_SOFT_SPLIT_CHARS = "rag.chunk_soft_split_chars"
 KEY_RAG_CHUNK_OVERLAP_MSGS = "rag.chunk_overlap_msgs"
 
-# Scheduled backups (on-start check). Default 7 day interval, keep
-# 10 newest scheduled backups per character. Both surfaced in the
-# Settings panel under "Backups". Setting interval to 0 disables the
-# auto-backup entirely without ripping out the wiring — handy for
-# users who'd rather drive every backup themselves.
-KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS = "backups.scheduled_interval_days"
-KEY_BACKUPS_SCHEDULED_KEEP_LAST_N = "backups.scheduled_keep_last_n"
-BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT = 7
-BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT = 10
-
-# Last-sweep telemetry persisted across launches. The Settings →
-# Backups pane reads these to show "last ran at" + "next due" + the
-# saved/skipped/failed counts. Manual trigger and the on-start hook
-# both write these — manual trigger naturally resets the "next due"
-# clock forward by 7 days because it updates last_started_at.
-KEY_BACKUPS_LAST_SWEEP_STARTED_AT = "backups.last_sweep_started_at"
-KEY_BACKUPS_LAST_SWEEP_FINISHED_AT = "backups.last_sweep_finished_at"
-KEY_BACKUPS_LAST_SWEEP_WRITTEN = "backups.last_sweep_written"
-KEY_BACKUPS_LAST_SWEEP_SKIPPED = "backups.last_sweep_skipped"
-KEY_BACKUPS_LAST_SWEEP_FAILED = "backups.last_sweep_failed"
-# Provenance of the last sweep: 'on_start' (sidecar boot) or 'manual'
-# (user pressed Trigger scheduled backup now). Lets the UI clarify
-# "ran on app launch" vs "you ran it from Settings".
-KEY_BACKUPS_LAST_SWEEP_SOURCE = "backups.last_sweep_source"
-
 # Folders the MCP `import_image` tool may read from, as a JSON list of
 # absolute paths. Set only from Settings → Security: a tool call that
 # could widen its own reach would make the allow-list pointless.
@@ -112,18 +81,15 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     # and teardown on different worker threads. SQLite's same-thread
     # guard would then 500 every /settings call. Per-request open +
     # close means concurrent use of a single connection isn't a risk.
-    base = root or paths.user_data_dir()
-    target = db_path(base)
-    _migrate_from_documents_db(base, target)
-    conn = sqlite3.connect(target, check_same_thread=False)
+    conn = sqlite3.connect(db_path(root), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
-    _drop_retired_ai_keys(conn)
+    _drop_retired_keys(conn)
     return conn
 
 
-# Keys that belonged to the in-app LLM features (RAG chat, the IC/OOC
-# classifier, multi-query expansion). Workbench runs no language model
+# Keys of removed features: mostly the in-app LLM features (RAG chat,
+# the IC/OOC classifier, multi-query expansion), plus scheduled backups. Workbench runs no language model
 # of its own any more — the connected MCP client brings one — so these
 # rows are dead weight that would otherwise sit in every existing
 # install's settings.db forever, including an API key the user can no
@@ -152,6 +118,17 @@ RETIRED_KEYS = (
     "rag.embed_document_prefix",
     "rag.embed_keep_alive",
     "rag.chat_embed_keep_alive",
+    # Scheduled backups are gone: nothing runs on a timer, and no
+    # Backups are pruned, so their interval, retention and last-run
+    # rows have no reader.
+    "backups.scheduled_interval_days",
+    "backups.scheduled_keep_last_n",
+    "backups.last_sweep_started_at",
+    "backups.last_sweep_finished_at",
+    "backups.last_sweep_written",
+    "backups.last_sweep_skipped",
+    "backups.last_sweep_failed",
+    "backups.last_sweep_source",
 )
 
 #: `rag.local_embed_model` existed only while both backends did. With
@@ -160,8 +137,8 @@ RETIRED_KEYS = (
 _RENAMED_KEYS = {"rag.local_embed_model": KEY_RAG_EMBED_MODEL}
 
 
-def _drop_retired_ai_keys(conn: sqlite3.Connection) -> None:
-    """Clean up settings rows left over from the removed AI features.
+def _drop_retired_keys(conn: sqlite3.Connection) -> None:
+    """Clean up settings rows left over from removed features.
 
     Runs on every connect and is a no-op once done — a DELETE of rows
     that aren't there costs nothing, and this way an install that
@@ -188,52 +165,6 @@ def _drop_retired_ai_keys(conn: sqlite3.Connection) -> None:
     except sqlite3.DatabaseError:
         # A settings cleanup must never stop the sidecar from starting.
         pass
-
-
-def _migrate_from_documents_db(base: Path, target: Path) -> None:
-    """One-shot import of the `settings` table out of the old shared
-    `documents.db` into the new dedicated `settings.db`, then delete
-    `documents.db` so the snippets feature leaves no trace on disk.
-
-    Idempotent: once settings.db exists this is a no-op. Errors are
-    swallowed because a corrupt or locked documents.db must not block
-    the sidecar from starting up — worst case the user loses their
-    FCHAT data-dir preference and re-picks it from Settings.
-    """
-    if target.exists():
-        return
-    legacy = base / "documents.db"
-    if not legacy.exists():
-        return
-    try:
-        src = sqlite3.connect(legacy)
-        src.row_factory = sqlite3.Row
-        try:
-            rows = src.execute("SELECT key, value FROM settings").fetchall()
-        except sqlite3.DatabaseError:
-            rows = []
-        src.close()
-        if rows:
-            dst = sqlite3.connect(target)
-            dst.executescript(SCHEMA)
-            dst.executemany(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                [(r["key"], r["value"]) for r in rows],
-            )
-            dst.commit()
-            dst.close()
-    except Exception:
-        return
-    finally:
-        try:
-            legacy.unlink()
-        except OSError:
-            pass
-        for sidecar_file in ("documents.db-wal", "documents.db-shm"):
-            try:
-                (base / sidecar_file).unlink()
-            except OSError:
-                pass
 
 
 def get(conn: sqlite3.Connection, key: str) -> str | None:
