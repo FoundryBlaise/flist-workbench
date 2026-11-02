@@ -68,14 +68,6 @@ _PAYLOAD_FIELDS = (
 )
 
 
-_MANIFEST_SCHEMA = """
-CREATE TABLE IF NOT EXISTS rag_meta (
-    key         TEXT PRIMARY KEY,
-    value       TEXT NOT NULL,
-    updated_at  REAL NOT NULL
-);
-"""
-
 _KEY_EMBED_MODEL = "embed_model"
 _KEY_EMBED_DIMENSION = "embed_dimension"
 _KEY_LAST_INGEST_AT = "last_ingest_at"
@@ -109,14 +101,12 @@ def qdrant_dir(root: Path | None = None) -> Path:
 
 
 def _manifest_conn(root: Path | None = None) -> sqlite3.Connection:
-    """Open the same labels.db connection and ensure rag_meta exists.
+    """Open labels.db, where the rag_meta table lives (labels.py migrates it).
 
     Stashing manifest rows next to labels keeps the user's app data in
     one SQLite file — easier to back up, no second migration story.
     """
-    conn = labels_store.connect(root)
-    conn.executescript(_MANIFEST_SCHEMA)
-    return conn
+    return labels_store.connect(root)
 
 
 def read_manifest(conn: sqlite3.Connection | None = None, root: Path | None = None) -> Manifest:

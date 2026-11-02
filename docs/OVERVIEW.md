@@ -53,7 +53,8 @@ it rather than beside it.
 | `electron/` | main process, preload bridge, native menu, sidecar spawn |
 | `renderer/src/features/` | editor, logs, flist (profile tabs), sidebar, settings |
 | `renderer/src/state.ts` | one Zustand store; `state/flist.ts` holds the payload helpers |
-| `sidecar/server.py` | the REST surface the renderer and extension call |
+| `sidecar/server.py` | the sidecar app: lifespan, middleware, error handlers, router registration |
+| `sidecar/routers/` | the REST surface the renderer and extension call, one router per area |
 | `sidecar/services/` | orchestration shared by REST routes and MCP tools |
 | `sidecar/workbench_mcp/` | the MCP server: tool registry + tool modules |
 | `sidecar/services/render.py` | parks a render request until the app draws it |
