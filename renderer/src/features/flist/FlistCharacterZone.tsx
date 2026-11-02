@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
 import { selectWorkingSlot, useStore } from '../../state'
-import type { SetMeta } from '../../state/flist'
-import { ContextMenu } from './working-sets/ContextMenu'
-import { ConfirmModal } from './working-sets/ConfirmModal'
-import { CrossCharacterImportModal } from './working-sets/CrossCharacterImportModal'
+import { ContextMenu } from '../../components/ContextMenu'
+import { ConfirmModal } from '../../components/ConfirmModal'
 
 function relativeTime(epoch: number | null | undefined): string {
   if (!epoch) return 'never'
@@ -18,13 +16,7 @@ function relativeTime(epoch: number | null | undefined): string {
   return new Date(epoch * 1000).toLocaleDateString()
 }
 
-type CtxAnchor = { setId: string; x: number; y: number }
-
-// Stable empty reference — returning a fresh `[]` from a Zustand
-// selector triggers a re-render every time because the new reference
-// never compares equal to the previous one, which puts this component
-// into a tight render loop (React #185).
-const EMPTY_SETS: readonly never[] = []
+type CtxAnchor = { x: number; y: number }
 
 export function FlistCharacterZone() {
   const session = useStore((s) => s.flistSession)
@@ -33,35 +25,22 @@ export function FlistCharacterZone() {
   const roster = useStore((s) => s.flistRoster)
   const pull = useStore((s) => s.flistPullCharacter)
 
-  // Working sets v2 wiring.
-  const sets = useStore(
-    (s) =>
-      (activeId && s.flistSets[activeId]) ||
-      (EMPTY_SETS as unknown as SetMeta[])
+  // When the Workbench last changed; null while it has none, absent
+  // until asked.
+  const workbenchInfo = useStore((s) =>
+    activeId ? s.flistWorkbenchInfo[activeId] : undefined
   )
-  const activeSetId = useStore((s) =>
-    activeId ? (s.flistActiveSetId[activeId] ?? null) : null
-  )
-  const setsStatus = useStore((s) =>
-    activeId ? (s.flistSetsStatus[activeId] ?? 'idle') : 'idle'
+  const viewingFlist = useStore((s) =>
+    activeId ? s.flistViewingLive[activeId] === true : false
   )
   const workingSlot = useStore((s) =>
     activeId ? selectWorkingSlot(s, activeId) : undefined
   )
-  const loadSets = useStore((s) => s.flistLoadSets)
-  // flistCreateSet / Rename / Duplicate / Delete still exist in the
-  // store for the MCP-facing routes and for drafts an older version
-  // left behind. The window has no surface for them any more.
-  const activateFromFlist = useStore((s) => s.flistActivateFromFlist)
-  const openWorkbench = useStore((s) => s.flistOpenWorkbench)
-  const exportSet = useStore((s) => s.flistExportSet)
-  const importSet = useStore((s) => s.flistImportSet)
+  const loadWorkbenchInfo = useStore((s) => s.flistLoadWorkbenchInfo)
+  const showLive = useStore((s) => s.flistShowLive)
+  const openWorkbench = useStore((s) => s.flistOpenWorking)
   const backupCharacter = useStore((s) => s.flistBackupCharacter)
   const resetWorkingToLive = useStore((s) => s.flistResetWorkingToLive)
-  const confirmCrossCharacterImport = useStore(
-    (s) => s.flistConfirmCrossCharacterImport
-  )
-  const cancelPendingImport = useStore((s) => s.flistCancelPendingImport)
 
   // TODO(working-sets v2): the three actions below were the inline-button
   // surfaces removed from area 2 (Export for restore, Save snapshot, Open
@@ -73,8 +52,8 @@ export function FlistCharacterZone() {
 
   useEffect(() => {
     if (!activeId) return
-    if (setsStatus === 'idle') void loadSets(activeId)
-  }, [activeId, setsStatus, loadSets])
+    if (workbenchInfo === undefined) void loadWorkbenchInfo(activeId)
+  }, [activeId, workbenchInfo, loadWorkbenchInfo])
 
   const [ctx, setCtx] = useState<CtxAnchor | null>(null)
   const [fromFlistCtx, setFromFlistCtx] = useState<{
@@ -85,31 +64,10 @@ export function FlistCharacterZone() {
   // as a ConfirmModal before the reset runs — the bench only reaches here
   // when it actually differs from Live, so confirming is never a no-op.
   const [confirmReset, setConfirmReset] = useState(false)
-  const [crossCharImport, setCrossCharImport] = useState<{
-    characterName: string
-    setName: string
-  } | null>(null)
-  const [importBusy, setImportBusy] = useState(false)
-  const [importMessage, setImportMessage] = useState<{
-    kind: 'success' | 'error'
-    text: string
-  } | null>(null)
-  // Drop any in-flight import state when the active character switches
-  // — the modal and the module-scope handshake state are both keyed to
-  // the previous character and would materialise under the wrong one.
+  // A reset armed for one character must not run on the next.
   useEffect(() => {
-    setCrossCharImport(null)
-    setImportMessage(null)
     setConfirmReset(false)
-    cancelPendingImport()
-  }, [activeId, cancelPendingImport])
-  // Auto-clear import banners after 6s so they don't accumulate.
-  useEffect(() => {
-    if (!importMessage) return
-    const t = setTimeout(() => setImportMessage(null), 6000)
-    return () => clearTimeout(t)
-  }, [importMessage])
-
+  }, [activeId])
 
   if (!session.active || !activeId) return null
 
@@ -130,12 +88,7 @@ export function FlistCharacterZone() {
     && (integrity.status === 'partial' || integrity.status === 'interrupted')
     && integrity.missing > 0
   const hasLive = Boolean(live)
-  // One bench per character, so the list has at most one entry worth
-  // showing. Extra drafts an older version left behind stay on disk and
-  // stay out of the tree — the sidecar picks which one is the bench and
-  // logs the choice.
-  const bench = sets.length > 0 ? sets[0] : null
-  const viewingFlist = activeSetId === null
+  const viewingWorkbench = !viewingFlist
   // F-list's character-data.php response carries `updated_at` (unix
   // epoch of the last profile edit). We round-trip it inside live.json,
   // so the renderer can surface "F-list edited Xd ago" without a
@@ -148,12 +101,11 @@ export function FlistCharacterZone() {
         ?? null)
       : null
 
-  // Rename / Create a copy / Delete are gone with the concept they
-  // belonged to: there is one bench, it is not named, and deleting it
-  // would throw away unpublished edits to no end — the next click
-  // recreates it from Live.
-  const ctxItems = (setId: string) => {
-    const s = sets.find((x) => x.id === setId)
+  // Rename / Create a copy / Delete / Export are gone with the concept
+  // they belonged to: there is one bench, it is not named, and deleting
+  // it would throw away unpublished edits to no end — the next click
+  // recreates it from Live. A Backup is the copy to keep or carry.
+  const ctxItems = () => {
     // The bench is the only editable copy, so local changes are exactly
     // the paths the user has touched — same guard the Profile-fields tab
     // uses for its "Reset to Live" affordance.
@@ -169,16 +121,6 @@ export function FlistCharacterZone() {
           void backupCharacter(name, { pull: false })
         }
       },
-      ...(s
-        ? [
-            {
-              label: 'Export as ZIP…',
-              onSelect: () => {
-                void exportSet(activeId, s.id)
-              }
-            }
-          ]
-        : []),
       ...(hasLocalChanges
         ? [
             {
@@ -196,59 +138,6 @@ export function FlistCharacterZone() {
           ]
         : [])
     ]
-  }
-
-  const handleImport = async (): Promise<void> => {
-    if (importBusy) return
-    setImportBusy(true)
-    setImportMessage(null)
-    try {
-      const outcome = await importSet(activeId)
-      if (outcome.status === 'requires_confirmation') {
-        setCrossCharImport({
-          characterName: outcome.source.characterName,
-          setName: outcome.source.setName
-        })
-      } else if (outcome.status === 'imported') {
-        const { added, skipped } = outcome.imageStats
-        setImportMessage({
-          kind: 'success',
-          text:
-            added === 0 && skipped === 0
-              ? `Imported "${outcome.set.name}".`
-              : `Imported "${outcome.set.name}" — ${added} new image${added === 1 ? '' : 's'}, ${skipped} already on disk.`
-        })
-      } else if (outcome.status === 'error') {
-        setImportMessage({ kind: 'error', text: outcome.message })
-      } else if (outcome.status === 'unavailable') {
-        setImportMessage({
-          kind: 'error',
-          text: 'Import is unavailable — file dialogs require the desktop build.'
-        })
-      }
-      // 'cancelled' is the OS dialog dismiss; deliberately silent.
-    } finally {
-      setImportBusy(false)
-    }
-  }
-
-  const handleCrossCharConfirm = async (): Promise<void> => {
-    setCrossCharImport(null)
-    setImportBusy(true)
-    try {
-      const outcome = await confirmCrossCharacterImport()
-      if (outcome.status === 'imported') {
-        const { added, skipped } = outcome.imageStats
-        setImportMessage({
-          kind: 'success',
-          text: `Imported "${outcome.set.name}" — ${added} new image${added === 1 ? '' : 's'}, ${skipped} already on disk.`
-        })
-      } else if (outcome.status === 'error') {
-        setImportMessage({ kind: 'error', text: outcome.message })
-      }
-    } finally {
-      setImportBusy(false)
-    }
   }
 
   return (
@@ -300,18 +189,6 @@ export function FlistCharacterZone() {
       )}
 
       <div className="flist-zone-setactions">
-        <button
-          type="button"
-          className="flist-zone-import"
-          onClick={() => {
-            void handleImport()
-          }}
-          disabled={importBusy}
-          title="Import a Workbench-native working set bundle (.zip)"
-          data-testid="flist-zone-import"
-        >
-          {importBusy ? 'Importing…' : 'Import…'}
-        </button>
         {/* The one thing that cannot happen in here: publishing.
             Workbench never writes to f-list.net, so every finished
             profile ends with a trip to the site — and finding that
@@ -333,22 +210,8 @@ export function FlistCharacterZone() {
           Open on F-list ↗
         </button>
       </div>
-      {importMessage && (
-        <div
-          className={
-            importMessage.kind === 'success'
-              ? 'flist-zone-import-msg flist-zone-import-msg-success'
-              : 'flist-zone-import-msg flist-zone-import-msg-error'
-          }
-          role={importMessage.kind === 'error' ? 'alert' : 'status'}
-          data-testid="flist-zone-import-msg"
-        >
-          {importMessage.text}
-        </div>
-      )}
-
       {/* Two rows, always the same two: what F-list has, and the copy
-          you edit. The tree used to list N named working sets with one
+          you edit. The tree used to list several named drafts with one
           of them active, which is the arrangement testers could not
           explain — not the wording. */}
       <ul className="flist-zone-sets" data-testid="flist-zone-sets">
@@ -357,8 +220,8 @@ export function FlistCharacterZone() {
             viewingFlist ? ' is-active' : ''
           }${hasLive ? '' : ' is-empty'}`}
           onClick={() => {
-            if (!hasLive) return
-            void activateFromFlist(activeId)
+            if (!hasLive || viewingFlist) return
+            void showLive(activeId)
           }}
           onContextMenu={(e) => {
             // Read-only row, so only the action that makes sense
@@ -396,29 +259,29 @@ export function FlistCharacterZone() {
         {hasLive && (
           <li
             className={`flist-zone-setrow flist-zone-workbench${
-              bench && activeSetId === bench.id ? ' is-active' : ''
+              viewingWorkbench ? ' is-active' : ''
             }`}
             onClick={() => {
-              if (bench && activeSetId === bench.id) return
+              if (viewingWorkbench) return
               void openWorkbench(activeId)
             }}
             onContextMenu={(e) => {
               e.preventDefault()
-              setCtx({ setId: bench?.id ?? '', x: e.clientX, y: e.clientY })
+              setCtx({ x: e.clientX, y: e.clientY })
             }}
             data-testid="flist-zone-workbench"
           >
             <span className="flist-zone-setrow-marker" aria-hidden="true">
-              {bench && activeSetId === bench.id ? '✱' : '·'}
+              {viewingWorkbench ? '✱' : '·'}
             </span>
             <div className="flist-zone-setrow-label">
               <span className="flist-zone-setrow-name">Workbench</span>
               <span className="flist-zone-setrow-meta">
-                {!bench
-                  ? 'starts as a copy of F-List'
-                  : activeSetId === bench.id && workingSlot?.unsavedDirty
-                    ? 'unsaved'
-                    : `your edits · last changed ${relativeTime(bench.updatedAt)}`}
+                {viewingWorkbench && workingSlot?.unsavedDirty
+                  ? 'unsaved'
+                  : !workbenchInfo
+                    ? 'starts as a copy of F-List'
+                    : `your edits · last changed ${relativeTime(workbenchInfo.updatedAt)}`}
               </span>
             </div>
           </li>
@@ -429,7 +292,7 @@ export function FlistCharacterZone() {
         <ContextMenu
           x={ctx.x}
           y={ctx.y}
-          items={ctxItems(ctx.setId)}
+          items={ctxItems()}
           onClose={() => setCtx(null)}
         />
       )}
@@ -446,19 +309,6 @@ export function FlistCharacterZone() {
             }
           ]}
           onClose={() => setFromFlistCtx(null)}
-        />
-      )}
-      {crossCharImport && (
-        <CrossCharacterImportModal
-          source={crossCharImport}
-          targetCharacterName={name}
-          onCancel={() => {
-            setCrossCharImport(null)
-            cancelPendingImport()
-          }}
-          onConfirm={() => {
-            void handleCrossCharConfirm()
-          }}
         />
       )}
       {confirmReset && (

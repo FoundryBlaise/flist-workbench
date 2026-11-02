@@ -32,7 +32,6 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
     // Working sets v2: writes route through the active set's payload
     // endpoint, so a slot without an active set can never produce a PUT.
     flistSetWorking: { ...s.flistSetWorking, [SET_ID]: slot },
-    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistArchive: {
       ...s.flistArchive,
       [characterId]: archiveEntry(livePayload({ character: { description: 'live' } }), {
@@ -51,8 +50,6 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistSetWorking: {},
-    flistActiveSetId: {},
-    flistSets: {},
     flistArchive: {},
     flistDiffRightSource: {},
     flistDiffBackupCache: {},

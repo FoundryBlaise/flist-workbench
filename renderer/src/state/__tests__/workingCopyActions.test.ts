@@ -27,8 +27,6 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistSetWorking: {},
-    flistActiveSetId: {},
-    flistSets: {},
     flistExternalChange: {},
     flistArchive: {},
     flistCustomKinksUI: {},
@@ -69,7 +67,6 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
     // (that's F-list read-only mode). Without this the autosave
     // assertions below can never see a PUT.
     flistSetWorking: { ...s.flistSetWorking, [SET_ID]: slot },
-    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistActiveCharacterId: characterId
   }))
 }
@@ -328,7 +325,6 @@ describe('flistFlushWorking 409 etag-mismatch path', () => {
     await vi.advanceTimersByTimeAsync(500)
     const change = useStore.getState().flistExternalChange['99']
     expect(change).toBeTruthy()
-    expect(change?.setId).toBe(SET_ID)
     expect(change?.etag).toBe('server-etag')
   })
 })
@@ -477,7 +473,7 @@ describe('flistOpenWorking reads the one Workbench endpoint', () => {
     await useStore.getState().flistOpenWorking('99')
     expect(fake.requestsTo(`GET ${BENCH_URL}?create=false`)).toHaveLength(1)
     expect(fake.requestsTo('GET /flist/character/99/working')).toHaveLength(0)
-    expect(useStore.getState().flistActiveSetId['99']).toBe('bbbbbbbbbbbb')
+    expect(useStore.getState().flistViewingLive['99']).toBe(false)
     const slot = useStore.getState().flistWorking['99']
     expect(slot.etag).toBe('disk-etag')
     expect(slot.materialised).toBe(true)
@@ -514,7 +510,6 @@ describe('the first edit of a character with no Workbench', () => {
           materialised: false
         })
       },
-      flistActiveSetId: {},
       flistActiveCharacterId: '99',
       editorReadOnly: false
     })
@@ -545,7 +540,7 @@ describe('the first edit of a character with no Workbench', () => {
     const slot = useStore.getState().flistWorking['99']
     expect(slot.etag).toBe('saved')
     expect(slot.unsavedDirty).toBe(false)
-    expect(useStore.getState().flistActiveSetId['99']).toBe('bbbbbbbbbbbb')
+    expect(useStore.getState().flistWorkbenchInfo['99']?.updatedAt).toBeGreaterThan(0)
   })
 
   it('a Workbench something else made meanwhile is not overwritten: the edit waits for the user', async () => {
@@ -593,7 +588,7 @@ describe('the first edit of a character with no Workbench', () => {
 describe('the window addresses the Workbench, never a set', () => {
   it('open, autosave and the close-time flush send no set id', async () => {
     seedLive({ character: { description: 'published' } })
-    useStore.setState({ flistActiveSetId: {}, flistActiveCharacterId: '99', flistRoster: [] })
+    useStore.setState({ flistActiveCharacterId: '99', flistRoster: [] })
     fake.on('GET /flist/character/99/workbench?create=false', json(workbenchRead(SET_ID)))
     fake.on(
       `GET ${BENCH_URL}?create=false`,
@@ -960,19 +955,17 @@ describe('coming back to a character shows the Workbench, not Live', () => {
     // back — the Workbench row is selected but the editor shows the
     // published profile. The edits were fine on disk; the window was
     // reading the wrong thing. Clicking Live and then Workbench fixed
-    // it, because that path goes through flistActivateSet, which does
-    // read the set's payload.
+    // it, because that path read the Workbench again.
     seedSlot('99', { character: { description: 'stale' } })
-    useStore.setState((s) => ({
+    useStore.setState({
       flistWorking: {},
       flistArchive: {
         '99': archiveEntry(
           livePayload({ character: { name: 'Amber', description: 'what the site has' } })
         )
       },
-      flistActiveSetId: { ...s.flistActiveSetId, '99': SET_ID },
       flistActiveCharacterId: '99'
-    }))
+    })
     fake.on(
       `GET ${BENCH_URL}`,
       json(
@@ -1080,7 +1073,6 @@ describe('opening a character never applies a stale read', () => {
         { id: 99, name: 'Amber' },
         { id: 100, name: 'Birch' }
       ] as never,
-      flistActiveSetId: { [AMBER]: AMBER_SET, [BIRCH]: BIRCH_SET },
       flistArchive: {
         [AMBER]: archiveEntry(livePayload({ character: { description: 'Amber on F-list' } })),
         [BIRCH]: archiveEntry(livePayload({ character: { description: 'Birch on F-list' } }))

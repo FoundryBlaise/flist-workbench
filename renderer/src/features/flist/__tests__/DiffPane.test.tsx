@@ -37,7 +37,6 @@ function seed(state: {
   // satisfies the legacy direct-read paths AND the new selector.
   useStore.setState({
     flistWorking: { '99': slot },
-    flistActiveSetId: { '99': 'set99' },
     flistSetWorking: { 'set99': slot },
     flistArchive: {
       '99': {
@@ -61,7 +60,6 @@ function seed(state: {
 beforeEach(() => {
   useStore.setState({
     flistWorking: {},
-    flistActiveSetId: {},
     flistSetWorking: {},
     flistArchive: {},
     flistMapping: {

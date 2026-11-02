@@ -48,7 +48,6 @@ beforeEach(() => {
   }
   useStore.setState({
     flistWorking: { [CID]: slot },
-    flistActiveSetId: { [CID]: 'set42' },
     flistSetWorking: { set42: slot },
     flistCharacterImages: { [CID]: { byId: {}, status: 'ready' } },
     flistRoster: []

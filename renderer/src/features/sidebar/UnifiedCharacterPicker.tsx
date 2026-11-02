@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { api } from '../../lib/api'
 import { displayCharacter as displayName } from '../../lib/partnerName'
-import { ContextMenu } from '../flist/working-sets/ContextMenu'
+import { ContextMenu } from '../../components/ContextMenu'
 
 const HIDE_LOGS_ONLY_KEY = 'flist-workbench:picker-hide-logs-only'
 

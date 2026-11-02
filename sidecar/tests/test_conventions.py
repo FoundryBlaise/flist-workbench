@@ -252,14 +252,11 @@ RETIRED_TERMS: dict[str, re.Pattern[str]] = {
 # term not listed here has no allowance.
 WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/components/ExternalChangeBanner.tsx": 1,
-    "renderer/src/features/flist/FlistCharacterZone.tsx": 1,
     "renderer/src/features/flist/ImagesTab.tsx": 2,
     "renderer/src/features/flist/UserscriptHelpModal.tsx": 2,
     "renderer/src/features/flist/imageUsage.ts": 1,
-    "renderer/src/features/flist/working-sets/CrossCharacterImportModal.tsx": 1,
     "renderer/src/features/foreign/ForeignWorkspace.tsx": 1,
     "renderer/src/features/sidebar/UnifiedCharacterPicker.tsx": 1,
-    "renderer/src/state.ts": 2,
     "sidecar/character_archive.py": 1,
     "sidecar/services/payload_ops.py": 1,
 }
@@ -274,10 +271,6 @@ SNAPSHOT_ALLOWED: dict[str, int] = {
 }
 
 BUNDLE_ALLOWED: dict[str, int] = {
-    "renderer/src/features/flist/FlistCharacterZone.tsx": 1,
-    "renderer/src/features/flist/working-sets/CrossCharacterImportModal.tsx": 1,
-    "renderer/src/lib/api.ts": 1,
-    "renderer/src/state.ts": 3,
     "sidecar/set_bundle.py": 7,
 }
 
