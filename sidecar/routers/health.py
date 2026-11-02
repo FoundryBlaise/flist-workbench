@@ -1,11 +1,12 @@
-"""Health, the event stream and the MCP endpoint description."""
+"""Health, shutdown, the event stream and the MCP endpoint description."""
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 import workbench_mcp
+from refusals import NotStoppable
 from services import events as event_bus
-from services import sse
+from services import lifecycle, sse
 
 router = APIRouter()
 
@@ -13,6 +14,20 @@ router = APIRouter()
 @router.get("/health")
 def health(request: Request) -> dict[str, str]:
     return {"status": "ok", "version": request.app.version}
+
+
+@router.post("/shutdown", status_code=202)
+def shutdown() -> dict[str, bool]:
+    """The app asks its sidecar to stop (at quit, or to replace it).
+
+    Needs the launch secret like every other route (ADR 0002): a web
+    page that can reach the port must not be able to stop it. The
+    answer goes out first; open requests then get
+    `lifecycle.GRACEFUL_SHUTDOWN_S` and the process exits.
+    """
+    if not lifecycle.request_stop():
+        raise NotStoppable()
+    return {"stopping": True}
 
 
 @router.get("/events")
