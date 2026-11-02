@@ -52,8 +52,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const resetField = useStore((s) => s.flistResetWorkingField)
   const resetCustomKink = useStore((s) => s.flistCustomKinksResetField)
   const resetImageRow = useStore((s) => s.flistResetImageRow)
-  const resetToLive = useStore((s) => s.flistResetWorkingToLive)
-  const resetToBackup = useStore((s) => s.flistResetWorkingToBackup)
+  const resetToSource = useStore((s) => s.flistDiffResetToSource)
 
   const [showUnchanged, setShowUnchanged] = useState(false)
   const [activeCategories, setActiveCategories] = useState<Set<DiffCategory>>(
@@ -139,14 +138,14 @@ export function DiffPane({ characterId }: { characterId: string }) {
 
   if (!slot) {
     return (
-      <div className="diff-pane diff-pane-loading">Loading working copy…</div>
+      <div className="diff-pane diff-pane-loading">Loading the Workbench…</div>
     )
   }
   if (!right && source.kind === 'live') {
     return (
       <div className="diff-pane diff-pane-empty" data-testid="diff-pane-empty">
         <p>
-          Pull a Live snapshot first: open the <strong>F-list</strong> sidebar
+          Pull Live first: open the <strong>F-list</strong> sidebar
           and click <strong>↻ Refresh</strong> on this character.
         </p>
         <BackupPicker characterId={characterId} />
@@ -198,7 +197,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
       ? 'Live'
       : source.kind === 'workbench'
         ? 'the Workbench'
-        : `Snapshot · ${formatBackupDate(archive?.snapshots ?? [], source.filename)}`
+        : `Backup · ${formatBackupDate(archive?.zipBackups ?? [], source.filename)}`
 
   const descriptionRow = model.rows.find(
     (r) => r.path === 'character.description'
@@ -345,7 +344,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
         <p className="diff-pane-empty-text">
           {showUnchanged
             ? 'No matching rows. Try toggling category pills above.'
-            : `Working copy matches ${rightLabel}.`}
+            : `The Workbench matches ${rightLabel}.`}
         </p>
       ) : (
         <div className="diff-pane-table-wrap">
@@ -368,7 +367,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
                       <tr>
                         <th></th>
                         <th>Field</th>
-                        <th>Working</th>
+                        <th>Workbench</th>
                         <th>{rightLabel}</th>
                         <th></th>
                       </tr>
@@ -413,7 +412,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
                           <tr>
                             <th></th>
                             <th>Field</th>
-                            <th>Working</th>
+                            <th>Workbench</th>
                             <th>{rightLabel}</th>
                             <th></th>
                           </tr>
@@ -451,7 +450,11 @@ export function DiffPane({ characterId }: { characterId: string }) {
         >
           <div className="profile-fields-modal">
             <div className="profile-fields-modal-header">
-              <span>Reset working copy to {rightLabel}</span>
+              <span>
+                {source.kind === 'backup'
+                  ? `Restore ${rightLabel}`
+                  : `Reset the Workbench to ${rightLabel}`}
+              </span>
               <button
                 type="button"
                 className="profile-fields-modal-close"
@@ -467,8 +470,9 @@ export function DiffPane({ characterId }: { characterId: string }) {
               {model.counts.added + model.counts.removed +
               model.counts.modified === 1
                 ? ''
-                : 's'} and replace Working copy with {rightLabel}? You'll have 5
-              seconds to undo.
+                : 's'} and replace the Workbench with {rightLabel}? The Workbench
+              is kept as a Backup first
+              {source.kind === 'live' ? ", and you'll have 5 seconds to undo." : '.'}
             </p>
             {source.kind === 'backup' && (
               <p className="profile-fields-modal-warn">
@@ -489,11 +493,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
                 className="profile-fields-modal-confirm"
                 onClick={() => {
                   setResetAllConfirm(false)
-                  if (source.kind === 'live') {
-                    void resetToLive(characterId)
-                  } else if (source.kind === 'backup') {
-                    void resetToBackup(characterId, source.filename)
-                  }
+                  void resetToSource(characterId)
                 }}
               >
                 Discard changes
@@ -507,11 +507,12 @@ export function DiffPane({ characterId }: { characterId: string }) {
 }
 
 function formatBackupDate(
-  backups: { filename: string; created_at: number }[],
+  backups: { filename: string; created_at: number; name: string | null }[],
   filename: string
 ): string {
   const match = backups.find((b) => b.filename === filename)
   if (!match) return filename
+  if (match.name) return match.name
   return new Date(match.created_at * 1000)
     .toISOString()
     .slice(0, 16)

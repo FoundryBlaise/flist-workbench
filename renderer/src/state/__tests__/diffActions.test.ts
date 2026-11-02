@@ -1,11 +1,14 @@
-// Tier 4 — flistResetWorkingToBackup integration. Covers:
-// - lazy backup load via api.flistSnapshotRead when cache miss
-// - PUT seeded-from-backup over the Workbench's etag, with undo stashed
-// - drain in-flight save so a mid-flight PUT can't resurrect the
-//   pre-reset payload (parity with reset-to-Live).
+// The Diff tab compares the Workbench with Live (the default) or with
+// one of the character's Backups. Seam: the store, against the fake
+// sidecar.
+//
+// - the picker's entries: Live, then the Backups with their source and
+//   occasion, read from the Backup list the archive load fetched
+// - choosing a Backup reads that Backup's payload
+// - "reset to this" resets to Live, or Restores the chosen Backup
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectDiffSources, useStore } from '../../state'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 import {
   archiveEntry,
@@ -17,13 +20,42 @@ import {
 
 let fake: FakeApi
 
-const SET_ID = 'aaaaaaaaaaaa'
 const BENCH = '/flist/character/99/workbench/payload'
 const SAVE = `PUT ${BENCH}`
-const SNAPSHOT_111 = 'GET /flist/character/99/snapshots/111.json'
+const BACKUPS = 'GET /flist/character/99/zip-backups'
+const OLDER = '2026-10-01T090000Z.zip'
+const NEWER = '2026-10-30T120000Z.zip'
+const backupPayloadRoute = (filename: string) =>
+  `GET /flist/character/99/zip-backups/${filename}/payload`
 
 const descOf = (body: unknown) =>
   ((body as { character?: { description?: string } } | undefined)?.character ?? {}).description
+
+/** One row of the sidecar's Backup list. */
+function backupRow(
+  filename: string,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    filename,
+    created_at: 1790000000,
+    size: 2048,
+    kind: 'manual_single',
+    source: 'workbench',
+    occasion: 'manual',
+    name: null,
+    ...overrides
+  }
+}
+
+/** The sidecar's answer to reading a Backup's payload. */
+function backupRead(filename: string, description: string) {
+  return json({
+    payload: workbenchPayload({ character: { description } }),
+    filename,
+    meta: { kind: 'manual_single' }
+  })
+}
 
 function seedSlot(characterId: string, payload: Record<string, unknown>) {
   const slot = workingSlot(
@@ -32,18 +64,11 @@ function seedSlot(characterId: string, payload: Record<string, unknown>) {
   )
   useStore.setState((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
-    // Working sets v2: writes route through the active set's payload
-    // endpoint, so a slot without an active set can never produce a PUT.
-    flistActiveSetId: { ...s.flistActiveSetId, [characterId]: SET_ID },
     flistArchive: {
       ...s.flistArchive,
-      [characterId]: archiveEntry(livePayload({ character: { description: 'live' } }), {
-        snapshots: [{ filename: '111.json', created_at: 111, size: 200 }]
-      })
+      [characterId]: archiveEntry(livePayload({ character: { description: 'live' } }))
     },
-    flistActiveCharacterId: characterId,
-    flistDiffRightSource: {},
-    flistDiffBackupCache: {}
+    flistActiveCharacterId: characterId
   }))
 }
 
@@ -57,7 +82,10 @@ beforeEach(() => {
     flistArchive: {},
     flistDiffRightSource: {},
     flistDiffBackupCache: {},
-    flistResetUndo: null
+    flistDiffBackupStatus: {},
+    flistResetUndo: null,
+    flistActiveCharacterId: null,
+    editorReadOnly: false
   })
 })
 
@@ -67,108 +95,207 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('flistDiffSetRightSource', () => {
+describe('the Diff picker', () => {
+  it('lists Live, then the Backups with their source and occasion, and no snapshots', async () => {
+    fake.on('GET /flist/character/99/live', json(livePayload({ fetched_at: 1790000500 })))
+    fake.on(
+      'GET /flist/character/99/snapshots',
+      json({ snapshots: [{ filename: '111.json', created_at: 111, size: 200 }] })
+    )
+    fake.on(
+      BACKUPS,
+      json({
+        backups: [
+          backupRow(NEWER, { source: 'workbench', occasion: 'before-restore' }),
+          backupRow(OLDER, { source: 'live', occasion: 'backup-all', kind: 'manual_bulk' }),
+          backupRow('2025-01-01T000000Z.zip', { source: 'unknown', occasion: null })
+        ]
+      })
+    )
+
+    await useStore.getState().flistLoadArchive('99')
+
+    expect(selectDiffSources(useStore.getState(), '99')).toEqual([
+      { kind: 'live', lastPullAt: 1790000500 },
+      { kind: 'workbench' },
+      {
+        kind: 'backup',
+        filename: NEWER,
+        createdAt: 1790000000,
+        name: null,
+        origin: 'Workbench · before Restore'
+      },
+      {
+        kind: 'backup',
+        filename: OLDER,
+        createdAt: 1790000000,
+        name: null,
+        origin: 'Live · Back up all'
+      },
+      {
+        kind: 'backup',
+        filename: '2025-01-01T000000Z.zip',
+        createdAt: 1790000000,
+        name: null,
+        origin: 'Source unknown'
+      }
+    ])
+  })
+
+  it('offers Live alone while the Backup list has not loaded', () => {
+    seedSlot('99', {})
+    expect(selectDiffSources(useStore.getState(), '99')).toEqual([
+      { kind: 'live', lastPullAt: null },
+      { kind: 'workbench' }
+    ])
+  })
+})
+
+describe('the Diff tab picks its right-hand side', () => {
   it('records the picked source per character', () => {
-    useStore.getState().flistDiffSetRightSource('99', {
-      kind: 'backup',
-      filename: '111.json'
-    })
+    useStore.getState().flistDiffSetRightSource('99', { kind: 'backup', filename: NEWER })
     expect(useStore.getState().flistDiffRightSource['99']).toEqual({
       kind: 'backup',
-      filename: '111.json'
+      filename: NEWER
     })
   })
 })
 
-describe('flistDiffLoadBackup', () => {
-  it('caches the fetched backup payload under (characterId, filename)', async () => {
+describe('choosing a Backup compares the Workbench with its payload', () => {
+  it("reads the Backup's payload once and keeps it for the comparison", async () => {
     seedSlot('99', { character: { description: 'edited' } })
-    fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
-    await useStore.getState().flistDiffLoadBackup('99', '111.json')
-    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toEqual({
-      character: { description: 'snapshot' }
-    })
-    // Idempotent on second call: fetch is not re-invoked, and the
-    // cached Backup is still the one that was read.
-    fake.on(SNAPSHOT_111, json({ character: { description: 'changed' } }))
-    await useStore.getState().flistDiffLoadBackup('99', '111.json')
-    expect(fake.requestsTo(SNAPSHOT_111)).toHaveLength(1)
-    expect(useStore.getState().flistDiffBackupCache['99:111.json']).toEqual({
-      character: { description: 'snapshot' }
-    })
+    fake.on(backupPayloadRoute(NEWER), backupRead(NEWER, 'in the Backup'))
+
+    await useStore.getState().flistDiffLoadBackup('99', NEWER)
+    await useStore.getState().flistDiffLoadBackup('99', NEWER)
+
+    expect(fake.requestsTo(backupPayloadRoute(NEWER))).toHaveLength(1)
+    expect(descOf(useStore.getState().flistDiffBackupCache[`99:${NEWER}`])).toBe(
+      'in the Backup'
+    )
+    expect(useStore.getState().flistDiffBackupStatus[`99:${NEWER}`]).toBe('loaded')
+    expect(fake.requests.filter((r) => r.path.includes('/snapshots'))).toEqual([])
+  })
+
+  it('a Backup that cannot be read shows as an error, not a spinner', async () => {
+    seedSlot('99', {})
+    fake.on(
+      backupPayloadRoute(OLDER),
+      json({ code: 'backup_not_found', message: 'That Backup is gone.' }, 404)
+    )
+
+    await useStore.getState().flistDiffLoadBackup('99', OLDER)
+
+    expect(useStore.getState().flistDiffBackupStatus[`99:${OLDER}`]).toBe('error')
+    expect(useStore.getState().flistDiffBackupCache[`99:${OLDER}`]).toBeUndefined()
   })
 })
 
-describe('flistDiffLoadWorkbench', () => {
-  it(
-    'reads the Workbench payload and caches it under __workbench__',
-    async () => {
-      seedSlot('99', { character: { description: 'edited' } })
-      const onDisk = workbenchPayload({
-        _overlay: ['character.description'],
-        character: { description: 'on disk' }
-      })
-      fake.on(`GET ${BENCH}?create=false`, json(payloadRead(onDisk, 'p')))
-      await useStore.getState().flistDiffLoadWorkbench('99')
-      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
-      // Idempotent on second call: fetch is not re-invoked, and the
-      // cached Workbench is still the one that was read.
-      await useStore.getState().flistDiffLoadWorkbench('99')
-      expect(fake.requests).toHaveLength(1)
-      expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
-    }
-  )
-  it('marks error (not a spinner) when there is no bench', async () => {
+describe('the Diff tab compares Live with the Workbench while Live is shown', () => {
+  it('reads the Workbench payload once and keeps it', async () => {
     seedSlot('99', { character: { description: 'edited' } })
+    const onDisk = workbenchPayload({
+      _overlay: ['character.description'],
+      character: { description: 'on disk' }
+    })
+    fake.on(`GET ${BENCH}?create=false`, json(payloadRead(onDisk, 'p')))
+
+    await useStore.getState().flistDiffLoadWorkbench('99')
+    await useStore.getState().flistDiffLoadWorkbench('99')
+
+    expect(fake.requests).toHaveLength(1)
+    expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
+  })
+
+  it('marks error (not a spinner) when there is no Workbench', async () => {
+    seedSlot('99', {})
     fake.on(
       `GET ${BENCH}?create=false`,
       json({ code: 'no_workbench', message: 'this character has no Workbench yet' }, 404)
     )
+
     await useStore.getState().flistDiffLoadWorkbench('99')
+
     expect(useStore.getState().flistDiffBackupStatus['99:__workbench__']).toBe('error')
-    expect(
-      useStore.getState().flistDiffBackupCache['99:__workbench__']
-    ).toBeUndefined()
+    expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toBeUndefined()
   })
 })
 
-describe('flistResetWorkingToBackup', () => {
-  it('saves the Backup over the Workbench it replaces, with undo stashed, and never touches the legacy working-copy route', async () => {
+describe('"reset to this" in the Diff tab', () => {
+  const RESET = 'POST /flist/character/99/workbench/reset-to-live'
+  const LOAD = 'POST /flist/character/99/workbench/load-backup'
+  const BENCH_ID = 'aaaaaaaaaaaa'
+  const KEPT = '2026-11-02T120000Z.zip'
+
+  /** The Backup list after the sidecar kept the replaced Workbench. */
+  function backupListWithKept() {
+    fake.on('GET /flist/character/99/live', json(livePayload()))
+    fake.on('GET /flist/character/99/snapshots', json({ snapshots: [] }))
+    fake.on(
+      BACKUPS,
+      json({
+        backups: [
+          backupRow(KEPT, { source: 'workbench', occasion: 'before-restore' }),
+          backupRow(NEWER)
+        ]
+      })
+    )
+  }
+
+  const keptOrigins = () =>
+    selectDiffSources(useStore.getState(), '99').flatMap((e) =>
+      e.kind === 'backup' && e.filename === KEPT ? [e.origin] : []
+    )
+
+  it('on Live resets the Workbench to Live, which leaves a before-restore Backup', async () => {
     seedSlot('99', { character: { description: 'edited' } })
-    fake.on(SNAPSHOT_111, json({ character: { description: 'snapshot' } }))
-    fake.on(SAVE, json({ etag: 'restored' }))
-    await useStore.getState().flistResetWorkingToBackup('99', '111.json')
-    // Let the scheduled flush fire so the eager-PUT lands.
-    await vi.advanceTimersByTimeAsync(1000)
-    const [put] = fake.requestsTo(SAVE)
-    expect(put?.headers['If-Match']).toBe('seed')
-    expect(descOf(put?.body)).toBe('snapshot')
-    expect(fake.requests.map((r) => r.path).filter((p) => p.endsWith('/working'))).toEqual([])
-    const slot = useStore.getState().flistWorking['99']
-    expect(descOf(slot.payload)).toBe('snapshot')
-    expect(slot.etag).toBe('restored')
-    expect(useStore.getState().flistResetUndo?.characterId).toBe('99')
-  })
-})
-
-describe('flistDiffLoadBackup status tracking', () => {
-  it('records error status on api failure so the view can distinguish loading from 404 (UX P1-3)', async () => {
-    seedSlot('99', {})
     fake.on(
-      'GET /flist/character/99/snapshots/999.json',
-      json({ detail: 'not found' }, 404)
+      RESET,
+      json({
+        payload: workbenchPayload({ character: { description: 'live' } }),
+        etag: 'after-reset',
+        backed_up_first: { filename: KEPT, created_at: 1790000000 }
+      })
     )
-    await useStore.getState().flistDiffLoadBackup('99', '999.json')
-    expect(useStore.getState().flistDiffBackupStatus['99:999.json']).toBe('error')
+    backupListWithKept()
+
+    await useStore.getState().flistDiffResetToSource('99')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fake.requestsTo(RESET)).toHaveLength(1)
+    expect(fake.requestsTo(LOAD)).toHaveLength(0)
+    expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe('live')
+    expect(keptOrigins()).toEqual(['Workbench · before Restore'])
   })
 
-  it('marks loaded after a successful read', async () => {
-    seedSlot('99', {})
+  it('on a Backup Restores that Backup, which leaves a before-restore Backup', async () => {
+    seedSlot('99', { character: { description: 'edited' } })
+    useStore.getState().flistDiffSetRightSource('99', { kind: 'backup', filename: NEWER })
+    const restored = workbenchPayload({ character: { description: 'restored' } })
     fake.on(
-      'GET /flist/character/99/snapshots/888.json',
-      json({ character: { description: 'snap' } })
+      LOAD,
+      json({
+        workbench: { id: BENCH_ID, kind: 'bench', name: 'Workbench' },
+        payload: restored,
+        etag: 'after-restore',
+        loaded: NEWER,
+        backed_up_first: { filename: KEPT, created_at: 1790000000 }
+      })
     )
-    await useStore.getState().flistDiffLoadBackup('99', '888.json')
-    expect(useStore.getState().flistDiffBackupStatus['99:888.json']).toBe('loaded')
+    fake.on(
+      `POST /flist/character/99/sets/${BENCH_ID}/activate`,
+      json({ active_set_id: BENCH_ID })
+    )
+    fake.on(`GET ${BENCH}`, json(payloadRead(restored, 'after-restore')))
+    backupListWithKept()
+
+    await useStore.getState().flistDiffResetToSource('99')
+
+    const [load] = fake.requestsTo(LOAD)
+    expect(load?.body).toEqual({ filename: NEWER })
+    expect(fake.requestsTo(RESET)).toHaveLength(0)
+    expect(fake.requestsTo(SAVE)).toHaveLength(0)
+    expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe('restored')
+    expect(keptOrigins()).toEqual(['Workbench · before Restore'])
   })
 })
