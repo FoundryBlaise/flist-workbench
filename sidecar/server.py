@@ -1108,6 +1108,28 @@ async def flist_character_workbench_load_backup(
     }
 
 
+@app.post("/flist/character/{character_id}/workbench/reset-to-live")
+async def flist_character_workbench_reset_to_live(character_id: str) -> dict:
+    """Reset to Live: the Workbench becomes a fresh copy of Live.
+
+    Done here rather than in the window so the Workbench it replaces is
+    saved as a `before-restore` Backup first, whoever asks; that Backup
+    is `backed_up_first` (null when there was no Workbench yet). When it
+    cannot be written nothing is replaced: 500 `workbench_not_kept`. A
+    character never pulled has no Live: 404 `no_live`.
+
+    Answers with the new payload and its etag, which the window adopts
+    as the Workbench it saves over next.
+    """
+    replaced = character_archive.reset_workbench_to_live(character_id)
+    return {
+        "workbench": _set_meta_to_json(replaced.workbench),
+        "payload": replaced.payload,
+        "etag": replaced.etag,
+        "backed_up_first": replaced.kept,
+    }
+
+
 @app.get("/flist/character/{character_id}/workbench/load-backup/preflight")
 async def flist_character_workbench_load_preflight(
     character_id: str, filename: str

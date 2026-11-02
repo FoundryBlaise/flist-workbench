@@ -44,3 +44,11 @@ class WorkbenchNotKept(Refusal, OSError):
 
     status = 500
     code = "workbench_not_kept"
+
+
+class NoLive(Refusal, LookupError):
+    """An action that needs the character's Live, on a character never
+    pulled."""
+
+    status = 404
+    code = "no_live"

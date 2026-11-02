@@ -39,7 +39,12 @@ from typing import Any, Iterable
 
 import backup_origin
 import paths
-from archive_errors import CharacterNotFound, InvalidCharacterId, WorkbenchNotKept
+from archive_errors import (
+    CharacterNotFound,
+    InvalidCharacterId,
+    NoLive,
+    WorkbenchNotKept,
+)
 from refusals import InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
@@ -1726,7 +1731,8 @@ class WorkbenchReplaced:
     """
 
     workbench: SetMeta
-    etag: str | None
+    payload: dict[str, Any]
+    etag: str
     kept: dict[str, Any] | None
 
 
@@ -1772,7 +1778,10 @@ def _replace_workbench(
     etag = write_set_payload(character_id, bench.id, payload, expected_etag=None)
     meta = read_set_meta(character_id, bench.id)
     return WorkbenchReplaced(
-        workbench=meta if meta is not None else bench, etag=etag, kept=kept
+        workbench=meta if meta is not None else bench,
+        payload=payload,
+        etag=etag,
+        kept=kept,
     )
 
 
@@ -1780,12 +1789,12 @@ def reset_workbench_to_live(character_id: int | str) -> WorkbenchReplaced:
     """Throw away every edit: the Workbench becomes a fresh copy of Live.
 
     The Workbench it replaces is kept as a `before-restore` Backup
-    first; see `_keep_workbench_before_replacing`. Raises LookupError
-    when the character has no Live to reset to.
+    first; see `_keep_workbench_before_replacing`. Raises `NoLive` when
+    the character has no Live to reset to.
     """
     live = read_live(character_id)
     if live is None:
-        raise LookupError("no Live to reset the Workbench to")
+        raise NoLive("no Live to reset the Workbench to")
     return _replace_workbench(character_id, _seed_payload_from_live(live))
 
 
