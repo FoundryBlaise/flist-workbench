@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import atomic_write
 import backup_origin
 import character_archive
 import paths
@@ -119,14 +120,9 @@ def _load_if_needed() -> None:
 
 
 def _persist() -> None:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps({"accepted_token": _STATE.accepted_token}, indent=2),
-        encoding="utf-8",
+    atomic_write.write_json(
+        _state_path(), {"accepted_token": _STATE.accepted_token}, indent=2
     )
-    tmp.replace(path)
 
 
 def _prune_expired_handshakes() -> None:

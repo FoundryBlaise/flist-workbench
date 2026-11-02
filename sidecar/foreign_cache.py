@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import atomic_write
 import paths
 
 FOREIGN_DIRNAME = "foreign"
@@ -130,25 +131,12 @@ def read_profile(name: str) -> dict[str, Any] | None:
 def write_profile(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Store `payload` with a `fetched_at` stamp. Returns what landed.
 
-    Written the same way the archive writes `live.json` — temp file
-    then replace — so a half-written profile is never readable.
+    Written atomically, like the archive's `live.json`, so a
+    half-written profile is never readable.
     """
     stamped = dict(payload)
     stamped["fetched_at"] = int(time.time())
-    target = _profile_path(name)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(stamped, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    try:
-        tmp.replace(target)
-    except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    atomic_write.write_json(_profile_path(name), stamped, indent=2, ensure_ascii=False)
     return stamped
 
 

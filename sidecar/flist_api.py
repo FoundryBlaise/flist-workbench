@@ -33,6 +33,8 @@ from urllib.parse import quote
 
 import httpx
 
+import atomic_write
+
 USER_AGENT = "flist-workbench/0.1.0 (+https://github.com/FoundryBlaise/flist-workbench)"
 
 BASE = "https://www.f-list.net"
@@ -745,9 +747,7 @@ async def fetch_mapping_list(
         if cached is not None:
             return cached
         raise
-    tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload), encoding="utf-8")
-    tmp.replace(cache_path)
+    atomic_write.write_json(cache_path, payload)
     return payload
 
 
@@ -781,10 +781,7 @@ async def download_to(
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} fetching {url}")
         data = res.content
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(dest)
+        atomic_write.write_bytes(dest, data)
         return len(data)
     finally:
         if own:

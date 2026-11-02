@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import aliases as aliases_store
+import atomic_write
 import character_archive
 import labels as labels_store
 import paths
@@ -68,10 +69,7 @@ def _write_entry(character: str, partner: str | None, rows: list[dict]) -> dict[
         "deleted_by": trash_ledger.actor(),
         "labels": rows,
     }
-    p = folder / f"{trash_id}.json"
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(p)
+    atomic_write.write_json(folder / f"{trash_id}.json", entry, ensure_ascii=False)
     return _summary(entry)
 
 
