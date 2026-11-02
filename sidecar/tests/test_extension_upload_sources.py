@@ -249,3 +249,22 @@ def test_a_source_list_from_before_the_update_still_uploads_the_workbench(paired
     profile = _fetch(extension, AMBER, f"set:{bench_id}")
 
     assert profile["character"]["description"] == "[b]Drafted in the Workbench.[/b]"
+
+
+def test_a_draft_left_by_an_older_version_is_not_an_upload_source(paired) -> None:
+    """Older versions could keep several drafts per character. Only the
+    one the window shows as the Workbench is offered or served; the
+    rest stay on disk until the migration to one Workbench folds them
+    into a Backup."""
+    import character_archive
+
+    window, extension = paired
+    _edit_workbench(window, "42", "[b]Drafted in the Workbench.[/b]")
+    leftover = character_archive.create_set_from_live("42", "An older draft")
+
+    res = extension.get(
+        f"/restore/snapshot/set:{leftover.id}", params={"character": AMBER}
+    )
+
+    assert res.status_code == 404
+    assert [s["id"] for s in _by_kind(_sources(extension, AMBER), "set")] == ["workbench"]
