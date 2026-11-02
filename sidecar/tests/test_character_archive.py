@@ -8,7 +8,6 @@ ways that would hurt real users:
   safe-name alphabet.
 - image_path / inline_path must reject path-traversal payloads in the
   F-list-supplied filename parts.
-- old_pull_copies finds what the migration packs, touching nothing.
 """
 from __future__ import annotations
 
@@ -17,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import character_archive
+from workbench_state import put_workbench, workbench_payload
 
 
 @pytest.fixture(autouse=True)
@@ -70,39 +70,6 @@ def test_inline_path_rejects_unsafe_basename():
         character_archive.inline_path("123", "..")
     with pytest.raises(ValueError):
         character_archive.inline_path("123", "foo/bar.png")
-
-
-def test_old_copies_of_live_are_found_where_earlier_versions_left_them():
-    """Pulls once kept a JSON copy of Live per change, first in
-    `backups/`, later in `snapshots/`. The migration finds them all;
-    finding them moves, creates and reads nothing."""
-    cid = "6666"
-    character_archive.create_character_dir(cid)
-    folder = character_archive.character_dir(cid)
-    (folder / "backups").mkdir()
-    (folder / "backups" / "100.json").write_text("{}", encoding="utf-8")
-    (folder / "backups" / "_names.json").write_text("{}", encoding="utf-8")
-    (folder / "backups" / "2026-01-01T000000Z.zip").write_bytes(b"PK")
-    (folder / "snapshots").mkdir()
-    (folder / "snapshots" / "200.json").write_text("{}", encoding="utf-8")
-    (folder / "snapshots" / "300-1.json").write_text("{}", encoding="utf-8")
-    before = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
-
-    found = character_archive.old_pull_copies(cid)
-
-    assert sorted(p.relative_to(folder).as_posix() for p in found) == [
-        "backups/100.json",
-        "snapshots/200.json",
-        "snapshots/300-1.json",
-    ]
-    assert sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*")) == before
-
-
-def test_a_character_without_old_copies_gets_no_folder_for_them():
-    cid = "6667"
-    character_archive.create_character_dir(cid)
-    assert character_archive.old_pull_copies(cid) == []
-    assert not (character_archive.character_dir(cid) / "snapshots").exists()
 
 
 def test_save_zip_backup_dedups_unchanged_live(tmp_path):
@@ -437,9 +404,7 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
     character_archive.write_character_image(
         cid, "local-deadbeef", "png", _PNG_HEADER
     )
-    # The gallery lives in the character's working set — the legacy
-    # working.json is deleted on sight by the M3 migration, so pointing
-    # this at it would test a world that no longer exists.
+    # The gallery lives in the character's Workbench.
     character_archive.write_live(
         cid,
         {
@@ -452,23 +417,21 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
             "fetched_at": 1000,
         },
     )
-    bench = character_archive.resolve_workbench(cid)
-    character_archive.write_set_payload(
+    put_workbench(
+        character_archive,
         cid,
-        bench.id,
         {
             "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"id": cid, "name": "X"},
             "images": [{"image_id": "local-deadbeef", "description": "mine"}],
         },
-        expected_etag=None,
     )
 
     rows = character_archive.list_character_images(cid)
     ids = sorted(r["image_id"] for r in rows)
     assert ids == ["45755545"]
-    payload = character_archive.read_set_payload(cid, bench.id)
+    payload = workbench_payload(character_archive, cid)
     assert payload is not None
     # The slot keeps its place and its description; only the id moves.
     assert payload["images"] == [
@@ -495,35 +458,6 @@ def test_list_character_images_includes_added_at():
     assert rows[0]["image_id"] == "333"
     assert rows[0]["extension"] == "png"
     assert isinstance(rows[0]["added_at"], int)
-
-
-def test_migrate_working_v3_drops_sha_only_images():
-    cid = "515"
-    character_archive.create_character_dir(cid)
-    target = character_archive.working_path(cid)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-    target.write_text(
-        _json.dumps(
-            {
-                "_schema_version": 3,
-                "_overlay": [],
-                "images": [
-                    {"sha256": "abc", "description": "first"},
-                ],
-                "character": {"id": "1", "name": "X"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    out = character_archive.read_working(cid)
-    assert out is not None
-    # v3 → v5 strips the sha-only images array; caller re-seeds from Live.
-    assert "images" not in out
-    assert out["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
-    on_disk = _json.loads(target.read_text(encoding="utf-8"))
-    assert on_disk["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
-    assert "images" not in on_disk
 
 
 def test_migrate_v4_pool_promotes_orphan_to_local():
@@ -637,35 +571,6 @@ def test_normalise_image_ext_jpeg_to_jpg():
     assert character_archive.normalise_image_ext("jpeg") == "jpg"
     assert character_archive.normalise_image_ext("JPEG") == "jpg"
     assert character_archive.normalise_image_ext(".png") == "png"
-
-
-def test_read_working_refuses_future_schema_version():
-    """A working.json written by a newer build must be refused, not
-    silently mis-interpreted. The renderer falls back to seed-from-Live
-    on None, so the file stays intact for a future re-open with the
-    matching version (QA feedback BLOCK #4)."""
-    cid = "510"
-    character_archive.create_character_dir(cid)
-    target = character_archive.working_path(cid)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-
-    target.write_text(
-        _json.dumps(
-            {
-                "_schema_version": character_archive.WORKING_SCHEMA_VERSION + 1,
-                "_overlay": [],
-                "character": {"id": "1", "name": "X"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert character_archive.read_working(cid) is None
-    # File stays on disk untouched — no quarantine for a future-version
-    # file; we want it readable again after upgrade.
-    assert target.exists()
-
-
 
 
 # ---- name-keyed folder registry ----------------------------------------
@@ -843,48 +748,3 @@ def test_forget_backup_name_drops_entry(tmp_path):
     # After forget, list shows no name on that row.
     rows = character_archive.list_zip_backups(cid)
     assert rows[0]["name"] is None
-
-
-def test_create_set_from_zip_backup_seeds_payload(tmp_path):
-    cid = "8020"
-    character_archive.write_live(
-        cid,
-        {
-            "character": {
-                "id": int(cid),
-                "name": "Setty",
-                "description": "v1 desc",
-            },
-            "images": [],
-            "kinks": {},
-            "fetched_at": 100,
-        },
-    )
-    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
-    fname = res["filename"]
-    meta = character_archive.create_set_from_zip_backup(
-        cid, fname, "From the backup"
-    )
-    assert meta.name == "From the backup"
-    payload = character_archive.read_set_payload(cid, meta.id)
-    assert payload is not None
-    # The character description from the backup should be on the new set.
-    assert payload.get("character", {}).get("description") == "v1 desc"
-
-
-def test_create_set_from_zip_backup_rejects_bad_filename(tmp_path):
-    character_archive.create_character_dir("8021")
-    import pytest
-
-    with pytest.raises(ValueError):
-        character_archive.create_set_from_zip_backup("8021", "../etc/passwd", "x")
-
-
-def test_create_set_from_zip_backup_404_when_missing(tmp_path):
-    character_archive.create_character_dir("8022")
-    import pytest
-
-    with pytest.raises(FileNotFoundError):
-        character_archive.create_set_from_zip_backup(
-            "8022", "2026-06-17T120000Z.zip", "x"
-        )

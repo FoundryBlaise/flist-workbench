@@ -1,21 +1,26 @@
 """On-disk archive store for F-list character backups.
 
-Layout under `<userdata>/characters/<character_id>/`:
+Layout under `<userdata>/characters/<character folder>/` (ADR 0001):
 
     live.json                        last fetched character-data + fetch ts
+    workbench/payload.json           the Workbench: the one editable copy
+    workbench/meta.json              when it was made and last saved
     backups/<name>.zip               Backups
     images/<image_id>.<ext>          all on-disk image bytes (Pool view in
                                      the UI is whatever isn't currently in
-                                     working.json's gallery)
+                                     the Workbench's gallery)
     inlines/<sha1>.<ext>             inline images referenced in BBCode
+    trash/                           what waits for a human to empty it
+    layout.json                      written once the folder has this
+                                     shape (`workbench_migration`)
 
 `<image_id>` is digits for F-list-pulled images, `local-<sha8>` for user
 uploads that haven't been restored to F-list yet. There's no separate
 sha-keyed pool — bytes live in `images/` once, and the renderer treats
-files not referenced by working.json's gallery as "in the pool" for the
+files not referenced by the Workbench's gallery as "in the pool" for the
 UI. The only path that ever deletes bytes is an explicit user delete
 from the pool view (DELETE /images/<image_id>); pulls overwrite the
-same id in place, profile→pool moves are pure working.json edits.
+same id in place, profile→pool moves are pure Workbench edits.
 
 Avatars sit one level up at `<userdata>/avatars/<lowercase_name>.png`
 because they survive a character being deleted from the account.
@@ -53,24 +58,12 @@ AVATARS_DIRNAME = "avatars"
 CACHE_DIRNAME = "cache"
 LIVE_FILENAME = "live.json"
 PULL_STATE_FILENAME = "pull_state.json"
-WORKING_FILENAME = "working.json"
 REGISTRY_FILENAME = "_registry.json"
 
-# v1 → v2 (Tier 3): added local: ids, _custom_kinks_order, tombstones.
-# v2 → v3 (Tier 6 attempt 1): sha256-keyed gallery refs. Reverted in v4.
-# v3 → v4 (Tier 6 attempt 2): gallery refs back to image_id, with `local-
-#   <sha8>` synthetic ids for non-F-list uploads. Bytes still doubly-
-#   stored in a sha-keyed pool/ dir.
-# v4 → v5 (refinement): drop the sha-keyed pool/ directory entirely.
-#   Bytes live once under `images/<image_id>.<ext>`; the renderer's "Pool"
-#   pane is a view over files not referenced by working.json's gallery.
-#   Migration: pool/<sha>.<ext> entries are moved into `images/` under
-#   their first-known F-list id (if not already on disk) or under
-#   `local-<sha8>`; pool/ + manifest.json are then removed.
-# v5 → v6 (working sets v2): payload moves out of `working.json` into a
-#   per-set folder `sets/<set_id>/payload.json`. Structurally the payload
-#   shape is unchanged. M3 migration unlinks the legacy `working.json` on
-#   first read of any v5-era character directory under the new build.
+# The payload's `_schema_version`, stamped on every Workbench write.
+# v1 → v2 added local: ids, _custom_kinks_order and tombstones; v3 held
+# sha256-keyed gallery refs, which v4 turned back into image ids; v5 and
+# v6 changed where the payload is stored, not its shape.
 WORKING_SCHEMA_VERSION = 6
 
 
@@ -408,37 +401,6 @@ def inlines_dir(character_id: int | str) -> Path:
     return p
 
 
-#: Folder where Pulls once kept a JSON copy of Live per change. Nothing
-#: writes there any more; the one-time migration packs what is left
-#: into a Backup.
-OLD_PULL_COPIES_DIRNAME = "snapshots"
-
-
-def old_pull_copies(character_id: int | str) -> list[Path]:
-    """JSON copies of Live that earlier versions kept per Pull: every
-    `*.json` in `snapshots/`, and the `<unix>.json` files in `backups/`
-    from before that folder existed. Read-only and for the migration alone: nothing is moved,
-    created or parsed."""
-    folder = character_dir(character_id)
-    out: list[Path] = []
-    copies = folder / OLD_PULL_COPIES_DIRNAME
-    if copies.is_dir():
-        out.extend(
-            e for e in sorted(copies.iterdir())
-            if e.is_file() and e.suffix.lower() == ".json"
-        )
-    older = folder / "backups"
-    if older.is_dir():
-        out.extend(
-            e for e in sorted(older.iterdir())
-            if e.is_file() and _OLD_PULL_COPY_RE.fullmatch(e.name)
-        )
-    return out
-
-
-_OLD_PULL_COPY_RE = re.compile(r"^\d+(?:-\d+)?\.json$")
-
-
 def backups_dir(character_id: int | str) -> Path:
     """Per-character `backups/` dir — full ZIP backups, restorable via
     the userscript. Created lazily by `save_zip_backup`."""
@@ -669,13 +631,17 @@ def free_backup_filename(character_id: int | str, filename: str) -> str:
     return _free_backup_path(backups_dir(character_id), stem).name
 
 
+def free_backup_path(folder: Path) -> Path:
+    """Where a Backup taken now goes in `folder`: named for this second,
+    with the first free `-N` suffix when that name is taken."""
+    return _free_backup_path(folder, _zip_backup_filename().removesuffix(".zip"))
+
+
 def write_backup_zip(character_id: int | str, data: bytes) -> Path:
     """Store `data` as a new Backup of the character, under the Backup
     file name the list recognises, and return where it went. Written
     through a temp file, so a crash leaves no half-written Backup."""
-    target = _free_backup_path(
-        backups_dir(character_id), _zip_backup_filename().removesuffix(".zip")
-    )
+    target = free_backup_path(backups_dir(character_id))
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_bytes(data)
     tmp.replace(target)
@@ -961,9 +927,9 @@ def save_zip_backup(
 
     working = None
     if source == backup_origin.WORKBENCH:
-        bench = resolve_workbench(character_id, create=False)
+        bench = read_workbench(character_id)
         if bench is not None:
-            working = read_set_payload(character_id, bench.id)
+            working = bench.payload
     if working is None:
         if live is None:
             return {"saved": False, "reason": "no_live"}
@@ -1024,11 +990,21 @@ def save_zip_backup(
     }
 
 
-# ---- legacy working copy (working.json, read only until migrated) -----
+# ---- the one Workbench --------------------------------------------------
+#
+# A character has one editable copy of its profile beside Live (ADR
+# 0001): `<character>/workbench/payload.json`, with `meta.json` beside it
+# holding when it was made and last saved. Every reader and writer goes
+# through the functions below; nothing else knows where it lives.
+# Archives from versions that kept several drafts are moved to this
+# shape once, at startup (`workbench_migration`).
 
+WORKBENCH_DIRNAME = "workbench"
+WORKBENCH_PAYLOAD_FILENAME = "payload.json"
+WORKBENCH_META_FILENAME = "meta.json"
 
-def working_path(character_id: int | str) -> Path:
-    return character_dir(character_id) / WORKING_FILENAME
+#: How the Workbench is named wherever a name is shown.
+WORKBENCH_NAME = "Workbench"
 
 
 def _file_sha256(path: Path) -> str | None:
@@ -1043,13 +1019,10 @@ def _file_sha256(path: Path) -> str | None:
 
 
 def _migrate_working_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """In-memory schema migration. v1 → v2 fills _custom_kinks_order
-    from the dict; v2 → v4 drops any sha256-keyed images array (the
-    short-lived v3 shape) since we can't infer image_ids from shas
-    without re-querying F-list. v4 → v5 is a no-op on the payload (gallery
-    refs are unchanged); the actual disk side-effect (pool/ → images/) is
-    driven by `migrate_v4_pool_to_images` in `read_working`.
-    """
+    """In-memory schema stamp for a payload about to be written. v1 → v2
+    fills _custom_kinks_order from the dict; v3 stored images as
+    [{sha256, description}], which cannot be turned back into image ids,
+    so that array is dropped and the gallery comes from Live again."""
     version = payload.get("_schema_version")
     if version is None:
         version = 1
@@ -1059,75 +1032,10 @@ def _migrate_working_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(ck, dict) and "_custom_kinks_order" not in payload:
             payload["_custom_kinks_order"] = list(ck.keys())
     if isinstance(version, int) and version <= 3:
-        # v3 stored images as [{sha256, description}]. We can't translate
-        # back to image_ids without the API. Drop the array — caller
-        # re-seeds from live.json on next open.
         payload.pop("images", None)
     if isinstance(version, int) and version < WORKING_SCHEMA_VERSION:
         payload["_schema_version"] = WORKING_SCHEMA_VERSION
     return payload
-
-
-def read_working(character_id: int | str) -> dict[str, Any] | None:
-    """Return the working-copy payload or None if absent.
-
-    On a JSONDecodeError, the corrupt file is renamed with a unix-
-    timestamp suffix (`working.json.corrupt-<unix>`) so the user keeps
-    the bytes for forensics — mirrors `read_live`'s broader silent-None
-    behaviour but recovers more information for a file the user is
-    actively editing.
-    """
-    p = working_path(character_id)
-    if not p.exists():
-        return None
-    try:
-        raw = p.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        # Quarantine the broken file; renderer falls back to a fresh
-        # seed-from-Live on the next load.
-        try:
-            p.rename(p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
-        except OSError:
-            pass
-        return None
-    if not isinstance(payload, dict):
-        return None
-    version = payload.get("_schema_version")
-    if isinstance(version, int) and version > WORKING_SCHEMA_VERSION:
-        # File was written by a newer build. Refuse rather than silently
-        # mis-interpret a future shape (QA feedback BLOCK #4). The
-        # renderer's working-load handler treats None as "no working
-        # copy" and seeds from Live — the file on disk stays intact.
-        print(
-            f"[flist] refusing to load working.json v{version} "
-            f"(this build understands up to v{WORKING_SCHEMA_VERSION}); "
-            f"upgrade the app or open the file with a matching version",
-            flush=True,
-        )
-        return None
-    migrated = _migrate_working_payload(payload)
-    # Write the migrated shape back to disk so the next read (and any
-    # external tooling inspecting working.json) sees the canonical
-    # current-version layout — otherwise a renderer that never edits
-    # would carry the in-memory migration forever and the on-disk file
-    # would stay behind. v4 → v5 also drives the pool/→images/ disk
-    # migration: payload's shape doesn't change but the byte store
-    # collapses to a single directory.
-    if (
-        isinstance(version, int)
-        and version < WORKING_SCHEMA_VERSION
-    ):
-        try:
-            _atomic_write_json(p, migrated)
-        except OSError:
-            pass
-        if version <= 4:
-            migrate_v4_pool_to_images(character_id)
-    return migrated
 
 
 _WORKING_TOP_LEVEL_KEYS = {
@@ -1141,392 +1049,32 @@ _WORKING_TOP_LEVEL_KEYS = {
 }
 
 
-# ---- working sets v2 -------------------------------------------------
+def workbench_dir(character_id: int | str) -> Path:
+    """The character's `workbench/` folder. Never creates it."""
+    return character_dir(character_id) / WORKBENCH_DIRNAME
 
-SETS_DIRNAME = "sets"
-SET_PAYLOAD_FILENAME = "payload.json"
-SET_META_FILENAME = "meta.json"
-ACTIVE_SET_FILENAME = "active_set.json"
 
-_SET_ID_RE = re.compile(r"^[0-9a-f]{12}$")
-_MAX_SET_NAME_LEN = 80
+def _workbench_payload_path(character_id: int | str) -> Path:
+    return workbench_dir(character_id) / WORKBENCH_PAYLOAD_FILENAME
+
+
+def _workbench_meta_path(character_id: int | str) -> Path:
+    return workbench_dir(character_id) / WORKBENCH_META_FILENAME
 
 
 @dataclass(frozen=True)
-class SetMeta:
-    id: str
-    name: str
+class WorkbenchInfo:
+    """When the Workbench was made and last saved (unix seconds)."""
+
     created_at: int
     updated_at: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "id": self.id,
-            "name": self.name,
+            "name": WORKBENCH_NAME,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
-
-
-def _is_valid_set_id(set_id: str) -> bool:
-    return isinstance(set_id, str) and bool(_SET_ID_RE.fullmatch(set_id))
-
-
-def _new_set_id() -> str:
-    import uuid
-
-    return uuid.uuid4().hex[:12]
-
-
-def validate_set_name(name: Any) -> str:
-    """Strip + length-check a set name. Duplicates are allowed — the
-    underlying set_id is the unique identity per the design doc."""
-    if not isinstance(name, str):
-        raise ValueError("set name must be a string")
-    stripped = name.strip()
-    if not stripped:
-        raise ValueError("set name is empty")
-    if "\x00" in stripped:
-        raise ValueError("set name contains NUL")
-    if len(stripped) > _MAX_SET_NAME_LEN:
-        raise ValueError(f"set name longer than {_MAX_SET_NAME_LEN} chars")
-    return stripped
-
-
-def sets_dir(character_id: int | str) -> Path:
-    p = character_dir(character_id) / SETS_DIRNAME
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def set_dir(character_id: int | str, set_id: str) -> Path:
-    if not _is_valid_set_id(set_id):
-        raise ValueError(f"invalid set_id: {set_id!r}")
-    return sets_dir(character_id) / set_id
-
-
-def set_payload_path(character_id: int | str, set_id: str) -> Path:
-    return set_dir(character_id, set_id) / SET_PAYLOAD_FILENAME
-
-
-def set_meta_path(character_id: int | str, set_id: str) -> Path:
-    return set_dir(character_id, set_id) / SET_META_FILENAME
-
-
-def active_set_path(character_id: int | str) -> Path:
-    return character_dir(character_id) / ACTIVE_SET_FILENAME
-
-
-def _migrate_working_v2(character_id: int | str) -> None:
-    """M3: drop the legacy `working.json` (and any orphan tmp/bak siblings)
-    on first read of a v5-era character directory under the working-sets
-    v2 build. Owner-chosen (2026-06-02) — all current users are test users
-    and a clean disk is preferred over importing a stale single-set blob.
-
-    Idempotent: re-running on a directory with no legacy file is a no-op.
-    Safe to call from every working-sets-v2 helper that touches a
-    character directory.
-    """
-    cdir = character_dir(character_id)
-    for name in (WORKING_FILENAME, f"{WORKING_FILENAME}.tmp", "working.bak"):
-        path = cdir / name
-        if path.exists():
-            try:
-                path.unlink()
-            except OSError:
-                pass
-
-
-def read_set_meta(character_id: int | str, set_id: str) -> SetMeta | None:
-    if not _is_valid_set_id(set_id):
-        return None
-    p = set_meta_path(character_id, set_id)
-    if not p.exists():
-        return None
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    rid = raw.get("id")
-    rname = raw.get("name")
-    rcreated = raw.get("created_at")
-    rupdated = raw.get("updated_at")
-    if not isinstance(rid, str) or not isinstance(rname, str):
-        return None
-    if not isinstance(rcreated, int) or not isinstance(rupdated, int):
-        return None
-    return SetMeta(id=rid, name=rname, created_at=rcreated, updated_at=rupdated)
-
-
-def write_set_meta(
-    character_id: int | str,
-    set_id: str,
-    *,
-    name: str,
-    created_at: int,
-    updated_at: int,
-) -> SetMeta:
-    if not _is_valid_set_id(set_id):
-        raise ValueError(f"invalid set_id: {set_id!r}")
-    clean = validate_set_name(name)
-    meta = SetMeta(
-        id=set_id,
-        name=clean,
-        created_at=int(created_at),
-        updated_at=int(updated_at),
-    )
-    _atomic_write_json(set_meta_path(character_id, set_id), meta.to_dict())
-    _publish(
-        "sets-changed",
-        character_id=str(character_id),
-        set_id=set_id,
-        name=clean,
-    )
-    return meta
-
-
-def read_set_payload(character_id: int | str, set_id: str) -> dict[str, Any] | None:
-    if not _is_valid_set_id(set_id):
-        return None
-    p = set_payload_path(character_id, set_id)
-    if not p.exists():
-        return None
-    try:
-        raw = p.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-def set_payload_etag(character_id: int | str, set_id: str) -> str | None:
-    if not _is_valid_set_id(set_id):
-        return None
-    return _file_sha256(set_payload_path(character_id, set_id))
-
-
-def write_set_payload(
-    character_id: int | str,
-    set_id: str,
-    payload: dict[str, Any],
-    *,
-    expected_etag: str | None,
-) -> str:
-    """Persist a set's payload atomically; return the new sha256 etag.
-
-    Validation: `_overlay` must be a list of strings; at least one recognised top-level content key must be
-    present; schema version is stamped to v6.
-    """
-    if expected_etag is None:
-        # Diagnostic only. A write that skips the If-Match check is
-        # exactly what silently invalidates an open window's etag, and
-        # nothing showed it happening: a "someone else changed this set"
-        # report had no source to trace. This names the caller in
-        # main-diag.log (the Electron main tees sidecar stderr there).
-        try:
-            caller = sys._getframe(1).f_code.co_name
-        except Exception:  # noqa: BLE001 - diagnostics never break a write
-            caller = "unknown"
-        print(
-            f"[set-rewrite] '{caller}' rewrote char={character_id} "
-            f"set={set_id} without an etag check",
-            file=sys.stderr,
-            flush=True,
-        )
-    if not _is_valid_set_id(set_id):
-        raise ValueError(f"invalid set_id: {set_id!r}")
-    if not isinstance(payload, dict):
-        raise ValueError("set payload must be a dict")
-    payload = _migrate_working_payload(dict(payload))
-    overlay = payload.get("_overlay")
-    if not isinstance(overlay, list) or not all(isinstance(s, str) for s in overlay):
-        raise ValueError("_overlay must be a list of strings")
-    if not any(k in payload for k in _WORKING_TOP_LEVEL_KEYS):
-        raise ValueError(
-            "set payload must carry at least one of "
-            f"{sorted(_WORKING_TOP_LEVEL_KEYS)}"
-        )
-    meta = read_set_meta(character_id, set_id)
-    if meta is None:
-        raise FileNotFoundError(f"set {set_id} not found")
-    p = set_payload_path(character_id, set_id)
-    current = _file_sha256(p)
-    if expected_etag is not None and current != expected_etag:
-        raise EtagMismatch(current)
-    _atomic_write_json(p, payload)
-    now = int(time.time())
-    write_set_meta(
-        character_id,
-        set_id,
-        name=meta.name,
-        created_at=meta.created_at,
-        updated_at=now,
-    )
-    new_etag = _file_sha256(p)
-    assert new_etag is not None
-    _publish(
-        "set-payload-changed",
-        character_id=str(character_id),
-        set_id=set_id,
-        etag=new_etag,
-    )
-    return new_etag
-
-
-def read_active_set_id(character_id: int | str) -> str | None:
-    p = active_set_path(character_id)
-    if not p.exists():
-        return None
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    val = raw.get("active_set_id")
-    if val is None:
-        return None
-    if isinstance(val, str) and _is_valid_set_id(val):
-        return val
-    return None
-
-
-def set_active_set_id(character_id: int | str, set_id: str) -> None:
-    if not _is_valid_set_id(set_id):
-        raise ValueError(f"invalid set_id: {set_id!r}")
-    _atomic_write_json(active_set_path(character_id), {"active_set_id": set_id})
-    _publish(
-        "active-set-changed",
-        character_id=str(character_id),
-        set_id=set_id,
-    )
-
-
-def clear_active_set_id(character_id: int | str) -> None:
-    _atomic_write_json(active_set_path(character_id), {"active_set_id": None})
-    _publish(
-        "active-set-changed", character_id=str(character_id), set_id=None
-    )
-
-
-def list_sets(character_id: int | str) -> list[SetMeta]:
-    """List every set on disk for a character, newest first.
-
-    Triggers the M3 migration once per directory before walking. Sets
-    with corrupt or missing meta.json are skipped — a half-written set
-    folder is invisible until repaired by another write.
-    """
-    _migrate_working_v2(character_id)
-    out: list[SetMeta] = []
-    d = sets_dir(character_id)
-    if not d.exists():
-        return out
-    for entry in d.iterdir():
-        if not entry.is_dir():
-            continue
-        if not _is_valid_set_id(entry.name):
-            continue
-        meta = read_set_meta(character_id, entry.name)
-        if meta is None:
-            continue
-        out.append(meta)
-    out.sort(key=lambda m: (-m.updated_at, m.id))
-    return out
-
-
-def create_set_from_live(character_id: int | str, name: str) -> SetMeta:
-    """Seed a new set from `live.json`. Raises ValueError if no Live
-    exists yet — the renderer disables `+ New working set` in that case
-    (design doc §"Seed-from-F-list on create")."""
-    _migrate_working_v2(character_id)
-    clean = validate_set_name(name)
-    live = read_live(character_id)
-    if live is None:
-        raise ValueError("no Live to seed from")
-    payload = _seed_payload_from_live(live)
-    return _materialise_set(character_id, clean, payload)
-
-
-#: The one working set a character has. Named after the app, because
-#: that is what it is: the bench you work on, as opposed to the
-#: read-only copy of what is live on F-list.
-#:
-#: Working sets used to be a user-facing concept — create, name, keep
-#: several, pick an active one. Testers could not explain what a
-#: working set was, how it related to Live, or why backups were a third
-#: thing. So the concept stays on disk and leaves the vocabulary: one
-#: bench per character, always present, seeded from Live the first time
-#: it is needed.
-WORKBENCH_SET_NAME = "Workbench"
-
-
-def resolve_workbench(
-    character_id: int | str, *, create: bool = True
-) -> SetMeta | None:
-    """The character's workbench, creating it from Live if absent.
-
-    This is the definition, not a migration: "the workbench" has to
-    resolve to a stored set, and the rule is
-
-        the active set, else the most recently changed, else a new one
-        seeded from Live.
-
-    Which means an archive from before the rename needs no conversion.
-    A character with one set keeps working on it under a new label; one
-    with several keeps working on whichever was active, and the rest sit
-    untouched on disk, reachable through the MCP tools and invisible in
-    the window. Nothing is renamed behind the user's back and nothing is
-    deleted.
-
-    `create=False` answers "is there one yet" without making it so —
-    what a read-only caller wants.
-    """
-    active_id = read_active_set_id(character_id)
-    if active_id is not None:
-        meta = read_set_meta(character_id, active_id)
-        if meta is not None:
-            return meta
-
-    existing = list_sets(character_id)
-    if existing:
-        if len(existing) > 1:
-            # Deliberately a log line and not a dialog: the extra sets
-            # are only reachable by people who made them with the old
-            # UI or through MCP, and asking them to make a decision is
-            # the confusion this change exists to remove. Remove the
-            # warning once no archive can have more than one set.
-            print(
-                f"legacy: character {character_id} has {len(existing)}"
-                f" working sets; using {existing[0].name!r} as the"
-                " workbench",
-                file=sys.stderr,
-            )
-        chosen = existing[0]
-        set_active_set_id(character_id, chosen.id)
-        return chosen
-
-    if not create:
-        return None
-    if read_live(character_id) is None:
-        return None
-    meta = create_set_from_live(character_id, WORKBENCH_SET_NAME)
-    set_active_set_id(character_id, meta.id)
-    return meta
-
-
-# ---- the one Workbench --------------------------------------------------
-#
-# How every caller reads and saves a character's Workbench, without
-# knowing where on disk it lives. Today it is the set `resolve_workbench`
-# picks; the on-disk migration swaps that for a `workbench/` folder here
-# and nowhere else.
 
 
 @dataclass(frozen=True)
@@ -1552,6 +1100,64 @@ class EtagRequired(EtagMismatch):
         self.args = ("etag_required",)
 
 
+def _read_workbench_payload(character_id: int | str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(_workbench_payload_path(character_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def workbench_info(character_id: int | str) -> WorkbenchInfo | None:
+    """The Workbench's dates, or None when the character has none yet."""
+    if not _workbench_payload_path(character_id).is_file():
+        return None
+    try:
+        raw = json.loads(_workbench_meta_path(character_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = None
+    created = raw.get("created_at") if isinstance(raw, dict) else None
+    updated = raw.get("updated_at") if isinstance(raw, dict) else None
+    if not isinstance(created, int) or not isinstance(updated, int):
+        # A Workbench whose meta is missing still is one; its file's
+        # time stands in.
+        try:
+            mtime = int(_workbench_payload_path(character_id).stat().st_mtime)
+        except OSError:
+            return None
+        created = created if isinstance(created, int) else mtime
+        updated = updated if isinstance(updated, int) else mtime
+    return WorkbenchInfo(created_at=created, updated_at=updated)
+
+
+def _store_workbench(
+    character_id: int | str, payload: dict[str, Any], *, created_at: int | None = None
+) -> str:
+    """Write the payload and its dates atomically, announce the change,
+    and return the new etag. No etag check: callers do that."""
+    path = _workbench_payload_path(character_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, payload)
+    now = int(time.time())
+    if created_at is None:
+        info = workbench_info(character_id)
+        created_at = info.created_at if info is not None else now
+    _atomic_write_json(
+        _workbench_meta_path(character_id),
+        {"created_at": created_at, "updated_at": now},
+    )
+    etag = _file_sha256(path)
+    assert etag is not None
+    _publish("sets-changed", character_id=str(character_id))
+    _publish(
+        "set-payload-changed",
+        character_id=str(character_id),
+        set_id=WORKBENCH_DIRNAME,
+        etag=etag,
+    )
+    return etag
+
+
 def read_workbench(
     character_id: int | str, *, create: bool = False
 ) -> WorkbenchRead | None:
@@ -1560,15 +1166,18 @@ def read_workbench(
     `create=True` makes it from Live first if needed; None then means
     there is no Live to make it from.
     """
-    bench = resolve_workbench(character_id, create=False)
     created = False
-    if bench is None and create:
-        bench = resolve_workbench(character_id, create=True)
-        created = bench is not None
-    if bench is None:
-        return None
-    payload = read_set_payload(character_id, bench.id)
-    etag = set_payload_etag(character_id, bench.id)
+    payload = _read_workbench_payload(character_id)
+    if payload is None and create and not _workbench_payload_path(character_id).exists():
+        live = read_live(character_id)
+        if live is None:
+            return None
+        _store_workbench(
+            character_id, _seed_payload_from_live(live), created_at=int(time.time())
+        )
+        payload = _read_workbench_payload(character_id)
+        created = True
+    etag = _file_sha256(_workbench_payload_path(character_id))
     if payload is None or etag is None:
         return None
     return WorkbenchRead(payload=payload, etag=etag, created=created)
@@ -1576,10 +1185,7 @@ def read_workbench(
 
 def workbench_etag(character_id: int | str) -> str | None:
     """The etag of the character's Workbench; None when it has none."""
-    bench = resolve_workbench(character_id, create=False)
-    if bench is None:
-        return None
-    return set_payload_etag(character_id, bench.id)
+    return _file_sha256(_workbench_payload_path(character_id))
 
 
 def write_workbench(
@@ -1594,17 +1200,27 @@ def write_workbench(
     disk now. Without one this raises `EtagRequired`, with a stale one
     (or when there is no Workbench to replace) `EtagMismatch`; neither
     touches the file. The write is atomic and announces the change.
-    Raises ValueError for a payload that is not a Workbench.
+    Raises ValueError for a payload that is not a Workbench: `_overlay`
+    must be a list of strings and at least one content key present; the
+    schema version is stamped.
     """
     current = workbench_etag(character_id)
     if expected_etag is None:
         raise EtagRequired(current)
-    bench = resolve_workbench(character_id, create=False)
-    if bench is None:
-        raise EtagMismatch(None)
-    return write_set_payload(
-        character_id, bench.id, payload, expected_etag=expected_etag
-    )
+    if not isinstance(payload, dict):
+        raise ValueError("the Workbench payload must be an object")
+    payload = _migrate_working_payload(dict(payload))
+    overlay = payload.get("_overlay")
+    if not isinstance(overlay, list) or not all(isinstance(s, str) for s in overlay):
+        raise ValueError("_overlay must be a list of strings")
+    if not any(k in payload for k in _WORKING_TOP_LEVEL_KEYS):
+        raise ValueError(
+            "the Workbench payload must carry at least one of "
+            f"{sorted(_WORKING_TOP_LEVEL_KEYS)}"
+        )
+    if current is None or current != expected_etag:
+        raise EtagMismatch(current)
+    return _store_workbench(character_id, payload)
 
 
 @dataclass(frozen=True)
@@ -1692,18 +1308,13 @@ def load_zip_backup_into_workbench(
 ) -> WorkbenchReplaced:
     """Restore: replace the Workbench's payload with a Backup's contents.
 
-    The old path for this made a *new* set from the backup, which is
-    how the user ended up with several and stopped knowing which one
-    they were editing. Now it overwrites the one bench, in place, so
-    "load this backup" means what it says.
-
     The Backup is read and checked first; only then is the Workbench it
     replaces kept as a `before-restore` Backup, and only once that is
-    written is the Workbench overwritten.
+    written is the Workbench overwritten. Raises KeyError for a Backup
+    that holds no profile to load.
     """
     import zipfile
 
-    _migrate_working_v2(character_id)
     require_backup_filename(backup_filename)
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
@@ -1717,124 +1328,6 @@ def load_zip_backup_into_workbench(
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
     return _replace_workbench(character_id, backup_payload(payload))
-
-
-def create_set_from_zip_backup(
-    character_id: int | str,
-    backup_filename: str,
-    name: str,
-) -> SetMeta:
-    """Seed a new working set from a backup ZIP — reads the embedded
-    `working.json` and materialises it as the new set's payload. The
-    set bundle format (the userscript-import path) has a different
-    shape (`manifest.json` + `payload.json` + image dir), so trying
-    to import a backup ZIP via the import-set endpoint fails with
-    "bundle is missing manifest.json". This path skips that wrapper
-    entirely.
-
-    Raises:
-      ValueError on a malformed backup filename or invalid set name.
-      FileNotFoundError when the backup file is missing.
-      KeyError when the backup predates the `working.json` write
-        (older than 2026-06-17) — caller surfaces 410-like error
-        copy in that case.
-    """
-    import zipfile
-
-    _migrate_working_v2(character_id)
-    require_backup_filename(backup_filename)
-    clean = validate_set_name(name)
-    target = backups_dir(character_id) / backup_filename
-    if not target.exists() or not target.is_file():
-        raise FileNotFoundError(str(target))
-    try:
-        with zipfile.ZipFile(target, "r") as zf:
-            raw = zf.read("working.json").decode("utf-8")
-    except zipfile.BadZipFile as exc:
-        raise ValueError(f"corrupt backup file: {exc}") from exc
-    try:
-        payload = json.loads(raw)
-    except ValueError as exc:
-        raise ValueError(f"backup working.json is not valid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("backup working.json is not an object")
-    return _materialise_set(character_id, clean, backup_payload(payload))
-
-
-def duplicate_set(
-    character_id: int | str,
-    source_set_id: str,
-    name: str,
-) -> SetMeta:
-    """Copy `source_set_id`'s payload into a new set with a fresh id and
-    meta. Raises FileNotFoundError if the source set is missing."""
-    _migrate_working_v2(character_id)
-    clean = validate_set_name(name)
-    if not _is_valid_set_id(source_set_id):
-        raise FileNotFoundError(f"set {source_set_id} not found")
-    src_payload = read_set_payload(character_id, source_set_id)
-    src_meta = read_set_meta(character_id, source_set_id)
-    if src_payload is None or src_meta is None:
-        raise FileNotFoundError(f"set {source_set_id} not found")
-    return _materialise_set(character_id, clean, src_payload)
-
-
-def rename_set(
-    character_id: int | str,
-    set_id: str,
-    new_name: str,
-) -> SetMeta:
-    _migrate_working_v2(character_id)
-    clean = validate_set_name(new_name)
-    meta = read_set_meta(character_id, set_id)
-    if meta is None:
-        raise FileNotFoundError(f"set {set_id} not found")
-    now = int(time.time())
-    return write_set_meta(
-        character_id,
-        set_id,
-        name=clean,
-        created_at=meta.created_at,
-        updated_at=now,
-    )
-
-
-def delete_set(character_id: int | str, set_id: str) -> None:
-    """Unlink `sets/<set_id>/` and, if it was active, clear the active
-    pointer. Raises FileNotFoundError if the set does not exist."""
-    _migrate_working_v2(character_id)
-    if not _is_valid_set_id(set_id):
-        raise FileNotFoundError(f"set {set_id} not found")
-    d = set_dir(character_id, set_id)
-    if not d.exists():
-        raise FileNotFoundError(f"set {set_id} not found")
-    import shutil
-
-    shutil.rmtree(d, ignore_errors=True)
-    _publish("sets-changed", character_id=str(character_id), set_id=set_id)
-    if read_active_set_id(character_id) == set_id:
-        clear_active_set_id(character_id)
-
-
-def _materialise_set(
-    character_id: int | str,
-    name: str,
-    payload: dict[str, Any],
-) -> SetMeta:
-    sid = _new_set_id()
-    while set_dir(character_id, sid).exists():
-        sid = _new_set_id()
-    set_dir(character_id, sid).mkdir(parents=True, exist_ok=True)
-    stamped = _migrate_working_payload(dict(payload))
-    _atomic_write_json(set_payload_path(character_id, sid), stamped)
-    now = int(time.time())
-    return write_set_meta(
-        character_id,
-        sid,
-        name=name,
-        created_at=now,
-        updated_at=now,
-    )
 
 
 def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
@@ -2228,7 +1721,7 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     """Walk `images/` and return one row per file: `{image_id, extension,
     size, added_at}`. `added_at` is the file mtime (unix seconds) so the
     renderer can sort the Pool pane newest-first. The renderer pairs
-    these rows with `description`/`sort_order` from working.json to
+    these rows with `description`/`sort_order` from the Workbench to
     decide which are on the profile vs. in the pool view.
 
     Side-effect: triggers the v4 → v5 pool migration if a legacy pool/
@@ -2331,7 +1824,7 @@ def file_sha256(path: Path) -> str:
 
 def collapse_local_duplicates(character_id: int | str) -> int:
     """Fold every `local-<sha8>` image whose bytes match a real-id file
-    into that real id, across the character's working sets.
+    into that real id, in the character's Workbench.
 
     The cure for an archive where the same picture sits in the pool
     twice — once as the file that came from F-list, once as the local
@@ -2387,11 +1880,9 @@ def dedupe_local_after_pull(
     local copy, so the picture stops appearing in the pool and on the
     profile at once.
 
-    This used to patch the legacy `working.json` and then unlink the
-    local file regardless of whether the patch had landed. Under
-    working sets there is no `working.json` — the gallery lives in
-    `sets/<id>/payload.json` — so the patch never landed and the unlink
-    always ran. Every pull after an upload therefore cut a gallery
+    This used to patch a file the gallery no longer lived in and then
+    unlink the local file regardless of whether the patch had landed,
+    so the patch never landed and the unlink always ran. Every pull after an upload therefore cut a gallery
     entry loose from its bytes, and the image turned into a black
     placeholder on the profile. The file removal was called a cure for
     "image shows in both panes"; it was, and it caused something worse.
@@ -2547,7 +2038,7 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
 
     # What F-list actually has. An upload gives a picture a new id, so
     # after the extension deletes and re-uploads a gallery, the ids the
-    # working set holds are dead: the same bytes now live under a new
+    # Workbench holds are dead: the same bytes now live under a new
     # id, which shows up in the pool while the profile pane still lists
     # the old one. The same image, on both sides at once.
     live = read_live(character_id)
@@ -2577,15 +2068,12 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
     relinked: list[dict[str, str]] = []
     duplicates_removed: list[str] = []
     unresolved: list[str] = []
-    sets_rewritten = 0
+    workbench_rewritten = False
 
-    for meta in list_sets(character_id):
-        payload = read_set_payload(character_id, meta.id)
-        if not isinstance(payload, dict):
-            continue
-        gallery = payload.get("images")
-        if not isinstance(gallery, list):
-            continue
+    bench = read_workbench(character_id)
+    gallery = bench.payload.get("images") if bench is not None else None
+    if bench is not None and isinstance(gallery, list):
+        payload = bench.payload
 
         kept: list[Any] = []
         seen: set[str] = set()
@@ -2624,8 +2112,12 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
 
         if touched:
             payload["images"] = kept
-            write_set_payload(character_id, meta.id, payload, expected_etag=None)
-            sets_rewritten += 1
+            try:
+                write_workbench(character_id, payload, expected_etag=bench.etag)
+                workbench_rewritten = True
+            except EtagMismatch:
+                # Saved meanwhile; the next repair looks again.
+                pass
 
     # The files left behind by the re-upload: byte-identical to one
     # F-list has, under an id it no longer knows. Keeping them would
@@ -2647,7 +2139,7 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
         "duplicates_removed": duplicates_removed,
         "stale_removed": stale_removed,
         "unresolved": sorted(set(unresolved)),
-        "sets_rewritten": sets_rewritten,
+        "workbench_rewritten": workbench_rewritten,
         "repaired": bool(relinked or duplicates_removed or stale_removed),
     }
 
@@ -2669,7 +2161,7 @@ def adopt_flist_image_ids(
     The extension knows the pairing the moment it uploads, so it tells
     us, and this is where the archive takes it on:
 
-    - every working set's gallery row moves to the new id;
+    - the Workbench's gallery row moves to the new id;
     - `images/local-<sha8>.<ext>` becomes `images/<new id>.<ext>`, or
       is simply dropped when a pull already fetched the same bytes
       under that name. When that name holds other bytes, the local
@@ -2735,35 +2227,31 @@ def adopt_flist_image_ids(
             src.replace(dst)
             renamed.append({"from": old_id, "to": new_id})
 
-    rewritten_sets = 0
-    if resolved:
-        for meta in list_sets(character_id):
-            payload = read_set_payload(character_id, meta.id)
-            if not isinstance(payload, dict):
+    workbench_rewritten = False
+    bench = read_workbench(character_id) if resolved else None
+    gallery = bench.payload.get("images") if bench is not None else None
+    if bench is not None and isinstance(gallery, list):
+        touched = False
+        for row in gallery:
+            if not isinstance(row, dict):
                 continue
-            gallery = payload.get("images")
-            if not isinstance(gallery, list):
-                continue
-            touched = False
-            for row in gallery:
-                if not isinstance(row, dict):
-                    continue
-                current = str(row.get("image_id") or "")
-                if current in resolved:
-                    row["image_id"] = resolved[current]
-                    touched = True
-            if touched:
-                write_set_payload(
-                    character_id, meta.id, payload, expected_etag=None
-                )
-                rewritten_sets += 1
+            current = str(row.get("image_id") or "")
+            if current in resolved:
+                row["image_id"] = resolved[current]
+                touched = True
+        if touched:
+            try:
+                write_workbench(character_id, bench.payload, expected_etag=bench.etag)
+                workbench_rewritten = True
+            except EtagMismatch:
+                pass
 
     return {
         "renamed": renamed,
         "dropped_duplicate": dropped_duplicate,
         "trashed": trashed,
         "unknown": unknown,
-        "sets_rewritten": rewritten_sets,
+        "workbench_rewritten": workbench_rewritten,
     }
 
 

@@ -510,7 +510,7 @@ async def diff_working_set(
     target = resolve_character(character)
     left = resolve_set(target, working_set)
     right = resolve_set(target, against, param="against")
-    if left.id == right.id and left.is_live == right.is_live:
+    if left.is_live == right.is_live:
         raise ToolError(
             "validation_failed",
             "both sides are the same version; nothing to compare",

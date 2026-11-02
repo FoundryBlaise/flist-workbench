@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sidecar_client import app_client
+from workbench_state import put_workbench
 
 NAME = "Mira Thornfield"
 CID = 4242
@@ -173,17 +174,15 @@ def test_gallery_repair_moves_a_superseded_image_to_the_trash(
         "fetched_at": 1000,
     }
     archive.write_live(str(CID), live)
-    bench = archive.resolve_workbench(str(CID))
-    archive.write_set_payload(
+    put_workbench(
+        archive,
         str(CID),
-        bench.id,
         {
             "_schema_version": archive.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [{"image_id": IMAGE_ID, "description": "", "sort_order": 0}],
         },
-        expected_etag=None,
     )
 
     result = client.post(f"/flist/character/{CID}/images/repair").json()

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
+from workbench_state import put_workbench, workbench_payload
 
 # A trimmed mapping list with the shapes F-list actually uses: infotags
 # pointing at a listitem *category* name, and a separate listitems array.
@@ -96,13 +97,10 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     mapping_service.invalidate()
 
 
-def _seed_set(archive, name: str = "Draft", **payload: Any) -> str:
-    meta = archive.create_set_from_live("42", name)
-    body = archive.read_set_payload("42", meta.id) or {}
+def _seed_workbench(archive, **payload: Any) -> None:
+    body = workbench_payload(archive, "42")
     body.update(payload)
-    archive.write_set_payload("42", meta.id, body, expected_etag=None)
-    archive.set_active_set_id("42", meta.id)
-    return meta.id
+    put_workbench(archive, "42", body)
 
 
 # ---- characters & sets -------------------------------------------------
@@ -194,10 +192,9 @@ async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:
 
 
 async def test_get_description_pages_through_a_long_text(workbench) -> None:
-    set_id = _seed_set(workbench)
-    payload = workbench.read_set_payload("42", set_id)
+    payload = workbench_payload(workbench, "42")
     payload["character"]["description"] = "ABCDEFGHIJ"
-    workbench.write_set_payload("42", set_id, payload, expected_etag=None)
+    put_workbench(workbench, "42", payload)
 
     async with mcp_client() as session:
         _, head = await call_tool(
@@ -221,10 +218,9 @@ async def test_get_description_pages_through_a_long_text(workbench) -> None:
 
 
 async def test_profile_fields_resolve_names_and_options(workbench) -> None:
-    set_id = _seed_set(workbench)
-    payload = workbench.read_set_payload("42", set_id)
+    payload = workbench_payload(workbench, "42")
     payload["infotags"] = {"2": "Elf", "3": "11"}
-    workbench.write_set_payload("42", set_id, payload, expected_etag=None)
+    put_workbench(workbench, "42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(
@@ -245,7 +241,7 @@ async def test_profile_fields_resolve_names_and_options(workbench) -> None:
 async def test_profile_fields_lists_everything_settable_by_default(
     workbench,
 ) -> None:
-    _seed_set(workbench)
+    _seed_workbench(workbench)
     async with mcp_client() as session:
         _, body = await call_tool(
             session, "list_profile_fields", character="Lady Amber Blaise"
@@ -256,7 +252,7 @@ async def test_profile_fields_lists_everything_settable_by_default(
 
 
 async def test_profile_fields_filter_by_group_and_query(workbench) -> None:
-    _seed_set(workbench)
+    _seed_workbench(workbench)
     async with mcp_client() as session:
         _, by_group = await call_tool(
             session,
@@ -275,10 +271,9 @@ async def test_profile_fields_filter_by_group_and_query(workbench) -> None:
 
 
 async def test_unmapped_fields_are_surfaced_separately(workbench) -> None:
-    set_id = _seed_set(workbench)
-    payload = workbench.read_set_payload("42", set_id)
+    payload = workbench_payload(workbench, "42")
     payload["infotags"] = {"999": "something F-list no longer describes"}
-    workbench.write_set_payload("42", set_id, payload, expected_etag=None)
+    put_workbench(workbench, "42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(
@@ -297,14 +292,13 @@ async def test_unmapped_fields_are_surfaced_separately(workbench) -> None:
 
 
 async def test_list_kinks_resolves_names_and_counts_choices(workbench) -> None:
-    set_id = _seed_set(workbench)
-    payload = workbench.read_set_payload("42", set_id)
+    payload = workbench_payload(workbench, "42")
     payload["kinks"] = {"100": "fave", "101": "no"}
     payload["custom_kinks"] = {
         "local:abc": {"name": "Thunderstorms", "description": "", "choice": "yes"},
         "local:dead": {"name": "Gone", "choice": "no", "_deleted": True},
     }
-    workbench.write_set_payload("42", set_id, payload, expected_etag=None)
+    put_workbench(workbench, "42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(
@@ -321,10 +315,9 @@ async def test_list_kinks_resolves_names_and_counts_choices(workbench) -> None:
 
 
 async def test_list_kinks_can_filter_to_one_choice(workbench) -> None:
-    set_id = _seed_set(workbench)
-    payload = workbench.read_set_payload("42", set_id)
+    payload = workbench_payload(workbench, "42")
     payload["kinks"] = {"100": "fave", "101": "no"}
-    workbench.write_set_payload("42", set_id, payload, expected_etag=None)
+    put_workbench(workbench, "42", payload)
 
     async with mcp_client() as session:
         _, body = await call_tool(

@@ -19,6 +19,7 @@ from PIL import Image
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_edit import open_workbench, payload_of, seed_gallery, workbench  # noqa: F401
+from workbench_state import put_workbench
 
 CHAR = "Lady Amber Blaise"
 
@@ -335,8 +336,7 @@ async def test_a_batch_replaces_each_image_in_its_own_place(workbench, outputs) 
         seed_gallery(workbench, old_ids)
         payload = payload_of(workbench)
         payload["images"][1]["description"] = "kept caption"
-        bench = workbench.resolve_workbench("42", create=False)
-        workbench.write_set_payload("42", bench.id, payload, expected_etag=None)
+        put_workbench(workbench, "42", payload)
 
         _, body = await call_tool(
             session,

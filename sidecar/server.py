@@ -40,6 +40,7 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
+import workbench_migration
 from archive_errors import (
     InvalidWorkbenchPayload,
     NoWorkbench,
@@ -98,6 +99,7 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _hydrate_activity_log_on_startup()
     await _avatar_cleanup_on_startup()
     await _adopt_old_pre_upload_backups_on_startup()
+    workbench_migration.migrate_all()
     await _password_idle_watchdog()
     async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
         yield
@@ -887,20 +889,18 @@ class _LoadBackupBody(BaseModel):
     back_up_first: bool = True
 
 
-def _set_meta_to_json(meta: character_archive.SetMeta) -> dict:
-    return meta.to_dict()
-
-
 @app.get("/flist/character/{character_id}/workbench")
 async def flist_character_workbench(character_id: str, create: bool = True) -> dict:
-    """The character's one editable copy, created from Live if needed.
+    """The character's one editable copy, created from Live if needed:
+    `{workbench: {name, created_at, updated_at}}`.
 
-    The window asks for this instead of listing sets and picking one.
     `create=false` answers "is there one yet" without making it so,
     which is what a read-only render wants.
     """
-    meta = character_archive.resolve_workbench(character_id, create=create)
-    if meta is None:
+    if create:
+        character_archive.read_workbench(character_id, create=True)
+    info = character_archive.workbench_info(character_id)
+    if info is None:
         # Two different nothings, and the window renders them
         # differently: a character never pulled has nothing to copy
         # from, while one merely not edited yet gets the row that
@@ -911,10 +911,7 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
             else "not_created_yet"
         )
         return {"workbench": None, "reason": reason}
-    return {
-        "workbench": _set_meta_to_json(meta),
-        "active_set_id": character_archive.read_active_set_id(character_id),
-    }
+    return {"workbench": info.to_dict()}
 
 
 @app.get("/flist/character/{character_id}/workbench/payload")
@@ -1001,17 +998,17 @@ async def flist_character_workbench_load_backup(
         raise HTTPException(
             status_code=409,
             detail=(
-                "That backup predates the stored profile payload, so there "
-                "is nothing in it to load."
+                "That Backup holds no profile to load: it predates the "
+                "stored profile payload, or keeps the files an earlier "
+                "version of the app left behind."
             ),
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # `workbench` is for windows that still re-open the Workbench by id.
-    bench = character_archive.resolve_workbench(character_id, create=False)
+    info = character_archive.workbench_info(character_id)
     return {
-        "workbench": _set_meta_to_json(bench) if bench is not None else None,
+        "workbench": info.to_dict() if info is not None else None,
         "payload": replaced.payload,
         "etag": replaced.etag,
         "loaded": filename,
@@ -1064,13 +1061,8 @@ async def flist_character_workbench_load_preflight(
     if entry is None:
         raise HTTPException(status_code=404, detail="no such backup")
 
-    bench = character_archive.resolve_workbench(character_id, create=False)
-    bench_has_edits = False
-    if bench is not None:
-        payload = character_archive.read_set_payload(character_id, bench.id)
-        if isinstance(payload, dict):
-            overlay = payload.get("_overlay")
-            bench_has_edits = bool(overlay)
+    bench = character_archive.read_workbench(character_id)
+    bench_has_edits = bench is not None and bool(bench.payload.get("_overlay"))
 
     # "Diverged" means the profile on F-list was pulled after this
     # backup was taken, so the backup is not a picture of what is up
@@ -1318,16 +1310,13 @@ async def flist_character_export_zip(character_id: str) -> Response:
     the character name.
 
     The export modal shows the Workbench's counts, so this is the
-    Workbench too: what the user reviewed is what they upload. The
-    legacy working copy is never read here. Live is the fallback only
-    for a character that has no Workbench yet.
+    Workbench too: what the user reviewed is what they upload. Live is
+    the fallback only for a character that has no Workbench yet.
     """
     import zip_serialise
 
-    working = None
-    bench = character_archive.resolve_workbench(character_id, create=False)
-    if bench is not None:
-        working = character_archive.read_set_payload(character_id, bench.id)
+    bench = character_archive.read_workbench(character_id)
+    working = bench.payload if bench is not None else None
     if working is None:
         live = character_archive.read_live(character_id)
         if live is None:

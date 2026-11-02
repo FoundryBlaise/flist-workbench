@@ -50,6 +50,12 @@ def upload_refusal(character_id: str, filename: str) -> str | None:
     be. One taken without its image files lists no image in
     character.json, which an Upload reads as "remove every image"."""
     meta = character_archive.zip_backup_meta(character_id, filename)
+    if meta.get("occasion") == backup_origin.MIGRATION:
+        return (
+            "This Backup keeps the files an earlier version of the app "
+            "left behind, not a profile, so there is nothing in it to "
+            "upload."
+        )
     note = meta.get("note")
     if meta.get("images_missing") or (
         meta.get("kind") == PRE_UPLOAD_BACKUP_KIND
@@ -393,9 +399,7 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
     return out
 
 
-#: The Workbench's id in the source list. Earlier versions listed it as
-#: `set:<id>`; an extension still holding such a list is served the
-#: Workbench too, as long as the id is the Workbench's.
+#: The Workbench's id in the source list.
 WORKBENCH_SOURCE_ID = "workbench"
 
 
@@ -403,22 +407,11 @@ def _workbench(character_id: str) -> tuple[float, dict[str, Any]] | None:
     """The character's Workbench as `(updated_at, payload)`, or None
     when it has none yet. Never creates one: listing or fetching what
     can be uploaded must not bring a Workbench into existence."""
-    bench = character_archive.resolve_workbench(character_id, create=False)
-    if bench is None:
+    bench = character_archive.read_workbench(character_id)
+    info = character_archive.workbench_info(character_id)
+    if bench is None or info is None:
         return None
-    payload = character_archive.read_set_payload(character_id, bench.id)
-    if not isinstance(payload, dict):
-        return None
-    return bench.updated_at, payload
-
-
-def _names_the_workbench(character_id: str, source_id: str) -> bool:
-    if source_id == WORKBENCH_SOURCE_ID:
-        return True
-    if not source_id.startswith("set:"):
-        return False
-    bench = character_archive.resolve_workbench(character_id, create=False)
-    return bench is not None and source_id == f"set:{bench.id}"
+    return info.updated_at, bench.payload
 
 
 def _iso_from_unix(ts: float | int | None) -> str | None:
@@ -436,7 +429,7 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     images_dir = character_archive.images_dir(character_id)
     avatar = _avatar_path_for_name(character_name)
 
-    if _names_the_workbench(character_id, snapshot_id):
+    if snapshot_id == WORKBENCH_SOURCE_ID:
         bench = _workbench(character_id)
         if bench is None:
             return None

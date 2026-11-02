@@ -238,32 +238,14 @@ def test_the_workbench_source_names_the_one_workbench(paired) -> None:
     assert bench["label"] == "Workbench (your edits)"
 
 
-def test_a_source_list_from_before_the_update_still_uploads_the_workbench(paired) -> None:
-    """Earlier versions named the Workbench entry `set:<id>`; an
-    extension holding such a list keeps working."""
+def test_the_workbench_is_fetched_under_its_own_id_only(paired) -> None:
+    """Earlier versions named the Workbench entry `set:<id>`. The
+    extension fetches the id the list gives it, which is `workbench`;
+    an id naming a draft of an older version is no source."""
     window, extension = paired
     _edit_workbench(window, "42", "[b]Drafted in the Workbench.[/b]")
-    bench_id = window.get("/flist/character/42/workbench").json()["workbench"]["id"]
 
-    profile = _fetch(extension, AMBER, f"set:{bench_id}")
-
-    assert profile["character"]["description"] == "[b]Drafted in the Workbench.[/b]"
-
-
-def test_a_draft_left_by_an_older_version_is_not_an_upload_source(paired) -> None:
-    """Older versions could keep several drafts per character. Only the
-    one the window shows as the Workbench is offered or served; the
-    rest stay on disk until the migration to one Workbench folds them
-    into a Backup."""
-    import character_archive
-
-    window, extension = paired
-    _edit_workbench(window, "42", "[b]Drafted in the Workbench.[/b]")
-    leftover = character_archive.create_set_from_live("42", "An older draft")
-
-    res = extension.get(
-        f"/restore/snapshot/set:{leftover.id}", params={"character": AMBER}
-    )
+    res = extension.get("/restore/snapshot/set:aaaaaaaaaaaa", params={"character": AMBER})
 
     assert res.status_code == 404
     assert [s["id"] for s in _by_kind(_sources(extension, AMBER), "set")] == ["workbench"]
