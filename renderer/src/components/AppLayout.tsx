@@ -229,6 +229,11 @@ export function AppLayout() {
           // so nothing else would make the Images tab list them.
           if (event.character_id) void store.flistLoadCharacterImages(event.character_id)
           break
+        case 'index-changed':
+          // An ingest started or ended, or the Index was wiped: views
+          // showing its status read it again.
+          store.noteIndexChanged()
+          break
         case 'labels-changed': {
           // Label chips are rendered from the cached message list, so
           // the cache has to go before they can refresh.
