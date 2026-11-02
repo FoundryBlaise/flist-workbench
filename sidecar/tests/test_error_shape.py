@@ -32,10 +32,9 @@ NAME = "Mira Thornfield"
 
 #: Routes a sweep cannot call once and move on from: the event stream
 #: never ends, and the render long-poll waits for the window to draw.
+#: `POST /shutdown` is swept: in-process there is no server loop of the
+#: app's to end, so it refuses (409 `not_stoppable`) and nothing stops.
 UNSWEPT = {("GET", "/events"), ("GET", "/render/requests")}
-
-#: Areas with no request that can be turned down.
-NEVER_REFUSE = {"health"}
 
 #: What fills the path of every swept route: a character the archive
 #: does not hold, then one it does, and names that name nothing.
@@ -114,7 +113,10 @@ def test_every_route_group_answers_its_errors_in_one_shape(
             failures += sweep(client, [route], note, json=[], **params)
 
     assert failures == []
-    assert groups - refused == NEVER_REFUSE
+    assert groups - refused == set()
+    # The sweep asked the sidecar to stop and was refused, so it is
+    # still the one answering here.
+    assert statuses["not_stoppable"] == {409}
     assert {code: s for code, s in statuses.items() if len(s) > 1} == {}
 
 

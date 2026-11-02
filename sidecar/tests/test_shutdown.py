@@ -18,7 +18,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from sidecar_client import BASE_URL, SECRET_HEADER, app_client
+from sidecar_client import BASE_URL, SECRET_HEADER, app_client, is_refusal_shaped
 
 SIDECAR_DIR = Path(__file__).resolve().parent.parent
 START_BUDGET_S = 60
@@ -101,6 +101,7 @@ def test_a_caller_without_the_launch_secret_cannot_stop_it(
     proc, url, _secret = sidecar_process
     res = httpx.post(f"{url}/shutdown", headers=headers, timeout=5)
     assert res.status_code == 401
+    assert is_refusal_shaped(res)
     assert res.json()["code"] == "unauthorized"
     time.sleep(1)
     assert proc.poll() is None
@@ -114,6 +115,11 @@ def test_a_sidecar_the_app_did_not_start_says_it_cannot_stop_itself() -> None:
 
     res = app_client(server.app).post("/shutdown")
     assert res.status_code == 409
-    assert res.json()["code"] == "not_stoppable"
+    assert is_refusal_shaped(res)
+    assert res.json() == {
+        "code": "not_stoppable",
+        "message": res.json()["message"],
+        "details": {},
+    }
     # And a stranger still hears 401 first.
     assert TestClient(server.app, base_url=BASE_URL).post("/shutdown").status_code == 401
