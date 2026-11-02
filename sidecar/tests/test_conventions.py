@@ -275,7 +275,7 @@ SNAPSHOT_ALLOWED: dict[str, int] = {
     "renderer/src/features/flist/DiffPane.tsx": 3,
     "renderer/src/features/flist/ExtensionPairModal.tsx": 2,
     "renderer/src/features/flist/imageUsage.ts": 3,
-    "renderer/src/features/settings/SettingsModal.tsx": 3,
+    "renderer/src/features/settings/SettingsModal.tsx": 2,
     "sidecar/character_archive.py": 3,
     "sidecar/server.py": 2,
     "sidecar/workbench_mcp/tools_sets.py": 3,

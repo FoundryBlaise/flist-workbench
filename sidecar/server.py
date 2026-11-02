@@ -709,10 +709,10 @@ async def flist_character_zip_backup(
 
     `kind` lets a caller mark the provenance: `manual_single` (the
     default — right-click Back-up-now), `import` (set when an
-    import flow triggers a follow-up backup), `scheduled` (timer).
+    import flow triggers a follow-up backup).
     The bulk path passes `manual_bulk` directly to `save_zip_backup`.
     """
-    if kind not in ("manual_single", "manual_bulk", "import", "scheduled"):
+    if kind not in ("manual_single", "manual_bulk", "import"):
         kind = "manual_single"
     try:
         return character_archive.save_zip_backup(
@@ -912,10 +912,7 @@ async def flist_character_zip_backup_payload(
 
 
 @app.post("/flist/backup-all")
-async def flist_backup_all(
-    kind: str = "manual_bulk",
-    source: str = "manual",
-) -> StreamingResponse:
+async def flist_backup_all() -> StreamingResponse:
     """Back up every character on the signed-in account, as an SSE
     stream.
 
@@ -926,7 +923,7 @@ async def flist_backup_all(
     """
 
     async def producer():
-        async for event, data in backup_all_service.run(kind, source):
+        async for event, data in backup_all_service.run():
             yield _sse_event(event, data)
 
     return StreamingResponse(
@@ -2832,14 +2829,6 @@ class RagSettingsUpdate(BaseModel):
     chunk_overlap_msgs: int | None = None
 
 
-class BackupsSettingsUpdate(BaseModel):
-    # 0 disables the scheduled-on-start sweep entirely. Both are
-    # clamped server-side so a bad UI write can't disable scheduling
-    # via a negative interval or store nonsense.
-    scheduled_interval_days: int | None = None
-    scheduled_keep_last_n: int | None = None
-
-
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
@@ -2847,7 +2836,6 @@ class SettingsUpdate(BaseModel):
     fchat_data_dir: str | None = None
     labels: LabelsSettingsUpdate | None = None
     rag: RagSettingsUpdate | None = None
-    backups: BackupsSettingsUpdate | None = None
     # Folders MCP's import_image may read from. Only this endpoint — the
     # window — sets them; the MCP settings tool can read but not change.
     image_import_roots: list[str] | None = None
@@ -2904,80 +2892,9 @@ def _settings_dict(conn) -> dict:
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
             },
         },
-        "backups": _backups_settings_dict(conn),
         "image_import_roots": [
             str(p) for p in image_import_service.import_roots(conn)
         ],
-    }
-
-
-def _backups_settings_dict(conn) -> dict:
-    interval_raw = settings_store.get(
-        conn, settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS
-    )
-    keep_raw = settings_store.get(
-        conn, settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N
-    )
-    try:
-        interval = (
-            int(interval_raw)
-            if interval_raw is not None
-            else settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
-        )
-    except (TypeError, ValueError):
-        interval = settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
-    try:
-        keep = (
-            int(keep_raw)
-            if keep_raw is not None
-            else settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
-        )
-    except (TypeError, ValueError):
-        keep = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
-
-    def _opt_int(key: str) -> int | None:
-        raw = settings_store.get(conn, key)
-        if raw is None:
-            return None
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
-
-    started_at = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_STARTED_AT)
-    finished_at = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_FINISHED_AT)
-    written = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_WRITTEN) or 0
-    skipped = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_SKIPPED) or 0
-    failed = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_FAILED) or 0
-    source = (
-        settings_store.get(conn, settings_store.KEY_BACKUPS_LAST_SWEEP_SOURCE)
-        or None
-    )
-
-    # "Next due" is just last-started + interval_days. The UI computes
-    # the human-readable countdown ("in 3 days") on its side.
-    next_due_at = (
-        started_at + interval * 86400
-        if started_at is not None and interval > 0
-        else None
-    )
-
-    return {
-        "scheduled_interval_days": interval,
-        "scheduled_keep_last_n": keep,
-        "defaults": {
-            "scheduled_interval_days": settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT,
-            "scheduled_keep_last_n": settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT,
-        },
-        "last_sweep": {
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "written": written,
-            "skipped": skipped,
-            "failed": failed,
-            "source": source,
-        },
-        "next_due_at": next_due_at,
     }
 
 
@@ -3037,22 +2954,6 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
 
     if body.rag is not None:
         _apply_rag_update(conn, body.rag)
-
-    if body.backups is not None:
-        if body.backups.scheduled_interval_days is not None:
-            n = max(0, min(365, int(body.backups.scheduled_interval_days)))
-            settings_store.set_value(
-                conn,
-                settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS,
-                str(n),
-            )
-        if body.backups.scheduled_keep_last_n is not None:
-            n = max(1, min(200, int(body.backups.scheduled_keep_last_n)))
-            settings_store.set_value(
-                conn,
-                settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N,
-                str(n),
-            )
 
     if body.image_import_roots is not None:
         try:

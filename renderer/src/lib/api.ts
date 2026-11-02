@@ -352,36 +352,6 @@ export type LabelsSettings = {
   }
 }
 
-export type BackupsSettings = {
-  /** Day interval for the scheduled-on-start sweep. 0 disables. */
-  scheduled_interval_days: number
-  /** Maximum scheduled backups kept per character. Older entries are
-   *  pruned after each successful scheduled write. */
-  scheduled_keep_last_n: number
-  defaults: {
-    scheduled_interval_days: number
-    scheduled_keep_last_n: number
-  }
-  /** Telemetry from the last sweep run. `null` epochs mean the sweep
-   *  has never executed in this install — the UI shows "Never run"
-   *  instead of a stale relative time. */
-  last_sweep: {
-    started_at: number | null
-    finished_at: number | null
-    written: number
-    skipped: number
-    failed: number
-    /** 'on_start' (sidecar boot) or 'manual' (user pressed the
-     *  Trigger button in Settings). `null` only when no run has
-     *  happened yet. */
-    source: 'on_start' | 'manual' | null
-  }
-  /** Computed `last_sweep.started_at + interval_days × 86400`. `null`
-   *  when no sweep has run yet, or when interval=0 (sweep disabled).
-   *  UI renders the countdown ("in 3 days" / "due now"). */
-  next_due_at: number | null
-}
-
 export type RagSettings = {
   embed_model: string
   rerank_model: string
@@ -731,14 +701,12 @@ export const api = {
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
       rag: RagSettings
-      backups: BackupsSettings
       image_import_roots: string[]
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
     rag?: Partial<Omit<RagSettings, 'defaults'>>
-    backups?: Partial<Omit<BackupsSettings, 'defaults'>>
     image_import_roots?: string[]
   }) =>
     request<{
@@ -747,7 +715,6 @@ export const api = {
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
       rag: RagSettings
-      backups: BackupsSettings
       image_import_roots: string[]
     }>('/settings', {
       method: 'PUT',
@@ -1550,25 +1517,13 @@ export const api = {
    *  renders. */
   flistBackupAll: async (
     handlers: FlistBackupAllHandlers,
-    // `source` tags the sweep in the last-run telemetry Settings →
-    // Backups reads back: 'post_login' for the automatic sweep after
-    // sign-in, 'manual' for the Trigger button.
-    opts?: ApiOptions & {
-      kind?: 'manual_bulk' | 'scheduled'
-      source?: 'manual' | 'post_login'
-    }
+    opts?: ApiOptions
   ): Promise<void> => {
-    const kind = opts?.kind ?? 'manual_bulk'
-    const source = opts?.source ?? 'manual'
-    const res = await fetch(
-      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}` +
-        `&source=${encodeURIComponent(source)}`,
-      {
-        method: 'POST',
-        headers: { Accept: 'text/event-stream' },
-        signal: opts?.signal
-      }
-    )
+    const res = await fetch(`${base()}/flist/backup-all`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream' },
+      signal: opts?.signal
+    })
     if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`)
     }
