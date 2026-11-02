@@ -15,6 +15,7 @@ import {
 import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
+import { removeOnefileLeftoversOnce } from './onefileLeftovers'
 import { FileGrants } from './fileGrants'
 import { APP_PAGE_URL, isAppPage, registerAppScheme, serveAppScheme } from './appPage'
 import { saveEditsAndAllowClose, saveEditsOnClose } from './unsavedEdits'
@@ -800,6 +801,18 @@ app.whenReady().then(async () => {
     (status) => appendDiagLog('browser-extension', status),
     (err) => appendDiagLog('browser-extension-sync-failed', err)
   )
+  // Older versions' one-file sidecar left its unpacked runtime in %TEMP%
+  // at every quit; the folder build unpacks nothing. A dev run leaves
+  // the user's temp folder alone.
+  if (app.isPackaged && process.platform === 'win32') {
+    removeOnefileLeftoversOnce({
+      tempDir: app.getPath('temp'),
+      markerPath: join(app.getPath('userData'), 'onefile-leftovers-removed.json')
+    }).then(
+      (sweep) => appendDiagLog('onefile-leftovers', sweep),
+      (err) => appendDiagLog('onefile-leftovers-failed', err)
+    )
+  }
   if (updaterActive) {
     setTimeout(() => runStartupUpdateCheck('fallback timer'), 45_000)
   }
