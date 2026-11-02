@@ -5,8 +5,8 @@ one profile into the cache, and the shared budget check that stops an
 MCP client spending the user's F-list quota.
 
 What this module deliberately does *not* have is a write path into
-`character_archive`. Nothing here produces a working set, a snapshot,
-a backup or an export, and no tool or route is offered that would. The
+`character_archive`. Nothing here produces a Workbench, a Backup or
+an export, and no tool or route is offered that would. The
 viewer exists to answer "how is this profile put together", and that
 question is answered by reading.
 

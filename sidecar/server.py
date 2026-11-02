@@ -253,7 +253,7 @@ async def events_stream(request: Request) -> StreamingResponse:
 
     The renderer holds one of these open for the life of the window.
     It exists because the window is no longer the only writer: a model
-    connected over MCP edits the same working sets, and without this
+    connected over MCP edits the same Workbench, and without this
     the window would keep showing a stale draft and then autosave it
     back over the model's work.
 
@@ -875,7 +875,7 @@ async def flist_character_live(character_id: str) -> dict:
     return payload
 
 
-# ---- working sets v2 -------------------------------------------------
+# ---- the Workbench -----------------------------------------------------
 
 
 class _LoadBackupBody(BaseModel):
@@ -1105,7 +1105,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
 async def flist_character_images_list(character_id: str) -> dict:
     """List the files in `images/`. Each row: `{image_id, extension,
     size, added_at}`. Renderer pairs these with description/sort_order
-    from working.json to decide which are on the profile vs. in the
+    from the Workbench to decide which are on the profile vs. in the
     pool view."""
     return {
         "character_id": character_id,
@@ -1138,7 +1138,7 @@ async def flist_character_image_upload(
     id. The body is the raw image bytes; the server sniffs magic bytes
     to decide the extension (Content-Type is never trusted). The
     uploaded image lands in the renderer's Pool view by default — it
-    only appears on-profile after the user moves it via a working.json
+    only appears on-profile after the user moves it via a Workbench
     gallery edit.
 
     Idempotent — identical bytes always produce the same `local-<sha8>`
@@ -1515,7 +1515,7 @@ async def flist_avatar(name: str) -> FileResponse:
 #
 # Somebody else's profile, cached under `<userdata>/foreign/` and never
 # under `characters/`. There is deliberately no route here that writes
-# into the archive: no working set, no snapshot, no backup, no export.
+# into the archive: no Workbench, no Backup, no export.
 # The viewer reads.
 
 
@@ -2796,9 +2796,8 @@ async def restore_saved(
     """The user pressed Save on f-list.net — re-pull so Live matches
     what is published again.
 
-    Live is the only thing this touches. The pull writes live.json, the
-    images and a snapshot; working sets are never written by it, and
-    the Workbench in particular must come through untouched: the user
+    Live is the only thing this touches. The pull writes live.json and
+    the images; the Workbench must come through untouched: the user
     may well have gone on editing it while the upload happened, and
     quietly replacing their draft with what they just published would
     be the rudest possible interpretation of "restore finished".

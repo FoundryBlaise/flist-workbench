@@ -281,8 +281,8 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # Under the v5 unified store, pulls no longer delete
             # images/ files that F-list dropped — the bytes stay
             # on disk and surface in the renderer's Pool view (any
-            # image_id not referenced by working.json's gallery is
-            # "in the pool"). The working copy's gallery is the only
+            # image_id not referenced by the Workbench's gallery is
+            # "in the pool"). The Workbench's gallery is the only
             # source of truth for what shows on-profile, and only
             # the explicit pool-delete UI removes bytes.
 
@@ -290,7 +290,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # extension deletes and re-uploads a gallery, F-list mints
             # new ids, and what we just downloaded is byte-identical to
             # files we already hold under ids the site has forgotten.
-            # Left alone, the working set keeps naming the dead ones
+            # Left alone, the Workbench keeps naming the dead ones
             # and the same picture shows in the pool and on the profile
             # at once. Repair compares bytes, so it recognises them.
             try:

@@ -39,9 +39,9 @@ REQUEST_TTL_SEC = 120.0
 @dataclass
 class RenderRequest:
     id: str
-    #: The BBCode to draw. Resolved here rather than in the app: which
-    #: working set counts as "the Workbench" is the sidecar's business,
-    #: and the window should not have to agree with it separately.
+    #: The BBCode to draw. Resolved here rather than in the app: where
+    #: the Workbench lives is the sidecar's business, and the window
+    #: should not have to agree with it separately.
     bbcode: str
     #: `[img=ID]` needs a manifest to build a CDN URL from an id.
     inlines: dict[str, Any]

@@ -15,7 +15,7 @@ translation layer.
 The separate root is the point. Everything that can copy, back up,
 export or edit a character resolves its paths through
 `character_archive.character_dir()`, and nothing under `foreign/` is
-reachable that way. Copying one of these into a working set is still
+reachable that way. Copying one of these into a Workbench is still
 *possible* for anyone with a file manager; what the app must not offer
 is a button that does it.
 
