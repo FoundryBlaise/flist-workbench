@@ -35,7 +35,7 @@ import backup_origin
 import character_archive
 import paths
 import zip_serialise
-from refusals import BackupHoldsNoProfile, BackupNotUploadable
+from refusals import BackupHoldsNoProfile, BackupNotUploadable, Refusal
 
 #: `backup-meta.json` kind of the Backup taken before an Upload.
 PRE_UPLOAD_BACKUP_KIND = "pre_upload"
@@ -45,25 +45,33 @@ PRE_UPLOAD_BACKUP_KIND = "pre_upload"
 IMAGES_NOT_PACKED_NOTE = "Full backup failed"
 
 
-def upload_refusal(character_id: str, filename: str) -> str | None:
-    """Why a Backup must not be an Upload source, or None when it can
-    be. One taken without its image files lists no image in
+def _upload_refused(character_id: str, filename: str) -> Refusal | None:
+    """The refusal a Backup meets as an Upload source, or None when it
+    can be one. One that holds no profile is refused as everywhere
+    else. One taken without its image files lists no image in
     character.json, which an Upload reads as "remove every image"."""
     meta = character_archive.zip_backup_meta(character_id, filename)
     if not backup_origin.holds_profile(meta):
-        return BackupHoldsNoProfile.fixed_message
+        return BackupHoldsNoProfile(filename)
     note = meta.get("note")
     if meta.get("images_missing") or (
         meta.get("kind") == PRE_UPLOAD_BACKUP_KIND
         and isinstance(note, str)
         and note.startswith(IMAGES_NOT_PACKED_NOTE)
     ):
-        return (
+        return BackupNotUploadable(
             "This Backup was taken without its image files, so uploading it "
             "would remove every image from the profile. Load it into the "
             "Workbench instead, and upload the Workbench."
         )
     return None
+
+
+def upload_refusal(character_id: str, filename: str) -> str | None:
+    """Why a Backup must not be an Upload source, or None when it can
+    be: the message fetching it for an Upload is refused with."""
+    refused = _upload_refused(character_id, filename)
+    return refused.message if refused is not None else None
 
 
 _STATE_FILENAME = "restore-state.json"
@@ -455,9 +463,9 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     candidate = character_archive.backups_dir(character_id) / snapshot_id
     if not candidate.is_file():
         return None
-    refused = upload_refusal(character_id, snapshot_id)
-    if refused:
-        raise BackupNotUploadable(refused)
+    refused = _upload_refused(character_id, snapshot_id)
+    if refused is not None:
+        raise refused
     return _with_form_state_translated(candidate.read_bytes())
 
 
