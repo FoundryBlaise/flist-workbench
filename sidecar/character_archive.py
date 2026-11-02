@@ -1724,11 +1724,9 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     these rows with `description`/`sort_order` from the Workbench to
     decide which are on the profile vs. in the pool view.
 
-    Side-effect: triggers the v4 → v5 pool migration if a legacy pool/
-    directory is present, then collapses any `local-<sha8>` files whose
-    bytes match an existing real-id file. Both are idempotent — no-ops
-    once the disk is clean."""
-    migrate_v4_pool_to_images(character_id)
+    Side-effect: collapses any `local-<sha8>` files whose bytes match an
+    existing real-id file. Idempotent — a no-op once the disk is clean.
+    A `pool/` folder left by v0.0.3 or older stays untouched."""
     collapse_local_duplicates(character_id)
     out: list[dict[str, Any]] = []
     d = images_dir(character_id)
@@ -2253,125 +2251,6 @@ def adopt_flist_image_ids(
         "unknown": unknown,
         "workbench_rewritten": workbench_rewritten,
     }
-
-
-# ---- v4 → v5 pool migration ------------------------------------------
-
-# v4 stored bytes twice: once under `images/<image_id>.<ext>` and once
-# under `pool/<sha>.<ext>` with a sha→{image_ids[]} manifest. v5 keeps
-# only the `images/` store; migration moves any pool-only bytes into
-# `images/` under their first-known F-list id (or a `local-<sha8>`
-# synthetic) and deletes the pool/ directory.
-
-_LEGACY_POOL_DIRNAME = "pool"
-_LEGACY_POOL_MANIFEST = "manifest.json"
-
-
-def migrate_v4_pool_to_images(character_id: int | str) -> int:
-    """One-shot disk migration from v4's `pool/<sha>` store to v5's
-    unified `images/<image_id>` store. Returns the number of pool files
-    promoted (informational; legacy archive with no pool/ returns 0).
-    Idempotent — re-runs are no-ops once pool/ is gone.
-    """
-    cdir = character_dir(character_id)
-    pool_d = cdir / _LEGACY_POOL_DIRNAME
-    if not pool_d.exists():
-        return 0
-    manifest_path = pool_d / _LEGACY_POOL_MANIFEST
-    manifest: dict[str, dict[str, Any]] = {}
-    if manifest_path.exists():
-        try:
-            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                manifest = {
-                    k: v for k, v in raw.items()
-                    if isinstance(k, str) and isinstance(v, dict)
-                }
-        except (OSError, ValueError):
-            manifest = {}
-    images_d = images_dir(character_id)
-    promoted = 0
-    seen_pool_files: set[str] = set()
-    for sha, meta in manifest.items():
-        ext_raw = meta.get("extension")
-        if not isinstance(ext_raw, str):
-            continue
-        try:
-            ext = normalise_image_ext(ext_raw)
-        except ValueError:
-            continue
-        sha_file = pool_d / f"{sha}.{ext}"
-        seen_pool_files.add(sha_file.name)
-        if not sha_file.exists():
-            continue
-        image_ids_raw = meta.get("image_ids")
-        image_ids: list[str] = (
-            [str(x) for x in image_ids_raw if isinstance(x, (str, int))]
-            if isinstance(image_ids_raw, list)
-            else []
-        )
-        # If any of this sha's historical image_ids is already a file in
-        # images/<id>.<ext>, the bytes are already preserved under that
-        # id — skip rather than mint a redundant `local-<sha8>` copy.
-        already_preserved = any(
-            _SAFE_NAME_RE.fullmatch(iid) and (images_d / f"{iid}.{ext}").exists()
-            for iid in image_ids
-        )
-        if already_preserved:
-            continue
-        chosen: str | None = None
-        for iid in image_ids:
-            if not _SAFE_NAME_RE.fullmatch(iid):
-                continue
-            chosen = iid
-            break
-        if chosen is None:
-            chosen = f"local-{sha[:8]}"
-        if not _SAFE_NAME_RE.fullmatch(chosen):
-            continue
-        target = images_d / f"{chosen}.{ext}"
-        if not target.exists():
-            try:
-                target.write_bytes(sha_file.read_bytes())
-                promoted += 1
-            except OSError:
-                continue
-    # Also catch orphan files in pool/ that weren't in the manifest —
-    # they only carry sha+ext, so they always land as `local-<sha8>`.
-    for entry in list(pool_d.iterdir()):
-        if not entry.is_file():
-            continue
-        if entry.name == _LEGACY_POOL_MANIFEST:
-            continue
-        if entry.name in seen_pool_files:
-            continue
-        stem = entry.stem
-        ext_part = entry.suffix.lstrip(".")
-        try:
-            ext = normalise_image_ext(ext_part)
-        except ValueError:
-            continue
-        if len(stem) < 8 or not _SAFE_NAME_RE.fullmatch(stem):
-            continue
-        chosen = f"local-{stem[:8]}"
-        target = images_d / f"{chosen}.{ext}"
-        if not target.exists():
-            try:
-                target.write_bytes(entry.read_bytes())
-                promoted += 1
-            except OSError:
-                continue
-    # Tear down pool/ — best-effort, leaves directory intact on errors.
-    for entry in list(pool_d.iterdir()):
-        try:
-            entry.unlink()
-        except OSError:
-            pass
-    try:
-        pool_d.rmdir()
-    except OSError:
-        pass
-    return promoted
 
 
 def avatar_path_for(name: str) -> Path:
