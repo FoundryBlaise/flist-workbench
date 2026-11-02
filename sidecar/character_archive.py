@@ -40,8 +40,9 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
+import atomic_write
 import backup_origin
 import paths
 from archive_errors import (
@@ -448,14 +449,9 @@ def _read_backup_names(character_id: int | str) -> dict[str, str]:
 def _write_backup_names(
     character_id: int | str, names: dict[str, str]
 ) -> None:
-    p = _names_file(character_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(names, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
+    atomic_write.write_json(
+        _names_file(character_id), names, indent=2, ensure_ascii=False, sort_keys=True
     )
-    tmp.replace(p)
 
 
 def rename_zip_backup(
@@ -519,35 +515,8 @@ def _publish(event: str, **data: Any) -> None:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Atomic JSON write. Retries `Path.replace` once on OSError with a
-    short jittered backoff — OneDrive / Dropbox-synced directories can
-    return EBUSY for milliseconds when their sync agent has the target
-    file open. The retry costs nothing on healthy filesystems and is
-    the documented fix for the open question in PHASE7_TIER2_PLAN §1.3
-    (QA P3-6).
-
-    If the retry also fails, the leftover `.tmp` is unlinked so the
-    archive directory doesn't accumulate orphan temp files
-    (Round 1 verifier follow-up).
-    """
-    import random
-    import time as _time
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
-        tmp.replace(path)
-    except OSError:
-        _time.sleep(0.05 + random.random() * 0.05)
-        try:
-            tmp.replace(path)
-        except OSError:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-            raise
+    """Write `payload` as the archive's indented JSON, atomically."""
+    atomic_write.write_json(path, payload, indent=2, ensure_ascii=False)
 
 
 def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
@@ -621,15 +590,20 @@ def _zip_backup_filename(now: float | None = None) -> str:
     return ts.strftime("%Y-%m-%dT%H%M%SZ") + ".zip"
 
 
+def _backup_paths(folder: Path, stem: str) -> Iterator[Path]:
+    """`<folder>/<stem>.zip`, then `<stem>-1.zip`, `<stem>-2.zip`, ...:
+    the names a Backup of one second may take, in order."""
+    yield folder / f"{stem}.zip"
+    i = 1
+    while True:
+        yield folder / f"{stem}-{i}.zip"
+        i += 1
+
+
 def _free_backup_path(folder: Path, stem: str) -> Path:
     """`<folder>/<stem>.zip`, or `<stem>-N.zip` with the first N not on
     disk yet, so a same-second second Backup never overwrites the first."""
-    target = folder / f"{stem}.zip"
-    i = 1
-    while target.exists():
-        target = folder / f"{stem}-{i}.zip"
-        i += 1
-    return target
+    return next(p for p in _backup_paths(folder, stem) if not p.exists())
 
 
 def free_backup_filename(character_id: int | str, filename: str) -> str:
@@ -643,21 +617,18 @@ def free_backup_filename(character_id: int | str, filename: str) -> str:
     return _free_backup_path(backups_dir(character_id), stem).name
 
 
-def free_backup_path(folder: Path) -> Path:
-    """Where a Backup taken now goes in `folder`: named for this second,
-    with the first free `-N` suffix when that name is taken."""
-    return _free_backup_path(folder, _zip_backup_filename().removesuffix(".zip"))
+def write_new_backup(folder: Path, data: bytes) -> Path:
+    """Store `data` as a new Backup in `folder`, named for this second
+    with the first free `-N` suffix, and return where it went. Atomic,
+    and two Backups made in the same second each keep their own name."""
+    stem = _zip_backup_filename().removesuffix(".zip")
+    return atomic_write.write_new(_backup_paths(folder, stem), data)
 
 
 def write_backup_zip(character_id: int | str, data: bytes) -> Path:
     """Store `data` as a new Backup of the character, under the Backup
-    file name the list recognises, and return where it went. Written
-    through a temp file, so a crash leaves no half-written Backup."""
-    target = free_backup_path(backups_dir(character_id))
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(target)
-    return target
+    file name the list recognises, and return where it went."""
+    return write_new_backup(backups_dir(character_id), data)
 
 
 #: The name earlier versions gave the Backup before an Upload, which the
@@ -957,12 +928,9 @@ def save_zip_backup(
     img_dir = images_dir(character_id)
     if img_dir.exists():
         for entry in img_dir.iterdir():
-            if not entry.is_file():
-                continue
-            stem = entry.stem
-            ext = entry.suffix.lstrip(".").lower()
-            if stem and ext:
-                image_extensions[stem] = ext
+            m = _IMAGE_FILE_RE.fullmatch(entry.name)
+            if m and entry.is_file():
+                image_extensions[m.group(1)] = m.group(2).lower()
     candidate_payload = zip_serialise.to_zip_character_json(
         working, image_extensions=image_extensions
     )
@@ -1798,10 +1766,7 @@ def write_character_image(
     if not _SAFE_NAME_RE.fullmatch(image_id):
         raise ValueError(f"unsafe image_id: {image_id!r}")
     ext_n = normalise_image_ext(ext)
-    target = images_dir(character_id) / f"{image_id}.{ext_n}"
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(target)
+    atomic_write.write_bytes(images_dir(character_id) / f"{image_id}.{ext_n}", data)
 
 
 def find_image_with_sha(
@@ -1925,7 +1890,7 @@ def dedupe_local_after_pull(
     d = images_dir(character_id)
     matched: Path | None = None
     for c in sorted(d.glob(f"local-{sha8}.*")):
-        if not c.is_file():
+        if not c.is_file() or not _IMAGE_FILE_RE.fullmatch(c.name):
             continue
         try:
             if _hash_bytes(c.read_bytes()) == full:
@@ -1984,9 +1949,7 @@ def add_uploaded_image(
     image_id = f"local-{sha[:8]}"
     target = images_dir(character_id) / f"{image_id}.{ext}"
     if not target.exists():
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(target)
+        atomic_write.write_bytes(target, data)
     try:
         stat = target.stat()
         added_at = int(stat.st_mtime)
@@ -2158,6 +2121,8 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
     for old_id in superseded:
         try:
             for entry in images.glob(f"{old_id}.*"):
+                if not _IMAGE_FILE_RE.fullmatch(entry.name):
+                    continue  # an interrupted write's temp file
                 if entry.is_file() and image_trash.trash_pool_file(character_id, entry):
                     stale_removed.append(old_id)
         except OSError:

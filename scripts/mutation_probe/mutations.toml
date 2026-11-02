@@ -26,6 +26,7 @@
 
 [groups]
 archive = [
+  "sidecar/tests/test_atomic_writes.py",
   "sidecar/tests/test_character_archive.py",
   "sidecar/tests/test_workbench_api.py",
   "sidecar/tests/test_workbench_payload_api.py",
@@ -107,24 +108,25 @@ replace = '''
 [[mutation]]
 id = "A03"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
-breaks = "The Workbench is written in place instead of temp file plus swap, so an interrupted save can leave it half written."
+file = "sidecar/atomic_write.py"
+breaks = "The Workbench (and every other file) is written in place instead of temp file plus swap, so an interrupted save can leave it half written."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 4
 # audit: M3 atomic write -> direct write (no tmp+replace)
+# Re-anchored for spec #4 (#63): the one write helper every writer uses.
 find = '''
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = _temp_beside(target, data)
     try:
-        tmp.replace(path)
-    except OSError:'''
+        _replace(tmp, target)'''
 replace = '''
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "wb") as f:
+        f.write(data)
+        os.fsync(f.fileno())
+    return
     try:
-        pass
-    except OSError:'''
+        _replace(tmp, target)'''
 
 [[mutation]]
 id = "A04"
@@ -209,12 +211,13 @@ tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 2
 # audit: M8 same-second backup overwrites instead of -N suffix
+# Re-anchored for spec #4 (#63): a new Backup claims its name atomically.
 find = '''
-    i = 1
-    while target.exists():'''
+    return atomic_write.write_new(_backup_paths(folder, stem), data)'''
 replace = '''
-    i = 1
-    while False:'''
+    target = folder / f"{stem}.zip"
+    atomic_write.write_bytes(target, data)
+    return target'''
 
 [[mutation]]
 id = "A09"
