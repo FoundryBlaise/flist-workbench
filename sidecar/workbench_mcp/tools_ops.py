@@ -177,7 +177,7 @@ async def backup_all_characters(ctx: Context) -> dict[str, Any]:
     seen = 0
     rows: list[dict[str, Any]] = []
 
-    async for event, data in backup_all_service.run("manual_bulk", "manual"):
+    async for event, data in backup_all_service.run():
         if event == "error":
             failure = data
             break
