@@ -29,18 +29,15 @@ from __future__ import annotations
 
 from typing import Any
 
-import aliases as aliases_store
 import labels as labels_store
-import logs as log_store
-import settings as settings_store
-from services import label_trash
+from services import classification
+from services import labels as label_service
 
 from ._context import (
     ToolError,
     audit,
     resolve_conversation,
     resolve_log_character,
-    validation_failed,
 )
 from ._registry import TAG_CLASSIFY, TAG_LOGS, prompt, tool
 
@@ -63,34 +60,6 @@ NEXT_INGEST = (
 )
 
 
-def _read_conversation(character: str, partner: str) -> list[dict[str, Any]]:
-    """Parse one conversation, distinguishing "no such conversation"
-    from "the log directory itself is missing".
-
-    Both come back from the parser as the same exception type, but they
-    need different answers: one is a typo the caller can fix, the other
-    is a setting the user has to change.
-    """
-    try:
-        return list(log_store.read_messages(character, partner))
-    except log_store.LogDirError as exc:
-        try:
-            known = [
-                entry.name for entry in log_store.list_partners(character)
-            ]
-        except log_store.LogDirError:
-            raise ToolError(
-                "log_dir_unavailable",
-                f"{exc} The F-Chat data directory is set in "
-                "Settings → General.",
-            ) from exc
-        raise ToolError(
-            "partner_not_found",
-            f"No log for {partner!r} with {character!r}.",
-            known_partners=[n for n in known if not n.startswith("#")][:50],
-        ) from exc
-
-
 @tool(
     tags=(TAG_LOGS, TAG_CLASSIFY),
     title="Classification guidelines",
@@ -105,8 +74,6 @@ def get_classification_guidelines(language: str = "de") -> dict[str, Any]:
     Workbench's own classifier used before this moved to MCP, so
     verdicts stay consistent with anything labelled earlier.
     """
-    from services import classification
-
     try:
         result = classification.guidelines(language)
     except ValueError as exc:
@@ -137,8 +104,6 @@ def classify_ic_ooc_prompt(language: str = "de") -> str:
     """Prompt twin of get_classification_guidelines, for clients that
     support prompts. LM Studio, the primary client, does not — so the
     tool is the load-bearing surface and this is a convenience."""
-    from services import classification
-
     result = classification.guidelines(language)
     return (
         f"{result['guidelines']}\n\n{result['rules_already_applied']}\n\n"
@@ -202,28 +167,14 @@ def get_messages_to_classify(
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
     capped = max(1, min(MAX_BATCH, int(limit)))
-    from services import classification
-
-    messages = _read_conversation(character, partner)
-
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        batch = classification.collect_pending(
-            messages,
-            labels_conn,
-            character,
-            partner,
-            lab_settings,
-            limit=capped,
-            cursor=int(cursor),
-            context_before=max(0, min(10, int(context_before))),
-            context_after=max(0, min(10, int(context_after))),
-        )
-    finally:
-        settings_conn.close()
-        labels_conn.close()
+    batch = classification.pending(
+        character,
+        partner,
+        limit=capped,
+        cursor=int(cursor),
+        context_before=max(0, min(10, int(context_before))),
+        context_after=max(0, min(10, int(context_after))),
+    )
 
     # Field order is load-bearing: a client whose context cannot hold
     # the whole response loses the tail, so everything needed to
@@ -306,48 +257,8 @@ def set_message_labels(
 
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
-    messages = _read_conversation(character, partner)
-    by_hash = {labels_store.msg_hash(m): m for m in messages}
-
-    written: list[str] = []
-    unknown: list[str] = []
-    rejected: list[dict[str, str]] = []
-
-    conn = labels_store.connect()
-    try:
-        # Verdicts are stored under the alias group's primary name so
-        # the partner column stays consistent across a rename.
-        primary = aliases_store.primary_for(conn, character, partner)
-        for raw in items:
-            if not isinstance(raw, dict):
-                rejected.append({"item": str(raw), "reason": "not an object"})
-                continue
-            h = str(raw.get("hash") or "").strip()
-            label = str(raw.get("label") or "").strip().upper()
-            if label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
-                rejected.append(
-                    {"hash": h, "reason": f"label must be IC or OOC, got {label!r}"}
-                )
-                continue
-            msg = by_hash.get(h)
-            if msg is None:
-                unknown.append(h)
-                continue
-            reason = raw.get("reason")
-            labels_store.upsert_label(
-                conn,
-                hash=h,
-                character=character,
-                partner=primary,
-                ts=int(msg.get("ts") or 0),
-                speaker=str(msg.get("speaker") or ""),
-                label=label,
-                source="mcp",
-                reason=str(reason)[:500] if reason else None,
-            )
-            written.append(h)
-    finally:
-        conn.close()
+    result = label_service.record_verdicts(character, partner, items)
+    written, unknown, rejected = result.written, result.unknown, result.rejected
 
     audit(
         "set_message_labels",
@@ -369,7 +280,7 @@ def set_message_labels(
             rejected=rejected,
         )
 
-    remaining = _unlabeled_remaining(character, partner, messages)
+    remaining = result.unlabeled_remaining
     out: dict[str, Any] = {
         "character": character,
         "partner": partner,
@@ -398,38 +309,6 @@ def set_message_labels(
         )
     out["note"] = " ".join(notes)
     return out
-
-
-def _unlabeled_remaining(
-    character: str, partner: str, messages: list[dict[str, Any]]
-) -> int:
-    """How many messages still have no verdict, counted after a write.
-
-    Cheap: the conversation is already parsed, so this is one labels
-    query plus a resolve per message. Worth it on every write — a
-    caller that only ever sees `written: 20` has nothing to check its
-    own bookkeeping against, and a model summarising a long run will
-    fill that gap with a plausible number instead of a true one.
-    """
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-        by_hash = labels_store.labels_for_partner(
-            labels_conn, character, partner, partner_aliases=alias_group
-        )
-        return sum(
-            1
-            for m in messages
-            if labels_store.resolve(
-                m, by_hash.get(labels_store.msg_hash(m)), lab_settings
-            )
-            == labels_store.LABEL_UNLABELED
-        )
-    finally:
-        settings_conn.close()
-        labels_conn.close()
 
 
 @tool(
@@ -461,19 +340,13 @@ def label_all_unlabeled(
     Unlabeled messages are skipped by ingest, so a conversation filled
     this way is found by search only after the next ingest_logs.
     """
-    if label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
-        raise validation_failed(
-            "label",
-            f"must be IC or OOC, got {label!r}",
-            allowed=[labels_store.LABEL_IC, labels_store.LABEL_OOC],
-        )
+    label = label_service.verdict(label)
 
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
-    messages = _read_conversation(character, partner)
 
     if not confirm:
-        pending = _unlabeled_remaining(character, partner, messages)
+        pending = label_service.conversation_stats(character, partner)["unlabeled"]
         raise ToolError(
             "confirm_required",
             f"This writes {label} to all {pending} unlabeled message(s) "
@@ -482,26 +355,7 @@ def label_all_unlabeled(
             f"{label}. Ask them, then call again with confirm=true.",
         )
 
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        alias_group = aliases_store.all_names_for(
-            labels_conn, character, partner
-        )
-        primary = aliases_store.primary_for(labels_conn, character, partner)
-        result = labels_store.fill_unlabeled(
-            labels_conn,
-            character,
-            primary,
-            messages,
-            lab_settings,
-            label,
-            partner_aliases=alias_group,
-        )
-    finally:
-        settings_conn.close()
-        labels_conn.close()
+    result = label_service.fill_unlabeled(character, partner, label)
 
     audit(
         "label_all_unlabeled",
@@ -559,7 +413,7 @@ def clear_labels(
             "again with confirm=true.",
         )
 
-    cleared = label_trash.clear(character, partner)
+    cleared = label_service.clear(character, partner)
 
     audit(
         "clear_labels",

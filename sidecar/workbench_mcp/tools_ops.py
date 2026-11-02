@@ -674,9 +674,8 @@ def add_alias(character: str, name: str, primary_name: str) -> dict[str, Any]:
     lookups, and the scope of a semantic search.
     """
     import aliases as aliases_store
-    import labels as labels_store
 
-    conn = labels_store.connect()
+    conn = aliases_store.connect()
     try:
         aliases_store.add_alias(conn, character, name, primary_name)
         group = aliases_store.all_names_for(conn, character, primary_name)
@@ -693,9 +692,8 @@ def remove_alias(character: str, name: str) -> dict[str, Any]:
     """Undo add_alias for one name, so it shows as its own conversation
     again."""
     import aliases as aliases_store
-    import labels as labels_store
 
-    conn = labels_store.connect()
+    conn = aliases_store.connect()
     try:
         removed = aliases_store.remove_alias(conn, character, name)
     finally:
