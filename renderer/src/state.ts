@@ -543,9 +543,9 @@ type State = {
   ) => Promise<boolean>
   /** Hide the reason the last Restore was turned down. */
   flistDismissRestoreRefusal: (characterId: string) => void
-  /** Record that something outside this window changed a set. Called
-   *  by the `/events` subscription; ignored when the change is one we
-   *  made ourselves. */
+  /** Record that something outside this window changed the Workbench.
+   *  Called by the `/events` subscription; ignored when the change is
+   *  one we made ourselves. */
   flistNoteExternalChange: (
     characterId: string,
     change: { etag: string | null; origin: string }

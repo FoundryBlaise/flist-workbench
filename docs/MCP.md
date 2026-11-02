@@ -253,9 +253,12 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (72 tools) | ~14500 (measured with 76) | does not fit in 24k |
+| `/mcp` (72 tools) | ~14500 (with 76 tools) | does not fit in 24k |
 | `/mcp/logs` (30 tools) | ~5800 | ~14900 |
 | `/mcp/classify` (9 tools) | ~1500 | ~10600 |
+
+The `/mcp` schema figure was measured when that endpoint carried 76
+tools and has not been measured again since it shrank to 72.
 
 So: point a labelling run at **`/mcp/classify`**. It carries only the
 eight tools the loop calls, which is the one change that lowers the
