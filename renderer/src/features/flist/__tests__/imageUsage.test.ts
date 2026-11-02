@@ -44,9 +44,9 @@ describe('usageNotes', () => {
     ])
   })
 
-  it('warns that the older drafts kept from the upgrade name an image but hold no copy of it', () => {
+  it('warns that the older copies from before the upgrade name an image but hold no copy of it', () => {
     expect(usageNotes(['a'], { a: ref({ migration_backup: true }) })).toEqual([
-      'It is named in the older drafts kept from the upgrade; that Backup holds no copy of the file.'
+      'It is named in the older copies from before the upgrade; that Backup holds no copy of the file.'
     ])
     expect(
       usageNotes(['a', 'b'], {
@@ -55,7 +55,7 @@ describe('usageNotes', () => {
       })
     ).toEqual([
       '1 of these is kept in a Backup, which holds its own copy.',
-      '2 of these are named in the older drafts kept from the upgrade; that Backup holds no copy of the files.'
+      '2 of these are named in the older copies from before the upgrade; that Backup holds no copy of the files.'
     ])
   })
 })

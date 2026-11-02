@@ -131,7 +131,7 @@ it('offers the Backup of the older files for download only, and says what it hol
   expect(offered).not.toContain('Load into Workbench…')
   expect(offered).not.toContain('Browse backup')
   expect(rowOf(MIGRATION_BACKUP).textContent).toMatch(
-    /older drafts and Pull copies from the upgrade, kept so nothing is lost/
+    /older copies from before the upgrade, kept so nothing is lost/
   )
 })
 

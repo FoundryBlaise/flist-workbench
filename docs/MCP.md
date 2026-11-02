@@ -13,7 +13,8 @@ Two things to hold onto before anything else:
    upload it yourself in the browser, with the userscript or the
    paired extension. A model that tells you a change is live on F-list
    is wrong.
-2. **`live` is read-only.** It is the record of what is published.
+2. **`live` is read-only.** It is the character's profile as it was
+   last pulled from F-list.
    Editing happens in the character's *Workbench*, its one local
    editable copy. Tools work on the Workbench when `working_set` is
    left out; `working_set="live"` reads Live. Nothing else is
@@ -252,9 +253,12 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (72 tools) | ~14500 (measured with 76) | does not fit in 24k |
+| `/mcp` (72 tools) | ~14500 (with 76 tools) | does not fit in 24k |
 | `/mcp/logs` (30 tools) | ~5800 | ~14900 |
 | `/mcp/classify` (9 tools) | ~1500 | ~10600 |
+
+The `/mcp` schema figure was measured when that endpoint carried 76
+tools and has not been measured again since it shrank to 72.
 
 So: point a labelling run at **`/mcp/classify`**. It carries only the
 eight tools the loop calls, which is the one change that lowers the

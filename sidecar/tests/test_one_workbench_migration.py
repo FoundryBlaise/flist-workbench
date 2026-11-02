@@ -505,6 +505,37 @@ def test_the_migration_backup_cannot_be_browsed_as_a_profile(old: OldArchive) ->
     assert res.json()["code"] == "backup_holds_no_profile"
 
 
+def test_the_migration_backup_is_never_uploaded_even_holding_a_working_copy(
+    old: OldArchive,
+) -> None:
+    """The extension hears the same refusal as the window and MCP, and
+    the source list says the same thing before it asks."""
+    import restore
+    import server
+
+    seen = _with_a_leftover_working_copy(old)
+    [backup] = seen["backups"]
+
+    hs = restore.begin_handshake()
+    restore.accept_handshake(hs["handshake_id"])
+    try:
+        extension = app_client(
+            server.app,
+            headers={"X-Workbench-Auth": hs["token"], "X-Workbench-Extension-Version": "0.1.1"},
+        )
+        sources = extension.get("/restore/snapshots", params={"character": NAME}).json()
+        fetched = extension.get(
+            f"/restore/snapshot/{backup['filename']}", params={"character": NAME}
+        )
+    finally:
+        restore.revoke_token()
+
+    assert fetched.status_code == 409
+    assert fetched.json()["code"] == "backup_holds_no_profile"
+    [listed] = [s for s in sources if s["id"] == backup["filename"]]
+    assert listed["upload_refused"] == fetched.json()["message"]
+
+
 def test_the_backup_list_says_which_backups_hold_a_profile(old: OldArchive) -> None:
     import server
 

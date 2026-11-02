@@ -20,7 +20,7 @@ from pydantic import BaseModel
 import bbcode_rules
 import character_archive
 from archive_errors import WorkbenchConflict, WorkbenchNotKept
-from refusals import BackupHoldsNoProfile
+from refusals import BackupHoldsNoProfile, BackupTooOld
 
 from ._context import (
     ToolError,
@@ -34,10 +34,10 @@ from ._registry import TAG_CHARACTER, tool
 from .tools_session import NO_PUSH_NOTE
 
 
-def _writable(character: str, set_ref: str | None):  # noqa: ANN202
+def _writable(character: str, workbench_or_live: str | None):  # noqa: ANN202
     """Resolve a character and its Workbench for writing, refusing `live`."""
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, set_ref, for_write=True)
+    resolved = resolve_workbench_or_live(target, workbench_or_live, for_write=True)
     return target, resolved
 
 
@@ -131,14 +131,10 @@ def load_backup_into_workbench(
         )
     except FileNotFoundError as exc:
         raise ToolError("backup_not_found", str(exc)) from exc
-    except (WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile) as exc:
+    except (
+        WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile, BackupTooOld
+    ) as exc:
         raise ToolError(exc.code, exc.message) from exc
-    except KeyError as exc:
-        raise ToolError(
-            "backup_too_old",
-            "That Backup holds no profile to load into the Workbench: "
-            "it predates the stored profile payload.",
-        ) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
     kept = replaced.kept["filename"] if replaced.kept else None

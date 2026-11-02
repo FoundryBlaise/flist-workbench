@@ -128,6 +128,26 @@ def test_a_backup_name_that_is_not_one_is_refused_as_invalid_file_name(
     assert res.json()["code"] == "invalid_file_name"
 
 
+def test_a_backup_from_before_the_stored_profile_is_refused_as_too_old(
+    client: TestClient, character: str
+) -> None:
+    import zipfile
+
+    import character_archive
+
+    name = "2026-01-01T000000Z.zip"
+    with zipfile.ZipFile(character_archive.backups_dir(character) / name, "w") as zf:
+        zf.writestr("character.json", "{}")
+
+    res = client.post(
+        f"/flist/character/{character}/workbench/load-backup", json={"filename": name}
+    )
+
+    assert res.status_code == 409, res.text
+    assert res.json()["code"] == "backup_too_old"
+    assert "early version" in res.json()["message"]
+
+
 @pytest.mark.parametrize("folder", ["images", "trash", "inlines"])
 @pytest.mark.parametrize("name", ["..%5Clive.json", "no-extension"])
 def test_an_image_name_that_is_not_one_is_refused_as_invalid_file_name(

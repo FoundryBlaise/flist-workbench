@@ -85,8 +85,9 @@ export type FlistZipBackupEntry = {
   source: FlistBackupSource
   occasion: FlistBackupOccasion | null
   /** False for a Backup that holds no profile: the one the move to one
-   *  Workbench made of the older drafts and Pull copies. The sidecar
-   *  refuses to restore, browse or upload it; it can be downloaded. */
+   *  Workbench made of the older copies from before the upgrade. The
+   *  sidecar refuses to restore, browse or upload it; it can be
+   *  downloaded. */
   holds_profile: boolean
   /** User-set name from `_names.json`. `null` when the user hasn't
    *  renamed this backup yet — the UI then derives a default label
@@ -149,7 +150,7 @@ export type FlistTrashedLabels = {
 /** Where an image id is still used, beyond the pool: the Workbench's
  *  gallery, Live, and how many Backups keep it (each with its own copy
  *  of the bytes), with the newest of them. `migration_backup`: the
- *  older drafts kept from the upgrade name it; that Backup holds JSON
+ *  older copies from before the upgrade name it; that Backup holds JSON
  *  only, no copy of the bytes, and is not counted in `backups`. */
 export type FlistImageReferences = {
   workbench: boolean
@@ -515,6 +516,14 @@ export class RefusalError extends Error {
     this.code = code
     this.status = status
   }
+}
+
+/** What a failed request says, without the `HTTP <status>: ` prefix
+ *  `request` puts in front of it: the sidecar's or F-list's own words,
+ *  ready to show. Any other error's message as it is. */
+export function errorDetail(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.replace(/^HTTP \d+:\s*/, '')
 }
 
 async function request<T>(

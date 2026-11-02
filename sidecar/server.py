@@ -995,14 +995,6 @@ async def flist_character_workbench_load_backup(
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "That Backup holds no profile to load: it predates the "
-                "stored profile payload."
-            ),
-        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

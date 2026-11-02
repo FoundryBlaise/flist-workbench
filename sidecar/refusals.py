@@ -74,6 +74,20 @@ class BackupNotUploadable(Refusal):
     code = "backup_not_uploadable"
 
 
+class BackupTooOld(Refusal):
+    """A Backup an early version of the app took before it stored a
+    loadable copy of the profile in the zip. Nothing in it can be loaded
+    into the Workbench; it can still be downloaded."""
+
+    status = 409
+    code = "backup_too_old"
+    fixed_message = (
+        "This Backup comes from an early version of the app that did not "
+        "yet store a loadable copy of the profile in it, so it cannot be "
+        "loaded into the Workbench. Download it to look at what it holds."
+    )
+
+
 class BackupHoldsNoProfile(Refusal):
     """A Backup that holds no profile: the one the move to one Workbench
     made of the files an earlier version left behind (occasion
@@ -83,7 +97,7 @@ class BackupHoldsNoProfile(Refusal):
     status = 409
     code = "backup_holds_no_profile"
     fixed_message = (
-        "This Backup keeps the older drafts and Pull copies an earlier "
-        "version of the app left behind, not a profile, so there is "
+        "This Backup keeps the older copies an earlier version of the app "
+        "left behind before the upgrade, not a profile, so there is "
         "nothing in it to load or upload. Download it to look at them."
     )

@@ -51,7 +51,7 @@ from archive_errors import (
     WorkbenchConflict,
     WorkbenchNotKept,
 )
-from refusals import BackupHoldsNoProfile, InvalidFileName
+from refusals import BackupHoldsNoProfile, BackupTooOld, InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -496,8 +496,8 @@ def forget_backup_name(character_id: int | str, filename: str) -> None:
 
 
 def _events() -> Any:
-    """The event bus module, for its event names. Imported lazily, like
-    `_publish` does, so the archive imports without `services`."""
+    """The event bus module. Imported lazily, so the archive imports
+    without `services`."""
     from services import events
 
     return events
@@ -513,9 +513,7 @@ def _publish(event: str, **data: Any) -> None:
     must stay importable in tests that don't run a loop.
     """
     try:
-        from services import events
-
-        events.publish(event, **data)
+        _events().publish(event, **data)
     except Exception:  # noqa: BLE001
         pass
 
@@ -1327,8 +1325,8 @@ def load_zip_backup_into_workbench(
     The Backup is read and checked first; only then is the Workbench it
     replaces kept as a `before-restore` Backup, and only once that is
     written is the Workbench overwritten. Raises `BackupHoldsNoProfile`
-    for the migration Backup, and KeyError for a Backup from before the
-    profile payload was stored in it.
+    for the migration Backup, and `BackupTooOld` for a Backup from
+    before the profile payload was stored in it.
     """
     import zipfile
 
@@ -1342,6 +1340,8 @@ def load_zip_backup_into_workbench(
             raw = zf.read("working.json").decode("utf-8")
     except zipfile.BadZipFile as exc:
         raise ValueError(f"corrupt backup file: {exc}") from exc
+    except KeyError as exc:
+        raise BackupTooOld(backup_filename) from exc
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("backup working.json is not an object")
