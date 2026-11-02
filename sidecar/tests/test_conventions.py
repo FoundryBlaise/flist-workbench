@@ -262,13 +262,6 @@ WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/state.ts": 2,
     "sidecar/character_archive.py": 1,
     "sidecar/services/payload_ops.py": 1,
-    "sidecar/workbench_mcp/__init__.py": 2,
-    "sidecar/workbench_mcp/_context.py": 4,
-    "sidecar/workbench_mcp/resources.py": 1,
-    "sidecar/workbench_mcp/tools_edit.py": 7,
-    "sidecar/workbench_mcp/tools_foreign.py": 1,
-    "sidecar/workbench_mcp/tools_ops.py": 7,
-    "sidecar/workbench_mcp/tools_sets.py": 7,
 }
 
 SNAPSHOT_ALLOWED: dict[str, int] = {
@@ -278,7 +271,6 @@ SNAPSHOT_ALLOWED: dict[str, int] = {
     "renderer/src/features/settings/SettingsModal.tsx": 2,
     "sidecar/character_archive.py": 3,
     "sidecar/server.py": 2,
-    "sidecar/workbench_mcp/tools_sets.py": 3,
 }
 
 BUNDLE_ALLOWED: dict[str, int] = {
@@ -287,7 +279,6 @@ BUNDLE_ALLOWED: dict[str, int] = {
     "renderer/src/lib/api.ts": 1,
     "renderer/src/state.ts": 3,
     "sidecar/set_bundle.py": 7,
-    "sidecar/workbench_mcp/tools_ops.py": 5,
 }
 
 VERDICT_ALLOWED: dict[str, int] = {

@@ -1,9 +1,9 @@
-"""Characters, working sets and descriptions (design §3.2–3.4).
+"""Characters, their Workbench and Live, and descriptions (design §3.2–3.4).
 
 Addressing note that runs through all of these: `character` takes a
-name or an id, and `working_set` takes a set name, a set id, or the
-string `"live"` for the read-only profile last pulled from F-list.
-Omitting `working_set` means "the active one".
+name or an id. `working_set` is left out for the character's Workbench,
+or is the string `"live"` for the read-only profile last pulled from
+F-list; nothing else is accepted.
 
 The parameter is not called `set`: that shadows the Python builtin
 inside every tool body, and the first tool that reached for `set(...)`
@@ -17,7 +17,6 @@ from typing import Any
 import character_archive
 
 from ._context import (
-    LIVE,
     ToolError,
     load_payload,
     resolve_character,
@@ -43,8 +42,6 @@ def list_characters(include_log_only: bool = True) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for row in archived:
         cid = str(row.get("id") or "")
-        sets = character_archive.list_sets(cid)
-        active = character_archive.read_active_set_id(cid)
         rows.append(
             {
                 "name": row.get("name"),
@@ -53,10 +50,6 @@ def list_characters(include_log_only: bool = True) -> dict[str, Any]:
                 "last_pulled_at": row.get("last_pulled_at"),
                 "snapshot_count": row.get("snapshot_count"),
                 "backup_count": row.get("backup_count"),
-                "working_sets": len(sets),
-                "active_set": next(
-                    (s.name for s in sets if s.id == active), None
-                ),
             }
         )
 
@@ -93,7 +86,7 @@ def get_live_profile(
     """The profile as it stood at the last pull from F-list.
 
     Read-only by definition — this is the record of what is published,
-    not a draft. Pass include_description=true to also get the BBCode,
+    not the Workbench. Pass include_description=true to also get the BBCode,
     which can be tens of kilobytes.
     """
     target = resolve_character(character)
@@ -122,51 +115,19 @@ def get_live_profile(
     return out
 
 
-@tool(tags=TAG_CHARACTER, title="List working sets", read_only=True)
-def list_working_sets(character: str) -> dict[str, Any]:
-    """The named drafts stored for a character.
-
-    Exactly one is active at a time — that is the one the app
-    window is showing and the one tools edit when `working_set` is
-    omitted.
-    """
-    target = resolve_character(character)
-    active = character_archive.read_active_set_id(target.id)
-    sets = [
-        {
-            "id": meta.id,
-            "name": meta.name,
-            "created_at": meta.created_at,
-            "updated_at": meta.updated_at,
-            "active": meta.id == active,
-        }
-        for meta in character_archive.list_sets(target.id)
-    ]
-    return {
-        "character": target.name,
-        "sets": sets,
-        "active_set": next((s["name"] for s in sets if s["active"]), None),
-        "note": (
-            "No set is active; the window is showing the read-only live "
-            "profile. Create one with create_working_set before editing."
-            if active is None
-            else NO_PUSH_NOTE
-        ),
-    }
-
-
 #: What `get_working_set` can be asked for. Descriptions are excluded by
 #: default because a single one can run to 30 KB.
 SET_SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "settings")
 
 
-@tool(tags=TAG_CHARACTER, title="Read a working set", read_only=True)
+@tool(tags=TAG_CHARACTER, title="Read the Workbench", read_only=True)
 async def get_working_set(
     character: str,
     working_set: str | None = None,
     include: list[str] | None = None,
 ) -> dict[str, Any]:
-    """A working set's contents, by section.
+    """The Workbench's contents, by section; working_set="live" reads
+    Live instead.
 
     `include` picks from summary, infotags, kinks, custom_kinks, images
     and settings; the default is summary only. The description is not
@@ -283,7 +244,8 @@ def get_description(
     """The profile description, in F-list BBCode.
 
     Descriptions run long; `offset` and `length` page through one.
-    Pass set="live" to read what is currently published.
+    Reads the Workbench; pass working_set="live" to read what is
+    currently published.
     """
     target = resolve_character(character)
     resolved = resolve_set(target, working_set)
@@ -530,24 +492,25 @@ _BBCODE_TAGS: list[dict[str, str]] = [
 ]
 
 
-@tool(tags=TAG_CHARACTER, title="Compare two versions", read_only=True)
+@tool(tags=TAG_CHARACTER, title="Compare the Workbench with Live", read_only=True)
 async def diff_working_set(
     character: str,
     working_set: str | None = None,
     against: str = "live",
 ) -> dict[str, Any]:
-    """What differs between two versions of a profile.
+    """What differs between the Workbench and Live.
 
-    By default compares a working set against `live` — the published
-    profile — which answers "what would change if I uploaded this".
-    Pass another set's name to `against` to compare two drafts.
+    Compares the Workbench against `live`, the published profile, which
+    answers "what would change if I uploaded this". Pass
+    working_set="live" and against="workbench" to read the change the
+    other way round.
 
     The description is summarised rather than diffed line by line;
     read both with get_description if the text itself matters.
     """
     target = resolve_character(character)
     left = resolve_set(target, working_set)
-    right = resolve_set(target, against)
+    right = resolve_set(target, against, param="against")
     if left.id == right.id and left.is_live == right.is_live:
         raise ToolError(
             "validation_failed",
@@ -574,20 +537,6 @@ async def diff_working_set(
     }
 
 
-@tool(tags=TAG_CHARACTER, title="List snapshots", read_only=True)
-def list_snapshots(character: str) -> dict[str, Any]:
-    """Automatic JSON snapshots, one per pull that found a change.
-
-    This is the history of what the profile looked like on F-list over
-    time — distinct from backups, which the user makes deliberately.
-    """
-    target = resolve_character(character)
-    return {
-        "character": target.name,
-        "snapshots": character_archive.list_snapshots(target.id),
-    }
-
-
 @tool(tags=TAG_CHARACTER, title="List backups", read_only=True)
 def list_backups(character: str) -> dict[str, Any]:
     """ZIP backups of a character, newest first.
@@ -597,8 +546,8 @@ def list_backups(character: str) -> dict[str, Any]:
     `manual`, `before-upload`, `before-restore`, `migration` or
     `backup-all` (null for older Backups).
 
-    Backups include images and the avatar, and can be restored into a
-    new working set with create_working_set(source="backup:<file>").
+    Backups include images and the avatar. load_backup_into_workbench
+    restores one into the Workbench.
     """
     target = resolve_character(character)
     return {
@@ -618,8 +567,8 @@ def list_images(
     `sort_order` is the position on the profile page, counting from 0.
     Each `not_on_profile` entry also carries `width`, `height`, `sha256`,
     `source_name` (the file name it was imported under, when known) and
-    `referenced_by`: the working sets that still use it, whether the
-    live profile does, and in how many pull snapshots it appears.
+    `referenced_by`: which stored copies of the profile, Live among
+    them, still use it.
     """
     from services import image_import
 
@@ -677,32 +626,4 @@ def list_images(
         "set": resolved.name,
         "gallery": sorted(gallery, key=lambda r: r.get("sort_order") or 0),
         "not_on_profile": pool,
-    }
-
-
-@tool(tags=TAG_CHARACTER, title="Set addressing help", read_only=True)
-def explain_set_addressing() -> dict[str, Any]:
-    """How `character` and `set` arguments are interpreted.
-
-    Read this if a tool call failed with character_not_found,
-    set_not_found or no_active_set and the reason isn't obvious.
-    """
-    return {
-        "character": (
-            "A character name (case-insensitive) or the numeric F-list "
-            "id. Only characters with a local archive can be edited; "
-            "list_characters shows which."
-        ),
-        "set": (
-            f"A working set's name or id, or {LIVE!r} for the read-only "
-            "profile last pulled from F-list. Omit it to use the "
-            "character's active set — the one the app window is "
-            "showing. If no set is active, create one with "
-            "create_working_set; editing tools refuse to guess."
-        ),
-        "live": (
-            "Never writable. It is the record of what is published, and "
-            "overwriting it would lose the ability to tell what changed."
-        ),
-        "note": NO_PUSH_NOTE,
     }

@@ -115,7 +115,6 @@ async def test_list_characters_reports_the_archive(workbench) -> None:
     assert "Lady Amber Blaise" in names
     row = next(c for c in body["characters"] if c["name"] == "Lady Amber Blaise")
     assert row["has_archive"] is True
-    assert row["working_sets"] == 0
 
 
 async def test_get_live_profile_omits_the_description_by_default(
@@ -153,17 +152,6 @@ async def test_an_unknown_character_lists_the_known_ones(workbench) -> None:
     text = tool_error_text(result)
     assert "character_not_found" in text
     assert "Lady Amber Blaise" in text
-
-
-async def test_list_working_sets_marks_the_active_one(workbench) -> None:
-    _seed_set(workbench, "Main")
-    _seed_set(workbench, "AU")
-    async with mcp_client() as session:
-        _, body = await call_tool(
-            session, "list_working_sets", character="Lady Amber Blaise"
-        )
-    assert {s["name"] for s in body["sets"]} == {"Main", "AU"}
-    assert body["active_set"] == "AU"
 
 
 async def test_naming_no_set_means_the_workbench(workbench) -> None:

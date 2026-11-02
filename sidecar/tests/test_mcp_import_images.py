@@ -18,7 +18,7 @@ import pytest
 from PIL import Image
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
-from test_mcp_edit import make_draft, payload_of, seed_gallery, workbench  # noqa: F401
+from test_mcp_edit import open_workbench, payload_of, seed_gallery, workbench  # noqa: F401
 
 CHAR = "Lady Amber Blaise"
 
@@ -331,7 +331,7 @@ async def test_a_batch_replaces_each_image_in_its_own_place(workbench, outputs) 
         sources.append(src)
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, old_ids)
         payload = payload_of(workbench)
         payload["images"][1]["description"] = "kept caption"
@@ -377,7 +377,7 @@ async def test_add_to_gallery_appends_in_the_order_given(workbench, outputs) -> 
         srcs.append(src)
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [])
         _, body = await call_tool(
             session,
@@ -398,7 +398,7 @@ async def test_one_bad_item_means_nothing_is_imported(workbench, outputs) -> Non
     good.write_bytes(png_bytes((8, 8)))
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [])
         missing_target, _ = await call_tool(
             session,
@@ -443,7 +443,7 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     workbench.save_snapshot("42")
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [])
         _, imported = await call_tool(
             session, "import_image", character=CHAR, source_path=str(src)

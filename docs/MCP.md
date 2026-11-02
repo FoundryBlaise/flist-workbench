@@ -14,8 +14,10 @@ Two things to hold onto before anything else:
    paired extension. A model that tells you a change is live on F-list
    is wrong.
 2. **`live` is read-only.** It is the record of what is published.
-   Editing happens in a *working set* — a named local draft. A
-   character can have several; one is active at a time.
+   Editing happens in the character's *Workbench*, its one local
+   editable copy. Tools work on the Workbench when `working_set` is
+   left out; `working_set="live"` reads Live. Nothing else is
+   accepted.
 
 ## Connecting
 
@@ -109,8 +111,7 @@ ends up in a transcript.
 76 tools. The ones worth knowing about:
 
 **Finding your way around** — `get_workbench_status` first, then
-`list_characters`, `list_working_sets`, `explain_set_addressing` if an
-addressing error is puzzling.
+`list_characters`.
 
 **Reading a profile** — `get_description` (pages through a long one),
 `list_profile_fields`, `list_kinks`, `list_images`, `get_live_profile`.
@@ -137,11 +138,11 @@ be open: it is the thing that draws. A picture-heavy profile comes
 back as JPEG rather than PNG, because the image travels to the model
 as base64 and an oversized tool result is refused outright.
 
-**Editing** — `create_working_set`, then `edit_description` (an exact
-string replacement, far safer than `set_description` on a 30 KB
-profile), `set_profile_field`, `set_kink`, `add_custom_kink`,
-`reorder_images`. `diff_working_set` says what would change if you
-published.
+**Editing** — the Workbench is created from Live on the first edit.
+`edit_description` (an exact string replacement, far safer than
+`set_description` on a 30 KB profile), `set_profile_field`,
+`set_kink`, `add_custom_kink`, `reorder_images`. `diff_working_set`
+says what would change if you published.
 
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
@@ -280,7 +281,7 @@ something.
 
 ## Sharing the app with the window
 
-You and a model can edit the same working set at the same time. When
+You and a model can edit the same Workbench at the same time. When
 that happens the window shows a banner and asks which version to keep
 — it will not silently overwrite either side. Changes a model makes
 show up in the window without a reload.
@@ -295,11 +296,11 @@ Tool errors carry a stable code as their first word:
 | Code | Means |
 |---|---|
 | `character_not_found` | no local archive for that name — the error lists the ones that exist |
-| `no_active_set` | nothing is active; create one or name one explicitly |
+| `nothing_to_edit` | the character was never pulled, so there is no Live to make a Workbench from |
 | `live_is_read_only` | tried to edit the published profile |
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
-| `validation_failed` | a value F-list wouldn't accept — the error carries the allowed ones |
+| `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
 | `etag_conflict` | the window saved while the edit was in flight |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
 | `no_index` | nothing ingested yet |
