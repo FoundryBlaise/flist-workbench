@@ -148,12 +148,15 @@ export type FlistTrashedLabels = {
 
 /** Where an image id is still used, beyond the pool: the Workbench's
  *  gallery, Live, and how many Backups keep it (each with its own copy
- *  of the bytes), with the newest of them. */
+ *  of the bytes), with the newest of them. `migration_backup`: the
+ *  older drafts kept from the upgrade name it; that Backup holds JSON
+ *  only, no copy of the bytes, and is not counted in `backups`. */
 export type FlistImageReferences = {
   workbench: boolean
   live: boolean
   backups: number
   newest_backup: string | null
+  migration_backup: boolean
 }
 
 

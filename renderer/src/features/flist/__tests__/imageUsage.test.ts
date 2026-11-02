@@ -7,6 +7,7 @@ const ref = (r: Partial<FlistImageReferences>): FlistImageReferences => ({
   live: false,
   backups: 0,
   newest_backup: null,
+  migration_backup: false,
   ...r
 })
 
@@ -40,6 +41,21 @@ describe('usageNotes', () => {
     ])
     expect(usageNotes(['a'], { a: ref({ backups: 1 }) })).toEqual([
       'It is kept in a Backup, which holds its own copy.'
+    ])
+  })
+
+  it('warns that the older drafts kept from the upgrade name an image but hold no copy of it', () => {
+    expect(usageNotes(['a'], { a: ref({ migration_backup: true }) })).toEqual([
+      'It is named in the older drafts kept from the upgrade; that Backup holds no copy of the file.'
+    ])
+    expect(
+      usageNotes(['a', 'b'], {
+        a: ref({ migration_backup: true }),
+        b: ref({ migration_backup: true, backups: 1 })
+      })
+    ).toEqual([
+      '1 of these is kept in a Backup, which holds its own copy.',
+      '2 of these are named in the older drafts kept from the upgrade; that Backup holds no copy of the files.'
     ])
   })
 })

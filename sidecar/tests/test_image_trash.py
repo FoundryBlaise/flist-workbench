@@ -141,9 +141,18 @@ def test_image_usage_counts_the_workbench_live_and_backups(client, workbench) ->
 
     refs = client.get("/flist/character/42/image-references").json()
 
-    assert refs[kept] == {"workbench": True, "live": False, "backups": 2, "newest_backup": second}
-    assert refs[parked] == {"workbench": False, "live": False, "backups": 1, "newest_backup": first}
-    assert refs[pulled] == {"workbench": False, "live": True, "backups": 0, "newest_backup": None}
+    assert refs[kept] == {
+        "workbench": True, "live": False, "backups": 2, "newest_backup": second,
+        "migration_backup": False,
+    }
+    assert refs[parked] == {
+        "workbench": False, "live": False, "backups": 1, "newest_backup": first,
+        "migration_backup": False,
+    }
+    assert refs[pulled] == {
+        "workbench": False, "live": True, "backups": 0, "newest_backup": None,
+        "migration_backup": False,
+    }
     assert older not in refs
     assert loose not in refs
 

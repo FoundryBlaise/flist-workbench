@@ -45,8 +45,8 @@ beforeEach(() => {
     .on(
       `GET /flist/character/${CID}/image-references`,
       json({
-        [IDS[0]]: { workbench: false, live: true, backups: 0, newest_backup: null },
-        [IDS[1]]: { workbench: false, live: true, backups: 0, newest_backup: null }
+        [IDS[0]]: { workbench: false, live: true, backups: 0, newest_backup: null, migration_backup: false },
+        [IDS[1]]: { workbench: false, live: true, backups: 0, newest_backup: null, migration_backup: false }
       })
     )
     .on(`POST ${IMAGES}/trash`, (req) => {

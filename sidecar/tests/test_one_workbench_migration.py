@@ -518,3 +518,34 @@ def test_the_backup_list_says_which_backups_hold_a_profile(old: OldArchive) -> N
         "migration": False,
         "manual": True,
     }
+
+
+def test_an_image_named_only_in_the_older_drafts_is_referenced_but_not_kept(
+    old: OldArchive,
+) -> None:
+    """The migration Backup holds JSON only. An image a spare draft named
+    is still used somewhere, but no Backup holds its bytes: trashing the
+    pool file must not be told it is safely kept."""
+    import server
+
+    old.draft("aaaaaaaaaaaa", "Main", "[b]Mine.[/b]", updated_at=900)
+    old.write(
+        "sets/bbbbbbbbbbbb/payload.json",
+        {**_draft("[b]Spare.[/b]"), "images": [{"image_id": "777", "sort_order": 0}]},
+    )
+    old.write(
+        "sets/bbbbbbbbbbbb/meta.json",
+        {"id": "bbbbbbbbbbbb", "name": "Spare", "created_at": 100, "updated_at": 500},
+    )
+    old.point_at("aaaaaaaaaaaa")
+    start(old)
+
+    refs = app_client(server.app).get(f"/flist/character/{CID}/image-references").json()
+
+    assert refs["777"] == {
+        "workbench": False,
+        "live": False,
+        "backups": 0,
+        "newest_backup": None,
+        "migration_backup": True,
+    }

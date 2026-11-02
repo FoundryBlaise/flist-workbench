@@ -567,7 +567,9 @@ def list_images(
     Each `not_on_profile` entry also carries `width`, `height`, `sha256`,
     `source_name` (the file name it was imported under, when known) and
     `referenced_by`: whether the Workbench's gallery and Live use it,
-    and how many Backups hold it.
+    how many Backups hold it (each with its own copy of the file), and
+    whether the older drafts kept from the upgrade name it
+    (`migration_backup`; that Backup holds no image files).
     """
     from services import image_import
 
@@ -615,6 +617,7 @@ def list_images(
                     "workbench": ref.get("workbench", False),
                     "live": ref.get("live", False),
                     "backups": ref.get("backups", 0),
+                    "migration_backup": ref.get("migration_backup", False),
                 },
                 "on_profile": False,
             }

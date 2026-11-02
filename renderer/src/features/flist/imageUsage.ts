@@ -11,6 +11,7 @@ export function usageNotes(
   let workbench = 0
   let kept = 0
   let backups = 0
+  let olderDrafts = 0
   for (const id of imageIds) {
     const r = refs[id]
     if (!r) continue
@@ -20,6 +21,7 @@ export function usageNotes(
       kept++
       backups = r.backups
     }
+    if (r.migration_backup) olderDrafts++
   }
   const one = imageIds.length === 1
   const howMany = (n: number) => (one ? 'It' : `${n} of these`)
@@ -40,6 +42,14 @@ export function usageNotes(
       one && backups > 1
         ? `It is kept in ${backups} Backups, which hold their own copy.`
         : `${howMany(kept)} ${is(kept)} kept in a Backup, which holds its own copy.`
+    )
+  }
+  if (olderDrafts > 0) {
+    // That Backup keeps JSON only, so it is no copy of the picture.
+    notes.push(
+      `${howMany(olderDrafts)} ${is(olderDrafts)} named in the older drafts kept from the upgrade; that Backup holds no copy of the ${
+        olderDrafts === 1 ? 'file' : 'files'
+      }.`
     )
   }
   return notes
