@@ -188,38 +188,25 @@ app.add_middleware(local_access.LocalAccessGuard, port=SIDECAR_PORT)
 async def _refusal(_request: Request, exc: Refusal) -> JSONResponse:
     """Wherever a typed refusal is raised (a hostile character id, a
     bad file name, a missing Log), the caller hears it as
-    `{code, message}` rather than as a 500."""
+    `{code, message, details}` rather than as a 500."""
     return JSONResponse(status_code=exc.status, content=exc.body())
 
 
 @app.exception_handler(StarletteHTTPException)
 async def _http_exception(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    """Refusals not yet raised as a typed `Refusal` still answer in the
-    `{code, message}` shape.
-
-    `detail` stays in the body as it was, because the app window reads
-    structured details from it (an etag conflict, a cross-character
-    confirmation). A detail that carries its own `code` keeps it; any
-    other gets a generic `http_<status>`.
-    """
-    detail = exc.detail
-    code = f"http_{exc.status_code}"
+    """What the framework itself refuses (a path no route serves, a
+    method a route does not take) answers in the same shape, coded
+    `http_<status>`. The routes raise `Refusal`s, not HTTPException
+    (tests/test_conventions.py, rule typed-refusal)."""
     try:
         message = HTTPStatus(exc.status_code).phrase
     except ValueError:
         message = "refused"
-    if isinstance(detail, str):
-        message = detail
-    elif isinstance(detail, dict):
-        if isinstance(detail.get("code"), str):
-            code = detail["code"]
-        for key in ("message", "detail"):
-            if isinstance(detail.get(key), str):
-                message = detail[key]
-                break
+    if isinstance(exc.detail, str) and exc.detail:
+        message = exc.detail
     return JSONResponse(
         status_code=exc.status_code,
-        content={"code": code, "message": message, "detail": detail},
+        content={"code": f"http_{exc.status_code}", "message": message, "details": {}},
         headers=getattr(exc, "headers", None),
     )
 
@@ -227,14 +214,29 @@ async def _http_exception(_request: Request, exc: StarletteHTTPException) -> JSO
 @app.exception_handler(RequestValidationError)
 async def _invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
     """A request FastAPI could not bind (a missing query parameter, a
-    body of the wrong shape). `detail` keeps FastAPI's error list."""
+    body of the wrong shape). `details.errors` keeps FastAPI's list."""
     errors = jsonable_encoder(exc.errors())
     first = errors[0] if errors else {}
     where = ".".join(str(part) for part in first.get("loc", ()))
     message = f"{where}: {first.get('msg', 'invalid request')}" if where else "invalid request"
     return JSONResponse(
         status_code=422,
-        content={"code": "invalid_request", "message": message, "detail": errors},
+        content={"code": "invalid_request", "message": message, "details": {"errors": errors}},
+    )
+
+
+@app.exception_handler(Exception)
+async def _internal_error(_request: Request, _exc: Exception) -> JSONResponse:
+    """A failure nothing turned into a refusal still answers in the
+    shape. The traceback goes to the sidecar's log (Starlette re-raises
+    after this answer), not to the caller."""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": "internal_error",
+            "message": "Something went wrong inside the sidecar; its log has the details.",
+            "details": {},
+        },
     )
 
 
@@ -258,11 +260,11 @@ for _area in (
     app.include_router(_area.router)
 
 
-# Entry point for the PyInstaller-frozen build. In dev we run via
-# `uv run uvicorn server:app` which imports `app` directly, so this
-# block is unreached. The packaged Electron app spawns sidecar.exe
-# (this script frozen) and reads SIDECAR_PORT from the environment.
+# Entry point: the packaged app spawns sidecar.exe (this script frozen),
+# a dev build runs `python server.py`; both read SIDECAR_PORT from the
+# environment. Run this way, `POST /shutdown` can end the server loop.
+# A hand-started `uvicorn server:app` imports `app` and skips this.
 if __name__ == "__main__":
-    import uvicorn
+    from services import lifecycle
 
-    uvicorn.run(app, host="127.0.0.1", port=SIDECAR_PORT, log_level="info")
+    lifecycle.serve(app, SIDECAR_PORT)

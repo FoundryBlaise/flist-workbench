@@ -39,10 +39,13 @@ def app_client(app: Any, **kwargs: Any) -> TestClient:
 
 @dataclass(frozen=True)
 class Route:
-    """One method on one path template, as the app declares it."""
+    """One method on one path template, as the app declares it. `group`
+    is the area that declares it: the router module's name (`workbench`,
+    `labels`, ...)."""
 
     method: str
     path: str
+    group: str = ""
 
     def url(self, **params: str) -> str:
         """The path with the named parameters filled in, every other one as `x`."""
@@ -60,8 +63,9 @@ def api_routes(app: Any, *, param: str | None = None) -> list[Route]:
             continue
         if param is not None and f"{{{param}}}" not in route.path:
             continue
+        group = route.endpoint.__module__.rpartition(".")[2]
         for method in sorted(route.methods - {"HEAD"}):
-            routes.append(Route(method, route.path))
+            routes.append(Route(method, route.path, group))
     return routes
 
 
@@ -81,9 +85,9 @@ def sweep(
     """Call every route once and describe each answer `accept` rejects.
 
     `params` fill the path (see `Route.url`); `json` is sent as the body.
-    Every refusal the sweep provokes must also be in the agreed
-    `{code, message}` shape, whatever `accept` says, so callers can show
-    the reason without special cases.
+    Every error the sweep provokes must also be in the agreed
+    `{code, message, details}` shape, whatever `accept` says, so callers
+    can show the reason without special cases.
     An empty result means every route answered as expected, so a test
     asserts `== []` and a failure lists the routes that let it down.
     """
@@ -93,22 +97,37 @@ def sweep(
         res = client.request(route.method, url, json=json)
         if not accept(res):
             failures.append(f"{route.method} {url} -> {res.status_code}")
-        elif 400 <= res.status_code < 500 and not is_refusal_shaped(res):
-            failures.append(f"{route.method} {url} -> {res.status_code} without {{code, message}}")
+        elif res.status_code >= 400 and not is_refusal_shaped(res):
+            failures.append(
+                f"{route.method} {url} -> {res.status_code} not {{code, message, details}}: {res.text[:200]}"
+            )
     return failures
 
 
+#: The keys of every error body, and nothing else.
+ERROR_KEYS = {"code", "message", "details"}
+
+
 def is_refusal_shaped(res: Response) -> bool:
-    """True when the body carries a string `code` and a string `message`."""
+    """True when the body is exactly `{code, message, details}`: a string
+    code, a string message and a `details` object, with no error object
+    nested inside it."""
     try:
         body = res.json()
     except ValueError:
         return False
     return (
         isinstance(body, dict)
-        and isinstance(body.get("code"), str)
-        and isinstance(body.get("message"), str)
+        and set(body) == ERROR_KEYS
+        and isinstance(body["code"], str)
+        and isinstance(body["message"], str)
+        and isinstance(body["details"], dict)
+        and not any(_is_error_object(v) for v in body["details"].values())
     )
+
+
+def _is_error_object(value: Any) -> bool:
+    return isinstance(value, dict) and "code" in value and "message" in value
 
 
 def error_code(res: Response) -> str | None:

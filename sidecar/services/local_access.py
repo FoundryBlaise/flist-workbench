@@ -224,7 +224,7 @@ async def _send_preflight(send: Any, origin: str, headers: dict[bytes, str]) -> 
 async def _refuse(
     send: Any, status: int, code: str, message: str, origin: str | None = None
 ) -> None:
-    body = json.dumps({"code": code, "message": message}).encode()
+    body = json.dumps({"code": code, "message": message, "details": {}}).encode()
     response_headers = [
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode()),

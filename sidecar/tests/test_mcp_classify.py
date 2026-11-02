@@ -786,4 +786,4 @@ async def test_labelling_everything_at_once_refuses_a_non_verdict(
             label="Unlabeled",
             confirm=True,
         )
-    assert "invalid_label" in tool_error_text(result)
+    assert "validation_failed" in tool_error_text(result)

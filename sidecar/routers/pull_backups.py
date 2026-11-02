@@ -4,16 +4,14 @@ Pull and Back up all stream their progress as server-sent events; the
 work itself lives in `services/pull.py` and `services/backup_all.py`.
 """
 
-import json
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import archive_backups
 import archive_workbench
 import backup_origin
-from refusals import Refusal
+from refusals import BackupNotFound, BackupNotWritten, NotTrashed
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
 from services import pull as pull_service
@@ -69,7 +67,8 @@ async def flist_character_zip_backup(
             force=force,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # A file the Backup needed went away while it was packed.
+        raise BackupNotWritten(str(exc)) from exc
 
 
 @router.get("/flist/character/{character_id}/zip-backups")
@@ -95,11 +94,9 @@ async def flist_character_zip_backup_delete(
     try:
         backup_trash_service.trash_backup(character_id, filename)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="backup not found") from exc
+        raise BackupNotFound("no such Backup") from exc
     except OSError as exc:
-        raise HTTPException(
-            status_code=500, detail=f"could not move backup to the Trash: {exc}"
-        ) from exc
+        raise NotTrashed(f"could not move backup to the Trash: {exc}") from exc
 
 
 class _ZipBackupRename(BaseModel):
@@ -116,20 +113,12 @@ async def flist_character_zip_backup_rename(
     back to the timestamp-derived default). Returns the canonical
     entry for the renamed backup so the renderer can update its
     in-memory list without a separate /zip-backups re-fetch."""
-    try:
-        archive_backups.rename_zip_backup(character_id, filename, body.name)
-    except Refusal:
-        # A bad backup name answers as itself, not as a bad set name.
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="backup not found") from exc
+    archive_backups.rename_zip_backup(character_id, filename, body.name)
     # Return the freshly-read entry so the client can patch its row.
     for row in archive_backups.list_zip_backups(character_id):
         if row["filename"] == filename:
             return row
-    raise HTTPException(status_code=404, detail="backup not found")
+    raise BackupNotFound("no such Backup")
 
 
 @router.get(
@@ -146,8 +135,8 @@ async def flist_character_zip_backup_download(
     arbitrary-file-read by crafting a `../` path."""
     archive_backups.require_backup_filename(filename)
     p = archive_backups.backups_dir(character_id) / filename
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail="backup not found")
+    if not p.is_file():
+        raise BackupNotFound("no such Backup")
     return FileResponse(
         path=p,
         media_type="application/zip",
@@ -171,53 +160,17 @@ async def flist_character_zip_backup_payload(
     overlay, custom-kink dict, etc.) without inverting the export
     reshape passes.
 
-    Older backups predate the `working.json` write and return 410
-    Gone with an explanation — the user retries Back-up-now and the
-    next browse works. We deliberately don't try to invert
+    Older backups predate the `working.json` write and answer 409
+    `backup_too_old`, as Restore does. We deliberately don't try to invert
     character.json on the fly; it's a multi-stage lossy reshape and
     not worth the complexity for the v1 ship.
     """
-    import zipfile
-
-    archive_backups.require_backup_filename(filename)
-    p = archive_backups.backups_dir(character_id) / filename
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail="backup not found")
-    archive_backups.require_backup_holds_profile(character_id, filename)
-    meta: dict | None = None
-    try:
-        with zipfile.ZipFile(p, "r") as zf:
-            try:
-                raw = zf.read("working.json").decode("utf-8")
-            except KeyError as exc:
-                raise HTTPException(
-                    status_code=410,
-                    detail=(
-                        "This backup predates Browse support. Click "
-                        "Back up now on the character and the new "
-                        "backup will be browsable."
-                    ),
-                ) from exc
-            # Optional backup-meta.json — embedded since 2026-06-17.
-            # Older backups don't have it; the Browse-backup viewer
-            # falls back to "unknown" provenance.
-            try:
-                meta_raw = zf.read("backup-meta.json").decode("utf-8")
-                parsed = json.loads(meta_raw)
-                if isinstance(parsed, dict):
-                    meta = parsed
-            except (KeyError, ValueError):
-                meta = None
-    except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=500, detail="corrupt backup file") from exc
-    try:
-        payload = json.loads(raw)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=500, detail="backup working.json is not valid JSON"
-        ) from exc
-    if isinstance(payload, dict):
-        payload = archive_workbench.backup_payload(payload)
+    payload = archive_backups.read_backup_profile(character_id, filename)
+    # Optional backup-meta.json — embedded since 2026-06-17. Older
+    # Backups don't have it; the Browse-backup viewer falls back to
+    # "unknown" provenance.
+    meta = archive_backups.zip_backup_meta(character_id, filename) or None
+    payload = archive_workbench.backup_payload(payload)
     return {"payload": payload, "filename": filename, "meta": meta}
 
 

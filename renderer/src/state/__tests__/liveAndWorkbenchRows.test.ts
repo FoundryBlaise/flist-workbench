@@ -79,7 +79,7 @@ describe('the Live row', () => {
   it('keeps edits that could not be saved on screen instead of showing Live', async () => {
     fake.on(
       SAVE,
-      json({ code: 'etag_mismatch', message: 'changed', current_etag: 'theirs' }, 409)
+      json({ code: 'etag_mismatch', message: 'changed', details: { current_etag: 'theirs' } }, 409)
     )
     useStore.getState().setEditorContent('typed just now')
 

@@ -4,13 +4,14 @@ Clearing moves the Labels to the Trash; the Trash routes are in
 `images_trash`.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 import aliases as aliases_store
 import labels as labels_store
 import settings as settings_store
 from logs import LogDirError, data_dir, list_partners, read_messages
+from refusals import ValidationFailed
 from services import label_rollup
 from services import label_trash as label_trash_service
 
@@ -190,10 +191,15 @@ def labels_rollup() -> dict:
     Settings opens. Used by the Labels rollup pane to show one-glance
     state ("3,402 IC · 18,720 OOC · …").
     """
-    try:
-        return label_rollup.rollup()
-    except LogDirError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return label_rollup.rollup()
+
+
+def _not_a_label(label: object) -> ValidationFailed:
+    return ValidationFailed(
+        "label",
+        f"must be IC or OOC, got {label!r}",
+        allowed=[labels_store.LABEL_IC, labels_store.LABEL_OOC],
+    )
 
 
 class LabelsFillUnlabeled(BaseModel):
@@ -224,10 +230,7 @@ def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> dict:
     the undo exact.
     """
     if body.label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
-        raise HTTPException(
-            status_code=400,
-            detail=f"label must be IC or OOC, got {body.label!r}",
-        )
+        raise _not_a_label(body.label)
     messages = list(read_messages(body.character, body.partner))
     settings_conn = settings_store.connect()
     labels_conn = labels_store.connect()
@@ -286,10 +289,7 @@ def labels_override(body: LabelOverride) -> dict:
             removed = labels_store.delete_label(conn, body.hash)
             return {"hash": body.hash, "deleted": removed, "label": None}
         if body.label not in (labels_store.LABEL_IC, labels_store.LABEL_OOC):
-            raise HTTPException(
-                status_code=400,
-                detail=f"label must be IC or OOC, got {body.label!r}",
-            )
+            raise _not_a_label(body.label)
         # Write labels under the alias group's canonical primary so
         # the partner column stays consistent post-rename. Lookup is
         # alias-aware (labels_for_partner expands the group) so old
@@ -329,10 +329,7 @@ def labels_override_many(body: LabelOverrideMany) -> dict:
         labels_store.LABEL_IC,
         labels_store.LABEL_OOC,
     ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"label must be IC or OOC, got {body.label!r}",
-        )
+        raise _not_a_label(body.label)
     conn = labels_store.connect()
     try:
         if body.label is None:

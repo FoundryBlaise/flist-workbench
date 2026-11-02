@@ -22,7 +22,10 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 
+from refusals import Refusal
 from services import events
+
+from ._context import ToolError
 
 #: Tag applied to tools that belong on the character-editing endpoint.
 TAG_CHARACTER = "character"
@@ -112,12 +115,14 @@ def tool(
 
 def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     """Tag everything a tool publishes on the event bus as coming from
-    MCP, naming the tool.
+    MCP, naming the tool, and report a `Refusal` from anywhere under the
+    tool as a `ToolError` with its code and details.
 
     The renderer ignores changes it made itself and reloads for
     everything else, so a write has to say where it came from — and
     "the set you have open just changed" is far more useful to a user
-    when it can name `set_description` as the cause.
+    when it can name `set_description` as the cause. A refusal reads
+    the same to a model as to the window (`refusals`).
     """
 
     if inspect.iscoroutinefunction(fn):
@@ -125,14 +130,20 @@ def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             with events.origin(f"mcp:{tool_name}"):
-                return await fn(*args, **kwargs)
+                try:
+                    return await fn(*args, **kwargs)
+                except Refusal as exc:
+                    raise ToolError.from_refusal(exc) from exc
 
         return async_wrapper
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         with events.origin(f"mcp:{tool_name}"):
-            return fn(*args, **kwargs)
+            try:
+                return fn(*args, **kwargs)
+            except Refusal as exc:
+                raise ToolError.from_refusal(exc) from exc
 
     return wrapper
 

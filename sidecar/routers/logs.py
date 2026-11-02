@@ -2,13 +2,12 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 import aliases as aliases_store
 import labels as labels_store
 import settings as settings_store
 from logs import (
-    LogDirError,
     find_contacts,
     list_characters,
     list_partners,
@@ -22,10 +21,7 @@ router = APIRouter()
 
 @router.get("/logs/characters")
 def logs_characters() -> dict:
-    try:
-        return {"characters": [asdict(c) for c in list_characters()]}
-    except LogDirError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"characters": [asdict(c) for c in list_characters()]}
 
 
 @router.get("/logs/partners")

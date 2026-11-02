@@ -54,7 +54,14 @@ const descOf = (body: unknown) =>
   ((body as { character?: { description?: string } }).character ?? {}).description
 
 const refusal = (code: string, currentEtag: string | null) =>
-  json({ code, message: 'The Workbench changed since it was read.', current_etag: currentEtag }, 409)
+  json(
+    {
+      code,
+      message: 'The Workbench changed since it was read.',
+      details: { current_etag: currentEtag }
+    },
+    409
+  )
 const conflict = refusal('etag_mismatch', 'server-etag')
 
 /** What the sidecar answers to reset to Live: the fresh copy of Live,

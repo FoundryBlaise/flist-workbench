@@ -1,10 +1,11 @@
 """Look-ups for the editor: the eicon catalogue and a public profile."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 import archive_registry
 import eicons as eicons_catalog
 import flist_api
+from refusals import FlistRefused
 
 router = APIRouter()
 
@@ -34,18 +35,14 @@ async def profile(name: str) -> dict:
     try:
         payload = await flist_api.fetch_character_data(name)
     except flist_api.TicketRequired as exc:
-        raise HTTPException(
-            status_code=401, detail="not signed in to F-list"
-        ) from exc
-    except flist_api.AuthFailure as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise FlistRefused("not_signed_in", "not signed in to F-list") from exc
     except flist_api.FlistApiError as exc:
         msg = str(exc).lower()
-        if "no such character" in msg or "not found" in msg:
-            raise HTTPException(
-                status_code=404, detail=f"character not found: {name}"
-            ) from exc
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if not isinstance(exc, flist_api.RateLimited) and (
+            "no such character" in msg or "not found" in msg
+        ):
+            raise FlistRefused("not_found", f"character not found: {name}") from exc
+        raise flist_api.refusal(exc) from exc
 
     resolved_name = payload.get("name") or name
     # F-list serves descriptions with literal CRLF / CR line endings.
