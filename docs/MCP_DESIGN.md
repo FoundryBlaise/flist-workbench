@@ -454,8 +454,8 @@ over `services/`.
   kink ids validated against the mapping list; infotag values
   validated per type (§3.5).
 - Writes only to an existing set; `live` is never writable.
-- `If-Match` used on every write (read etag → mutate → put), retried
-  once on 409 with a fresh read.
+- `If-Match` used on every write (read etag → mutate → put), all
+  under the character's lock (spec #4), so no save lands in between.
 
 ### 4.3 UI ↔ MCP concurrency (needs real work)
 

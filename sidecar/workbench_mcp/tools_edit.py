@@ -73,9 +73,8 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
     except archive_workbench.EtagMismatch as exc:
         raise ToolError(
             "etag_mismatch",
-            "The app window saved the Workbench while the edit was in "
-            "flight, twice in a row. Read the field again and redo the "
-            "change.",
+            "The Workbench changed while the edit was in flight. Read "
+            "the field again and redo the change.",
             current_etag=exc.current_etag,
         ) from exc
 
