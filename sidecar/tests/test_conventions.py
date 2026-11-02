@@ -138,9 +138,12 @@ def test_the_fullmatch_allowlist_has_no_stale_entries():
 # was introduced. May only shrink: new refusals subclass
 # refusals.Refusal.
 HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
+    ("sidecar/routers/flist_session.py", "flist_avatar"): 3,
+    ("sidecar/routers/flist_session.py", "flist_mapping_list"): 2,
+    ("sidecar/routers/flist_session.py", "flist_session_create"): 1,
+    ("sidecar/routers/lookups.py", "profile"): 4,
     ("sidecar/server.py", "_foreign_http"): 1,
     ("sidecar/server.py", "_require_restore_auth"): 1,
-    ("sidecar/server.py", "flist_avatar"): 3,
     ("sidecar/server.py", "flist_character_export_zip"): 1,
     ("sidecar/server.py", "flist_character_image"): 1,
     ("sidecar/server.py", "flist_character_image_by_id"): 1,
@@ -156,8 +159,6 @@ HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "flist_character_zip_backup_download"): 1,
     ("sidecar/server.py", "flist_character_zip_backup_payload"): 4,
     ("sidecar/server.py", "flist_character_zip_backup_rename"): 3,
-    ("sidecar/server.py", "flist_mapping_list"): 2,
-    ("sidecar/server.py", "flist_session_create"): 1,
     ("sidecar/server.py", "foreign_character_avatar"): 3,
     ("sidecar/server.py", "foreign_character_image"): 4,
     ("sidecar/server.py", "labels_fill_unlabeled"): 1,
@@ -165,7 +166,6 @@ HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "labels_override_many"): 1,
     ("sidecar/server.py", "labels_rollup"): 1,
     ("sidecar/server.py", "logs_characters"): 1,
-    ("sidecar/server.py", "profile"): 4,
     ("sidecar/server.py", "rag_job_cancel"): 1,
     ("sidecar/server.py", "rag_job_get"): 1,
     ("sidecar/server.py", "rag_lexical_rebuild"): 1,

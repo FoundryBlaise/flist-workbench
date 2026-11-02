@@ -47,7 +47,8 @@ from archive_errors import (
     WorkbenchConflict,
 )
 from refusals import InvalidFileName, LogNameRefused, Refusal
-from services import label_rollup, local_access
+from routers import flist_session, health, lookups
+from services import avatars, label_rollup, local_access, password_idle
 from services import render as render_service
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
@@ -87,8 +88,9 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     This has to be a lifespan rather than `on_event` because the MCP
     sub-app mounted at `/mcp` needs its session manager started, and
     FastAPI silently ignores every `on_event` handler as soon as a
-    lifespan is present. The startup routines themselves still live
-    next to the code they belong to; this only sequences them.
+    lifespan is present. The startup routines themselves live next to
+    the code they belong to; the steps below only name and sequence
+    them.
     """
     import asyncio as _asyncio
 
@@ -103,6 +105,47 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _password_idle_watchdog()
     async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
         yield
+
+
+async def _eicons_warm_up() -> None:
+    """Warm the eicon catalog. Sequenced by `sidecar_lifespan`."""
+    await eicons_catalog.start()
+
+
+async def _hydrate_activity_log_on_startup() -> None:
+    """Load the on-disk redacted activity log into the in-memory
+    buffer so a restart-after-incident still surfaces audit context
+    in the Help → F-list Activity Log modal."""
+    loaded = flist_activity.hydrate_from_disk()
+    if loaded > 0:
+        print(
+            f"[flist] hydrated {loaded} activity events from disk",
+            flush=True,
+        )
+
+
+async def _avatar_cleanup_on_startup() -> None:
+    count = avatars.cleanup_placeholder_avatars()
+    if count > 0:
+        print(
+            f"[flist] cleaned {count} placeholder avatars from cache "
+            "(left over from pre-URL-fix sidecar)",
+            flush=True,
+        )
+
+
+async def _adopt_old_pre_upload_backups_on_startup() -> None:
+    count = character_archive.adopt_old_pre_upload_backups()
+    if count > 0:
+        print(
+            f"[flist] {count} Backups taken before an Upload by an earlier "
+            "version are now in the Backup list",
+            flush=True,
+        )
+
+
+async def _password_idle_watchdog() -> None:
+    await password_idle.start_watchdog()
 
 
 # Sub-servers keyed by mount suffix: "" (everything), "character"
@@ -136,28 +179,11 @@ app = FastAPI(
     lifespan=sidecar_lifespan,
 )
 
+# For `/mcp-info`, which describes the endpoints mounted below.
+app.state.mcp_servers = _MCP_SERVERS
+app.state.sidecar_port = SIDECAR_PORT
+
 workbench_mcp.mount(app, _MCP_SERVERS)
-
-
-# Idle password watchdog. When set to >0, drops the cached F-list
-# password from RAM after that many seconds of no user-initiated
-# /flist/* activity (ticket itself stays until natural expiry). When 0
-# (the default), the password lives in RAM for the lifetime of the
-# sidecar process so the 23-min auto-refresh keeps signing the user in
-# transparently — F-list tickets last 30 min, and forcing a manual
-# re-sign every half hour breaks any long working session.
-#
-# The original 10-min default was a defensive "forgotten window
-# overnight" measure, but once the user opts into keychain-backed
-# saved credentials the password is already durable on disk, so
-# dropping it from RAM no longer changes the threat model — it just
-# guarantees the next pull/refresh fails with "invalid ticket".
-# Users on shared workstations can re-enable by setting
-# FLIST_WORKBENCH_PASSWORD_IDLE_SEC=600 (or any positive value).
-IDLE_PASSWORD_TIMEOUT_SEC = int(
-    os.environ.get("FLIST_WORKBENCH_PASSWORD_IDLE_SEC", "0")
-)
-_PASSWORD_WATCHDOG_INTERVAL_SEC = 60
 
 
 _TOUCH_EXEMPT_PATHS = {
@@ -240,408 +266,6 @@ async def _invalid_request(_request: Request, exc: RequestValidationError) -> JS
         status_code=422,
         content={"code": "invalid_request", "message": message, "detail": errors},
     )
-
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "version": app.version}
-
-
-@app.get("/events")
-async def events_stream(request: Request) -> StreamingResponse:
-    """Server-sent stream of changes to shared state.
-
-    The renderer holds one of these open for the life of the window.
-    It exists because the window is no longer the only writer: a model
-    connected over MCP edits the same Workbench, and without this
-    the window would keep showing a stale draft and then autosave it
-    back over the model's work.
-
-    Events are hints — `{event, at, ...ids}`. The renderer re-reads
-    through the normal endpoints when one arrives.
-    """
-
-    async def producer():
-        import asyncio
-
-        async with event_bus.subscribe() as sub:
-            # Announce immediately so the client knows the stream is
-            # live rather than merely connected.
-            yield _sse_event("ready", {"subscribers": event_bus.subscriber_count()})
-            while True:
-                if await request.is_disconnected():
-                    return
-                try:
-                    payload = await asyncio.wait_for(sub.queue.get(), timeout=20.0)
-                except asyncio.TimeoutError:
-                    # A comment frame keeps proxies and the renderer's
-                    # own read timeout from treating idle as dead.
-                    yield b": keep-alive\n\n"
-                    continue
-                yield _sse_event(payload["event"], payload)
-
-    return StreamingResponse(
-        producer(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.get("/mcp-info")
-def mcp_info() -> dict:
-    """What the MCP endpoints are and how many tools each carries.
-
-    Powers Settings → MCP. Deliberately *not* under /mcp — that prefix
-    belongs to the protocol itself, and this is a plain REST read for
-    the renderer.
-    """
-    return workbench_mcp.describe(_MCP_SERVERS, SIDECAR_PORT)
-
-
-@app.post("/mcp-info/token")
-def mcp_token_create() -> dict:
-    """Issue a bearer token for the MCP endpoints, replacing any
-    existing one. Clients using the old token stop working.
-
-    Off by default — see `services/mcp_auth.py` for why. The token is
-    returned once here and again from `/mcp-info`, because the user has
-    to be able to copy it into a client config at any point.
-    """
-    from services import mcp_auth
-
-    return {"token": mcp_auth.generate()}
-
-
-@app.delete("/mcp-info/token")
-def mcp_token_revoke() -> dict:
-    """Turn the MCP bearer requirement back off."""
-    from services import mcp_auth
-
-    mcp_auth.revoke()
-    return {"required": False}
-
-
-@app.get("/eicons/search")
-def eicons_search(q: str = "", limit: int = 200) -> dict:
-    """Search the cached eicon catalog (sourced from xariah.net).
-
-    The renderer uses this to populate the toolbar's eicon picker. The
-    catalog is loaded into memory at sidecar startup with delta refreshes
-    every hour. While the first fetch is in flight `status` will be
-    'loading'; the renderer should poll or show a spinner.
-    """
-    return eicons_catalog.search(q, limit)
-
-
-async def _eicons_warm_up() -> None:
-    """Warm the eicon catalog. Sequenced by `sidecar_lifespan`."""
-    await eicons_catalog.start()
-
-
-@app.get("/profile/{name}")
-async def profile(name: str) -> dict:
-    """Public profile fetch routed through the F-list JSON API.
-
-    Replaces the previous HTML scrape (`flist.fetch_profile`). The shape
-    returned here matches the old `Profile.to_dict()` so existing
-    renderer code in EditorPane's "Fetch profile" button still works
-    against it. Requires an active sign-in — 401 surfaces a "Sign in to
-    F-list first" CTA in the renderer.
-    """
-    try:
-        payload = await flist_api.fetch_character_data(name)
-    except flist_api.TicketRequired as exc:
-        raise HTTPException(
-            status_code=401, detail="not signed in to F-list"
-        ) from exc
-    except flist_api.AuthFailure as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    except flist_api.FlistApiError as exc:
-        msg = str(exc).lower()
-        if "no such character" in msg or "not found" in msg:
-            raise HTTPException(
-                status_code=404, detail=f"character not found: {name}"
-            ) from exc
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    resolved_name = payload.get("name") or name
-    # F-list serves descriptions with literal CRLF / CR line endings.
-    # CodeMirror tolerates them but our contentEditable PreviewPane +
-    # BBCode→HTML transformer render them as visible artifacts. Match
-    # what the old HTML-scrape path did (flist.parse_profile) and
-    # normalise to LF for editor consumers.
-    description = (payload.get("description") or "").replace("\r\n", "\n").replace("\r", "\n")
-    inlines_raw = payload.get("inlines")
-    inlines: dict[str, dict] = {}
-    if isinstance(inlines_raw, dict):
-        for k, v in inlines_raw.items():
-            if isinstance(v, dict):
-                inlines[str(k)] = v
-
-    # Stats are rendered as a key:value list in the editor's profile
-    # pane. We resolve infotag IDs → labels via the cached mapping list
-    # so the user sees "Age: 28" instead of "info_1: 28".
-    stats: dict[str, str] = {}
-    infotags = payload.get("infotags")
-    if isinstance(infotags, dict) and infotags:
-        try:
-            mapping = await flist_api.fetch_mapping_list(
-                character_archive.cache_root() / "mapping-list.json"
-            )
-            stats = _resolve_infotag_stats(infotags, mapping)
-        except flist_api.FlistApiError:
-            # Mapping fetch failure is non-fatal for description-lookup
-            # — surface raw infotag IDs so the user still gets the
-            # BBCode they came for.
-            stats = {f"info_{k}": str(v) for k, v in infotags.items()}
-
-    return {
-        "name": resolved_name,
-        "avatar_url": flist_api.avatar_url(resolved_name),
-        "bbcode": description,
-        "stats": stats,
-        "inlines": inlines,
-    }
-
-
-def _resolve_infotag_stats(
-    infotags: dict, mapping: dict
-) -> dict[str, str]:
-    """Resolve `{infotag_id: value}` → `{label: human_value}` using the
-    mapping list. Enum infotags have list IDs as values; we look up the
-    list-item label too."""
-    out: dict[str, str] = {}
-    infotag_meta = {}
-    raw_infotags = mapping.get("infotags")
-    if isinstance(raw_infotags, list):
-        for entry in raw_infotags:
-            if isinstance(entry, dict) and entry.get("id") is not None:
-                infotag_meta[str(entry["id"])] = entry
-    listitems_meta: dict[str, str] = {}
-    raw_listitems = mapping.get("listitems")
-    if isinstance(raw_listitems, list):
-        for entry in raw_listitems:
-            if isinstance(entry, dict) and entry.get("id") is not None:
-                listitems_meta[str(entry["id"])] = entry.get("value", "")
-    for raw_id, raw_value in infotags.items():
-        meta = infotag_meta.get(str(raw_id))
-        label = (meta or {}).get("name") or f"info_{raw_id}"
-        text = str(raw_value)
-        # Enum-type infotags: value is a listitem id whose label lives
-        # in `listitems[*].value`.
-        if (meta or {}).get("type") == "list":
-            text = listitems_meta.get(text, text)
-        out[label] = text
-    return out
-
-
-# ---- flist archive ---------------------------------------------------
-
-
-class FlistSignInRequest(BaseModel):
-    account: str = Field(min_length=1, max_length=80)
-    password: str = Field(min_length=1, max_length=200)
-
-
-@app.post("/flist/session")
-async def flist_session_create(body: FlistSignInRequest) -> dict:
-    """Trade (account, password) for an F-list session ticket.
-
-    The ticket is held in sidecar RAM only (`flist_api.TicketStore`).
-    The password is held too — see flist_api docstring for why — but
-    neither value crosses this endpoint boundary. Renderer gets back
-    the character list and an expiry hint.
-
-    Schedules a fire-and-forget avatar warm-up for every account
-    character so the picker has avatars ready by the time the user
-    opens it (instead of waiting for 30+ lazy fetches to serialise
-    through the CDN rate limiter).
-    """
-    import asyncio as _asyncio
-
-    try:
-        result = await flist_api.acquire_ticket(
-            body.account.strip(), body.password
-        )
-    except flist_api.AuthFailure as exc:
-        flist_activity.record(
-            "sign-in-failed",
-            account=body.account.strip(),
-            error=str(exc),
-        )
-        # Pass F-list's error string through verbatim — see Tier 1
-        # decision in PHASE7_TIER1_PLAN.md.
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    names = [c["name"] for c in result["characters"] if c.get("name")]
-    flist_activity.record(
-        "sign-in",
-        account=body.account.strip(),
-        character_count=len(names),
-    )
-    if names:
-        _asyncio.create_task(_prefetch_avatars(names))
-    return result
-
-
-async def _prefetch_avatars(names: list[str]) -> None:
-    """Best-effort warm-up of the avatar cache.
-
-    Each missing avatar goes through the CDN rate limiter (2 req/s),
-    so a 33-character account finishes in ~15s. Already-cached avatars
-    are skipped instantly. Errors swallowed silently — the lazy fetch
-    on `/flist/avatar/{name}` retries on demand if a download flaked.
-    """
-    import asyncio
-    import httpx
-
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=10.0),
-        headers={"User-Agent": flist_api.USER_AGENT},
-        follow_redirects=True,
-    ) as client:
-
-        async def one(name: str) -> None:
-            try:
-                dest = character_archive.avatar_path_for(name)
-            except ValueError:
-                return
-            if dest.exists():
-                return
-            try:
-                await flist_api.download_to(
-                    flist_api.avatar_url(name), dest, client=client
-                )
-            except Exception:  # noqa: BLE001 — best-effort warmup
-                pass
-
-        await asyncio.gather(*(one(n) for n in names), return_exceptions=True)
-
-
-@app.post("/flist/avatars/prefetch")
-async def flist_avatars_prefetch() -> dict:
-    """Explicit re-trigger of the avatar warm-up.
-
-    Useful if a sign-in race left some avatars un-cached, or if F-list
-    avatars changed on the user's side and we want to refresh the whole
-    set. Fires immediately, returns the scheduled count, downloads
-    happen in the background.
-    """
-    import asyncio as _asyncio
-
-    chars = flist_api.ticket_store().characters()
-    names = [c["name"] for c in chars if c.get("name")]
-    if names:
-        _asyncio.create_task(_prefetch_avatars(names))
-    return {"scheduled": len(names)}
-
-
-@app.delete("/flist/session")
-async def flist_session_delete() -> dict:
-    status = flist_api.ticket_store().status()
-    flist_api.ticket_store().clear()
-    # Bookmarks and friends are account-scoped and memoised for ten
-    # minutes. Leaving them would show the next account who signs in
-    # the previous one's contacts.
-    foreign_service.reset_social_cache()
-    flist_activity.record(
-        "sign-out",
-        account=status.get("account"),
-    )
-    return {"signed_out": True}
-
-
-@app.get("/flist/activity")
-async def flist_activity_snapshot() -> dict:
-    """In-memory append-only audit log of F-list operations (sign-in,
-    ticket refresh, per-character pull stages, idle password clear,
-    sign-out). Closes the trust-question gap surfaced by the
-    2026-05-30 UX subagent review — see UX F4 in
-    REVIEW_2026-05-30_post_tier1_polish.md."""
-    return flist_activity.snapshot()
-
-
-@app.get("/flist/session")
-async def flist_session_get() -> dict:
-    """Footer chip polls this every 60s for session age + hourly count.
-    Stateless — never refreshes the ticket on its own; refresh happens
-    on the next ticket-requiring action.
-
-    Also reports `password_idle_seconds_remaining` so the renderer can
-    surface a "session will be cleared in Nm" warning before the
-    watchdog drops the cached password (UX gap from the 2026-05-30 QA
-    verification of P0-C).
-    """
-    store = flist_api.ticket_store()
-    status = store.status()
-    status["api_hourly_count"] = flist_api.api_rate_limiter().hourly_count()
-    if (
-        IDLE_PASSWORD_TIMEOUT_SEC > 0
-        and status.get("active")
-        and status.get("password_cached")
-    ):
-        idle = store.idle_seconds()
-        remaining = max(0, int(IDLE_PASSWORD_TIMEOUT_SEC - idle))
-        status["password_idle_seconds_remaining"] = remaining
-    else:
-        # Idle watchdog disabled (or no active session) — never surface
-        # a countdown; renderer suppresses its "stay signed in" warning
-        # when this field is null.
-        status["password_idle_seconds_remaining"] = None
-    return status
-
-
-@app.get("/flist/characters")
-async def flist_characters() -> dict:
-    """Roster union: account roster (if signed in) + archived characters
-    + characters with local F-Chat logs. Each entry carries flags so the
-    picker can render status badges.
-    """
-    account_chars = flist_api.ticket_store().characters()
-    log_chars: list[str] = []
-    try:
-        log_chars = [c.name for c in list_characters()]
-    except LogDirError:
-        pass
-    rows = character_archive.merge_roster(account_chars, log_chars)
-    # Annotate every has_archive row with its on-disk pull integrity so
-    # the picker / F-list zone can surface "incomplete — N missing" for
-    # archives where a prior pull was interrupted or had image failures.
-    # Cheap: each call is one dir-walk under images/.
-    for row in rows:
-        if row.get("has_archive") and row.get("id") is not None:
-            row["pull_status"] = character_archive.compute_pull_status(row["id"])
-    return {"characters": rows}
-
-
-@app.get("/flist/mapping-list")
-async def flist_mapping_list(force: bool = False) -> dict:
-    cache_path = character_archive.cache_root() / "mapping-list.json"
-    try:
-        mapping = await flist_api.fetch_mapping_list(cache_path, force=force)
-    except flist_api.TicketRequired as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    except flist_api.FlistApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    # Decorate with cache metadata so the renderer can drive the staleness
-    # chip (§2.4) without a second filesystem peek. `_etag` is the cache
-    # key for the resolver memo (§3 step 3); `_fetched_at` is the file
-    # mtime in unix seconds.
-    try:
-        st = cache_path.stat()
-        fetched_at: int | None = int(st.st_mtime)
-    except OSError:
-        fetched_at = None
-    etag: str | None = None
-    try:
-        import hashlib
-
-        etag = hashlib.sha256(cache_path.read_bytes()).hexdigest()
-    except OSError:
-        pass
-    return {**mapping, "_etag": etag, "_fetched_at": fetched_at}
 
 
 @app.post("/flist/character/{name}/pull")
@@ -1364,141 +988,6 @@ async def flist_character_inline(character_id: str, filename: str) -> FileRespon
     return FileResponse(path)
 
 
-_PLACEHOLDER_AVATAR_SIZE = 5827  # bytes returned by F-list when a name has no avatar
-
-
-def _cleanup_placeholder_avatars() -> int:
-    """One-time cache cleanup at sidecar startup.
-
-    Early Tier-1 sidecars built the wrong avatar URL (underscores
-    instead of spaces), so F-list always returned its 5827-byte
-    "no avatar" placeholder and we cached those PNGs to disk. After
-    the URL fix landed, the cached placeholders kept tripping the
-    placeholder-size check in /flist/avatar/{name} and serving 404
-    even for characters that DO have a real avatar. Deleting any
-    file matching the placeholder size lets the next request
-    re-fetch through the fixed URL.
-
-    Idempotent — after the first run there's nothing left to delete.
-    """
-    avatars = character_archive.avatars_root()
-    if not avatars.exists():
-        return 0
-    deleted = 0
-    for entry in avatars.iterdir():
-        try:
-            if entry.is_file() and entry.stat().st_size == _PLACEHOLDER_AVATAR_SIZE:
-                entry.unlink()
-                deleted += 1
-        except OSError:
-            continue
-    return deleted
-
-
-async def _hydrate_activity_log_on_startup() -> None:
-    """Load the on-disk redacted activity log into the in-memory
-    buffer so a restart-after-incident still surfaces audit context
-    in the Help → F-list Activity Log modal."""
-    loaded = flist_activity.hydrate_from_disk()
-    if loaded > 0:
-        print(
-            f"[flist] hydrated {loaded} activity events from disk",
-            flush=True,
-        )
-
-
-async def _avatar_cleanup_on_startup() -> None:
-    count = _cleanup_placeholder_avatars()
-    if count > 0:
-        print(
-            f"[flist] cleaned {count} placeholder avatars from cache "
-            "(left over from pre-URL-fix sidecar)",
-            flush=True,
-        )
-
-
-async def _adopt_old_pre_upload_backups_on_startup() -> None:
-    count = character_archive.adopt_old_pre_upload_backups()
-    if count > 0:
-        print(
-            f"[flist] {count} Backups taken before an Upload by an earlier "
-            "version are now in the Backup list",
-            flush=True,
-        )
-
-
-async def _password_idle_watchdog() -> None:
-    """Periodically drop the cached F-list password after idle. Disabled
-    when IDLE_PASSWORD_TIMEOUT_SEC is 0 (the default) — the password is
-    needed in RAM for the 23-min ticket auto-refresh, and the keychain
-    already provides cross-launch persistence."""
-    import asyncio
-
-    if IDLE_PASSWORD_TIMEOUT_SEC <= 0:
-        print(
-            "[flist] password idle watchdog disabled "
-            "(FLIST_WORKBENCH_PASSWORD_IDLE_SEC=0); "
-            "ticket auto-refresh stays armed for the session lifetime",
-            flush=True,
-        )
-        return
-
-    async def _loop() -> None:
-        while True:
-            try:
-                await asyncio.sleep(_PASSWORD_WATCHDOG_INTERVAL_SEC)
-                store = flist_api.ticket_store()
-                if store.clear_password_if_idle(IDLE_PASSWORD_TIMEOUT_SEC):
-                    flist_activity.record(
-                        "password-idle-clear",
-                        idle_seconds=int(IDLE_PASSWORD_TIMEOUT_SEC),
-                    )
-                    print(
-                        "[flist] idle password timeout — cached password "
-                        "dropped (ticket left in place until natural expiry)",
-                        flush=True,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                # Don't let a transient hiccup kill the watchdog.
-                print(f"[flist] password watchdog error: {exc!r}", flush=True)
-
-    asyncio.create_task(_loop())
-
-
-@app.get("/flist/avatar/{name}")
-async def flist_avatar(name: str) -> FileResponse:
-    """Serve a cached avatar from `<userdata>/avatars/`. Fetches on
-    miss; avatars are public so this works signed-out too.
-
-    F-list returns a 5827-byte placeholder PNG (HTTP 200) for any name
-    without an uploaded avatar — there's no 404 path. We detect that
-    by size and surface a real 404 so the renderer's `onError` fires
-    and the initial-circle fallback renders instead of an alien
-    placeholder graphic.
-    """
-    try:
-        dest = character_archive.avatar_path_for(name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not dest.exists():
-        try:
-            await flist_api.download_to(flist_api.avatar_url(name), dest)
-        except flist_api.FlistApiError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    try:
-        size = dest.stat().st_size
-    except OSError:
-        size = -1
-    if size == _PLACEHOLDER_AVATAR_SIZE:
-        # F-list's "no avatar" placeholder. Keep the cached file (it's
-        # tiny and avoids re-fetching the same placeholder on every
-        # request) but surface 404 so the renderer's onError fires and
-        # the initial-circle fallback renders.
-        raise HTTPException(status_code=404, detail="no avatar uploaded")
-    return FileResponse(dest)
-
-
-
 # ---- foreign profiles (read-only viewer) ------------------------------
 #
 # Somebody else's profile, cached under `<userdata>/foreign/` and never
@@ -1571,7 +1060,7 @@ async def foreign_character_avatar(name: str) -> FileResponse:
         size = dest.stat().st_size
     except OSError:
         size = -1
-    if size == _PLACEHOLDER_AVATAR_SIZE:
+    if size == avatars.PLACEHOLDER_SIZE:
         raise HTTPException(status_code=404, detail="no avatar uploaded")
     return FileResponse(dest)
 
@@ -2819,6 +2308,14 @@ def restore_done(
     _auth: str = Depends(_require_restore_auth),
 ) -> dict[str, bool]:
     return {"ok": True}
+
+
+for _area in (
+    health,
+    lookups,
+    flist_session,
+):
+    app.include_router(_area.router)
 
 
 # Entry point for the PyInstaller-frozen build. In dev we run via
