@@ -10,7 +10,7 @@ Two things to hold onto before anything else:
 
 1. **Nothing here uploads to F-list.** Every tool changes local files.
    When a profile is ready you review it in the app window and
-   publish it yourself in the browser, with the userscript or the
+   upload it yourself in the browser, with the userscript or the
    paired extension. A model that tells you a change is live on F-list
    is wrong.
 2. **`live` is read-only.** It is the record of what is published.
@@ -70,19 +70,19 @@ Ollama model.
 
 ### Smaller endpoints
 
-A small local model handling 76 tools tends to pick badly. Two narrower
+A small local model handling 72 tools tends to pick badly. Two narrower
 endpoints serve the same implementations:
 
 | URL | What it carries |
 |---|---|
-| `.../mcp` | everything (76 tools) |
-| `.../mcp/character` | profile editing (58) |
+| `.../mcp` | everything (72 tools) |
+| `.../mcp/character` | profile editing (54) |
 | `.../mcp/logs` | logs, labels, search (30) |
 | `.../mcp/classify` | the IC/OOC labelling loop only (9) |
 
 Tool schemas are not free. Every tool an endpoint carries is
 described in the model's context before it does any work: the 30 on
-`/mcp/logs` cost roughly 5800 tokens, the 76 on `/mcp` roughly 14500.
+`/mcp/logs` cost roughly 5800 tokens, the 72 on `/mcp` up to 14500.
 A client with a 12k window could not fit one batch of messages to
 classify alongside them. Point a long labelling run at
 `/mcp/classify` and that drops to about 1500.
@@ -108,7 +108,7 @@ ends up in a transcript.
 
 ## What it can do
 
-76 tools. The ones worth knowing about:
+72 tools. The ones worth knowing about:
 
 **Finding your way around** — `get_workbench_status` first, then
 `list_characters`.
@@ -142,7 +142,7 @@ as base64 and an oversized tool result is refused outright.
 `edit_description` (an exact string replacement, far safer than
 `set_description` on a 30 KB profile), `set_profile_field`,
 `set_kink`, `add_custom_kink`, `reorder_images`. `diff_working_set`
-says what would change if you published.
+says what an Upload would change.
 
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
@@ -252,7 +252,7 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (76 tools) | ~14500 | does not fit in 24k |
+| `/mcp` (72 tools) | ~14500 (measured with 76) | does not fit in 24k |
 | `/mcp/logs` (30 tools) | ~5800 | ~14900 |
 | `/mcp/classify` (9 tools) | ~1500 | ~10600 |
 
@@ -297,7 +297,7 @@ Tool errors carry a stable code as their first word:
 |---|---|
 | `character_not_found` | no local archive for that name — the error lists the ones that exist |
 | `nothing_to_edit` | the character was never pulled, so there is no Live to make a Workbench from |
-| `live_is_read_only` | tried to edit the published profile |
+| `live_is_read_only` | tried to edit Live |
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
 | `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
