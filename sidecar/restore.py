@@ -259,7 +259,7 @@ def extension_seen() -> dict[str, Any]:
 def list_archived_characters() -> list[dict[str, Any]]:
     """Names of every character with an archive on disk. Lets the
     extension show a cross-character source picker — "edit Spielwiesending
-    but load MainChar's working set."""
+    but load MainChar's Workbench."""
     root = character_archive.root()
     if not root.exists():
         return []
@@ -337,21 +337,17 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
 
-    # `create=False`: listing what can be pushed must not bring a
-    # workbench into existence as a side effect.
-    bench = character_archive.resolve_workbench(character_id, create=False)
+    bench = _workbench(character_id)
     if bench is not None:
-        payload = character_archive.read_set_payload(character_id, bench.id)
-        image_count = 0
-        if isinstance(payload, dict):
-            images = payload.get("images")
-            if isinstance(images, list):
-                image_count = len(images)
+        updated_at, payload = bench
+        images = payload.get("images")
+        image_count = len(images) if isinstance(images, list) else 0
         out.append({
-            "id": f"set:{bench.id}",
+            "id": WORKBENCH_SOURCE_ID,
+            # Extension 0.1.1 finds the Workbench entry by this kind.
             "kind": "set",
             "label": "Workbench (your edits)",
-            "created_at": _iso_from_unix(bench.updated_at),
+            "created_at": _iso_from_unix(updated_at),
             "image_count": image_count,
             "upload_refused": None,
         })
@@ -396,6 +392,34 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
     return out
 
 
+#: The Workbench's id in the source list. Earlier versions listed it as
+#: `set:<id>`; an extension still holding such a list is served the
+#: Workbench too, as long as the id is the Workbench's.
+WORKBENCH_SOURCE_ID = "workbench"
+
+
+def _workbench(character_id: str) -> tuple[float, dict[str, Any]] | None:
+    """The character's Workbench as `(updated_at, payload)`, or None
+    when it has none yet. Never creates one: listing or fetching what
+    can be uploaded must not bring a Workbench into existence."""
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    if bench is None:
+        return None
+    payload = character_archive.read_set_payload(character_id, bench.id)
+    if not isinstance(payload, dict):
+        return None
+    return bench.updated_at, payload
+
+
+def _names_the_workbench(character_id: str, source_id: str) -> bool:
+    if source_id == WORKBENCH_SOURCE_ID:
+        return True
+    if not source_id.startswith("set:"):
+        return False
+    bench = character_archive.resolve_workbench(character_id, create=False)
+    return bench is not None and source_id == f"set:{bench.id}"
+
+
 def _iso_from_unix(ts: float | int | None) -> str | None:
     if ts is None:
         return None
@@ -411,14 +435,13 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     images_dir = character_archive.images_dir(character_id)
     avatar = _avatar_path_for_name(character_name)
 
-    if snapshot_id.startswith("set:"):
-        set_id = snapshot_id[len("set:"):]
-        payload = character_archive.read_set_payload(character_id, set_id)
-        if payload is None:
+    if _names_the_workbench(character_id, snapshot_id):
+        bench = _workbench(character_id)
+        if bench is None:
             return None
         return zip_serialise.build_zip(
             character_id,
-            payload,
+            bench[1],
             images_dir=images_dir,
             avatar_path=avatar,
         )

@@ -181,3 +181,71 @@ def test_live_cannot_be_fetched_as_an_upload_source(paired) -> None:
     res = extension.get("/restore/snapshot/live", params={"character": AMBER})
 
     assert res.status_code == 404
+
+
+def test_another_characters_sources_can_be_uploaded(paired) -> None:
+    """One profile as the template for another: on Mirela's edit page
+    the extension lists and fetches Corvin's sources by his name."""
+    window, extension = paired
+    _edit_workbench(window, "42", "[b]Mirela's draft.[/b]")
+    _edit_workbench(window, "77", "[b]Corvin's older draft.[/b]")
+    backup = _back_up(window, "77")
+    _edit_workbench(window, "77", "[b]Corvin's draft.[/b]")
+    (bench,) = _by_kind(_sources(extension, CORVIN), "set")
+
+    assert _fetch(extension, CORVIN, bench["id"])["character"]["description"] == (
+        "[b]Corvin's draft.[/b]"
+    )
+    assert _fetch(extension, CORVIN, backup)["character"]["description"] == (
+        "[b]Corvin's older draft.[/b]"
+    )
+
+
+def test_a_request_shaped_like_extension_0_1_1_gets_the_fields_it_reads(paired) -> None:
+    window, extension = paired
+    _edit_workbench(window, "42", "[b]Drafted in the Workbench.[/b]")
+    _back_up(window, "42")
+
+    res = extension.get("/restore/snapshots", params={"character": AMBER})
+
+    assert res.status_code == 200
+    bench, backup = res.json()
+    assert set(bench) == {"id", "kind", "label", "created_at", "image_count", "upload_refused"}
+    assert set(backup) == {
+        "id", "kind", "label", "created_at", "image_count",
+        "backup_kind", "name", "upload_refused",
+    }
+    assert bench["kind"] == "set"
+    assert bench["image_count"] == 1
+    assert bench["upload_refused"] is None
+    assert backup["kind"] == "backup"
+    assert backup["backup_kind"] == "manual_single"
+    # 0.1.1 echoes the id back as a path segment.
+    for source in (bench, backup):
+        res = extension.get(
+            f"/restore/snapshot/{source['id']}", params={"character": AMBER}
+        )
+        assert res.status_code == 200
+        assert res.headers["content-type"] == "application/zip"
+
+
+def test_the_workbench_source_names_the_one_workbench(paired) -> None:
+    window, extension = paired
+    _edit_workbench(window, "42", "[b]Drafted in the Workbench.[/b]")
+
+    (bench,) = _by_kind(_sources(extension, AMBER), "set")
+
+    assert bench["id"] == "workbench"
+    assert bench["label"] == "Workbench (your edits)"
+
+
+def test_a_source_list_from_before_the_update_still_uploads_the_workbench(paired) -> None:
+    """Earlier versions named the Workbench entry `set:<id>`; an
+    extension holding such a list keeps working."""
+    window, extension = paired
+    _edit_workbench(window, "42", "[b]Drafted in the Workbench.[/b]")
+    bench_id = window.get("/flist/character/42/workbench").json()["workbench"]["id"]
+
+    profile = _fetch(extension, AMBER, f"set:{bench_id}")
+
+    assert profile["character"]["description"] == "[b]Drafted in the Workbench.[/b]"
