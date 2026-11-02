@@ -110,7 +110,7 @@ def test_every_app_route_refuses_a_caller_without_the_launch_secret(
         for route in api_routes(server.app)
         if (route.method, route.path) not in OPEN_ROUTES | EXTENSION_ROUTES
     ]
-    assert len(routes) > 100
+    assert len(routes) > 80
     let_through = sweep(
         stranger,
         routes,
@@ -226,7 +226,7 @@ def test_a_preflight_from_the_app_window_origin_needs_no_secret(
     stranger: TestClient,
 ) -> None:
     res = stranger.options(
-        "/flist/character/1/working",
+        "/flist/character/1/workbench/payload",
         headers={
             "Origin": APP_ORIGIN,
             "Access-Control-Request-Method": "PUT",
@@ -275,7 +275,7 @@ def test_origin_null_is_refused_on_every_route(server) -> None:  # noqa: ANN001
     sidecar sends `null`: not even the launch secret lets it in."""
     client = app_client(server.app, headers={"Origin": "null"})
     routes = [*api_routes(server.app), *UNLISTED_ROUTES]
-    assert len(routes) > 100
+    assert len(routes) > 80
     let_through = sweep(client, routes, _refused_origin, json={})
     assert let_through == []
 
@@ -283,7 +283,7 @@ def test_origin_null_is_refused_on_every_route(server) -> None:  # noqa: ANN001
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("PUT", "/flist/character/1/working"),
+        ("PUT", "/flist/character/1/workbench/payload"),
         ("GET", "/settings"),
         ("POST", "/restore/handshake"),
         ("GET", "/restore/handshake-status"),

@@ -1,5 +1,5 @@
-import { useStore } from '../../state'
-import type { FlistSnapshotEntry } from '../../lib/api'
+import { useMemo } from 'react'
+import { selectDiffSources, useStore } from '../../state'
 
 // Stable fallback — see DiffPane for the same identity guard.
 const DEFAULT_RIGHT_SOURCE = { kind: 'live' } as const
@@ -31,20 +31,17 @@ export function BackupPicker({ characterId }: { characterId: string }) {
   )
   const setSource = useStore((s) => s.flistDiffSetRightSource)
   const loadBackup = useStore((s) => s.flistDiffLoadBackup)
-  const loadWorkbench = useStore((s) => s.flistDiffLoadWorkbench)
   const archive = useStore((s) => s.flistArchive[characterId])
   const lastPullAt = archive?.lastPullAt
-  // Backup picker sort: newest first; Live always pinned at top.
-  const backups: FlistSnapshotEntry[] = archive?.snapshots ?? []
-  const value =
-    source.kind === 'live'
-      ? '__live__'
-      : source.kind === 'workbench'
-        ? '__workbench__'
-        : `b:${source.filename}`
+  // Live first, then the Backups newest first.
+  const entries = useMemo(
+    () => selectDiffSources({ flistArchive: { [characterId]: archive } }, characterId),
+    [archive, characterId]
+  )
+  const value = source.kind === 'live' ? '__live__' : `b:${source.filename}`
   return (
     <label className="diff-backup-picker">
-      <span className="diff-backup-picker-label">Compare Working against</span>
+      <span className="diff-backup-picker-label">Compare with</span>
       <select
         className="diff-backup-picker-select"
         value={value}
@@ -60,11 +57,6 @@ export function BackupPicker({ characterId }: { characterId: string }) {
             setSource(characterId, { kind: 'live' })
             return
           }
-          if (v === '__workbench__') {
-            void loadWorkbench(characterId)
-            setSource(characterId, { kind: 'workbench' })
-            return
-          }
           if (v.startsWith('b:')) {
             const filename = v.slice(2)
             void loadBackup(characterId, filename)
@@ -72,13 +64,20 @@ export function BackupPicker({ characterId }: { characterId: string }) {
           }
         }}
       >
-        <option value="__live__">Live (pulled {relTime(lastPullAt)})</option>
-        <option value="__workbench__">the Workbench (your edits)</option>
-        {backups.map((b) => (
-          <option key={b.filename} value={`b:${b.filename}`}>
-            Backup · {isoDate(b.created_at)}
-          </option>
-        ))}
+        {entries.map((entry) => {
+          if (entry.kind === 'live') {
+            return (
+              <option key="__live__" value="__live__">
+                Live (pulled {relTime(entry.lastPullAt)})
+              </option>
+            )
+          }
+          return (
+            <option key={entry.filename} value={`b:${entry.filename}`}>
+              Backup · {entry.name ?? isoDate(entry.createdAt)} · {entry.origin}
+            </option>
+          )
+        })}
       </select>
     </label>
   )

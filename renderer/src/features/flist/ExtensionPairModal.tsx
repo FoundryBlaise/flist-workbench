@@ -123,7 +123,7 @@ function ExtensionPairModal({
           <p>
             If you just clicked <strong>Pair with Workbench</strong> in the
             extension popup, this prompt is expected. Accept it to let the
-            extension fetch backup snapshots on{' '}
+            extension fetch your Workbench and Backups on{' '}
             <code>character_edit.php</code>.
           </p>
           <p>
@@ -131,10 +131,10 @@ function ExtensionPairModal({
             <code>{pending.fingerprint}</code>
           </p>
           <p className="settings-help">
-            The token grants read-only access to backups + the right to post
-            pre-restore snapshots. It does <em>not</em> let the extension
-            sign you in, change your F-list account, or pull data from
-            F-list itself. Revoke anytime from{' '}
+            The token grants read-only access to the Workbench and Backups,
+            and the right to save a Backup before an Upload. It does{' '}
+            <em>not</em> let the extension sign you in, change your F-list
+            account, or pull data from F-list itself. Revoke anytime from{' '}
             <strong>Settings → Security</strong>.
           </p>
           {error && (

@@ -45,7 +45,7 @@ def main() -> None:
         },
     )
     # Its Workbench too, as for a character the user has edited before.
-    character_archive.resolve_workbench(character_id, create=True)
+    character_archive.read_workbench(character_id, create=True)
 
 
 if __name__ == "__main__":

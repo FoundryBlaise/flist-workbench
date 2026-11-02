@@ -31,10 +31,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import backup_origin
 import character_archive
 import paths
 import zip_serialise
-from refusals import BackupNotUploadable
+from refusals import BackupHoldsNoProfile, BackupNotUploadable, Refusal
 
 #: `backup-meta.json` kind of the Backup taken before an Upload.
 PRE_UPLOAD_BACKUP_KIND = "pre_upload"
@@ -44,23 +45,33 @@ PRE_UPLOAD_BACKUP_KIND = "pre_upload"
 IMAGES_NOT_PACKED_NOTE = "Full backup failed"
 
 
-def upload_refusal(character_id: str, filename: str) -> str | None:
-    """Why a Backup must not be an Upload source, or None when it can
-    be. One taken without its image files lists no image in
+def _upload_refused(character_id: str, filename: str) -> Refusal | None:
+    """The refusal a Backup meets as an Upload source, or None when it
+    can be one. One that holds no profile is refused as everywhere
+    else. One taken without its image files lists no image in
     character.json, which an Upload reads as "remove every image"."""
     meta = character_archive.zip_backup_meta(character_id, filename)
+    if not backup_origin.holds_profile(meta):
+        return BackupHoldsNoProfile(filename)
     note = meta.get("note")
     if meta.get("images_missing") or (
         meta.get("kind") == PRE_UPLOAD_BACKUP_KIND
         and isinstance(note, str)
         and note.startswith(IMAGES_NOT_PACKED_NOTE)
     ):
-        return (
+        return BackupNotUploadable(
             "This Backup was taken without its image files, so uploading it "
             "would remove every image from the profile. Load it into the "
             "Workbench instead, and upload the Workbench."
         )
     return None
+
+
+def upload_refusal(character_id: str, filename: str) -> str | None:
+    """Why a Backup must not be an Upload source, or None when it can
+    be: the message fetching it for an Upload is refused with."""
+    refused = _upload_refused(character_id, filename)
+    return refused.message if refused is not None else None
 
 
 _STATE_FILENAME = "restore-state.json"
@@ -259,7 +270,7 @@ def extension_seen() -> dict[str, Any]:
 def list_archived_characters() -> list[dict[str, Any]]:
     """Names of every character with an archive on disk. Lets the
     extension show a cross-character source picker — "edit Spielwiesending
-    but load MainChar's working set."""
+    but load MainChar's Workbench."""
     root = character_archive.root()
     if not root.exists():
         return []
@@ -316,23 +327,20 @@ def _character_id_for_name(name: str) -> str | None:
 
 
 def list_snapshots(character_name: str) -> list[dict[str, Any]]:
-    """Everything the extension can push into the F-list form:
+    """Everything the extension can push into the F-list form, its
+    Upload sources:
 
-    1. **Live on F-List** — `live.json`, what the website currently has.
-       Pushing this reverts the profile to the last pull.
-    2. **The Workbench** — the character's one editable copy. This is
+    1. **The Workbench** — the character's one editable copy. This is
        what a user means when they say "put my changes up".
-    3. **Backups** — full ZIP archives under `backups/`, including the
-       ones taken before an Upload by `/restore/snapshot/fresh`.
+    2. **Backups**, newest first — full ZIP archives under `backups/`,
+       including the ones taken before an Upload by
+       `/restore/snapshot/fresh`.
 
-    Drafts the user never sees are not offered. A character used to be
-    able to hold several named working sets, and the extension listed
-    them all — which meant choosing between things the window did not
-    show and the user could not name. Extra drafts left behind by an
-    older version stay on disk and stay out of this list.
+    Live is not one: it already is what the site shows.
 
-    Order: Live first (it reverts), then the bench, then backups
-    newest-first.
+    Any archived character's sources can be listed, not only the one
+    whose edit page is open: one profile can serve as the template for
+    another.
     """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
@@ -340,32 +348,13 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
 
-    live = character_archive.read_live(character_id)
-    if live is not None:
-        live_images = live.get("images") if isinstance(live.get("images"), list) else []
-        out.append({
-            "id": "live",
-            "kind": "live",
-            "label": "Live on F-List (what the website has now)",
-            "created_at": _iso_from_path(
-                character_archive.character_dir(character_id) / "live.json"
-            ),
-            "image_count": len(live_images),
-            "upload_refused": None,
-        })
-
-    # `create=False`: listing what can be pushed must not bring a
-    # workbench into existence as a side effect.
-    bench = character_archive.resolve_workbench(character_id, create=False)
+    bench = _workbench(character_id)
     if bench is not None:
-        payload = character_archive.read_set_payload(character_id, bench.id)
-        image_count = 0
-        if isinstance(payload, dict):
-            images = payload.get("images")
-            if isinstance(images, list):
-                image_count = len(images)
+        images = bench.payload.get("images")
+        image_count = len(images) if isinstance(images, list) else 0
         out.append({
-            "id": f"set:{bench.id}",
+            "id": WORKBENCH_SOURCE_ID,
+            # Extension 0.1.1 finds the Workbench entry by this kind.
             "kind": "set",
             "label": "Workbench (your edits)",
             "created_at": _iso_from_unix(bench.updated_at),
@@ -413,13 +402,27 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
     return out
 
 
-def _iso_from_path(p: Path) -> str | None:
-    try:
-        mtime = p.stat().st_mtime
-    except OSError:
+#: The Workbench's id in the source list.
+WORKBENCH_SOURCE_ID = "workbench"
+
+
+@dataclass(frozen=True)
+class _UploadableWorkbench:
+    """The Workbench as the extension's source list needs it."""
+
+    updated_at: float
+    payload: dict[str, Any]
+
+
+def _workbench(character_id: str) -> _UploadableWorkbench | None:
+    """The character's Workbench, or None when it has none yet. Never
+    creates one: listing or fetching what can be uploaded must not bring
+    a Workbench into existence."""
+    bench = character_archive.read_workbench(character_id)
+    info = character_archive.workbench_info(character_id)
+    if bench is None or info is None:
         return None
-    import datetime as _dt
-    return _dt.datetime.fromtimestamp(mtime, tz=_dt.timezone.utc).isoformat()
+    return _UploadableWorkbench(updated_at=info.updated_at, payload=bench.payload)
 
 
 def _iso_from_unix(ts: float | int | None) -> str | None:
@@ -437,26 +440,13 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     images_dir = character_archive.images_dir(character_id)
     avatar = _avatar_path_for_name(character_name)
 
-    if snapshot_id == "live":
-        live = character_archive.read_live(character_id)
-        if live is None:
-            return None
-        working_shape = character_archive._seed_payload_from_live(live)
-        return zip_serialise.build_zip(
-            character_id,
-            working_shape,
-            images_dir=images_dir,
-            avatar_path=avatar,
-        )
-
-    if snapshot_id.startswith("set:"):
-        set_id = snapshot_id[len("set:"):]
-        payload = character_archive.read_set_payload(character_id, set_id)
-        if payload is None:
+    if snapshot_id == WORKBENCH_SOURCE_ID:
+        bench = _workbench(character_id)
+        if bench is None:
             return None
         return zip_serialise.build_zip(
             character_id,
-            payload,
+            bench.payload,
             images_dir=images_dir,
             avatar_path=avatar,
         )
@@ -473,9 +463,9 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
     candidate = character_archive.backups_dir(character_id) / snapshot_id
     if not candidate.is_file():
         return None
-    refused = upload_refusal(character_id, snapshot_id)
-    if refused:
-        raise BackupNotUploadable(refused)
+    refused = _upload_refused(character_id, snapshot_id)
+    if refused is not None:
+        raise refused
     return _with_form_state_translated(candidate.read_bytes())
 
 
@@ -525,6 +515,8 @@ def write_pre_restore_snapshot(
     The gallery and the avatar come from the archive: gallery edits can
     only reach F-list through a save, so Live's images are what the
     profile has. The form fields are the page's, unsaved edits included.
+    It is recorded as `source: live, occasion: before-upload`: what it
+    holds is what F-list shows, not the Workbench about to be uploaded.
     """
     character_id = _character_id_for_name(character_name)
     if character_id is None:
@@ -539,7 +531,8 @@ def write_pre_restore_snapshot(
             working,
             images_dir=character_archive.images_dir(character_id),
             avatar_path=_avatar_path_for_name(character_name),
-            backup_kind=PRE_UPLOAD_BACKUP_KIND,
+            backup_source=backup_origin.LIVE,
+            backup_occasion=backup_origin.BEFORE_UPLOAD,
         )
     except Exception as exc:  # pylint: disable=broad-except
         # Without the image files if packing them fails: a partial
@@ -553,7 +546,8 @@ def write_pre_restore_snapshot(
                 character_id,
                 working,
                 images_dir=Path(no_images),
-                backup_kind=PRE_UPLOAD_BACKUP_KIND,
+                backup_source=backup_origin.LIVE,
+                backup_occasion=backup_origin.BEFORE_UPLOAD,
                 backup_note=f"{IMAGES_NOT_PACKED_NOTE} ({exc}); form fields only.",
                 images_missing=True,
             )

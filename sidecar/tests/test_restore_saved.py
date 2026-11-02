@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 from sidecar_client import app_client
+from workbench_state import put_workbench, workbench_payload
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -116,9 +117,8 @@ def fake_flist(httpx_mock):
 
 
 def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) -> None:
-    client, _archive, _server = paired
-    bench = client.get("/flist/character/42/workbench").json()["workbench"]
-    payload_url = f"/flist/character/42/sets/{bench['id']}/payload"
+    client, archive, _server = paired
+    payload_url = "/flist/character/42/workbench/payload"
     current = client.get(payload_url).json()
     draft = current["payload"]
     draft["_overlay"] = ["character.description"]
@@ -148,8 +148,6 @@ def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) 
     live = client.get("/flist/character/42/live").json()
     assert live["description"] == "[b]Just saved on f-list.net.[/b]"
     assert client.get(payload_url).json() == before
-    sets = client.get("/flist/character/42/sets").json()
-    assert [s["id"] for s in sets["sets"]] == [bench["id"]]
 
 
 def test_it_needs_the_pairing_token(paired) -> None:
@@ -181,17 +179,15 @@ def test_the_extensions_early_id_report_defers(paired) -> None:
     the profile (see test_dedupe_local_after_pull_*)."""
     client, archive, _server = paired
     local_id = archive.add_uploaded_image("42", PNG)["image_id"]
-    bench = archive.resolve_workbench("42")
-    archive.write_set_payload(
+    put_workbench(
+        archive,
         "42",
-        bench.id,
         {
             "_schema_version": archive.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [{"image_id": local_id, "description": "", "sort_order": 0}],
         },
-        expected_etag=None,
     )
 
     res = client.post(
@@ -201,7 +197,7 @@ def test_the_extensions_early_id_report_defers(paired) -> None:
 
     assert res.status_code == 200
     assert res.json()["deferred"] is True
-    payload = archive.read_set_payload("42", bench.id)
+    payload = workbench_payload(archive, "42")
     assert [r["image_id"] for r in payload["images"]] == [local_id]
     local_file = next(archive.images_dir("42").glob(f"{local_id}.*"))
     assert local_file.exists()

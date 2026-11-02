@@ -32,17 +32,11 @@ function seed(state: {
     lastSavedAt: null,
     materialised: true
   }
-  // Working-sets v2: consumers read via selectWorkingSlot, which routes
-  // through the active-set pointer. Seed both shapes so the same fixture
-  // satisfies the legacy direct-read paths AND the new selector.
   useStore.setState({
     flistWorking: { '99': slot },
-    flistActiveSetId: { '99': 'set99' },
-    flistSetWorking: { 'set99': slot },
     flistArchive: {
       '99': {
         live: (state.live ?? null) as Record<string, unknown> | null,
-        snapshots: [],
         pullStatus: 'idle' as const
       }
     },
@@ -61,8 +55,6 @@ function seed(state: {
 beforeEach(() => {
   useStore.setState({
     flistWorking: {},
-    flistActiveSetId: {},
-    flistSetWorking: {},
     flistArchive: {},
     flistMapping: {
       status: 'idle',
@@ -105,7 +97,7 @@ describe('DiffPane', () => {
     })
     const { queryByText } = render(<DiffPane characterId="99" />)
     // No-diff empty state — updated copy after UX P3 batch.
-    expect(queryByText(/Working copy matches Live/)).toBeTruthy()
+    expect(queryByText(/The Workbench matches Live/)).toBeTruthy()
   })
 
   it('Reset all button is disabled when overlay is empty', () => {

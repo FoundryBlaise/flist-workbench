@@ -19,7 +19,7 @@ out of date.
    The extension does report that step back: when the user presses
    Save on f-list.net it calls `/restore/saved`, and the app re-pulls
    so its read-only Live copy matches the site again. That pull writes
-   Live, images and a snapshot — never a working set. The Workbench
+   Live and images — never the Workbench. The Workbench
    may well have moved on while the upload happened, and overwriting
    the user's draft with what they just published is not something
    "the upload finished" should ever mean.
@@ -58,7 +58,7 @@ it rather than beside it.
 | `sidecar/workbench_mcp/` | the MCP server: tool registry + tool modules |
 | `sidecar/services/render.py` | parks a render request until the app draws it |
 | `electron/renderProfile.ts` | offscreen capture of a profile, for `render_profile_image` |
-| `sidecar/character_archive.py` | on-disk character archive (working sets, snapshots, backups) |
+| `sidecar/character_archive.py` | on-disk character archive (Live, the Workbench, Backups, images) |
 | `sidecar/foreign_cache.py` | read-only cache of *other people's* profiles, under its own root |
 | `sidecar/labels.py` | IC/OOC verdicts + the read-time rule resolver |
 | `sidecar/rag_*.py`, `chunker.py` | chunking, embedding, Qdrant, BM25, reranking |
@@ -70,20 +70,23 @@ Per character under `%APPDATA%\flist-workbench\characters\<Folder>\`:
 
 - `live.json` — the last profile pulled from F-list. Read-only. The
   window calls it **Live on F-List**.
-- `sets/<12hex>/{payload,meta}.json` — the editable copy. On disk this
-  is still the working-set format, and a character can technically hold
-  several; the window shows exactly one and calls it the **Workbench**.
-  `active_set.json` says which one that is.
-- `snapshots/`, `backups/*.zip`, `images/`, `inlines/`
+- `workbench/payload.json` and `workbench/meta.json` — the
+  **Workbench**, the one editable copy, and when it was made and last
+  saved. Every reader and writer goes through
+  `character_archive.read_workbench` / `write_workbench`.
+- `backups/*.zip` (the Backups), `images/`, `inlines/`, `trash/`.
+- `layout.json` — written once the folder has this shape.
 
-Working sets were once a user-facing concept — create, name, keep
-several, pick an active one. Testers could not say what one was or how
-it differed from the read-only row above it, so the concept stayed on
-disk and left the vocabulary. `character_archive.resolve_workbench()`
-picks the bench: the active set, else the most recently changed, else a
-new one seeded from Live. Extra sets an older version left behind stay
-on disk, out of the window, and are logged once when chosen — there is
-no migration step to remove later.
+Older versions kept several drafts per character with a pointer to the
+active one, a copy of Live per Pull, and before that one working-copy
+file. At startup `workbench_migration` moves each character once (ADR
+0001): the draft the window showed (the active one, else the most
+recently changed) becomes `workbench/`, and every old file goes
+verbatim into one Backup (source `workbench`, occasion `migration`),
+verified before the originals are removed. `layout.json` is written
+last; a folder without it is redone from the start, and one whose
+Backup could not be written keeps its old files until the next start.
+A character with no drafts gets its Workbench from Live on first use.
 
 The working payload (schema v6) carries `_overlay` — the dotted paths
 the user has touched — so a later pull can refresh untouched fields
@@ -143,7 +146,7 @@ that was 1.9 s, against 0.07-0.14 s through one
 pull, the backup-all run), where nothing waits on any single image.
 
 The slot is not a character. It has no id, no archive entry, no
-working set and never sets `flistActiveCharacterId` — which is what
+Workbench and never sets `flistActiveCharacterId` — which is what
 leaves every edit, pull, backup and export path with nothing to act
 on. The sidebar hides the per-character zones while it is selected,
 and a `read-only` badge sits in the panel's header, because the panel

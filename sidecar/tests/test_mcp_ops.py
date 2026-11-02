@@ -1,6 +1,6 @@
 """The operations tools (design §3.8, §3.10, §3.11).
 
-Phase-5 acceptance: pull, backup, ingest, bundle export/import,
+Phase-5 acceptance: pull, backup, ingest, the upload export,
 settings and aliases all run through MCP, and the REST routes they were
 extracted from still behave the same.
 """
@@ -95,7 +95,7 @@ async def test_pull_reports_progress_and_returns_a_summary(
         yield "images", {"total": 2, "downloaded": 0, "failed": 0}
         yield "image", {"index": 1, "total": 2, "image_id": "a"}
         yield "image", {"index": 2, "total": 2, "image_id": "b"}
-        yield "done", {"character_id": "42", "image_count": 2}
+        yield "done", {"character_id": "42", "image_count": 2, "changed": False}
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     async with mcp_client("character") as session:
@@ -104,6 +104,7 @@ async def test_pull_reports_progress_and_returns_a_summary(
         )
     assert body["character_id"] == "42"
     assert body["images"] == 2
+    assert body["changed"] is False
     # A pull refreshes what is published; it must not imply an upload.
     assert "never writes to f-list.net" in body["note"]
 
@@ -157,14 +158,9 @@ async def test_a_backup_note_becomes_the_backups_name(workbench) -> None:
 
 
 async def test_a_backup_loads_back_into_the_workbench(workbench) -> None:
-    """The round trip the backup exists for. It replaces the bench in
-    place — the old path made a *new* draft from the backup, which is one
-    of the ways a user ended up with several and lost track of which one
-    they were editing."""
+    """The round trip the backup exists for. It replaces the Workbench
+    in place."""
     async with mcp_client("character") as session:
-        await call_tool(
-            session, "create_working_set", character="Lady Amber Blaise"
-        )
         _, backup = await call_tool(
             session, "create_backup", character="Lady Amber Blaise"
         )
@@ -195,11 +191,7 @@ async def test_a_backup_loads_back_into_the_workbench(workbench) -> None:
         _, desc = await call_tool(
             session, "get_description", character="Lady Amber Blaise"
         )
-        _, sets = await call_tool(
-            session, "list_working_sets", character="Lady Amber Blaise"
-        )
     assert desc["description"] == "[b]Published.[/b]"
-    assert len(sets["sets"]) == 1, "loading must not add a second draft"
 
 
 async def test_backing_up_a_character_never_pulled(workbench) -> None:
@@ -334,46 +326,7 @@ async def test_embedding_probe_reports_an_unreachable_endpoint(
     assert "connection refused" in body["error"]
 
 
-# ---- bundles -----------------------------------------------------------
-
-
-async def test_a_bundle_round_trips_between_sets(
-    workbench, tmp_path: Path
-) -> None:
-    out = tmp_path / "bundles" / "amber.zip"
-    async with mcp_client("character") as session:
-        await call_tool(
-            session, "create_working_set", character="Lady Amber Blaise", name="Main"
-        )
-        await call_tool(
-            session,
-            "set_description",
-            character="Lady Amber Blaise",
-            text="bundled text",
-        )
-        _, exported = await call_tool(
-            session,
-            "export_working_set_bundle",
-            character="Lady Amber Blaise",
-            path=str(out),
-        )
-        assert Path(exported["path"]).is_file()
-
-        _, imported = await call_tool(
-            session,
-            "import_working_set_bundle",
-            character="Lady Amber Blaise",
-            path=str(out),
-            name="Reimported",
-        )
-        assert imported["set"] == "Reimported"
-        _, desc = await call_tool(
-            session,
-            "get_description",
-            character="Lady Amber Blaise",
-            working_set="Reimported",
-        )
-    assert desc["description"] == "bundled text"
+# ---- exports -----------------------------------------------------------
 
 
 async def test_exporting_to_a_directory_generates_a_filename(
@@ -383,12 +336,9 @@ async def test_exporting_to_a_directory_generates_a_filename(
     folder = tmp_path / "downloads"
     folder.mkdir()
     async with mcp_client("character") as session:
-        await call_tool(
-            session, "create_working_set", character="Lady Amber Blaise", name="Main"
-        )
         _, body = await call_tool(
             session,
-            "export_working_set_bundle",
+            "export_restore_zip",
             character="Lady Amber Blaise",
             path=str(folder),
         )
@@ -397,26 +347,12 @@ async def test_exporting_to_a_directory_generates_a_filename(
     assert written.suffix == ".zip"
 
 
-async def test_importing_a_missing_file(workbench, tmp_path: Path) -> None:
-    async with mcp_client("character") as session:
-        result, _ = await call_tool(
-            session,
-            "import_working_set_bundle",
-            character="Lady Amber Blaise",
-            path=str(tmp_path / "nope.zip"),
-        )
-    assert "file_not_found" in tool_error_text(result)
-
-
 async def test_export_restore_zip_names_the_manual_step(
     workbench, tmp_path: Path
 ) -> None:
     """The hand-off point: a model must not claim this published
     anything."""
     async with mcp_client("character") as session:
-        await call_tool(
-            session, "create_working_set", character="Lady Amber Blaise", name="Main"
-        )
         _, body = await call_tool(
             session,
             "export_restore_zip",
@@ -428,7 +364,7 @@ async def test_export_restore_zip_names_the_manual_step(
     assert "cannot do it for them" in body["next_step"]
 
 
-EXPORT_TOOLS = ("export_working_set_bundle", "export_restore_zip")
+EXPORT_TOOLS = ("export_restore_zip",)
 
 
 @pytest.mark.parametrize("tool", EXPORT_TOOLS)
@@ -439,9 +375,6 @@ async def test_an_export_refuses_to_overwrite_an_existing_file(
     existing = tmp_path / "keep.zip"
     existing.write_bytes(b"the user's own file")
     async with mcp_client("character") as session:
-        await call_tool(
-            session, "create_working_set", character="Lady Amber Blaise", name="Main"
-        )
         result, _ = await call_tool(
             session, tool, character="Lady Amber Blaise", path=str(existing)
         )
@@ -461,9 +394,6 @@ async def test_exporting_into_a_folder_never_reuses_a_taken_name(
     folder = tmp_path / "downloads"
     folder.mkdir()
     async with mcp_client("character") as session:
-        await call_tool(
-            session, "create_working_set", character="Lady Amber Blaise", name="Main"
-        )
         _, first = await call_tool(
             session, tool, character="Lady Amber Blaise", path=str(folder)
         )

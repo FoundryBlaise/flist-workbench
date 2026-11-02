@@ -38,8 +38,6 @@ beforeEach(() => {
   }
   useStore.setState({
     flistWorking: { [CID]: slot },
-    flistActiveSetId: { [CID]: 'set42' },
-    flistSetWorking: { set42: slot },
     flistCharacterImages: { [CID]: { byId: {}, status: 'ready' } },
     flistRoster: []
   } as never)
@@ -58,7 +56,6 @@ beforeEach(() => {
       })
     })
     .on(`GET ${CHAR}/live`, json(null))
-    .on(`GET ${CHAR}/snapshots`, json({ snapshots: [] }))
     .on(`GET ${CHAR}/zip-backups`, json({ character_id: CID, backups: [] }))
 })
 

@@ -9,15 +9,13 @@ from http import HTTPStatus
 from typing import Any, AsyncIterator, Literal
 
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
-    File,
-    Form,
     Header,
     HTTPException,
     Request,
     Response,
-    UploadFile,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -26,6 +24,7 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import aliases as aliases_store
+import backup_origin
 import character_archive
 import eicons as eicons_catalog
 import flist_activity
@@ -41,9 +40,14 @@ import rag_query
 import rag_store
 import settings as settings_store
 import workbench_mcp
-from archive_errors import InvalidCharacterId
+import workbench_migration
+from archive_errors import (
+    InvalidWorkbenchPayload,
+    NoWorkbench,
+    WorkbenchConflict,
+)
 from refusals import InvalidFileName, LogNameRefused, Refusal
-from services import label_rollup, local_access, payload_ops
+from services import label_rollup, local_access
 from services import render as render_service
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
@@ -95,6 +99,7 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _hydrate_activity_log_on_startup()
     await _avatar_cleanup_on_startup()
     await _adopt_old_pre_upload_backups_on_startup()
+    workbench_migration.migrate_all()
     await _password_idle_watchdog()
     async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
         yield
@@ -107,28 +112,16 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
 _MCP_SERVERS = workbench_mcp.build_mcp_servers()
 
 
-#: `{character_id}` routes that bring a character into the archive, so
-#: they may name one it does not hold yet. The Pull is keyed by name and
-#: needs no entry here.
-_CREATES_CHARACTER = {("POST", "/flist/character/{character_id}/sets/import")}
-
-
 def _known_character(request: Request) -> None:
     """Every route with a `{character_id}` names a character the archive
-    already holds, except the few in `_CREATES_CHARACTER`.
+    already holds. Only the Pull, keyed by name, brings one in.
 
     Checked before the route's own parameters and body, so an unknown
     id is refused the same way however complete the request is, and
-    before anything could create a folder for it. A creating route
-    still gets a malformed id refused here.
+    before anything could create a folder for it.
     """
     character_id = request.path_params.get("character_id")
     if character_id is None:
-        return
-    route = request.scope.get("route")
-    if (request.method, getattr(route, "path", None)) in _CREATES_CHARACTER:
-        _require_valid_character_id(character_id)
-        character_archive.require_character_id(character_id)
         return
     character_archive.character_dir(character_id)
 
@@ -260,7 +253,7 @@ async def events_stream(request: Request) -> StreamingResponse:
 
     The renderer holds one of these open for the life of the window.
     It exists because the window is no longer the only writer: a model
-    connected over MCP edits the same working sets, and without this
+    connected over MCP edits the same Workbench, and without this
     the window would keep showing a stale draft and then autosave it
     back over the model's work.
 
@@ -675,42 +668,27 @@ async def flist_character_pull(name: str) -> StreamingResponse:
     )
 
 
-@app.post("/flist/character/{character_id}/snapshot")
-async def flist_character_snapshot(character_id: str) -> dict:
-    """Capture the current Live JSON into `snapshots/<unix>.json`. 409
-    if no Live exists yet. Cheap (a few KB); does not include images."""
-    try:
-        return character_archive.save_snapshot(character_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
 @app.post("/flist/character/{character_id}/zip-backup")
 async def flist_character_zip_backup(
     character_id: str,
     force: bool = True,
-    kind: str = "manual_single",
 ) -> dict:
-    """Pack the character into a userscript-restoreable ZIP at
-    `backups/<ISO>.zip`.
+    """A manual Backup: pack the character's Workbench into a
+    userscript-restoreable ZIP at `backups/<ISO>.zip`, recorded as
+    `source: workbench, occasion: manual`, so the user can park their
+    work. Live needs no manual Backup: Back up all and every Upload keep
+    it.
 
-    What goes in is the workbench if there is one, and Live otherwise —
-    a backup is for the state the user cares about, and once they have
-    started editing that is the bench. `force=True` is the default
-    because the explicit right-click asked for an artefact in hand and
-    dedup would be surprising; the bulk `/backup-all` flow calls
-    `save_zip_backup` directly with `force=False`.
-
-    `kind` lets a caller mark the provenance: `manual_single` (the
-    default — right-click Back-up-now), `import` (set when an
-    import flow triggers a follow-up backup), `scheduled` (timer).
-    The bulk path passes `manual_bulk` directly to `save_zip_backup`.
+    `force=True` is the default because the explicit right-click asked
+    for an artefact in hand and dedup would be surprising. A `kind`
+    query parameter, which older windows sent, is ignored.
     """
-    if kind not in ("manual_single", "manual_bulk", "import", "scheduled"):
-        kind = "manual_single"
     try:
         return character_archive.save_zip_backup(
-            character_id, force=force, kind=kind
+            character_id,
+            source=backup_origin.WORKBENCH,
+            occasion=backup_origin.MANUAL,
+            force=force,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -722,47 +700,6 @@ async def flist_character_zip_backups(character_id: str) -> dict:
         "character_id": character_id,
         "backups": character_archive.list_zip_backups(character_id),
     }
-
-
-class _CreateSetFromBackupBody(BaseModel):
-    name: str
-
-
-@app.post(
-    "/flist/character/{character_id}/zip-backups/{filename}/create-set",
-    status_code=201,
-)
-async def flist_character_zip_backup_create_set(
-    character_id: str,
-    filename: str,
-    body: _CreateSetFromBackupBody,
-) -> dict:
-    """Create a new working set seeded from the backup's embedded
-    `working.json`. Used by Sidebar → Backups → right-click → Create
-    working set from backup. Distinct from the userscript-import path
-    (POST /sets/import) — that one expects a manifest.json-style
-    bundle and rejects backups for missing it. This path goes
-    straight from the backup's payload to a new set."""
-    try:
-        meta = character_archive.create_set_from_zip_backup(
-            character_id, filename, body.name
-        )
-    except Refusal:
-        # A bad backup name answers as itself, not as a bad set name.
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "This backup predates working.json support. "
-                "Click Back up now and the new backup will be importable."
-            ),
-        ) from exc
-    return {"set": _set_meta_to_json(meta)}
 
 
 @app.delete(
@@ -868,6 +805,7 @@ async def flist_character_zip_backup_payload(
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
+    character_archive.require_backup_holds_profile(character_id, filename)
     meta: dict | None = None
     try:
         with zipfile.ZipFile(p, "r") as zf:
@@ -906,10 +844,7 @@ async def flist_character_zip_backup_payload(
 
 
 @app.post("/flist/backup-all")
-async def flist_backup_all(
-    kind: str = "manual_bulk",
-    source: str = "manual",
-) -> StreamingResponse:
+async def flist_backup_all() -> StreamingResponse:
     """Back up every character on the signed-in account, as an SSE
     stream.
 
@@ -920,7 +855,7 @@ async def flist_backup_all(
     """
 
     async def producer():
-        async for event, data in backup_all_service.run(kind, source):
+        async for event, data in backup_all_service.run():
             yield _sse_event(event, data)
 
     return StreamingResponse(
@@ -937,122 +872,36 @@ async def flist_backup_all(
 async def flist_character_live(character_id: str) -> dict:
     payload = character_archive.read_live(character_id)
     if payload is None:
-        raise HTTPException(status_code=404, detail="no Live snapshot yet")
+        raise HTTPException(status_code=404, detail="no Live yet")
     return payload
 
 
-@app.get("/flist/character/{character_id}/working")
-async def flist_character_working_get(character_id: str) -> dict:
-    """Return the on-disk working copy + its current sha256 etag.
-
-    The etag is returned even on a clean read so the renderer can pin it
-    for the next PUT's `If-Match`. `payload: null` means no file yet —
-    renderer seeds from Live, materialise-on-first-edit (Tier 2 §1.6).
-    Earlier this returned 404 for the same case, but Chrome's network
-    panel logs every 4xx unconditionally and the noise was scaring
-    users into thinking the app was broken. 200 + null payload is the
-    same signal, surfaced cleanly.
-    """
-    payload = character_archive.read_working(character_id)
-    if payload is None:
-        return {"payload": None, "etag": None}
-    etag = character_archive.working_etag(character_id)
-    return {"payload": payload, "etag": etag}
-
-
-@app.put("/flist/character/{character_id}/working")
-async def flist_character_working_put(
-    character_id: str,
-    request: Request,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-) -> dict:
-    """Persist the working copy atomically.
-
-    Body is the whole payload. Optional `If-Match: <sha256>` enables
-    optimistic concurrency — mismatch returns 409 with the current etag.
-    Renderer caches the returned etag and ships it on the next PUT.
-    """
-    try:
-        body = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-    try:
-        new_etag = character_archive.write_working(
-            character_id, body, expected_etag=if_match
-        )
-    except character_archive.EtagMismatch as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "detail": "etag_mismatch",
-                "current_etag": exc.current_etag,
-            },
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"etag": new_etag}
-
-
-@app.delete("/flist/character/{character_id}/working")
-async def flist_character_working_delete(character_id: str) -> dict:
-    """Drop the working copy. Idempotent — `deleted: false` on a no-op."""
-    return {"deleted": character_archive.delete_working(character_id)}
-
-
-# ---- working sets v2 -------------------------------------------------
+# ---- the Workbench -----------------------------------------------------
 
 
 class _LoadBackupBody(BaseModel):
-    """Load a backup into the workbench.
+    """Restore a Backup into the Workbench.
 
-    `back_up_first` is the window's third button — cancel, load, or back
-    up and load. Whether the current bench is worth keeping is the
-    user's call, not a default we pick for them.
+    `back_up_first` is still accepted from older windows and ignored:
+    the Workbench is always kept as a Backup first (ADR 0003).
     """
 
     filename: str
-    back_up_first: bool = False
-
-
-class _SetNameBody(BaseModel):
-    name: str
-
-
-def _set_meta_to_json(meta: character_archive.SetMeta) -> dict:
-    return meta.to_dict()
-
-
-def _require_valid_set_id(set_id: str) -> None:
-    """Path-traversal guard before any disk touch on an id-bearing route."""
-    if not character_archive._is_valid_set_id(set_id):
-        raise HTTPException(status_code=404, detail="set not found")
-
-
-_CHARACTER_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,32}$")
-
-
-def _require_valid_character_id(character_id: str) -> None:
-    """The id shape a route that creates a character accepts: an F-list
-    id (digits) or a name slug, at most 32 characters. Every other
-    `{character_id}` route needs no check of its own, because
-    `_known_character` only lets ids through that the archive holds.
-    """
-    if not isinstance(character_id, str) or not _CHARACTER_ID_RE.fullmatch(
-        character_id
-    ):
-        raise InvalidCharacterId(character_id)
+    back_up_first: bool = True
 
 
 @app.get("/flist/character/{character_id}/workbench")
 async def flist_character_workbench(character_id: str, create: bool = True) -> dict:
-    """The character's one editable copy, created from Live if needed.
+    """The character's one editable copy, created from Live if needed:
+    `{workbench: {name, created_at, updated_at}}`.
 
-    The window asks for this instead of listing sets and picking one.
     `create=false` answers "is there one yet" without making it so,
     which is what a read-only render wants.
     """
-    meta = character_archive.resolve_workbench(character_id, create=create)
-    if meta is None:
+    if create:
+        character_archive.read_workbench(character_id, create=True)
+    info = character_archive.workbench_info(character_id)
+    if info is None:
         # Two different nothings, and the window renders them
         # differently: a character never pulled has nothing to copy
         # from, while one merely not edited yet gets the row that
@@ -1063,22 +912,71 @@ async def flist_character_workbench(character_id: str, create: bool = True) -> d
             else "not_created_yet"
         )
         return {"workbench": None, "reason": reason}
-    return {
-        "workbench": _set_meta_to_json(meta),
-        "active_set_id": character_archive.read_active_set_id(character_id),
-    }
+    return {"workbench": info.to_dict()}
+
+
+@app.get("/flist/character/{character_id}/workbench/payload")
+async def flist_character_workbench_payload_get(
+    character_id: str, create: bool = True
+) -> dict:
+    """The Workbench payload and the etag a save must send back.
+
+    Made from Live when the character has none yet, and then `created`
+    says so: that copy holds nobody's edits. `create=false` reads
+    without making one (404 `no_workbench`).
+    """
+    read = character_archive.read_workbench(character_id, create=create)
+    if read is None:
+        raise NoWorkbench(character_id)
+    return {"payload": read.payload, "etag": read.etag, "created": read.created}
+
+
+@app.put("/flist/character/{character_id}/workbench/payload")
+async def flist_character_workbench_payload_put(
+    character_id: str,
+    payload: dict[str, Any] = Body(...),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> dict:
+    """Save the whole Workbench, against the etag the caller read.
+
+    No `If-Match` is a write by something that never read what it is
+    replacing: refused with 409 `etag_required`, like a stale etag
+    (409 `etag_mismatch`). A window that had seeded its editor from
+    Live once flattened a long draft down to the published text this
+    way, one keystroke at a time. Both carry the current etag.
+    """
+    try:
+        etag = character_archive.write_workbench(
+            character_id, payload, expected_etag=if_match
+        )
+    except character_archive.EtagRequired as exc:
+        raise WorkbenchConflict(
+            "etag_required",
+            "Read the Workbench and send its etag as If-Match; a write "
+            "that has not seen the current contents would overwrite them.",
+            exc.current_etag,
+        ) from exc
+    except character_archive.EtagMismatch as exc:
+        raise WorkbenchConflict(
+            "etag_mismatch",
+            "The Workbench changed since it was read.",
+            exc.current_etag,
+        ) from exc
+    except ValueError as exc:
+        raise InvalidWorkbenchPayload(str(exc)) from exc
+    return {"etag": etag}
 
 
 @app.post("/flist/character/{character_id}/workbench/load-backup")
 async def flist_character_workbench_load_backup(
     character_id: str, body: _LoadBackupBody
 ) -> dict:
-    """Replace the workbench contents with a backup's.
+    """Restore: replace the Workbench contents with a Backup's.
 
-    Destructive by design, so the window asks first — cancel, load, or
-    back up and load. `back_up_first` is that third button: it saves
-    what is currently on the bench before overwriting it, which is the
-    only way the user can be sure a misclick costs nothing.
+    The Workbench it replaces is saved as a `before-restore` Backup
+    first, always; `backed_up_first` names it (null when there was no
+    Workbench yet). When that Backup cannot be written, nothing is
+    replaced and the caller hears 500 `workbench_not_kept`.
 
     `live_diverged` is reported back rather than enforced. A backup can
     be older than the profile now on F-list, and loading it anyway is a
@@ -1088,42 +986,46 @@ async def flist_character_workbench_load_backup(
     filename = (body.filename or "").strip()
     if not filename:
         raise HTTPException(status_code=422, detail="filename is required")
-    # Checked here as well as in the archive: `back_up_first` writes a
-    # Backup before the archive would get to refuse the name.
+    # A bad name is refused as such, not as an unreadable Backup.
     character_archive.require_backup_filename(filename)
 
-    saved_first: dict | None = None
-    if body.back_up_first:
-        result = character_archive.save_zip_backup(
-            character_id, kind="manual_single", force=True
-        )
-        if result.get("saved"):
-            saved_first = {
-                "filename": result.get("filename"),
-                "created_at": result.get("created_at"),
-            }
-
     try:
-        meta = character_archive.load_zip_backup_into_workbench(
+        replaced = character_archive.load_zip_backup_into_workbench(
             character_id, filename
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "That backup predates the stored profile payload, so there "
-                "is nothing in it to load."
-            ),
-        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    info = character_archive.workbench_info(character_id)
     return {
-        "workbench": _set_meta_to_json(meta),
+        "workbench": info.to_dict() if info is not None else None,
+        "payload": replaced.payload,
+        "etag": replaced.etag,
         "loaded": filename,
-        "backed_up_first": saved_first,
+        "backed_up_first": replaced.kept,
+    }
+
+
+@app.post("/flist/character/{character_id}/workbench/reset-to-live")
+async def flist_character_workbench_reset_to_live(character_id: str) -> dict:
+    """Reset to Live: the Workbench becomes a fresh copy of Live.
+
+    Done here rather than in the window so the Workbench it replaces is
+    saved as a `before-restore` Backup first, whoever asks; that Backup
+    is `backed_up_first` (null when there was no Workbench yet). When it
+    cannot be written nothing is replaced: 500 `workbench_not_kept`. A
+    character never pulled has no Live: 404 `no_live`.
+
+    Answers with the new payload and its etag, which the window adopts
+    as the Workbench it saves over next.
+    """
+    replaced = character_archive.reset_workbench_to_live(character_id)
+    return {
+        "payload": replaced.payload,
+        "etag": replaced.etag,
+        "backed_up_first": replaced.kept,
     }
 
 
@@ -1151,13 +1053,8 @@ async def flist_character_workbench_load_preflight(
     if entry is None:
         raise HTTPException(status_code=404, detail="no such backup")
 
-    bench = character_archive.resolve_workbench(character_id, create=False)
-    bench_has_edits = False
-    if bench is not None:
-        payload = character_archive.read_set_payload(character_id, bench.id)
-        if isinstance(payload, dict):
-            overlay = payload.get("_overlay")
-            bench_has_edits = bool(overlay)
+    bench = character_archive.read_workbench(character_id)
+    bench_has_edits = bench is not None and bool(bench.payload.get("_overlay"))
 
     # "Diverged" means the profile on F-list was pulled after this
     # backup was taken, so the backup is not a picture of what is up
@@ -1184,265 +1081,6 @@ async def flist_character_workbench_load_preflight(
     }
 
 
-@app.get("/flist/character/{character_id}/sets")
-async def flist_character_sets_list(character_id: str) -> dict:
-    sets = character_archive.list_sets(character_id)
-    return {
-        "sets": [_set_meta_to_json(m) for m in sets],
-        "active_set_id": character_archive.read_active_set_id(character_id),
-    }
-
-
-@app.post("/flist/character/{character_id}/sets", status_code=201)
-async def flist_character_sets_create(
-    character_id: str, body: _SetNameBody
-) -> dict:
-    try:
-        clean = character_archive.validate_set_name(body.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        meta = character_archive.create_set_from_live(character_id, clean)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
-@app.patch("/flist/character/{character_id}/sets/{set_id}")
-async def flist_character_sets_rename(
-    character_id: str, set_id: str, body: _SetNameBody
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        clean = character_archive.validate_set_name(body.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        meta = character_archive.rename_set(character_id, set_id, clean)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
-@app.delete("/flist/character/{character_id}/sets/{set_id}")
-async def flist_character_sets_delete(
-    character_id: str, set_id: str
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        character_archive.delete_set(character_id, set_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {
-        "deleted": True,
-        "active_set_id": character_archive.read_active_set_id(character_id),
-    }
-
-
-@app.post(
-    "/flist/character/{character_id}/sets/{set_id}/duplicate",
-    status_code=201,
-)
-async def flist_character_sets_duplicate(
-    character_id: str, set_id: str, body: _SetNameBody
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        clean = character_archive.validate_set_name(body.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        meta = character_archive.duplicate_set(character_id, set_id, clean)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"set": _set_meta_to_json(meta)}
-
-
-@app.post("/flist/character/{character_id}/sets/{set_id}/activate")
-async def flist_character_sets_activate(
-    character_id: str, set_id: str
-) -> dict:
-    _require_valid_set_id(set_id)
-    meta = character_archive.read_set_meta(character_id, set_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="set not found")
-    character_archive.set_active_set_id(character_id, set_id)
-    return {"active_set_id": set_id}
-
-
-@app.post("/flist/character/{character_id}/from-flist/activate")
-async def flist_character_from_flist_activate(character_id: str) -> dict:
-    character_archive.clear_active_set_id(character_id)
-    return {"active_set_id": None}
-
-
-@app.get("/flist/character/{character_id}/sets/{set_id}/payload")
-async def flist_character_set_payload_get(
-    character_id: str, set_id: str
-) -> dict:
-    _require_valid_set_id(set_id)
-    payload = character_archive.read_set_payload(character_id, set_id)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="set not found")
-    etag = character_archive.set_payload_etag(character_id, set_id)
-    return {"payload": payload, "etag": etag}
-
-
-@app.put("/flist/character/{character_id}/sets/{set_id}/payload")
-async def flist_character_set_payload_put(
-    character_id: str,
-    set_id: str,
-    request: Request,
-    if_match: str | None = Header(default=None, alias="If-Match"),
-) -> dict:
-    _require_valid_set_id(set_id)
-    try:
-        body = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-    # A write with no If-Match is a write by something that never read
-    # what it is replacing. That is fine for the first one — the file
-    # does not exist yet, which is how materialise-on-first-edit works
-    # — and is never fine afterwards. A window that had seeded its
-    # editor from Live once flattened a 556-character draft down to the
-    # 41 published characters this way, one keystroke at a time, and
-    # the blind PUT is what carried it out.
-    if if_match is None:
-        existing = character_archive.set_payload_etag(character_id, set_id)
-        if existing is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "detail": "etag_required",
-                    "current_etag": existing,
-                    "message": (
-                        "This set already has a payload. Read it and send "
-                        "its etag as If-Match; a write that has not seen "
-                        "the current contents would overwrite them."
-                    ),
-                },
-            )
-    try:
-        new_etag = character_archive.write_set_payload(
-            character_id, set_id, body, expected_etag=if_match
-        )
-    except character_archive.EtagMismatch as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "detail": "etag_mismatch",
-                "current_etag": exc.current_etag,
-            },
-        ) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"etag": new_etag}
-
-
-@app.get("/flist/character/{character_id}/sets/{set_id}/export")
-async def flist_character_set_export(
-    character_id: str, set_id: str
-) -> Response:
-    """Bundle the named working set into a Workbench-native ZIP.
-
-    Distinct from `/export.zip` (the userscript restore ZIP) — this one
-    round-trips between Workbench installs and carries the v6 payload
-    verbatim plus every referenced image's bytes. Renderer triggers a
-    save dialog with the suggested filename derived from character + set.
-    """
-    _require_valid_set_id(set_id)
-    import set_bundle as _set_bundle
-
-    try:
-        data, manifest = _set_bundle.build_set_bundle(character_id, set_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    source = manifest.get("source") or {}
-    char_part = _safe_filename_part(str(source.get("character_name") or "character"))
-    set_part = _safe_filename_part(str(source.get("set_name") or "set"))
-    import time as _t
-
-    download_name = (
-        f"workbench-set-{char_part}-{set_part}-{int(_t.time())}.zip"
-    )
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{download_name}"'
-        },
-    )
-
-
-@app.post("/flist/character/{character_id}/sets/import", status_code=201)
-async def flist_character_set_import(
-    character_id: str,
-    zip: UploadFile = File(...),
-    name: str = Form(...),
-    confirm_cross_character: str = Form(default="false"),
-) -> dict:
-    """Materialise a Workbench-native bundle into a new working set.
-
-    Cross-character handshake: the first POST omits / sets
-    `confirm_cross_character` to false. If the bundle's source character
-    doesn't match `character_id`, the sidecar returns 422 with the
-    source manifest so the renderer can show the warning modal. The
-    second POST (after user clicks confirm) sends the same multipart
-    payload with `confirm_cross_character=true` and the import proceeds.
-
-    The renderer chooses `name` (auto-`Imported set N` or user-supplied);
-    duplicate names are permitted per the working-sets v2 design — the
-    set_id is the unique identity.
-    """
-    import set_bundle as _set_bundle
-
-    try:
-        zip_bytes = await zip.read()
-    finally:
-        await zip.close()
-
-    confirmed = confirm_cross_character.lower() in ("true", "1", "yes")
-    try:
-        result = _set_bundle.import_set_bundle(
-            character_id,
-            zip_bytes,
-            name=name,
-            confirm_cross_character=confirmed,
-        )
-    except _set_bundle.CrossCharacterConfirmationRequired as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "requires_cross_character_confirmation",
-                "source": exc.source,
-            },
-        ) from exc
-    except _set_bundle.BundleError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return result
-
-
-@app.get("/flist/character/{character_id}/snapshots")
-async def flist_character_snapshots(character_id: str) -> dict:
-    return {
-        "character_id": character_id,
-        "snapshots": character_archive.list_snapshots(character_id),
-    }
-
-
-@app.get("/flist/character/{character_id}/snapshots/{filename}")
-async def flist_character_snapshot_read(character_id: str, filename: str) -> dict:
-    payload = character_archive.read_snapshot(character_id, filename)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="snapshot not found")
-    return payload
-
-
 @app.get("/flist/character/{character_id}/images/{filename}")
 async def flist_character_image(character_id: str, filename: str) -> FileResponse:
     """Serve `images/<image_id>.<ext>`. The filename shape is validated
@@ -1459,7 +1097,7 @@ async def flist_character_image(character_id: str, filename: str) -> FileRespons
 async def flist_character_images_list(character_id: str) -> dict:
     """List the files in `images/`. Each row: `{image_id, extension,
     size, added_at}`. Renderer pairs these with description/sort_order
-    from working.json to decide which are on the profile vs. in the
+    from the Workbench to decide which are on the profile vs. in the
     pool view."""
     return {
         "character_id": character_id,
@@ -1492,7 +1130,7 @@ async def flist_character_image_upload(
     id. The body is the raw image bytes; the server sniffs magic bytes
     to decide the extension (Content-Type is never trusted). The
     uploaded image lands in the renderer's Pool view by default — it
-    only appears on-profile after the user moves it via a working.json
+    only appears on-profile after the user moves it via a Workbench
     gallery edit.
 
     Idempotent — identical bytes always produce the same `local-<sha8>`
@@ -1554,8 +1192,8 @@ async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -
 # Not under /images/: that prefix is taken by the `{filename}` route.
 @app.get("/flist/character/{character_id}/image-references")
 async def flist_character_image_references(character_id: str) -> dict:
-    """Where each image id is still used — working sets, live, pull
-    snapshots — so the window can warn before trashing one."""
+    """Where each image id is still used — the Workbench, Live and
+    Backups — so the window can warn before trashing one."""
     return image_import_service.references(character_id)
 
 
@@ -1664,24 +1302,17 @@ async def flist_character_export_zip(character_id: str) -> Response:
     the character name.
 
     The export modal shows the Workbench's counts, so this is the
-    Workbench too: what the user reviewed is what they upload. The
-    legacy working copy is never read here. Live is the fallback only
-    for a character that has no Workbench yet.
+    Workbench too: what the user reviewed is what they upload. Live is
+    the fallback only for a character that has no Workbench yet.
     """
     import zip_serialise
 
-    working = None
-    bench = character_archive.resolve_workbench(character_id, create=False)
-    if bench is not None:
-        working = character_archive.read_set_payload(character_id, bench.id)
+    working = character_archive.export_payload(character_id)
     if working is None:
-        live = character_archive.read_live(character_id)
-        if live is None:
-            raise HTTPException(
-                status_code=404,
-                detail="no Workbench or Live to export",
-            )
-        working = payload_ops.seed_from_live(live)
+        raise HTTPException(
+            status_code=404,
+            detail="no Workbench or Live to export",
+        )
     name_for_file = "character"
     char = working.get("character")
     if isinstance(char, dict):
@@ -1872,7 +1503,7 @@ async def flist_avatar(name: str) -> FileResponse:
 #
 # Somebody else's profile, cached under `<userdata>/foreign/` and never
 # under `characters/`. There is deliberately no route here that writes
-# into the archive: no working set, no snapshot, no backup, no export.
+# into the archive: no Workbench, no Backup, no export.
 # The viewer reads.
 
 
@@ -2774,14 +2405,6 @@ class RagSettingsUpdate(BaseModel):
     chunk_overlap_msgs: int | None = None
 
 
-class BackupsSettingsUpdate(BaseModel):
-    # 0 disables the scheduled-on-start sweep entirely. Both are
-    # clamped server-side so a bad UI write can't disable scheduling
-    # via a negative interval or store nonsense.
-    scheduled_interval_days: int | None = None
-    scheduled_keep_last_n: int | None = None
-
-
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
@@ -2789,7 +2412,6 @@ class SettingsUpdate(BaseModel):
     fchat_data_dir: str | None = None
     labels: LabelsSettingsUpdate | None = None
     rag: RagSettingsUpdate | None = None
-    backups: BackupsSettingsUpdate | None = None
     # Folders MCP's import_image may read from. Only this endpoint — the
     # window — sets them; the MCP settings tool can read but not change.
     image_import_roots: list[str] | None = None
@@ -2846,80 +2468,9 @@ def _settings_dict(conn) -> dict:
                 "chunk_overlap_msgs": rag_settings.DEFAULT_CHUNK_OVERLAP_MSGS,
             },
         },
-        "backups": _backups_settings_dict(conn),
         "image_import_roots": [
             str(p) for p in image_import_service.import_roots(conn)
         ],
-    }
-
-
-def _backups_settings_dict(conn) -> dict:
-    interval_raw = settings_store.get(
-        conn, settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS
-    )
-    keep_raw = settings_store.get(
-        conn, settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N
-    )
-    try:
-        interval = (
-            int(interval_raw)
-            if interval_raw is not None
-            else settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
-        )
-    except (TypeError, ValueError):
-        interval = settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT
-    try:
-        keep = (
-            int(keep_raw)
-            if keep_raw is not None
-            else settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
-        )
-    except (TypeError, ValueError):
-        keep = settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT
-
-    def _opt_int(key: str) -> int | None:
-        raw = settings_store.get(conn, key)
-        if raw is None:
-            return None
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
-
-    started_at = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_STARTED_AT)
-    finished_at = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_FINISHED_AT)
-    written = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_WRITTEN) or 0
-    skipped = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_SKIPPED) or 0
-    failed = _opt_int(settings_store.KEY_BACKUPS_LAST_SWEEP_FAILED) or 0
-    source = (
-        settings_store.get(conn, settings_store.KEY_BACKUPS_LAST_SWEEP_SOURCE)
-        or None
-    )
-
-    # "Next due" is just last-started + interval_days. The UI computes
-    # the human-readable countdown ("in 3 days") on its side.
-    next_due_at = (
-        started_at + interval * 86400
-        if started_at is not None and interval > 0
-        else None
-    )
-
-    return {
-        "scheduled_interval_days": interval,
-        "scheduled_keep_last_n": keep,
-        "defaults": {
-            "scheduled_interval_days": settings_store.BACKUPS_SCHEDULED_INTERVAL_DAYS_DEFAULT,
-            "scheduled_keep_last_n": settings_store.BACKUPS_SCHEDULED_KEEP_LAST_N_DEFAULT,
-        },
-        "last_sweep": {
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "written": written,
-            "skipped": skipped,
-            "failed": failed,
-            "source": source,
-        },
-        "next_due_at": next_due_at,
     }
 
 
@@ -2979,22 +2530,6 @@ def settings_update(body: SettingsUpdate, conn=Depends(_settings_db)) -> dict:
 
     if body.rag is not None:
         _apply_rag_update(conn, body.rag)
-
-    if body.backups is not None:
-        if body.backups.scheduled_interval_days is not None:
-            n = max(0, min(365, int(body.backups.scheduled_interval_days)))
-            settings_store.set_value(
-                conn,
-                settings_store.KEY_BACKUPS_SCHEDULED_INTERVAL_DAYS,
-                str(n),
-            )
-        if body.backups.scheduled_keep_last_n is not None:
-            n = max(1, min(200, int(body.backups.scheduled_keep_last_n)))
-            settings_store.set_value(
-                conn,
-                settings_store.KEY_BACKUPS_SCHEDULED_KEEP_LAST_N,
-                str(n),
-            )
 
     if body.image_import_roots is not None:
         try:
@@ -3249,9 +2784,8 @@ async def restore_saved(
     """The user pressed Save on f-list.net — re-pull so Live matches
     what is published again.
 
-    Live is the only thing this touches. The pull writes live.json, the
-    images and a snapshot; working sets are never written by it, and
-    the Workbench in particular must come through untouched: the user
+    Live is the only thing this touches. The pull writes live.json and
+    the images; the Workbench must come through untouched: the user
     may well have gone on editing it while the upload happened, and
     quietly replacing their draft with what they just published would
     be the rudest possible interpretation of "restore finished".

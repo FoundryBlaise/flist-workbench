@@ -518,6 +518,39 @@ body {
   color: var(--text-dim);
   flex: 0;
 }
+.sb-backup-origin {
+  font-size: 0.85em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The migration Backup: why it offers only a download. Wraps, unlike
+   the one-line origin above it. */
+.sb-backup-note {
+  font-size: 0.85em;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
+/* Why the last Restore was turned down. */
+.sb-backup-refusal {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 4px 16px 8px;
+  font-size: var(--font-body);
+  color: #d28b8b;
+}
+
+.sb-backup-refusal button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
 .sb-backup-size {
   color: var(--text-dim);
   font-size: 0.85em;
@@ -1685,19 +1718,6 @@ body {
   font-size: calc(var(--font-meta) - 1px);
   opacity: 0.85;
 }
-.backup-all-banner-sub {
-  display: block;
-  margin-top: 4px;
-  font-size: calc(var(--font-meta) - 1px);
-  opacity: 0.78;
-  font-weight: normal;
-}
-.settings-sweep-warn {
-  color: var(--text-dim);
-  font-size: var(--font-body);
-  align-self: center;
-  margin-left: 12px;
-}
 .first-run-toast-open {
   background: var(--accent);
   color: #0d1117;
@@ -2298,34 +2318,6 @@ body {
   cursor: not-allowed;
 }
 
-/* Settings → Backups sweep-status block. Three rows of "label · value"
-   pairs with a manual trigger button beneath. */
-.settings-sweep-status {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: 12px;
-  row-gap: 4px;
-  margin: 8px 0 12px;
-  font-size: var(--font-body);
-}
-.settings-sweep-status > div {
-  display: contents;
-}
-.settings-sweep-status dt {
-  color: var(--text-dim);
-  font-weight: 600;
-  margin: 0;
-}
-.settings-sweep-status dd {
-  margin: 0;
-  color: var(--text);
-}
-.settings-sweep-result {
-  color: var(--green, #8acf8a);
-  font-size: var(--font-body);
-  align-self: center;
-  margin-left: 12px;
-}
 .settings-preset {
   background: var(--tag-bg);
   border: 1px solid var(--border);
@@ -5337,26 +5329,6 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.flist-zone-import {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 6px 10px;
-  font: inherit;
-  font-size: var(--font-meta);
-  cursor: pointer;
-}
-.flist-zone-import:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.flist-zone-import:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-/* Sits beside Import in the same row and matches it — the only
-   difference is where it leads. */
 .flist-zone-openflist {
   background: var(--bg);
   color: var(--text);
@@ -5370,24 +5342,6 @@ body {
 .flist-zone-openflist:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.flist-zone-import-msg {
-  margin: 0 8px 6px;
-  padding: 6px 8px;
-  border-radius: 3px;
-  font-size: var(--font-meta);
-  line-height: 1.35;
-}
-.flist-zone-import-msg-success {
-  background: rgba(80, 160, 90, 0.12);
-  color: #6fcc7a;
-  border: 1px solid rgba(80, 160, 90, 0.35);
-}
-.flist-zone-import-msg-error {
-  background: rgba(204, 80, 80, 0.12);
-  color: #e58484;
-  border: 1px solid rgba(204, 80, 80, 0.35);
 }
 
 .flist-zone-sep {
@@ -5457,36 +5411,6 @@ body {
   font-style: italic;
   color: var(--text-dim);
   line-height: 1.4;
-}
-
-/* ---- Name dialog (create + rename) ---- */
-
-.ws-name-dialog { max-width: 420px; }
-.ws-name-body { padding: 14px 18px 16px; display: flex; flex-direction: column; gap: 10px; }
-.ws-name-field { display: flex; flex-direction: column; gap: 4px; }
-.ws-name-field > span {
-  font-size: var(--font-meta);
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-}
-.ws-name-field > input {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: var(--font-body);
-}
-.ws-name-field > input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.ws-name-hint {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin: 0;
 }
 
 /* ---- Context menu ---- */

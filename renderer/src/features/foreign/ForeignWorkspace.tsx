@@ -300,8 +300,8 @@ function ForeignLookup() {
       <div className="foreign-lookup-head">
         <h2 className="foreign-lookup-title">Look at another character</h2>
         <p className="foreign-lookup-sub">
-          Read-only. Workbench cannot turn somebody else’s profile into a
-          working set, a backup or an export — this is for seeing how a
+          Read-only. The app cannot turn somebody else’s profile into a
+          Workbench, a Backup or a download — this is for seeing how a
           profile is put together.
         </p>
       </div>

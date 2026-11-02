@@ -16,10 +16,10 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 import aliases as aliases_store  # noqa: F401  (kept for parity with server)
+import backup_origin
 import character_archive
 import flist_activity
 import flist_api
-import settings as settings_store
 import zip_serialise
 
 from . import image_trash
@@ -60,11 +60,6 @@ async def _pull_one_character_for_backup_all(
     live_payload = dict(payload)
     live_payload["fetched_at"] = int(_t.time())
     character_archive.write_live(cid, live_payload)
-    # Auto-snapshot the JSON (cheap, separate from the ZIP).
-    try:
-        character_archive.save_snapshot_if_changed(cid)
-    except OSError:
-        pass
 
     # Avatar — non-fatal.
     try:
@@ -147,78 +142,12 @@ async def _pull_one_character_for_backup_all(
     }
 
 
-def _record_scheduled_sweep_telemetry(
-    *,
-    started_at: int,
-    finished_at: int,
-    written: int,
-    skipped: int,
-    failed: int,
-    source: str,
-) -> None:
-    """Persist the last-sweep summary so Settings → Backups can show
-    'Last ran' + compute the next due date. Called by /flist/backup-all
-    after a kind='scheduled' run completes.
-
-    `source` is `'post_login'` (renderer's auto-fire after F-list
-    sign-in detects the interval has elapsed) or `'manual'` (user
-    pressed the Trigger button in Settings)."""
-    conn = settings_store.connect()
-    try:
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_BACKUPS_LAST_SWEEP_STARTED_AT,
-            str(started_at),
-        )
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_BACKUPS_LAST_SWEEP_FINISHED_AT,
-            str(finished_at),
-        )
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_BACKUPS_LAST_SWEEP_WRITTEN,
-            str(written),
-        )
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_BACKUPS_LAST_SWEEP_SKIPPED,
-            str(skipped),
-        )
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_BACKUPS_LAST_SWEEP_FAILED,
-            str(failed),
-        )
-        settings_store.set_value(
-            conn,
-            settings_store.KEY_BACKUPS_LAST_SWEEP_SOURCE,
-            source,
-        )
-    finally:
-        conn.close()
-
-
-async def run(
-    kind: str = "manual_bulk", source: str = "manual"
-) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-    """Back up every character on the signed-in account.
-
-    `kind` tags each ZIP's backup-meta.json so the sidebar can bucket
-    them: `manual_bulk` (Tools → Back up all) or `scheduled` (the
-    post-sign-in sweep). A scheduled run also records sweep telemetry
-    so Settings → Backups can show when it last ran.
+async def run() -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    """Back up every character on the signed-in account: pull it, then
+    keep its Live as a Backup recorded as `source: live, occasion:
+    backup-all` (kind `manual_bulk` for the extension). A character
+    whose Live matches its newest Backup of Live is left as it is.
     """
-    import time as _time
-
-    backup_kind = (
-        kind if kind in ("manual_bulk", "scheduled") else "manual_bulk"
-    )
-    telemetry_source = (
-        source if source in ("manual", "post_login") else "manual"
-    )
-    started_at = int(_time.time())
-
 
     store = flist_api.ticket_store()
     roster = store.characters()
@@ -338,8 +267,13 @@ async def run(
                     "failed": pull_result["failed_images"],
                 }
                 try:
+                    # Live, as just pulled: Back up all keeps what was on
+                    # F-list, whatever the Workbench holds.
                     result = character_archive.save_zip_backup(
-                        cid, force=False, kind=backup_kind
+                        cid,
+                        source=backup_origin.LIVE,
+                        occasion=backup_origin.BACKUP_ALL,
+                        force=False,
                     )
                 except OSError as exc:
                     failed += 1
@@ -394,28 +328,6 @@ async def run(
             {"stage": "unknown", "message": repr(unexpected)},
         )
         return
-
-    # Record sweep telemetry for kind=='scheduled' so Settings →
-    # Backups can show 'Last ran' and compute the next due date.
-    # Note this fires from the renderer's post-sign-in nudge (or
-    # the Trigger button), so the next-due clock is anchored to
-    # the time of the actual fresh-data sweep, not to some
-    # cached-data lifespan event from sidecar boot.
-    if backup_kind == "scheduled":
-        try:
-            _record_scheduled_sweep_telemetry(
-                started_at=started_at,
-                finished_at=int(_time.time()),
-                written=saved,
-                skipped=unchanged,
-                failed=failed,
-                source=telemetry_source,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[backups] failed to record sweep telemetry: {exc!r}",
-                flush=True,
-            )
 
     yield (
         "done",

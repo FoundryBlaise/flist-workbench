@@ -16,34 +16,6 @@
 
 import type { InlineImage } from '../lib/api'
 
-/** Working-sets v2: per-character list of named working sets. The active
- *  set's payload is what the editor edits; null active = viewing F-list. */
-export interface SetMeta {
-  id: string
-  name: string
-  createdAt: number
-  updatedAt: number
-}
-
-/** Outcome of `flistImportSet`. The cross-character case is the only
- *  branch the renderer has to surface UI for — `requires_confirmation`
- *  is what the cross-char modal listens on, then it calls the second-
- *  leg action to actually create the set. */
-export type FlistImportOutcome =
-  | { status: 'cancelled' }
-  | { status: 'unavailable' }
-  | {
-      status: 'requires_confirmation'
-      source: { characterId: string; characterName: string; setName: string }
-    }
-  | {
-      status: 'imported'
-      set: SetMeta
-      imageStats: { added: number; skipped: number }
-      crossCharacter: boolean
-    }
-  | { status: 'error'; message: string }
-
 export type WorkingPayload = Record<string, unknown> & {
   _schema_version?: number
   _overlay?: string[]
@@ -424,24 +396,20 @@ export function descriptionOf(payload: WorkingPayload): string {
   return normaliseNewlines(v)
 }
 
-// ---- Working-sets v2 selector ---------------------------------------
+// ---- The Workbench slot selector -----------------------------------
 
 /** Shape the selector reads. The store's full State extends this; isolating
  *  the dependency keeps `selectWorkingSlot` testable without importing the
  *  whole store contract. */
-export interface FlistWorkingSetsState {
-  flistActiveSetId: Record<string, string | null>
-  flistSetWorking: Record<string, FlistWorkingSlot>
-  /** The active view slot — mirrors whichever set is active (or live in
-   *  read-only mode). Edit machinery from Tier 2 still writes here; the
-   *  activate flow synchronises with `flistSetWorking[setId]` and the
-   *  per-set payload on disk. */
+export interface FlistWorkbenchSlotState {
+  /** The one Workbench slot per character: the editor edits it and
+   *  autosave writes it through the Workbench endpoint. */
   flistWorking: Record<string, FlistWorkingSlot>
 }
 
 /** Resolve the editable working slot for `characterId`. */
 export function selectWorkingSlot(
-  s: FlistWorkingSetsState,
+  s: FlistWorkbenchSlotState,
   characterId: string
 ): FlistWorkingSlot | undefined {
   return s.flistWorking[characterId]

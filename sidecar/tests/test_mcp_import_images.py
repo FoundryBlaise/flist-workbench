@@ -18,7 +18,8 @@ import pytest
 from PIL import Image
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
-from test_mcp_edit import make_draft, payload_of, seed_gallery, workbench  # noqa: F401
+from test_mcp_edit import open_workbench, payload_of, seed_gallery, workbench  # noqa: F401
+from workbench_state import put_workbench
 
 CHAR = "Lady Amber Blaise"
 
@@ -331,12 +332,11 @@ async def test_a_batch_replaces_each_image_in_its_own_place(workbench, outputs) 
         sources.append(src)
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, old_ids)
         payload = payload_of(workbench)
         payload["images"][1]["description"] = "kept caption"
-        bench = workbench.resolve_workbench("42", create=False)
-        workbench.write_set_payload("42", bench.id, payload, expected_etag=None)
+        put_workbench(workbench, "42", payload)
 
         _, body = await call_tool(
             session,
@@ -377,7 +377,7 @@ async def test_add_to_gallery_appends_in_the_order_given(workbench, outputs) -> 
         srcs.append(src)
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [])
         _, body = await call_tool(
             session,
@@ -398,7 +398,7 @@ async def test_one_bad_item_means_nothing_is_imported(workbench, outputs) -> Non
     good.write_bytes(png_bytes((8, 8)))
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [])
         missing_target, _ = await call_tool(
             session,
@@ -440,10 +440,13 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     live = workbench.read_live("42")
     live["images"] = [{"image_id": "555", "extension": "jpg", "description": "", "sort_order": 0}]
     workbench.write_live("42", live)
-    workbench.save_snapshot("42")
+    # A copy of Live an earlier version kept per Pull: nothing counts it.
+    old_copy = workbench.character_dir("42") / "snapshots" / "1000.json"
+    old_copy.parent.mkdir()
+    old_copy.write_text('{"images": [{"image_id": "555"}]}', encoding="utf-8")
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [])
         _, imported = await call_tool(
             session, "import_image", character=CHAR, source_path=str(src)
@@ -455,9 +458,12 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     assert (mine["width"], mine["height"]) == (30, 50)
     assert mine["source_name"] == "Profil_final_07.png"
     assert mine["sha256"] == imported["sha256"]
-    assert mine["referenced_by"] == {"working_sets": [], "live": False, "snapshots": 0}
+    assert mine["referenced_by"] == {
+        "workbench": False, "live": False, "backups": 0, "migration_backup": False
+    }
 
     pulled = pool["555"]
     assert pulled["source_name"] is None
-    assert pulled["referenced_by"]["live"] is True
-    assert pulled["referenced_by"]["snapshots"] == 1
+    assert pulled["referenced_by"] == {
+        "workbench": False, "live": True, "backups": 0, "migration_backup": False
+    }

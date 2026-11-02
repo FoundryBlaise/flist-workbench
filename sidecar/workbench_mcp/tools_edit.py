@@ -1,4 +1,4 @@
-"""Editing a character's working set (design §3.3–3.7).
+"""Editing a character's Workbench (design §3.3–3.7).
 
 Everything here changes local files only. Nothing is uploaded to
 f-list.net — when a profile is ready the user reviews it in the
@@ -19,16 +19,25 @@ from pydantic import BaseModel
 
 import bbcode_rules
 import character_archive
+from archive_errors import WorkbenchConflict, WorkbenchNotKept
+from refusals import BackupHoldsNoProfile, BackupTooOld
 
-from ._context import ToolError, audit, load_payload, resolve_character, resolve_set
+from ._context import (
+    ToolError,
+    audit,
+    load_payload,
+    resolve_character,
+    resolve_workbench_or_live,
+    workbench_target,
+)
 from ._registry import TAG_CHARACTER, tool
 from .tools_session import NO_PUSH_NOTE
 
 
-def _writable(character: str, set_ref: str | None):  # noqa: ANN202
-    """Resolve a character + set for writing, refusing `live`."""
+def _writable(character: str, workbench_or_live: str | None):  # noqa: ANN202
+    """Resolve a character and its Workbench for writing, refusing `live`."""
     target = resolve_character(character)
-    resolved = resolve_set(target, set_ref, for_write=True)
+    resolved = resolve_workbench_or_live(target, workbench_or_live, for_write=True)
     return target, resolved
 
 
@@ -58,13 +67,13 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
     from services import payload_ops
 
     try:
-        return payload_ops.edit(target.id, resolved.id or "", mutate)
+        return payload_ops.edit(target.id, mutate)
     except payload_ops.PayloadError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
     except character_archive.EtagMismatch as exc:
         raise ToolError(
             "etag_conflict",
-            "The app window saved this set while the edit was in "
+            "The app window saved the Workbench while the edit was in "
             "flight, twice in a row. Read the field again and redo the "
             "change.",
             current_etag=exc.current_etag,
@@ -91,176 +100,56 @@ async def _catalogue():  # noqa: ANN202
 #
 # A character has one editable copy of its profile, always present,
 # seeded from Live the first time anything needs it. The window calls it
-# the Workbench and shows it directly under "Live on F-List".
-#
-# Several named drafts per character used to be the model, and the tools
-# further down still address them because old archives still hold them.
-# They are kept for that and nothing else: a model working over MCP
-# should never create a second one, or the window and the tools stop
-# describing the same thing.
+# the Workbench and shows it directly under "Live on F-List". Editing
+# tools create it on their own; there is nothing to open first.
 # --------------------------------------------------------------------
-
-
-@tool(tags=TAG_CHARACTER, title="Open the workbench")
-def create_working_set(
-    character: str, name: str | None = None, source: str = "live"
-) -> dict[str, Any]:
-    """The character's workbench, created from Live if it does not exist.
-
-    Despite the name this never makes a second one. A character has one
-    workbench; calling this when it already exists returns the existing
-    bench untouched, edits and all, so it is safe to call before editing
-    without checking first.
-
-    To put something else in the bench use `load_backup_into_workbench`,
-    which replaces the contents rather than adding another draft. `name`
-    and `source` are ignored and kept only so existing callers do not
-    break.
-    """
-    target = resolve_character(character)
-    existed = character_archive.resolve_workbench(target.id, create=False)
-    bench = character_archive.resolve_workbench(target.id)
-    if bench is None:
-        raise ToolError(
-            "no_live_profile",
-            "There is no pulled profile to seed a workbench from. Pull "
-            "the character first with pull_character.",
-        )
-    if existed is None:
-        audit("create_working_set", character=target.name, set=bench.name)
-    return {
-        "character": target.name,
-        "set": bench.name,
-        "set_id": bench.id,
-        "active": True,
-        "created": existed is None,
-        "note": (
-            "This character has one workbench"
-            + ("." if existed is None else " — it already existed and is unchanged.")
-            + " "
-            + NO_PUSH_NOTE
-        ),
-    }
 
 
 @tool(tags=TAG_CHARACTER, title="Load a backup into the workbench")
 def load_backup_into_workbench(
     character: str, backup: str, confirm: bool = False
 ) -> dict[str, Any]:
-    """Replace the workbench contents with a backup's.
+    """Restore: replace the Workbench contents with a Backup's.
 
-    Overwrites whatever is in the bench, so it needs `confirm=true`.
-    Nothing is saved first — if the current edits matter, call
-    `create_backup` before this. `backup` is a filename from
-    `list_backups`.
+    Overwrites everything in the Workbench, so it needs `confirm=true`.
+    The Workbench it replaces is always saved as a Backup first
+    (occasion `before-restore`), named in `kept_as`; restoring that
+    Backup undoes this. If that Backup cannot be written, nothing is
+    replaced. `backup` is a filename from `list_backups`.
     """
     target = resolve_character(character)
     if not confirm:
         raise ToolError(
             "confirm_required",
             "Loading a backup replaces everything currently in the "
-            "workbench. If those edits matter, call create_backup "
-            "first, then call this again with confirm=true.",
+            "Workbench; the Workbench is saved as a Backup first. Call "
+            "this again with confirm=true.",
         )
     try:
-        meta = character_archive.load_zip_backup_into_workbench(target.id, backup)
+        replaced = character_archive.load_zip_backup_into_workbench(
+            target.id, backup
+        )
     except FileNotFoundError as exc:
         raise ToolError("backup_not_found", str(exc)) from exc
-    except KeyError as exc:
-        raise ToolError(
-            "backup_too_old",
-            "That backup predates the stored profile payload, so there "
-            "is nothing in it to load into the bench.",
-        ) from exc
+    except (
+        WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile, BackupTooOld
+    ) as exc:
+        raise ToolError(exc.code, exc.message) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
-    audit("load_backup_into_workbench", character=target.name, backup=backup)
+    kept = replaced.kept["filename"] if replaced.kept else None
+    audit(
+        "load_backup_into_workbench",
+        character=target.name,
+        backup=backup,
+        kept_as=kept,
+    )
     return {
         "character": target.name,
-        "set": meta.name,
+        "set": character_archive.WORKBENCH_NAME,
         "loaded": backup,
+        "kept_as": kept,
         "note": NO_PUSH_NOTE,
-    }
-
-
-@tool(tags=TAG_CHARACTER, title="Rename a working set (legacy)")
-def rename_working_set(
-    character: str, working_set: str, name: str
-) -> dict[str, Any]:
-    """Rename a draft.
-
-    Legacy: the window shows one workbench per character and does not
-    name it, so this only matters for drafts an older version left
-    behind.
-    """
-    target = resolve_character(character)
-    resolved = resolve_set(target, working_set, allow_live=False)
-    try:
-        meta = character_archive.rename_set(target.id, resolved.id or "", name)
-    except ValueError as exc:
-        raise ToolError("validation_failed", str(exc)) from exc
-    audit("rename_working_set", character=target.name, set=meta.name)
-    return {"character": target.name, "set": meta.name, "set_id": meta.id}
-
-
-@tool(tags=TAG_CHARACTER, title="Activate a working set (legacy)")
-def activate_working_set(character: str, working_set: str) -> dict[str, Any]:
-    """Choose which draft is the workbench.
-
-    Legacy: with one bench per character there is nothing to switch
-    between, unless an older version left several drafts behind — then
-    this is how to pick the one to keep working in. Passing `live` still
-    drops out of editing and shows the published profile read-only.
-    """
-    target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
-    if resolved.is_live:
-        character_archive.clear_active_set_id(target.id)
-        audit("activate_working_set", character=target.name, set="live")
-        return {
-            "character": target.name,
-            "active_set": None,
-            "note": "Showing the published profile, read-only.",
-        }
-    character_archive.set_active_set_id(target.id, resolved.id or "")
-    audit("activate_working_set", character=target.name, set=resolved.name)
-    return {"character": target.name, "active_set": resolved.name}
-
-
-@tool(
-    tags=TAG_CHARACTER,
-    title="Delete a working set (legacy)",
-    destructive=True,
-)
-def delete_working_set(
-    character: str,
-    working_set: str,
-    confirm: bool = False,
-) -> dict[str, Any]:
-    """Delete a draft and everything in it. Permanent.
-
-    The published profile is untouched — this only removes a local
-    draft. Legacy: deleting a character's only workbench throws away
-    unpublished edits and gains nothing, since the bench is recreated
-    from Live on next use. Its purpose is clearing out extra drafts an
-    older version left behind. Ask the user before calling with
-    confirm=true.
-    """
-    target = resolve_character(character)
-    resolved = resolve_set(target, working_set, allow_live=False)
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            f"Deleting the working set {resolved.name!r} discards its "
-            "edits permanently. Ask the user, then call again with "
-            "confirm=true.",
-        )
-    character_archive.delete_set(target.id, resolved.id or "")
-    audit("delete_working_set", character=target.name, set=resolved.name)
-    return {
-        "character": target.name,
-        "deleted": resolved.name,
-        "remaining_sets": [m.name for m in character_archive.list_sets(target.id)],
     }
 
 
@@ -998,7 +887,7 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     to the character's Trash. `restore_image` brings them back; only the
     user can empty the Trash, in the window.
 
-    An image still in a working set's gallery is refused (take it off
+    An image still in the Workbench's gallery is refused (take it off
     with `remove_image` first), so no gallery is left pointing at a file
     that is gone. An image on the live profile can be trashed, but the
     next pull fetches it again; the result says which.
@@ -1010,14 +899,12 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     if not ids:
         raise ToolError("validation_failed", "Give at least one image id.")
     refs = image_import.references(target.id)
-    in_gallery = {
-        i: refs[i]["working_sets"] for i in ids if refs.get(i, {}).get("working_sets")
-    }
+    in_gallery = [i for i in ids if refs.get(i, {}).get("workbench")]
     if in_gallery:
         raise ToolError(
             "image_on_profile",
-            "Still in a gallery, so not trashed: "
-            + ", ".join(f"{i} ({', '.join(sets)})" for i, sets in in_gallery.items())
+            "Still in the Workbench's gallery, so not trashed: "
+            + ", ".join(in_gallery)
             + ". Take them off with remove_image first. Nothing was moved.",
         )
     result = image_trash.trash_images(target.id, ids)
@@ -1211,7 +1098,7 @@ def _import_batch(
                 "Nothing was imported.",
             )
     else:
-        resolved = _set_for_reporting(target, working_set)
+        resolved = _workbench_for_reporting(target, working_set)
 
     roots = image_import.import_roots()
     prepared: list[image_import.PreparedImage] = []
@@ -1330,15 +1217,15 @@ def _import_batch(
     }
 
 
-def _set_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
-    """The set whose gallery a pool-only import reports against. Never
-    creates a bench: importing into the pool is not editing."""
+def _workbench_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
+    """The Workbench (or Live) whose gallery a pool-only import reports
+    against. Never creates a Workbench: importing into the pool is not
+    editing."""
     if working_set is not None:
-        return resolve_set(target, working_set)
-    meta = character_archive.resolve_workbench(target.id, create=False)
-    if meta is None:
+        return resolve_workbench_or_live(target, working_set)
+    if character_archive.read_workbench(target.id) is None:
         return None
-    return resolve_set(target, meta.id)
+    return workbench_target(target)
 
 
 @tool(tags=TAG_CHARACTER, title="Import images into the pool")
@@ -1427,19 +1314,20 @@ def get_working_set_payload(
     character: str,
     working_set: str | None = None,
 ) -> dict[str, Any]:
-    """The complete raw payload of a working set, including `_overlay`.
+    """The complete raw payload of the Workbench, including `_overlay`;
+    working_set="live" reads Live instead.
 
     Large — a description alone can be tens of kilobytes. The targeted
     read tools are almost always the better choice; this exists for
     inspecting something they don't expose.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     etag = (
         None
         if resolved.is_live
-        else character_archive.set_payload_etag(target.id, resolved.id or "")
+        else character_archive.workbench_etag(target.id)
     )
     return {
         "character": target.name,
@@ -1458,7 +1346,7 @@ def put_working_set_payload(
     if_match: str | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
-    """Replace a working set's entire payload.
+    """Replace the Workbench's entire payload.
 
     The escape hatch, and a blunt one: none of the rules the targeted
     tools enforce are applied, so a malformed payload here can lose the
@@ -1479,14 +1367,18 @@ def put_working_set_payload(
     if not isinstance(payload, dict):
         raise ToolError("validation_failed", "payload must be an object")
 
+    if if_match is None:
+        # Without `if_match` this overwrites whatever is there, as the
+        # docstring warns: the caller has confirmed it.
+        if_match = character_archive.workbench_etag(target.id)
     try:
-        etag = character_archive.write_set_payload(
-            target.id, resolved.id or "", payload, expected_etag=if_match
+        etag = character_archive.write_workbench(
+            target.id, payload, expected_etag=if_match
         )
     except character_archive.EtagMismatch as exc:
         raise ToolError(
             "etag_conflict",
-            "The set changed since you read it. Read it again and redo "
+            "The Workbench changed since you read it. Read it again and redo "
             "the change.",
             current_etag=exc.current_etag,
         ) from exc

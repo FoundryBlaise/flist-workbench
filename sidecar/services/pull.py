@@ -2,7 +2,7 @@
 
 Lifted out of the `/flist/character/{name}/pull` route, which was the
 only place this lived. The MCP `pull_character` tool needs the same
-sequence — ticket, fetch, images, snapshot, backup — and reimplementing
+sequence — ticket, fetch, Live, images — and reimplementing
 a 300-line orchestration against a rate-limited API twice is how the
 two drift apart.
 
@@ -59,9 +59,21 @@ EVENTS = (
     "fetching",  # calling character-data.php
     "images",    # {total, downloaded, failed} — the image batch starts
     "image",     # {index, total, image_id} — per image
-    "done",      # {character_id, image_count, backup_path?}
+    "done",      # {character_id, changed, image_count, ...}
     "error",     # {stage, message}
 )
+
+
+def _differs_from_live(cid: str, payload: dict[str, Any]) -> bool:
+    """Whether a freshly fetched profile differs from the stored Live.
+    No Live yet counts as a change."""
+    try:
+        live = character_archive.read_live(cid)
+    except character_archive.CharacterNotFound:
+        live = None
+    if live is None:
+        return True
+    return character_archive.live_content_hash(payload) != character_archive.live_content_hash(live)
 
 
 async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -108,33 +120,14 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
 
             # Stamp fetch time and write Live before any image work
             # — so even if image downloads fail, the user has the
-            # JSON and can retry the gallery later.
+            # JSON and can retry the gallery later. Whether F-list
+            # changed is judged against the Live this replaces, with
+            # the fetch time left out.
             import time as _t
+            changed = _differs_from_live(cid, payload)
             live_payload = dict(payload)
             live_payload["fetched_at"] = int(_t.time())
             character_archive.write_live(cid, live_payload)
-
-            # Forever-history: auto-snapshot the Live JSON if the
-            # F-list content actually changed since the last
-            # snapshot. `fetched_at` is excluded from the dedup
-            # hash so a no-op pull doesn't bloat the snapshot
-            # folder. Snapshots are a few KB each and never pruned
-            # — explicit owner decision: every change archived.
-            # (Distinct from the ZIP "backup" written by Tools →
-            # Back up all, which includes images.)
-            try:
-                snapshot_result = character_archive.save_snapshot_if_changed(cid)
-            except OSError as exc:
-                snapshot_result = {"saved": False, "reason": f"oserror: {exc}"}
-            if snapshot_result.get("saved"):
-                yield (
-                    "snapshot",
-                    {
-                        "saved": True,
-                        "filename": snapshot_result.get("filename"),
-                        "created_at": snapshot_result.get("created_at"),
-                    },
-                )
 
             # Avatar — deterministic URL, no rate-limit-bucket cost
             # against the API. Fire-and-forget; failures are
@@ -288,8 +281,8 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # Under the v5 unified store, pulls no longer delete
             # images/ files that F-list dropped — the bytes stay
             # on disk and surface in the renderer's Pool view (any
-            # image_id not referenced by working.json's gallery is
-            # "in the pool"). The working copy's gallery is the only
+            # image_id not referenced by the Workbench's gallery is
+            # "in the pool"). The Workbench's gallery is the only
             # source of truth for what shows on-profile, and only
             # the explicit pool-delete UI removes bytes.
 
@@ -297,7 +290,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # extension deletes and re-uploads a gallery, F-list mints
             # new ids, and what we just downloaded is byte-identical to
             # files we already hold under ids the site has forgotten.
-            # Left alone, the working set keeps naming the dead ones
+            # Left alone, the Workbench keeps naming the dead ones
             # and the same picture shows in the pool and on the profile
             # at once. Repair compares bytes, so it recognises them.
             try:
@@ -332,6 +325,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 {
                     "character_id": cid,
                     "name": payload.get("name") or name,
+                    "changed": changed,
                     "image_count": downloaded + cached,
                     "image_downloaded": downloaded,
                     "image_cached": cached,

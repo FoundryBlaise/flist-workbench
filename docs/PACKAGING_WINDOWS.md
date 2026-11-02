@@ -190,10 +190,10 @@ Hit `http://127.0.0.1:27384/health` in a browser — should return
 **Common PyInstaller gotchas you'll hit:**
 
 - `parser.py` uses `struct` — fine, stdlib.
-- `documents.py` and `settings.py` use `sqlite3` — fine, stdlib, but
+- `settings.py` uses `sqlite3` — fine, stdlib, but
   the bundled sqlite has its own quirks. Run the full test suite
   against the *binary* before shipping (see Step 5).
-- The sidecar opens `documents.db` in the user-data dir at runtime.
+- The sidecar opens `settings.db` in the user-data dir at runtime.
   That dir is resolved at runtime, NOT at bundle time. Don't try to
   bake a fixed path.
 
@@ -515,12 +515,12 @@ Phase 6 — Windows packaging (electron-builder + PyInstaller sidecar)
   test user to click "More info" → "Run anyway." Real users get a
   proper code-signing cert later.
 
-- **Sidecar can't write documents.db.** The packaged sidecar writes
-  to `%APPDATA%\flist-workbench\documents.db`. This dir is created
-  on demand by `documents.user_data_dir()`. If permissions are weird
+- **Sidecar can't write settings.db.** The packaged sidecar writes
+  to `%APPDATA%\flist-workbench\settings.db`. This dir is created
+  on demand by `paths.user_data_dir()`. If permissions are weird
   on the test machine (corporate AD, locked-down profile), the
   sidecar will return 500 errors when the renderer asks for
-  `/documents`. Test on a normal user account.
+  `/settings`. Test on a normal user account.
 
 - **Sidecar's bundled SQLite vs Python's bundled SQLite.** PyInstaller
   ships its own sqlite3 stdlib module. It's usually current enough

@@ -1,4 +1,4 @@
-"""Editing a working-set payload, with the rules the renderer enforces.
+"""Editing the Workbench payload, with the rules the renderer enforces.
 
 Until now the only thing that wrote a payload was the React editor, so
 a pile of invariants lived in `renderer/src/state.ts` and
@@ -100,10 +100,9 @@ def new_local_kink_id() -> str:
 
 def edit(
     character_id: str,
-    set_id: str,
     mutate: Callable[[dict[str, Any]], EditResult | None],
 ) -> EditResult:
-    """Read a payload, apply `mutate`, write it back under its etag.
+    """Read the Workbench, apply `mutate`, write it back under its etag.
 
     `mutate` changes the payload in place and returns an `EditResult`
     carrying the paths it touched (its `etag` is filled in here). A
@@ -113,17 +112,17 @@ def edit(
     fields.
     """
     for attempt in (1, 2):
-        payload = character_archive.read_set_payload(character_id, set_id)
-        if payload is None:
-            raise PayloadError(f"working set {set_id} has no payload on disk")
-        etag = character_archive.set_payload_etag(character_id, set_id)
+        bench = character_archive.read_workbench(character_id)
+        if bench is None:
+            raise PayloadError("the Workbench has no payload on disk")
+        payload = bench.payload
 
         result = mutate(payload) or EditResult(etag="")
         _finalise(payload, result.changed)
 
         try:
-            new_etag = character_archive.write_set_payload(
-                character_id, set_id, payload, expected_etag=etag
+            new_etag = character_archive.write_workbench(
+                character_id, payload, expected_etag=bench.etag
             )
         except character_archive.EtagMismatch:
             if attempt == 1:
@@ -428,17 +427,3 @@ def set_profile_settings(payload: dict[str, Any], values: dict[str, Any]) -> lis
         raise PayloadError("no settings given")
     return touched
 
-
-# --------------------------------------------------------------------
-# Seeding
-# --------------------------------------------------------------------
-
-
-def seed_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    """Build a fresh working payload from a pulled profile.
-
-    One implementation, used by every caller. There used to be three —
-    `character_archive._seed_payload_from_live`, a copy in `server.py`,
-    and `seedWorkingFromLive` in the renderer — which drifted.
-    """
-    return character_archive._seed_payload_from_live(live)

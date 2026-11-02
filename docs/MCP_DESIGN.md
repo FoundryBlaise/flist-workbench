@@ -132,10 +132,9 @@ Hidden couplings (must be handled during removal, in this order):
 ### 1.3 Character data model essentials
 
 Per character under `%APPDATA%\flist-workbench\characters\<Folder>\`:
-`live.json` (last pull, read-only), `sets/<12hex>/{payload,meta}.json`
-(working sets — the only editable thing), `active_set.json`,
-`snapshots/*.json`, `backups/*.zip`, `images/<id>.<ext>`,
-`inlines/`. Registry `characters/_registry.json` maps id → folder.
+`live.json` (last pull, read-only), `workbench/{payload,meta}.json`
+(the Workbench — the only editable thing), `backups/*.zip`,
+`images/<id>.<ext>`, `inlines/`. Registry `characters/_registry.json` maps id → folder.
 
 Working payload (schema v6) keys: `_schema_version`, `_overlay`
 (dotted paths the user touched), `character{id,name,description,

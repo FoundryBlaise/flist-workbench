@@ -1,9 +1,10 @@
 """Shared plumbing for the MCP tools: errors, addressing, auditing.
 
-Tools address characters and working sets the way a human would — by
-name — instead of by the numeric character id and 12-hex set id the
-REST API uses. Everything that turns a human string into an on-disk
-identity lives here so the rules stay identical across ~70 tools.
+Tools address characters the way a human would — by name — instead of
+by the numeric character id the REST API uses, and a profile as the
+character's Workbench or its Live. Everything that turns a human
+string into an on-disk identity lives here so the rules stay identical
+across every tool.
 """
 
 from __future__ import annotations
@@ -16,8 +17,8 @@ import character_archive
 import flist_activity
 import logs as log_store
 
-#: Sentinel a `set` argument can carry to address the read-only
-#: `live.json` pulled from F-list rather than an editable working set.
+#: Sentinel a `working_set` argument can carry to address the read-only
+#: `live.json` pulled from F-list rather than the editable Workbench.
 LIVE = "live"
 
 
@@ -135,91 +136,84 @@ def resolve_character(character: str) -> ResolvedCharacter:
 
 
 # --------------------------------------------------------------------
-# Working-set addressing
+# Workbench or Live
 # --------------------------------------------------------------------
+
+#: What a `working_set` argument may name besides leaving it out.
+WORKBENCH = "workbench"
+SOURCES = (WORKBENCH, LIVE)
 
 
 @dataclass(frozen=True)
-class ResolvedSet:
-    """A working set, or the read-only live profile."""
+class WorkbenchOrLive:
+    """A character's Workbench, or its read-only Live."""
 
     character: ResolvedCharacter
-    id: str | None  # None ⇒ live.json
     name: str
-
-    @property
-    def is_live(self) -> bool:
-        return self.id is None
+    is_live: bool = False
 
 
-def resolve_set(
+def workbench_target(character: ResolvedCharacter) -> WorkbenchOrLive:
+    """The character's Workbench, under the one name a model sees."""
+    return WorkbenchOrLive(character=character, name=character_archive.WORKBENCH_NAME)
+
+
+def resolve_workbench_or_live(
     character: ResolvedCharacter,
-    set_ref: str | None,
+    workbench_or_live: str | None,
     *,
     allow_live: bool = True,
     for_write: bool = False,
-) -> ResolvedSet:
-    """Resolve `set` to a working set: by id, by name, `"live"`, or —
-    when omitted — the character's active set.
+    param: str = "working_set",
+) -> WorkbenchOrLive:
+    """Resolve `working_set`: omitted (or `"workbench"`) is the
+    character's Workbench, `"live"` is Live. Anything else is refused:
+    a character has one Workbench, so there is nothing else to name.
 
-    `for_write=True` refuses live and refuses "no active set" with a
-    hint rather than silently picking something.
+    `for_write=True` refuses Live. `param` is the argument's name, for
+    the error message.
     """
-    sets = character_archive.list_sets(character.id)
+    needle = (
+        "" if workbench_or_live is None else str(workbench_or_live).strip().lower()
+    )
 
-    if set_ref is not None and str(set_ref).strip().lower() == LIVE:
+    if needle == LIVE:
         if not allow_live or for_write:
             raise ToolError(
                 "live_is_read_only",
                 "'live' is the last profile pulled from F-list and is "
-                "never edited. Create or pick a working set instead.",
+                f"never edited. Leave {param} out to edit the "
+                "Workbench instead.",
             )
-        return ResolvedSet(character=character, id=None, name="live")
+        return WorkbenchOrLive(character=character, name=LIVE, is_live=True)
 
-    if set_ref is None or not str(set_ref).strip():
-        # No set named: the character's Workbench, which is what the
-        # window shows and the only thing a user means by "my edits".
-        # It is seeded from Live the first time anything asks — for a
-        # read this is harmless, and it spares every caller a
-        # "create one first" dance that no longer matches the UI.
-        meta = character_archive.resolve_workbench(character.id)
-        if meta is None:
-            raise ToolError(
-                "nothing_to_edit",
-                f"{character.name} has never been pulled from F-list, so "
-                "there is nothing to copy into a Workbench. Pull the "
-                "character first.",
-                available_sets=[
-                    {"id": s.id, "name": s.name} for s in sets
-                ],
-            )
-        return ResolvedSet(character=character, id=meta.id, name=meta.name)
-
-    needle = str(set_ref).strip()
-    for meta in sets:
-        if meta.id == needle:
-            return ResolvedSet(character=character, id=meta.id, name=meta.name)
-    matches = [m for m in sets if m.name.lower() == needle.lower()]
-    if len(matches) == 1:
-        return ResolvedSet(
-            character=character, id=matches[0].id, name=matches[0].name
-        )
-    if len(matches) > 1:
+    if needle not in ("", WORKBENCH):
         raise ToolError(
-            "ambiguous_set",
-            f"{character.name} has {len(matches)} working sets named "
-            f"{needle!r}. Address it by id.",
-            candidates=[{"id": m.id, "name": m.name} for m in matches],
+            "validation_failed",
+            f"{param}: got {str(workbench_or_live).strip()!r}, but "
+            f"{character.name} has one Workbench beside its Live and "
+            f"nothing else to name. Leave {param} out (or pass "
+            "'workbench') for the Workbench, or pass 'live' for Live.",
+            field=param,
+            allowed=list(SOURCES),
         )
-    raise ToolError(
-        "set_not_found",
-        f"{character.name} has no working set {needle!r}.",
-        available_sets=[{"id": m.id, "name": m.name} for m in sets],
-    )
+
+    # The Workbench, which is what the window shows. It is seeded from
+    # Live the first time anything asks: for a read this is harmless,
+    # and it spares every caller a "create one first" step the window
+    # does not have either.
+    if character_archive.read_workbench(character.id, create=True) is None:
+        raise ToolError(
+            "nothing_to_edit",
+            f"{character.name} has never been pulled from F-list, so "
+            "there is nothing to copy into a Workbench. Pull the "
+            "character first.",
+        )
+    return workbench_target(character)
 
 
-def load_payload(target: ResolvedSet) -> dict[str, Any]:
-    """Read the payload behind a resolved set (or the live profile)."""
+def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:
+    """Read the payload behind a resolved Workbench or Live."""
     if target.is_live:
         live = character_archive.read_live(target.character.id)
         if live is None:
@@ -229,11 +223,12 @@ def load_payload(target: ResolvedSet) -> dict[str, Any]:
                 "Run pull_character first.",
             )
         return live
-    payload = character_archive.read_set_payload(target.character.id, target.id or "")
+    bench = character_archive.read_workbench(target.character.id)
+    payload = bench.payload if bench is not None else None
     if payload is None:
         raise ToolError(
-            "set_not_found",
-            f"Working set {target.name!r} has no payload on disk.",
+            "workbench_not_found",
+            f"{target.character.name}'s Workbench has no payload on disk.",
         )
     return payload
 

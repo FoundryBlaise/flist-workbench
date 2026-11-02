@@ -38,7 +38,6 @@ const RERANK_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 export type SectionId =
   | 'general'
   | 'flist'
-  | 'backups'
   | 'labels'
   | 'retrieval'
   | 'embedding'
@@ -47,8 +46,7 @@ export type SectionId =
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
-  { id: 'flist', label: 'F-list', subtitle: 'Sign-in refresh + snapshot behaviour' },
-  { id: 'backups', label: 'Backups', subtitle: 'Scheduled-on-start sweep + retention' },
+  { id: 'flist', label: 'F-list', subtitle: 'Saved login + sign-in refresh' },
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC coverage + rules' },
   { id: 'retrieval', label: 'Retrieval', subtitle: 'How log search ranks results' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
@@ -114,10 +112,6 @@ type Draft = {
     chunk_soft_split_chars: string
     chunk_overlap_msgs: string
   }
-  backups: {
-    scheduled_interval_days: string
-    scheduled_keep_last_n: string
-  }
 }
 
 function buildDraft(state: SettingsState): Draft {
@@ -138,10 +132,6 @@ function buildDraft(state: SettingsState): Draft {
       chunk_max_chars: String(state.rag.chunk_max_chars),
       chunk_soft_split_chars: String(state.rag.chunk_soft_split_chars),
       chunk_overlap_msgs: String(state.rag.chunk_overlap_msgs)
-    },
-    backups: {
-      scheduled_interval_days: String(state.backups.scheduled_interval_days),
-      scheduled_keep_last_n: String(state.backups.scheduled_keep_last_n)
     }
   }
 }
@@ -166,15 +156,9 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     draft.rag.chunk_max_chars !== baseline.rag.chunk_max_chars ||
     draft.rag.chunk_soft_split_chars !== baseline.rag.chunk_soft_split_chars ||
     draft.rag.chunk_overlap_msgs !== baseline.rag.chunk_overlap_msgs
-  const backupsDirty =
-    draft.backups.scheduled_interval_days !==
-      baseline.backups.scheduled_interval_days ||
-    draft.backups.scheduled_keep_last_n !==
-      baseline.backups.scheduled_keep_last_n
   return {
     general: generalDirty,
     flist: false,
-    backups: backupsDirty,
     labels: labelsDirty,
     retrieval: retrievalDirty,
     embedding: embeddingDirty,
@@ -185,7 +169,7 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
 }
 
 function anyDirty(d: Record<SectionId, boolean>): boolean {
-  return d.general || d.labels || d.retrieval || d.embedding || d.backups
+  return d.general || d.labels || d.retrieval || d.embedding
 }
 
 const clampInt = (s: string, lo: number, hi: number, fallback: number): number => {
@@ -294,8 +278,6 @@ export function SettingsModal({
     setDraft((d) => (d ? { ...d, rag: { ...d.rag, ...patch } } : d))
   const updateGeneral = (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d))
-  const updateBackups = (patch: Partial<Draft['backups']>) =>
-    setDraft((d) => (d ? { ...d, backups: { ...d.backups, ...patch } } : d))
 
   const saveAll = async () => {
     if (!state || !draft || !dirtyByDraft) return
@@ -366,22 +348,6 @@ export function SettingsModal({
             0,
             5,
             state.rag.chunk_overlap_msgs
-          )
-        }
-      }
-      if (dirtyByDraft.backups) {
-        payload.backups = {
-          scheduled_interval_days: clampInt(
-            draft.backups.scheduled_interval_days,
-            0,
-            365,
-            state.backups.scheduled_interval_days
-          ),
-          scheduled_keep_last_n: clampInt(
-            draft.backups.scheduled_keep_last_n,
-            1,
-            200,
-            state.backups.scheduled_keep_last_n
           )
         }
       }
@@ -461,24 +427,6 @@ export function SettingsModal({
                   />
                 )}
                 {activeSection === 'flist' && <FlistPane />}
-                {activeSection === 'backups' && (
-                  <BackupsPane
-                    state={state}
-                    draft={draft}
-                    onChange={updateBackups}
-                    onStateRefresh={(next) => {
-                      setState(next)
-                      // Rebuild the form's baseline from the refreshed
-                      // state — last_sweep / next_due_at aren't editable
-                      // fields, so this won't clobber unsaved knob edits.
-                      setDraft((d) =>
-                        d
-                          ? { ...d, backups: buildDraft(next).backups }
-                          : buildDraft(next)
-                      )
-                    }}
-                  />
-                )}
                 {activeSection === 'labels' && (
                   <LabelsPane
                     labels={state.labels}
@@ -678,232 +626,6 @@ function GeneralPane({
             vector index.
           </p>
         )}
-      </div>
-    </>
-  )
-}
-
-function BackupsPane({
-  state,
-  draft,
-  onChange,
-  onStateRefresh
-}: {
-  state: SettingsState
-  draft: Draft
-  onChange: (patch: Partial<Draft['backups']>) => void
-  onStateRefresh: (next: SettingsState) => void
-}) {
-  const defaults = state.backups.defaults
-  const intervalNum = Number(draft.backups.scheduled_interval_days)
-  const disabled = Number.isFinite(intervalNum) && intervalNum === 0
-  const lastSweep = state.backups.last_sweep
-  const nextDueAt = state.backups.next_due_at
-  // Re-use the existing BackupAllBanner state so the manual Trigger
-  // button shares the same in-flight indicator as the post-login auto
-  // path. Disabled while any backup-all is running.
-  const backupAllStatus = useStore((s) => s.flistBackupAllStatus)
-  const flistSession = useStore((s) => s.flistSession)
-  const fireBackupAll = useStore((s) => s.flistBackupAll)
-  const running = backupAllStatus.phase === 'running'
-  const signedIn = flistSession.active
-  const [runError, setRunError] = useState<string | null>(null)
-
-  // When the user-triggered backup-all finishes, re-fetch /settings so
-  // the Last-ran / Next-due rows reflect the new telemetry. We only
-  // care about transitions from running → done|error, not initial
-  // mount state.
-  const lastPhase = useRef(backupAllStatus.phase)
-  useEffect(() => {
-    if (
-      lastPhase.current === 'running' &&
-      (backupAllStatus.phase === 'done' || backupAllStatus.phase === 'error')
-    ) {
-      void api.settingsGet().then(onStateRefresh).catch(() => {})
-    }
-    lastPhase.current = backupAllStatus.phase
-  }, [backupAllStatus.phase, onStateRefresh])
-
-  const runNow = async () => {
-    setRunError(null)
-    if (!signedIn) {
-      setRunError('Sign in to F-list first — scheduled backups pull fresh data per character.')
-      return
-    }
-    try {
-      await fireBackupAll({ kind: 'scheduled', source: 'manual' })
-    } catch (err) {
-      setRunError(err instanceof Error ? err.message : String(err))
-    }
-  }
-  return (
-    <>
-      <PaneHeader
-        title="Backups"
-        subtitle="On-start sweep that auto-snapshots each character every N days."
-      />
-      <div className="settings-section">
-        <div className="settings-field">
-          <label className="settings-label">Scheduled sweep status</label>
-          <p className="settings-help">
-            Workbench checks for due backups every time the app starts
-            (not while it's open — it's not a background daemon). Use
-            the button below to run the sweep without restarting. A
-            manual run resets the clock — the next backup will then be
-            due {Number.isFinite(intervalNum) && intervalNum > 0 ? `${intervalNum} day${intervalNum === 1 ? '' : 's'}` : 'N days'}{' '}
-            from when you press it.
-          </p>
-          <dl className="settings-sweep-status">
-            <div>
-              <dt>Last ran</dt>
-              <dd data-testid="settings-backups-last-ran">
-                {lastSweep.started_at
-                  ? `${formatAbsoluteDate(lastSweep.started_at)} · ${
-                      lastSweep.source === 'manual'
-                        ? 'manual trigger'
-                        : 'on app launch'
-                    }`
-                  : 'Never run'}
-              </dd>
-            </div>
-            <div>
-              <dt>Last result</dt>
-              <dd>
-                {lastSweep.started_at
-                  ? `${lastSweep.written} written, ${lastSweep.skipped} skipped${lastSweep.failed > 0 ? `, ${lastSweep.failed} failed` : ''}`
-                  : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt>Next due</dt>
-              <dd data-testid="settings-backups-next-due">
-                {disabled
-                  ? 'Sweep disabled (set interval ≥ 1)'
-                  : nextDueAt
-                    ? `${formatAbsoluteDate(nextDueAt)} · ${formatRelativeDueIn(nextDueAt)}`
-                    : 'On next app launch'}
-              </dd>
-            </div>
-          </dl>
-          <div className="settings-actions">
-            <button
-              type="button"
-              className="settings-secondary-btn"
-              onClick={() => void runNow()}
-              disabled={running || !signedIn}
-              title={
-                !signedIn
-                  ? 'Sign in to F-list first — scheduled backups pull fresh data'
-                  : undefined
-              }
-              data-testid="settings-backups-trigger"
-            >
-              {running
-                ? 'Sweep running — see banner above…'
-                : 'Trigger scheduled backup now'}
-            </button>
-            {!signedIn && (
-              <span className="settings-sweep-warn">
-                Sign in to F-list to enable this button.
-              </span>
-            )}
-          </div>
-          {runError && (
-            <p className="settings-help" data-testid="settings-backups-error">
-              <strong>{runError}</strong>
-            </p>
-          )}
-        </div>
-        <div className="settings-field">
-          <label
-            className="settings-label"
-            htmlFor="settings-backups-interval-input"
-          >
-            Interval (days)
-          </label>
-          <p className="settings-help">
-            On startup, Workbench checks each character's newest{' '}
-            <em>scheduled</em> backup. If it's older than this many days
-            — or doesn't exist yet — a fresh scheduled backup is
-            written. Manual and import backups are left alone. Set to{' '}
-            <code>0</code> to disable the auto-sweep entirely.
-          </p>
-          <input
-            id="settings-backups-interval-input"
-            type="number"
-            inputMode="numeric"
-            min={0}
-            max={365}
-            step={1}
-            className="settings-input settings-input-narrow"
-            value={draft.backups.scheduled_interval_days}
-            onChange={(e) =>
-              onChange({ scheduled_interval_days: e.target.value })
-            }
-            data-testid="settings-backups-interval"
-          />
-          <p className="settings-help">
-            Default <code>{defaults.scheduled_interval_days}</code>.
-            {disabled && (
-              <>
-                {' '}
-                <strong>Sweep currently disabled</strong> — set to 1 or
-                more days to re-enable.
-              </>
-            )}
-          </p>
-        </div>
-        <div className="settings-field">
-          <label
-            className="settings-label"
-            htmlFor="settings-backups-keep-input"
-          >
-            Keep last N
-          </label>
-          <p className="settings-help">
-            After each successful scheduled write, older scheduled
-            backups for that character are pruned down to this many.
-            Only scheduled backups are counted — manual, import, and
-            unknown-kind backups are never pruned by this number.
-          </p>
-          <input
-            id="settings-backups-keep-input"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={200}
-            step={1}
-            className="settings-input settings-input-narrow"
-            value={draft.backups.scheduled_keep_last_n}
-            onChange={(e) =>
-              onChange({ scheduled_keep_last_n: e.target.value })
-            }
-            data-testid="settings-backups-keep"
-          />
-          <p className="settings-help">
-            Default <code>{defaults.scheduled_keep_last_n}</code>. A
-            character whose Live hasn't changed since the last
-            scheduled backup is a no-op write (dedup'd by content hash),
-            so an idle character won't spawn a fresh ZIP every week.
-          </p>
-        </div>
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="settings-secondary-btn"
-            onClick={() =>
-              onChange({
-                scheduled_interval_days: String(
-                  defaults.scheduled_interval_days
-                ),
-                scheduled_keep_last_n: String(defaults.scheduled_keep_last_n)
-              })
-            }
-            data-testid="settings-backups-reset"
-          >
-            Reset to defaults
-          </button>
-        </div>
       </div>
     </>
   )
@@ -1487,7 +1209,7 @@ function SecurityPane() {
           accept-this-extension prompt the first time the extension
           asks. The extension never sees your F-list session and this
           app never sees your F-list cookies — the extension just
-          fetches snapshots you've already stored locally.
+          fetches the Workbench and Backups already stored here.
         </p>
       </div>
       <h3 className="settings-section-h">Rotate pairing token</h3>
@@ -2238,26 +1960,6 @@ function EmbeddingPane({
       </div>
     </>
   )
-}
-
-function formatAbsoluteDate(unixSeconds: number): string {
-  const d = new Date(unixSeconds * 1000)
-  if (isNaN(d.getTime())) return '—'
-  const pad = (n: number) => (n < 10 ? `0${n}` : String(n))
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-function formatRelativeDueIn(unixSeconds: number): string {
-  const now = Date.now() / 1000
-  const delta = unixSeconds - now
-  if (delta <= 0) return 'due now'
-  const days = Math.round(delta / 86400)
-  if (days < 1) {
-    const hours = Math.round(delta / 3600)
-    if (hours < 1) return 'in under an hour'
-    return `in ${hours} hour${hours === 1 ? '' : 's'}`
-  }
-  return `in ${days} day${days === 1 ? '' : 's'}`
 }
 
 function PaneHeader({ title, subtitle }: { title: string; subtitle: string }) {

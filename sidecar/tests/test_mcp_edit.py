@@ -1,6 +1,6 @@
 """The MCP write tools (design §3.3–3.7, §4.2).
 
-Phase-4 acceptance: a model can create a draft, rewrite a description,
+Phase-4 acceptance: a model can edit the Workbench, rewrite a description,
 set fields and kinks and reorder a gallery — and every invariant the
 renderer used to be solely responsible for is enforced here too, since
 the sidecar is no longer talking only to the UI.
@@ -15,6 +15,7 @@ import pytest
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
+from workbench_state import put_workbench, workbench_payload
 
 
 @pytest.fixture
@@ -67,16 +68,16 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def payload_of(archive) -> dict[str, Any]:
     """The workbench payload. There is one per character, so nothing to
     address it by."""
-    bench = archive.resolve_workbench("42", create=False)
+    bench = archive.read_workbench("42")
     assert bench is not None, "no workbench yet"
-    return archive.read_set_payload("42", bench.id) or {}
+    return bench.payload
 
 
-async def make_draft(session, name: str | None = None) -> dict[str, Any]:
-    """Open the character's workbench. `name` is accepted and ignored,
-    the way the tool itself now does."""
+async def open_workbench(session) -> dict[str, Any]:
+    """Read the character's Workbench, which seeds it from Live the
+    first time, the way the window's first look does."""
     _, body = await call_tool(
-        session, "create_working_set", character="Lady Amber Blaise", name=name
+        session, "get_working_set", character="Lady Amber Blaise"
     )
     return body
 
@@ -86,46 +87,11 @@ async def make_draft(session, name: str | None = None) -> dict[str, Any]:
 
 async def test_the_workbench_starts_as_a_copy_of_live(workbench) -> None:
     async with mcp_client("character") as session:
-        body = await make_draft(session)
-        assert body["active"] is True
-        assert body["created"] is True
-        assert body["set"] == workbench.WORKBENCH_SET_NAME
-        _, sets = await call_tool(
-            session, "list_working_sets", character="Lady Amber Blaise"
-        )
-    assert sets["active_set"] == workbench.WORKBENCH_SET_NAME
+        body = await open_workbench(session)
+    assert body["set"] == "Workbench"
+    assert body["read_only"] is False
     payload = payload_of(workbench)
     assert payload["character"]["description"] == "[b]Published.[/b]"
-
-
-async def test_opening_the_workbench_twice_returns_the_same_one(
-    workbench,
-) -> None:
-    """A character has one bench, so this is safe to call before editing
-    without checking first — which is why it does not need a name and
-    cannot make a second."""
-    async with mcp_client("character") as session:
-        first = await make_draft(session)
-        await call_tool(
-            session,
-            "set_description",
-            character="Lady Amber Blaise",
-            text="my unpublished edit",
-        )
-        second = await make_draft(session, "Something Else")
-
-        assert second["set_id"] == first["set_id"]
-        assert second["created"] is False
-        assert "already existed and is unchanged" in second["note"]
-
-        _, desc = await call_tool(
-            session, "get_description", character="Lady Amber Blaise"
-        )
-        _, sets = await call_tool(
-            session, "list_working_sets", character="Lady Amber Blaise"
-        )
-    assert desc["description"] == "my unpublished edit", "edits must survive"
-    assert len(sets["sets"]) == 1
 
 
 async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
@@ -134,7 +100,7 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
     """F-list serves `kinks: []`. Setting a key on a list produces a
     list with a named property, which doesn't survive JSON."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_kink",
@@ -147,72 +113,9 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
     assert payload["kinks"] == {"100": "fave"}
 
 
-async def test_the_old_source_argument_cannot_branch_a_second_draft(
-    workbench,
-) -> None:
-    """`source` used to accept live / set:<name> / backup:<file> and
-    produce another draft each time. It is accepted and ignored now, so
-    a caller written against the old contract gets the bench rather than
-    a surprise second copy."""
-    async with mcp_client("character") as session:
-        await make_draft(session)
-        await call_tool(
-            session,
-            "set_description",
-            character="Lady Amber Blaise",
-            text="edited on the bench",
-        )
-        for source in ("set:Workbench", "backup:whatever.zip", "magic"):
-            _, body = await call_tool(
-                session,
-                "create_working_set",
-                character="Lady Amber Blaise",
-                name="AU",
-                source=source,
-            )
-            assert body["set"] == workbench.WORKBENCH_SET_NAME
-        _, sets = await call_tool(
-            session, "list_working_sets", character="Lady Amber Blaise"
-        )
-        _, desc = await call_tool(
-            session, "get_description", character="Lady Amber Blaise"
-        )
-    assert len(sets["sets"]) == 1
-    assert desc["description"] == "edited on the bench"
-
-
-@pytest.mark.known_violation(
-    "nothing_vanishes",
-    spec=3,
-    reason="the delete_working_set tool (character_archive.delete_set) removes the folder for good; the spec removes it",
-)
-async def test_deleting_a_set_needs_confirmation(workbench) -> None:
-    """Kept for the drafts an older version left behind — deleting a
-    character's only bench discards unpublished edits and gains nothing,
-    since the next call recreates it from Live."""
-    async with mcp_client("character") as session:
-        bench = await make_draft(session)
-        result, _ = await call_tool(
-            session,
-            "delete_working_set",
-            character="Lady Amber Blaise",
-            working_set=bench["set"],
-        )
-        assert "confirm_required" in tool_error_text(result)
-
-        _, body = await call_tool(
-            session,
-            "delete_working_set",
-            character="Lady Amber Blaise",
-            working_set=bench["set"],
-            confirm=True,
-        )
-    assert body["remaining_sets"] == []
-
-
 async def test_live_is_never_writable(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_description",
@@ -256,7 +159,7 @@ async def test_editing_without_naming_a_set_lands_in_the_workbench(
 
 async def test_set_description_normalises_line_endings(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_description",
@@ -268,7 +171,7 @@ async def test_set_description_normalises_line_endings(workbench) -> None:
 
 async def test_edit_description_replaces_exactly_once(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_description",
@@ -293,7 +196,7 @@ async def test_edit_description_refuses_an_ambiguous_match(workbench) -> None:
     """The point of the exact-match edit: on a 30 KB description, a
     silent second replacement is invisible until the user publishes."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_description",
@@ -318,7 +221,7 @@ async def test_edit_description_refuses_an_ambiguous_match(workbench) -> None:
 
 async def test_edit_description_replace_all(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_description",
@@ -343,7 +246,7 @@ async def test_edit_description_says_how_to_recover_from_a_miss(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "edit_description",
@@ -356,7 +259,7 @@ async def test_edit_description_says_how_to_recover_from_a_miss(
 
 async def test_append_description_starts_a_new_line(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session, "set_description", character="Lady Amber Blaise", text="first"
         )
@@ -373,7 +276,7 @@ async def test_every_edit_records_its_path_in_the_overlay(workbench) -> None:
     """`_overlay` is what stops the next pull from reverting an edit, so
     an edit that doesn't extend it is silently undone later."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session, "set_description", character="Lady Amber Blaise", text="mine"
         )
@@ -402,7 +305,7 @@ async def test_every_edit_records_its_path_in_the_overlay(workbench) -> None:
 
 async def test_set_profile_field_by_label(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session,
             "set_profile_field",
@@ -418,7 +321,7 @@ async def test_a_dropdown_accepts_the_option_label_and_stores_the_id(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session,
             "set_profile_field",
@@ -436,7 +339,7 @@ async def test_a_dropdown_refuses_an_unlisted_value_with_the_options(
     """A value F-list doesn't recognise is dropped on upload, so it has
     to fail loudly here rather than look saved."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_profile_field",
@@ -451,7 +354,7 @@ async def test_a_dropdown_refuses_an_unlisted_value_with_the_options(
 
 async def test_a_number_field_refuses_prose(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_profile_field",
@@ -466,7 +369,7 @@ async def test_a_field_the_mapping_list_does_not_describe_is_refused(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_profile_field",
@@ -479,7 +382,7 @@ async def test_a_field_the_mapping_list_does_not_describe_is_refused(
 
 async def test_an_unknown_field_name_points_at_the_list(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_profile_field",
@@ -496,7 +399,7 @@ async def test_clearing_a_field_removes_the_key(workbench) -> None:
     """Not the same as writing an empty string, which publishes an
     empty field."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_profile_field",
@@ -516,7 +419,7 @@ async def test_clearing_a_field_removes_the_key(workbench) -> None:
 
 async def test_setting_a_field_to_an_empty_string_is_refused(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_profile_field",
@@ -534,7 +437,7 @@ async def test_undecided_removes_the_kink_entry(workbench) -> None:
     """F-list has no "undecided" value — the absence of an entry is
     what means no opinion."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_kink",
@@ -554,7 +457,7 @@ async def test_undecided_removes_the_kink_entry(workbench) -> None:
 
 async def test_an_invalid_choice_lists_the_valid_ones(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_kink",
@@ -570,7 +473,7 @@ async def test_set_kinks_validates_everything_before_writing(workbench) -> None:
     """A partial write would leave the set in a state the caller didn't
     ask for and can't easily tell from success."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_kinks",
@@ -586,7 +489,7 @@ async def test_set_kinks_validates_everything_before_writing(workbench) -> None:
 
 async def test_set_kinks_writes_a_valid_batch(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session,
             "set_kinks",
@@ -607,7 +510,7 @@ async def test_a_new_custom_kink_gets_a_local_id_and_joins_the_order(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session,
             "add_custom_kink",
@@ -628,7 +531,7 @@ async def test_deleting_a_local_custom_kink_drops_it_outright(
     """It was never uploaded, so there is nothing for the exporter to
     remove — a tombstone would just be noise."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, added = await call_tool(
             session,
             "add_custom_kink",
@@ -657,13 +560,12 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
     """The tombstone is how the exporter knows to remove it from the
     published profile."""
     async with mcp_client("character") as session:
-        await make_draft(session)
-        meta = next(m for m in workbench.list_sets("42"))
-        payload = workbench.read_set_payload("42", meta.id)
+        await open_workbench(session)
+        payload = workbench_payload(workbench, "42")
         payload["custom_kinks"] = {
             "7788": {"name": "From F-list", "description": "", "choice": "yes"}
         }
-        workbench.write_set_payload("42", meta.id, payload, expected_etag=None)
+        put_workbench(workbench, "42", payload)
 
         _, deleted = await call_tool(
             session,
@@ -695,7 +597,7 @@ async def test_restoring_a_dropped_local_kink_explains_it_is_gone(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "restore_custom_kink",
@@ -709,7 +611,7 @@ async def test_reorder_custom_kinks_requires_the_complete_list(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, a = await call_tool(
             session, "add_custom_kink", character="Lady Amber Blaise", name="A"
         )
@@ -737,20 +639,19 @@ async def test_reorder_custom_kinks_requires_the_complete_list(
 
 
 def seed_gallery(archive, image_ids: list[str]) -> None:
-    meta = next(m for m in archive.list_sets("42"))
-    payload = archive.read_set_payload("42", meta.id)
+    payload = workbench_payload(archive, "42")
     payload["images"] = [
         {"image_id": i, "description": "", "sort_order": n}
         for n, i in enumerate(image_ids)
     ]
-    archive.write_set_payload("42", meta.id, payload, expected_etag=None)
+    put_workbench(archive, "42", payload)
 
 
 async def test_reordering_the_gallery_renumbers_from_zero(workbench) -> None:
     """F-list renders by sort_order, so a gap silently reorders the
     profile."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, ["1", "2", "3"])
         await call_tool(
             session,
@@ -770,7 +671,7 @@ async def test_removing_an_image_closes_the_gap_in_sort_order(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, ["1", "2", "3"])
         _, body = await call_tool(
             session, "remove_image", character="Lady Amber Blaise", image_id="2"
@@ -782,7 +683,7 @@ async def test_removing_an_image_closes_the_gap_in_sort_order(
 
 async def test_reordering_refuses_a_partial_list(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, ["1", "2", "3"])
         result, _ = await call_tool(
             session,
@@ -797,7 +698,7 @@ async def test_captioning_an_image_that_is_not_on_the_profile(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, ["1"])
         result, _ = await call_tool(
             session,
@@ -811,7 +712,7 @@ async def test_captioning_an_image_that_is_not_on_the_profile(
 
 async def test_adding_an_image_that_is_not_on_disk(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session, "add_image", character="Lady Amber Blaise", image_id="404"
         )
@@ -823,7 +724,7 @@ async def test_adding_an_image_that_is_not_on_disk(workbench) -> None:
 
 async def test_profile_settings_round_trip(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session,
             "set_profile_settings",
@@ -839,7 +740,7 @@ async def test_profile_settings_round_trip(workbench) -> None:
 
 async def test_profile_settings_needs_at_least_one(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session, "set_profile_settings", character="Lady Amber Blaise"
         )
@@ -851,7 +752,7 @@ async def test_profile_settings_needs_at_least_one(workbench) -> None:
 
 async def test_raw_payload_write_needs_confirmation(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "put_working_set_payload",
@@ -865,7 +766,7 @@ async def test_raw_payload_write_needs_confirmation(workbench) -> None:
 
 async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, read = await call_tool(
             session, "get_working_set_payload", character="Lady Amber Blaise"
         )
@@ -904,28 +805,23 @@ async def test_an_edit_retries_once_when_the_ui_saves_underneath(
     two are usually touching different fields."""
     from services import payload_ops
 
-    meta_id = None
-
     async with mcp_client("character") as session:
-        await make_draft(session)
-        meta_id = next(m.id for m in workbench.list_sets("42"))
+        await open_workbench(session)
 
         original = payload_ops.edit
         calls = {"n": 0}
 
-        def racing_edit(character_id, set_id, mutate):  # noqa: ANN001
+        def racing_edit(character_id, mutate):  # noqa: ANN001
             def wrapper(payload):
                 calls["n"] += 1
                 if calls["n"] == 1:
                     # Simulate the UI saving between our read and write.
-                    other = workbench.read_set_payload("42", meta_id)
+                    other = workbench_payload(workbench, "42")
                     other["settings"] = {"public": True}
-                    workbench.write_set_payload(
-                        "42", meta_id, other, expected_etag=None
-                    )
+                    put_workbench(workbench, "42", other)
                 return mutate(payload)
 
-            return original(character_id, set_id, wrapper)
+            return original(character_id, wrapper)
 
         payload_ops.edit = racing_edit
         try:
@@ -952,7 +848,6 @@ async def test_destructive_tools_are_annotated_as_such() -> None:
     async with mcp_client("character") as session:
         tools = {t.name: t for t in (await session.list_tools()).tools}
     for name in (
-        "delete_working_set",
         "delete_custom_kink",
         "put_working_set_payload",
     ):
@@ -963,7 +858,7 @@ async def test_destructive_tools_are_annotated_as_such() -> None:
 async def test_write_tools_say_workbench_does_not_publish(workbench) -> None:
     """A model must never tell the user a change is live on F-list."""
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session, "set_description", character="Lady Amber Blaise", text="x"
         )
@@ -981,7 +876,7 @@ async def test_write_tools_say_workbench_does_not_publish(workbench) -> None:
 
 async def test_a_description_f_list_would_reject_is_refused(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         result, _ = await call_tool(
             session,
             "set_description",
@@ -997,7 +892,7 @@ async def test_a_description_f_list_would_reject_is_refused(workbench) -> None:
 
 async def test_the_refused_text_was_not_written(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_description",
@@ -1020,7 +915,7 @@ async def test_the_same_markup_with_the_colour_outside_goes_through(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         _, body = await call_tool(
             session,
             "set_description",
@@ -1032,7 +927,7 @@ async def test_the_same_markup_with_the_colour_outside_goes_through(
 
 async def test_appending_something_invalid_is_refused_too(workbench) -> None:
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         await call_tool(
             session,
             "set_description",

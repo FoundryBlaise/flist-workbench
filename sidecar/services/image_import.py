@@ -361,31 +361,76 @@ def _image_ids(payload: dict[str, Any] | None) -> set[str]:
     return out
 
 
+def _ids_in_backup(path: Path) -> set[str]:
+    """Every image id a Backup's profile copies name: the gallery of
+    each JSON member that holds one, whether as the app's `images` list
+    or as the Upload's `images.list` of file names. An unreadable zip
+    names none."""
+    import zipfile
+
+    out: set[str] = set()
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            for member in zf.namelist():
+                if not member.lower().endswith(".json"):
+                    continue
+                try:
+                    doc = json.loads(zf.read(member).decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                images = doc.get("images")
+                if isinstance(images, dict):
+                    for row in images.get("list") or []:
+                        name = row.get("filename") if isinstance(row, dict) else None
+                        if isinstance(name, str) and name:
+                            out.add(Path(name).name.split(".", 1)[0])
+                else:
+                    out |= _image_ids(doc)
+    except (OSError, zipfile.BadZipFile):
+        return set()
+    return out
+
+
 def references(character_id: int | str) -> dict[str, dict[str, Any]]:
-    """For every image id mentioned anywhere: which working sets carry
-    it, whether the live profile does, and in how many pull snapshots it
-    appears (with the newest). Backups are left out: each ZIP carries its
-    own copy of the bytes, so nothing in one depends on the pool."""
+    """For every image id mentioned anywhere: whether the Workbench's
+    gallery holds it, whether Live does, in how many Backups it appears
+    (with the newest), and whether the migration Backup names it. A
+    Backup that holds a profile carries its own copy of the bytes, so
+    trashing a pool file costs none of them; that count says where else
+    the picture is kept.
+
+    The migration Backup is not counted there: it keeps the older copies
+    from before the upgrade as JSON only, with no image files. An image named
+    only there is still referenced (`migration_backup`), but trashing
+    its pool file loses the only copy of its bytes."""
 
     def empty() -> dict[str, Any]:
-        return {"working_sets": [], "live": False, "snapshots": 0, "newest_snapshot": None}
+        return {
+            "workbench": False,
+            "live": False,
+            "backups": 0,
+            "newest_backup": None,
+            "migration_backup": False,
+        }
 
     out: dict[str, dict[str, Any]] = defaultdict(empty)
-    for meta in character_archive.list_sets(character_id):
-        payload = character_archive.read_set_payload(character_id, meta.id)
-        for image_id in _image_ids(payload):
-            out[image_id]["working_sets"].append(meta.name)
+    bench = character_archive.read_workbench(character_id)
+    for image_id in _image_ids(bench.payload if bench else None):
+        out[image_id]["workbench"] = True
     for image_id in _image_ids(character_archive.read_live(character_id)):
         out[image_id]["live"] = True
-    try:
-        snapshots = character_archive.list_snapshots(character_id)
-    except OSError:
-        snapshots = []
-    for snap in snapshots:  # newest first
-        payload = character_archive.read_snapshot(character_id, snap["filename"])
-        for image_id in _image_ids(payload):
+    backups = character_archive.backups_dir(character_id)
+    for backup in character_archive.list_zip_backups(character_id):  # newest first
+        ids = _ids_in_backup(backups / backup["filename"])
+        if not backup["holds_profile"]:
+            for image_id in ids:
+                out[image_id]["migration_backup"] = True
+            continue
+        for image_id in ids:
             entry = out[image_id]
-            entry["snapshots"] += 1
-            if entry["newest_snapshot"] is None:
-                entry["newest_snapshot"] = snap["filename"]
+            entry["backups"] += 1
+            if entry["newest_backup"] is None:
+                entry["newest_backup"] = backup["filename"]
     return dict(out)

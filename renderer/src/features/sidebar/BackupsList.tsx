@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import type { FlistZipBackupEntry } from '../../lib/api'
+import { formatBackupOrigin } from '../../lib/backupOrigin'
 import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
 
 /** Per-character Backups list in the sidebar. Reads from
  *  `flistArchive[activeId].zipBackups` (populated by
  *  `flistLoadArchive`). Right-click on a row → Browse / Load into
- *  Workbench / Download.
+ *  Workbench / Download. A Backup that holds no profile (the one the
+ *  move to one Workbench made of the older copies from before the
+ *  upgrade)
+ *  offers only Download, and its row says why. When a Restore is turned
+ *  down, the reason shows above the list.
  *
  *  Grouped into three always-shown default folders by `kind`:
  *    - "Manual backups"     — manual_single + manual_bulk
@@ -16,6 +21,10 @@ import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
  *  hand-dropped into the folder) land in "Other backups" below. The
  *  three core sections are visible even when empty so the user can
  *  see the taxonomy at a glance.
+ *
+ *  Each row also says what the Backup holds and why it was made
+ *  ("Live · Back up all", "Workbench · manual"); Backups from before
+ *  the app recorded that say "Source unknown".
  *
  *  Date label: backups are saved with UTC ISO-basic filenames
  *  (`YYYY-MM-DDTHHMMSSZ.zip`); `created_at` is the unix-seconds form
@@ -28,6 +37,9 @@ export function BackupsList() {
     activeId ? (s.flistArchive[activeId] ?? null) : null
   )
   const browseBackup = useStore((s) => s.flistBrowseBackup)
+  const restoreRefusal = useStore((s) =>
+    activeId ? (s.flistRestoreRefusal[activeId] ?? null) : null
+  )
   const [menu, setMenu] = useState<{
     x: number
     y: number
@@ -78,6 +90,18 @@ export function BackupsList() {
   return (
     <>
       <div className="sb-section-h">Backups</div>
+      {restoreRefusal && (
+        <div className="sb-backup-refusal" role="alert">
+          <span>Couldn't load that Backup: {restoreRefusal}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => useStore.getState().flistDismissRestoreRefusal(activeId)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {status === 'loading' && backups.length === 0 ? (
         <div className="sb-empty sb-empty-inline">Loading…</div>
       ) : status === 'error' ? (
@@ -111,33 +135,35 @@ export function BackupsList() {
           role="menu"
           style={{ left: menu.x, top: menu.y }}
         >
-          <button
-            className="ctx-menu-item"
-            role="menuitem"
-            onClick={() => {
-              const cid = activeId
-              const fname = menu.backup.filename
-              setMenu(null)
-              void useStore.getState().flistOpenBrowseBackup(cid, fname)
-            }}
-          >
-            Browse backup
-          </button>
-          <button
-            className="ctx-menu-item"
-            role="menuitem"
-            onClick={() => {
-              // Replaces the one bench rather than adding a draft next
-              // to it. The old "Create working set from backup" is how
-              // a user ended up with several and stopped knowing which
-              // one they were editing.
-              const b = menu.backup
-              setMenu(null)
-              setLoadTarget(b)
-            }}
-          >
-            Load into Workbench…
-          </button>
+          {menu.backup.holds_profile && (
+            <>
+              <button
+                className="ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  const cid = activeId
+                  const fname = menu.backup.filename
+                  setMenu(null)
+                  void useStore.getState().flistOpenBrowseBackup(cid, fname)
+                }}
+              >
+                Browse backup
+              </button>
+              <button
+                className="ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  // Replaces the one Workbench rather than adding a
+                  // copy next to it.
+                  const b = menu.backup
+                  setMenu(null)
+                  setLoadTarget(b)
+                }}
+              >
+                Load into Workbench…
+              </button>
+            </>
+          )}
           <button
             className="ctx-menu-item"
             role="menuitem"
@@ -193,16 +219,12 @@ export function BackupsList() {
           characterId={activeId}
           backup={loadTarget}
           onCancel={() => setLoadTarget(null)}
-          onConfirm={(backUpFirst) => {
+          onConfirm={() => {
             const target = loadTarget
             setLoadTarget(null)
             void useStore
               .getState()
-              .flistLoadBackupIntoWorkbench(
-                activeId,
-                target.filename,
-                backUpFirst
-              )
+              .flistLoadBackupIntoWorkbench(activeId, target.filename)
           }}
         />
       )}
@@ -403,6 +425,7 @@ function BackupsFolder({
                   onContextMenu(e.clientX, e.clientY, b)
                 }}
                 onDoubleClick={() => {
+                  if (!b.holds_profile) return
                   void useStore
                     .getState()
                     .flistOpenBrowseBackup(activeId, b.filename)
@@ -420,6 +443,19 @@ function BackupsFolder({
                   ) : (
                     <span className="sb-backup-date">
                       {formatBackupDate(b.created_at)}
+                    </span>
+                  )}
+                  <span
+                    className="sb-backup-origin"
+                    data-testid="backup-origin"
+                  >
+                    {formatBackupOrigin(b)}
+                  </span>
+                  {!b.holds_profile && (
+                    <span className="sb-backup-note">
+                      Holds the older copies from before the upgrade,
+                      kept so nothing is lost. Right-click to download
+                      it.
                     </span>
                   )}
                 </div>

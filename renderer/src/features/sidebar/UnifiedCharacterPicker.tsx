@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { api } from '../../lib/api'
 import { displayCharacter as displayName } from '../../lib/partnerName'
-import { ContextMenu } from '../flist/working-sets/ContextMenu'
+import { ContextMenu } from '../../components/ContextMenu'
 
 const HIDE_LOGS_ONLY_KEY = 'flist-workbench:picker-hide-logs-only'
 
@@ -541,7 +541,7 @@ export function UnifiedCharacterPicker() {
               </ul>
             </>
           )}
-          <div className="char-picker-section-h" title="A stand-in slot for reading somebody else's profile. It is not one of your characters: no working set, no pull, no backup.">
+          <div className="char-picker-section-h" title="A stand-in slot for reading somebody else's profile. It is not one of your characters: no Workbench, no Pull, no Backup.">
             Other people
           </div>
           <ul className="char-picker-unified-list">

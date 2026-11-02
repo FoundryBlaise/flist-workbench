@@ -116,8 +116,7 @@ def _seed_workbench_with_gallery(
             "fetched_at": 1,
         },
     )
-    bench = client.get(f"/flist/character/{character_id}/workbench").json()
-    url = f"/flist/character/{character_id}/sets/{bench['workbench']['id']}/payload"
+    url = f"/flist/character/{character_id}/workbench/payload"
     current = client.get(url).json()
     payload = current["payload"]
     payload["images"] = images
@@ -183,8 +182,7 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
             "fetched_at": 1,
         },
     )
-    bench = client.get("/flist/character/9999/workbench").json()["workbench"]
-    url = f"/flist/character/9999/sets/{bench['id']}/payload"
+    url = "/flist/character/9999/workbench/payload"
     current = client.get(url).json()
     payload = current["payload"]
     payload["character"]["description"] = "Workbench description"
@@ -196,16 +194,17 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
     saved = client.put(url, json=payload, headers={"If-Match": current["etag"]})
     assert saved.status_code == 200
     # A legacy working copy left on disk from an older build.
-    stale = client.put(
-        "/flist/character/9999/working",
-        json={
-            "_schema_version": 1,
-            "_overlay": ["character.description", "images"],
-            "character": {"id": "9999", "name": "Ember Vale", "description": "Stale"},
-            "images": [],
-        },
+    (character_archive.character_dir("9999") / "working.json").write_text(
+        json.dumps(
+            {
+                "_schema_version": 1,
+                "_overlay": ["character.description", "images"],
+                "character": {"id": "9999", "name": "Ember Vale", "description": "Stale"},
+                "images": [],
+            }
+        ),
+        encoding="utf-8",
     )
-    assert stale.status_code == 200
 
     z = _zip_of(client, "9999")
 

@@ -196,7 +196,7 @@ export function ImagesTab({
   const [filters, setFilters] = useState({ unused: false, over2mb: false, png: false })
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   // Where each image is still used, for the Trash warning and the
-  // "not in a working set" filter; and how full the Trash is. Both
+  // "not in the Workbench" filter; and how full the Trash is. Both
   // follow the pool listing, which reloads after every change to it.
   const [refs, setRefs] = useState<Record<string, FlistImageReferences>>({})
   const [trashCount, setTrashCount] = useState<number | null>(null)
@@ -227,7 +227,7 @@ export function ImagesTab({
   const visiblePool = useMemo(
     () =>
       poolEntries.filter((e) => {
-        if (filters.unused && (refs[e.image_id]?.working_sets.length ?? 0) > 0) return false
+        if (filters.unused && refs[e.image_id]?.workbench) return false
         if (filters.over2mb && e.size < FLIST_MAX_UPLOAD_BYTES) return false
         if (filters.png && e.extension !== 'png') return false
         return true
@@ -480,7 +480,7 @@ export function ImagesTab({
                   <span className="flist-images-toolbar__spacer" />
                   {(
                     [
-                      ['unused', 'Not in a working set'],
+                      ['unused', 'Not in the Workbench'],
                       ['over2mb', 'Over 2 MB'],
                       ['png', 'PNG']
                     ] as const
@@ -590,8 +590,9 @@ export function ImagesTab({
               <div className="flist-images-avatar-meta">
                 <div className="flist-images-avatar-label">Avatar</div>
                 <div className="flist-images-avatar-hint">
-                  Pulled from F-list. Edit on the F-list website; Workbench
-                  bundles whatever’s on disk into the restore ZIP.
+                  Pulled from F-list. Change it on the F-list website; the
+                  app puts the copy it has on disk into the zip for an
+                  Upload.
                 </div>
               </div>
             </div>
@@ -714,8 +715,8 @@ export function ImagesTab({
       {!readOnly && (
         <footer className="flist-images-tab__footer">
           <span className="flist-images-tab__footer-hint">
-            Done curating? Export the working set as a ZIP for restore via the
-            flistcharexporter userscript.
+            Done curating? Download the Workbench as a ZIP and upload it
+            with the flistcharexporter userscript.
           </span>
           <button
             type="button"
@@ -723,7 +724,7 @@ export function ImagesTab({
             onClick={() => openExportRestore(characterId)}
             data-testid="flist-images-tab-export"
           >
-            ⬇ Export for restore…
+            ⬇ Download for Upload…
           </button>
         </footer>
       )}

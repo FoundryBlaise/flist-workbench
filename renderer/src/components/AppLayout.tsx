@@ -193,7 +193,7 @@ export function AppLayout() {
   }, [])
 
   // Watch the sidecar for changes this window didn't make. A model
-  // connected over MCP writes the same working sets, labels the same
+  // connected over MCP writes the same Workbench, labels the same
   // logs and changes the same settings — and so do the app's own
   // maintenance passes (gallery repair after a pull, image-id folding
   // when the Images tab lists files), which the sidecar now marks
@@ -208,17 +208,18 @@ export function AppLayout() {
       const store = useStore.getState()
       switch (event.event) {
         case 'set-payload-changed':
-          if (event.character_id && event.set_id) {
+          if (event.character_id) {
             store.flistNoteExternalChange(event.character_id, {
-              setId: event.set_id,
               etag: event.etag ?? null,
               origin: event.origin
             })
           }
           break
         case 'sets-changed':
-        case 'active-set-changed':
-          if (event.character_id) void store.flistLoadSets(event.character_id)
+          // The Workbench's metadata moved: its row's "last changed".
+          // Which row the window shows is its own choice and does not
+          // follow anything on disk.
+          if (event.character_id) void store.flistLoadWorkbenchInfo(event.character_id)
           break
         case 'live-changed':
           if (event.character_id) void store.flistLoadArchive(event.character_id)

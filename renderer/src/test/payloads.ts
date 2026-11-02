@@ -58,7 +58,7 @@ export function archiveEntry(
   live: Record<string, unknown> | null = livePayload(),
   overrides: Partial<ArchiveEntry> = {}
 ): ArchiveEntry {
-  return { live, snapshots: [], pullStatus: 'idle', ...overrides }
+  return { live, pullStatus: 'idle', ...overrides }
 }
 
 /** What the sidecar answers to reading a Workbench payload. */
@@ -69,10 +69,9 @@ export function payloadRead(
   return { payload, etag }
 }
 
-/** What the sidecar answers to resolving a character's Workbench. */
-export function workbenchRead(id: string): {
-  workbench: { id: string; kind: 'bench'; name: string }
-  active_set_id: string
+/** What the sidecar answers to asking for a character's Workbench. */
+export function workbenchRead(updatedAt = 200): {
+  workbench: { name: string; created_at: number; updated_at: number }
 } {
-  return { workbench: { id, kind: 'bench', name: 'Workbench' }, active_set_id: id }
+  return { workbench: { name: 'Workbench', created_at: 100, updated_at: updatedAt } }
 }

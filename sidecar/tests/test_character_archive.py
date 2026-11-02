@@ -8,7 +8,6 @@ ways that would hurt real users:
   safe-name alphabet.
 - image_path / inline_path must reject path-traversal payloads in the
   F-list-supplied filename parts.
-- save_snapshot / list_snapshots must round-trip a JSON checkpoint.
 """
 from __future__ import annotations
 
@@ -17,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import character_archive
+from workbench_state import put_workbench, workbench_payload
 
 
 @pytest.fixture(autouse=True)
@@ -72,80 +72,6 @@ def test_inline_path_rejects_unsafe_basename():
         character_archive.inline_path("123", "foo/bar.png")
 
 
-def test_save_snapshot_round_trip(tmp_path):
-    character_archive.write_live("9999", {"name": "Test", "fetched_at": 100})
-    snap = character_archive.save_snapshot("9999")
-    assert snap["filename"].endswith(".json")
-    listed = character_archive.list_snapshots("9999")
-    assert len(listed) == 1
-    assert listed[0]["filename"] == snap["filename"]
-    payload = character_archive.read_snapshot("9999", snap["filename"])
-    assert payload is not None
-    assert payload["name"] == "Test"
-
-
-def test_read_snapshot_rejects_invalid_filename():
-    # Filenames not matching the on-disk regex are refused so a
-    # hostile caller can't path-traverse out of backups/.
-    assert character_archive.read_snapshot("123", "../../../etc/passwd") is None
-    assert character_archive.read_snapshot("123", "foo.txt") is None
-
-
-def test_save_snapshot_if_changed_skips_when_only_fetched_at_changed():
-    cid = "8888"
-    character_archive.write_live(cid, {"description": "v1", "fetched_at": 100})
-    first = character_archive.save_snapshot_if_changed(cid)
-    assert first["saved"] is True
-    character_archive.write_live(cid, {"description": "v1", "fetched_at": 200})
-    second = character_archive.save_snapshot_if_changed(cid)
-    assert second == {"saved": False, "reason": "unchanged"}
-    assert len(character_archive.list_snapshots(cid)) == 1
-
-
-def test_save_snapshot_if_changed_writes_when_content_differs():
-    cid = "8889"
-    character_archive.write_live(cid, {"description": "v1", "fetched_at": 100})
-    character_archive.save_snapshot_if_changed(cid)
-    character_archive.write_live(cid, {"description": "v2", "fetched_at": 200})
-    second = character_archive.save_snapshot_if_changed(cid)
-    assert second["saved"] is True
-    third = character_archive.save_snapshot_if_changed(cid)
-    assert third == {"saved": False, "reason": "unchanged"}
-    assert len(character_archive.list_snapshots(cid)) == 2
-
-
-def test_save_snapshot_if_changed_no_live():
-    character_archive.create_character_dir("nope")
-    assert character_archive.save_snapshot_if_changed("nope") == {
-        "saved": False,
-        "reason": "no_live",
-    }
-
-
-def test_snapshots_dir_migrates_legacy_backups(tmp_path):
-    """Pre-rename archives stored JSON snapshots under `backups/`. The
-    first call to `snapshots_dir` for such an archive must move the
-    JSON files into the new `snapshots/` location so the dedup check
-    and the renderer's history view keep working without the user
-    losing their checkpoint history."""
-    cid = "6666"
-    character_archive.create_character_dir(cid)
-    char_root = character_archive.character_dir(cid)
-    legacy = char_root / "backups"
-    legacy.mkdir(parents=True, exist_ok=True)
-    (legacy / "100.json").write_text('{"name": "legacy-100"}', encoding="utf-8")
-    (legacy / "200.json").write_text('{"name": "legacy-200"}', encoding="utf-8")
-    # Sanity: no `snapshots/` yet.
-    assert not (char_root / "snapshots").exists()
-
-    rows = character_archive.list_snapshots(cid)
-    filenames = sorted(r["filename"] for r in rows)
-    assert filenames == ["100.json", "200.json"]
-    # Legacy dir is now empty (JSON files moved); kept on disk in case
-    # the user wants to inspect it.
-    assert not list((char_root / "backups").glob("*.json"))
-
-
 def test_save_zip_backup_dedups_unchanged_live(tmp_path):
     cid = "5555"
     character_archive.write_live(
@@ -157,11 +83,11 @@ def test_save_zip_backup_dedups_unchanged_live(tmp_path):
             "fetched_at": 100,
         },
     )
-    first = character_archive.save_zip_backup(cid)
+    first = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert first["saved"] is True
     assert first["filename"].endswith(".zip")
     # Same content → unchanged.
-    second = character_archive.save_zip_backup(cid)
+    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert second == {"saved": False, "reason": "unchanged"}
 
 
@@ -176,7 +102,7 @@ def test_save_zip_backup_writes_when_content_differs(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     character_archive.write_live(
         cid,
         {
@@ -186,9 +112,9 @@ def test_save_zip_backup_writes_when_content_differs(tmp_path):
             "fetched_at": 200,
         },
     )
-    second = character_archive.save_zip_backup(cid)
+    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert second["saved"] is True
-    third = character_archive.save_zip_backup(cid)
+    third = character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     assert third == {"saved": False, "reason": "unchanged"}
     assert len(character_archive.list_zip_backups(cid)) == 2
 
@@ -204,16 +130,16 @@ def test_save_zip_backup_force_bypasses_dedup(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
     # Without force this would dedup.
-    second = character_archive.save_zip_backup(cid, force=True)
+    second = character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
     assert second["saved"] is True
     assert len(character_archive.list_zip_backups(cid)) == 2
 
 
 def test_save_zip_backup_no_live(tmp_path):
     character_archive.create_character_dir("nope")
-    assert character_archive.save_zip_backup("nope") == {
+    assert character_archive.save_zip_backup("nope", source="live", occasion="backup-all") == {
         "saved": False,
         "reason": "no_live",
     }
@@ -235,34 +161,15 @@ def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
             "fetched_at": 100,
         },
     )
-    character_archive.save_zip_backup(cid)
-    character_archive.save_zip_backup(cid, force=True)
-    character_archive.save_zip_backup(cid, force=True)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all")
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    character_archive.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
     rows = character_archive.list_zip_backups(cid)
     # Highest-suffix first.
     assert rows[0]["filename"].endswith("-2.zip")
     assert rows[1]["filename"].endswith("-1.zip")
     # And the no-suffix one is the oldest → last.
     assert "-" not in rows[2]["filename"].rsplit(".zip", 1)[0].split("Z", 1)[1]
-
-
-def test_list_snapshots_orders_same_second_writes_newest_first():
-    """Same-epoch collisions are broken by the `-N` suffix counter. The
-    dedup check in `save_snapshot_if_changed` depends on `list_snapshots`
-    surfacing the most-recently-written row first even when several
-    backups share an epoch."""
-    cid = "7777"
-    character_archive.write_live(cid, {"description": "a", "fetched_at": 100})
-    character_archive.save_snapshot(cid)
-    character_archive.write_live(cid, {"description": "b", "fetched_at": 100})
-    character_archive.save_snapshot(cid)
-    character_archive.write_live(cid, {"description": "c", "fetched_at": 100})
-    character_archive.save_snapshot(cid)
-    rows = character_archive.list_snapshots(cid)
-    assert rows[0]["filename"].endswith("-2.json")
-    assert rows[1]["filename"].endswith("-1.json")
-    # The third row is the no-suffix one written first.
-    assert "-" not in rows[2]["filename"].rsplit(".json", 1)[0]
 
 
 def test_merge_roster_keeps_case_only_distinct_ids():
@@ -497,9 +404,7 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
     character_archive.write_character_image(
         cid, "local-deadbeef", "png", _PNG_HEADER
     )
-    # The gallery lives in the character's working set — the legacy
-    # working.json is deleted on sight by the M3 migration, so pointing
-    # this at it would test a world that no longer exists.
+    # The gallery lives in the character's Workbench.
     character_archive.write_live(
         cid,
         {
@@ -512,23 +417,21 @@ def test_list_collapses_existing_local_duplicate_of_real_id():
             "fetched_at": 1000,
         },
     )
-    bench = character_archive.resolve_workbench(cid)
-    character_archive.write_set_payload(
+    put_workbench(
+        character_archive,
         cid,
-        bench.id,
         {
             "_schema_version": character_archive.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"id": cid, "name": "X"},
             "images": [{"image_id": "local-deadbeef", "description": "mine"}],
         },
-        expected_etag=None,
     )
 
     rows = character_archive.list_character_images(cid)
     ids = sorted(r["image_id"] for r in rows)
     assert ids == ["45755545"]
-    payload = character_archive.read_set_payload(cid, bench.id)
+    payload = workbench_payload(character_archive, cid)
     assert payload is not None
     # The slot keeps its place and its description; only the id moves.
     assert payload["images"] == [
@@ -557,139 +460,6 @@ def test_list_character_images_includes_added_at():
     assert isinstance(rows[0]["added_at"], int)
 
 
-def test_migrate_working_v3_drops_sha_only_images():
-    cid = "515"
-    character_archive.create_character_dir(cid)
-    target = character_archive.working_path(cid)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-    target.write_text(
-        _json.dumps(
-            {
-                "_schema_version": 3,
-                "_overlay": [],
-                "images": [
-                    {"sha256": "abc", "description": "first"},
-                ],
-                "character": {"id": "1", "name": "X"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    out = character_archive.read_working(cid)
-    assert out is not None
-    # v3 → v5 strips the sha-only images array; caller re-seeds from Live.
-    assert "images" not in out
-    assert out["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
-    on_disk = _json.loads(target.read_text(encoding="utf-8"))
-    assert on_disk["_schema_version"] == character_archive.WORKING_SCHEMA_VERSION
-    assert "images" not in on_disk
-
-
-def test_migrate_v4_pool_promotes_orphan_to_local():
-    """A v4 pool/<sha>.<ext> with no manifest history is bytes the user
-    cared about — it must land in images/local-<sha8>.<ext> when v5
-    migration runs."""
-    import hashlib
-    cid = "516"
-    character_archive.create_character_dir(cid)
-    cdir = character_archive.character_dir(cid)
-    pool_d = cdir / "pool"
-    pool_d.mkdir()
-    sha = hashlib.sha256(_PNG_HEADER).hexdigest()
-    (pool_d / f"{sha}.png").write_bytes(_PNG_HEADER)
-    # No manifest entry — exercises the orphan-files fallback.
-    promoted = character_archive.migrate_v4_pool_to_images(cid)
-    assert promoted == 1
-    assert not pool_d.exists()
-    assert (
-        character_archive.images_dir(cid) / f"local-{sha[:8]}.png"
-    ).exists()
-
-
-@pytest.mark.known_violation(
-    "nothing_vanishes",
-    spec=3,
-    reason="the v4 pool migration deletes pool/ outright, including files it failed to copy; the spec removes this migration",
-)
-def test_migrate_v4_pool_skips_already_preserved_bytes():
-    """If a pool sha's image_ids[] already names a file on disk under
-    images/, the bytes are already preserved — migration must not mint
-    a redundant local-<sha8> copy."""
-    import hashlib, json as _json
-    cid = "517"
-    character_archive.create_character_dir(cid)
-    cdir = character_archive.character_dir(cid)
-    images_d = character_archive.images_dir(cid)
-    pool_d = cdir / "pool"
-    pool_d.mkdir()
-    sha = hashlib.sha256(_PNG_HEADER).hexdigest()
-    (images_d / "42.png").write_bytes(_PNG_HEADER)
-    (pool_d / f"{sha}.png").write_bytes(_PNG_HEADER)
-    (pool_d / "manifest.json").write_text(
-        _json.dumps(
-            {
-                sha: {
-                    "extension": "png",
-                    "source": "flist_pull",
-                    "added_at": 1,
-                    "size": len(_PNG_HEADER),
-                    "image_ids": ["42"],
-                }
-            }
-        )
-    )
-    character_archive.migrate_v4_pool_to_images(cid)
-    assert not pool_d.exists()
-    # Only the original 42.png — no redundant local-<sha8>.png.
-    files = sorted(p.name for p in images_d.iterdir())
-    assert files == ["42.png"]
-
-
-@pytest.mark.known_violation(
-    "nothing_vanishes",
-    spec=3,
-    reason="the v4 pool migration deletes pool/ outright, including files it failed to copy; the spec removes this migration",
-)
-def test_migrate_v4_pool_uses_first_free_image_id():
-    """When the pool entry has image_ids[] and none of those files are
-    on disk, migration adopts the first id rather than minting a
-    synthetic — preserves identity across the v5 upgrade."""
-    import hashlib, json as _json
-    cid = "518"
-    character_archive.create_character_dir(cid)
-    cdir = character_archive.character_dir(cid)
-    pool_d = cdir / "pool"
-    pool_d.mkdir()
-    bytes_ = _PNG_HEADER + b"unique"
-    sha = hashlib.sha256(bytes_).hexdigest()
-    (pool_d / f"{sha}.png").write_bytes(bytes_)
-    (pool_d / "manifest.json").write_text(
-        _json.dumps(
-            {
-                sha: {
-                    "extension": "png",
-                    "source": "user_upload",
-                    "added_at": 1,
-                    "size": len(bytes_),
-                    "image_ids": ["7777"],
-                }
-            }
-        )
-    )
-    promoted = character_archive.migrate_v4_pool_to_images(cid)
-    assert promoted == 1
-    assert (character_archive.images_dir(cid) / "7777.png").exists()
-
-
-def test_migrate_v4_pool_is_idempotent_when_already_v5():
-    cid = "519"
-    character_archive.create_character_dir(cid)
-    # No pool/ dir at all — migration should be a no-op.
-    promoted = character_archive.migrate_v4_pool_to_images(cid)
-    assert promoted == 0
-
-
 def test_normalise_image_ext_jpeg_to_jpg():
     # Pinned because the pull cache check depends on this normalisation
     # to match what write_character_image stores. If F-list ever returns
@@ -697,35 +467,6 @@ def test_normalise_image_ext_jpeg_to_jpg():
     assert character_archive.normalise_image_ext("jpeg") == "jpg"
     assert character_archive.normalise_image_ext("JPEG") == "jpg"
     assert character_archive.normalise_image_ext(".png") == "png"
-
-
-def test_read_working_refuses_future_schema_version():
-    """A working.json written by a newer build must be refused, not
-    silently mis-interpreted. The renderer falls back to seed-from-Live
-    on None, so the file stays intact for a future re-open with the
-    matching version (QA feedback BLOCK #4)."""
-    cid = "510"
-    character_archive.create_character_dir(cid)
-    target = character_archive.working_path(cid)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-
-    target.write_text(
-        _json.dumps(
-            {
-                "_schema_version": character_archive.WORKING_SCHEMA_VERSION + 1,
-                "_overlay": [],
-                "character": {"id": "1", "name": "X"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert character_archive.read_working(cid) is None
-    # File stays on disk untouched — no quarantine for a future-version
-    # file; we want it readable again after upgrade.
-    assert target.exists()
-
-
 
 
 # ---- name-keyed folder registry ----------------------------------------
@@ -863,126 +604,6 @@ def test_write_live_first_pull_creates_name_folder(tmp_path):
 
 
 
-def test_maybe_run_scheduled_backup_writes_when_no_scheduled_exists(tmp_path):
-    cid = "8001"
-    character_archive.write_live(
-        cid,
-        {
-            "character": {"id": int(cid), "name": "Sched", "description": "v1"},
-            "images": [],
-            "kinks": {},
-            "fetched_at": 100,
-        },
-    )
-    result = character_archive.maybe_run_scheduled_backup(
-        cid, interval_seconds=86400 * 7, keep_last_n=10
-    )
-    assert result["action"] == "saved"
-    rows = character_archive.list_zip_backups(cid)
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "scheduled"
-
-
-def test_maybe_run_scheduled_backup_skips_when_recent(tmp_path):
-    cid = "8002"
-    character_archive.write_live(
-        cid,
-        {
-            "character": {"id": int(cid), "name": "Sched", "description": "v1"},
-            "images": [],
-            "kinks": {},
-            "fetched_at": 100,
-        },
-    )
-    # Plant a fresh scheduled backup.
-    character_archive.save_zip_backup(cid, force=True, kind="scheduled")
-    # Mutate the live so dedup won't be what skips the second call.
-    character_archive.write_live(
-        cid,
-        {
-            "character": {"id": int(cid), "name": "Sched", "description": "v2"},
-            "images": [],
-            "kinks": {},
-            "fetched_at": 200,
-        },
-    )
-    # Interval of 7 days; the existing scheduled backup was just made,
-    # so the next call should skip.
-    result = character_archive.maybe_run_scheduled_backup(
-        cid, interval_seconds=86400 * 7, keep_last_n=10
-    )
-    assert result["action"] == "skipped"
-    assert result["reason"] == "recent"
-    rows = [
-        r for r in character_archive.list_zip_backups(cid) if r["kind"] == "scheduled"
-    ]
-    assert len(rows) == 1
-
-
-@pytest.mark.known_violation(
-    "nothing_vanishes",
-    spec=3,
-    reason="scheduled-backup pruning deletes Backups for good; the spec removes scheduled backups",
-)
-def test_maybe_run_scheduled_backup_prunes_old_scheduled(tmp_path):
-    cid = "8003"
-    character_archive.write_live(
-        cid,
-        {
-            "character": {"id": int(cid), "name": "Sched", "description": "v0"},
-            "images": [],
-            "kinks": {},
-            "fetched_at": 100,
-        },
-    )
-    # Plant five scheduled backups by force, so dedup doesn't block. Each
-    # mutate-then-backup pair produces a fresh ZIP with distinct content.
-    for i in range(5):
-        character_archive.write_live(
-            cid,
-            {
-                "character": {
-                    "id": int(cid),
-                    "name": "Sched",
-                    "description": f"v{i}",
-                },
-                "images": [],
-                "kinks": {},
-                "fetched_at": 100 + i,
-            },
-        )
-        character_archive.save_zip_backup(cid, force=True, kind="scheduled")
-    assert (
-        len([r for r in character_archive.list_zip_backups(cid) if r["kind"] == "scheduled"])
-        == 5
-    )
-    # Mutate again so the next save isn't a dedup. Then run the
-    # scheduler with interval=0 (force-run path) + keep_last_n=3.
-    # The scheduler's interval check looks at the newest backup's
-    # creation time vs now; the planted backups all happened in this
-    # second, so we sidestep the recency skip by using a 0-second
-    # interval.
-    character_archive.write_live(
-        cid,
-        {
-            "character": {"id": int(cid), "name": "Sched", "description": "fresh"},
-            "images": [],
-            "kinks": {},
-            "fetched_at": 999,
-        },
-    )
-    result = character_archive.maybe_run_scheduled_backup(
-        cid, interval_seconds=0, keep_last_n=3
-    )
-    assert result["action"] == "saved"
-    # After write: 6 scheduled total → prune down to 3.
-    remaining = [
-        r for r in character_archive.list_zip_backups(cid) if r["kind"] == "scheduled"
-    ]
-    assert len(remaining) == 3
-    assert result["pruned"] == 3
-
-
 def test_rename_zip_backup_persists_in_names_json(tmp_path):
     cid = "8010"
     character_archive.write_live(
@@ -994,7 +615,7 @@ def test_rename_zip_backup_persists_in_names_json(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
     character_archive.rename_zip_backup(cid, fname, "Pre-overhaul")
     rows = character_archive.list_zip_backups(cid)
@@ -1016,55 +637,10 @@ def test_forget_backup_name_drops_entry(tmp_path):
             "fetched_at": 100,
         },
     )
-    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
+    res = character_archive.save_zip_backup(cid, force=True, source="workbench", occasion="manual")
     fname = res["filename"]
     character_archive.rename_zip_backup(cid, fname, "label")
     character_archive.forget_backup_name(cid, fname)
     # After forget, list shows no name on that row.
     rows = character_archive.list_zip_backups(cid)
     assert rows[0]["name"] is None
-
-
-def test_create_set_from_zip_backup_seeds_payload(tmp_path):
-    cid = "8020"
-    character_archive.write_live(
-        cid,
-        {
-            "character": {
-                "id": int(cid),
-                "name": "Setty",
-                "description": "v1 desc",
-            },
-            "images": [],
-            "kinks": {},
-            "fetched_at": 100,
-        },
-    )
-    res = character_archive.save_zip_backup(cid, force=True, kind="manual_single")
-    fname = res["filename"]
-    meta = character_archive.create_set_from_zip_backup(
-        cid, fname, "From the backup"
-    )
-    assert meta.name == "From the backup"
-    payload = character_archive.read_set_payload(cid, meta.id)
-    assert payload is not None
-    # The character description from the backup should be on the new set.
-    assert payload.get("character", {}).get("description") == "v1 desc"
-
-
-def test_create_set_from_zip_backup_rejects_bad_filename(tmp_path):
-    character_archive.create_character_dir("8021")
-    import pytest
-
-    with pytest.raises(ValueError):
-        character_archive.create_set_from_zip_backup("8021", "../etc/passwd", "x")
-
-
-def test_create_set_from_zip_backup_404_when_missing(tmp_path):
-    character_archive.create_character_dir("8022")
-    import pytest
-
-    with pytest.raises(FileNotFoundError):
-        character_archive.create_set_from_zip_backup(
-            "8022", "2026-06-17T120000Z.zip", "x"
-        )

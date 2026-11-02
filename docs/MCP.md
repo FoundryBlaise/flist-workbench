@@ -10,12 +10,15 @@ Two things to hold onto before anything else:
 
 1. **Nothing here uploads to F-list.** Every tool changes local files.
    When a profile is ready you review it in the app window and
-   publish it yourself in the browser, with the userscript or the
+   upload it yourself in the browser, with the userscript or the
    paired extension. A model that tells you a change is live on F-list
    is wrong.
-2. **`live` is read-only.** It is the record of what is published.
-   Editing happens in a *working set* — a named local draft. A
-   character can have several; one is active at a time.
+2. **`live` is read-only.** It is the character's profile as it was
+   last pulled from F-list.
+   Editing happens in the character's *Workbench*, its one local
+   editable copy. Tools work on the Workbench when `working_set` is
+   left out; `working_set="live"` reads Live. Nothing else is
+   accepted.
 
 ## Connecting
 
@@ -68,19 +71,19 @@ Ollama model.
 
 ### Smaller endpoints
 
-A small local model handling 76 tools tends to pick badly. Two narrower
+A small local model handling 72 tools tends to pick badly. Two narrower
 endpoints serve the same implementations:
 
 | URL | What it carries |
 |---|---|
-| `.../mcp` | everything (76 tools) |
-| `.../mcp/character` | profile editing (58) |
+| `.../mcp` | everything (72 tools) |
+| `.../mcp/character` | profile editing (54) |
 | `.../mcp/logs` | logs, labels, search (30) |
 | `.../mcp/classify` | the IC/OOC labelling loop only (9) |
 
 Tool schemas are not free. Every tool an endpoint carries is
 described in the model's context before it does any work: the 30 on
-`/mcp/logs` cost roughly 5800 tokens, the 76 on `/mcp` roughly 14500.
+`/mcp/logs` cost roughly 5800 tokens, the 72 on `/mcp` up to 14500.
 A client with a 12k window could not fit one batch of messages to
 classify alongside them. Point a long labelling run at
 `/mcp/classify` and that drops to about 1500.
@@ -106,11 +109,10 @@ ends up in a transcript.
 
 ## What it can do
 
-76 tools. The ones worth knowing about:
+72 tools. The ones worth knowing about:
 
 **Finding your way around** — `get_workbench_status` first, then
-`list_characters`, `list_working_sets`, `explain_set_addressing` if an
-addressing error is puzzling.
+`list_characters`.
 
 **Reading a profile** — `get_description` (pages through a long one),
 `list_profile_fields`, `list_kinks`, `list_images`, `get_live_profile`.
@@ -137,11 +139,11 @@ be open: it is the thing that draws. A picture-heavy profile comes
 back as JPEG rather than PNG, because the image travels to the model
 as base64 and an oversized tool result is refused outright.
 
-**Editing** — `create_working_set`, then `edit_description` (an exact
-string replacement, far safer than `set_description` on a 30 KB
-profile), `set_profile_field`, `set_kink`, `add_custom_kink`,
-`reorder_images`. `diff_working_set` says what would change if you
-published.
+**Editing** — the Workbench is created from Live on the first edit.
+`edit_description` (an exact string replacement, far safer than
+`set_description` on a 30 KB profile), `set_profile_field`,
+`set_kink`, `add_custom_kink`, `reorder_images`. `diff_working_set`
+says what an Upload would change.
 
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
@@ -251,9 +253,12 @@ Measured against a running sidecar:
 
 | | schema | with one 10-message batch |
 |---|---|---|
-| `/mcp` (76 tools) | ~14500 | does not fit in 24k |
+| `/mcp` (72 tools) | ~14500 (with 76 tools) | does not fit in 24k |
 | `/mcp/logs` (30 tools) | ~5800 | ~14900 |
 | `/mcp/classify` (9 tools) | ~1500 | ~10600 |
+
+The `/mcp` schema figure was measured when that endpoint carried 76
+tools and has not been measured again since it shrank to 72.
 
 So: point a labelling run at **`/mcp/classify`**. It carries only the
 eight tools the loop calls, which is the one change that lowers the
@@ -280,7 +285,7 @@ something.
 
 ## Sharing the app with the window
 
-You and a model can edit the same working set at the same time. When
+You and a model can edit the same Workbench at the same time. When
 that happens the window shows a banner and asks which version to keep
 — it will not silently overwrite either side. Changes a model makes
 show up in the window without a reload.
@@ -295,13 +300,14 @@ Tool errors carry a stable code as their first word:
 | Code | Means |
 |---|---|
 | `character_not_found` | no local archive for that name — the error lists the ones that exist |
-| `no_active_set` | nothing is active; create one or name one explicitly |
-| `live_is_read_only` | tried to edit the published profile |
+| `nothing_to_edit` | the character was never pulled, so there is no Live to make a Workbench from |
+| `live_is_read_only` | tried to edit Live |
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
-| `validation_failed` | a value F-list wouldn't accept — the error carries the allowed ones |
+| `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
 | `etag_conflict` | the window saved while the edit was in flight |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
+| `workbench_not_kept` | loading a Backup would replace the Workbench, but the Backup of it could not be written first, so nothing was replaced |
 | `no_index` | nothing ingested yet |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |

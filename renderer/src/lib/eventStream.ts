@@ -1,7 +1,7 @@
 /** Subscription to the sidecar's change broadcast.
  *
  *  The window is no longer the only thing that writes: a model
- *  connected over MCP edits the same working sets, labels the same
+ *  connected over MCP edits the same Workbench, labels the same
  *  logs and changes the same settings. Without this the window would
  *  keep showing a stale draft and then autosave it back over the
  *  model's work.
@@ -16,7 +16,6 @@ export type WorkbenchEvent = {
    *  connected model. */
   origin: string
   character_id?: string
-  set_id?: string | null
   etag?: string | null
   character?: string
   partner?: string
@@ -56,7 +55,6 @@ export function subscribeToWorkbenchEvents(
   const NAMES = [
     'set-payload-changed',
     'sets-changed',
-    'active-set-changed',
     'live-changed',
     'labels-changed',
     'settings-changed',

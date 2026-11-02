@@ -41,9 +41,6 @@ export type FlistRosterEntry = {
   has_archive: boolean
   has_logs: boolean
   last_pulled_at: number | null
-  /** Count of JSON snapshots in `snapshots/` — the auto-on-pull
-   *  history. Cheap; one per F-list-side change. */
-  snapshot_count: number
   /** Count of ZIP backups in `backups/` — the explicit "Back up"
    *  artefacts that include images + avatar. */
   backup_count: number
@@ -51,15 +48,6 @@ export type FlistRosterEntry = {
   // a prior pull was interrupted or had image failures so the renderer
   // can prompt the user to resume.
   pull_status?: FlistPullStatus
-}
-
-/** A single JSON-snapshot entry as listed by /flist/character/<id>/snapshots.
- *  Each snapshot is the full Live JSON captured at the time the
- *  corresponding pull noticed an F-list-side change. */
-export type FlistSnapshotEntry = {
-  filename: string
-  created_at: number
-  size: number
 }
 
 /** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
@@ -73,13 +61,34 @@ export type FlistZipBackupKind =
   | 'manual_bulk'
   | 'import'
   | 'scheduled'
+  | 'pre_upload'
   | 'unknown'
+
+/** What a Backup holds: the Live or the Workbench of its moment.
+ *  Backups from before the app recorded it come back as `'unknown'`. */
+export type FlistBackupSource = 'live' | 'workbench' | 'unknown'
+
+/** Why a Backup was made; `null` for Backups from before the app
+ *  recorded it. */
+export type FlistBackupOccasion =
+  | 'manual'
+  | 'before-upload'
+  | 'before-restore'
+  | 'migration'
+  | 'backup-all'
 
 export type FlistZipBackupEntry = {
   filename: string
   created_at: number
   size: number
   kind: FlistZipBackupKind
+  source: FlistBackupSource
+  occasion: FlistBackupOccasion | null
+  /** False for a Backup that holds no profile: the one the move to one
+   *  Workbench made of the older copies from before the upgrade. The
+   *  sidecar refuses to restore, browse or upload it; it can be
+   *  downloaded. */
+  holds_profile: boolean
   /** User-set name from `_names.json`. `null` when the user hasn't
    *  renamed this backup yet — the UI then derives a default label
    *  from the timestamp. */
@@ -138,12 +147,17 @@ export type FlistTrashedLabels = {
   deleted_by: string | null
 }
 
-/** Where an image id is still used, beyond the pool. */
+/** Where an image id is still used, beyond the pool: the Workbench's
+ *  gallery, Live, and how many Backups keep it (each with its own copy
+ *  of the bytes), with the newest of them. `migration_backup`: the
+ *  older copies from before the upgrade name it; that Backup holds JSON
+ *  only, no copy of the bytes, and is not counted in `backups`. */
 export type FlistImageReferences = {
-  working_sets: string[]
+  workbench: boolean
   live: boolean
-  snapshots: number
-  newest_snapshot: string | null
+  backups: number
+  newest_backup: string | null
+  migration_backup: boolean
 }
 
 
@@ -153,7 +167,7 @@ export type FlistImageReferences = {
 // character-data.php response the archive stores as live.json, so the
 // panes that render a Live profile read this without a translation
 // layer. Nothing here writes: there is no endpoint that turns one of
-// these into a working set, and that is deliberate.
+// these into a Workbench, and that is deliberate.
 
 /** Where the viewer's candidate names come from. `name` is free text
  *  taken as an exact character name — F-list has no search endpoint. */
@@ -198,38 +212,12 @@ export type ForeignProfileResult = {
   refresh_error?: string
 }
 
-// ---- Working-sets v2 wire types -------------------------------------
-//
-// Snake_case at the wire layer matches the sidecar contract; the store
-// converts to camelCase via _setMetaFromWire so in-memory `SetMeta`
-// stays consistent with the rest of the slice (e.g. `lastSavedAt`).
-
-export type SetMetaWire = {
-  id: string
+/** The Workbench's metadata as the sidecar sends it. The window reads
+ *  only `updated_at`, for the Workbench row's "last changed". */
+export type WorkbenchInfoWire = {
   name: string
   created_at: number
   updated_at: number
-}
-
-export type FlistSetImportResult = {
-  set: SetMetaWire
-  source: {
-    character_id: string
-    character_name: string
-    set_id: string
-    set_name: string
-  }
-  image_stats: { added: number; skipped: number }
-  cross_character: boolean
-}
-
-export type SetsListResponseWire = {
-  sets: SetMetaWire[]
-  active_set_id: string | null
-}
-
-export type SetActivateResponseWire = {
-  active_set_id: string | null
 }
 
 export type FlistPullHandlers = {
@@ -350,36 +338,6 @@ export type LabelsSettings = {
   defaults: {
     threshold_chars: number
   }
-}
-
-export type BackupsSettings = {
-  /** Day interval for the scheduled-on-start sweep. 0 disables. */
-  scheduled_interval_days: number
-  /** Maximum scheduled backups kept per character. Older entries are
-   *  pruned after each successful scheduled write. */
-  scheduled_keep_last_n: number
-  defaults: {
-    scheduled_interval_days: number
-    scheduled_keep_last_n: number
-  }
-  /** Telemetry from the last sweep run. `null` epochs mean the sweep
-   *  has never executed in this install — the UI shows "Never run"
-   *  instead of a stale relative time. */
-  last_sweep: {
-    started_at: number | null
-    finished_at: number | null
-    written: number
-    skipped: number
-    failed: number
-    /** 'on_start' (sidecar boot) or 'manual' (user pressed the
-     *  Trigger button in Settings). `null` only when no run has
-     *  happened yet. */
-    source: 'on_start' | 'manual' | null
-  }
-  /** Computed `last_sweep.started_at + interval_days × 86400`. `null`
-   *  when no sweep has run yet, or when interval=0 (sweep disabled).
-   *  UI renders the countdown ("in 3 days" / "due now"). */
-  next_due_at: number | null
 }
 
 export type RagSettings = {
@@ -560,15 +518,12 @@ export class RefusalError extends Error {
   }
 }
 
-/** The bundle comes from another character; importing it needs the user's confirmation. */
-export class CrossCharacterImportRefusal extends RefusalError {
-  readonly source: { characterId: string; characterName: string; setName: string }
-
-  constructor(source: CrossCharacterImportRefusal['source']) {
-    super('requires_cross_character_confirmation', 422, 'requires_cross_character_confirmation')
-    this.name = 'CrossCharacterImportRefusal'
-    this.source = source
-  }
+/** What a failed request says, without the `HTTP <status>: ` prefix
+ *  `request` puts in front of it: the sidecar's or F-list's own words,
+ *  ready to show. Any other error's message as it is. */
+export function errorDetail(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.replace(/^HTTP \d+:\s*/, '')
 }
 
 async function request<T>(
@@ -731,14 +686,12 @@ export const api = {
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
       rag: RagSettings
-      backups: BackupsSettings
       image_import_roots: string[]
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
     rag?: Partial<Omit<RagSettings, 'defaults'>>
-    backups?: Partial<Omit<BackupsSettings, 'defaults'>>
     image_import_roots?: string[]
   }) =>
     request<{
@@ -747,7 +700,6 @@ export const api = {
       fchat_data_dir_env_locked: boolean
       labels: LabelsSettings
       rag: RagSettings
-      backups: BackupsSettings
       image_import_roots: string[]
     }>('/settings', {
       method: 'PUT',
@@ -978,25 +930,6 @@ export const api = {
     get<Record<string, unknown>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/live`
     ),
-  /** List the per-character JSON snapshots (the auto-on-pull
-   *  forever-history). Distinct from `flistZipBackups`, which lists
-   *  the userscript-restoreable ZIP artefacts. */
-  flistSnapshots: (characterId: string | number) =>
-    get<{ character_id: string; snapshots: FlistSnapshotEntry[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/snapshots`
-    ),
-  flistSnapshotRead: (characterId: string | number, filename: string) =>
-    get<Record<string, unknown>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/snapshots/${encodeURIComponent(filename)}`
-    ),
-  /** Capture the current Live JSON into a new snapshot. POST'd by the
-   *  diff/history flow when the user wants an explicit checkpoint
-   *  beyond what the auto-on-pull dedup gives them. */
-  flistSaveSnapshot: (characterId: string | number) =>
-    request<{ path: string; created_at: number; filename: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/snapshot`,
-      { method: 'POST' }
-    ),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
@@ -1089,37 +1022,57 @@ export const api = {
         _fetched_at: number | null
       }
     >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
-  // ---- F-list working copy (Tier 2: §1 persistence) ----
-  flistWorkingRead: (characterId: string | number) =>
-    get<{ payload: Record<string, unknown> | null; etag: string | null }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/working`
+  // ---- The workbench --------------------------------------------
+  // A character has one editable copy of its profile beside Live,
+  // seeded from Live when first needed (ADR 0001).
+  /** Resolve the character's workbench, creating it from Live if it
+   *  does not exist. `create: false` asks without making one, which is
+   *  what a read-only render wants — merely looking at a character
+   *  should not bring a bench into being. */
+  flistWorkbench: (characterId: string | number, create = true) =>
+    get<{
+      workbench: WorkbenchInfoWire | null
+      reason?: string
+    }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
+        + (create ? '' : '?create=false')
     ),
-  flistWorkingWrite: async (
+  /** The character's Workbench payload and the etag a save must send
+   *  back. Made from Live when there is none yet, and `created` then
+   *  says this read made it, so nobody has edited it. `create: false`
+   *  reads without making one: a 404 `no_workbench` refusal. */
+  flistWorkbenchPayloadRead: (
+    characterId: string | number,
+    opts: { create?: boolean } = {}
+  ) =>
+    get<{ payload: Record<string, unknown>; etag: string; created: boolean }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
+        + (opts.create === false ? '?create=false' : '')
+    ),
+  /** Save the whole Workbench over the etag it was read with. A 409
+   *  (no etag, or a stale one) throws `Error('etag_mismatch')` carrying
+   *  the etag on disk as `currentEtag`. */
+  flistWorkbenchPayloadPut: async (
     characterId: string | number,
     payload: Record<string, unknown>,
-    opts?: { etag?: string | null }
+    etag: string | null
   ): Promise<{ etag: string }> => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
     }
-    if (opts?.etag) headers['If-Match'] = opts.etag
+    if (etag) headers['If-Match'] = etag
     const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/working`,
-      {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify(payload)
-      }
+      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
+      { method: 'PUT', headers, body: JSON.stringify(payload) }
     )
     if (res.status === 409) {
       const body = (await res.json().catch(() => null)) as
-        | { detail?: { detail: string; current_etag: string | null } }
+        | { code?: string; current_etag?: string | null }
         | null
-      const current = body?.detail?.current_etag ?? null
       const err = new Error('etag_mismatch') as Error & {
         currentEtag: string | null
       }
-      err.currentEtag = current
+      err.currentEtag = body?.current_etag ?? null
       throw err
     }
     if (!res.ok) {
@@ -1127,29 +1080,19 @@ export const api = {
     }
     return (await res.json()) as { etag: string }
   },
-  flistWorkingDelete: (characterId: string | number) =>
-    request<{ deleted: boolean }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/working`,
-      { method: 'DELETE' }
-    ),
-  // ---- The workbench --------------------------------------------
-  // A character has one editable copy of its profile, always present,
-  // seeded from Live when first needed. "Working sets" — several named
-  // drafts with one active — stayed on disk and left the vocabulary:
-  // testers could not say what one was or how it related to the
-  // read-only F-list row above it.
-  /** Resolve the character's workbench, creating it from Live if it
-   *  does not exist. `create: false` asks without making one, which is
-   *  what a read-only render wants — merely looking at a character
-   *  should not bring a bench into being. */
-  flistWorkbench: (characterId: string | number, create = true) =>
-    get<{
-      workbench: SetMetaWire | null
-      active_set_id?: string | null
-      reason?: string
+  /** Reset to Live: the sidecar saves the Workbench as a Backup
+   *  (`backed_up_first`, null when there was no Workbench yet), then
+   *  makes it a fresh copy of Live and answers with that payload and
+   *  its etag. When the Backup cannot be written nothing is replaced:
+   *  a `workbench_not_kept` refusal. */
+  flistWorkbenchResetToLive: (characterId: string | number) =>
+    request<{
+      payload: Record<string, unknown>
+      etag: string
+      backed_up_first: { filename: string; created_at: number } | null
     }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
-        + (create ? '' : '?create=false')
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
+      { method: 'POST' }
     ),
   /** What the confirm dialog needs before overwriting the bench:
    *  whether it holds unpublished edits, and whether F-list has moved
@@ -1169,16 +1112,15 @@ export const api = {
         + `/workbench/load-backup/preflight?filename=`
         + encodeURIComponent(filename)
     ),
-  /** Replace the workbench contents with a backup's. `backUpFirst` is
-   *  the dialog's third button — the safety net is offered, never
-   *  imposed. */
-  flistWorkbenchLoadBackup: (
-    characterId: string | number,
-    filename: string,
-    backUpFirst: boolean
-  ) =>
+  /** Restore: replace the Workbench contents with a Backup's. The
+   *  sidecar saves the Workbench as a Backup first (`backed_up_first`,
+   *  null when there was no Workbench yet); when it cannot, nothing is
+   *  replaced: a `workbench_not_kept` refusal. */
+  flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
     request<{
-      workbench: SetMetaWire
+      workbench: WorkbenchInfoWire
+      payload: Record<string, unknown>
+      etag: string
       loaded: string
       backed_up_first: { filename: string; created_at: number } | null
     }>(
@@ -1186,186 +1128,9 @@ export const api = {
         + `/workbench/load-backup`,
       {
         method: 'POST',
-        body: JSON.stringify({ filename, back_up_first: backUpFirst })
+        body: JSON.stringify({ filename })
       }
     ),
-  // ---- F-list working sets v2 (sets list + per-set payload) ----
-  flistSetsList: (characterId: string | number) =>
-    get<SetsListResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets`
-    ),
-  flistSetCreate: (characterId: string | number, body: { name: string }) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  /** Create a new working set seeded from an existing backup ZIP's
-   *  embedded working.json. Distinct from flistSetImport (which
-   *  expects the userscript-bundle manifest.json shape); this hits
-   *  a dedicated sidecar endpoint that reads working.json directly
-   *  out of the backup. 410 Gone when the backup predates the
-   *  working.json write (older than 2026-06-17). */
-  flistSetCreateFromBackup: (
-    characterId: string | number,
-    backupFilename: string,
-    body: { name: string }
-  ) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(backupFilename)}/create-set`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  flistSetRename: (
-    characterId: string | number,
-    setId: string,
-    body: { name: string }
-  ) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}`,
-      { method: 'PATCH', body: JSON.stringify(body) }
-    ),
-  flistSetDelete: (characterId: string | number, setId: string) =>
-    request<SetActivateResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}`,
-      { method: 'DELETE' }
-    ),
-  flistSetDuplicate: (
-    characterId: string | number,
-    setId: string,
-    body: { name: string }
-  ) =>
-    request<{ set: SetMetaWire }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/duplicate`,
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  flistSetActivate: (characterId: string | number, setId: string) =>
-    request<SetActivateResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/activate`,
-      { method: 'POST' }
-    ),
-  flistFromFlistActivate: (characterId: string | number) =>
-    request<SetActivateResponseWire>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/from-flist/activate`,
-      { method: 'POST' }
-    ),
-  flistSetPayloadRead: (characterId: string | number, setId: string) =>
-    get<{ payload: Record<string, unknown>; etag: string | null }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`
-    ),
-  /** Download the Workbench-native bundle for a working set. Returns
-   *  the raw bytes + the suggested filename pulled out of the
-   *  `Content-Disposition` header so the caller can hand a clean
-   *  default-name to the save dialog. */
-  flistSetExport: async (
-    characterId: string | number,
-    setId: string
-  ): Promise<{ bytes: Uint8Array; suggestedFilename: string }> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/export`
-    )
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const buf = new Uint8Array(await res.arrayBuffer())
-    // Parse `filename="…"` out of Content-Disposition. Falls back to a
-    // generic name; the renderer will overlay the character + set name
-    // on top of that anyway.
-    const cd = res.headers.get('content-disposition') ?? ''
-    const m = /filename="([^"]+)"/.exec(cd)
-    return {
-      bytes: buf,
-      suggestedFilename: m ? m[1] : 'workbench-set.zip'
-    }
-  },
-  /** Upload a bundle and create a new working set under
-   *  `characterId`. The cross-character handshake is a 422 with
-   *  `detail.code === 'requires_cross_character_confirmation'`; the
-   *  caller catches that, shows a confirm modal, and retries with
-   *  `confirmCrossCharacter: true`. */
-  flistSetImport: async (
-    characterId: string | number,
-    zipBytes: Uint8Array,
-    body: { name: string; confirmCrossCharacter?: boolean }
-  ): Promise<FlistSetImportResult> => {
-    const form = new FormData()
-    form.append(
-      'zip',
-      new Blob([new Uint8Array(zipBytes)], { type: 'application/zip' }),
-      'bundle.zip'
-    )
-    form.append('name', body.name)
-    form.append(
-      'confirm_cross_character',
-      body.confirmCrossCharacter ? 'true' : 'false'
-    )
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/import`,
-      { method: 'POST', body: form }
-    )
-    if (res.status === 422) {
-      const errBody = (await res.json().catch(() => null)) as
-        | {
-            detail?:
-              | string
-              | {
-                  code?: string
-                  source?: {
-                    character_id?: string
-                    character_name?: string
-                    set_name?: string
-                  }
-                }
-          }
-        | null
-      const detail = errBody?.detail
-      if (
-        detail &&
-        typeof detail === 'object' &&
-        detail.code === 'requires_cross_character_confirmation'
-      ) {
-        throw new CrossCharacterImportRefusal({
-          characterId: String(detail.source?.character_id ?? ''),
-          characterName: String(detail.source?.character_name ?? ''),
-          setName: String(detail.source?.set_name ?? '')
-        })
-      }
-      const msg = typeof detail === 'string' ? detail : 'invalid bundle'
-      throw new Error(msg)
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    return (await res.json()) as FlistSetImportResult
-  },
-  flistSetPayloadPut: async (
-    characterId: string | number,
-    setId: string,
-    payload: Record<string, unknown>,
-    etag: string | null
-  ): Promise<{ etag: string }> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
-    if (etag) headers['If-Match'] = etag
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/sets/${encodeURIComponent(setId)}/payload`,
-      { method: 'PUT', headers, body: JSON.stringify(payload) }
-    )
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => null)) as
-        | { detail?: { detail: string; current_etag: string | null } }
-        | null
-      const current = body?.detail?.current_etag ?? null
-      const err = new Error('etag_mismatch') as Error & {
-        currentEtag: string | null
-      }
-      err.currentEtag = current
-      throw err
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    return (await res.json()) as { etag: string }
-  },
   flistAvatarUrl: (name: string) =>
     `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>
@@ -1431,7 +1196,7 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
       { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
     ),
-  /** Where each image id is still used: working sets, live, snapshots. */
+  /** Where each image id is still used: the Workbench, Live, Backups. */
   flistImageReferences: (characterId: string | number) =>
     get<Record<string, FlistImageReferences>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
@@ -1501,31 +1266,19 @@ export const api = {
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
   /** Streams the Backup-all SSE protocol. Tools → "Back up all
    *  characters" walks the signed-in account roster, pulls each
-   *  character (JSON only — no images), and snapshots a backup when
-   *  the F-list content has actually changed. Per-character status is
+   *  character, and keeps its Live as a Backup when the F-list
+   *  content has actually changed. Per-character status is
    *  surfaced as `character` events the renderer's progress banner
    *  renders. */
   flistBackupAll: async (
     handlers: FlistBackupAllHandlers,
-    // `source` tags the sweep in the last-run telemetry Settings →
-    // Backups reads back: 'post_login' for the automatic sweep after
-    // sign-in, 'manual' for the Trigger button.
-    opts?: ApiOptions & {
-      kind?: 'manual_bulk' | 'scheduled'
-      source?: 'manual' | 'post_login'
-    }
+    opts?: ApiOptions
   ): Promise<void> => {
-    const kind = opts?.kind ?? 'manual_bulk'
-    const source = opts?.source ?? 'manual'
-    const res = await fetch(
-      `${base()}/flist/backup-all?kind=${encodeURIComponent(kind)}` +
-        `&source=${encodeURIComponent(source)}`,
-      {
-        method: 'POST',
-        headers: { Accept: 'text/event-stream' },
-        signal: opts?.signal
-      }
-    )
+    const res = await fetch(`${base()}/flist/backup-all`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream' },
+      signal: opts?.signal
+    })
     if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`)
     }

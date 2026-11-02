@@ -244,10 +244,10 @@ function EditorActiveTabBody(props: {
   // external F-list pull rewrote the working slot), @uiw's
   // value-prop reconcile fires after mount and pushes the latest
   // content over the stashed doc; the history sticks.
-  const activeSetIdForKey = useStore((s) =>
-    flistActiveId ? (s.flistActiveSetId[flistActiveId] ?? '') : ''
+  const rowForKey = useStore((s) =>
+    flistActiveId && s.flistViewingLive[flistActiveId] ? 'live' : 'workbench'
   )
-  const cmKey = `${flistActiveId ?? 'doc'}|${activeSetIdForKey}|${
+  const cmKey = `${flistActiveId ?? 'doc'}|${rowForKey}|${
     props.readOnly ? 'ro' : 'rw'
   }`
   const initialCmState = (() => {

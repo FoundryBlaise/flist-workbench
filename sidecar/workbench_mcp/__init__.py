@@ -63,15 +63,17 @@ profiles offline, and for reading the user's own F-Chat logs.
 
 Two things to keep straight:
 
-1. Workbench NEVER writes to f-list.net. Every tool here changes local
-   files only. When the user wants a profile published they review it
+1. The app NEVER writes to f-list.net. Every tool here changes local
+   files only. When the user wants a profile on F-list they review it
    in the app window and upload it themselves in the browser.
    Never tell the user a change is live on F-list.
 2. `live` is the last profile pulled down from F-list and is
-   read-only. All editing happens in a "working set" — a named local
-   draft. If a character has no active working set, create one.
+   read-only. Each character has one Workbench beside it: the local
+   copy every editing tool changes. Leave `working_set` out to work on
+   the Workbench; editing creates it from Live when it does not exist
+   yet. Pass `working_set="live"` only to read Live.
 
-Characters and sets are addressed by name; ids also work.
+Characters are addressed by name; ids also work.
 """
 
 
