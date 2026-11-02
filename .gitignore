@@ -22,8 +22,9 @@ tests/screenshots/*.png
 # Electron-builder output (Phase 6 Windows packaging — see docs/PACKAGING_WINDOWS.md)
 release/
 dist-electron/
-# Bundled sidecar binary produced by `npm run pack:sidecar`. ~30 MB,
-# regenerated from source on every pack — never check it in.
+# Bundled sidecar folder produced by `npm run pack:sidecar` (~150 MB),
+# regenerated from source on every pack — never check it in. The .exe
+# line covers the one-file builds before ADR 0005.
 resources/sidecar.exe
 resources/sidecar
 # Unpacked browser extension from `npm run fetch:extension`. The pin in
