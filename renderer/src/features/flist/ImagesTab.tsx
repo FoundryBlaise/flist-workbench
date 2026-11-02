@@ -196,7 +196,7 @@ export function ImagesTab({
   const [filters, setFilters] = useState({ unused: false, over2mb: false, png: false })
   const [sel, setSel] = useState<Selection>(EMPTY_SELECTION)
   // Where each image is still used, for the Trash warning and the
-  // "not in a working set" filter; and how full the Trash is. Both
+  // "not in the Workbench" filter; and how full the Trash is. Both
   // follow the pool listing, which reloads after every change to it.
   const [refs, setRefs] = useState<Record<string, FlistImageReferences>>({})
   const [trashCount, setTrashCount] = useState<number | null>(null)
@@ -227,7 +227,7 @@ export function ImagesTab({
   const visiblePool = useMemo(
     () =>
       poolEntries.filter((e) => {
-        if (filters.unused && (refs[e.image_id]?.working_sets.length ?? 0) > 0) return false
+        if (filters.unused && refs[e.image_id]?.workbench) return false
         if (filters.over2mb && e.size < FLIST_MAX_UPLOAD_BYTES) return false
         if (filters.png && e.extension !== 'png') return false
         return true
@@ -480,7 +480,7 @@ export function ImagesTab({
                   <span className="flist-images-toolbar__spacer" />
                   {(
                     [
-                      ['unused', 'Not in a working set'],
+                      ['unused', 'Not in the Workbench'],
                       ['over2mb', 'Over 2 MB'],
                       ['png', 'PNG']
                     ] as const

@@ -37,7 +37,6 @@ function seed(state: {
     flistArchive: {
       '99': {
         live: (state.live ?? null) as Record<string, unknown> | null,
-        snapshots: [],
         pullStatus: 'idle' as const
       }
     },

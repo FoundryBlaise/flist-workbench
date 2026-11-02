@@ -46,7 +46,7 @@ export type SectionId =
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
-  { id: 'flist', label: 'F-list', subtitle: 'Sign-in refresh + snapshot behaviour' },
+  { id: 'flist', label: 'F-list', subtitle: 'Saved login + sign-in refresh' },
   { id: 'labels', label: 'Labels', subtitle: 'IC / OOC coverage + rules' },
   { id: 'retrieval', label: 'Retrieval', subtitle: 'How log search ranks results' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },

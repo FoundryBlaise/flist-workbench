@@ -41,9 +41,6 @@ export type FlistRosterEntry = {
   has_archive: boolean
   has_logs: boolean
   last_pulled_at: number | null
-  /** Count of JSON snapshots in `snapshots/` — the auto-on-pull
-   *  history. Cheap; one per F-list-side change. */
-  snapshot_count: number
   /** Count of ZIP backups in `backups/` — the explicit "Back up"
    *  artefacts that include images + avatar. */
   backup_count: number
@@ -51,15 +48,6 @@ export type FlistRosterEntry = {
   // a prior pull was interrupted or had image failures so the renderer
   // can prompt the user to resume.
   pull_status?: FlistPullStatus
-}
-
-/** A single JSON-snapshot entry as listed by /flist/character/<id>/snapshots.
- *  Each snapshot is the full Live JSON captured at the time the
- *  corresponding pull noticed an F-list-side change. */
-export type FlistSnapshotEntry = {
-  filename: string
-  created_at: number
-  size: number
 }
 
 /** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
@@ -154,12 +142,14 @@ export type FlistTrashedLabels = {
   deleted_by: string | null
 }
 
-/** Where an image id is still used, beyond the pool. */
+/** Where an image id is still used, beyond the pool: the Workbench's
+ *  gallery, Live, and how many Backups keep it (each with its own copy
+ *  of the bytes), with the newest of them. */
 export type FlistImageReferences = {
-  working_sets: string[]
+  workbench: boolean
   live: boolean
-  snapshots: number
-  newest_snapshot: string | null
+  backups: number
+  newest_backup: string | null
 }
 
 
@@ -925,13 +915,6 @@ export const api = {
     get<Record<string, unknown>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/live`
     ),
-  /** List the per-character JSON snapshots (the auto-on-pull
-   *  forever-history). Distinct from `flistZipBackups`, which lists
-   *  the userscript-restoreable ZIP artefacts. */
-  flistSnapshots: (characterId: string | number) =>
-    get<{ character_id: string; snapshots: FlistSnapshotEntry[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/snapshots`
-    ),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
@@ -1202,7 +1185,7 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
       { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
     ),
-  /** Where each image id is still used: working sets, live, snapshots. */
+  /** Where each image id is still used: the Workbench, Live, Backups. */
   flistImageReferences: (characterId: string | number) =>
     get<Record<string, FlistImageReferences>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
@@ -1272,8 +1255,8 @@ export const api = {
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
   /** Streams the Backup-all SSE protocol. Tools → "Back up all
    *  characters" walks the signed-in account roster, pulls each
-   *  character (JSON only — no images), and snapshots a backup when
-   *  the F-list content has actually changed. Per-character status is
+   *  character, and keeps its Live as a Backup when the F-list
+   *  content has actually changed. Per-character status is
    *  surfaced as `character` events the renderer's progress banner
    *  renders. */
   flistBackupAll: async (

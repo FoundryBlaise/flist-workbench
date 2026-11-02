@@ -240,7 +240,7 @@ test('a request that outlives the closing page goes without the launch secret', 
     // (unsaved-edits.spec.ts); these, a Workbench save among them,
     // must leave without the secret, so the sidecar refuses them.
     const workingUrl = `${sidecarUrl}/flist/character/123/workbench/payload`
-    const otherUrl = `${sidecarUrl}/flist/character/123/snapshot`
+    const otherUrl = `${sidecarUrl}/flist/character/123/zip-backup`
     await window.evaluate(
       ([working, other]) => {
         addEventListener('beforeunload', () => {

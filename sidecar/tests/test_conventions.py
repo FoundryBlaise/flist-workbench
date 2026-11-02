@@ -238,9 +238,8 @@ RETIRED_TERMS: dict[str, re.Pattern[str]] = {
 # term not listed here has no allowance.
 WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/components/ExternalChangeBanner.tsx": 1,
-    "renderer/src/features/flist/ImagesTab.tsx": 2,
+    "renderer/src/features/flist/ImagesTab.tsx": 1,
     "renderer/src/features/flist/UserscriptHelpModal.tsx": 2,
-    "renderer/src/features/flist/imageUsage.ts": 1,
     "renderer/src/features/foreign/ForeignWorkspace.tsx": 1,
     "renderer/src/features/sidebar/UnifiedCharacterPicker.tsx": 1,
     "sidecar/character_archive.py": 1,
@@ -249,8 +248,7 @@ WORKING_SET_ALLOWED: dict[str, int] = {
 
 SNAPSHOT_ALLOWED: dict[str, int] = {
     "renderer/src/features/flist/ExtensionPairModal.tsx": 2,
-    "renderer/src/features/flist/imageUsage.ts": 3,
-    "renderer/src/features/settings/SettingsModal.tsx": 2,
+    "renderer/src/features/settings/SettingsModal.tsx": 1,
 }
 
 BUNDLE_ALLOWED: dict[str, int] = {}

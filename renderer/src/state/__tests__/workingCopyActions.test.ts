@@ -1181,7 +1181,6 @@ describe('opening a character never applies a stale read', () => {
     // Backup lists. Answered at once; only the Workbench reads race.
     for (const id of [AMBER, BIRCH]) {
       fake.on(`GET /flist/character/${id}/live`, json(livePayload()))
-      fake.on(`GET /flist/character/${id}/snapshots`, json({ snapshots: [] }))
       fake.on(`GET /flist/character/${id}/zip-backups`, json({ backups: [] }))
     }
     fake.on(AMBER_SAVE, json({ etag: 'amber-saved' }))
