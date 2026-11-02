@@ -54,7 +54,8 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     the local archive.
 
     This is a *download*. It refreshes `live` — the record of what is
-    published — and leaves the Workbench alone. Needs the user to be
+    published — and leaves the Workbench alone. `changed` says whether
+    the profile on F-list differed from the stored Live. Needs the user to be
     signed in, which happens in the app window; there is no
     sign-in tool, because credentials never travel through MCP.
 
@@ -108,7 +109,7 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
         "character": name,
         "character_id": summary.get("character_id"),
         "images": summary.get("image_count"),
-        "backup": summary.get("backup_path"),
+        "changed": summary.get("changed"),
         "note": (
             "This updated the local copy of what is published. Edits "
             "live in the Workbench and were not touched. " + NO_PUSH_NOTE

@@ -902,14 +902,12 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     if not ids:
         raise ToolError("validation_failed", "Give at least one image id.")
     refs = image_import.references(target.id)
-    in_gallery = {
-        i: refs[i]["working_sets"] for i in ids if refs.get(i, {}).get("working_sets")
-    }
+    in_gallery = [i for i in ids if refs.get(i, {}).get("workbench")]
     if in_gallery:
         raise ToolError(
             "image_on_profile",
-            "Still in a gallery, so not trashed: "
-            + ", ".join(f"{i} ({', '.join(sets)})" for i, sets in in_gallery.items())
+            "Still in the Workbench's gallery, so not trashed: "
+            + ", ".join(in_gallery)
             + ". Take them off with remove_image first. Nothing was moved.",
         )
     result = image_trash.trash_images(target.id, ids)

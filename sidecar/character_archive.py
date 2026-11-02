@@ -3,7 +3,7 @@
 Layout under `<userdata>/characters/<character_id>/`:
 
     live.json                        last fetched character-data + fetch ts
-    backups/<unix>.json              snapshot of a previous Live
+    backups/<name>.zip               Backups
     images/<image_id>.<ext>          all on-disk image bytes (Pool view in
                                      the UI is whatever isn't currently in
                                      working.json's gallery)
@@ -408,55 +408,35 @@ def inlines_dir(character_id: int | str) -> Path:
     return p
 
 
-def snapshots_dir(character_id: int | str) -> Path:
-    """Per-character `snapshots/` dir — JSON checkpoints of `live.json`.
-
-    Terminology: a *snapshot* is the cheap JSON-only checkpoint that
-    fires automatically on every pull. A *backup* (see `backups_dir`)
-    is a full userscript-restoreable ZIP. They're different artefacts
-    in different directories; we keep them strictly separated so the
-    user-facing "Back up" never confuses with the auto-save history.
-
-    One-shot migration: pre-rename archives had JSON files under
-    `backups/`. If we see that legacy directory and the new
-    `snapshots/` doesn't exist yet, move the JSON files over. ZIP
-    files in the legacy `backups/` (if any — there shouldn't be) are
-    left alone for the user to inspect.
-    """
-    p = character_dir(character_id) / "snapshots"
-    if not p.exists():
-        _move_legacy_snapshots(p, _legacy_snapshot_files(character_id))
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+#: Folder where Pulls once kept a JSON copy of Live per change. Nothing
+#: writes there any more; the one-time migration packs what is left
+#: into a Backup.
+OLD_PULL_COPIES_DIRNAME = "snapshots"
 
 
-def _move_legacy_snapshots(snapshots: Path, json_files: list[Path]) -> None:
-    """Move a pre-rename archive's JSON snapshots into `snapshots/`."""
-    if not json_files:
-        return
-    snapshots.mkdir(parents=True, exist_ok=True)
-    for entry in json_files:
-        try:
-            entry.replace(snapshots / entry.name)
-        except OSError:
-            # If a JSON file can't move (locked, perms),
-            # skip it — the legacy backups/ stays around.
-            pass
+def old_pull_copies(character_id: int | str) -> list[Path]:
+    """JSON copies of Live that earlier versions kept per Pull: every
+    `*.json` in `snapshots/`, and the `<unix>.json` files in `backups/`
+    from before that folder existed. Read-only and for the migration alone: nothing is moved,
+    created or parsed."""
+    folder = character_dir(character_id)
+    out: list[Path] = []
+    copies = folder / OLD_PULL_COPIES_DIRNAME
+    if copies.is_dir():
+        out.extend(
+            e for e in sorted(copies.iterdir())
+            if e.is_file() and e.suffix.lower() == ".json"
+        )
+    older = folder / "backups"
+    if older.is_dir():
+        out.extend(
+            e for e in sorted(older.iterdir())
+            if e.is_file() and _OLD_PULL_COPY_RE.fullmatch(e.name)
+        )
+    return out
 
 
-def _legacy_snapshot_files(character_id: int | str) -> list[Path]:
-    """JSON snapshots a pre-rename archive kept under `backups/`.
-
-    Legacy migration only: an archive written since the rename has
-    none, and nothing else should read `backups/` for snapshots.
-    """
-    legacy = character_dir(character_id) / "backups"
-    if not legacy.is_dir():
-        return []
-    return [
-        e for e in legacy.iterdir()
-        if e.is_file() and e.suffix.lower() == ".json"
-    ]
+_OLD_PULL_COPY_RE = re.compile(r"^\d+(?:-\d+)?\.json$")
 
 
 def backups_dir(character_id: int | str) -> Path:
@@ -544,7 +524,7 @@ def forget_backup_name(character_id: int | str, filename: str) -> None:
         _write_backup_names(character_id, names)
 
 
-# ---- live + snapshot read/write ---------------------------------------
+# ---- live read/write ---------------------------------------------------
 
 
 def _publish(event: str, **data: Any) -> None:
@@ -623,130 +603,23 @@ def read_live(character_id: int | str) -> dict[str, Any] | None:
         return None
 
 
-def save_snapshot(character_id: int | str) -> dict[str, Any]:
-    """Snapshot the current Live into `snapshots/<unix>.json`.
-
-    Returns `{path, created_at, filename}` so the renderer can show
-    the new entry without re-listing. Raises FileNotFoundError if
-    there's no Live to snapshot.
-    """
-    live = read_live(character_id)
-    if live is None:
-        raise FileNotFoundError("no Live snapshot to capture")
-    now = int(time.time())
-    target = snapshots_dir(character_id) / f"{now}.json"
-    # On the very-unlikely same-second collision, suffix with a counter.
-    i = 1
-    while target.exists():
-        target = snapshots_dir(character_id) / f"{now}-{i}.json"
-        i += 1
-    _atomic_write_json(target, live)
-    return {"path": str(target), "created_at": now, "filename": target.name}
+# Fields that are not F-list-side state: the Pull stamps `fetched_at`
+# every time, so a hash that counted it would never match.
+_LIVE_HASH_EXCLUDE = {"fetched_at"}
 
 
-# Fields that don't represent F-list-side state — excluding them from
-# the content hash means "pulled twice in a row with no F-list change"
-# doesn't bloat the snapshot directory with identical entries. The pull
-# stamps `fetched_at` every time, so without this it would never dedup.
-_SNAPSHOT_DEDUP_EXCLUDE = {"fetched_at"}
-
-
-def _live_content_hash(live: dict[str, Any]) -> str:
+def live_content_hash(live: dict[str, Any]) -> str:
     """Canonical-JSON sha256 of `live`, ignoring fields that aren't
     really part of the F-list profile state (currently just
-    `fetched_at`). Used by `save_snapshot_if_changed` to skip identical
-    snapshots after a no-op pull, and by the ZIP backup dedup."""
+    `fetched_at`). A Pull compares it to tell whether F-list changed,
+    and the ZIP backup dedup uses the same shape."""
     import hashlib
 
-    filtered = {k: v for k, v in live.items() if k not in _SNAPSHOT_DEDUP_EXCLUDE}
+    filtered = {k: v for k, v in live.items() if k not in _LIVE_HASH_EXCLUDE}
     canonical = json.dumps(filtered, sort_keys=True, ensure_ascii=False).encode(
         "utf-8"
     )
     return hashlib.sha256(canonical).hexdigest()
-
-
-def latest_snapshot_content_hash(character_id: int | str) -> str | None:
-    """Content-hash of the most recent snapshot, or None when no
-    snapshots exist (or the latest is unreadable). Hashes the same
-    shape as `_live_content_hash` so callers can compare in either
-    direction."""
-    snapshots = list_snapshots(character_id)
-    if not snapshots:
-        return None
-    latest = read_snapshot(character_id, snapshots[0]["filename"])
-    if latest is None:
-        return None
-    return _live_content_hash(latest)
-
-
-def save_snapshot_if_changed(character_id: int | str) -> dict[str, Any]:
-    """Save a snapshot *only* when the current Live differs in content
-    from the latest existing snapshot. Returns one of:
-
-      `{saved: True, ...save_snapshot payload}` — wrote a new snapshot.
-      `{saved: False, reason: 'unchanged'}`     — Live matches latest.
-      `{saved: False, reason: 'no_live'}`       — Live missing.
-
-    Callers (the pull SSE handler) use this to keep a forever-history
-    of JSON deltas without thrashing the disk on every pull. Snapshots
-    are never pruned — they're a few KB each and the owner explicitly
-    wants every change archived.
-    """
-    live = read_live(character_id)
-    if live is None:
-        return {"saved": False, "reason": "no_live"}
-    current_hash = _live_content_hash(live)
-    prior_hash = latest_snapshot_content_hash(character_id)
-    if prior_hash == current_hash:
-        return {"saved": False, "reason": "unchanged"}
-    snapshot = save_snapshot(character_id)
-    return {"saved": True, **snapshot}
-
-
-_SNAPSHOT_FILE_RE = re.compile(r"^(\d+)(?:-(\d+))?\.json$")
-
-
-def list_snapshots(character_id: int | str) -> list[dict[str, Any]]:
-    """List snapshots newest first. Each entry: `{filename, created_at, size}`.
-
-    When two snapshots share the same epoch (same-second collision,
-    broken by the `-N` suffix counter in `save_snapshot`), the higher-N
-    file is the more recent write — sort key includes the suffix so
-    the forever-history dedup check always compares against the
-    *truly* latest snapshot.
-    """
-    out: list[dict[str, Any]] = []
-    p = character_dir(character_id) / "snapshots"
-    if not p.exists():
-        legacy = _legacy_snapshot_files(character_id)
-        if not legacy:
-            # None saved yet. Listing must not create the folder: the
-            # roster lists every character, so any read would touch them all.
-            return out
-        _move_legacy_snapshots(p, legacy)
-    for entry in p.iterdir():
-        if not entry.is_file():
-            continue
-        m = _SNAPSHOT_FILE_RE.fullmatch(entry.name)
-        if not m:
-            continue
-        try:
-            stat = entry.stat()
-        except OSError:
-            continue
-        suffix = int(m.group(2)) if m.group(2) else 0
-        out.append(
-            {
-                "filename": entry.name,
-                "created_at": int(m.group(1)),
-                "_suffix": suffix,
-                "size": stat.st_size,
-            }
-        )
-    out.sort(key=lambda r: (r["created_at"], r["_suffix"]), reverse=True)
-    for row in out:
-        row.pop("_suffix", None)
-    return out
 
 
 _ZIP_BACKUP_FILE_RE = re.compile(
@@ -985,7 +858,7 @@ def latest_zip_backup_content_hash(
     character_id: int | str, source: str | None = None
 ) -> str | None:
     """Hash of the most recent ZIP backup's `character.json`, in the same
-    canonical-JSON shape used by `_live_content_hash`. Used by
+    canonical-JSON shape used by `live_content_hash`. Used by
     `save_zip_backup` to dedup against an unchanged Live so two
     Back-up-all clicks in a row don't write two identical ZIPs.
 
@@ -1149,20 +1022,6 @@ def save_zip_backup(
         "source": source,
         "occasion": occasion,
     }
-
-
-def read_snapshot(character_id: int | str, filename: str) -> dict[str, Any] | None:
-    if not _SNAPSHOT_FILE_RE.fullmatch(filename):
-        # Reject anything that doesn't match the on-disk filename shape
-        # so a caller can't path-traverse out of snapshots/.
-        return None
-    p = snapshots_dir(character_id) / filename
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
 
 
 # ---- legacy working copy (working.json, read only until migrated) -----
@@ -1590,7 +1449,7 @@ def create_set_from_live(character_id: int | str, name: str) -> SetMeta:
     clean = validate_set_name(name)
     live = read_live(character_id)
     if live is None:
-        raise ValueError("no live snapshot to seed from")
+        raise ValueError("no Live to seed from")
     payload = _seed_payload_from_live(live)
     return _materialise_set(character_id, clean, payload)
 
@@ -3076,8 +2935,7 @@ def character_name(character_id: int | str) -> str | None:
 def list_archived_characters() -> list[dict[str, Any]]:
     """Walk `<userdata>/characters/` and surface every directory that
     looks like a character archive. Each entry: `{id, name, last_pulled_at,
-    snapshot_count, backup_count}`. Name comes from the last Live
-    snapshot if present — we never had a name without a Live, so
+    backup_count}`. Name comes from the Live — we never had a name without a Live, so
     missing-name is impossible in normal use.
 
     Since the rename to name-keyed folders, the directory name is no
@@ -3125,7 +2983,6 @@ def list_archived_characters() -> list[dict[str, Any]]:
         name = (
             char.get("name") if isinstance(char, dict) else None
         ) or live.get("name")
-        snapshots = list_snapshots(cid)
         zip_dir = character_dir(cid) / "backups"
         if zip_dir.exists():
             backup_count = sum(
@@ -3140,7 +2997,6 @@ def list_archived_characters() -> list[dict[str, Any]]:
                 "id": cid,
                 "name": name,
                 "last_pulled_at": live.get("fetched_at"),
-                "snapshot_count": len(snapshots),
                 "backup_count": backup_count,
             }
         )

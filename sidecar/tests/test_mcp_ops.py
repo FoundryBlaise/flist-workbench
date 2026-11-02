@@ -95,7 +95,7 @@ async def test_pull_reports_progress_and_returns_a_summary(
         yield "images", {"total": 2, "downloaded": 0, "failed": 0}
         yield "image", {"index": 1, "total": 2, "image_id": "a"}
         yield "image", {"index": 2, "total": 2, "image_id": "b"}
-        yield "done", {"character_id": "42", "image_count": 2}
+        yield "done", {"character_id": "42", "image_count": 2, "changed": False}
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     async with mcp_client("character") as session:
@@ -104,6 +104,7 @@ async def test_pull_reports_progress_and_returns_a_summary(
         )
     assert body["character_id"] == "42"
     assert body["images"] == 2
+    assert body["changed"] is False
     # A pull refreshes what is published; it must not imply an upload.
     assert "never writes to f-list.net" in body["note"]
 

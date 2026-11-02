@@ -48,7 +48,6 @@ def list_characters(include_log_only: bool = True) -> dict[str, Any]:
                 "id": cid,
                 "has_archive": True,
                 "last_pulled_at": row.get("last_pulled_at"),
-                "snapshot_count": row.get("snapshot_count"),
                 "backup_count": row.get("backup_count"),
             }
         )
@@ -567,8 +566,8 @@ def list_images(
     `sort_order` is the position on the profile page, counting from 0.
     Each `not_on_profile` entry also carries `width`, `height`, `sha256`,
     `source_name` (the file name it was imported under, when known) and
-    `referenced_by`: which stored copies of the profile, Live among
-    them, still use it.
+    `referenced_by`: whether the Workbench's gallery and Live use it,
+    and how many Backups hold it.
     """
     from services import image_import
 
@@ -613,9 +612,9 @@ def list_images(
                 "sha256": sha,
                 "source_name": (meta.get(sha or "") or {}).get("source_name"),
                 "referenced_by": {
-                    "working_sets": ref.get("working_sets", []),
+                    "workbench": ref.get("workbench", False),
                     "live": ref.get("live", False),
-                    "snapshots": ref.get("snapshots", 0),
+                    "backups": ref.get("backups", 0),
                 },
                 "on_profile": False,
             }

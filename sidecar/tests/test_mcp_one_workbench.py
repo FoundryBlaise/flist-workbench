@@ -194,3 +194,16 @@ async def test_list_characters_does_not_count_drafts(workbench) -> None:  # noqa
     row = next(c for c in body["characters"] if c["name"] == "Lady Amber Blaise")
     assert "working_sets" not in row
     assert "active_set" not in row
+
+
+async def test_no_character_listing_counts_old_copies_of_live(workbench) -> None:  # noqa: F811
+    old_copy = workbench.character_dir("42") / "snapshots" / "1000.json"
+    old_copy.parent.mkdir()
+    old_copy.write_text("{}", encoding="utf-8")
+    async with mcp_client() as session:
+        _, listed = await call_tool(session, "list_characters")
+        _, status = await call_tool(session, "get_workbench_status")
+    for rows in (listed["characters"], status["characters"]):
+        row = next(c for c in rows if c["name"] == "Lady Amber Blaise")
+        assert row["backup_count"] == 0
+        assert not any("snapshot" in key for key in row)

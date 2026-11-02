@@ -99,7 +99,53 @@ def test_the_window_can_ask_where_an_image_is_used(client, workbench) -> None:  
     refs = client.get("/flist/character/42/image-references").json()
 
     assert refs[iid]["live"] is True
-    assert refs[iid]["working_sets"] == []
+    assert refs[iid]["workbench"] is False
+
+
+def _set_gallery(client: TestClient, image_ids: list[str]) -> None:
+    read = client.get("/flist/character/42/workbench/payload").json()
+    payload = read["payload"]
+    payload["images"] = [
+        {"image_id": i, "description": "", "sort_order": n} for n, i in enumerate(image_ids)
+    ]
+    res = client.put(
+        "/flist/character/42/workbench/payload",
+        json=payload,
+        headers={"If-Match": read["etag"]},
+    )
+    assert res.status_code == 200, res.text
+
+
+def _back_up(client: TestClient) -> str:
+    res = client.post("/flist/character/42/zip-backup")
+    assert res.status_code == 200 and res.json()["saved"], res.text
+    return res.json()["filename"]
+
+
+def test_image_usage_counts_the_workbench_live_and_backups(client, workbench) -> None:  # noqa: F811
+    kept, parked, pulled, older, loose = (upload(client, n) for n in (30, 31, 32, 33, 34))
+    live = workbench.read_live("42")
+    live["images"] = [{"image_id": pulled, "description": "", "sort_order": 0}]
+    workbench.write_live("42", live)
+    _set_gallery(client, [parked, kept])
+    first = _back_up(client)
+    _set_gallery(client, [kept])
+    second = _back_up(client)
+    # A copy of Live an earlier version kept per Pull names `older`;
+    # nothing counts it any more.
+    old_copies = workbench.character_dir("42") / "snapshots"
+    old_copies.mkdir()
+    (old_copies / "1000.json").write_text(
+        '{"images": [{"image_id": "%s"}]}' % older, encoding="utf-8"
+    )
+
+    refs = client.get("/flist/character/42/image-references").json()
+
+    assert refs[kept] == {"workbench": True, "live": False, "backups": 2, "newest_backup": second}
+    assert refs[parked] == {"workbench": False, "live": False, "backups": 1, "newest_backup": first}
+    assert refs[pulled] == {"workbench": False, "live": True, "backups": 0, "newest_backup": None}
+    assert older not in refs
+    assert loose not in refs
 
 
 def test_unknown_ids_are_reported_not_fatal(client) -> None:

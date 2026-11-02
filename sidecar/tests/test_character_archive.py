@@ -8,7 +8,7 @@ ways that would hurt real users:
   safe-name alphabet.
 - image_path / inline_path must reject path-traversal payloads in the
   F-list-supplied filename parts.
-- save_snapshot / list_snapshots must round-trip a JSON checkpoint.
+- old_pull_copies finds what the migration packs, touching nothing.
 """
 from __future__ import annotations
 
@@ -72,78 +72,37 @@ def test_inline_path_rejects_unsafe_basename():
         character_archive.inline_path("123", "foo/bar.png")
 
 
-def test_save_snapshot_round_trip(tmp_path):
-    character_archive.write_live("9999", {"name": "Test", "fetched_at": 100})
-    snap = character_archive.save_snapshot("9999")
-    assert snap["filename"].endswith(".json")
-    listed = character_archive.list_snapshots("9999")
-    assert len(listed) == 1
-    assert listed[0]["filename"] == snap["filename"]
-    payload = character_archive.read_snapshot("9999", snap["filename"])
-    assert payload is not None
-    assert payload["name"] == "Test"
-
-
-def test_read_snapshot_rejects_invalid_filename():
-    # Filenames not matching the on-disk regex are refused so a
-    # hostile caller can't path-traverse out of backups/.
-    assert character_archive.read_snapshot("123", "../../../etc/passwd") is None
-    assert character_archive.read_snapshot("123", "foo.txt") is None
-
-
-def test_save_snapshot_if_changed_skips_when_only_fetched_at_changed():
-    cid = "8888"
-    character_archive.write_live(cid, {"description": "v1", "fetched_at": 100})
-    first = character_archive.save_snapshot_if_changed(cid)
-    assert first["saved"] is True
-    character_archive.write_live(cid, {"description": "v1", "fetched_at": 200})
-    second = character_archive.save_snapshot_if_changed(cid)
-    assert second == {"saved": False, "reason": "unchanged"}
-    assert len(character_archive.list_snapshots(cid)) == 1
-
-
-def test_save_snapshot_if_changed_writes_when_content_differs():
-    cid = "8889"
-    character_archive.write_live(cid, {"description": "v1", "fetched_at": 100})
-    character_archive.save_snapshot_if_changed(cid)
-    character_archive.write_live(cid, {"description": "v2", "fetched_at": 200})
-    second = character_archive.save_snapshot_if_changed(cid)
-    assert second["saved"] is True
-    third = character_archive.save_snapshot_if_changed(cid)
-    assert third == {"saved": False, "reason": "unchanged"}
-    assert len(character_archive.list_snapshots(cid)) == 2
-
-
-def test_save_snapshot_if_changed_no_live():
-    character_archive.create_character_dir("nope")
-    assert character_archive.save_snapshot_if_changed("nope") == {
-        "saved": False,
-        "reason": "no_live",
-    }
-
-
-def test_snapshots_dir_migrates_legacy_backups(tmp_path):
-    """Pre-rename archives stored JSON snapshots under `backups/`. The
-    first call to `snapshots_dir` for such an archive must move the
-    JSON files into the new `snapshots/` location so the dedup check
-    and the renderer's history view keep working without the user
-    losing their checkpoint history."""
+def test_old_copies_of_live_are_found_where_earlier_versions_left_them():
+    """Pulls once kept a JSON copy of Live per change, first in
+    `backups/`, later in `snapshots/`. The migration finds them all;
+    finding them moves, creates and reads nothing."""
     cid = "6666"
     character_archive.create_character_dir(cid)
-    char_root = character_archive.character_dir(cid)
-    legacy = char_root / "backups"
-    legacy.mkdir(parents=True, exist_ok=True)
-    (legacy / "100.json").write_text('{"name": "legacy-100"}', encoding="utf-8")
-    (legacy / "200.json").write_text('{"name": "legacy-200"}', encoding="utf-8")
-    # Sanity: no `snapshots/` yet.
-    assert not (char_root / "snapshots").exists()
+    folder = character_archive.character_dir(cid)
+    (folder / "backups").mkdir()
+    (folder / "backups" / "100.json").write_text("{}", encoding="utf-8")
+    (folder / "backups" / "_names.json").write_text("{}", encoding="utf-8")
+    (folder / "backups" / "2026-01-01T000000Z.zip").write_bytes(b"PK")
+    (folder / "snapshots").mkdir()
+    (folder / "snapshots" / "200.json").write_text("{}", encoding="utf-8")
+    (folder / "snapshots" / "300-1.json").write_text("{}", encoding="utf-8")
+    before = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
 
-    rows = character_archive.list_snapshots(cid)
-    filenames = sorted(r["filename"] for r in rows)
-    assert filenames == ["100.json", "200.json"]
-    # Legacy dir is now empty (JSON files moved); kept on disk in case
-    # the user wants to inspect it.
-    assert not list((char_root / "backups").glob("*.json"))
+    found = character_archive.old_pull_copies(cid)
+
+    assert sorted(p.relative_to(folder).as_posix() for p in found) == [
+        "backups/100.json",
+        "snapshots/200.json",
+        "snapshots/300-1.json",
+    ]
+    assert sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*")) == before
+
+
+def test_a_character_without_old_copies_gets_no_folder_for_them():
+    cid = "6667"
+    character_archive.create_character_dir(cid)
+    assert character_archive.old_pull_copies(cid) == []
+    assert not (character_archive.character_dir(cid) / "snapshots").exists()
 
 
 def test_save_zip_backup_dedups_unchanged_live(tmp_path):
@@ -244,25 +203,6 @@ def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
     assert rows[1]["filename"].endswith("-1.zip")
     # And the no-suffix one is the oldest → last.
     assert "-" not in rows[2]["filename"].rsplit(".zip", 1)[0].split("Z", 1)[1]
-
-
-def test_list_snapshots_orders_same_second_writes_newest_first():
-    """Same-epoch collisions are broken by the `-N` suffix counter. The
-    dedup check in `save_snapshot_if_changed` depends on `list_snapshots`
-    surfacing the most-recently-written row first even when several
-    backups share an epoch."""
-    cid = "7777"
-    character_archive.write_live(cid, {"description": "a", "fetched_at": 100})
-    character_archive.save_snapshot(cid)
-    character_archive.write_live(cid, {"description": "b", "fetched_at": 100})
-    character_archive.save_snapshot(cid)
-    character_archive.write_live(cid, {"description": "c", "fetched_at": 100})
-    character_archive.save_snapshot(cid)
-    rows = character_archive.list_snapshots(cid)
-    assert rows[0]["filename"].endswith("-2.json")
-    assert rows[1]["filename"].endswith("-1.json")
-    # The third row is the no-suffix one written first.
-    assert "-" not in rows[2]["filename"].rsplit(".json", 1)[0]
 
 
 def test_merge_roster_keeps_case_only_distinct_ids():

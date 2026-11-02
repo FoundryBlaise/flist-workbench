@@ -68,7 +68,6 @@ def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
                 "name": row.get("name"),
                 "id": row.get("id"),
                 "last_pulled_at": row.get("last_pulled_at"),
-                "snapshot_count": row.get("snapshot_count"),
                 "backup_count": row.get("backup_count"),
             }
             for row in characters
