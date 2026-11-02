@@ -26,8 +26,8 @@ What this module guarantees, all of it ported from the renderer:
 * **Descriptions normalise CRLF to LF.**
 
 Every mutation goes through `edit()`, which reads the payload, applies
-a change function, and writes it back under the etag it read — retrying
-once if the UI saved in between.
+a change function, and writes it back under the etag it read, all
+under the character's lock.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+import archive_registry
 import archive_workbench
 
 #: Top-level payload keys that hold content, as opposed to bookkeeping.
@@ -105,13 +106,12 @@ def edit(
     """Read the Workbench, apply `mutate`, write it back under its etag.
 
     `mutate` changes the payload in place and returns an `EditResult`
-    carrying the paths it touched (its `etag` is filled in here). A
-    409 means the app window saved while we were working; the
-    edit is re-applied once against the fresh payload rather than
-    failing, because the two writers are usually touching different
-    fields.
+    carrying the paths it touched (its `etag` is filled in here). The
+    read, the change and the write hold the character's lock, so a save
+    from the app window waits for the edit and is then refused as stale
+    if it read the Workbench before, rather than either one being lost.
     """
-    for attempt in (1, 2):
+    with archive_registry.character_lock(character_id):
         bench = archive_workbench.read_workbench(character_id)
         if bench is None:
             raise PayloadError("the Workbench has no payload on disk")
@@ -120,18 +120,10 @@ def edit(
         result = mutate(payload) or EditResult(etag="")
         _finalise(payload, result.changed)
 
-        try:
-            new_etag = archive_workbench.write_workbench(
-                character_id, payload, expected_etag=bench.etag
-            )
-        except archive_workbench.EtagMismatch:
-            if attempt == 1:
-                continue
-            raise
-        result.etag = new_etag
+        result.etag = archive_workbench.write_workbench(
+            character_id, payload, expected_etag=bench.etag
+        )
         return result
-
-    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _finalise(payload: dict[str, Any], changed: Iterable[str]) -> None:

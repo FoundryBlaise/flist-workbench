@@ -797,53 +797,6 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
     assert "etag_mismatch" in tool_error_text(result)
 
 
-# ---- concurrency -------------------------------------------------------
-
-
-async def test_an_edit_retries_once_when_the_ui_saves_underneath(
-    workbench,
-) -> None:
-    """The app window and a model can both be editing. A save
-    landing between our read and write is expected, not an error — the
-    two are usually touching different fields."""
-    from services import payload_ops
-
-    async with mcp_client("character") as session:
-        await open_workbench(session)
-
-        original = payload_ops.edit
-        calls = {"n": 0}
-
-        def racing_edit(character_id, mutate):  # noqa: ANN001
-            def wrapper(payload):
-                calls["n"] += 1
-                if calls["n"] == 1:
-                    # Simulate the UI saving between our read and write.
-                    other = workbench_payload("42")
-                    other["settings"] = {"public": True}
-                    put_workbench("42", other)
-                return mutate(payload)
-
-            return original(character_id, wrapper)
-
-        payload_ops.edit = racing_edit
-        try:
-            _, body = await call_tool(
-                session,
-                "set_description",
-                character="Lady Amber Blaise",
-                text="mine",
-            )
-        finally:
-            payload_ops.edit = original
-
-    assert body["length"] == 4
-    payload = payload_of(workbench)
-    # Both writes survived: ours and the one that raced us.
-    assert payload["character"]["description"] == "mine"
-    assert payload["settings"] == {"public": True}
-
-
 # ---- annotations -------------------------------------------------------
 
 

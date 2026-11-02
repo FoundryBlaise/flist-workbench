@@ -309,7 +309,7 @@ window gets for the same situation:
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
 | `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
-| `etag_mismatch` | the window saved while the edit was in flight; details carry the `current_etag` |
+| `etag_mismatch` | the Workbench changed since it was read (`put_working_set_payload` with an old `if_match`); details carry the `current_etag` |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
 | `workbench_not_kept` | loading a Backup would replace the Workbench, but the Backup of it could not be written first, so nothing was replaced |
 | `backup_too_old` | the Backup comes from before the app stored a loadable profile in it; it can only be downloaded |

@@ -16,6 +16,7 @@ import archive_live
 import archive_registry
 import archive_workbench
 import atomic_write
+from archive_errors import WorkbenchConflict
 from refusals import InvalidFileName
 
 PULL_STATE_FILENAME = "pull_state.json"
@@ -72,6 +73,7 @@ def pull_state_path(character_id: int | str) -> Path:
     return archive_registry.character_dir(character_id) / PULL_STATE_FILENAME
 
 
+@archive_registry.under_character_lock
 def write_pull_state(
     character_id: int | str,
     expected_image_ids: Iterable[dict[str, Any]],
@@ -299,6 +301,7 @@ def list_character_images(character_id: int | str) -> list[dict[str, Any]]:
     return out
 
 
+@archive_registry.under_character_lock
 def write_character_image(
     character_id: int | str,
     image_id: str,
@@ -362,6 +365,7 @@ def file_sha256(path: Path) -> str:
     return digest
 
 
+@archive_registry.under_character_lock
 def collapse_local_duplicates(character_id: int | str) -> int:
     """Fold every `local-<sha8>` image whose bytes match a real-id file
     into that real id, in the character's Workbench.
@@ -410,6 +414,7 @@ def collapse_local_duplicates(character_id: int | str) -> int:
     return len(result["renamed"]) + len(result["dropped_duplicate"])
 
 
+@archive_registry.under_character_lock
 def dedupe_local_after_pull(
     character_id: int | str,
     pulled_image_id: str,
@@ -457,6 +462,7 @@ def dedupe_local_after_pull(
     return None
 
 
+@archive_registry.under_character_lock
 def add_uploaded_image(
     character_id: int | str,
     data: bytes,
@@ -529,6 +535,24 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
         return _repair_gallery(character_id)
 
 
+def _write_gallery(
+    character_id: int | str, payload: dict[str, Any], etag: str, doing: str
+) -> None:
+    """Write a Workbench whose gallery the archive changed, against the
+    etag it read. A refused write is the caller's conflict, reported as
+    `WorkbenchConflict` before any image file has changed for good."""
+    try:
+        archive_workbench.write_workbench(character_id, payload, expected_etag=etag)
+    except archive_workbench.EtagMismatch as exc:
+        raise WorkbenchConflict(
+            "etag_mismatch",
+            f"The Workbench changed while its gallery was being {doing},"
+            " so nothing was changed. Try again.",
+            exc.current_etag,
+        ) from exc
+
+
+@archive_registry.under_character_lock
 def _repair_gallery(character_id: int | str) -> dict[str, Any]:
     """Put a character's gallery back together when its entries have
     lost their bytes.
@@ -650,17 +674,14 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
 
         if touched:
             payload["images"] = kept
-            try:
-                archive_workbench.write_workbench(character_id, payload, expected_etag=bench.etag)
-                workbench_rewritten = True
-            except archive_workbench.EtagMismatch:
-                # Saved meanwhile; the next repair looks again.
-                pass
+            _write_gallery(character_id, payload, bench.etag, "repaired")
+            workbench_rewritten = True
 
     # The files left behind by the re-upload: byte-identical to one
     # F-list has, under an id it no longer knows. Keeping them would
     # leave the picture sitting in the pool for good, so they go to
-    # the Trash, where repair can never destroy them.
+    # the Trash, where repair can never destroy them. Only once the
+    # gallery no longer names them: a refused write above raised.
     from services import image_trash  # lazy: image_trash imports this module
 
     stale_removed: list[str] = []
@@ -684,6 +705,7 @@ def _repair_gallery(character_id: int | str) -> dict[str, Any]:
     }
 
 
+@archive_registry.under_character_lock
 def adopt_flist_image_ids(
     character_id: int | str,
     mapping: dict[str, str],
@@ -733,6 +755,7 @@ def adopt_flist_image_ids(
                 on_disk[m.group(1)] = m.group(2).lower()
 
     resolved: dict[str, str] = {}
+    moves: list[tuple[str, str, Path, Path]] = []
     for old_id, new_id in mapping.items():
         old_id, new_id = str(old_id).strip(), str(new_id).strip()
         if not old_id.startswith("local-") or not new_id:
@@ -747,15 +770,52 @@ def adopt_flist_image_ids(
             unknown.append(old_id)
             continue
         resolved[old_id] = new_id
-
         src = image_path(character_id, old_id, ext)
         dst = image_path(character_id, new_id, on_disk.get(new_id, ext))
-        if dst.exists() and file_sha256(dst) == file_sha256(src):
+        moves.append((old_id, new_id, src, dst))
+
+    # The Workbench write decides. A rename goes first, so the gallery
+    # never names a file that is not there yet, and is undone when the
+    # write is refused; the twin dropped and the file sent to the Trash
+    # only once the write landed, since until then the gallery may
+    # still name them.
+    done: list[tuple[Path, Path]] = []
+    workbench_rewritten = False
+    try:
+        for old_id, new_id, src, dst in moves:
+            if not dst.exists():
+                src.replace(dst)
+                done.append((src, dst))
+                renamed.append({"from": old_id, "to": new_id})
+
+        bench = archive_workbench.read_workbench(character_id) if resolved else None
+        gallery = bench.payload.get("images") if bench is not None else None
+        if bench is not None and isinstance(gallery, list):
+            touched = False
+            for row in gallery:
+                if not isinstance(row, dict):
+                    continue
+                current = str(row.get("image_id") or "")
+                if current in resolved:
+                    row["image_id"] = resolved[current]
+                    touched = True
+            if touched:
+                _write_gallery(character_id, bench.payload, bench.etag, "given F-list's ids")
+                workbench_rewritten = True
+    except BaseException:
+        for src, dst in reversed(done):
+            dst.replace(src)
+        raise
+
+    for old_id, _new_id, src, dst in moves:
+        if (src, dst) in done:
+            continue
+        if file_sha256(dst) == file_sha256(src):
             # A pull fetched the same picture under its F-list name.
             # One copy is enough.
             src.unlink(missing_ok=True)
             dropped_duplicate.append(old_id)
-        elif dst.exists():
+        else:
             # Other bytes under the F-list id (F-list re-encoded the
             # upload, or the pairing is wrong): ours is no duplicate,
             # so it goes to the Trash rather than away for good.
@@ -763,30 +823,6 @@ def adopt_flist_image_ids(
 
             image_trash.trash_pool_file(character_id, src)
             trashed.append(old_id)
-        else:
-            src.replace(dst)
-            renamed.append({"from": old_id, "to": new_id})
-
-    workbench_rewritten = False
-    bench = archive_workbench.read_workbench(character_id) if resolved else None
-    gallery = bench.payload.get("images") if bench is not None else None
-    if bench is not None and isinstance(gallery, list):
-        touched = False
-        for row in gallery:
-            if not isinstance(row, dict):
-                continue
-            current = str(row.get("image_id") or "")
-            if current in resolved:
-                row["image_id"] = resolved[current]
-                touched = True
-        if touched:
-            try:
-                archive_workbench.write_workbench(
-                    character_id, bench.payload, expected_etag=bench.etag
-                )
-                workbench_rewritten = True
-            except archive_workbench.EtagMismatch:
-                pass
 
     return {
         "renamed": renamed,

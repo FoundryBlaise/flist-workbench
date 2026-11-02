@@ -76,6 +76,7 @@ def _write_backup_names(
     )
 
 
+@archive_registry.under_character_lock
 def rename_zip_backup(
     character_id: int | str, filename: str, name: str
 ) -> None:
@@ -100,6 +101,7 @@ def backup_name(character_id: int | str, filename: str) -> str | None:
     return _read_backup_names(character_id).get(filename) or None
 
 
+@archive_registry.under_character_lock
 def forget_backup_name(character_id: int | str, filename: str) -> None:
     """Drop the user-set name for a backup that's about to be deleted.
     Called by the DELETE endpoint so `_names.json` doesn't carry
@@ -170,6 +172,7 @@ def write_new_backup(folder: Path, data: bytes) -> Path:
     return atomic_write.write_new(_backup_paths(folder, stem), data)
 
 
+@archive_registry.under_character_lock
 def write_backup_zip(character_id: int | str, data: bytes) -> Path:
     """Store `data` as a new Backup of the character, under the Backup
     file name the list recognises, and return where it went."""
@@ -442,6 +445,7 @@ def _zip_payload_content_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+@archive_registry.under_character_lock
 def save_zip_backup(
     character_id: int | str,
     *,
@@ -600,6 +604,7 @@ def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any]:
     return {"filename": result["filename"], "created_at": result["created_at"]}
 
 
+@archive_registry.under_character_lock
 def _replace_workbench(
     character_id: int | str, payload: dict[str, Any]
 ) -> WorkbenchReplaced:
@@ -626,6 +631,7 @@ def _replace_workbench(
     return WorkbenchReplaced(payload=payload, etag=etag, kept=kept)
 
 
+@archive_registry.under_character_lock
 def reset_workbench_to_live(character_id: int | str) -> WorkbenchReplaced:
     """Throw away every edit: the Workbench becomes a fresh copy of Live.
 

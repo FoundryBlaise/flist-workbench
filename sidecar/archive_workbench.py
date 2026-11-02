@@ -146,12 +146,24 @@ class EtagRequired(EtagMismatch):
         self.args = ("etag_required",)
 
 
-def _read_workbench_payload(character_id: int | str) -> dict[str, Any] | None:
+def _read_workbench_file(
+    character_id: int | str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The Workbench payload and its etag, from one read of the file:
+    (None, None) when there is no file, (None, etag) when it holds no
+    payload."""
+    import hashlib
+
     try:
-        payload = json.loads(_workbench_payload_path(character_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return payload if isinstance(payload, dict) else None
+        data = _workbench_payload_path(character_id).read_bytes()
+    except OSError:
+        return None, None
+    etag = hashlib.sha256(data).hexdigest()
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except ValueError:
+        return None, etag
+    return (payload if isinstance(payload, dict) else None), etag
 
 
 def workbench_info(character_id: int | str) -> WorkbenchInfo | None:
@@ -176,6 +188,7 @@ def workbench_info(character_id: int | str) -> WorkbenchInfo | None:
     return WorkbenchInfo(created_at=created, updated_at=updated)
 
 
+@archive_registry.under_character_lock
 def _store_workbench(
     character_id: int | str, payload: dict[str, Any], *, created_at: int | None = None
 ) -> str:
@@ -202,36 +215,40 @@ def _store_workbench(
     return etag
 
 
+@archive_registry.under_character_lock
 def read_workbench(
     character_id: int | str, *, create: bool = False
 ) -> WorkbenchRead | None:
     """The character's Workbench, or None when it has none.
 
-    `create=True` makes it from Live first if needed; None then means
-    there is no Live to make it from.
+    The payload and its etag come from one read of the file, under the
+    character's lock. `create=True` makes it from Live first if needed,
+    under the same lock, so no save can land between "there is none"
+    and making it; None then means there is no Live to make it from.
     """
     created = False
-    payload = _read_workbench_payload(character_id)
-    if payload is None and create and not _workbench_payload_path(character_id).exists():
+    payload, etag = _read_workbench_file(character_id)
+    if etag is None and create and not _workbench_payload_path(character_id).exists():
         live = archive_live.read_live(character_id)
         if live is None:
             return None
         _store_workbench(
             character_id, _seed_payload_from_live(live), created_at=int(time.time())
         )
-        payload = _read_workbench_payload(character_id)
+        payload, etag = _read_workbench_file(character_id)
         created = True
-    etag = _file_sha256(_workbench_payload_path(character_id))
     if payload is None or etag is None:
         return None
     return WorkbenchRead(payload=payload, etag=etag, created=created)
 
 
+@archive_registry.under_character_lock
 def workbench_etag(character_id: int | str) -> str | None:
     """The etag of the character's Workbench; None when it has none."""
     return _file_sha256(_workbench_payload_path(character_id))
 
 
+@archive_registry.under_character_lock
 def write_workbench(
     character_id: int | str,
     payload: dict[str, Any],
@@ -241,7 +258,8 @@ def write_workbench(
     """Replace the character's Workbench; return the new etag.
 
     The save contract: `expected_etag` must be the etag of what is on
-    disk now. Without one this raises `EtagRequired`, with a stale one
+    disk now; the check and the replace run under the character's lock,
+    so of two writes that read the same Workbench one is refused. Without one this raises `EtagRequired`, with a stale one
     (or when there is no Workbench to replace) `EtagMismatch`; neither
     touches the file. The write is atomic and announces the change.
     Raises ValueError for a payload that is not a Workbench: `_overlay`

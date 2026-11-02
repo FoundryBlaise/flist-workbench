@@ -289,3 +289,16 @@ class FlistRefused(Refusal):
         super().__init__(message, details=details)
         self.code = code
         self.status = self.STATUS_BY_CODE.get(code, 502)
+
+
+class NotStoppable(Refusal):
+    """A stop asked of a sidecar that runs without the app's server loop
+    (in tests, or a hand-started `uvicorn server:app`): there is nothing
+    of ours to end, so it keeps running."""
+
+    status = 409
+    code = "not_stoppable"
+    fixed_message = (
+        "This sidecar was not started by F-list Workbench, so it cannot stop "
+        "itself. Stop it where it was started."
+    )
