@@ -56,7 +56,6 @@ export function subscribeToWorkbenchEvents(
   const NAMES = [
     'set-payload-changed',
     'sets-changed',
-    'active-set-changed',
     'live-changed',
     'labels-changed',
     'settings-changed',

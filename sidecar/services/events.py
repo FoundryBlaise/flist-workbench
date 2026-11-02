@@ -2,7 +2,7 @@
 
 Before this, the app window was the only writer, so it always
 knew the current state of anything it displayed. Now a model can edit
-the same working set at the same time, and the window has no idea —
+the same Workbench at the same time, and the window has no idea —
 it keeps showing a stale draft until the user reloads, and worse, its
 next autosave writes the stale version back over the model's edit.
 
@@ -25,10 +25,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Iterator
 
-#: Event names. The renderer switches on these.
+#: Event names. The renderer switches on these. The two Workbench
+#: events keep the names they had when a character held several drafts:
+#: the payload changed (with its new etag), and its "last changed" moved.
 SET_PAYLOAD_CHANGED = "set-payload-changed"
 SETS_CHANGED = "sets-changed"
-ACTIVE_SET_CHANGED = "active-set-changed"
 LIVE_CHANGED = "live-changed"
 LABELS_CHANGED = "labels-changed"
 SETTINGS_CHANGED = "settings-changed"
