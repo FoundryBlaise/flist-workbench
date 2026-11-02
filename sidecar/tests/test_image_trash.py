@@ -17,7 +17,7 @@ from sidecar_client import app_client
 from PIL import Image
 
 from mcp_helpers import call_tool, mcp_client, tool_error_text
-from test_mcp_edit import make_draft, payload_of, seed_gallery, workbench  # noqa: F401
+from test_mcp_edit import open_workbench, payload_of, seed_gallery, workbench  # noqa: F401
 
 CHAR = "Lady Amber Blaise"
 
@@ -145,7 +145,7 @@ async def test_remove_image_with_delete_file_trashes_and_restore_brings_it_back(
     keep = upload(client, 8)
     drop = upload(client, 9)
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [keep, drop])
         _, removed = await call_tool(
             session,
@@ -183,7 +183,7 @@ async def test_a_model_can_trash_pool_images_but_not_gallery_ones(
     workbench.write_live("42", live)
 
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
         seed_gallery(workbench, [on_profile])
         refused, _ = await call_tool(
             session, "trash_images", character=CHAR, image_ids=[loose, on_profile]
@@ -232,7 +232,7 @@ async def test_backups_leave_the_trash_out(client, workbench) -> None:  # noqa: 
     keep = upload(client, 11)
     gone = upload(client, 12)
     async with mcp_client("character") as session:
-        await make_draft(session)
+        await open_workbench(session)
     seed_gallery(workbench, [keep])
     client.delete(f"/flist/character/42/images/{gone}")
 

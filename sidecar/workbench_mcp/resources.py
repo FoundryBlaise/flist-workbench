@@ -47,7 +47,7 @@ def bbcode_resource() -> str:
     tags=TAG_CHARACTER,
     name="A character's description",
     description=(
-        "The active working set's description, in BBCode. Tool twin: "
+        "The Workbench's description, in BBCode. Tool twin: "
         "get_description, which can also page through a long one."
     ),
     mime_type="text/plain",

@@ -66,10 +66,10 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     mapping_service.invalidate()
 
 
-async def draft(session, name: str | None = None) -> dict[str, Any]:
-    """Open the character's workbench and return what the tool said."""
+async def draft(session) -> dict[str, Any]:
+    """Read the character's Workbench, which seeds it from Live."""
     _, body = await call_tool(
-        session, "create_working_set", character="Lady Amber Blaise", name=name
+        session, "get_working_set", character="Lady Amber Blaise"
     )
     return body
 
@@ -222,52 +222,15 @@ async def test_a_removed_image_is_listed(workbench) -> None:
     assert body["changes"]["images"]["removed"] == ["1"]
 
 
-async def test_two_drafts_can_be_compared(workbench) -> None:
-    """Comparing two drafts still works, for the drafts an older version
-    left behind. MCP cannot create the second one any more — a character
-    has one workbench — so this seeds it the way an old archive holds
-    it, through the archive directly."""
+async def test_comparing_a_side_with_itself_is_refused(workbench) -> None:
     async with mcp_client("character") as session:
-        # The bench first, so it stays the active one — otherwise the
-        # legacy set would be picked up as the workbench, which is
-        # exactly what resolve_workbench is supposed to do.
         await draft(session)
-        legacy = workbench.create_set_from_live("42", "Main")
-        workbench.write_set_payload(
-            "42",
-            legacy.id,
-            {
-                "_schema_version": workbench.WORKING_SCHEMA_VERSION,
-                "_overlay": ["character.description"],
-                "character": {"id": "42", "name": "Lady Amber Blaise",
-                              "description": "one"},
-            },
-            expected_etag=None,
-        )
-        await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="two"
-        )
-        _, body = await call_tool(
-            session,
-            "diff_working_set",
-            character="Lady Amber Blaise",
-            working_set=workbench.WORKBENCH_SET_NAME,
-            against="Main",
-        )
-    assert body["from"] == "Main"
-    assert body["to"] == workbench.WORKBENCH_SET_NAME
-    assert body["changes"]["description"]["changed"] is True
-
-
-async def test_comparing_a_set_with_itself_is_refused(workbench) -> None:
-    async with mcp_client("character") as session:
-        bench = await draft(session)
         result, _ = await call_tool(
             session,
             "diff_working_set",
             character="Lady Amber Blaise",
-            working_set=bench["set"],
-            against=bench["set"],
+            working_set="live",
+            against="live",
         )
     assert "nothing to compare" in tool_error_text(result)
 

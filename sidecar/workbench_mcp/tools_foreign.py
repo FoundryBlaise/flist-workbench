@@ -6,7 +6,7 @@ same 24-hour TTL, same three sources for candidate names.
 Two constraints shape this module.
 
 *It only reads.* There is no tool here that turns a foreign profile
-into a working set, a backup or an export, and none should be added.
+into a Workbench, a Backup or an export, and none should be added.
 The cache is a separate on-disk root precisely so no existing write
 path can reach it. A model asked to "copy this profile" should say
 that Workbench does not do that.
@@ -146,7 +146,7 @@ async def get_foreign_profile(
     BBCode is structured, which infotags are filled, how the kink
     lists are arranged. Workbench offers no way to copy one of these
     into the user's own characters, and this tool is not a step
-    towards one: there is no working set, backup or export behind it.
+    towards one: there is no Workbench, Backup or export behind it.
 
     Served from a local cache for 24 hours; `refresh=true` fetches
     again. Pass `include_description=true` for the BBCode itself,
