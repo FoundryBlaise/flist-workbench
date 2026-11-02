@@ -24,6 +24,7 @@ export type WorkbenchEventTargets = {
   invalidateMessages: (char: string, partner: string) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   noteIndexChanged: () => void
+  noteLabelsChanged: () => void
   noteSettingsChanged: (fields: string[]) => void
 }
 
@@ -42,7 +43,12 @@ export function applyWorkbenchEvent(event: WorkbenchEvent, store: WorkbenchEvent
       if (id) void store.flistLoadWorkbenchInfo(id)
       break
     case 'live-changed':
-      if (id) void store.flistLoadArchive(id)
+      // Live, and the roster row's badge saying whether that Pull got
+      // every image.
+      if (id) {
+        void store.flistLoadArchive(id)
+        void store.flistLoadRoster()
+      }
       break
     case 'images-changed':
       // Files came into or left the pool; no payload changed, so
@@ -66,6 +72,9 @@ export function applyWorkbenchEvent(event: WorkbenchEvent, store: WorkbenchEvent
       store.noteIndexChanged()
       break
     case 'labels-changed': {
+      // Cleared Labels go to the Trash, which Settings → Labels and
+      // the character's Trash view list.
+      store.noteLabelsChanged()
       // Label chips are rendered from the cached message list, so
       // the cache has to go before they can refresh.
       const char = store.activeCharacter

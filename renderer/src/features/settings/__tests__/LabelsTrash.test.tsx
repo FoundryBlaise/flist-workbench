@@ -4,8 +4,10 @@
 // them back; deleting for good asks first.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api } from '../../../lib/api'
+import { useStore } from '../../../state'
+import { applyWorkbenchEvent } from '../../../state/workbenchEvents'
 import { SettingsModal } from '../SettingsModal'
 
 const SETTINGS = {
@@ -114,4 +116,29 @@ it('the reset confirm says where the copy can be restored', async () => {
 
   expect(ask.mock.calls[0][0]).toContain('Cleared Labels')
   expect(ask.mock.calls[0][0]).not.toContain('character’s Trash')
+})
+
+it('Labels a model cleared show up without reopening Settings', async () => {
+  let entries: (typeof ENTRY)[] = []
+  vi.spyOn(api, 'labelsTrashList').mockImplementation(async () => ({ labels: entries }))
+  openLabels()
+  const section = await screen.findByTestId('labels-trash')
+  await waitFor(() => expect(api.labelsTrashList).toHaveBeenCalled())
+  expect(within(section).queryAllByTestId('flist-trash-labels-item')).toHaveLength(0)
+
+  entries = [{ ...ENTRY, deleted_by: 'mcp:clear_labels' }]
+  act(() => {
+    applyWorkbenchEvent(
+      {
+        event: 'labels-changed',
+        at: 2,
+        origin: 'mcp:clear_labels',
+        character: ENTRY.character,
+        partner: ENTRY.partner
+      },
+      useStore.getState()
+    )
+  })
+
+  expect(await within(section).findAllByTestId('flist-trash-labels-item')).toHaveLength(1)
 })

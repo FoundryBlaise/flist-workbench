@@ -1395,6 +1395,14 @@ function LabelsPane({
     void refreshRollup()
     void loadTrash()
   }, [])
+  // Labels another writer cleared (a model over MCP) land in the Trash.
+  const labelsRevision = useStore((s) => s.labelsRevision)
+  const seenLabelsRevision = useRef(labelsRevision)
+  useEffect(() => {
+    if (labelsRevision === seenLabelsRevision.current) return
+    seenLabelsRevision.current = labelsRevision
+    void loadTrash()
+  }, [labelsRevision])
 
   const triggerResetAll = async () => {
     const confirmed = window.confirm(

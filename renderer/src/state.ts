@@ -127,6 +127,9 @@ type State = {
    *  started or ended, a wipe). Views that show the Index status
    *  re-read it when this moves. */
   indexRevision: number
+  /** Bumped whenever another writer changed Labels (a model labelled
+   *  or cleared them). Views listing cleared Labels re-read it. */
+  labelsRevision: number
 
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
@@ -449,6 +452,8 @@ type State = {
   closeIngest: () => void
   /** The Index changed elsewhere: views showing its status re-read. */
   noteIndexChanged: () => void
+  /** Labels changed elsewhere: views listing cleared Labels re-read. */
+  noteLabelsChanged: () => void
   /** One message by hash, or every message in a set of hashes. */
   applyLabelOverride: (
     char: string,
@@ -1804,6 +1809,7 @@ export const useStore = create<State>((set, get) => ({
 
   ingestTarget: null,
   indexRevision: 0,
+  labelsRevision: 0,
 
   messagesByPartner: {},
   messagesStatus: {},
@@ -4272,6 +4278,10 @@ export const useStore = create<State>((set, get) => ({
 
   noteIndexChanged() {
     set((s) => ({ indexRevision: s.indexRevision + 1 }))
+  },
+
+  noteLabelsChanged() {
+    set((s) => ({ labelsRevision: s.labelsRevision + 1 }))
   },
 
   // Patches one message's label fields in place, or those of every

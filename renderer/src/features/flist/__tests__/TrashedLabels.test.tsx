@@ -3,8 +3,9 @@
 // them back, saying which messages kept a newer Label.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useStore } from '../../../state'
+import { applyWorkbenchEvent } from '../../../state/workbenchEvents'
 import { ImagesTab } from '../ImagesTab'
 import { installFakeApi, json, type FakeApi } from '../../../test/fakeApi'
 
@@ -98,4 +99,29 @@ it('a clear of every conversation says so', async () => {
 
   const [row] = await screen.findAllByTestId('flist-trash-labels-item')
   expect(row.textContent).toContain('every conversation')
+})
+
+it('Labels a model clears while the Trash is open show up in it', async () => {
+  const cleared = trashedLabels
+  trashedLabels = []
+  render(<ImagesTab characterId={CID} />)
+  fireEvent.click(await screen.findByTestId('flist-images-trash-toggle'))
+  await waitFor(() => expect(fake.requests.some((r) => r.path === `${CHAR}/trash`)).toBe(true))
+  expect(screen.queryAllByTestId('flist-trash-labels-item')).toHaveLength(0)
+
+  trashedLabels = cleared
+  act(() => {
+    applyWorkbenchEvent(
+      {
+        event: 'labels-changed',
+        at: 2,
+        origin: 'mcp:clear_labels',
+        character: 'Lady Amber Blaise',
+        partner: 'Daelan Envale'
+      },
+      useStore.getState()
+    )
+  })
+
+  expect(await screen.findAllByTestId('flist-trash-labels-item')).toHaveLength(1)
 })
