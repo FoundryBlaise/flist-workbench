@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   api,
+  errorDetail,
   RefusalError,
   type CharacterEntry,
   type FlistAccountCharacter,
@@ -1720,13 +1721,9 @@ export const useStore = create<State>((set, get) => ({
       // interleaves cleanly. Fire-and-forget.
       void _flistAutoRefreshOnLogin(get)
     } catch (err) {
-      // F-list returns the human-readable error in `detail`; the
-      // request() helper folds it into `HTTP 401: <detail>`. Strip the
-      // prefix so the modal shows "Invalid account name or password"
-      // instead of "HTTP 401: Invalid account name or password".
-      const raw = err instanceof Error ? err.message : String(err)
-      const stripped = raw.replace(/^HTTP \d+:\s*/, '')
-      set({ flistSignInStatus: 'error', flistSignInError: stripped })
+      // The modal shows "Invalid account name or password", not
+      // "HTTP 401: Invalid account name or password".
+      set({ flistSignInStatus: 'error', flistSignInError: errorDetail(err) })
     }
   },
 
@@ -2665,8 +2662,7 @@ export const useStore = create<State>((set, get) => ({
     } catch (err) {
       // Nothing was replaced. Say why where the Backups are listed,
       // rather than leaving the click without an answer.
-      const raw = err instanceof Error ? err.message : String(err)
-      const reason = raw.replace(/^HTTP \d+:\s*/, '')
+      const reason = errorDetail(err)
       set((s) => ({
         flistRestoreRefusal: { ...s.flistRestoreRefusal, [characterId]: reason }
       }))
@@ -4220,6 +4216,6 @@ function humanizeFetchError(err: unknown, name: string): string {
     return "Can't reach the app's sidecar. Restart the app and try again."
   }
   if (/HTTP 5\d\d/.test(raw)) return 'F-list is having trouble right now. Try again in a moment.'
-  if (/HTTP 4\d\d/.test(raw)) return `F-list refused that name (${raw.replace(/^HTTP \d+:\s*/, '')}).`
+  if (/HTTP 4\d\d/.test(raw)) return `F-list refused that name (${errorDetail(err)}).`
   return raw
 }

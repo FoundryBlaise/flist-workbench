@@ -518,6 +518,14 @@ export class RefusalError extends Error {
   }
 }
 
+/** What a failed request says, without the `HTTP <status>: ` prefix
+ *  `request` puts in front of it: the sidecar's or F-list's own words,
+ *  ready to show. Any other error's message as it is. */
+export function errorDetail(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.replace(/^HTTP \d+:\s*/, '')
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
