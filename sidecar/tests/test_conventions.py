@@ -148,8 +148,6 @@ HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
     ("sidecar/server.py", "flist_character_image_upload"): 3,
     ("sidecar/server.py", "flist_character_inline"): 1,
     ("sidecar/server.py", "flist_character_live"): 1,
-    ("sidecar/server.py", "flist_character_snapshot"): 1,
-    ("sidecar/server.py", "flist_character_snapshot_read"): 1,
     ("sidecar/server.py", "flist_character_trash_file"): 1,
     ("sidecar/server.py", "flist_character_workbench_load_backup"): 4,
     ("sidecar/server.py", "flist_character_workbench_load_preflight"): 2,
@@ -240,9 +238,8 @@ RETIRED_TERMS: dict[str, re.Pattern[str]] = {
 # term not listed here has no allowance.
 WORKING_SET_ALLOWED: dict[str, int] = {
     "renderer/src/components/ExternalChangeBanner.tsx": 1,
-    "renderer/src/features/flist/ImagesTab.tsx": 2,
+    "renderer/src/features/flist/ImagesTab.tsx": 1,
     "renderer/src/features/flist/UserscriptHelpModal.tsx": 2,
-    "renderer/src/features/flist/imageUsage.ts": 1,
     "renderer/src/features/foreign/ForeignWorkspace.tsx": 1,
     "renderer/src/features/sidebar/UnifiedCharacterPicker.tsx": 1,
     "sidecar/character_archive.py": 1,
@@ -251,10 +248,7 @@ WORKING_SET_ALLOWED: dict[str, int] = {
 
 SNAPSHOT_ALLOWED: dict[str, int] = {
     "renderer/src/features/flist/ExtensionPairModal.tsx": 2,
-    "renderer/src/features/flist/imageUsage.ts": 3,
-    "renderer/src/features/settings/SettingsModal.tsx": 2,
-    "sidecar/character_archive.py": 2,
-    "sidecar/server.py": 2,
+    "renderer/src/features/settings/SettingsModal.tsx": 1,
 }
 
 BUNDLE_ALLOWED: dict[str, int] = {}

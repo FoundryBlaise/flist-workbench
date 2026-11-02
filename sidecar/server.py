@@ -666,16 +666,6 @@ async def flist_character_pull(name: str) -> StreamingResponse:
     )
 
 
-@app.post("/flist/character/{character_id}/snapshot")
-async def flist_character_snapshot(character_id: str) -> dict:
-    """Capture the current Live JSON into `snapshots/<unix>.json`. 409
-    if no Live exists yet. Cheap (a few KB); does not include images."""
-    try:
-        return character_archive.save_snapshot(character_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
 @app.post("/flist/character/{character_id}/zip-backup")
 async def flist_character_zip_backup(
     character_id: str,
@@ -879,7 +869,7 @@ async def flist_backup_all() -> StreamingResponse:
 async def flist_character_live(character_id: str) -> dict:
     payload = character_archive.read_live(character_id)
     if payload is None:
-        raise HTTPException(status_code=404, detail="no Live snapshot yet")
+        raise HTTPException(status_code=404, detail="no Live yet")
     return payload
 
 
@@ -1107,22 +1097,6 @@ async def flist_character_workbench_load_preflight(
     }
 
 
-@app.get("/flist/character/{character_id}/snapshots")
-async def flist_character_snapshots(character_id: str) -> dict:
-    return {
-        "character_id": character_id,
-        "snapshots": character_archive.list_snapshots(character_id),
-    }
-
-
-@app.get("/flist/character/{character_id}/snapshots/{filename}")
-async def flist_character_snapshot_read(character_id: str, filename: str) -> dict:
-    payload = character_archive.read_snapshot(character_id, filename)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="snapshot not found")
-    return payload
-
-
 @app.get("/flist/character/{character_id}/images/{filename}")
 async def flist_character_image(character_id: str, filename: str) -> FileResponse:
     """Serve `images/<image_id>.<ext>`. The filename shape is validated
@@ -1234,8 +1208,8 @@ async def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -
 # Not under /images/: that prefix is taken by the `{filename}` route.
 @app.get("/flist/character/{character_id}/image-references")
 async def flist_character_image_references(character_id: str) -> dict:
-    """Where each image id is still used — working sets, live, pull
-    snapshots — so the window can warn before trashing one."""
+    """Where each image id is still used — the Workbench, Live and
+    Backups — so the window can warn before trashing one."""
     return image_import_service.references(character_id)
 
 

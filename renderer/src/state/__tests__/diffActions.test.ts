@@ -94,12 +94,8 @@ afterEach(() => {
 })
 
 describe('the Diff picker', () => {
-  it('lists Live, then the Backups with their source and occasion, and no snapshots', async () => {
+  it('lists Live, then the Backups with their source and occasion', async () => {
     fake.on('GET /flist/character/99/live', json(livePayload({ fetched_at: 1790000500 })))
-    fake.on(
-      'GET /flist/character/99/snapshots',
-      json({ snapshots: [{ filename: '111.json', created_at: 111, size: 200 }] })
-    )
     fake.on(
       BACKUPS,
       json({
@@ -172,7 +168,6 @@ describe('choosing a Backup compares the Workbench with its payload', () => {
       'in the Backup'
     )
     expect(useStore.getState().flistDiffBackupStatus[`99:${NEWER}`]).toBe('loaded')
-    expect(fake.requests.filter((r) => r.path.includes('/snapshots'))).toEqual([])
   })
 
   it('a Backup that cannot be read shows as an error, not a spinner', async () => {
@@ -228,7 +223,6 @@ describe('"reset to this" in the Diff tab', () => {
   /** The Backup list after the sidecar kept the replaced Workbench. */
   function backupListWithKept() {
     fake.on('GET /flist/character/99/live', json(livePayload()))
-    fake.on('GET /flist/character/99/snapshots', json({ snapshots: [] }))
     fake.on(
       BACKUPS,
       json({

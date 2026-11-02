@@ -56,7 +56,6 @@ beforeEach(() => {
       })
     })
     .on(`GET ${CHAR}/live`, json(null))
-    .on(`GET ${CHAR}/snapshots`, json({ snapshots: [] }))
     .on(`GET ${CHAR}/zip-backups`, json({ character_id: CID, backups: [] }))
 })
 

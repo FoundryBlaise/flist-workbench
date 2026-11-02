@@ -106,8 +106,8 @@ the file and report it.
 Nothing lives next to the .exe. Everything goes under
 `%APPDATA%\flist-workbench\`:
 
-- `characters/` — your character archive: pulled profiles, working
-  sets, snapshots, ZIP backups and images
+- `characters/` — your character archive: pulled profiles (Live),
+  the Workbench, Backups (zips) and images
 - `settings.db` — preferences (F-Chat log directory, embedding
   endpoint, retrieval tuning)
 - `labels.db` — the IC/OOC verdict for each log message, plus partner

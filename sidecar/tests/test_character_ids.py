@@ -85,7 +85,7 @@ def test_no_character_route_accepts_a_hostile_id_or_touches_the_disk(
 
 @pytest.mark.parametrize("cid", HOSTILE_IDS)
 @pytest.mark.parametrize(
-    "suffix", ["live", "workbench", "images", "zip-backups", "trash", "snapshots"]
+    "suffix", ["live", "workbench", "images", "zip-backups", "trash"]
 )
 def test_a_hostile_id_is_refused_by_name(client: TestClient, cid: str, suffix: str) -> None:
     res = client.get(f"/flist/character/{cid}/{suffix}")
@@ -265,9 +265,7 @@ def test_a_file_name_ending_in_a_newline_is_refused_on_every_route(
 ) -> None:
     """Backup, image, trash and inline names alike: 400 `invalid_file_name`."""
     _pulled_character(archive)
-    routes = [
-        r for r in api_routes(client.app, param="filename") if "/snapshots/" not in r.path
-    ]
+    routes = api_routes(client.app, param="filename")
     assert any("/zip-backups/" in r.path for r in routes)
     before = disk_tree(tmp_path)
     failures = []
@@ -287,14 +285,6 @@ def test_a_file_name_ending_in_a_newline_is_refused_on_every_route(
 def test_a_backup_name_ending_in_a_newline_is_refused_by_the_archive(archive) -> None:  # noqa: ANN001
     with pytest.raises(archive.InvalidFileName):
         archive.require_backup_filename(f"{BACKUP_NAME}\n")
-
-
-def test_a_snapshot_name_ending_in_a_newline_is_not_found(
-    client: TestClient, archive  # noqa: ANN001
-) -> None:
-    _pulled_character(archive)
-    res = client.get("/flist/character/123/snapshots/1.json%0A")
-    assert res.status_code == 404
 
 
 def test_an_image_id_ending_in_a_newline_is_refused(client: TestClient, archive) -> None:  # noqa: ANN001

@@ -60,11 +60,6 @@ async def _pull_one_character_for_backup_all(
     live_payload = dict(payload)
     live_payload["fetched_at"] = int(_t.time())
     character_archive.write_live(cid, live_payload)
-    # Auto-snapshot the JSON (cheap, separate from the ZIP).
-    try:
-        character_archive.save_snapshot_if_changed(cid)
-    except OSError:
-        pass
 
     # Avatar — non-fatal.
     try:

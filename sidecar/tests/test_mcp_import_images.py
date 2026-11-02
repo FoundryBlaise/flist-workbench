@@ -440,7 +440,10 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     live = workbench.read_live("42")
     live["images"] = [{"image_id": "555", "extension": "jpg", "description": "", "sort_order": 0}]
     workbench.write_live("42", live)
-    workbench.save_snapshot("42")
+    # A copy of Live an earlier version kept per Pull: nothing counts it.
+    old_copy = workbench.character_dir("42") / "snapshots" / "1000.json"
+    old_copy.parent.mkdir()
+    old_copy.write_text('{"images": [{"image_id": "555"}]}', encoding="utf-8")
 
     async with mcp_client("character") as session:
         await open_workbench(session)
@@ -455,9 +458,8 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     assert (mine["width"], mine["height"]) == (30, 50)
     assert mine["source_name"] == "Profil_final_07.png"
     assert mine["sha256"] == imported["sha256"]
-    assert mine["referenced_by"] == {"working_sets": [], "live": False, "snapshots": 0}
+    assert mine["referenced_by"] == {"workbench": False, "live": False, "backups": 0}
 
     pulled = pool["555"]
     assert pulled["source_name"] is None
-    assert pulled["referenced_by"]["live"] is True
-    assert pulled["referenced_by"]["snapshots"] == 1
+    assert pulled["referenced_by"] == {"workbench": False, "live": True, "backups": 0}

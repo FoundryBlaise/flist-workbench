@@ -59,7 +59,6 @@ beforeEach(() => {
     flistArchive: {
       [CID]: {
         live: null,
-        snapshots: [],
         pullStatus: 'idle',
         zipBackups: BACKUPS,
         zipBackupsStatus: 'ready',

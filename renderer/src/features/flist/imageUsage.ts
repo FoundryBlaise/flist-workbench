@@ -8,14 +8,18 @@ export function usageNotes(
   refs: Record<string, FlistImageReferences>
 ): string[] {
   let live = 0
-  let snapshots = 0
-  const inSets = new Map<string, number>()
+  let workbench = 0
+  let kept = 0
+  let backups = 0
   for (const id of imageIds) {
     const r = refs[id]
     if (!r) continue
     if (r.live) live++
-    if (r.snapshots > 0) snapshots++
-    for (const name of r.working_sets) inSets.set(name, (inSets.get(name) ?? 0) + 1)
+    if (r.workbench) workbench++
+    if (r.backups > 0) {
+      kept++
+      backups = r.backups
+    }
   }
   const one = imageIds.length === 1
   const howMany = (n: number) => (one ? 'It' : `${n} of these`)
@@ -28,12 +32,14 @@ export function usageNotes(
       } again.`
     )
   }
-  for (const [name, n] of inSets) {
-    notes.push(`${howMany(n)} ${is(n)} still used in the working set “${name}”.`)
+  if (workbench > 0) {
+    notes.push(`${howMany(workbench)} ${is(workbench)} still in the Workbench’s gallery.`)
   }
-  if (snapshots > 0) {
+  if (kept > 0) {
     notes.push(
-      `${howMany(snapshots)} ${one || snapshots === 1 ? 'appears' : 'appear'} in earlier pulls (snapshots).`
+      one && backups > 1
+        ? `It is kept in ${backups} Backups, which hold their own copy.`
+        : `${howMany(kept)} ${is(kept)} kept in a Backup, which holds its own copy.`
     )
   }
   return notes

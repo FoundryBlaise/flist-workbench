@@ -4,7 +4,6 @@ import {
   RefusalError,
   type CharacterEntry,
   type FlistAccountCharacter,
-  type FlistSnapshotEntry,
   type FlistZipBackupEntry,
   type FlistCharacterImage,
   type FlistRosterEntry,
@@ -167,13 +166,8 @@ type State = {
     string,
     {
       live: Record<string, unknown> | null
-      /** JSON-snapshot history (the auto-on-pull forever-history). */
-      snapshots: FlistSnapshotEntry[]
       /** ZIP-backup files in `characters/<id>/backups/`, newest first.
-       *  Distinct from snapshots: backups are explicit user-driven
-       *  archives (Tools → Back up all sweep + per-character right-
-       *  click → Back up now); snapshots are auto-on-pull JSON. The
-       *  Backups sidebar list reads from this slot. `undefined` means
+       *  The Backups sidebar list reads from this slot. `undefined` means
        *  "not yet loaded for this character"; an empty array means
        *  "loaded, none exist". */
       zipBackups?: FlistZipBackupEntry[]
@@ -1365,7 +1359,6 @@ function _restoreFromBrowse(
       ...s.flistArchive,
       [characterId]: {
         ...(s.flistArchive[characterId] ?? {
-          snapshots: [],
           pullStatus: 'idle'
         }),
         live: previousLive
@@ -1812,7 +1805,6 @@ export const useStore = create<State>((set, get) => ({
           const key = String(entry.id)
           const prev = archive[key] ?? {
             live: null,
-            snapshots: [],
             pullStatus: 'idle' as const,
           }
           archive[key] = {
@@ -1900,7 +1892,6 @@ export const useStore = create<State>((set, get) => ({
         ...s.flistArchive,
         [characterId]: s.flistArchive[characterId] ?? {
           live: null,
-          snapshots: [],
           pullStatus: 'idle'
         }
       }
@@ -1913,7 +1904,6 @@ export const useStore = create<State>((set, get) => ({
         [characterId]: {
           ...(s.flistArchive[characterId] ?? {
             live: null,
-            snapshots: [],
             pullStatus: 'idle'
           }),
           zipBackupsStatus: 'loading',
@@ -1921,12 +1911,8 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     }))
-    const [live, snapshots, zipBackupsResult] = await Promise.all([
+    const [live, zipBackupsResult] = await Promise.all([
       api.flistLive(characterId).catch(() => null),
-      api
-        .flistSnapshots(characterId)
-        .then((r) => r.snapshots)
-        .catch(() => []),
       api
         .flistZipBackups(characterId)
         .then((r) => ({ ok: true as const, backups: r.backups }))
@@ -1947,7 +1933,6 @@ export const useStore = create<State>((set, get) => ({
         [characterId]: {
           ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
           live,
-          snapshots,
           zipBackups: zipBackupsResult.ok ? zipBackupsResult.backups : [],
           zipBackupsStatus: zipBackupsResult.ok ? 'ready' : 'error',
           zipBackupsError: zipBackupsResult.ok ? null : zipBackupsResult.error,
@@ -1981,7 +1966,6 @@ export const useStore = create<State>((set, get) => ({
           [targetId]: {
             ...(s.flistArchive[targetId] ?? {
               live: null,
-              snapshots: [],
               pullStatus: 'idle'
             }),
             ...patch
@@ -2026,7 +2010,6 @@ export const useStore = create<State>((set, get) => ({
               [info.character_id]: {
                 ...(s.flistArchive[info.character_id] ?? {
                   live: null,
-                  snapshots: [],
                   pullStatus: 'idle'
                 }),
                 pullStatus: 'done',
@@ -2331,7 +2314,6 @@ export const useStore = create<State>((set, get) => ({
             [characterId]: {
               ...(s.flistArchive[characterId] ?? {
                 live: null,
-                snapshots: [],
                 pullStatus: 'idle'
               }),
               live: fetched as Record<string, unknown>
@@ -2876,7 +2858,7 @@ export const useStore = create<State>((set, get) => ({
           // updated all of them — wasted disk + network on subsequent
           // manual REFRESH ALL clicks. flistLoadArchive reads from
           // local /flist/character/{id}/live (no F-list network),
-          // updates the live payload + snapshots + zipBackups +
+          // updates the live payload + zipBackups +
           // lastPullAt in one pass.
           const refreshable =
             (info.status === 'saved' || info.status === 'unchanged') &&
@@ -3050,7 +3032,6 @@ export const useStore = create<State>((set, get) => ({
               [cid]: {
                 ...(s.flistArchive[cid] ?? {
                   live: null,
-                  snapshots: [],
                   pullStatus: 'idle'
                 }),
                 zipBackups: r.backups,
@@ -3275,7 +3256,6 @@ export const useStore = create<State>((set, get) => ({
           ...s.flistArchive,
           [characterId]: {
             ...(s.flistArchive[characterId] ?? {
-              snapshots: [],
               pullStatus: 'idle'
             }),
             live: payload

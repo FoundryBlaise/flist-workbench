@@ -85,7 +85,6 @@ describe('sidecar replies', () => {
   it('archiveEntry wraps a Live with no Backups, idle', () => {
     expect(archiveEntry(livePayload())).toEqual({
       live: { character: { description: '' } },
-      snapshots: [],
       pullStatus: 'idle'
     })
   })

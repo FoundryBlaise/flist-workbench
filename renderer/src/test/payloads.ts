@@ -58,7 +58,7 @@ export function archiveEntry(
   live: Record<string, unknown> | null = livePayload(),
   overrides: Partial<ArchiveEntry> = {}
 ): ArchiveEntry {
-  return { live, snapshots: [], pullStatus: 'idle', ...overrides }
+  return { live, pullStatus: 'idle', ...overrides }
 }
 
 /** What the sidecar answers to reading a Workbench payload. */
