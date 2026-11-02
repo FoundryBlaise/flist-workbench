@@ -33,8 +33,8 @@ their archived data in the picker. Each entry carries `has_logs` and
 The archive is five modules; each imports only the ones listed above it:
 
     archive_registry   folders, the id → folder registry, the roster, and
-                       what every writer shares (`_publish`,
-                       `_atomic_write_json`)
+                       what every writer shares (the per-character
+                       lock, `_publish`, `_atomic_write_json`)
     archive_live       Live: what F-list showed at the last Pull
     archive_workbench  the Workbench: the one editable copy
     archive_images     images, inlines, avatars, the pull manifest, and
@@ -44,11 +44,12 @@ The archive is five modules; each imports only the ones listed above it:
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import threading
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, TypeVar
 
 import atomic_write
 import paths
@@ -144,7 +145,9 @@ def _registry_path() -> Path:
 
 _REGISTRY_CACHE: dict[str, dict[str, str]] | None = None
 _REGISTRY_MIGRATED = False
-_REGISTRY_LOCK = threading.Lock()
+#: Re-entrant: `register_character` holds it across its whole
+#: read-modify-write, and the load and save inside take it again.
+_REGISTRY_LOCK = threading.RLock()
 
 
 def load_registry() -> dict[str, dict[str, str]]:
@@ -207,7 +210,11 @@ def register_character(character_id: int | str, name: str) -> str:
     Rename failures (e.g. file lock on Windows) leave the registry
     pointing at the prior slug — the next pull will retry.
     """
-    cid = str(character_id)
+    with _REGISTRY_LOCK:
+        return _register_character(str(character_id), name)
+
+
+def _register_character(cid: str, name: str) -> str:
     new_slug = _slug_for(name)
     reg = dict(load_registry())
     entry = reg.get(cid) or {}
@@ -328,6 +335,51 @@ def _maybe_migrate_id_folders() -> None:
             _atomic_write_json(p, reg)
         except OSError:
             pass
+
+
+# ---- one lock per character ----------------------------------------
+#
+# Every read-modify-write of a character's Live, Workbench, Backups or
+# images runs under that character's lock, whoever asks: a REST route
+# on the event loop, an MCP tool, threadpool work. So two writers that
+# read the same Workbench cannot both pass the etag check, and a reader
+# never meets a file halfway through being replaced (on Windows a
+# replace and an open reader refuse each other).
+#
+# Re-entrant, because the archive's writers call each other: a Backup
+# repairs the gallery first, replacing the Workbench takes a Backup
+# first, image-id adoption rewrites the Workbench. Held only around
+# synchronous work, never across an `await`, so a coroutine waiting on
+# the network never holds it. Order: a character's lock before the
+# registry's or any module lock (`image_trash._lock` ...), never the
+# other way round.
+
+_CHARACTER_LOCKS: dict[str, threading.RLock] = {}
+_CHARACTER_LOCKS_GUARD = threading.Lock()
+
+
+def character_lock(character_id: int | str) -> threading.RLock:
+    """The lock for one character, the same object for every caller."""
+    cid = str(character_id)
+    with _CHARACTER_LOCKS_GUARD:
+        lock = _CHARACTER_LOCKS.get(cid)
+        if lock is None:
+            lock = _CHARACTER_LOCKS[cid] = threading.RLock()
+        return lock
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def under_character_lock(fn: _F) -> _F:
+    """Run `fn(character_id, ...)` holding that character's lock."""
+
+    @functools.wraps(fn)
+    def locked(character_id: int | str, *args: Any, **kwargs: Any) -> Any:
+        with character_lock(character_id):
+            return fn(character_id, *args, **kwargs)
+
+    return locked  # type: ignore[return-value]
 
 
 def _folder_for(character_id: int | str) -> tuple[Path, bool]:

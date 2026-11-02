@@ -1325,12 +1325,14 @@ def get_working_set_payload(
     """
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = load_payload(resolved)
-    etag = (
-        None
-        if resolved.is_live
-        else archive_workbench.workbench_etag(target.id)
-    )
+    if resolved.is_live:
+        payload, etag = load_payload(resolved), None
+    else:
+        # The payload and its etag from one read, so the etag a model
+        # sends back names exactly what it was shown.
+        bench = archive_workbench.read_workbench(target.id)
+        payload = bench.payload if bench is not None else load_payload(resolved)
+        etag = bench.etag if bench is not None else None
     return {
         "character": target.name,
         "set": resolved.name,

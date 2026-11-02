@@ -11,6 +11,7 @@ from typing import Any
 import archive_registry
 
 
+@archive_registry.under_character_lock
 def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     """Overwrite the Live snapshot. Caller is responsible for stamping
     `fetched_at` into the payload before calling.
@@ -30,6 +31,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     archive_registry._publish(events.LIVE_CHANGED, character_id=str(character_id))
 
 
+@archive_registry.under_character_lock
 def read_live(character_id: int | str) -> dict[str, Any] | None:
     p = archive_registry.character_dir(character_id) / archive_registry.LIVE_FILENAME
     if not p.exists():
