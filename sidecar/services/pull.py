@@ -8,7 +8,9 @@ two drift apart.
 
 A Pull runs as a job (`services.jobs`), one per character: `start()`
 answers with the job at once, and a second Pull of the same character
-while one runs is refused `character_busy`. The job is not tied to
+while one runs is refused `character_busy`. `start_when_free()` is the
+Pull the extension asks for after a save on f-list.net: it waits its
+turn instead. The job is not tied to
 whoever started it: the REST route's progress stream and the MCP tool
 only follow it, and only a cancel by job id stops it.
 
@@ -22,8 +24,10 @@ f-list.net: the only outbound calls are `getApiTicket.php`,
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
@@ -36,7 +40,7 @@ import archive_live
 import archive_registry
 import flist_activity
 import flist_api
-from refusals import INTERNAL_ERROR, CharacterBusy
+from refusals import INTERNAL_ERROR, CharacterBusy, JobNotFound
 
 from . import events, image_trash, jobs, sse
 
@@ -110,14 +114,12 @@ IMAGE = "image"  # {index, total, image_id}: per image
 EVENTS = (TICKET, FETCHING, IMAGES, IMAGE, jobs.DONE, jobs.ERROR)
 
 
-def start(name: str, *, delay: float = 0.0) -> jobs.Job:
-    """Start a Pull of `name` as a job, after `delay` seconds. Raises
-    `CharacterBusy` while another job holds the character."""
+def start(name: str) -> jobs.Job:
+    """Start a Pull of `name` as a job. Raises `CharacterBusy` while
+    another job holds the character."""
     name = name.strip()
 
     async def work() -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        if delay:
-            await asyncio.sleep(delay)
         async for item in run(name):
             yield item
 
@@ -130,6 +132,40 @@ def start(name: str, *, delay: float = 0.0) -> jobs.Job:
         progress={"stage": "queued"},
         observe=_observe,
     )
+
+
+def start_when_free(name: str, *, delay: float) -> None:
+    """Start a Pull of `name` after `delay` seconds, once no job holds
+    the character: the Pull after the user saved on f-list.net.
+
+    Holds nothing while it waits, so a Pull the user starts meanwhile
+    runs at once, and a busy character (a Pull, Back up all) only
+    delays this one: it starts when that job has finished. Returns at
+    once; the waiting is done on a thread of its own, in a copy of the
+    caller's context (`events.origin`)."""
+    context = contextvars.copy_context()
+    threading.Thread(
+        target=context.run,
+        args=(_start_when_free, name, delay),
+        daemon=True,
+        name=f"pull-when-free-{name}",
+    ).start()
+
+
+def _start_when_free(name: str, delay: float) -> None:
+    time.sleep(delay)
+    while True:
+        try:
+            start(name)
+            return
+        except CharacterBusy as busy:
+            holder = busy.details["job_id"]
+        try:
+            job = jobs.registry().get(holder)
+        except JobNotFound:  # finished and forgotten already
+            continue
+        while not job.finished:
+            time.sleep(jobs.POLL_SECONDS)
 
 
 def _observe(job: jobs.Job, event: str, data: dict[str, Any]) -> None:

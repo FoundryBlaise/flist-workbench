@@ -5,7 +5,6 @@ The extension's own routes take its pairing token
 window.
 """
 
-import sys
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Response
@@ -16,7 +15,7 @@ import archive_registry
 import archive_workbench
 import restore as restore_svc
 from archive_errors import CharacterNotFound, NoLive
-from refusals import BackupNotFound, CharacterBusy, InvalidRequest, NotPaired
+from refusals import BackupNotFound, InvalidRequest, NotPaired
 from services import events
 from services import pull as pull_service
 
@@ -268,26 +267,22 @@ async def restore_saved(
     quietly replacing their draft with what they just published would
     be the rudest possible interpretation of "restore finished".
 
-    Returns immediately with the Pull's job id. A pull takes seconds and
-    the extension has a page to get on with; it is fire-and-forget by
-    design, and the renderer hears about the result over the event
-    stream like any other pull. The Pull is a job like any other
-    (`services.pull.start`), waiting `delay_seconds` first: while a
-    Pull or Back up all already holds the character, nothing is
-    scheduled (`scheduled: false`, with the busy refusal's details).
+    Returns immediately. A pull takes seconds and the extension has a
+    page to get on with; it is fire-and-forget by design, and the
+    renderer hears about the result over the event stream like any
+    other pull. The Pull is a job like any other once it starts
+    (`services.pull.start_when_free`): after `delay_seconds`, and
+    after any Pull or Back up all that holds the character then has
+    finished. It holds nothing while it waits, so a Pull the user
+    starts in the window meanwhile is not refused.
     """
     name = body.character.strip()
     if not name:
         raise _character_required()
     delay = max(0.0, min(60.0, float(body.delay_seconds)))
-    answer: dict[str, Any] = {"character": name, "delay_seconds": delay}
-    try:
-        with events.origin(EXTENSION):
-            job = pull_service.start(name, delay=delay)
-    except CharacterBusy as exc:
-        print(f"post-save pull of {name} not scheduled: {exc.message}", file=sys.stderr)
-        return {"scheduled": False, **answer, "busy": exc.details}
-    return {"scheduled": True, **answer, "job_id": job.id}
+    with events.origin(EXTENSION):
+        pull_service.start_when_free(name, delay=delay)
+    return {"scheduled": True, "character": name, "delay_seconds": delay}
 
 
 @router.post("/restore/done")
