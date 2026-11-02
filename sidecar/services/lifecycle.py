@@ -15,7 +15,7 @@ from typing import Any
 #: How long open requests (the window's event stream, the render
 #: long-poll) may keep running once a stop is asked for, in seconds.
 #: Electron waits a little longer than this before it kills.
-GRACEFUL_SHUTDOWN_S = 3
+GRACEFUL_SHUTDOWN_S = 1
 
 _server: Any = None
 
