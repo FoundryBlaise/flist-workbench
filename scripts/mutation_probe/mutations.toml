@@ -14,6 +14,8 @@
 #   audit    verdict before spec #9: the October 2026 audit runs for A and L;
 #            R and A06 re-measured with this tool on main 77d79c4 (the
 #            audit's renderer log was lost, and A06 did not apply then)
+#            Entries re-anchored for spec #3 (A01 A02 A04 A08 A09 A13 A15,
+#            R01 R03 R04 R07 R10 R23) re-measured on spec/3-one-workbench.
 #   spec     the spec whose tests should kill it if it survives
 #            (9 = should already be killed by spec #9's fixtures)
 #
@@ -27,8 +29,15 @@ archive = [
   "sidecar/tests/test_character_archive.py",
   "sidecar/tests/test_workbench_api.py",
   "sidecar/tests/test_workbench_payload_api.py",
-  "sidecar/tests/test_working_copy.py",
-  "sidecar/tests/test_working_sets_v2_storage.py",
+  "sidecar/tests/test_one_workbench_migration.py",
+  "sidecar/tests/test_set_routes_gone.py",
+  "sidecar/tests/test_extension_upload_sources.py",
+  "sidecar/tests/test_backup_source_occasion.py",
+  "sidecar/tests/test_before_restore_backup.py",
+  "sidecar/tests/test_pre_upload_backup.py",
+  "sidecar/tests/test_backup_trash.py",
+  "sidecar/tests/test_pull_change.py",
+  "sidecar/tests/test_image_replacement.py",
   "sidecar/tests/test_image_trash.py",
   "sidecar/tests/test_pool_api.py",
   "sidecar/tests/test_adopt_image_ids.py",
@@ -73,33 +82,27 @@ audit = "killed"
 spec = 3
 # audit: M1 set payload: etag check skipped
 find = '''
-    current = _file_sha256(p)
-    if expected_etag is not None and current != expected_etag:
+    if current is None or current != expected_etag:
         raise EtagMismatch(current)
-    _atomic_write_json(p, payload)
-    now = int(time.time())'''
+    return _store_workbench(character_id, payload)'''
 replace = '''
-    current = _file_sha256(p)
-    _atomic_write_json(p, payload)
-    now = int(time.time())'''
+    return _store_workbench(character_id, payload)'''
 
 [[mutation]]
 id = "A02"
 suite = "sidecar"
-file = "sidecar/server.py"
+file = "sidecar/character_archive.py"
 breaks = "A Workbench save that never read the current version (no If-Match) is accepted: a blind overwrite."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 3
 # audit: M2 PUT set payload: blind write (no If-Match) allowed
 find = '''
-    if if_match is None:
-        existing = character_archive.set_payload_etag(character_id, set_id)
-        if existing is not None:'''
+    if expected_etag is None:
+        raise EtagRequired(current)'''
 replace = '''
-    if if_match is None:
-        existing = character_archive.set_payload_etag(character_id, set_id)
-        if False:'''
+    if expected_etag is None:
+        expected_etag = current'''
 
 [[mutation]]
 id = "A03"
@@ -133,13 +136,13 @@ audit = "killed"
 spec = 2
 # audit: M4 backup packs Live even when a Workbench exists
 find = '''
-    if bench is not None:
-        working = read_set_payload(character_id, bench.id)
-    if working is None:
-        working = _live_to_zip_payload(live)'''
+    if source == backup_origin.WORKBENCH:
+        bench = read_workbench(character_id)
+        if bench is not None:
+            working = bench.payload
+    if working is None:'''
 replace = '''
-    if working is None:
-        working = _live_to_zip_payload(live)'''
+    if working is None:'''
 
 [[mutation]]
 id = "A05"
@@ -207,11 +210,11 @@ audit = "killed"
 spec = 2
 # audit: M8 same-second backup overwrites instead of -N suffix
 find = '''
-    # Collision suffix in case a same-second second click occurs.
-    if target.exists():'''
+    i = 1
+    while target.exists():'''
 replace = '''
-    # Collision suffix in case a same-second second click occurs.
-    if False:'''
+    i = 1
+    while False:'''
 
 [[mutation]]
 id = "A09"
@@ -219,19 +222,17 @@ suite = "sidecar"
 file = "sidecar/services/image_trash.py"
 breaks = "Restoring an image from the Trash overwrites a different image of the same name in the pool."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 2
 # audit: M9 trash restore overwrites a different pool file
 find = '''
-            if dest.exists():
-                # Same name, different bytes: keep both rather than
-                # overwrite what the pool has now.
-                conflicts.append(image_id)
-                continue'''
+            if image_id in _files(pool_dir):
+                image_id = f"local-{sha[:8]}"
+            dest = pool_dir / f"{image_id}{src.suffix.lower()}"
+            if image_id in _files(pool_dir):'''
 replace = '''
-            if False:
-                conflicts.append(image_id)
-                continue'''
+            dest = pool_dir / f"{image_id}{src.suffix.lower()}"
+            if False:'''
 
 [[mutation]]
 id = "A10"
@@ -287,10 +288,10 @@ audit = "survived"
 spec = 4
 # audit: M13 write_live no longer publishes live-changed
 find = '''
-    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)
-    _publish("live-changed", character_id=str(character_id))'''
+    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
+    _publish(_events().LIVE_CHANGED, character_id=str(character_id))'''
 replace = '''
-    _atomic_write_json(character_dir(character_id) / LIVE_FILENAME, payload)'''
+    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)'''
 
 [[mutation]]
 id = "A14"
@@ -312,32 +313,17 @@ suite = "sidecar"
 file = "sidecar/restore.py"
 breaks = "The Upload source list leaves out the Workbench."
 tests = ["@archive", "@mcp"]
-audit = "survived"
+audit = "killed"
 spec = 3
 # audit: M15 extension source list drops the Workbench
 find = '''
-    bench = character_archive.resolve_workbench(character_id, create=False)
+    bench = _workbench(character_id)
     if bench is not None:
-        payload = character_archive.read_set_payload'''
+        images = bench.payload.get("images")'''
 replace = '''
-    bench = character_archive.resolve_workbench(character_id, create=False)
+    bench = _workbench(character_id)
     if False:
-        payload = character_archive.read_set_payload'''
-
-[[mutation]]
-id = "A16"
-suite = "sidecar"
-file = "sidecar/restore.py"
-breaks = "An Upload of Live sends the Workbench instead."
-tests = ["@archive", "@mcp"]
-audit = "survived"
-spec = 3
-# audit: M16 extension 'live' source packs the bench instead
-find = '''
-        working_shape = character_archive._seed_payload_from_live(live)'''
-replace = '''
-        _b = character_archive.resolve_workbench(character_id, create=False)
-        working_shape = character_archive.read_set_payload(character_id, _b.id) if _b else character_archive._seed_payload_from_live(live)'''
+        images = bench.payload.get("images")'''
 
 [[mutation]]
 id = "A17"
@@ -650,11 +636,11 @@ audit = "killed"
 spec = 2
 # audit: M01 409 conflict adopts server etag
 find = '''
-                etag: existing.etag,
-                unsavedDirty: true'''
+          etag: existing.etag,
+          unsavedDirty: true'''
 replace = '''
-                etag: errWith.currentEtag ?? existing.etag,
-                unsavedDirty: true'''
+          etag: currentEtag ?? existing.etag,
+          unsavedDirty: true'''
 
 [[mutation]]
 id = "R02"
@@ -680,15 +666,13 @@ suite = "renderer"
 file = "renderer/src/state.ts"
 breaks = "A save that lands marks the Workbench clean although the user typed while it was in flight; those keystrokes are never saved."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 9
 # audit: M03 save success clears dirty even if user typed during PUT
 find = '''
-
-            unsavedDirty: isFresh ? false : existing.unsavedDirty,'''
+        unsavedDirty: isFresh ? false : existing.unsavedDirty,'''
 replace = '''
-
-            unsavedDirty: false,'''
+        unsavedDirty: false,'''
 
 [[mutation]]
 id = "R04"
@@ -704,13 +688,13 @@ spec = 2
 # and passes either way). Spec #2's "one follow-up flush per character"
 # fix makes the follow-up the only path and this mutation killable.
 find = '''
-        if (next?.unsavedDirty) {
-          _scheduleFlush(characterId, () => {
-            void get().flistFlushWorking(characterId)
-          })
-        }'''
+    if (next?.unsavedDirty) {
+      _scheduleFlush(characterId, () => {
+        void get().flistFlushWorking(characterId)
+      })
+    }'''
 replace = '''
-        void next'''
+    void next'''
 
 [[mutation]]
 id = "R05"
@@ -756,13 +740,9 @@ audit = "killed"
 spec = 7
 # audit: M07 keep-mine writes against own stale etag
 find = '''
-        slot.payload,
-        change.etag
-      )'''
+api.flistWorkbenchPayloadPut(characterId, slot.payload, change.etag)'''
 replace = '''
-        slot.payload,
-        slot.etag
-      )'''
+api.flistWorkbenchPayloadPut(characterId, slot.payload, slot.etag)'''
 
 [[mutation]]
 id = "R08"
@@ -800,15 +780,17 @@ const current = slot'''
 id = "R10"
 suite = "renderer"
 file = "renderer/src/components/AppLayout.tsx"
-breaks = "A Workbench change event is dispatched with the character id as set id, so the open Workbench does not reload."
+breaks = "A Workbench change event reaches the window without its etag, so keeping my version after the external change saves without an etag and is refused."
 tests = ["@renderer"]
 audit = "survived"
 spec = 7
 # audit: M10 event wiring: set-payload-changed passes character id as set id
+# Re-anchored for spec #3: the event carries no set id any more; the same
+# wiring bug now drops the etag it carries.
 find = '''
-setId: event.set_id,'''
+              etag: event.etag ?? null,'''
 replace = '''
-setId: event.character_id,'''
+              etag: null,'''
 
 [[mutation]]
 id = "R11"
@@ -989,11 +971,11 @@ suite = "renderer"
 file = "renderer/src/state.ts"
 breaks = "Two saves of the same Workbench can be in flight at once and race."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 9
 # audit: M23 flush no longer registers single-flight (overlapping PUTs race)
 find = '''
-    _flushInflight.set(characterId, inflight)
+    _flushInflight.set(characterId, link)
 '''
 replace = '''
 '''
