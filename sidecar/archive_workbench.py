@@ -16,6 +16,7 @@ from typing import Any
 
 import archive_live
 import archive_registry
+from services import events
 
 # The payload's `_schema_version`, stamped on every Workbench write.
 # v1 → v2 added local: ids, _custom_kinks_order and tombstones; v3 held
@@ -196,22 +197,19 @@ def _store_workbench(
     and return the new etag. No etag check: callers do that."""
     path = _workbench_payload_path(character_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    archive_registry._atomic_write_json(path, payload)
+    archive_registry.write_json(path, payload)
     now = int(time.time())
     if created_at is None:
         info = workbench_info(character_id)
         created_at = info.created_at if info is not None else now
-    archive_registry._atomic_write_json(
+    archive_registry.write_json(
         _workbench_meta_path(character_id),
         {"created_at": created_at, "updated_at": now},
     )
     etag = _file_sha256(path)
     assert etag is not None
-    events = archive_registry._events()
-    archive_registry._publish(events.SETS_CHANGED, character_id=str(character_id))
-    archive_registry._publish(
-        events.SET_PAYLOAD_CHANGED, character_id=str(character_id), etag=etag
-    )
+    archive_registry.publish(events.SETS_CHANGED, character_id)
+    archive_registry.publish(events.SET_PAYLOAD_CHANGED, character_id, etag=etag)
     return etag
 
 

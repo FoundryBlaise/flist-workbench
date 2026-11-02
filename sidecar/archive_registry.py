@@ -34,7 +34,7 @@ The archive is five modules; each imports only the ones listed above it:
 
     archive_registry   folders, the id → folder registry, the roster, and
                        what every writer shares (the per-character
-                       lock, `_publish`, `_atomic_write_json`)
+                       lock, `publish`, `write_json`)
     archive_live       Live: what F-list showed at the last Pull
     archive_workbench  the Workbench: the one editable copy
     archive_images     images, inlines, avatars, the pull manifest, and
@@ -54,6 +54,7 @@ from typing import Any, Callable, Iterable, TypeVar
 import atomic_write
 import paths
 from archive_errors import CharacterNotFound, InvalidCharacterId
+from services import events
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -186,7 +187,7 @@ def load_registry() -> dict[str, dict[str, str]]:
 def save_registry(reg: dict[str, dict[str, str]]) -> None:
     global _REGISTRY_CACHE
     with _REGISTRY_LOCK:
-        _atomic_write_json(_registry_path(), reg)
+        write_json(_registry_path(), reg)
         _REGISTRY_CACHE = dict(reg)
 
 
@@ -251,7 +252,7 @@ def _register_character(cid: str, name: str) -> str:
     reg[cid] = entry
     save_registry(reg)
     if changed:
-        _publish(_events().CHARACTERS_CHANGED, character_id=cid)
+        publish(events.CHARACTERS_CHANGED, cid)
     return entry["folder"]
 
 
@@ -335,7 +336,7 @@ def _maybe_migrate_id_folders() -> None:
 
     if changed:
         try:
-            _atomic_write_json(p, reg)
+            write_json(p, reg)
         except OSError:
             pass
 
@@ -433,34 +434,24 @@ def create_character_dir(character_id: int | str) -> Path:
 
 # ---- shared by the archive modules ----------------------------------
 #
-# The event bus and the archive's JSON writer, used by every archive
-# module that writes (Live, the Workbench, the pull manifest).
+# Announcing a change and the archive's JSON writer, used by every
+# archive module that writes (Live, the Workbench, images, Backups, the
+# pull manifest).
 
 
-def _events() -> Any:
-    """The event bus module. Imported lazily, so the archive imports
-    without `services`."""
-    from services import events
+def publish(event: str, character_id: int | str, **data: Any) -> None:
+    """Announce a change to a character's files on the event bus
+    (`services.events`; `event` is one of its names).
 
-    return events
-
-
-def _publish(event: str, **data: Any) -> None:
-    """Announce a change on the event bus, if one is running.
-
-    Publishing lives here rather than in the callers so *every* writer
-    is covered — the REST routes the window calls and the MCP tools a
-    model calls alike. Imported lazily and failure-swallowing: a
-    notification is never worth failing a write for, and the archive
-    must stay importable in tests that don't run a loop.
+    Publishing lives in the writers rather than in the callers so
+    *every* writer is covered: the REST routes the window calls and the
+    MCP tools a model calls alike. The bus never fails a write and
+    needs no running loop.
     """
-    try:
-        _events().publish(event, **data)
-    except Exception:  # noqa: BLE001
-        pass
+    events.publish(event, character_id=str(character_id), **data)
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write `payload` as the archive's indented JSON, atomically."""
     atomic_write.write_json(path, payload, indent=2, ensure_ascii=False)
 

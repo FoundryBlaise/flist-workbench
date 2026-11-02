@@ -18,6 +18,7 @@ import archive_workbench
 import atomic_write
 from archive_errors import WorkbenchConflict
 from refusals import InvalidFileName
+from services import events
 
 PULL_STATE_FILENAME = "pull_state.json"
 
@@ -96,7 +97,7 @@ def write_pull_state(
         ext = entry.get("extension")
         if iid and ext:
             normalized.append({"image_id": str(iid), "extension": str(ext)})
-    archive_registry._atomic_write_json(
+    archive_registry.write_json(
         pull_state_path(character_id),
         {
             "started_at": started_at,
@@ -316,8 +317,7 @@ def write_character_image(
         raise ValueError(f"unsafe image_id: {image_id!r}")
     ext_n = normalise_image_ext(ext)
     atomic_write.write_bytes(images_dir(character_id) / f"{image_id}.{ext_n}", data)
-    events = archive_registry._events()
-    archive_registry._publish(events.IMAGES_CHANGED, character_id=str(character_id))
+    archive_registry.publish(events.IMAGES_CHANGED, character_id)
 
 
 def find_image_with_sha(
@@ -409,8 +409,6 @@ def collapse_local_duplicates(character_id: int | str) -> int:
     # Maintenance triggered by a read (the Images tab listing), which is
     # still not the window writing: attribute it like the repair, or the
     # listing itself silently invalidates open windows' etags.
-    from services import events  # lazy, same reason as archive_registry._publish
-
     with events.origin("internal:image-dedupe"), events.coalesced():
         result = adopt_flist_image_ids(character_id, mapping)
     return len(result["renamed"]) + len(result["dropped_duplicate"])
@@ -455,8 +453,6 @@ def dedupe_local_after_pull(
         return None
 
     local_id = f"local-{sha8}"
-    from services import events  # lazy, same reason as archive_registry._publish
-
     with events.origin("internal:dedupe-after-pull"), events.coalesced():
         result = adopt_flist_image_ids(character_id, {local_id: pulled_image_id})
     if result["renamed"] or result["dropped_duplicate"]:
@@ -504,8 +500,7 @@ def add_uploaded_image(
     target = images_dir(character_id) / f"{image_id}.{ext}"
     if not target.exists():
         atomic_write.write_bytes(target, data)
-        events = archive_registry._events()
-        archive_registry._publish(events.IMAGES_CHANGED, character_id=str(character_id))
+        archive_registry.publish(events.IMAGES_CHANGED, character_id)
     try:
         stat = target.stat()
         added_at = int(stat.st_mtime)
@@ -533,8 +528,6 @@ def repair_gallery(character_id: int | str) -> dict[str, Any]:
     kept a dead etag and the next save looked like a conflict with
     "someone else". The name here is what tells those apart.
     """
-    from services import events  # lazy, same reason as archive_registry._publish
-
     with events.origin("internal:gallery-repair"), events.coalesced():
         return _repair_gallery(character_id)
 
@@ -829,8 +822,7 @@ def adopt_flist_image_ids(
             trashed.append(old_id)
 
     if renamed or dropped_duplicate:
-        events = archive_registry._events()
-        archive_registry._publish(events.IMAGES_CHANGED, character_id=str(character_id))
+        archive_registry.publish(events.IMAGES_CHANGED, character_id)
     return {
         "renamed": renamed,
         "dropped_duplicate": dropped_duplicate,

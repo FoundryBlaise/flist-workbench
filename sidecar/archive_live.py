@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 import archive_registry
+from services import events
 
 
 @archive_registry.under_character_lock
@@ -26,9 +27,8 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     if isinstance(name, str) and name.strip():
         archive_registry.register_character(character_id, name)
     folder = archive_registry.create_character_dir(character_id)
-    archive_registry._atomic_write_json(folder / archive_registry.LIVE_FILENAME, payload)
-    events = archive_registry._events()
-    archive_registry._publish(events.LIVE_CHANGED, character_id=str(character_id))
+    archive_registry.write_json(folder / archive_registry.LIVE_FILENAME, payload)
+    archive_registry.publish(events.LIVE_CHANGED, character_id)
 
 
 @archive_registry.under_character_lock
