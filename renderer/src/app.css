@@ -525,6 +525,32 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* The migration Backup: why it offers only a download. Wraps, unlike
+   the one-line origin above it. */
+.sb-backup-note {
+  font-size: 0.85em;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
+/* Why the last Restore was turned down. */
+.sb-backup-refusal {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 4px 16px 8px;
+  font-size: var(--font-body);
+  color: #d28b8b;
+}
+
+.sb-backup-refusal button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
 .sb-backup-size {
   color: var(--text-dim);
   font-size: 0.85em;

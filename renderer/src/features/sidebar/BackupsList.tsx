@@ -7,7 +7,10 @@ import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
 /** Per-character Backups list in the sidebar. Reads from
  *  `flistArchive[activeId].zipBackups` (populated by
  *  `flistLoadArchive`). Right-click on a row → Browse / Load into
- *  Workbench / Download.
+ *  Workbench / Download. A Backup that holds no profile (the one the
+ *  move to one Workbench made of the older drafts and Pull copies)
+ *  offers only Download, and its row says why. When a Restore is turned
+ *  down, the reason shows above the list.
  *
  *  Grouped into three always-shown default folders by `kind`:
  *    - "Manual backups"     — manual_single + manual_bulk
@@ -33,6 +36,9 @@ export function BackupsList() {
     activeId ? (s.flistArchive[activeId] ?? null) : null
   )
   const browseBackup = useStore((s) => s.flistBrowseBackup)
+  const restoreRefusal = useStore((s) =>
+    activeId ? (s.flistRestoreRefusal[activeId] ?? null) : null
+  )
   const [menu, setMenu] = useState<{
     x: number
     y: number
@@ -83,6 +89,18 @@ export function BackupsList() {
   return (
     <>
       <div className="sb-section-h">Backups</div>
+      {restoreRefusal && (
+        <div className="sb-backup-refusal" role="alert">
+          <span>Couldn't load that Backup: {restoreRefusal}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => useStore.getState().flistDismissRestoreRefusal(activeId)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {status === 'loading' && backups.length === 0 ? (
         <div className="sb-empty sb-empty-inline">Loading…</div>
       ) : status === 'error' ? (
@@ -116,33 +134,35 @@ export function BackupsList() {
           role="menu"
           style={{ left: menu.x, top: menu.y }}
         >
-          <button
-            className="ctx-menu-item"
-            role="menuitem"
-            onClick={() => {
-              const cid = activeId
-              const fname = menu.backup.filename
-              setMenu(null)
-              void useStore.getState().flistOpenBrowseBackup(cid, fname)
-            }}
-          >
-            Browse backup
-          </button>
-          <button
-            className="ctx-menu-item"
-            role="menuitem"
-            onClick={() => {
-              // Replaces the one bench rather than adding a draft next
-              // to it. The old "Create working set from backup" is how
-              // a user ended up with several and stopped knowing which
-              // one they were editing.
-              const b = menu.backup
-              setMenu(null)
-              setLoadTarget(b)
-            }}
-          >
-            Load into Workbench…
-          </button>
+          {menu.backup.holds_profile && (
+            <>
+              <button
+                className="ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  const cid = activeId
+                  const fname = menu.backup.filename
+                  setMenu(null)
+                  void useStore.getState().flistOpenBrowseBackup(cid, fname)
+                }}
+              >
+                Browse backup
+              </button>
+              <button
+                className="ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  // Replaces the one Workbench rather than adding a
+                  // copy next to it.
+                  const b = menu.backup
+                  setMenu(null)
+                  setLoadTarget(b)
+                }}
+              >
+                Load into Workbench…
+              </button>
+            </>
+          )}
           <button
             className="ctx-menu-item"
             role="menuitem"
@@ -404,6 +424,7 @@ function BackupsFolder({
                   onContextMenu(e.clientX, e.clientY, b)
                 }}
                 onDoubleClick={() => {
+                  if (!b.holds_profile) return
                   void useStore
                     .getState()
                     .flistOpenBrowseBackup(activeId, b.filename)
@@ -429,6 +450,13 @@ function BackupsFolder({
                   >
                     {formatBackupOrigin(b)}
                   </span>
+                  {!b.holds_profile && (
+                    <span className="sb-backup-note">
+                      Holds the older drafts and Pull copies from the
+                      upgrade, kept so nothing is lost. Right-click to
+                      download it.
+                    </span>
+                  )}
                 </div>
                 <span className="sb-backup-size">{formatSize(b.size)}</span>
               </li>

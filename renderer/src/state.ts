@@ -267,6 +267,9 @@ type State = {
    *  or null while it has none. Absent until `flistLoadWorkbenchInfo`
    *  has asked. */
   flistWorkbenchInfo: Record<string, { updatedAt: number } | null>
+  /** Why the last Restore of each character was turned down, shown in
+   *  the Backup list; null once one goes through or it is dismissed. */
+  flistRestoreRefusal: Record<string, string | null>
   /** True while the window shows a character's Live instead of its
    *  Workbench. The window's own choice: nothing on disk records it, so
    *  looking at Live writes nothing and no other writer can flip it. */
@@ -538,6 +541,8 @@ type State = {
     characterId: string,
     filename: string
   ) => Promise<boolean>
+  /** Hide the reason the last Restore was turned down. */
+  flistDismissRestoreRefusal: (characterId: string) => void
   /** Record that something outside this window changed a set. Called
    *  by the `/events` subscription; ignored when the change is one we
    *  made ourselves. */
@@ -1455,6 +1460,7 @@ export const useStore = create<State>((set, get) => ({
   flistWorking: {},
   flistWorkingLoadStatus: {},
   flistWorkbenchInfo: {},
+  flistRestoreRefusal: {},
   flistViewingLive: {},
   flistExternalChange: {},
   flistMapping: {
@@ -1763,6 +1769,7 @@ export const useStore = create<State>((set, get) => ({
       flistWorking: {},
       flistWorkingLoadStatus: {},
       flistWorkbenchInfo: {},
+      flistRestoreRefusal: {},
       flistViewingLive: {},
       flistExternalChange: {},
       flistDriftBanners: {},
@@ -2666,12 +2673,26 @@ export const useStore = create<State>((set, get) => ({
       // The restored Workbench goes into the editor even when the
       // Workbench is already shown, and switches the view from Live.
       _showWorkbench(get, set, characterId, res.payload as WorkingPayload, res.etag)
+      get().flistDismissRestoreRefusal(characterId)
       // The Backup kept of the replaced Workbench belongs in the list.
       if (res.backed_up_first) await get().flistLoadArchive(characterId)
       return true
-    } catch {
+    } catch (err) {
+      // Nothing was replaced. Say why where the Backups are listed,
+      // rather than leaving the click without an answer.
+      const raw = err instanceof Error ? err.message : String(err)
+      const reason = raw.replace(/^HTTP \d+:\s*/, '')
+      set((s) => ({
+        flistRestoreRefusal: { ...s.flistRestoreRefusal, [characterId]: reason }
+      }))
       return false
     }
+  },
+
+  flistDismissRestoreRefusal(characterId) {
+    set((s) => ({
+      flistRestoreRefusal: { ...s.flistRestoreRefusal, [characterId]: null }
+    }))
   },
 
   flistNoteExternalChange(characterId, change) {
