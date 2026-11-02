@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import bbcode_rules
 import character_archive
 from archive_errors import WorkbenchConflict, WorkbenchNotKept
+from refusals import BackupHoldsNoProfile
 
 from ._context import (
     ToolError,
@@ -130,14 +131,13 @@ def load_backup_into_workbench(
         )
     except FileNotFoundError as exc:
         raise ToolError("backup_not_found", str(exc)) from exc
-    except (WorkbenchNotKept, WorkbenchConflict) as exc:
+    except (WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile) as exc:
         raise ToolError(exc.code, exc.message) from exc
     except KeyError as exc:
         raise ToolError(
             "backup_too_old",
             "That Backup holds no profile to load into the Workbench: "
-            "it predates the stored profile payload, or keeps the files "
-            "an earlier version of the app left behind.",
+            "it predates the stored profile payload.",
         ) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc

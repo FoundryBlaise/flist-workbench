@@ -51,7 +51,7 @@ from archive_errors import (
     WorkbenchConflict,
     WorkbenchNotKept,
 )
-from refusals import InvalidFileName
+from refusals import BackupHoldsNoProfile, InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -726,10 +726,10 @@ def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
 
 def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     """List ZIP backups newest first. Each entry:
-    `{filename, created_at, size, kind, source, occasion, name}`.
-    `source` and `occasion` come from `backup-meta.json` too; a Backup
-    that does not record them is listed with source "unknown" and
-    occasion null (see `backup_origin.read`). Filenames are the
+    `{filename, created_at, size, kind, source, occasion, holds_profile,
+    name}`. `source`, `occasion` and `holds_profile` come from
+    `backup-meta.json` too; a Backup that does not record them is listed
+    with source "unknown" and occasion null (see `backup_origin.read`). Filenames are the
     ISO-basic form written by `save_zip_backup`. `kind` comes from
     the embedded `backup-meta.json` (added 2026-06-17); older backups
     without that file get `"unknown"` so the UI can still bucket
@@ -818,6 +818,13 @@ def zip_backup_meta(character_id: int | str, filename: str) -> dict[str, Any]:
     except (KeyError, OSError, ValueError, zipfile.BadZipFile):
         return {}
     return meta if isinstance(meta, dict) else {}
+
+
+def require_backup_holds_profile(character_id: int | str, filename: str) -> None:
+    """Refuse a Backup that holds no profile (`backup_origin.holds_profile`)
+    before anything reads one out of it: raises `BackupHoldsNoProfile`."""
+    if not backup_origin.holds_profile(zip_backup_meta(character_id, filename)):
+        raise BackupHoldsNoProfile(filename)
 
 
 def latest_zip_backup_content_hash(
@@ -1310,8 +1317,9 @@ def load_zip_backup_into_workbench(
 
     The Backup is read and checked first; only then is the Workbench it
     replaces kept as a `before-restore` Backup, and only once that is
-    written is the Workbench overwritten. Raises KeyError for a Backup
-    that holds no profile to load.
+    written is the Workbench overwritten. Raises `BackupHoldsNoProfile`
+    for the migration Backup, and KeyError for a Backup from before the
+    profile payload was stored in it.
     """
     import zipfile
 
@@ -1319,6 +1327,7 @@ def load_zip_backup_into_workbench(
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(str(target))
+    require_backup_holds_profile(character_id, backup_filename)
     try:
         with zipfile.ZipFile(target, "r") as zf:
             raw = zf.read("working.json").decode("utf-8")

@@ -72,3 +72,18 @@ class BackupNotUploadable(Refusal):
 
     status = 409
     code = "backup_not_uploadable"
+
+
+class BackupHoldsNoProfile(Refusal):
+    """A Backup that holds no profile: the one the move to one Workbench
+    made of the files an earlier version left behind (occasion
+    `migration`, see `backup_origin.holds_profile`). It is never
+    restored, browsed as a profile or uploaded, only downloaded."""
+
+    status = 409
+    code = "backup_holds_no_profile"
+    fixed_message = (
+        "This Backup keeps the older drafts and Pull copies an earlier "
+        "version of the app left behind, not a profile, so there is "
+        "nothing in it to load or upload. Download it to look at them."
+    )

@@ -35,7 +35,7 @@ import backup_origin
 import character_archive
 import paths
 import zip_serialise
-from refusals import BackupNotUploadable
+from refusals import BackupHoldsNoProfile, BackupNotUploadable
 
 #: `backup-meta.json` kind of the Backup taken before an Upload.
 PRE_UPLOAD_BACKUP_KIND = "pre_upload"
@@ -50,12 +50,8 @@ def upload_refusal(character_id: str, filename: str) -> str | None:
     be. One taken without its image files lists no image in
     character.json, which an Upload reads as "remove every image"."""
     meta = character_archive.zip_backup_meta(character_id, filename)
-    if meta.get("occasion") == backup_origin.MIGRATION:
-        return (
-            "This Backup keeps the files an earlier version of the app "
-            "left behind, not a profile, so there is nothing in it to "
-            "upload."
-        )
+    if not backup_origin.holds_profile(meta):
+        return BackupHoldsNoProfile.fixed_message
     note = meta.get("note")
     if meta.get("images_missing") or (
         meta.get("kind") == PRE_UPLOAD_BACKUP_KIND
