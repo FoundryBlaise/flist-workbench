@@ -333,9 +333,8 @@ def label_all_unlabeled(
 
     Messages that already have a verdict keep it, and messages the
     rules decide (empty, short, `((` prefix) keep resolving through the
-    rules — so this adds labels and never overwrites. `hashes` in the
-    reply is exactly what was written, and the user can undo it in the
-    app.
+    rules — so this adds labels and never overwrites. `labeled` in the
+    reply counts what was written; the user can undo it in the app.
 
     Unlabeled messages are skipped by ingest, so a conversation filled
     this way is found by search only after the next ingest_logs.
