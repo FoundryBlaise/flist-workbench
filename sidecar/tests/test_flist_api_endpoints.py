@@ -1,4 +1,4 @@
-"""HTTP tests for /flist/mapping-list and /flist/character/{id}/working.
+"""HTTP tests for /flist/mapping-list.
 
 The fetcher is monkeypatched — no live HTTP. The cache file is written
 via the patched fetcher so the endpoint's etag + fetched_at decoration

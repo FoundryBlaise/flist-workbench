@@ -196,16 +196,17 @@ def test_export_zip_contains_the_workbench_not_a_stale_legacy_working_copy(
     saved = client.put(url, json=payload, headers={"If-Match": current["etag"]})
     assert saved.status_code == 200
     # A legacy working copy left on disk from an older build.
-    stale = client.put(
-        "/flist/character/9999/working",
-        json={
-            "_schema_version": 1,
-            "_overlay": ["character.description", "images"],
-            "character": {"id": "9999", "name": "Ember Vale", "description": "Stale"},
-            "images": [],
-        },
+    character_archive.working_path("9999").write_text(
+        json.dumps(
+            {
+                "_schema_version": 1,
+                "_overlay": ["character.description", "images"],
+                "character": {"id": "9999", "name": "Ember Vale", "description": "Stale"},
+                "images": [],
+            }
+        ),
+        encoding="utf-8",
     )
-    assert stale.status_code == 200
 
     z = _zip_of(client, "9999")
 
