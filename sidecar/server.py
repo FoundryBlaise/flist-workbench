@@ -12,7 +12,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import character_archive
+import archive_backups
+import archive_registry
 import eicons as eicons_catalog
 import flist_activity
 import flist_api
@@ -105,7 +106,7 @@ async def _avatar_cleanup_on_startup() -> None:
 
 
 async def _adopt_old_pre_upload_backups_on_startup() -> None:
-    count = character_archive.adopt_old_pre_upload_backups()
+    count = archive_backups.adopt_old_pre_upload_backups()
     if count > 0:
         print(
             f"[flist] {count} Backups taken before an Upload by an earlier "
@@ -136,7 +137,7 @@ def _known_character(request: Request) -> None:
     character_id = request.path_params.get("character_id")
     if character_id is None:
         return
-    character_archive.character_dir(character_id)
+    archive_registry.character_dir(character_id)
 
 
 app = FastAPI(

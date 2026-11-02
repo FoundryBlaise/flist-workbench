@@ -4,7 +4,8 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-import character_archive
+import archive_images
+import archive_registry
 import flist_activity
 import flist_api
 from logs import LogDirError, list_characters
@@ -79,7 +80,7 @@ async def _prefetch_avatars(names: list[str]) -> None:
 
         async def one(name: str) -> None:
             try:
-                dest = character_archive.avatar_path_for(name)
+                dest = archive_images.avatar_path_for(name)
             except ValueError:
                 return
             if dest.exists():
@@ -179,20 +180,20 @@ async def flist_characters() -> dict:
         log_chars = [c.name for c in list_characters()]
     except LogDirError:
         pass
-    rows = character_archive.merge_roster(account_chars, log_chars)
+    rows = archive_registry.merge_roster(account_chars, log_chars)
     # Annotate every has_archive row with its on-disk pull integrity so
     # the picker / F-list zone can surface "incomplete — N missing" for
     # archives where a prior pull was interrupted or had image failures.
     # Cheap: each call is one dir-walk under images/.
     for row in rows:
         if row.get("has_archive") and row.get("id") is not None:
-            row["pull_status"] = character_archive.compute_pull_status(row["id"])
+            row["pull_status"] = archive_images.compute_pull_status(row["id"])
     return {"characters": rows}
 
 
 @router.get("/flist/mapping-list")
 async def flist_mapping_list(force: bool = False) -> dict:
-    cache_path = character_archive.cache_root() / "mapping-list.json"
+    cache_path = archive_registry.cache_root() / "mapping-list.json"
     try:
         mapping = await flist_api.fetch_mapping_list(cache_path, force=force)
     except flist_api.FlistApiError as exc:
@@ -227,7 +228,7 @@ async def flist_avatar(name: str) -> FileResponse:
     and the initial-circle fallback renders instead of an alien
     placeholder graphic.
     """
-    dest = character_archive.avatar_path_for(name)
+    dest = archive_images.avatar_path_for(name)
     if not dest.exists():
         try:
             await flist_api.download_to(flist_api.avatar_url(name), dest)

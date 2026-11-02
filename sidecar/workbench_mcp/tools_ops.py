@@ -22,8 +22,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+import archive_backups
+import archive_images
+import archive_workbench
+import atomic_write
 import backup_origin
-import character_archive
 import rag_jobs
 from mcp.server.fastmcp import Context
 
@@ -134,7 +137,7 @@ def create_backup(
     Workbench already holds the same content.
     """
     target = resolve_character(character)
-    result = character_archive.save_zip_backup(
+    result = archive_backups.save_zip_backup(
         target.id,
         source=backup_origin.WORKBENCH,
         occasion=backup_origin.MANUAL,
@@ -164,7 +167,7 @@ def create_backup(
     if note:
         filename = result.get("filename")
         if filename:
-            character_archive.rename_zip_backup(target.id, filename, str(note))
+            archive_backups.rename_zip_backup(target.id, filename, str(note))
     audit("create_backup", character=target.name, filename=result.get("filename"))
     return {"character": target.name, **result}
 
@@ -448,7 +451,7 @@ def export_restore_zip(
 
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = character_archive.export_payload(target.id, from_live=resolved.is_live)
+    payload = archive_workbench.export_payload(target.id, from_live=resolved.is_live)
     if payload is None:
         raise ToolError(
             "no_live",
@@ -458,8 +461,8 @@ def export_restore_zip(
     data = zip_serialise.build_zip(
         target.id,
         payload,
-        images_dir=character_archive.images_dir(target.id),
-        avatar_path=character_archive.avatar_path_for(target.name),
+        images_dir=archive_images.images_dir(target.id),
+        avatar_path=archive_images.avatar_path_for(target.name),
     )
     written = _write_file(path, data, suffix=".zip")
     audit("export_restore_zip", character=target.name, path=str(written))
@@ -483,10 +486,10 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
     "put it in Downloads" is a reasonable thing for a user to say. If
     that name is taken, a numbered one beside it is used instead.
 
-    An existing file is never overwritten: the file is created
-    exclusively, so a model can't clobber something the user keeps
-    there, even if it appears between a check and the write. A file
-    path that is taken gets an `exists` refusal.
+    An existing file is never overwritten: the name is claimed in the
+    same step that places the bytes, so a model can't clobber something
+    the user keeps there, even if it appears between a check and the
+    write. A file path that is taken gets an `exists` refusal.
     """
     target = Path(str(path)).expanduser()
     if target.is_dir():
@@ -497,33 +500,19 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
     else:
         candidates = [target]
 
-    for candidate in candidates:
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            handle = candidate.open("xb")
-        except FileExistsError:
-            continue
-        except OSError as exc:
-            raise ToolError(
-                "write_failed", f"Couldn't write {candidate}: {exc}"
-            ) from exc
-        try:
-            with handle:
-                handle.write(data)
-        except OSError as exc:
-            # Only ever our own half-written file: it was created above.
-            candidate.unlink(missing_ok=True)
-            raise ToolError(
-                "write_failed", f"Couldn't write {candidate}: {exc}"
-            ) from exc
-        return candidate
-
-    raise ToolError(
-        "exists",
-        f"{candidates[0]} already exists and an export never overwrites "
-        "a file. Ask the user for another name, or give a folder to get "
-        "a fresh file name.",
-    )
+    try:
+        return atomic_write.write_new(candidates, data)
+    except FileExistsError:
+        raise ToolError(
+            "exists",
+            f"{candidates[0]} already exists and an export never overwrites "
+            "a file. Ask the user for another name, or give a folder to get "
+            "a fresh file name.",
+        ) from None
+    except OSError as exc:
+        raise ToolError(
+            "write_failed", f"Couldn't write {candidates[0]}: {exc}"
+        ) from exc
 
 
 #: How many numbered names an export into a folder tries before giving

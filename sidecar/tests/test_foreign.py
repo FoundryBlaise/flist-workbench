@@ -3,7 +3,7 @@
 No live HTTP — `flist_api.fetch_character_data` and
 `flist_api.fetch_social_lists` are stubbed. What these cover is the
 behaviour the feature was asked for: a 24-hour TTL, a cache root that
-nothing in `character_archive` can reach, and an MCP share of the
+nothing in the character archive can reach, and an MCP share of the
 hourly F-list budget that runs out before the user's does.
 """
 
@@ -70,14 +70,14 @@ def _stub_fetch(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> lis
 def test_cache_lives_outside_the_character_archive(data_dir: Path) -> None:
     """The whole no-copying guarantee rests on this: nothing the
     archive can address may point into the foreign cache."""
-    import character_archive
+    import archive_registry
     import foreign_cache
 
     foreign_cache.write_profile("Anexample Person", _profile())
 
     assert foreign_cache.root() == data_dir / "foreign"
-    assert character_archive.root() == data_dir / "characters"
-    archive_files = list(character_archive.root().rglob("*"))
+    assert archive_registry.root() == data_dir / "characters"
+    archive_files = list(archive_registry.root().rglob("*"))
     assert archive_files == [], archive_files
 
 

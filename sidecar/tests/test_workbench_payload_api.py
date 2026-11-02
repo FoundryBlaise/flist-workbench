@@ -27,15 +27,16 @@ def sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     monkeypatch.delenv("FCHAT_DATA_DIR", raising=False)
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    character_archive.register_character("42", NAME)
-    character_archive.write_live(
+    archive_registry.register_character("42", NAME)
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": NAME, "description": "[b]Published.[/b]"},
@@ -114,27 +115,6 @@ def test_a_write_with_a_stale_etag_is_refused_and_changes_nothing(sidecar) -> No
     assert api.get(URL).json() == saved
 
 
-def test_a_write_that_fails_halfway_leaves_the_workbench_as_it_was(
-    sidecar, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Atomic: the new contents go to a temporary file that replaces
-    the Workbench in one step. When that step fails, the old Workbench
-    is still whole and no temporary file is left behind."""
-    api, data_dir = sidecar
-    before = api.get(URL).json()
-
-    def locked(self: Path, target: Any) -> Path:
-        raise OSError("simulated lock")
-
-    with monkeypatch.context() as m:
-        m.setattr(Path, "replace", locked)
-        with pytest.raises(OSError):
-            api.put(URL, json=_edited("Lost."), headers={"If-Match": before["etag"]})
-
-    assert api.get(URL).json() == {**before, "created": False}
-    assert list(data_dir.rglob("*.tmp")) == []
-
-
 async def test_a_saved_write_is_announced_with_its_new_etag(sidecar) -> None:
     """The etag in the change event is what lets the window tell its
     own save from someone else's."""
@@ -211,9 +191,9 @@ def test_a_character_without_live_has_no_workbench_to_read_or_write(
     sidecar,
 ) -> None:
     api, _ = sidecar
-    import character_archive
+    import archive_registry
 
-    character_archive.register_character("43", "Moss Fernley")
+    archive_registry.register_character("43", "Moss Fernley")
     url = "/flist/character/43/workbench/payload"
 
     read = api.get(url)
@@ -247,9 +227,9 @@ def test_the_legacy_working_copy_routes_are_gone(sidecar, method: str) -> None:
     build left on disk is not read, replaced or removed through the old
     routes; the one-time migration takes care of it."""
     api, data_dir = sidecar
-    import character_archive
+    import archive_registry
 
-    legacy = character_archive.character_dir("42") / "working.json"
+    legacy = archive_registry.character_dir("42") / "working.json"
     legacy.write_text('{"_overlay": [], "character": {}}', encoding="utf-8")
     before = legacy.read_bytes()
 

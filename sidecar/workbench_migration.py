@@ -32,8 +32,8 @@ v0.0.3 archives (`pool/`) are not touched.
 
 from __future__ import annotations
 
+import io
 import json
-import os
 import re
 import sys
 import time
@@ -41,8 +41,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import archive_backups
+import archive_registry
+import archive_workbench
+import atomic_write
 import backup_origin
-import character_archive
 
 LAYOUT_FILENAME = "layout.json"
 #: 1 was the layout with several drafts; 2 is one Workbench.
@@ -67,7 +70,7 @@ def migrate_all() -> int:
     how many were moved. Never raises: a folder that fails keeps its old
     files and is tried again next start."""
     moved = 0
-    root = character_archive.root()
+    root = archive_registry.root()
     for folder in sorted(root.iterdir()):
         if not folder.is_dir() or folder.name.startswith("_"):
             continue
@@ -96,14 +99,14 @@ def migrate_folder(folder: Path) -> bool:
     """Move one character folder; False when it already was."""
     if is_migrated(folder):
         return False
-    bench = folder / character_archive.WORKBENCH_DIRNAME
+    bench = folder / archive_workbench.WORKBENCH_DIRNAME
     # A `workbench/` already here is kept, never replaced by the draft
     # chosen again. Only an earlier run that stopped before writing
     # `layout.json` leaves one beside old files, and the sidecar served
     # it from then on: the window, or a model, may have saved edits into
     # it that no draft and no Backup holds. Choosing again would lose
     # them; the drafts are still all kept in the Backup below.
-    if not (bench / character_archive.WORKBENCH_PAYLOAD_FILENAME).exists():
+    if not (bench / archive_workbench.WORKBENCH_PAYLOAD_FILENAME).exists():
         chosen = _draft_the_window_showed(folder)
         if chosen is not None:
             _write_workbench(bench, *chosen)
@@ -112,7 +115,7 @@ def migrate_folder(folder: Path) -> bool:
         if _covering_backup(folder, old) is None:
             _write_migration_backup(folder, old)
         _remove(folder, old)
-    _write_bytes(
+    atomic_write.write_bytes(
         folder / LAYOUT_FILENAME,
         json.dumps({"version": LAYOUT_VERSION}).encode("utf-8"),
     )
@@ -166,9 +169,9 @@ def _draft_the_window_showed(folder: Path) -> tuple[bytes, dict[str, int]] | Non
 
 def _write_workbench(bench: Path, payload: bytes, dates: dict[str, int]) -> None:
     bench.mkdir(parents=True, exist_ok=True)
-    _write_bytes(bench / character_archive.WORKBENCH_PAYLOAD_FILENAME, payload)
-    _write_bytes(
-        bench / character_archive.WORKBENCH_META_FILENAME,
+    atomic_write.write_bytes(bench / archive_workbench.WORKBENCH_PAYLOAD_FILENAME, payload)
+    atomic_write.write_bytes(
+        bench / archive_workbench.WORKBENCH_META_FILENAME,
         json.dumps(dates).encode("utf-8"),
     )
 
@@ -190,7 +193,7 @@ def _old_files(folder: Path) -> list[Path]:
         p for p in sorted(folder.iterdir())
         if p.is_file() and _LEGACY_WORKING_RE.fullmatch(p.name)
     )
-    loose = folder / character_archive.BACKUPS_DIRNAME
+    loose = folder / archive_registry.BACKUPS_DIRNAME
     if loose.is_dir():
         out.extend(
             p for p in sorted(loose.iterdir())
@@ -203,7 +206,7 @@ def _member(folder: Path, path: Path) -> str:
     return path.relative_to(folder).as_posix()
 
 
-def _holds(zip_path: Path, folder: Path, old: list[Path]) -> bool:
+def _holds(zip_path: Path | io.BytesIO, folder: Path, old: list[Path]) -> bool:
     """Whether the zip holds every old file, byte for byte, under its
     path in the folder."""
     try:
@@ -223,7 +226,7 @@ def _holds(zip_path: Path, folder: Path, old: list[Path]) -> bool:
 def _covering_backup(folder: Path, old: list[Path]) -> Path | None:
     """A migration Backup an interrupted earlier run already wrote that
     holds every old file left, so a second one is not needed."""
-    backups = folder / character_archive.BACKUPS_DIRNAME
+    backups = folder / archive_registry.BACKUPS_DIRNAME
     if not backups.is_dir():
         return None
     for entry in sorted(backups.glob("*.zip"), reverse=True):
@@ -240,29 +243,23 @@ def _covering_backup(folder: Path, old: list[Path]) -> Path | None:
 
 
 def _write_migration_backup(folder: Path, old: list[Path]) -> Path:
-    """Pack the old files into a new Backup, verified before it gets its
-    Backup name. Raises when it cannot be written or read back."""
-    backups = folder / character_archive.BACKUPS_DIRNAME
-    backups.mkdir(parents=True, exist_ok=True)
-    target = character_archive.free_backup_path(backups)
-    scratch = target.with_name(target.name + ".tmp")
+    """Pack the old files into a new Backup, verified before it is
+    written. Raises when it cannot be packed or written."""
     meta: dict[str, Any] = {
         **backup_origin.meta(backup_origin.WORKBENCH, backup_origin.MIGRATION),
         "created_at": int(time.time()),
         "note": "Files an earlier version of the app kept, under their old paths.",
     }
-    try:
-        with zipfile.ZipFile(scratch, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for path in old:
-                zf.writestr(_member(folder, path), path.read_bytes())
-            zf.writestr("backup-meta.json", json.dumps(meta, indent=2))
-        if not _holds(scratch, folder, old):
-            raise BackupNotVerified(f"{scratch.name} does not hold the old files")
-        os.replace(scratch, target)
-    finally:
-        if scratch.exists():
-            scratch.unlink()
-    return target
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in old:
+            zf.writestr(_member(folder, path), path.read_bytes())
+        zf.writestr("backup-meta.json", json.dumps(meta, indent=2))
+    if not _holds(buf, folder, old):
+        raise BackupNotVerified(f"the Backup of {folder.name} does not hold the old files")
+    return archive_backups.write_new_backup(
+        folder / archive_registry.BACKUPS_DIRNAME, buf.getvalue()
+    )
 
 
 def _remove(folder: Path, old: list[Path]) -> None:
@@ -278,9 +275,3 @@ def _remove(folder: Path, old: list[Path]) -> None:
                     here.rmdir()
             if not any(tree.iterdir()):
                 tree.rmdir()
-
-
-def _write_bytes(path: Path, data: bytes) -> None:
-    scratch = path.with_name(path.name + ".tmp")
-    scratch.write_bytes(data)
-    os.replace(scratch, path)

@@ -1,7 +1,7 @@
 """Errors the archive raises and the routes translate.
 
 A module of its own so the class stays one class: tests reload
-`character_archive`, and an exception defined there would no longer
+`archive_registry`, and an exception defined there would no longer
 match the handler `server` registered for it.
 """
 
@@ -26,7 +26,7 @@ class CharacterNotFound(Refusal, LookupError):
     """A safe id the archive holds no character for.
 
     Only a Pull brings a character into the archive (see
-    `character_archive.create_character_dir`); everything else finds
+    `archive_registry.create_character_dir`); everything else finds
     one, and an id it cannot find is this, not a fresh empty folder.
     The id is not echoed back.
     """

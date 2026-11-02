@@ -14,6 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import archive_images
+import archive_workbench
 from workbench_state import put_workbench, workbench_payload
 
 
@@ -22,11 +24,12 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
 
-    importlib.reload(character_archive)
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    importlib.reload(archive_registry)
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": "Lady Amber Blaise", "description": "x"},
@@ -38,7 +41,6 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "fetched_at": 1000,
         },
     )
-    return character_archive
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
@@ -46,10 +48,9 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 def _with_gallery(archive, *image_ids: str) -> None:
     put_workbench(
-        archive,
         "42",
         {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_schema_version": archive_workbench.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [
@@ -61,16 +62,16 @@ def _with_gallery(archive, *image_ids: str) -> None:
 
 
 def _gallery(archive) -> list[str]:
-    payload = workbench_payload(archive, "42")
+    payload = workbench_payload("42")
     return [row["image_id"] for row in payload.get("images", [])]
 
 
 def test_the_gallery_moves_to_the_f_list_id(archive) -> None:
-    row = archive.add_uploaded_image("42", PNG)
+    row = archive_images.add_uploaded_image("42", PNG)
     local_id = row["image_id"]
     _with_gallery(archive, local_id)
 
-    result = archive.adopt_flist_image_ids("42", {local_id: "47000849"})
+    result = archive_images.adopt_flist_image_ids("42", {local_id: "47000849"})
 
     assert _gallery(archive) == ["47000849"]
     assert result["workbench_rewritten"] is True
@@ -78,12 +79,12 @@ def test_the_gallery_moves_to_the_f_list_id(archive) -> None:
 
 
 def test_the_file_is_renamed_with_it(archive) -> None:
-    row = archive.add_uploaded_image("42", PNG)
+    row = archive_images.add_uploaded_image("42", PNG)
     local_id = row["image_id"]
     _with_gallery(archive, local_id)
-    images = archive.images_dir("42")
+    images = archive_images.images_dir("42")
 
-    archive.adopt_flist_image_ids("42", {local_id: "47000849"})
+    archive_images.adopt_flist_image_ids("42", {local_id: "47000849"})
 
     assert (images / "47000849.png").exists()
     assert not (images / f"{local_id}.png").exists()
@@ -92,13 +93,13 @@ def test_the_file_is_renamed_with_it(archive) -> None:
 def test_a_twin_left_by_a_pull_is_dropped(archive) -> None:
     # The pull fetched the same picture under its F-list name; keeping
     # both is what filled the user's archive with 16 duplicate pairs.
-    row = archive.add_uploaded_image("42", PNG)
+    row = archive_images.add_uploaded_image("42", PNG)
     local_id = row["image_id"]
     _with_gallery(archive, local_id)
-    images = archive.images_dir("42")
+    images = archive_images.images_dir("42")
     (images / "47000849.png").write_bytes(PNG)
 
-    result = archive.adopt_flist_image_ids("42", {local_id: "47000849"})
+    result = archive_images.adopt_flist_image_ids("42", {local_id: "47000849"})
 
     assert not (images / f"{local_id}.png").exists()
     assert (images / "47000849.png").read_bytes() == PNG
@@ -111,14 +112,14 @@ def test_a_different_picture_under_the_f_list_id_sends_ours_to_the_trash(archive
     # it is not deleted: it goes to the Trash, where it can be restored.
     from services import image_trash
 
-    row = archive.add_uploaded_image("42", PNG)
+    row = archive_images.add_uploaded_image("42", PNG)
     local_id = row["image_id"]
     _with_gallery(archive, local_id)
-    images = archive.images_dir("42")
+    images = archive_images.images_dir("42")
     other = PNG + b"re-encoded by F-list"
     (images / "47000849.png").write_bytes(other)
 
-    result = archive.adopt_flist_image_ids("42", {local_id: "47000849"})
+    result = archive_images.adopt_flist_image_ids("42", {local_id: "47000849"})
 
     assert result["dropped_duplicate"] == []
     assert result["trashed"] == [local_id]
@@ -131,12 +132,12 @@ def test_a_different_picture_under_the_f_list_id_sends_ours_to_the_trash(archive
 
 
 def test_running_it_twice_changes_nothing_further(archive) -> None:
-    row = archive.add_uploaded_image("42", PNG)
+    row = archive_images.add_uploaded_image("42", PNG)
     local_id = row["image_id"]
     _with_gallery(archive, local_id)
 
-    archive.adopt_flist_image_ids("42", {local_id: "47000849"})
-    second = archive.adopt_flist_image_ids("42", {local_id: "47000849"})
+    archive_images.adopt_flist_image_ids("42", {local_id: "47000849"})
+    second = archive_images.adopt_flist_image_ids("42", {local_id: "47000849"})
 
     assert _gallery(archive) == ["47000849"]
     assert second["renamed"] == []
@@ -144,7 +145,7 @@ def test_running_it_twice_changes_nothing_further(archive) -> None:
 
 
 def test_ids_that_are_not_ours_to_move_are_reported(archive) -> None:
-    result = archive.adopt_flist_image_ids(
+    result = archive_images.adopt_flist_image_ids(
         "42", {"47000849": "47000850", "local-deadbeef": "..unsafe"}
     )
     assert result["renamed"] == []
@@ -152,11 +153,11 @@ def test_ids_that_are_not_ours_to_move_are_reported(archive) -> None:
 
 
 def test_it_leaves_images_it_was_not_told_about_alone(archive) -> None:
-    keep = archive.add_uploaded_image("42", PNG)["image_id"]
-    other = archive.add_uploaded_image("42", PNG + b"different")["image_id"]
+    keep = archive_images.add_uploaded_image("42", PNG)["image_id"]
+    other = archive_images.add_uploaded_image("42", PNG + b"different")["image_id"]
     _with_gallery(archive, keep, other)
 
-    archive.adopt_flist_image_ids("42", {keep: "47000849"})
+    archive_images.adopt_flist_image_ids("42", {keep: "47000849"})
 
     assert _gallery(archive) == ["47000849", other]
 
@@ -174,30 +175,29 @@ def test_a_pull_hands_the_slot_over_instead_of_orphaning_it(archive) -> None:
     had landed, so the patch never landed and the unlink always ran: every pull after an upload cut a
     gallery entry loose from its bytes.
     """
-    local_id = archive.add_uploaded_image("42", PNG)["image_id"]
+    local_id = archive_images.add_uploaded_image("42", PNG)["image_id"]
     _with_gallery(archive, local_id)
     # The pull writes the same bytes under the id F-list minted.
-    archive.write_character_image("42", "47000849", "png", PNG)
+    archive_images.write_character_image("42", "47000849", "png", PNG)
 
-    removed = archive.dedupe_local_after_pull("42", "47000849", PNG)
+    removed = archive_images.dedupe_local_after_pull("42", "47000849", PNG)
 
     assert removed == local_id
     assert _gallery(archive) == ["47000849"], (
         "the slot must follow the bytes, not be left pointing at nothing"
     )
-    images = archive.images_dir("42")
+    images = archive_images.images_dir("42")
     assert not (images / f"{local_id}.png").exists()
     assert (images / "47000849.png").exists()
 
 
 def test_the_slot_keeps_its_place_and_description(archive) -> None:
-    first = archive.add_uploaded_image("42", PNG)["image_id"]
-    second = archive.add_uploaded_image("42", PNG + b"other")["image_id"]
+    first = archive_images.add_uploaded_image("42", PNG)["image_id"]
+    second = archive_images.add_uploaded_image("42", PNG + b"other")["image_id"]
     put_workbench(
-        archive,
         "42",
         {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_schema_version": archive_workbench.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [
@@ -206,11 +206,11 @@ def test_the_slot_keeps_its_place_and_description(archive) -> None:
             ],
         },
     )
-    archive.write_character_image("42", "47000849", "png", PNG)
+    archive_images.write_character_image("42", "47000849", "png", PNG)
 
-    archive.dedupe_local_after_pull("42", "47000849", PNG)
+    archive_images.dedupe_local_after_pull("42", "47000849", PNG)
 
-    rows = workbench_payload(archive, "42")["images"]
+    rows = workbench_payload("42")["images"]
     assert rows[0] == {
         "image_id": "47000849",
         "description": "the good one",
@@ -220,10 +220,10 @@ def test_the_slot_keeps_its_place_and_description(archive) -> None:
 
 
 def test_a_pull_of_something_we_never_had_changes_nothing(archive) -> None:
-    local_id = archive.add_uploaded_image("42", PNG)["image_id"]
+    local_id = archive_images.add_uploaded_image("42", PNG)["image_id"]
     _with_gallery(archive, local_id)
 
-    assert archive.dedupe_local_after_pull("42", "47000849", PNG + b"else") is None
+    assert archive_images.dedupe_local_after_pull("42", "47000849", PNG + b"else") is None
 
     assert _gallery(archive) == [local_id]
-    assert (archive.images_dir("42") / f"{local_id}.png").exists()
+    assert (archive_images.images_dir("42") / f"{local_id}.png").exists()

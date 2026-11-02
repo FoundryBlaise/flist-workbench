@@ -8,7 +8,7 @@ Workbench, no Backup, no export. The viewer reads.
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
-import character_archive
+import archive_images
 import flist_api
 import foreign_cache
 from refusals import ImageNotFound, NoAvatar, ProfileNotCached, UnsupportedType, ValidationFailed
@@ -74,7 +74,7 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     that is what stops this route being a general-purpose proxy for
     anything on the CDN.
     """
-    character_archive.require_image_id(image_id)
+    archive_images.require_image_id(image_id)
     profile = foreign_cache.read_profile(name)
     if profile is None:
         raise ProfileNotCached("profile not cached")
@@ -86,7 +86,7 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     if raw_ext is None:
         raise ImageNotFound("image is not in this profile's gallery")
     try:
-        ext = character_archive.normalise_image_ext(raw_ext)
+        ext = archive_images.normalise_image_ext(raw_ext)
     except ValueError as exc:
         raise UnsupportedType(str(exc)) from exc
     url = f"{flist_api.STATIC_BASE}/images/charimage/{image_id}.{ext}"

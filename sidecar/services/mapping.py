@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import character_archive
+import archive_registry
 import flist_api
 
 from . import profile_fields
@@ -19,7 +19,7 @@ _cache: tuple[float, profile_fields.Catalogue] | None = None
 
 
 def _cache_path():  # noqa: ANN202 — Path, imported lazily by caller
-    return character_archive.cache_root() / "mapping-list.json"
+    return archive_registry.cache_root() / "mapping-list.json"
 
 
 async def raw(force: bool = False) -> dict[str, Any]:

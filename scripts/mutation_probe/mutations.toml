@@ -26,6 +26,7 @@
 
 [groups]
 archive = [
+  "sidecar/tests/test_atomic_writes.py",
   "sidecar/tests/test_character_archive.py",
   "sidecar/tests/test_workbench_api.py",
   "sidecar/tests/test_workbench_payload_api.py",
@@ -75,12 +76,13 @@ renderer = ["renderer/**/*.test.ts", "renderer/**/*.test.tsx"]
 [[mutation]]
 id = "A01"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_workbench.py"
 breaks = "Saving the Workbench with a stale etag overwrites it instead of refusing with a conflict."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 3
 # audit: M1 set payload: etag check skipped
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
     if current is None or current != expected_etag:
         raise EtagMismatch(current)
@@ -91,12 +93,13 @@ replace = '''
 [[mutation]]
 id = "A02"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_workbench.py"
 breaks = "A Workbench save that never read the current version (no If-Match) is accepted: a blind overwrite."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 3
 # audit: M2 PUT set payload: blind write (no If-Match) allowed
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
     if expected_etag is None:
         raise EtagRequired(current)'''
@@ -107,37 +110,39 @@ replace = '''
 [[mutation]]
 id = "A03"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
-breaks = "The Workbench is written in place instead of temp file plus swap, so an interrupted save can leave it half written."
+file = "sidecar/atomic_write.py"
+breaks = "The Workbench (and every other file) is written in place instead of temp file plus swap, so an interrupted save can leave it half written."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 4
 # audit: M3 atomic write -> direct write (no tmp+replace)
+# Re-anchored for spec #4 (#63): the one write helper every writer uses.
 find = '''
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = _temp_beside(target, data)
     try:
-        tmp.replace(path)
-    except OSError:'''
+        _replace(tmp, target)'''
 replace = '''
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "wb") as f:
+        f.write(data)
+        os.fsync(f.fileno())
+    return
     try:
-        pass
-    except OSError:'''
+        _replace(tmp, target)'''
 
 [[mutation]]
 id = "A04"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_backups.py"
 breaks = "A Backup holds Live although the character has a Workbench."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 2
 # audit: M4 backup packs Live even when a Workbench exists
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
     if source == backup_origin.WORKBENCH:
-        bench = read_workbench(character_id)
+        bench = archive_workbench.read_workbench(character_id)
         if bench is not None:
             working = bench.payload
     if working is None:'''
@@ -147,12 +152,13 @@ replace = '''
 [[mutation]]
 id = "A05"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_backups.py"
 breaks = "A Backup zip leaves out the avatar."
 tests = ["@archive", "@mcp"]
 audit = "survived"
 spec = 2
 # audit: M5 backup zip omits the avatar
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
             if candidate_avatar.exists():
                 avatar_path = candidate_avatar'''
@@ -163,12 +169,13 @@ replace = '''
 [[mutation]]
 id = "A06"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_backups.py"
 breaks = "The Backup list shows the oldest Backup first."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 2
 # audit: M6 backup list sorted oldest first
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
                 "name": names.get(entry.name),
             }
@@ -183,12 +190,13 @@ replace = '''
 [[mutation]]
 id = "A07"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_backups.py"
 breaks = "Backup file names use a clock one hour off UTC, so scheduled Backups are pruned by the wrong age."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 2
 # audit: M7 backup filename shifted 1h (local time, not UTC)
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
     ts = _dt.datetime.fromtimestamp(
         time.time() if now is None else now, tz=_dt.timezone.utc
@@ -203,18 +211,20 @@ replace = '''
 [[mutation]]
 id = "A08"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_backups.py"
 breaks = "Two Backups made in the same second overwrite each other instead of both being kept."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 2
 # audit: M8 same-second backup overwrites instead of -N suffix
+# Re-anchored for spec #4 (#63): a new Backup claims its name atomically.
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
-    i = 1
-    while target.exists():'''
+    return atomic_write.write_new(_backup_paths(folder, stem), data)'''
 replace = '''
-    i = 1
-    while False:'''
+    target = folder / f"{stem}.zip"
+    atomic_write.write_bytes(target, data)
+    return target'''
 
 [[mutation]]
 id = "A09"
@@ -265,12 +275,13 @@ replace = '''
 [[mutation]]
 id = "A12"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_registry.py"
 breaks = "A Foreign profile slug starting with a dot (such as `..`) is accepted, so its cache can escape its folder."
 tests = ["@archive", "@mcp"]
 audit = "survived"
 spec = 5
 # audit: M12 slug safety: leading-dot check dropped ('..' escapes cache)
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
     if name[0] in " ." or name[-1] in " .":
         return False'''
@@ -281,17 +292,19 @@ replace = '''
 [[mutation]]
 id = "A13"
 suite = "sidecar"
-file = "sidecar/character_archive.py"
+file = "sidecar/archive_live.py"
 breaks = "Writing Live (a Pull) publishes no change event, so open windows keep the old Live."
 tests = ["@archive", "@mcp"]
 audit = "survived"
 spec = 4
 # audit: M13 write_live no longer publishes live-changed
+# Re-anchored for spec #4 (#65): the archive split into archive_* modules.
 find = '''
-    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
-    _publish(_events().LIVE_CHANGED, character_id=str(character_id))'''
+    archive_registry._atomic_write_json(folder / archive_registry.LIVE_FILENAME, payload)
+    events = archive_registry._events()
+    archive_registry._publish(events.LIVE_CHANGED, character_id=str(character_id))'''
 replace = '''
-    _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)'''
+    archive_registry._atomic_write_json(folder / archive_registry.LIVE_FILENAME, payload)'''
 
 [[mutation]]
 id = "A14"

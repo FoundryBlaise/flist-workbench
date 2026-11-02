@@ -128,7 +128,9 @@ export async function startSidecar(): Promise<void> {
     throw err
   }
   if (app.isPackaged) {
-    const exe = join(process.resourcesPath, 'sidecar.exe')
+    // A folder build (ADR 0005): the exe runs from its own folder and
+    // unpacks nothing.
+    const exe = join(process.resourcesPath, 'sidecar', 'sidecar.exe')
     sidecarDiag('spawn-packaged', { exe })
     // Pipe stdout/stderr so we can tee them into the diag log — a
     // PyInstaller bundle that crashes on startup prints the traceback

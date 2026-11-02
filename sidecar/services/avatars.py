@@ -1,7 +1,7 @@
 """The avatar cache under `<userdata>/avatars/`, and F-list's stand-in
 for a name without one."""
 
-import character_archive
+import archive_registry
 
 PLACEHOLDER_SIZE = 5827  # bytes returned by F-list when a name has no avatar
 
@@ -20,7 +20,7 @@ def cleanup_placeholder_avatars() -> int:
 
     Idempotent — after the first run there's nothing left to delete.
     """
-    avatars = character_archive.avatars_root()
+    avatars = archive_registry.avatars_root()
     if not avatars.exists():
         return 0
     deleted = 0

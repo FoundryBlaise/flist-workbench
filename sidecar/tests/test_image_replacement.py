@@ -17,6 +17,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import archive_images
+import archive_live
+import archive_workbench
 from sidecar_client import app_client
 from workbench_state import put_workbench
 
@@ -33,15 +36,16 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_images
+    import archive_registry
     import restore as restore_svc
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
-    character_archive.register_character(str(CID), NAME)
+    archive_registry.register_character(str(CID), NAME)
     # What an earlier Pull left in the pool: image 777 as a png.
-    character_archive.write_character_image(str(CID), IMAGE_ID, "png", OLD_PNG)
-    yield character_archive
+    archive_images.write_character_image(str(CID), IMAGE_ID, "png", OLD_PNG)
+    yield
     restore_svc.revoke_token()
 
 
@@ -163,7 +167,7 @@ def test_gallery_repair_moves_a_superseded_image_to_the_trash(
 ) -> None:
     # The extension re-uploaded the gallery: F-list now holds the same
     # picture under 888, and 777 is gone from the profile.
-    archive.write_character_image(str(CID), "888", "png", OLD_PNG)
+    archive_images.write_character_image(str(CID), "888", "png", OLD_PNG)
     live = {
         "character": {"id": CID, "name": NAME, "description": "x"},
         "infotags": {},
@@ -173,12 +177,11 @@ def test_gallery_repair_moves_a_superseded_image_to_the_trash(
         "images": [{"image_id": "888"}],
         "fetched_at": 1000,
     }
-    archive.write_live(str(CID), live)
+    archive_live.write_live(str(CID), live)
     put_workbench(
-        archive,
         str(CID),
         {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_schema_version": archive_workbench.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [{"image_id": IMAGE_ID, "description": "", "sort_order": 0}],

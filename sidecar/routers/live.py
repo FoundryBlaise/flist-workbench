@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-import character_archive
+import archive_live
 from archive_errors import NoLive
 
 router = APIRouter()
@@ -10,7 +10,7 @@ router = APIRouter()
 
 @router.get("/flist/character/{character_id}/live")
 async def flist_character_live(character_id: str) -> dict:
-    payload = character_archive.read_live(character_id)
+    payload = archive_live.read_live(character_id)
     if payload is None:
         raise NoLive("no Live yet")
     return payload

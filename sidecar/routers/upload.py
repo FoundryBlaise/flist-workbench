@@ -12,7 +12,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel
 
-import character_archive
+import archive_images
+import archive_workbench
 import restore as restore_svc
 from archive_errors import CharacterNotFound, NoLive
 from refusals import BackupNotFound, InvalidRequest, NotPaired
@@ -37,7 +38,7 @@ async def flist_character_export_zip(character_id: str) -> Response:
     """
     import zip_serialise
 
-    working = character_archive.export_payload(character_id)
+    working = archive_workbench.export_payload(character_id)
     if working is None:
         raise NoLive("no Workbench or Live to export")
     name_for_file = "character"
@@ -47,14 +48,14 @@ async def flist_character_export_zip(character_id: str) -> Response:
         if isinstance(nm, str) and nm:
             name_for_file = nm
     avatar_path = (
-        character_archive.avatar_path_for(name_for_file)
+        archive_images.avatar_path_for(name_for_file)
         if name_for_file != "character"
         else None
     )
     data = zip_serialise.build_zip(
         character_id,
         working,
-        images_dir=character_archive.images_dir(character_id),
+        images_dir=archive_images.images_dir(character_id),
         avatar_path=avatar_path,
     )
     import time as _t

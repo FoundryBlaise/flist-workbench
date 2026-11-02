@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+import archive_registry
 from fchat_logs import chat, utc, write_log
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
@@ -25,18 +26,19 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {
@@ -60,7 +62,7 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(settings_store)
     mapping_service.invalidate()
     importlib.reload(server)
-    yield character_archive
+    yield
     mapping_service.invalidate()
 
 
@@ -201,7 +203,7 @@ async def test_a_backup_loads_back_into_the_workbench(workbench) -> None:
 
 
 async def test_backing_up_a_character_never_pulled(workbench) -> None:
-    workbench.register_character("99", "Ghost Character")
+    archive_registry.register_character("99", "Ghost Character")
     async with mcp_client("character") as session:
         result, _ = await call_tool(
             session, "create_backup", character="Ghost Character"

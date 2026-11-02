@@ -17,8 +17,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+import archive_backups
+import archive_images
+import archive_workbench
 import bbcode_rules
-import character_archive
 
 from ._context import (
     ToolError,
@@ -68,7 +70,7 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
         return payload_ops.edit(target.id, mutate)
     except payload_ops.PayloadError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
-    except character_archive.EtagMismatch as exc:
+    except archive_workbench.EtagMismatch as exc:
         raise ToolError(
             "etag_mismatch",
             "The app window saved the Workbench while the edit was in "
@@ -123,7 +125,7 @@ def load_backup_into_workbench(
             "Workbench; the Workbench is saved as a Backup first. Call "
             "this again with confirm=true.",
         )
-    replaced = character_archive.load_zip_backup_into_workbench(target.id, backup)
+    replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
     kept = replaced.kept["filename"] if replaced.kept else None
     audit(
         "load_backup_into_workbench",
@@ -133,7 +135,7 @@ def load_backup_into_workbench(
     )
     return {
         "character": target.name,
-        "set": character_archive.WORKBENCH_NAME,
+        "set": archive_workbench.WORKBENCH_NAME,
         "loaded": backup,
         "kept_as": kept,
         "note": NO_PUSH_NOTE,
@@ -987,7 +989,7 @@ def add_image(
     target, resolved = _writable(character, working_set)
     on_disk = {
         str(row.get("image_id"))
-        for row in character_archive.list_character_images(target.id)
+        for row in archive_images.list_character_images(target.id)
     }
     if str(image_id) not in on_disk:
         raise ToolError(
@@ -1210,7 +1212,7 @@ def _workbench_for_reporting(target, working_set: str | None):  # noqa: ANN001, 
     editing."""
     if working_set is not None:
         return resolve_workbench_or_live(target, working_set)
-    if character_archive.read_workbench(target.id) is None:
+    if archive_workbench.read_workbench(target.id) is None:
         return None
     return workbench_target(target)
 
@@ -1314,7 +1316,7 @@ def get_working_set_payload(
     etag = (
         None
         if resolved.is_live
-        else character_archive.workbench_etag(target.id)
+        else archive_workbench.workbench_etag(target.id)
     )
     return {
         "character": target.name,
@@ -1357,12 +1359,12 @@ def put_working_set_payload(
     if if_match is None:
         # Without `if_match` this overwrites whatever is there, as the
         # docstring warns: the caller has confirmed it.
-        if_match = character_archive.workbench_etag(target.id)
+        if_match = archive_workbench.workbench_etag(target.id)
     try:
-        etag = character_archive.write_workbench(
+        etag = archive_workbench.write_workbench(
             target.id, payload, expected_etag=if_match
         )
-    except character_archive.EtagMismatch as exc:
+    except archive_workbench.EtagMismatch as exc:
         raise ToolError(
             "etag_mismatch",
             "The Workbench changed since you read it. Read it again and redo "

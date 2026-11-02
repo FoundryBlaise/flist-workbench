@@ -53,14 +53,15 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import restore as restore_svc
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
-    character_archive.register_character(CID, NAME)
-    character_archive.write_live(CID, {"id": int(CID), "name": NAME, "character": {"name": NAME}})
-    yield character_archive
+    archive_registry.register_character(CID, NAME)
+    archive_live.write_live(CID, {"id": int(CID), "name": NAME, "character": {"name": NAME}})
+    yield
     restore_svc.revoke_token()
 
 
@@ -71,10 +72,12 @@ def client(archive) -> TestClient:  # noqa: ANN001
     return app_client(server.app)
 
 
-def _too_old_backup(archive) -> str:  # noqa: ANN001
+def _too_old_backup() -> str:
     """A Backup from before the app stored a loadable profile in it."""
+    import archive_backups
+
     name = "2026-01-01T000000Z.zip"
-    with zipfile.ZipFile(archive.backups_dir(CID) / name, "w") as zf:
+    with zipfile.ZipFile(archive_backups.backups_dir(CID) / name, "w") as zf:
         zf.writestr("character.json", "{}")
     return name
 
@@ -136,9 +139,9 @@ def test_a_request_the_app_cannot_bind_lists_what_was_wrong_in_details(
 
 
 def test_a_backup_too_old_to_load_answers_the_same_on_every_route(
-    client: TestClient, archive  # noqa: ANN001
+    client: TestClient,
 ) -> None:
-    name = _too_old_backup(archive)
+    name = _too_old_backup()
 
     browsed = client.get(f"/flist/character/{CID}/zip-backups/{name}/payload")
     loaded = client.post(f"/flist/character/{CID}/workbench/load-backup", json={"filename": name})
@@ -181,9 +184,9 @@ def _tool_error(result) -> tuple[str, dict]:  # noqa: ANN001
 
 
 async def test_mcp_reports_a_too_old_backup_as_rest_does(
-    client: TestClient, archive  # noqa: ANN001
+    client: TestClient,
 ) -> None:
-    name = _too_old_backup(archive)
+    name = _too_old_backup()
     rest = client.post(f"/flist/character/{CID}/workbench/load-backup", json={"filename": name})
 
     async with mcp_client() as session:

@@ -15,6 +15,10 @@ Rules:
 * typed-refusal: the sidecar refuses with a `refusals.Refusal`
   subclass (one handler answers `{code, message, details}`), not a
   bare `HTTPException`.
+* atomic-write: the sidecar writes files only through `atomic_write`
+  (unique temp file, fsync, one-step replace), so a crash never
+  leaves a broken file. No `write_text`/`write_bytes`, no `open` for
+  writing and no fixed `.tmp` name anywhere else.
 * router-layering: every REST route lives in a router under
   `sidecar/routers/`; only `server.py` (app setup and router
   registration) imports routers, and nothing imports `server.py`.
@@ -168,6 +172,84 @@ def test_refusals_are_typed():
     for path in sidecar_sources():
         found.update(http_exception_sites(path))
     check_ratchet("typed-refusal", found, HTTP_EXCEPTION_ALLOWED)
+
+
+# ---------------------------------------------------------------------------
+# atomic-write
+
+ATOMIC_WRITE_MODULE = "sidecar/atomic_write.py"
+
+# Writes that are not a file replaced whole, per (file, enclosing
+# function). May only shrink.
+WRITE_ALLOWED: dict[tuple[str, str], int] = {
+    # The activity log is appended a line at a time; a torn last line
+    # is skipped when it is read back.
+    ("sidecar/flist_activity.py", "_append_to_disk"): 1,
+}
+
+_WRITE_METHODS = {"write_text", "write_bytes"}
+
+
+def _write_mode(node: ast.Call) -> str | None:
+    """The mode of an `open(...)` or `<path>.open(...)` call, when it
+    writes."""
+    f = node.func
+    if isinstance(f, ast.Name) and f.id == "open":
+        position = 1
+    elif isinstance(f, ast.Attribute) and f.attr == "open":
+        position = 0
+    else:
+        return None
+    mode = node.args[position] if len(node.args) > position else None
+    for kw in node.keywords:
+        if kw.arg == "mode":
+            mode = kw.value
+    if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+        return mode.value if set(mode.value) & set("wax+") else None
+    return None
+
+
+def file_write_sites(path: str) -> dict[tuple[str, str], list[str]]:
+    found: dict[tuple[str, str], list[str]] = defaultdict(list)
+
+    def visit(node: ast.AST, func: str) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node.name
+        what = None
+        if isinstance(node, ast.Call):
+            f = node.func
+            if (
+                isinstance(f, ast.Attribute)
+                and f.attr in _WRITE_METHODS
+                and ast.unparse(f.value) != "atomic_write"
+            ):
+                what = f"{f.attr}("
+            elif (mode := _write_mode(node)) is not None:
+                what = f"open(..., {mode!r})"
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.endswith(".tmp")
+        ):
+            what = f"fixed temp name {node.value!r}"
+        if what is not None:
+            found[(path, func)].append(
+                f"{path}:{node.lineno}: {what} in {func} -> write through atomic_write"
+                " (rule atomic-write)"
+            )
+        for child in ast.iter_child_nodes(node):
+            visit(child, func)
+
+    visit(parse(path), "<module>")
+    return found
+
+
+def test_files_are_written_atomically():
+    found: dict[object, list[str]] = {}
+    for path in sidecar_sources():
+        if path != ATOMIC_WRITE_MODULE:
+            found.update(file_write_sites(path))
+    check_ratchet("atomic-write", found, WRITE_ALLOWED)
 
 
 # ---------------------------------------------------------------------------

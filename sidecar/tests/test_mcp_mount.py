@@ -26,10 +26,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
     import server
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(server)
     # `with` runs the lifespan — which is the whole point here.
     # Host must look like the real sidecar: the MCP endpoints reject
@@ -180,12 +180,12 @@ async def test_status_tool_reports_the_data_dir(
     monkeypatch.setenv("FCHAT_DATA_DIR", str(fchat))
     import importlib
 
-    import character_archive
+    import archive_registry
     import paths
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(server)
 
     async with mcp_client("") as session:

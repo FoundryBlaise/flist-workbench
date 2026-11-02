@@ -19,7 +19,9 @@ import re
 import sys
 from typing import Any, AsyncIterator
 
-import character_archive
+import archive_errors
+import archive_images
+import archive_live
 import flist_activity
 import flist_api
 import settings as settings_store
@@ -68,12 +70,12 @@ def _differs_from_live(cid: str, payload: dict[str, Any]) -> bool:
     """Whether a freshly fetched profile differs from the stored Live.
     No Live yet counts as a change."""
     try:
-        live = character_archive.read_live(cid)
-    except character_archive.CharacterNotFound:
+        live = archive_live.read_live(cid)
+    except archive_errors.CharacterNotFound:
         live = None
     if live is None:
         return True
-    return character_archive.live_content_hash(payload) != character_archive.live_content_hash(live)
+    return archive_live.live_content_hash(payload) != archive_live.live_content_hash(live)
 
 
 async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -116,7 +118,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             changed = _differs_from_live(cid, payload)
             live_payload = dict(payload)
             live_payload["fetched_at"] = int(_t.time())
-            character_archive.write_live(cid, live_payload)
+            archive_live.write_live(cid, live_payload)
 
             # Avatar — deterministic URL, no rate-limit-bucket cost
             # against the API. Fire-and-forget; failures are
@@ -124,7 +126,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             try:
                 await flist_api.download_to(
                     flist_api.avatar_url(name),
-                    character_archive.avatar_path_for(name),
+                    archive_images.avatar_path_for(name),
                     client=client,
                 )
             except flist_api.FlistApiError:
@@ -154,7 +156,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # incomplete — N missing" on next launch.
             import time as _t
             pull_started_at = int(_t.time())
-            character_archive.write_pull_state(
+            archive_images.write_pull_state(
                 cid,
                 image_list,
                 started_at=pull_started_at,
@@ -172,7 +174,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # same image_id (F-list rarely changes ext for an existing
             # id, but a manual file replace can leave a `.png` next to
             # the `.jpg` we're about to download).
-            images_dir_path = character_archive.images_dir(cid)
+            images_dir_path = archive_images.images_dir(cid)
             downloaded = 0
             cached = 0
             failed = 0
@@ -180,7 +182,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 image_id = img["image_id"]
                 raw_ext = img["extension"]
                 try:
-                    ext = character_archive.normalise_image_ext(raw_ext)
+                    ext = archive_images.normalise_image_ext(raw_ext)
                 except ValueError:
                     ext = raw_ext.lower().lstrip(".")
                 target = images_dir_path / f"{image_id}.{ext}"
@@ -217,7 +219,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                 )
                 try:
                     data = await flist_api.fetch_bytes(url, client=client)
-                    character_archive.write_character_image(
+                    archive_images.write_character_image(
                         cid, image_id, ext, data
                     )
                     # If the user uploaded these exact bytes locally
@@ -225,7 +227,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
                     # file is still on disk and would show up as a
                     # phantom pool entry. Collapse the duplicate.
                     try:
-                        character_archive.dedupe_local_after_pull(
+                        archive_images.dedupe_local_after_pull(
                             cid, image_id, data
                         )
                     except Exception:  # noqa: BLE001 — best-effort
@@ -283,7 +285,7 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # and the same picture shows in the pool and on the profile
             # at once. Repair compares bytes, so it recognises them.
             try:
-                character_archive.repair_gallery(cid)
+                archive_images.repair_gallery(cid)
             except Exception as exc:  # noqa: BLE001 — never fail a pull
                 print(f"gallery repair after pull failed: {exc}", file=sys.stderr)
 
@@ -291,13 +293,13 @@ async def run(name: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
             # completion (success or with per-image failures). The
             # absence of this write is what compute_pull_status uses
             # to distinguish "interrupted" from "partial".
-            character_archive.write_pull_state(
+            archive_images.write_pull_state(
                 cid,
                 image_list,
                 started_at=pull_started_at,
                 finished_at=int(_t.time()),
             )
-            pull_status = character_archive.compute_pull_status(cid)
+            pull_status = archive_images.compute_pull_status(cid)
             flist_activity.record(
                 "pull-done",
                 name=payload.get("name") or name,

@@ -28,6 +28,7 @@ from pathlib import Path
 
 import httpx
 
+import atomic_write
 import paths
 
 log = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ def _save_to_disk() -> None:
             "asOfTimestamp": _store.as_of_timestamp,
             "records": _store.records,
         }
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        atomic_write.write_json(path, payload)
     except OSError as e:
         log.warning("eicons: save failed: %s", e)
 
