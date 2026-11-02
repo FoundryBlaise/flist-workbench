@@ -19,6 +19,9 @@ Rules:
   (unique temp file, fsync, one-step replace), so a crash never
   leaves a broken file. No `write_text`/`write_bytes`, no `open` for
   writing and no fixed `.tmp` name anywhere else.
+* router-layering: every REST route lives in a router under
+  `sidecar/routers/`; only `server.py` (app setup and router
+  registration) imports routers, and nothing imports `server.py`.
 * retired-term: user-facing prose (sidecar strings, MCP tool
   descriptions, renderer and main-process strings and JSX text) does
   not use a term GLOSSARY.md retired or avoids. Only text with a space
@@ -142,42 +145,42 @@ def test_the_fullmatch_allowlist_has_no_stale_entries():
 # was introduced. May only shrink: new refusals subclass
 # refusals.Refusal.
 HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
-    ("sidecar/server.py", "_foreign_http"): 1,
-    ("sidecar/server.py", "_require_restore_auth"): 1,
-    ("sidecar/server.py", "flist_avatar"): 3,
-    ("sidecar/server.py", "flist_character_export_zip"): 1,
-    ("sidecar/server.py", "flist_character_image"): 1,
-    ("sidecar/server.py", "flist_character_image_by_id"): 1,
-    ("sidecar/server.py", "flist_character_image_remove"): 1,
-    ("sidecar/server.py", "flist_character_image_upload"): 3,
-    ("sidecar/server.py", "flist_character_inline"): 1,
-    ("sidecar/server.py", "flist_character_live"): 1,
-    ("sidecar/server.py", "flist_character_trash_file"): 1,
-    ("sidecar/server.py", "flist_character_workbench_load_backup"): 3,
-    ("sidecar/server.py", "flist_character_workbench_load_preflight"): 2,
-    ("sidecar/server.py", "flist_character_zip_backup"): 1,
-    ("sidecar/server.py", "flist_character_zip_backup_delete"): 2,
-    ("sidecar/server.py", "flist_character_zip_backup_download"): 1,
-    ("sidecar/server.py", "flist_character_zip_backup_payload"): 4,
-    ("sidecar/server.py", "flist_character_zip_backup_rename"): 3,
-    ("sidecar/server.py", "flist_mapping_list"): 2,
-    ("sidecar/server.py", "flist_session_create"): 1,
-    ("sidecar/server.py", "foreign_character_avatar"): 3,
-    ("sidecar/server.py", "foreign_character_image"): 4,
-    ("sidecar/server.py", "labels_fill_unlabeled"): 1,
-    ("sidecar/server.py", "labels_override"): 1,
-    ("sidecar/server.py", "labels_override_many"): 1,
-    ("sidecar/server.py", "labels_rollup"): 1,
-    ("sidecar/server.py", "logs_characters"): 1,
-    ("sidecar/server.py", "profile"): 4,
-    ("sidecar/server.py", "rag_job_cancel"): 1,
-    ("sidecar/server.py", "rag_job_get"): 1,
-    ("sidecar/server.py", "rag_lexical_rebuild"): 1,
-    ("sidecar/server.py", "render_deliver"): 2,
-    ("sidecar/server.py", "restore_image_ids"): 2,
-    ("sidecar/server.py", "restore_saved"): 1,
-    ("sidecar/server.py", "restore_snapshot"): 1,
-    ("sidecar/server.py", "settings_update"): 2,
+    ("sidecar/routers/flist_session.py", "flist_avatar"): 3,
+    ("sidecar/routers/flist_session.py", "flist_mapping_list"): 2,
+    ("sidecar/routers/flist_session.py", "flist_session_create"): 1,
+    ("sidecar/routers/foreign.py", "_foreign_http"): 1,
+    ("sidecar/routers/foreign.py", "foreign_character_avatar"): 3,
+    ("sidecar/routers/foreign.py", "foreign_character_image"): 4,
+    ("sidecar/routers/images_trash.py", "flist_character_image"): 1,
+    ("sidecar/routers/images_trash.py", "flist_character_image_by_id"): 1,
+    ("sidecar/routers/images_trash.py", "flist_character_image_remove"): 1,
+    ("sidecar/routers/images_trash.py", "flist_character_image_upload"): 3,
+    ("sidecar/routers/images_trash.py", "flist_character_inline"): 1,
+    ("sidecar/routers/images_trash.py", "flist_character_trash_file"): 1,
+    ("sidecar/routers/index.py", "rag_job_cancel"): 1,
+    ("sidecar/routers/index.py", "rag_job_get"): 1,
+    ("sidecar/routers/index.py", "rag_lexical_rebuild"): 1,
+    ("sidecar/routers/labels.py", "labels_fill_unlabeled"): 1,
+    ("sidecar/routers/labels.py", "labels_override"): 1,
+    ("sidecar/routers/labels.py", "labels_override_many"): 1,
+    ("sidecar/routers/labels.py", "labels_rollup"): 1,
+    ("sidecar/routers/live.py", "flist_character_live"): 1,
+    ("sidecar/routers/logs.py", "logs_characters"): 1,
+    ("sidecar/routers/lookups.py", "profile"): 4,
+    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup"): 1,
+    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_delete"): 2,
+    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_download"): 1,
+    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_payload"): 4,
+    ("sidecar/routers/pull_backups.py", "flist_character_zip_backup_rename"): 3,
+    ("sidecar/routers/render.py", "render_deliver"): 2,
+    ("sidecar/routers/settings.py", "settings_update"): 2,
+    ("sidecar/routers/upload.py", "_require_restore_auth"): 1,
+    ("sidecar/routers/upload.py", "flist_character_export_zip"): 1,
+    ("sidecar/routers/upload.py", "restore_image_ids"): 2,
+    ("sidecar/routers/upload.py", "restore_saved"): 1,
+    ("sidecar/routers/upload.py", "restore_snapshot"): 1,
+    ("sidecar/routers/workbench.py", "flist_character_workbench_load_backup"): 3,
+    ("sidecar/routers/workbench.py", "flist_character_workbench_load_preflight"): 2,
 }
 
 
@@ -285,6 +288,60 @@ def test_files_are_written_atomically():
         if path != ATOMIC_WRITE_MODULE:
             found.update(file_write_sites(path))
     check_ratchet("atomic-write", found, WRITE_ALLOWED)
+
+
+# ---------------------------------------------------------------------------
+# router-layering
+
+ENTRY_MODULE = "sidecar/server.py"
+ROUTE_DECORATORS = {"get", "post", "put", "patch", "delete", "api_route", "websocket", "route"}
+
+
+def imported_names(path: str) -> list[tuple[int, str]]:
+    """(line, dotted name) of everything `path` imports; `from a import b`
+    gives both `a` and `a.b`, and a relative import gives `.`."""
+    names = []
+    for node in ast.walk(parse(path)):
+        if isinstance(node, ast.Import):
+            names.extend((node.lineno, alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                names.append((node.lineno, "."))
+                continue
+            names.append((node.lineno, node.module or ""))
+            names.extend((node.lineno, f"{node.module}.{alias.name}") for alias in node.names)
+    return names
+
+
+def test_only_the_entry_module_imports_routers():
+    """A router never imports another router, and nothing below the REST
+    surface (services, the archive, MCP tools) imports a router or the
+    entry module: what two routers share lives in services/."""
+    sites = [
+        f"{path}:{line}: imports {name} (rule router-layering)"
+        for path in sidecar_sources()
+        if path != ENTRY_MODULE
+        for line, name in imported_names(path)
+        if name in ("server", "routers")
+        or name.startswith(("server.", "routers."))
+        or (name == "." and path.startswith("sidecar/routers/"))
+    ]
+    assert not sites, report("router-layering", sites)
+
+
+def test_the_entry_module_declares_no_routes():
+    """server.py holds app setup, middleware, error handlers and router
+    registration; every route lives in a router under routers/."""
+    sites = [
+        f"{ENTRY_MODULE}:{node.lineno}: route {node.name} (rule router-layering)"
+        for node in ast.walk(parse(ENTRY_MODULE))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for deco in node.decorator_list
+        if isinstance(deco, ast.Call)
+        and isinstance(deco.func, ast.Attribute)
+        and deco.func.attr in ROUTE_DECORATORS
+    ]
+    assert not sites, report("router-layering", sites)
 
 
 # ---------------------------------------------------------------------------
