@@ -18,9 +18,9 @@ export function UserscriptHelpModal({ onClose }: { onClose: () => void }) {
       <div className="modal flist-userscript-help-modal">
         <header className="modal-head">
           <div>
-            <h2 className="modal-title">Install the restore userscript</h2>
+            <h2 className="modal-title">Install the upload userscript</h2>
             <p className="modal-subtitle">
-              Workbench can prepare a ZIP for restore but cannot directly
+              The app can prepare a ZIP for an Upload but cannot directly
               edit your F-list profile. A browser userscript reads the ZIP
               and drives F-list's edit form to upload images and save the
               updated character. The script only uploads — it never
@@ -67,9 +67,9 @@ export function UserscriptHelpModal({ onClose }: { onClose: () => void }) {
               </div>
             </li>
             <li>
-              <strong>In Workbench: pick the working set you want to restore</strong>{' '}
-              and click "Export for restore" in the sidebar. You'll get a ZIP
-              containing the curated character JSON, gallery images, and avatar.
+              <strong>In the app: open the character's Images tab</strong>{' '}
+              and click "Download for Upload". You'll get a ZIP of the
+              Workbench: the character JSON, gallery images, and avatar.
             </li>
             <li>
               <strong>On F-list:</strong> go to your character's edit page.
@@ -80,7 +80,7 @@ export function UserscriptHelpModal({ onClose }: { onClose: () => void }) {
           </ol>
           <div className="flist-userscript-help-callout">
             <strong>Safety:</strong> the userscript never deletes images
-            on F-list — it can only upload. If your working set leaves out
+            on F-list — it can only upload. If your Workbench leaves out
             an image that's currently on Live, remove it manually on the
             F-list website. F-list image deletions are irreversible, so we
             never automate them.

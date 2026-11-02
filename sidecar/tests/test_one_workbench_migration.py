@@ -438,3 +438,114 @@ def test_restoring_the_migration_backup_is_refused_and_keeps_the_workbench(
     assert res.status_code == 409
     after = window.get(f"/flist/character/{CID}/workbench/payload").json()["payload"]
     assert after == seen["workbench"]
+
+
+def _with_a_leftover_working_copy(old: OldArchive) -> dict:
+    """Started over a draft and a leftover `working.json`: the migration
+    Backup then holds a file named like a Backup's own profile, which
+    must not make it loadable."""
+    old.draft("aaaaaaaaaaaa", "Main", "[b]Mine.[/b]", updated_at=500)
+    old.write("working.json", {**_draft("[b]From long ago.[/b]"), "_schema_version": 5})
+    return start(old)
+
+
+def _restore_in_the_window(backup: str) -> tuple[int, str]:
+    import server
+
+    res = app_client(server.app).post(
+        f"/flist/character/{CID}/workbench/load-backup", json={"filename": backup}
+    )
+    return res.status_code, res.json().get("code", "")
+
+
+async def _load_over_mcp(backup: str) -> tuple[int, str]:
+    from mcp_helpers import call_tool, mcp_client, tool_error_text
+
+    async with mcp_client("character") as session:
+        result, _ = await call_tool(
+            session, "load_backup_into_workbench", character=NAME, backup=backup, confirm=True
+        )
+    return 409, tool_error_text(result)
+
+
+@pytest.mark.parametrize("load", ["window", "mcp"])
+async def test_the_migration_backup_is_never_restored_even_holding_a_working_copy(
+    old: OldArchive, load: str
+) -> None:
+    import server
+
+    seen = _with_a_leftover_working_copy(old)
+    [backup] = seen["backups"]
+
+    if load == "window":
+        status, said = _restore_in_the_window(backup["filename"])
+    else:
+        status, said = await _load_over_mcp(backup["filename"])
+
+    assert status == 409
+    assert "backup_holds_no_profile" in said
+    window = app_client(server.app)
+    assert window.get(f"/flist/character/{CID}/workbench/payload").json()["payload"] == (
+        seen["workbench"]
+    )
+    assert window.get(f"/flist/character/{CID}/zip-backups").json()["backups"] == seen["backups"]
+
+
+def test_the_migration_backup_cannot_be_browsed_as_a_profile(old: OldArchive) -> None:
+    import server
+
+    seen = _with_a_leftover_working_copy(old)
+    [backup] = seen["backups"]
+
+    res = app_client(server.app).get(
+        f"/flist/character/{CID}/zip-backups/{backup['filename']}/payload"
+    )
+
+    assert res.status_code == 409
+    assert res.json()["code"] == "backup_holds_no_profile"
+
+
+def test_the_backup_list_says_which_backups_hold_a_profile(old: OldArchive) -> None:
+    import server
+
+    _with_a_leftover_working_copy(old)
+    window = app_client(server.app)
+    assert window.post(f"/flist/character/{CID}/zip-backup").status_code == 200
+
+    backups = window.get(f"/flist/character/{CID}/zip-backups").json()["backups"]
+
+    assert {b["occasion"]: b["holds_profile"] for b in backups} == {
+        "migration": False,
+        "manual": True,
+    }
+
+
+def test_an_image_named_only_in_the_older_drafts_is_referenced_but_not_kept(
+    old: OldArchive,
+) -> None:
+    """The migration Backup holds JSON only. An image a spare draft named
+    is still used somewhere, but no Backup holds its bytes: trashing the
+    pool file must not be told it is safely kept."""
+    import server
+
+    old.draft("aaaaaaaaaaaa", "Main", "[b]Mine.[/b]", updated_at=900)
+    old.write(
+        "sets/bbbbbbbbbbbb/payload.json",
+        {**_draft("[b]Spare.[/b]"), "images": [{"image_id": "777", "sort_order": 0}]},
+    )
+    old.write(
+        "sets/bbbbbbbbbbbb/meta.json",
+        {"id": "bbbbbbbbbbbb", "name": "Spare", "created_at": 100, "updated_at": 500},
+    )
+    old.point_at("aaaaaaaaaaaa")
+    start(old)
+
+    refs = app_client(server.app).get(f"/flist/character/{CID}/image-references").json()
+
+    assert refs["777"] == {
+        "workbench": False,
+        "live": False,
+        "backups": 0,
+        "newest_backup": None,
+        "migration_backup": True,
+    }

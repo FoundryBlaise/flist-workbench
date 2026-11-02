@@ -427,17 +427,3 @@ def set_profile_settings(payload: dict[str, Any], values: dict[str, Any]) -> lis
         raise PayloadError("no settings given")
     return touched
 
-
-# --------------------------------------------------------------------
-# Seeding
-# --------------------------------------------------------------------
-
-
-def seed_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    """Build a fresh working payload from a pulled profile.
-
-    One implementation, used by every caller. There used to be three —
-    `character_archive._seed_payload_from_live`, a copy in `server.py`,
-    and `seedWorkingFromLive` in the renderer — which drifted.
-    """
-    return character_archive._seed_payload_from_live(live)

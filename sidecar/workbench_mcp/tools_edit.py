@@ -20,13 +20,14 @@ from pydantic import BaseModel
 import bbcode_rules
 import character_archive
 from archive_errors import WorkbenchConflict, WorkbenchNotKept
+from refusals import BackupHoldsNoProfile
 
 from ._context import (
     ToolError,
     audit,
     load_payload,
     resolve_character,
-    resolve_set,
+    resolve_workbench_or_live,
     workbench_target,
 )
 from ._registry import TAG_CHARACTER, tool
@@ -36,7 +37,7 @@ from .tools_session import NO_PUSH_NOTE
 def _writable(character: str, set_ref: str | None):  # noqa: ANN202
     """Resolve a character and its Workbench for writing, refusing `live`."""
     target = resolve_character(character)
-    resolved = resolve_set(target, set_ref, for_write=True)
+    resolved = resolve_workbench_or_live(target, set_ref, for_write=True)
     return target, resolved
 
 
@@ -130,14 +131,13 @@ def load_backup_into_workbench(
         )
     except FileNotFoundError as exc:
         raise ToolError("backup_not_found", str(exc)) from exc
-    except (WorkbenchNotKept, WorkbenchConflict) as exc:
+    except (WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile) as exc:
         raise ToolError(exc.code, exc.message) from exc
     except KeyError as exc:
         raise ToolError(
             "backup_too_old",
             "That Backup holds no profile to load into the Workbench: "
-            "it predates the stored profile payload, or keeps the files "
-            "an earlier version of the app left behind.",
+            "it predates the stored profile payload.",
         ) from exc
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
@@ -1102,7 +1102,7 @@ def _import_batch(
                 "Nothing was imported.",
             )
     else:
-        resolved = _set_for_reporting(target, working_set)
+        resolved = _workbench_for_reporting(target, working_set)
 
     roots = image_import.import_roots()
     prepared: list[image_import.PreparedImage] = []
@@ -1221,12 +1221,12 @@ def _import_batch(
     }
 
 
-def _set_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
+def _workbench_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
     """The Workbench (or Live) whose gallery a pool-only import reports
     against. Never creates a Workbench: importing into the pool is not
     editing."""
     if working_set is not None:
-        return resolve_set(target, working_set)
+        return resolve_workbench_or_live(target, working_set)
     if character_archive.read_workbench(target.id) is None:
         return None
     return workbench_target(target)
@@ -1326,7 +1326,7 @@ def get_working_set_payload(
     inspecting something they don't expose.
     """
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     etag = (
         None

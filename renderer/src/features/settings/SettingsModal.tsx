@@ -1209,7 +1209,7 @@ function SecurityPane() {
           accept-this-extension prompt the first time the extension
           asks. The extension never sees your F-list session and this
           app never sees your F-list cookies — the extension just
-          fetches snapshots you've already stored locally.
+          fetches the Workbench and Backups already stored here.
         </p>
       </div>
       <h3 className="settings-section-h">Rotate pairing token</h3>

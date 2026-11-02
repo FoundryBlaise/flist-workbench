@@ -458,8 +458,12 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     assert (mine["width"], mine["height"]) == (30, 50)
     assert mine["source_name"] == "Profil_final_07.png"
     assert mine["sha256"] == imported["sha256"]
-    assert mine["referenced_by"] == {"workbench": False, "live": False, "backups": 0}
+    assert mine["referenced_by"] == {
+        "workbench": False, "live": False, "backups": 0, "migration_backup": False
+    }
 
     pulled = pool["555"]
     assert pulled["source_name"] is None
-    assert pulled["referenced_by"] == {"workbench": False, "live": True, "backups": 0}
+    assert pulled["referenced_by"] == {
+        "workbench": False, "live": True, "backups": 0, "migration_backup": False
+    }

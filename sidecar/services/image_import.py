@@ -395,13 +395,25 @@ def _ids_in_backup(path: Path) -> set[str]:
 
 def references(character_id: int | str) -> dict[str, dict[str, Any]]:
     """For every image id mentioned anywhere: whether the Workbench's
-    gallery holds it, whether Live does, and in how many Backups it
-    appears (with the newest). Each Backup carries its own copy of the
-    bytes, so trashing a pool file costs none of them; the count says
-    where else the picture is kept."""
+    gallery holds it, whether Live does, in how many Backups it appears
+    (with the newest), and whether the migration Backup names it. A
+    Backup that holds a profile carries its own copy of the bytes, so
+    trashing a pool file costs none of them; that count says where else
+    the picture is kept.
+
+    The migration Backup is not counted there: it keeps the older drafts
+    and Pull copies as JSON only, with no image files. An image named
+    only there is still referenced (`migration_backup`), but trashing
+    its pool file loses the only copy of its bytes."""
 
     def empty() -> dict[str, Any]:
-        return {"workbench": False, "live": False, "backups": 0, "newest_backup": None}
+        return {
+            "workbench": False,
+            "live": False,
+            "backups": 0,
+            "newest_backup": None,
+            "migration_backup": False,
+        }
 
     out: dict[str, dict[str, Any]] = defaultdict(empty)
     bench = character_archive.read_workbench(character_id)
@@ -409,9 +421,13 @@ def references(character_id: int | str) -> dict[str, dict[str, Any]]:
         out[image_id]["workbench"] = True
     for image_id in _image_ids(character_archive.read_live(character_id)):
         out[image_id]["live"] = True
-    folder = character_archive.character_dir(character_id) / "backups"
     for backup in character_archive.list_zip_backups(character_id):  # newest first
-        for image_id in _ids_in_backup(folder / backup["filename"]):
+        ids = _ids_in_backup(character_archive.backups_dir(character_id) / backup["filename"])
+        if not backup["holds_profile"]:
+            for image_id in ids:
+                out[image_id]["migration_backup"] = True
+            continue
+        for image_id in ids:
             entry = out[image_id]
             entry["backups"] += 1
             if entry["newest_backup"] is None:

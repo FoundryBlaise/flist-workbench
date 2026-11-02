@@ -20,8 +20,10 @@ At startup every character folder is moved to the one shape:
    on disk, and only then given its Backup name.
 3. Only then are the old files removed.
 4. `layout.json` is written last. A folder holding it is never touched
-   again; one without it is redone from the start on the next run,
-   which is safe at every step above.
+   again; one without it goes through these steps again on the next
+   run, which is safe at every step above. That includes a `workbench/`
+   the earlier run already wrote: step 1 keeps it rather than choosing
+   a draft again (see `migrate_folder`).
 
 Anything that fails leaves the old files in place and the folder
 without its marker, so the next start tries again. Pool files from
@@ -95,6 +97,12 @@ def migrate_folder(folder: Path) -> bool:
     if is_migrated(folder):
         return False
     bench = folder / character_archive.WORKBENCH_DIRNAME
+    # A `workbench/` already here is kept, never replaced by the draft
+    # chosen again. Only an earlier run that stopped before writing
+    # `layout.json` leaves one beside old files, and the sidecar served
+    # it from then on: the window, or a model, may have saved edits into
+    # it that no draft and no Backup holds. Choosing again would lose
+    # them; the drafts are still all kept in the Backup below.
     if not (bench / character_archive.WORKBENCH_PAYLOAD_FILENAME).exists():
         chosen = _draft_the_window_showed(folder)
         if chosen is not None:
@@ -182,7 +190,7 @@ def _old_files(folder: Path) -> list[Path]:
         p for p in sorted(folder.iterdir())
         if p.is_file() and _LEGACY_WORKING_RE.fullmatch(p.name)
     )
-    loose = folder / "backups"
+    loose = folder / character_archive.BACKUPS_DIRNAME
     if loose.is_dir():
         out.extend(
             p for p in sorted(loose.iterdir())
@@ -215,7 +223,7 @@ def _holds(zip_path: Path, folder: Path, old: list[Path]) -> bool:
 def _covering_backup(folder: Path, old: list[Path]) -> Path | None:
     """A migration Backup an interrupted earlier run already wrote that
     holds every old file left, so a second one is not needed."""
-    backups = folder / "backups"
+    backups = folder / character_archive.BACKUPS_DIRNAME
     if not backups.is_dir():
         return None
     for entry in sorted(backups.glob("*.zip"), reverse=True):
@@ -234,7 +242,7 @@ def _covering_backup(folder: Path, old: list[Path]) -> Path | None:
 def _write_migration_backup(folder: Path, old: list[Path]) -> Path:
     """Pack the old files into a new Backup, verified before it gets its
     Backup name. Raises when it cannot be written or read back."""
-    backups = folder / "backups"
+    backups = folder / character_archive.BACKUPS_DIRNAME
     backups.mkdir(parents=True, exist_ok=True)
     target = character_archive.free_backup_path(backups)
     scratch = target.with_name(target.name + ".tmp")

@@ -14,7 +14,6 @@ function seed(opts: { dirty: boolean; origin?: string }) {
     flistActiveCharacterId: CID,
     flistExternalChange: {
       [CID]: {
-        setId: 'bench1',
         etag: 'e1',
         origin: opts.origin ?? 'mcp:set_profile_field',
         at: 1000

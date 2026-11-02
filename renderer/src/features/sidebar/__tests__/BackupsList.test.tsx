@@ -3,18 +3,28 @@
 // that say their source is unknown.
 
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useStore } from '../../../state'
 import { BackupsList } from '../BackupsList'
 import type { FlistZipBackupEntry } from '../../../lib/api'
 
 const CID = '42'
 
+const MIGRATION_BACKUP = '2026-10-26T120000Z.zip'
+
 function backup(
   filename: string,
-  origin: Pick<FlistZipBackupEntry, 'kind' | 'source' | 'occasion'>
+  origin: Pick<FlistZipBackupEntry, 'kind' | 'source' | 'occasion'> &
+    Partial<Pick<FlistZipBackupEntry, 'holds_profile'>>
 ): FlistZipBackupEntry {
-  return { filename, created_at: 1793361600, size: 4096, name: null, ...origin }
+  return {
+    filename,
+    created_at: 1793361600,
+    size: 4096,
+    name: null,
+    holds_profile: true,
+    ...origin
+  }
 }
 
 const BACKUPS: FlistZipBackupEntry[] = [
@@ -38,10 +48,11 @@ const BACKUPS: FlistZipBackupEntry[] = [
     source: 'workbench',
     occasion: 'before-restore'
   }),
-  backup('2026-10-26T120000Z.zip', {
+  backup(MIGRATION_BACKUP, {
     kind: 'unknown',
     source: 'workbench',
-    occasion: 'migration'
+    occasion: 'migration',
+    holds_profile: false
   }),
   backup('2026-06-01T120000Z.zip', {
     kind: 'manual_single',
@@ -74,8 +85,7 @@ afterEach(() => {
 })
 
 function originOf(filename: string): string {
-  const row = screen.getByTitle(new RegExp(filename.replace('.', '\\.')))
-  const origin = row.querySelector('[data-testid="backup-origin"]')
+  const origin = rowOf(filename).querySelector('[data-testid="backup-origin"]')
   return origin?.textContent ?? ''
 }
 
@@ -93,4 +103,46 @@ it('says the source of an older Backup is unknown', () => {
   render(<BackupsList />)
 
   expect(originOf('2026-06-01T120000Z.zip')).toBe('Source unknown')
+})
+
+function rowOf(filename: string): HTMLElement {
+  return screen.getByTitle(new RegExp(filename.replace('.', '\\.')))
+}
+
+function menuFor(filename: string): string[] {
+  fireEvent.contextMenu(rowOf(filename))
+  return screen.getAllByRole('menuitem').map((item) => item.textContent ?? '')
+}
+
+it('offers a Backup that holds a profile for loading into the Workbench', () => {
+  render(<BackupsList />)
+
+  expect(menuFor('2026-10-30T120000Z.zip')).toEqual(
+    expect.arrayContaining(['Browse backup', 'Load into Workbench…', 'Download ZIP…'])
+  )
+})
+
+it('offers the Backup of the older files for download only, and says what it holds', () => {
+  render(<BackupsList />)
+
+  const offered = menuFor(MIGRATION_BACKUP)
+
+  expect(offered).toContain('Download ZIP…')
+  expect(offered).not.toContain('Load into Workbench…')
+  expect(offered).not.toContain('Browse backup')
+  expect(rowOf(MIGRATION_BACKUP).textContent).toMatch(
+    /older drafts and Pull copies from the upgrade, kept so nothing is lost/
+  )
+})
+
+it('shows why a Restore was turned down', () => {
+  useStore.setState({
+    flistRestoreRefusal: { [CID]: 'That Backup cannot be read.' }
+  } as never)
+
+  render(<BackupsList />)
+
+  expect(screen.getByRole('alert').textContent).toMatch(
+    /Couldn't load that Backup: That Backup cannot be read\./
+  )
 })

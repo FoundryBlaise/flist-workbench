@@ -47,7 +47,7 @@ from archive_errors import (
     WorkbenchConflict,
 )
 from refusals import InvalidFileName, LogNameRefused, Refusal
-from services import label_rollup, local_access, payload_ops
+from services import label_rollup, local_access
 from services import render as render_service
 from services import backup_all as backup_all_service
 from services import backup_trash as backup_trash_service
@@ -805,6 +805,7 @@ async def flist_character_zip_backup_payload(
     p = character_archive.backups_dir(character_id) / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="backup not found")
+    character_archive.require_backup_holds_profile(character_id, filename)
     meta: dict | None = None
     try:
         with zipfile.ZipFile(p, "r") as zf:
@@ -999,8 +1000,7 @@ async def flist_character_workbench_load_backup(
             status_code=409,
             detail=(
                 "That Backup holds no profile to load: it predates the "
-                "stored profile payload, or keeps the files an earlier "
-                "version of the app left behind."
+                "stored profile payload."
             ),
         ) from exc
     except ValueError as exc:
@@ -1315,16 +1315,12 @@ async def flist_character_export_zip(character_id: str) -> Response:
     """
     import zip_serialise
 
-    bench = character_archive.read_workbench(character_id)
-    working = bench.payload if bench is not None else None
+    working = character_archive.export_payload(character_id)
     if working is None:
-        live = character_archive.read_live(character_id)
-        if live is None:
-            raise HTTPException(
-                status_code=404,
-                detail="no Workbench or Live to export",
-            )
-        working = payload_ops.seed_from_live(live)
+        raise HTTPException(
+            status_code=404,
+            detail="no Workbench or Live to export",
+        )
     name_for_file = "character"
     char = working.get("character")
     if isinstance(char, dict):

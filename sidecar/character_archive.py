@@ -51,7 +51,7 @@ from archive_errors import (
     WorkbenchConflict,
     WorkbenchNotKept,
 )
-from refusals import InvalidFileName
+from refusals import BackupHoldsNoProfile, InvalidFileName
 
 CHARACTERS_DIRNAME = "characters"
 AVATARS_DIRNAME = "avatars"
@@ -382,8 +382,8 @@ def character_dir(character_id: int | str) -> Path:
 
 def create_character_dir(character_id: int | str) -> Path:
     """Create a character's folder: the moment a character comes into
-    the archive. A Pull (`write_live`) and a set-bundle import call
-    this; every other path finds the character with `character_dir`."""
+    the archive. Only a Pull (`write_live`) calls this; every other path
+    finds the character with `character_dir`."""
     p, _registered = _folder_for(character_id)
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -401,10 +401,16 @@ def inlines_dir(character_id: int | str) -> Path:
     return p
 
 
+#: The folder of a character's Backups, below its character folder.
+#: Code that walks folders without an id (the startup migration) joins
+#: it on; everything else asks `backups_dir`.
+BACKUPS_DIRNAME = "backups"
+
+
 def backups_dir(character_id: int | str) -> Path:
     """Per-character `backups/` dir — full ZIP backups, restorable via
     the userscript. Created lazily by `save_zip_backup`."""
-    p = character_dir(character_id) / "backups"
+    p = character_dir(character_id) / BACKUPS_DIRNAME
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -489,6 +495,14 @@ def forget_backup_name(character_id: int | str, filename: str) -> None:
 # ---- live read/write ---------------------------------------------------
 
 
+def _events() -> Any:
+    """The event bus module, for its event names. Imported lazily, like
+    `_publish` does, so the archive imports without `services`."""
+    from services import events
+
+    return events
+
+
 def _publish(event: str, **data: Any) -> None:
     """Announce a change on the event bus, if one is running.
 
@@ -552,7 +566,7 @@ def write_live(character_id: int | str, payload: dict[str, Any]) -> None:
     if isinstance(name, str) and name.strip():
         register_character(character_id, name)
     _atomic_write_json(create_character_dir(character_id) / LIVE_FILENAME, payload)
-    _publish("live-changed", character_id=str(character_id))
+    _publish(_events().LIVE_CHANGED, character_id=str(character_id))
 
 
 def read_live(character_id: int | str) -> dict[str, Any] | None:
@@ -665,7 +679,7 @@ def adopt_old_pre_upload_backups() -> int:
     """
     adopted = 0
     for folder in root().iterdir():
-        backups = folder / "backups"
+        backups = folder / BACKUPS_DIRNAME
         if not backups.is_dir():
             continue
         for entry in list(backups.iterdir()):
@@ -726,10 +740,10 @@ def _live_to_zip_payload(live: dict[str, Any]) -> dict[str, Any]:
 
 def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
     """List ZIP backups newest first. Each entry:
-    `{filename, created_at, size, kind, source, occasion, name}`.
-    `source` and `occasion` come from `backup-meta.json` too; a Backup
-    that does not record them is listed with source "unknown" and
-    occasion null (see `backup_origin.read`). Filenames are the
+    `{filename, created_at, size, kind, source, occasion, holds_profile,
+    name}`. `source`, `occasion` and `holds_profile` come from
+    `backup-meta.json` too; a Backup that does not record them is listed
+    with source "unknown" and occasion null (see `backup_origin.read`). Filenames are the
     ISO-basic form written by `save_zip_backup`. `kind` comes from
     the embedded `backup-meta.json` (added 2026-06-17); older backups
     without that file get `"unknown"` so the UI can still bucket
@@ -748,7 +762,7 @@ def list_zip_backups(character_id: int | str) -> list[dict[str, Any]]:
 
     names = _read_backup_names(character_id)
     out: list[dict[str, Any]] = []
-    p = character_dir(character_id) / "backups"
+    p = character_dir(character_id) / BACKUPS_DIRNAME
     if not p.exists():
         return out
     for entry in p.iterdir():
@@ -818,6 +832,13 @@ def zip_backup_meta(character_id: int | str, filename: str) -> dict[str, Any]:
     except (KeyError, OSError, ValueError, zipfile.BadZipFile):
         return {}
     return meta if isinstance(meta, dict) else {}
+
+
+def require_backup_holds_profile(character_id: int | str, filename: str) -> None:
+    """Refuse a Backup that holds no profile (`backup_origin.holds_profile`)
+    before anything reads one out of it: raises `BackupHoldsNoProfile`."""
+    if not backup_origin.holds_profile(zip_backup_meta(character_id, filename)):
+        raise BackupHoldsNoProfile(filename)
 
 
 def latest_zip_backup_content_hash(
@@ -1148,13 +1169,8 @@ def _store_workbench(
     )
     etag = _file_sha256(path)
     assert etag is not None
-    _publish("sets-changed", character_id=str(character_id))
-    _publish(
-        "set-payload-changed",
-        character_id=str(character_id),
-        set_id=WORKBENCH_DIRNAME,
-        etag=etag,
-    )
+    _publish(_events().SETS_CHANGED, character_id=str(character_id))
+    _publish(_events().SET_PAYLOAD_CHANGED, character_id=str(character_id), etag=etag)
     return etag
 
 
@@ -1310,8 +1326,9 @@ def load_zip_backup_into_workbench(
 
     The Backup is read and checked first; only then is the Workbench it
     replaces kept as a `before-restore` Backup, and only once that is
-    written is the Workbench overwritten. Raises KeyError for a Backup
-    that holds no profile to load.
+    written is the Workbench overwritten. Raises `BackupHoldsNoProfile`
+    for the migration Backup, and KeyError for a Backup from before the
+    profile payload was stored in it.
     """
     import zipfile
 
@@ -1319,6 +1336,7 @@ def load_zip_backup_into_workbench(
     target = backups_dir(character_id) / backup_filename
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(str(target))
+    require_backup_holds_profile(character_id, backup_filename)
     try:
         with zipfile.ZipFile(target, "r") as zf:
             raw = zf.read("working.json").decode("utf-8")
@@ -1330,15 +1348,28 @@ def load_zip_backup_into_workbench(
     return _replace_workbench(character_id, backup_payload(payload))
 
 
-def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    """Build a fresh working payload from a Live snapshot.
+def export_payload(
+    character_id: int | str, *, from_live: bool = False
+) -> dict[str, Any] | None:
+    """What an export of the character packs: its Workbench, else (or
+    with `from_live`) a fresh copy of Live. Never makes a Workbench.
+    None when the character has neither."""
+    bench = None if from_live else read_workbench(character_id)
+    if bench is not None:
+        return bench.payload
+    live = read_live(character_id)
+    return _seed_payload_from_live(live) if live is not None else None
 
-    The one implementation on the Python side — `services.payload_ops`
-    re-exports it as `seed_from_live`, and both the set-create path and
-    the export fallback go through that. It mirrors the renderer's
-    `seedWorkingFromLive`; the two have to stay in step, because a set
-    created in the sidecar and one created in the UI must be the same
-    shape."""
+
+def _seed_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
+    """Build a fresh Workbench payload from Live.
+
+    The one implementation on the Python side: making the Workbench on
+    its first read, reset to Live and `export_payload` all go through
+    it. It mirrors the renderer's
+    `seedWorkingFromLive`; the two have to stay in step, because a
+    Workbench the sidecar makes and one the window seeds must be the
+    same shape."""
     out: dict[str, Any] = {
         "_schema_version": WORKING_SCHEMA_VERSION,
         "_overlay": [],
@@ -2350,7 +2381,7 @@ def list_archived_characters() -> list[dict[str, Any]]:
         name = (
             char.get("name") if isinstance(char, dict) else None
         ) or live.get("name")
-        zip_dir = character_dir(cid) / "backups"
+        zip_dir = character_dir(cid) / BACKUPS_DIRNAME
         if zip_dir.exists():
             backup_count = sum(
                 1

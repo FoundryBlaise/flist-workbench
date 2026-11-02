@@ -2,14 +2,12 @@ import type { FlistZipBackupEntry } from '../lib/api'
 import { formatBackupOrigin } from '../lib/backupOrigin'
 
 /** One entry of the Diff tab's picker: what the Workbench can be
- *  compared with. Live comes first, as the default, since it is what
- *  an Upload would change. The Workbench entry is for while the window
- *  shows Live, so Live can be compared with the edits. Then the
- *  character's Backups, newest first, each saying what it holds and why
- *  it was made. */
+ *  compared with. The Workbench is always the left side. Live comes
+ *  first, as the default, since it is what an Upload would change. Then
+ *  the character's Backups, newest first, each saying what it holds and
+ *  why it was made. */
 export type DiffSource =
   | { kind: 'live'; lastPullAt: number | null }
-  | { kind: 'workbench' }
   | {
       kind: 'backup'
       filename: string
@@ -34,10 +32,9 @@ export function selectDiffSources(s: DiffSourcesState, characterId: string): Dif
   const backups = archive?.zipBackups ?? []
   return [
     { kind: 'live', lastPullAt: archive?.lastPullAt ?? null },
-    { kind: 'workbench' },
-    // The migration Backup keeps the files an earlier version left
-    // behind, not a profile: there is nothing in it to compare.
-    ...backups.filter((b) => b.occasion !== 'migration').map(
+    // A Backup that holds no profile (the one the move to one Workbench
+    // made of older files) has nothing in it to compare.
+    ...backups.filter((b) => b.holds_profile).map(
       (b): DiffSource => ({
         kind: 'backup',
         filename: b.filename,

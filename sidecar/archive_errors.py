@@ -25,8 +25,8 @@ class InvalidCharacterId(Refusal, ValueError):
 class CharacterNotFound(Refusal, LookupError):
     """A safe id the archive holds no character for.
 
-    Only a Pull or a set-bundle import brings a character into the
-    archive (see `character_archive.create_character_dir`); everything else finds
+    Only a Pull brings a character into the archive (see
+    `character_archive.create_character_dir`); everything else finds
     one, and an id it cannot find is this, not a fresh empty folder.
     The id is not echoed back.
     """

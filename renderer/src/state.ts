@@ -267,6 +267,9 @@ type State = {
    *  or null while it has none. Absent until `flistLoadWorkbenchInfo`
    *  has asked. */
   flistWorkbenchInfo: Record<string, { updatedAt: number } | null>
+  /** Why the last Restore of each character was turned down, shown in
+   *  the Backup list; null once one goes through or it is dismissed. */
+  flistRestoreRefusal: Record<string, string | null>
   /** True while the window shows a character's Live instead of its
    *  Workbench. The window's own choice: nothing on disk records it, so
    *  looking at Live writes nothing and no other writer can flip it. */
@@ -281,7 +284,7 @@ type State = {
    *  take theirs, or keep mine. */
   flistExternalChange: Record<
     string,
-    { setId: string; etag: string | null; origin: string; at: number } | null
+    { etag: string | null; origin: string; at: number } | null
   >
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
@@ -340,7 +343,7 @@ type State = {
    *  Ephemeral (no disk persistence — default = Live each session). */
   flistDiffRightSource: Record<
     string,
-    { kind: 'live' } | { kind: 'backup'; filename: string } | { kind: 'workbench' }
+    { kind: 'live' } | { kind: 'backup'; filename: string }
   >
   /** Tier 4 — lazy-loaded backup payloads. Keyed by
    *  `${characterId}:${filename}`. Read-only and rarely re-opened, so
@@ -538,12 +541,14 @@ type State = {
     characterId: string,
     filename: string
   ) => Promise<boolean>
+  /** Hide the reason the last Restore was turned down. */
+  flistDismissRestoreRefusal: (characterId: string) => void
   /** Record that something outside this window changed a set. Called
    *  by the `/events` subscription; ignored when the change is one we
    *  made ourselves. */
   flistNoteExternalChange: (
     characterId: string,
-    change: { setId: string; etag: string | null; origin: string }
+    change: { etag: string | null; origin: string }
   ) => void
   /** Take the other writer's version, discarding unsaved local edits. */
   flistReloadAfterExternalChange: (characterId: string) => Promise<void>
@@ -641,14 +646,10 @@ type State = {
   /** Tier 4 — set the Diff tab's right-hand source. */
   flistDiffSetRightSource: (
     characterId: string,
-    source: { kind: 'live' } | { kind: 'backup'; filename: string } | { kind: 'workbench' }
+    source: { kind: 'live' } | { kind: 'backup'; filename: string }
   ) => void
   /** Tier 4 — fetch + cache a backup payload (idempotent). */
   flistDiffLoadBackup: (characterId: string, filename: string) => Promise<void>
-  /** Tier 4 — fetch + cache the current Workbench payload as a Diff
-   *  right-hand source, so the read-only Live row can be compared against
-   *  the edits actually in the bench (not only against backups). */
-  flistDiffLoadWorkbench: (characterId: string) => Promise<void>
   /** The Diff tab's "reset to this": with Live picked, reset the
    *  Workbench to Live; with a Backup picked, Restore that Backup. Both
    *  are the same actions as elsewhere, so the sidecar keeps the
@@ -1028,7 +1029,6 @@ function _noteSaveConflict(
       flistExternalChange: {
         ...s.flistExternalChange,
         [characterId]: {
-          setId: '',
           etag: currentEtag,
           origin: 'unknown',
           at: Date.now()
@@ -1039,15 +1039,34 @@ function _noteSaveConflict(
 }
 
 /** Save what was typed into the Workbench now, instead of after the
- *  autosave's pause. For a switch that replaces the slot. A failed save
- *  leaves the slot dirty with its error. */
-async function _saveTypedEdits(get: () => State, characterId: string): Promise<void> {
-  if (!get().flistWorking[characterId]?.unsavedDirty) return
-  _cancelFlush(characterId)
-  try {
-    await get().flistFlushWorking(characterId)
-  } catch {
-    // saveError on the slot is the user's signal
+ *  autosave's pause, chained after any save still in flight. For
+ *  anything that replaces the slot or the Workbench (showing Live, a
+ *  Restore, reset to Live): the sidecar keeps the Workbench as a Backup
+ *  before replacing it, so that Backup has to hold what was typed.
+ *  False when typed text is still unsaved (a conflict, the sidecar
+ *  gone): the caller stops, since replacing now would lose it, and the
+ *  slot's save error already says why. */
+async function _saveTypedEdits(get: () => State, characterId: string): Promise<boolean> {
+  if (get().flistWorking[characterId]?.unsavedDirty) {
+    _cancelFlush(characterId)
+    try {
+      await get().flistFlushWorking(characterId)
+    } catch {
+      // saveError on the slot is the user's signal
+    }
+  }
+  return !get().flistWorking[characterId]?.unsavedDirty
+}
+
+/** The slot for a Workbench payload the sidecar answered with, and the
+ *  etag the next save goes over. */
+function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot {
+  return {
+    ...emptyWorkingSlot(),
+    payload,
+    overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
+    etag,
+    materialised: true
   }
 }
 
@@ -1060,13 +1079,7 @@ function _showWorkbench(
   payload: WorkingPayload,
   etag: string
 ): void {
-  const slot: FlistWorkingSlot = {
-    ...emptyWorkingSlot(),
-    payload,
-    overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-    etag,
-    materialised: true
-  }
+  const slot = _workbenchSlot(payload, etag)
   set((s) => ({
     flistWorking: { ...s.flistWorking, [characterId]: slot },
     flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
@@ -1459,6 +1472,7 @@ export const useStore = create<State>((set, get) => ({
   flistWorking: {},
   flistWorkingLoadStatus: {},
   flistWorkbenchInfo: {},
+  flistRestoreRefusal: {},
   flistViewingLive: {},
   flistExternalChange: {},
   flistMapping: {
@@ -1767,6 +1781,7 @@ export const useStore = create<State>((set, get) => ({
       flistWorking: {},
       flistWorkingLoadStatus: {},
       flistWorkbenchInfo: {},
+      flistRestoreRefusal: {},
       flistViewingLive: {},
       flistExternalChange: {},
       flistDriftBanners: {},
@@ -2340,14 +2355,7 @@ export const useStore = create<State>((set, get) => ({
     let read: FlistWorkingSlot | null
     try {
       const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
-      const payload = res.payload as WorkingPayload
-      read = {
-        ...emptyWorkingSlot(),
-        payload,
-        overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-        etag: res.etag,
-        materialised: true
-      }
+      read = _workbenchSlot(res.payload as WorkingPayload, res.etag)
     } catch (err) {
       if (err instanceof RefusalError && err.code === 'no_workbench') {
         const liveForSeed = get().flistArchive[characterId]?.live ?? null
@@ -2554,16 +2562,8 @@ export const useStore = create<State>((set, get) => ({
   async flistResetWorkingToLive(characterId) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
-    // The sidecar keeps the Workbench as a Backup before resetting it,
-    // so that Backup has to hold what was typed: save it first. The
-    // flush chains after any save still in flight. A save that does
-    // not land (a conflict, the sidecar gone) leaves the edits only in
-    // this window, and a reset now would lose them: stop, the save's
-    // own error is already showing.
-    await get().flistFlushWorking(characterId)
-    _cancelFlush(characterId)
+    if (!(await _saveTypedEdits(get, characterId))) return
     const current = get().flistWorking[characterId] ?? slot
-    if (current.unsavedDirty) return
 
     const expiresAt = Date.now() + RESET_UNDO_MS
     let fresh: FlistWorkingSlot
@@ -2572,13 +2572,8 @@ export const useStore = create<State>((set, get) => ({
     if (current.materialised) {
       try {
         const res = await api.flistWorkbenchResetToLive(characterId)
-        const payload = res.payload as WorkingPayload
         fresh = {
-          ...emptyWorkingSlot(),
-          payload,
-          overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
-          etag: res.etag,
-          materialised: true,
+          ..._workbenchSlot(res.payload as WorkingPayload, res.etag),
           lastSavedAt: Date.now()
         }
         resetEtag = res.etag
@@ -2651,14 +2646,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistLoadBackupIntoWorkbench(characterId, filename) {
-    // The sidecar keeps the Workbench as a Backup before the Restore
-    // replaces it, so that Backup has to hold what was typed: save it
-    // first. Typed text that cannot be saved would be lost; stop.
-    if (get().flistWorking[characterId]) {
-      await get().flistFlushWorking(characterId)
-      _cancelFlush(characterId)
-      if (get().flistWorking[characterId]?.unsavedDirty) return false
-    }
+    if (!(await _saveTypedEdits(get, characterId))) return false
     try {
       const res = await api.flistWorkbenchLoadBackup(characterId, filename)
       set((s) => ({
@@ -2670,12 +2658,26 @@ export const useStore = create<State>((set, get) => ({
       // The restored Workbench goes into the editor even when the
       // Workbench is already shown, and switches the view from Live.
       _showWorkbench(get, set, characterId, res.payload as WorkingPayload, res.etag)
+      get().flistDismissRestoreRefusal(characterId)
       // The Backup kept of the replaced Workbench belongs in the list.
       if (res.backed_up_first) await get().flistLoadArchive(characterId)
       return true
-    } catch {
+    } catch (err) {
+      // Nothing was replaced. Say why where the Backups are listed,
+      // rather than leaving the click without an answer.
+      const raw = err instanceof Error ? err.message : String(err)
+      const reason = raw.replace(/^HTTP \d+:\s*/, '')
+      set((s) => ({
+        flistRestoreRefusal: { ...s.flistRestoreRefusal, [characterId]: reason }
+      }))
       return false
     }
+  },
+
+  flistDismissRestoreRefusal(characterId) {
+    set((s) => ({
+      flistRestoreRefusal: { ...s.flistRestoreRefusal, [characterId]: null }
+    }))
   },
 
   flistNoteExternalChange(characterId, change) {
@@ -2700,16 +2702,9 @@ export const useStore = create<State>((set, get) => ({
     try {
       const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
       const payload = res.payload as WorkingPayload
-      const overlay = Array.isArray(payload._overlay) ? payload._overlay : []
       const slot: FlistWorkingSlot = {
-        payload,
-        overlay,
-        etag: res.etag,
-        unsavedDirty: false,
-        saveStatus: 'idle',
-        saveError: null,
-        lastSavedAt: Date.now(),
-        materialised: true
+        ..._workbenchSlot(payload, res.etag),
+        lastSavedAt: Date.now()
       }
       set((s) => {
         const patch: Partial<State> = {
@@ -2765,10 +2760,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async flistShowLive(characterId) {
-    await _saveTypedEdits(get, characterId)
     // Edits that could not be saved stay on screen, with the slot's
     // save error saying why: the Live view replaces the slot.
-    if (get().flistWorking[characterId]?.unsavedDirty) return
+    if (!(await _saveTypedEdits(get, characterId))) return
     // Build a read-only view slot from the local live.json. The tabs
     // (Profile / Kinks / Images / Editor) read this slot; the editor
     // and any edit handlers honor editorReadOnly to block mutations.
@@ -3090,52 +3084,6 @@ export const useStore = create<State>((set, get) => ({
       // DiffPane reads `flistDiffBackupStatus` to distinguish "still
       // loading" from "404 / disk error" — gives the user a real
       // signal vs the previous indefinite spinner (UX P1-3).
-      set((s) => ({
-        flistDiffBackupStatus: {
-          ...s.flistDiffBackupStatus,
-          [cacheKey]: 'error'
-        }
-      }))
-    }
-  },
-
-  async flistDiffLoadWorkbench(characterId) {
-    const cacheKey = `${characterId}:__workbench__`
-    if (get().flistDiffBackupCache[cacheKey]) return
-    if (get().flistDiffBackupStatus[cacheKey] === 'loading') return
-    set((s) => ({
-      flistDiffBackupStatus: {
-        ...s.flistDiffBackupStatus,
-        [cacheKey]: 'loading'
-      }
-    }))
-    try {
-      // create=false so merely opening the Diff never brings a
-      // Workbench into being under a read-only Live view. None on disk
-      // is a refusal: the catch below marks it as an error, since there
-      // is nothing to compare but Live itself.
-      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
-      const payload = res?.payload ?? null
-      if (!payload) {
-        set((s) => ({
-          flistDiffBackupStatus: {
-            ...s.flistDiffBackupStatus,
-            [cacheKey]: 'error'
-          }
-        }))
-        return
-      }
-      set((s) => ({
-        flistDiffBackupCache: {
-          ...s.flistDiffBackupCache,
-          [cacheKey]: payload
-        },
-        flistDiffBackupStatus: {
-          ...s.flistDiffBackupStatus,
-          [cacheKey]: 'loaded'
-        }
-      }))
-    } catch {
       set((s) => ({
         flistDiffBackupStatus: {
           ...s.flistDiffBackupStatus,

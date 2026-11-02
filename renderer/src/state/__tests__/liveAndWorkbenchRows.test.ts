@@ -41,6 +41,7 @@ beforeEach(() => {
     flistActiveCharacterId: CID,
     flistBrowseBackup: null,
     flistResetUndo: null,
+    flistRestoreRefusal: {},
     editorReadOnly: false,
     editorContent: 'my draft',
     editorDirty: false
@@ -198,6 +199,46 @@ describe('Restore', () => {
     expect(s.flistWorkbenchInfo[CID]).toEqual({ updatedAt: 300 })
     expect(s.flistViewingLive[CID]).toBe(false)
     expect(s.editorReadOnly).toBe(false)
+  })
+
+  it('keeps the reason a Restore was turned down, and the Workbench as it was', async () => {
+    fake.on(
+      `POST /flist/character/${CID}/workbench/load-backup`,
+      json(
+        {
+          code: 'backup_holds_no_profile',
+          message: 'This Backup keeps older files, not a profile.'
+        },
+        409
+      )
+    )
+
+    const ok = await useStore
+      .getState()
+      .flistLoadBackupIntoWorkbench(CID, '2026-10-01T120000Z.zip')
+
+    expect(ok).toBe(false)
+    const s = useStore.getState()
+    expect(s.flistRestoreRefusal[CID]).toBe('This Backup keeps older files, not a profile.')
+    expect(s.editorContent).toBe('my draft')
+    expect(s.flistWorking[CID].etag).toBe('e1')
+  })
+
+  it('forgets an earlier refusal once a Restore goes through', async () => {
+    useStore.setState({ flistRestoreRefusal: { [CID]: 'turned down before' } })
+    fake.on(
+      `POST /flist/character/${CID}/workbench/load-backup`,
+      json({
+        workbench: { id: 'b1', name: 'Workbench', created_at: 100, updated_at: 300 },
+        ...payloadRead(described('from the Backup'), 'e9'),
+        loaded: '2026-10-01T120000Z.zip',
+        backed_up_first: null
+      })
+    )
+
+    await useStore.getState().flistLoadBackupIntoWorkbench(CID, '2026-10-01T120000Z.zip')
+
+    expect(useStore.getState().flistRestoreRefusal[CID]).toBeNull()
   })
 
   it('switches from Live to the restored Workbench', async () => {

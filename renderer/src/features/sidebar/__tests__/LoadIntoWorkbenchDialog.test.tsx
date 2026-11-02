@@ -15,7 +15,8 @@ const BACKUP: FlistZipBackupEntry = {
   name: null,
   kind: 'manual_single',
   source: 'workbench',
-  occasion: 'manual'
+  occasion: 'manual',
+  holds_profile: true
 }
 
 let fake: FakeApi

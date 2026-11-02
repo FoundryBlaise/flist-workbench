@@ -35,7 +35,7 @@ import backup_origin
 import character_archive
 import paths
 import zip_serialise
-from refusals import BackupNotUploadable
+from refusals import BackupHoldsNoProfile, BackupNotUploadable
 
 #: `backup-meta.json` kind of the Backup taken before an Upload.
 PRE_UPLOAD_BACKUP_KIND = "pre_upload"
@@ -50,12 +50,8 @@ def upload_refusal(character_id: str, filename: str) -> str | None:
     be. One taken without its image files lists no image in
     character.json, which an Upload reads as "remove every image"."""
     meta = character_archive.zip_backup_meta(character_id, filename)
-    if meta.get("occasion") == backup_origin.MIGRATION:
-        return (
-            "This Backup keeps the files an earlier version of the app "
-            "left behind, not a profile, so there is nothing in it to "
-            "upload."
-        )
+    if not backup_origin.holds_profile(meta):
+        return BackupHoldsNoProfile.fixed_message
     note = meta.get("note")
     if meta.get("images_missing") or (
         meta.get("kind") == PRE_UPLOAD_BACKUP_KIND
@@ -346,15 +342,14 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
 
     bench = _workbench(character_id)
     if bench is not None:
-        updated_at, payload = bench
-        images = payload.get("images")
+        images = bench.payload.get("images")
         image_count = len(images) if isinstance(images, list) else 0
         out.append({
             "id": WORKBENCH_SOURCE_ID,
             # Extension 0.1.1 finds the Workbench entry by this kind.
             "kind": "set",
             "label": "Workbench (your edits)",
-            "created_at": _iso_from_unix(updated_at),
+            "created_at": _iso_from_unix(bench.updated_at),
             "image_count": image_count,
             "upload_refused": None,
         })
@@ -403,15 +398,23 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
 WORKBENCH_SOURCE_ID = "workbench"
 
 
-def _workbench(character_id: str) -> tuple[float, dict[str, Any]] | None:
-    """The character's Workbench as `(updated_at, payload)`, or None
-    when it has none yet. Never creates one: listing or fetching what
-    can be uploaded must not bring a Workbench into existence."""
+@dataclass(frozen=True)
+class _UploadableWorkbench:
+    """The Workbench as the extension's source list needs it."""
+
+    updated_at: float
+    payload: dict[str, Any]
+
+
+def _workbench(character_id: str) -> _UploadableWorkbench | None:
+    """The character's Workbench, or None when it has none yet. Never
+    creates one: listing or fetching what can be uploaded must not bring
+    a Workbench into existence."""
     bench = character_archive.read_workbench(character_id)
     info = character_archive.workbench_info(character_id)
     if bench is None or info is None:
         return None
-    return info.updated_at, bench.payload
+    return _UploadableWorkbench(updated_at=info.updated_at, payload=bench.payload)
 
 
 def _iso_from_unix(ts: float | int | None) -> str | None:
@@ -435,7 +438,7 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
             return None
         return zip_serialise.build_zip(
             character_id,
-            bench[1],
+            bench.payload,
             images_dir=images_dir,
             avatar_path=avatar,
         )

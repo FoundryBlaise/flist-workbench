@@ -43,6 +43,7 @@ function backupRow(
     kind: 'manual_single',
     source: 'workbench',
     occasion: 'manual',
+    holds_profile: true,
     name: null,
     ...overrides
   }
@@ -111,7 +112,6 @@ describe('the Diff picker', () => {
 
     expect(selectDiffSources(useStore.getState(), '99')).toEqual([
       { kind: 'live', lastPullAt: 1790000500 },
-      { kind: 'workbench' },
       {
         kind: 'backup',
         filename: NEWER,
@@ -142,7 +142,12 @@ describe('the Diff picker', () => {
       BACKUPS,
       json({
         backups: [
-          backupRow(NEWER, { source: 'workbench', occasion: 'migration', kind: 'unknown' }),
+          backupRow(NEWER, {
+            source: 'workbench',
+            occasion: 'migration',
+            kind: 'unknown',
+            holds_profile: false
+          }),
           backupRow(OLDER, { source: 'workbench', occasion: 'manual' })
         ]
       })
@@ -160,8 +165,7 @@ describe('the Diff picker', () => {
   it('offers Live alone while the Backup list has not loaded', () => {
     seedSlot('99', {})
     expect(selectDiffSources(useStore.getState(), '99')).toEqual([
-      { kind: 'live', lastPullAt: null },
-      { kind: 'workbench' }
+      { kind: 'live', lastPullAt: null }
     ])
   })
 })
@@ -202,36 +206,6 @@ describe('choosing a Backup compares the Workbench with its payload', () => {
 
     expect(useStore.getState().flistDiffBackupStatus[`99:${OLDER}`]).toBe('error')
     expect(useStore.getState().flistDiffBackupCache[`99:${OLDER}`]).toBeUndefined()
-  })
-})
-
-describe('the Diff tab compares Live with the Workbench while Live is shown', () => {
-  it('reads the Workbench payload once and keeps it', async () => {
-    seedSlot('99', { character: { description: 'edited' } })
-    const onDisk = workbenchPayload({
-      _overlay: ['character.description'],
-      character: { description: 'on disk' }
-    })
-    fake.on(`GET ${BENCH}?create=false`, json(payloadRead(onDisk, 'p')))
-
-    await useStore.getState().flistDiffLoadWorkbench('99')
-    await useStore.getState().flistDiffLoadWorkbench('99')
-
-    expect(fake.requests).toHaveLength(1)
-    expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toEqual(onDisk)
-  })
-
-  it('marks error (not a spinner) when there is no Workbench', async () => {
-    seedSlot('99', {})
-    fake.on(
-      `GET ${BENCH}?create=false`,
-      json({ code: 'no_workbench', message: 'this character has no Workbench yet' }, 404)
-    )
-
-    await useStore.getState().flistDiffLoadWorkbench('99')
-
-    expect(useStore.getState().flistDiffBackupStatus['99:__workbench__']).toBe('error')
-    expect(useStore.getState().flistDiffBackupCache['99:__workbench__']).toBeUndefined()
   })
 })
 

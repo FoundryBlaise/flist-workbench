@@ -66,13 +66,24 @@ def meta(source: str, occasion: str, *, kind: str | None = None) -> dict[str, An
     return out
 
 
+def holds_profile(backup_meta: dict[str, Any] | None) -> bool:
+    """Whether a Backup holds a profile that can be restored, browsed or
+    uploaded. The migration Backup does not: it keeps the files an
+    earlier version left behind, verbatim, whatever they are named. The
+    one rule for it; a refusal is `refusals.BackupHoldsNoProfile`."""
+    backup_meta = backup_meta if isinstance(backup_meta, dict) else {}
+    return backup_meta.get("occasion") != MIGRATION
+
+
 def read(backup_meta: dict[str, Any] | None) -> dict[str, Any]:
-    """`{source, occasion}` as a Backup list reports them: source
-    "unknown" and occasion None for a Backup that does not record them."""
+    """`{source, occasion, holds_profile}` as a Backup list reports
+    them: source "unknown" and occasion None for a Backup that does not
+    record them."""
     backup_meta = backup_meta if isinstance(backup_meta, dict) else {}
     source = backup_meta.get("source")
     occasion = backup_meta.get("occasion")
     return {
         "source": source if source in SOURCES else UNKNOWN_SOURCE,
         "occasion": occasion if occasion in OCCASIONS else None,
+        "holds_profile": holds_profile(backup_meta),
     }

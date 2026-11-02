@@ -25,7 +25,7 @@ from mcp.server.fastmcp.utilities.types import Image
 
 from services import render as render_service
 
-from ._context import ToolError, audit, load_payload, resolve_character, resolve_set
+from ._context import ToolError, audit, load_payload, resolve_character, resolve_workbench_or_live
 from ._registry import TAG_CHARACTER, tool
 
 THEMES = ("dark", "default", "light")
@@ -71,7 +71,7 @@ async def render_profile_image(
     px = max(MIN_WIDTH, min(MAX_WIDTH, int(width)))
 
     target = resolve_character(character)
-    resolved = resolve_set(target, working_set)
+    resolved = resolve_workbench_or_live(target, working_set)
     payload = load_payload(resolved)
     char = payload.get("character") if isinstance(payload.get("character"), dict) else {}
     bbcode = (char or {}).get("description") or ""

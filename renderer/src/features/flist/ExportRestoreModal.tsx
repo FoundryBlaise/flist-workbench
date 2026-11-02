@@ -99,11 +99,11 @@ export function ExportRestoreModal({
       <div className="modal flist-export-restore-modal">
         <header className="modal-head">
           <div>
-            <h2 className="modal-title">Export for restore</h2>
+            <h2 className="modal-title">Download the Workbench for an Upload</h2>
             <p className="modal-subtitle">
-              Review what will be in the ZIP before downloading. The ZIP
-              is consumed by the flistcharexporter userscript — it can
-              only upload, never delete from F-list.
+              Review what will be in the ZIP before downloading. The
+              flistcharexporter userscript uploads it — it can only
+              upload, never delete from F-list.
             </p>
           </div>
           <button
@@ -151,7 +151,7 @@ export function ExportRestoreModal({
             </div>
             {onLiveNotInSet.length > 0 && (
               <div className="flist-export-restore-warn">
-                <dt>On Live but not in this set</dt>
+                <dt>On Live but not in the Workbench</dt>
                 <dd>
                   {onLiveNotInSet.length} image
                   {onLiveNotInSet.length === 1 ? '' : 's'} — the userscript
@@ -162,13 +162,13 @@ export function ExportRestoreModal({
             )}
           </dl>
           <div className="flist-export-restore-hint">
-            New to this? Workbench produces the ZIP; a browser userscript
+            New to this? The app makes the ZIP; a browser userscript
             uploads it. <button
               type="button"
               className="flist-export-restore-link"
               onClick={onShowUserscriptHelp}
             >
-              How to install and use the restore userscript →
+              How to install and use the upload userscript →
             </button>
           </div>
         </div>

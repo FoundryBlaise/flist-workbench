@@ -47,7 +47,6 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const backupCache = useStore((s) => s.flistDiffBackupCache)
   const backupStatus = useStore((s) => s.flistDiffBackupStatus)
   const loadBackup = useStore((s) => s.flistDiffLoadBackup)
-  const loadWorkbench = useStore((s) => s.flistDiffLoadWorkbench)
   const setSource = useStore((s) => s.flistDiffSetRightSource)
   const resetField = useStore((s) => s.flistResetWorkingField)
   const resetCustomKink = useStore((s) => s.flistCustomKinksResetField)
@@ -91,18 +90,13 @@ export function DiffPane({ characterId }: { characterId: string }) {
   useEffect(() => {
     if (source.kind === 'backup') {
       void loadBackup(characterId, source.filename)
-    } else if (source.kind === 'workbench') {
-      void loadWorkbench(characterId)
     }
-  }, [source, characterId, loadBackup, loadWorkbench])
+  }, [source, characterId, loadBackup])
 
   const right: Record<string, unknown> | null = useMemo(() => {
     if (source.kind === 'live') {
       const live = archive?.live
       return live ? (live as Record<string, unknown>) : null
-    }
-    if (source.kind === 'workbench') {
-      return backupCache[`${characterId}:__workbench__`] ?? null
     }
     return backupCache[`${characterId}:${source.filename}`] ?? null
   }, [source, archive, backupCache, characterId])
@@ -152,22 +146,6 @@ export function DiffPane({ characterId }: { characterId: string }) {
       </div>
     )
   }
-  if (!right && source.kind === 'workbench') {
-    const status = backupStatus[`${characterId}:__workbench__`] ?? 'loading'
-    return (
-      <div className="diff-pane-empty" data-testid="diff-pane-empty">
-        {status === 'error' ? (
-          <p>
-            This character has no separate Workbench yet — it matches Live,
-            so there is nothing to compare against.
-          </p>
-        ) : (
-          <p>Loading the Workbench…</p>
-        )}
-        <BackupPicker characterId={characterId} />
-      </div>
-    )
-  }
   if (!right && source.kind === 'backup') {
     const cacheKey = `${characterId}:${source.filename}`
     const status = backupStatus[cacheKey] ?? 'loading'
@@ -195,9 +173,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const rightLabel =
     source.kind === 'live'
       ? 'Live'
-      : source.kind === 'workbench'
-        ? 'the Workbench'
-        : `Backup · ${formatBackupDate(archive?.zipBackups ?? [], source.filename)}`
+      : `Backup · ${formatBackupDate(archive?.zipBackups ?? [], source.filename)}`
 
   const descriptionRow = model.rows.find(
     (r) => r.path === 'character.description'
@@ -290,7 +266,6 @@ export function DiffPane({ characterId }: { characterId: string }) {
           className="diff-pane-reset-all"
           data-testid="diff-pane-reset-all"
           disabled={
-            source.kind === 'workbench' ||
             slot.overlay.length === 0 ||
             model.changedRowCount === 0
           }
