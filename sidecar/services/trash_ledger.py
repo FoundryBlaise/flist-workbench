@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable, TypeVar
 
+import atomic_write
+
 T = TypeVar("T")
 
 
@@ -38,9 +40,7 @@ def read_index(path: Path) -> dict[str, dict[str, Any]]:
 
 def write_index(path: Path, index: dict[str, dict[str, Any]]) -> None:
     """Replace an index file in one step, so a crash leaves the old one."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write.write_json(path, index, ensure_ascii=False, indent=1)
 
 
 def resolve_ids(

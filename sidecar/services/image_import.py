@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import atomic_write
 import character_archive
 import settings as settings_store
 
@@ -337,10 +338,7 @@ def record_source(character_id: int | str, sha: str, source_name: str) -> None:
         if sha in meta and meta[sha].get("source_name"):
             return
         meta[sha] = {"source_name": source_name, "imported_at": int(time.time())}
-        p = _meta_path(character_id)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(p)
+        atomic_write.write_json(_meta_path(character_id), meta, ensure_ascii=False, indent=1)
 
 
 # --------------------------------------------------------------------
