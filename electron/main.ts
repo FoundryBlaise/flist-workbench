@@ -637,11 +637,14 @@ ipcMain.on('menu:set-state', (_event, flags: MenuFlags) => {
 })
 
 async function createWindow(): Promise<void> {
-  // The e2e harness starts the app many times per run; a window that
-  // took the focus each time would keep the desktop unusable meanwhile.
-  // showInactive alone is not enough: Windows may still activate the
-  // window later. focusable: false (WS_EX_NOACTIVATE, and no taskbar
-  // button) means it never is; Playwright emulates focus over CDP.
+  // The e2e harness starts the app many times per run. Even an inactive
+  // window it showed would pop up over whatever the user is doing,
+  // a fullscreen game included, so under the harness the window is
+  // never shown: the page still loads and renders, and Playwright drives
+  // it and emulates focus over CDP. focusable: false (WS_EX_NOACTIVATE,
+  // no taskbar button) keeps it from being activated all the same, and
+  // without background throttling a hidden page runs its timers and
+  // frames like a visible one.
   const noFocus = process.env['FLIST_WORKBENCH_NO_FOCUS'] === '1'
   mainWindow = new BrowserWindow({
     show: !noFocus,
@@ -658,6 +661,7 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       sandbox: true,
+      backgroundThrottling: !noFocus,
       // Forward the resolved sidecar port + current app version to the
       // sandboxed preload (process.env isn't reliable across the
       // sandbox boundary).
@@ -667,8 +671,6 @@ async function createWindow(): Promise<void> {
       ]
     }
   })
-  if (noFocus) mainWindow.showInactive()
-
   mainWindow.on('closed', () => {
     mainWindow = null
   })
