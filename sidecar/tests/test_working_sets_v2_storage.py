@@ -507,10 +507,9 @@ def test_loading_a_backup_overwrites_the_one_bench(isolated_userdata) -> None:
         character={"id": "123", "name": "Probe", "description": "later change"}
     )
     ca.write_set_payload("123", bench.id, later, expected_etag=None)
-    loaded = ca.load_zip_backup_into_workbench("123", saved["filename"])
+    ca.load_zip_backup_into_workbench("123", saved["filename"])
 
-    assert loaded.id == bench.id, "must not create a second set"
-    assert len(ca.list_sets("123")) == 1
+    assert len(ca.list_sets("123")) == 1, "must not create a second set"
     restored = ca.read_set_payload("123", bench.id)
     assert restored["character"]["description"] == "edited since"
 
