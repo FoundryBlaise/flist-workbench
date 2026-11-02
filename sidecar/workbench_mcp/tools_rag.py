@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import rag_store
-
 from ._context import ToolError, resolve_conversation, resolve_log_character
 from ._registry import TAG_CORE, TAG_LOGS, tool
 
@@ -95,24 +93,21 @@ def get_rag_status() -> dict[str, Any]:
 
     An index is built per embedding model; switching models means the
     old chunks can't be searched with the new one, which is why
-    `embed_model` is reported alongside the count.
+    `embed_model` is reported alongside the count. While an ingest
+    runs, `busy` is true, `job` is that ingest and `chunk_count` is
+    null: the Index can't be counted until it finishes.
     """
-    manifest = rag_store.read_manifest()
-    chunk_count = 0
-    if manifest.embed_dimension is not None:
-        try:
-            with rag_store.RagStore() as store:
-                chunk_count = store.count() if store.collection_exists() else 0
-        except Exception:  # noqa: BLE001 — status must always answer
-            chunk_count = 0
-    return {
-        "chunk_count": chunk_count,
-        "embed_model": manifest.embed_model,
-        "embed_dimension": manifest.embed_dimension,
-        "last_ingest_at": manifest.last_ingest_at,
-        "note": (
-            "Nothing indexed yet — run ingest_logs."
-            if chunk_count == 0
-            else "Only messages with an IC/OOC verdict are indexed."
-        ),
-    }
+    from services import index as index_service
+
+    out = index_service.status()
+    if out["busy"]:
+        out["note"] = (
+            "A job is changing the Index right now (see `job`), so it "
+            "can't be counted or searched. Poll get_job, or ask again "
+            "when it has finished."
+        )
+    elif not out["chunk_count"]:
+        out["note"] = "Nothing indexed yet — run ingest_logs."
+    else:
+        out["note"] = "Only messages with an IC/OOC verdict are indexed."
+    return out

@@ -183,6 +183,39 @@ class NoIndex(Refusal):
     code = "no_index"
 
 
+class ResourceBusy(Refusal):
+    """A job holds what the request needs (`services.jobs`). Each
+    resource has its own subclass and code; `details` name the job, so
+    the caller can poll or cancel it."""
+
+    status = 409
+    code = "resource_busy"
+    #: The resource, as the message names it.
+    what = "This"
+
+    def __init__(self, job_id: str, kind: str, resource: str) -> None:
+        super().__init__(
+            f"{self.what} is busy: a {kind} job ({job_id}) is running. Wait "
+            "for it to finish (get_job) or cancel it (cancel_job), then try again.",
+            details={"job_id": job_id, "kind": kind, "resource": resource},
+        )
+
+
+class IndexBusy(ResourceBusy):
+    """An ingest (or a wipe) holds the Index."""
+
+    code = "index_busy"
+    what = "The Index"
+
+
+class IndexUnreadable(Refusal):
+    """The Index is there but could not be read (its folder is held by
+    another program, or damaged): not the same as an empty one."""
+
+    status = 500
+    code = "index_unreadable"
+
+
 class UnsupportedType(Refusal, ValueError):
     """Bytes of a kind the route does not take (an image that is not
     PNG, JPEG or GIF; a render that is not PNG or JPEG)."""

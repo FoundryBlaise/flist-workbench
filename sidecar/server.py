@@ -27,6 +27,7 @@ from routers import (
     health,
     images_trash,
     index,
+    jobs,
     labels,
     live,
     logs,
@@ -254,6 +255,7 @@ for _area in (
     render,
     labels,
     index,
+    jobs,
     aliases,
     settings,
 ):
