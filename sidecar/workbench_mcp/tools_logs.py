@@ -17,15 +17,28 @@ import aliases as aliases_store
 import logs as log_store
 from services import labels as label_service
 
-from ._context import ToolError, page, resolve_conversation, resolve_log_character
+from ._context import (
+    ToolError,
+    clamp_limit,
+    page,
+    resolve_conversation,
+    resolve_log_character,
+)
 from ._registry import TAG_CLASSIFY, TAG_LOG_TEXT, TAG_LOGS, tool
 
-#: A single read can pull in a lot of text; keep the default modest and
-#: let the caller page with `offset`.
-DEFAULT_MESSAGE_LIMIT = 200
-MAX_MESSAGE_LIMIT = 1000
-#: The most partners one list_partners call returns; `offset` pages on.
+#: The most rows one call returns; `offset` pages on.
+MAX_LOG_CHARACTERS = 100
 MAX_PARTNERS = 100
+MAX_CONTACTS = 100
+#: Lower than the rest: every message is text a small model has to hold.
+MAX_MESSAGES = 200
+#: The most hits one search of a conversation returns.
+MAX_HITS = 100
+#: Without a partner one search can touch hundreds of conversations; a
+#: per-partner cap and a page of partners keep the answer readable and
+#: still show where the phrase comes up.
+MAX_HITS_PER_PARTNER = 20
+PARTNERS_PER_PAGE = 10
 
 
 # Note: every `except` below names the exception through `log_store`
@@ -41,18 +54,19 @@ def _log_dir_error(exc: Exception) -> ToolError:
 
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Characters with logs", read_only=True)
-def list_log_characters() -> dict[str, Any]:
+def list_log_characters(limit: int = MAX_LOG_CHARACTERS, offset: int = 0) -> dict[str, Any]:
     """Which of the user's characters have F-Chat logs on this machine."""
     try:
         chars = log_store.list_characters()
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
-    return {
-        "characters": [
-            {"name": c.name, "last_activity": c.mtime} for c in chars
-        ],
-        "log_dir": str(log_store.data_dir()),
-    }
+    rows, paged = page(
+        [{"name": c.name, "last_activity": c.mtime} for c in chars],
+        offset=offset,
+        limit=limit,
+        cap=MAX_LOG_CHARACTERS,
+    )
+    return {"characters": rows, "page": paged, "log_dir": str(log_store.data_dir())}
 
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Conversation partners", read_only=True)
@@ -95,10 +109,10 @@ def read_log_messages(
     character: str,
     partner: str,
     offset: int = 0,
-    limit: int = DEFAULT_MESSAGE_LIMIT,
+    limit: int = MAX_MESSAGES,
     labels: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Messages from one conversation, oldest first.
+    """Messages from one conversation, oldest first, at most 200 a page.
 
     Each message carries its `hash` (needed to set a label) and its
     resolved IC/OOC Label. `labels` filters to any of IC, OOC or
@@ -107,7 +121,6 @@ def read_log_messages(
     """
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
-    capped = max(1, min(MAX_MESSAGE_LIMIT, int(limit)))
     wanted = {str(l).strip().lower() for l in (labels or [])}
 
     try:
@@ -133,15 +146,11 @@ def read_log_messages(
             entry["label_source"] = item.stored["source"]
         resolved.append(entry)
 
-    start = max(0, int(offset))
-    window = resolved[start : start + capped]
+    window, paged = page(resolved, offset=offset, limit=limit, cap=MAX_MESSAGES)
     return {
         "character": character,
         "partner": partner,
-        "total_matching": len(resolved),
-        "offset": start,
-        "returned": len(window),
-        "has_more": start + len(window) < len(resolved),
+        "page": paged,
         "messages": window,
     }
 
@@ -153,21 +162,23 @@ def search_logs(
     partner: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    hits_per_partner: int = MAX_HITS_PER_PARTNER,
 ) -> dict[str, Any]:
     """Literal substring search in one character's Logs.
 
-    With `partner`, searches that conversation, at most 100 hits a page.
-    Without it, searches every partner of the character and groups the
-    hits by partner, 10 partners a page and at most 20 hits per partner
-    (`truncated` says there were more: search that partner on its own
-    to see them). Case-insensitive, matched against the message text
-    with BBCode stripped. For "what did we say about X" questions,
+    `limit` and `offset` page what the result lists: with `partner`, the
+    hits in that conversation (at most 100 a page); without it, the
+    partners whose conversations hold the phrase (at most 10 a page),
+    each with at most `hits_per_partner` hits (20 at most; `truncated`
+    says there were more: search that partner on its own to see them).
+    Case-insensitive, matched against the message text with BBCode
+    stripped. For "what did we say about X" questions,
     search_logs_semantic is usually the better tool.
     """
     if not (query or "").strip():
         raise ToolError("validation_failed", "query is empty")
     if not partner:
-        return _search_every_partner(character, query, limit, offset)
+        return _search_every_partner(character, query, limit, offset, hits_per_partner)
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
     try:
@@ -185,20 +196,11 @@ def search_logs(
     }
 
 
-#: The most hits one search of a conversation returns.
-MAX_HITS = 100
-#: Without a partner one search can touch hundreds of conversations; a
-#: per-partner cap and a page of partners keep the answer readable and
-#: still show where the phrase comes up.
-MAX_HITS_PER_PARTNER = 20
-PARTNERS_PER_PAGE = 10
-
-
 def _search_every_partner(
-    character: str, query: str, limit: int, offset: int
+    character: str, query: str, limit: int, offset: int, hits_per_partner: int
 ) -> dict[str, Any]:
     character = resolve_log_character(character)
-    per_partner = max(1, min(MAX_HITS_PER_PARTNER, int(limit)))
+    per_partner = clamp_limit(hits_per_partner, MAX_HITS_PER_PARTNER)
     try:
         result = log_store.search_all_partners(
             character, query, limit_per_partner=per_partner
@@ -208,13 +210,13 @@ def _search_every_partner(
     partners, paged = page(
         result.get("partners") or [],
         offset=offset,
-        limit=PARTNERS_PER_PAGE,
+        limit=limit,
         cap=PARTNERS_PER_PAGE,
     )
     return {
         "character": character,
         "query": query,
-        "limit_per_partner": per_partner,
+        "hits_per_partner": per_partner,
         "partners": [
             {
                 "partner": row.get("partner"),
@@ -237,7 +239,9 @@ def _hit(message: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(tags=TAG_LOGS, title="Find a contact", read_only=True)
-def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
+def find_contacts(
+    name: str, partial: bool = False, limit: int = MAX_CONTACTS, offset: int = 0
+) -> dict[str, Any]:
     """Have I ever talked to this person, on any of my characters?
 
     Searches every one of the user's characters for a one-to-one log
@@ -254,14 +258,21 @@ def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
             result = log_store.find_contacts(needle)
         except log_store.LogDirError as exc:
             raise _log_dir_error(exc) from exc
-        return {
-            "name": needle,
-            "matched": "exact",
-            "conversations": result.get("dm") or [],
-        }
+        found = result.get("dm") or []
+    else:
+        found = _partial_contacts(needle)
+    rows, paged = page(found, offset=offset, limit=limit, cap=MAX_CONTACTS)
+    return {
+        "name": needle,
+        "matched": "partial" if partial else "exact",
+        "conversations": rows,
+        "page": paged,
+    }
 
-    # Substring search: walk the partner directories, which is only a
-    # directory listing per character — no message parsing.
+
+def _partial_contacts(needle: str) -> list[dict[str, Any]]:
+    """Every one-to-one partner whose name holds `needle`: a directory
+    listing per character, no message parsing."""
     lowered = needle.lower()
     found: list[dict[str, Any]] = []
     try:
@@ -288,7 +299,7 @@ def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
                 }
             )
     found.sort(key=lambda r: (str(r["character"]).lower(), -int(r["bytes"])))
-    return {"name": needle, "matched": "partial", "conversations": found}
+    return found
 
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Label coverage", read_only=True)

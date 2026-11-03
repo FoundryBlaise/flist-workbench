@@ -225,10 +225,13 @@ of the Workbench first and needs `confirm=true`.
 
 ### How results read
 
-Lists and searches come a page at a time, with a capped `limit`. A
-result that holds back rows carries `page`, and when its
-`page.next_offset` is not null, passing that as `offset` fetches the
-next page.
+Lists and searches come a page at a time, with a capped `limit`: ask
+for more and you get the cap. Every page carries the same `page`:
+`offset`, `limit`, `returned`, `total` (null for the semantic search,
+which cannot count past the page) and `next_offset`. When
+`next_offset` is not null, passing it as `offset` fetches the next
+page. `search_logs` without a partner pages the partners, each with up
+to `hits_per_partner` hits.
 
 Every tool that deletes or replaces something the user would miss is
 marked destructive and refuses to run without `confirm=true`; the
@@ -434,7 +437,7 @@ server, so they cannot drift from it.
 | `get_foreign_kinks` | The kink choices on somebody else's profile. |
 | `list_log_characters` | Which of the user's characters have Logs on this machine. |
 | `list_partners` | Everyone a character has Logs with. |
-| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first. |
+| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first, 200 a page. |
 | `search_logs` | *Log text, opt-in.* Find a word or name in a character's Logs, with one partner or all. |
 | `find_contacts` | Whether the user ever talked to someone, on any character. |
 | `list_aliases` | Partner names linked as the same person. |
@@ -519,7 +522,7 @@ server, so they cannot drift from it.
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
 | `list_log_characters` | Which of the user's characters have Logs on this machine. |
 | `list_partners` | Everyone a character has Logs with. |
-| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first. |
+| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first, 200 a page. |
 | `search_logs` | *Log text, opt-in.* Find a word or name in a character's Logs, with one partner or all. |
 | `find_contacts` | Whether the user ever talked to someone, on any character. |
 | `list_aliases` | Partner names linked as the same person. |

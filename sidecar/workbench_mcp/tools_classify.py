@@ -38,6 +38,7 @@ from ._context import (
     LOG_TEXT_SWITCH,
     ToolError,
     audit,
+    clamp_limit,
     resolve_conversation,
     resolve_log_character,
 )
@@ -176,7 +177,7 @@ def get_unlabeled_messages(
     """
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
-    capped = max(1, min(MAX_BATCH, int(limit)))
+    capped = clamp_limit(limit, MAX_BATCH)
     batch = classification.pending(
         character,
         partner,

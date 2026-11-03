@@ -29,11 +29,17 @@ from ._context import (
     audit,
     confirm_required,
     load_payload,
+    page,
     resolve_character,
     resolve_workbench,
     workbench_target,
 )
 from ._registry import TAG_CHARACTER, TAG_FULL, tool
+
+#: The most images one import_images call takes.
+MAX_IMPORT_ITEMS = 200
+#: The most Trash entries one list_trash call returns; `offset` pages on.
+MAX_TRASH_ENTRIES = 50
 
 
 def _writable(character: str) -> ResolvedCharacter:
@@ -836,7 +842,9 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
 
 
 @tool(tags=TAG_CHARACTER, title="List the Trash", read_only=True)
-def list_trash(character: str) -> dict[str, Any]:
+def list_trash(
+    character: str, limit: int = MAX_TRASH_ENTRIES, offset: int = 0
+) -> dict[str, Any]:
     """What the character's Trash holds, newest first, with when and by
     whom (`ui` or `mcp`): `items` are deleted images, which
     `put_back_images` puts back into the pool by `trash_id` (the image
@@ -845,16 +853,28 @@ def list_trash(character: str) -> dict[str, Any]:
     Labels (one entry per clear, with its conversation, or `partner` null
     for every conversation, and how many Labels it holds), both of which
     the user puts back in the window. Emptying the Trash is the user's
-    job, in the window."""
+    job, in the window. Pages run through the images first, then the
+    Backups, then the Labels."""
     from services import backup_trash, image_trash, label_trash
 
     target = resolve_character(character)
-    return {
-        "character": target.name,
+    kinds = {
         "items": image_trash.list_trash(target.id),
         "backups": backup_trash.list_backups(target.id),
         "labels": label_trash.list_labels(target.name),
     }
+    # One page over the three lists, each row still under its own key.
+    window, paged = page(
+        [(kind, row) for kind, rows in kinds.items() for row in rows],
+        offset=offset,
+        limit=limit,
+        cap=MAX_TRASH_ENTRIES,
+    )
+    out: dict[str, Any] = {"character": target.name}
+    for kind in kinds:
+        out[kind] = [row for row_kind, row in window if row_kind == kind]
+    out["page"] = paged
+    return out
 
 
 @tool(tags=TAG_CHARACTER, title="Put images back from the Trash")
@@ -958,8 +978,6 @@ def add_image(
 # remove and a full reorder per swapped image. One batch call does it
 # now, with every source checked before anything is written.
 # --------------------------------------------------------------------
-
-MAX_IMPORT_ITEMS = 200
 
 
 class ImportItem(BaseModel):

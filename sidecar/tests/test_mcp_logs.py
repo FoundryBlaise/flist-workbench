@@ -95,7 +95,7 @@ async def test_read_log_messages_resolves_labels_and_hashes(corpus) -> None:
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
-    assert body["total_matching"] == 3
+    assert body["page"]["total"] == 3
     labels = [m["label"] for m in body["messages"]]
     # Rule: short messages are OOC without anyone judging them.
     assert labels == ["Unlabeled", "OOC", "Unlabeled"]
@@ -111,7 +111,7 @@ async def test_read_log_messages_filters_by_label(corpus) -> None:
             partner="Daelan Envale",
             labels=["Unlabeled"],
         )
-    assert body["total_matching"] == 2
+    assert body["page"]["total"] == 2
     assert {m["label"] for m in body["messages"]} == {"Unlabeled"}
 
 
@@ -132,10 +132,10 @@ async def test_read_log_messages_pages(corpus) -> None:
             offset=2,
             limit=2,
         )
-    assert first["returned"] == 2
-    assert first["has_more"] is True
-    assert second["returned"] == 1
-    assert second["has_more"] is False
+    assert first["page"]["returned"] == 2
+    assert first["page"]["next_offset"] == 2
+    assert second["page"]["returned"] == 1
+    assert second["page"]["next_offset"] is None
 
 
 async def test_a_missing_log_directory_says_where_to_set_it(

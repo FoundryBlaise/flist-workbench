@@ -50,6 +50,10 @@ from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 #: pull; a full-corpus ingest can run far longer.
 WAIT_BUDGET_SEC = 600
 
+#: How many numbered names an export into a folder tries before giving
+#: up with an `exists` refusal.
+_MAX_NAME_TRIES = 100
+
 
 # --------------------------------------------------------------------
 # F-list
@@ -489,11 +493,6 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
         raise ToolError(
             "write_failed", f"Couldn't write {candidates[0]}: {exc}"
         ) from exc
-
-
-#: How many numbered names an export into a folder tries before giving
-#: up with an `exists` refusal.
-_MAX_NAME_TRIES = 100
 
 
 @tool(tags=TAG_CORE, title="Extension pairing status", read_only=True)

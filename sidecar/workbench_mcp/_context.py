@@ -100,27 +100,45 @@ def validation_failed(field: str, reason: str, allowed: Any = None) -> ToolError
 # --------------------------------------------------------------------
 
 
+def clamp_limit(limit: int, cap: int) -> int:
+    """`limit`, at least 1 and never more than `cap`. A limit over the
+    cap is not refused: the caller gets the cap, so one call can never
+    flood a small model's context."""
+    return max(1, min(cap, int(limit)))
+
+
+def page_info(
+    *, offset: int, limit: int, returned: int, total: int | None, next_offset: int | None
+) -> dict[str, Any]:
+    """The `page` every paged result carries, the same keys whichever
+    tool answers: `next_offset` is the `offset` that fetches the rest
+    (null on the last page), and `total` is null for a tool that cannot
+    count its rows without reading them all (a semantic search)."""
+    return {
+        "offset": offset,
+        "limit": limit,
+        "returned": returned,
+        "total": total,
+        "next_offset": next_offset,
+    }
+
+
 def page(
     rows: list[Any], *, offset: int, limit: int, cap: int
 ) -> tuple[list[Any], dict[str, Any]]:
     """The rows from `offset` on, `limit` of them but never more than
-    `cap`, and the `page` a result carries beside them.
-
-    A limit over the cap is not refused: the caller gets the cap, and
-    `next_offset` (null on the last page) is the `offset` that fetches
-    the rest. One call can then never flood a small model's context.
-    """
+    `cap` (`clamp_limit`), and the `page` a result carries beside them."""
     start = max(0, int(offset))
-    size = max(1, min(cap, int(limit)))
+    size = clamp_limit(limit, cap)
     window = rows[start : start + size]
     end = start + len(window)
-    return window, {
-        "offset": start,
-        "limit": size,
-        "returned": len(window),
-        "total": len(rows),
-        "next_offset": end if end < len(rows) else None,
-    }
+    return window, page_info(
+        offset=start,
+        limit=size,
+        returned=len(window),
+        total=len(rows),
+        next_offset=end if end < len(rows) else None,
+    )
 
 
 # --------------------------------------------------------------------
