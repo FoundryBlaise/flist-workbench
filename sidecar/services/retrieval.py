@@ -230,25 +230,34 @@ def _backfill_if_empty(store: rag_store.RagStore, lex: rag_lexical.LexicalStore)
         raise KeywordBackfillFailed(
             "Hybrid search needs the keyword half of the Index, which is "
             f"empty and could not be filled from the vector half: {exc}. "
-            "Search with hybrid off, or rebuild the lexical index in "
-            "Settings once the cause is fixed."
+            "Search with hybrid off meanwhile; once the cause is fixed, "
+            "Settings → Index maintenance can fill it again."
         ) from exc
+
+
+def _chunk_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """What a chunk says and when, from its stored payload: the fields a
+    hit and a neighbouring chunk share."""
+    payload = raw.get("payload") or {}
+    return {
+        "chunk_id": str(payload.get("chunk_id") or ""),
+        "date": str(payload.get("date") or ""),
+        "speakers": list(payload.get("speakers") or []),
+        "text": str(payload.get("text") or ""),
+        "message_count": int(payload.get("msg_count") or 0),
+        "ts_start": int(payload.get("ts_start") or 0),
+        "ts_end": int(payload.get("ts_end") or 0),
+    }
 
 
 def _to_hit(raw: dict[str, Any]) -> SearchHit:
     payload = raw.get("payload") or {}
     return SearchHit(
-        chunk_id=str(payload.get("chunk_id") or ""),
+        **_chunk_fields(raw),
         character=str(payload.get("char_owner") or ""),
         partner=str(payload.get("partner") or ""),
-        date=str(payload.get("date") or ""),
         label=str(payload.get("label") or ""),
-        speakers=list(payload.get("speakers") or []),
-        text=str(payload.get("text") or ""),
         score=float(raw.get("fused_score") or 0.0),
-        message_count=int(payload.get("msg_count") or 0),
-        ts_start=int(payload.get("ts_start") or 0),
-        ts_end=int(payload.get("ts_end") or 0),
         fused_rank=int(raw.get("fused_rank") or 0),
         dense_rank=raw.get("dense_rank"),
         lexical_rank=raw.get("lexical_rank"),
@@ -264,13 +273,4 @@ def _to_hit(raw: dict[str, Any]) -> SearchHit:
 def _to_context(raw: dict[str, Any]) -> dict[str, Any]:
     """A neighbouring chunk: what it says and when, without the hit's
     ranks (it was not ranked) or the conversation (the hit's own)."""
-    payload = raw.get("payload") or {}
-    return {
-        "chunk_id": str(payload.get("chunk_id") or ""),
-        "date": str(payload.get("date") or ""),
-        "speakers": list(payload.get("speakers") or []),
-        "text": str(payload.get("text") or ""),
-        "message_count": int(payload.get("msg_count") or 0),
-        "ts_start": int(payload.get("ts_start") or 0),
-        "ts_end": int(payload.get("ts_end") or 0),
-    }
+    return _chunk_fields(raw)
