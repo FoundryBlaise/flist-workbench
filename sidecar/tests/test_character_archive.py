@@ -11,7 +11,6 @@ get wrong in ways that would hurt real users:
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 

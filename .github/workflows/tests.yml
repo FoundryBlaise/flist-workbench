@@ -14,8 +14,8 @@
 # fastembed is mocked in the rag tests, outbound HTTP is mocked with
 # pytest-httpx, and app routes are exercised in-process. No test needs
 # files that only exist on a developer machine, so nothing skips today;
-# `-rs` prints the reason of any skip that appears, so one is never
-# silent. Checked locally by running the suite with APPDATA,
+# pytest's `-rfEs` (sidecar/pyproject.toml) prints the reason of any skip
+# that appears, so one is never silent. Checked locally by running the suite with APPDATA,
 # LOCALAPPDATA and USERPROFILE pointed at an empty folder, which is
 # what a runner has.
 #
@@ -50,11 +50,18 @@ jobs:
         with:
           python: 'true'
 
+      # Unused imports, undefined names and silently swallowed
+      # exceptions; rules in sidecar/pyproject.toml.
+      - name: ruff
+        working-directory: sidecar
+        run: uv run --no-sync ruff check
+
       # --no-sync: test exactly the environment the step above built.
-      # -rs: print the reason for every skipped test.
+      # pyproject's addopts (-rfEs) list every failure and the reason
+      # for every skipped test.
       - name: pytest
         working-directory: sidecar
-        run: uv run --no-sync pytest -q -rs
+        run: uv run --no-sync pytest -q
 
       # The mutation probe's own tests (docs/MUTATION_PROBE.md): dirty-tree
       # refusal and restore-on-failure, on throwaway git repos. Not the

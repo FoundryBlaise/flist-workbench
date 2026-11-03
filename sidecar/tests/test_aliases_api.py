@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
 
 import pytest
 from fastapi.testclient import TestClient
 from sidecar_client import app_client
 
-import aliases as aliases_store
 import labels as labels_store
 import rag_embed
 import rag_rerank

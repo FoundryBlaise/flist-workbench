@@ -18,7 +18,6 @@ from typing import Any
 
 import aliases as aliases_store
 import rag as rag_settings
-import rag_embed
 import rag_lexical
 import rag_query
 import rag_store
@@ -170,7 +169,7 @@ def search(
             try:
                 if lex.count() == 0 and store.count() > 0:
                     rag_lexical.backfill_from_qdrant(store, lex)
-            except Exception:  # noqa: BLE001 — backfill is best-effort
+            except Exception:  # noqa: BLE001, S110 — backfill is best-effort
                 pass
         try:
             result = rag_query.run_query(

@@ -112,7 +112,7 @@ def data_dir() -> Path:
             conn.close()
         if override:
             return Path(override)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         # Settings DB unreachable / first launch / readonly filesystem
         # — fall through to the OS-native default.
         pass
@@ -190,7 +190,7 @@ def list_partners(character: str, root: Path | None = None) -> list[PartnerEntry
     # new name).
     try:
         conn = aliases_store.connect()
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Settings/labels DB unreachable on first launch / readonly FS —
         # fall back to the flat list. Linking just becomes a no-op.
         conn = None
@@ -307,7 +307,7 @@ def _alias_paths(character: str, partner: str, root: Path | None) -> list[Path]:
 
     try:
         conn = aliases_store.connect()
-    except Exception:
+    except Exception:  # noqa: BLE001 — as above: no DB, no aliases
         conn = None
     try:
         if conn is None:

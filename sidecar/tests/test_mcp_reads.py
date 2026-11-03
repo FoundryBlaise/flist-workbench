@@ -59,7 +59,6 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     import archive_live
     import archive_registry
-    import flist_api
     import paths
 
     importlib.reload(paths)

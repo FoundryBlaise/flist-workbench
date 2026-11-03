@@ -52,6 +52,9 @@ dev = [
   # CLI breakage; bump the floor when the build script needs a newer
   # one.
   "pyinstaller>=6,<7",
+  # The sidecar's linter (CI's Sidecar job). Pinned minor: ruff moves
+  # rules between minors.
+  "ruff>=0.17,<0.18",
 ]
 
 [tool.uv]
@@ -61,3 +64,19 @@ package = false
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# The short summary lists failures, errors and skips, so the name of a
+# failed test survives `| tail`. Passing `-rs` alone would replace
+# pytest's default `-rfE` and drop the FAILED lines.
+addopts = "-rfEs"
+
+# `uv run --no-sync ruff check` from sidecar/. A small rule set: real
+# mistakes (pyflakes) and exceptions swallowed without a word. A
+# deliberate best-effort `except Exception: pass` says why in its noqa.
+[tool.ruff.lint]
+select = ["F", "E722", "BLE001", "S110"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures are imported by name and then taken as a test argument
+# (`from two_characters import two_characters  # noqa: F401`).
+"tests/**" = ["F811"]

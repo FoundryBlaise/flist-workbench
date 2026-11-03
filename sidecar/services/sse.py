@@ -6,7 +6,7 @@ from typing import Any
 
 from starlette.responses import StreamingResponse
 
-from refusals import INTERNAL_ERROR, Refusal
+from refusals import Refusal
 
 from . import jobs
 
