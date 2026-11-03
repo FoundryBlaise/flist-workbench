@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from sidecar_client import app_client
 
 from fchat_logs import chat, write_log
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 from test_mcp_edit import workbench  # noqa: F401
 
 CID = "42"
@@ -44,6 +44,8 @@ def conversation(workbench) -> Path:  # noqa: F811
             chat(DAELAN, LONG_C, at=1700000120),
         ],
     )
+    # Labelling fetches its batches with a tool that returns Log text.
+    allow_log_text()
     return root
 
 

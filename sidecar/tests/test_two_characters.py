@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_helpers import call_tool, mcp_client
+from mcp_helpers import allow_log_text, call_tool, mcp_client
 from two_characters import (  # noqa: F401  (the fixture is used by name)
     AMBER,
     AMBER_PARTNER_LINE,
@@ -87,6 +87,7 @@ def test_searching_a_conversation_covers_every_name_in_its_alias_group(
 async def test_mcp_search_by_the_old_name_covers_the_whole_alias_group(
     two_characters: TwoCharacters,
 ) -> None:
+    allow_log_text()
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session, "search_logs", character=AZURE, partner=OLD_NAME, query=SEARCH_TERM

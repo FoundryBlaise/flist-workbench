@@ -70,6 +70,24 @@ def confirm_required(warning: str) -> ToolError:
     )
 
 
+#: Where the user turns on the tools that return Log text, said the
+#: same way in the server instructions, refusals and notes.
+LOG_TEXT_SWITCH = (
+    "the user turns on \"Let MCP clients read Log text\" in Settings → MCP"
+)
+
+
+def log_text_off(tool_name: str) -> ToolError:
+    """The refusal of a Log-text tool while the user has not turned
+    those tools on."""
+    return ToolError(
+        "log_text_off",
+        f"{tool_name} returns Log text, which is off. It works once "
+        f"{LOG_TEXT_SWITCH}; ask them to.",
+        tool=tool_name,
+    )
+
+
 def validation_failed(field: str, reason: str, allowed: Any = None) -> ToolError:
     details: dict[str, Any] = {"field": field, "reason": reason}
     if allowed is not None:

@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 import pytest
 
-from mcp_helpers import call_tool, mcp_client
+from mcp_helpers import allow_log_text, call_tool, mcp_client
 from two_characters import (  # noqa: F401  (the fixture is used by name)
     AMBER,
     AZURE,
@@ -228,6 +228,7 @@ async def test_a_label_reads_the_same_whichever_surface_set_it(
 ) -> None:
     two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
     await _verdicts(two_characters, AZURE, PARTNER, "IC")
+    allow_log_text()
 
     over_mcp = await _mcp("read_log_messages", **CONV)
 

@@ -23,7 +23,7 @@ import pytest
 
 import rag_embed
 import workbench_mcp
-from mcp_helpers import call_tool, mcp_client
+from mcp_helpers import allow_log_text, call_tool, mcp_client
 from test_rag_jobs import _stub_index_services
 from two_characters import (  # noqa: F401  (the fixture is used by name)
     AMBER,
@@ -86,6 +86,8 @@ def labelled(
     _stub_index_services(monkeypatch)
     two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "IC")
     two_characters.label_by_hand(AZURE, AMBER, SHARED_LINE, "IC")
+    # A search after an ingest returns Log text.
+    allow_log_text()
     yield two_characters
     # Never leave a worker holding the Index open past the test.
     deadline = time.monotonic() + 10

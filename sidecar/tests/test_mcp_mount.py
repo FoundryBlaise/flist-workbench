@@ -250,7 +250,10 @@ def test_the_classify_endpoint_is_the_smallest_surface() -> None:
     )
 
 
-def test_the_classify_endpoint_is_reachable_and_described() -> None:
+def test_the_classify_endpoint_is_reachable_and_described(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(tmp_path))
     import workbench_mcp
 
     servers = workbench_mcp.build_mcp_servers()
@@ -260,5 +263,7 @@ def test_the_classify_endpoint_is_reachable_and_described() -> None:
         e for e in described["endpoints"] if e["id"] == "classify"  # type: ignore[index]
     )
     assert row["path"] == "/mcp/classify"
-    assert row["tool_count"] == 10
+    # get_messages_to_classify returns Log text: off until the user
+    # turns it on, so it is not counted.
+    assert row["tool_count"] == 9
     assert "labelling" in row["label"]

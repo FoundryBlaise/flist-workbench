@@ -986,8 +986,9 @@ def test_channels_are_left_out_of_the_ingest_scope(monkeypatch, workbench_dir) -
 async def test_labels_changed_over_mcp_reach_the_index_on_the_next_ingest(
     index_window,
 ) -> None:
-    from mcp_helpers import call_tool, mcp_client
+    from mcp_helpers import allow_log_text, call_tool, mcp_client
 
+    allow_log_text()
     _client, log = index_window
     write_log(log, [
         chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
