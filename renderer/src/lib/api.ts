@@ -453,11 +453,17 @@ export type RagStatus = {
  *  narrow ones exist because small local models choke on long tool
  *  lists. */
 export type McpEndpoint = {
-  id: 'all' | 'character' | 'logs'
+  id: 'all' | 'character' | 'logs' | 'classify'
   label: string
   path: string
   url: string
   tool_count: number
+}
+
+/** MCP settings only the window may change. `log_text`: whether MCP
+ *  clients get the tools that return Log text; off by default. */
+export type McpSettings = {
+  log_text: boolean
 }
 
 export type McpInfo = {
@@ -729,12 +735,14 @@ export const api = {
       labels: LabelsSettings
       rag: RagSettings
       image_import_roots: string[]
+      mcp: McpSettings
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
     labels?: Partial<Omit<LabelsSettings, 'defaults'>>
     rag?: Partial<Omit<RagSettings, 'defaults'>>
     image_import_roots?: string[]
+    mcp?: Partial<McpSettings>
   }) =>
     request<{
       fchat_data_dir: string | null
@@ -743,6 +751,7 @@ export const api = {
       labels: LabelsSettings
       rag: RagSettings
       image_import_roots: string[]
+      mcp: McpSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)

@@ -1,4 +1,5 @@
-"""Settings: the F-Chat folder, Label and Index tunables, import folders."""
+"""Settings: the F-Chat folder, Label and Index tunables, import folders,
+and whether MCP clients may read Log text."""
 
 import os
 
@@ -51,6 +52,13 @@ class RagSettingsUpdate(BaseModel):
     chunk_overlap_msgs: int | None = None
 
 
+class McpSettingsUpdate(BaseModel):
+    # Whether MCP clients get the tools that return Log text. Only this
+    # endpoint, the window, sets it: the MCP settings tool has no
+    # parameter for it, so a model cannot grant itself the user's Logs.
+    log_text: bool | None = None
+
+
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
@@ -61,6 +69,7 @@ class SettingsUpdate(BaseModel):
     # Folders MCP's import_image may read from. Only this endpoint — the
     # window — sets them; the MCP settings tool can read but not change.
     image_import_roots: list[str] | None = None
+    mcp: McpSettingsUpdate | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -117,6 +126,7 @@ def _settings_dict(conn) -> dict:
         "image_import_roots": [
             str(p) for p in image_import_service.import_roots(conn)
         ],
+        "mcp": {"log_text": settings_service.log_text_over_mcp(conn)},
     }
 
 
@@ -167,7 +177,8 @@ def _changes(body: SettingsUpdate) -> dict:
     # missing key leaves it alone.
     if "fchat_data_dir" in body.model_fields_set:
         changes["fchat_data_dir"] = body.fchat_data_dir
-    for prefix, part in (("labels", body.labels), ("rag", body.rag)):
+    parts = (("labels", body.labels), ("rag", body.rag), ("mcp", body.mcp))
+    for prefix, part in parts:
         if part is not None:
             for name, value in part.model_dump(exclude_none=True).items():
                 changes[f"{prefix}.{name}"] = value

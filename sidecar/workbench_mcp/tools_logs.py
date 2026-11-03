@@ -1,8 +1,12 @@
 """Reading the user's F-Chat logs and their IC/OOC labels (§3.9).
 
-These logs are the user's own private roleplay. Tools here read them
-from disk; nothing is sent anywhere. F-Chat's data directory is never
-written to.
+These logs are the user's own private roleplay, and their partners'
+lines are in them too. Tools here read them from disk and never write
+to F-Chat's data directory, but whatever a tool returns goes to the
+connected client: to a cloud model's provider, when that is the client.
+So the tools that return message text carry `TAG_LOG_TEXT` and stay
+hidden until the user turns them on in Settings → MCP; names, counts
+and Labels are not message text and stay available.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ import logs as log_store
 from services import labels as label_service
 
 from ._context import ToolError, resolve_conversation, resolve_log_character
-from ._registry import TAG_CLASSIFY, TAG_LOGS, tool
+from ._registry import TAG_CLASSIFY, TAG_LOG_TEXT, TAG_LOGS, tool
 
 #: A single read can pull in a lot of text; keep the default modest and
 #: let the caller page with `offset`.
@@ -79,7 +83,7 @@ def list_partners(
     return {"character": character, "partners": rows}
 
 
-@tool(tags=TAG_LOGS, title="Read a conversation", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Read a conversation", read_only=True)
 def read_log_messages(
     character: str,
     partner: str,
@@ -135,7 +139,7 @@ def read_log_messages(
     }
 
 
-@tool(tags=TAG_LOGS, title="Search Logs for a phrase", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Search Logs for a phrase", read_only=True)
 def search_logs(
     character: str, query: str, partner: str | None = None, limit: int = 50
 ) -> dict[str, Any]:

@@ -48,6 +48,11 @@ TAG_CORE = "core"
 #: running the loop at 12k context could not fit one batch alongside
 #: them. Eight tools cost a quarter of that.
 TAG_CLASSIFY = "classify"
+#: Not an endpoint: marks a tool that returns Log text, the user's
+#: partners' lines included. When a cloud model is the client, its
+#: provider receives everything a tool returns, so these tools are left
+#: out of every endpoint until the user turns them on in Settings → MCP.
+TAG_LOG_TEXT = "log_text"
 
 
 @dataclass(frozen=True)
@@ -254,6 +259,26 @@ def registered_tools(tags: frozenset[str] | None = None) -> list[ToolSpec]:
     if tags is None:
         return list(_TOOLS)
     return [spec for spec in _TOOLS if spec.tags & tags]
+
+
+def hidden_tools() -> frozenset[str]:
+    """The tools no endpoint lists or runs right now: the Log-text
+    tools, while the user has not turned them on.
+
+    Read on every listing and call rather than when the servers are
+    built, so the switch reaches a connected client on its next listing.
+    """
+    from services import settings as settings_service
+
+    if settings_service.log_text_over_mcp():
+        return frozenset()
+    return frozenset(spec.name for spec in _TOOLS if TAG_LOG_TEXT in spec.tags)
+
+
+def listed_tools(tags: frozenset[str] | None = None) -> list[ToolSpec]:
+    """The tools an endpoint serving `tags` lists right now."""
+    hidden = hidden_tools()
+    return [spec for spec in registered_tools(tags) if spec.name not in hidden]
 
 
 @dataclass

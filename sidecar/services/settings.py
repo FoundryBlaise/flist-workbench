@@ -62,6 +62,7 @@ FIELDS = (
     "rag.rerank_min_ratio",
     "rag.hybrid_enabled",
     "image_import_roots",
+    "mcp.log_text",
 )
 
 
@@ -225,6 +226,33 @@ def _hybrid_enabled(conn: sqlite3.Connection, changes: Mapping[str, Any], value:
     return key, "1" if value else "0", value
 
 
+def _log_text(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
+    key = settings_store.KEY_MCP_LOG_TEXT
+    if value is None:
+        return key, None, False
+    if not isinstance(value, bool):
+        raise ValidationFailed("mcp.log_text", "not true or false", allowed=[True, False])
+    return key, "1" if value else "0", value
+
+
+def log_text_over_mcp(conn: sqlite3.Connection | None = None) -> bool:
+    """Whether the user has let MCP clients have the tools that return
+    Log text. Off until they turn it on in Settings → MCP.
+
+    Asked on every MCP tool listing, so asking creates nothing: without
+    a settings.db nothing was ever turned on.
+    """
+    if conn is None and not settings_store.db_exists():
+        return False
+    own = conn is None
+    conn = conn or settings_store.connect()
+    try:
+        return settings_store.get(conn, settings_store.KEY_MCP_LOG_TEXT) == "1"
+    finally:
+        if own:
+            conn.close()
+
+
 def _image_import_roots(
     conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any
 ) -> _Result:
@@ -249,6 +277,7 @@ _VALIDATORS: dict[str, Callable[..., _Result]] = {
     "rag.rerank_min_ratio": _rerank_min_ratio,
     "rag.hybrid_enabled": _hybrid_enabled,
     "image_import_roots": _image_import_roots,
+    "mcp.log_text": _log_text,
 }
 
 

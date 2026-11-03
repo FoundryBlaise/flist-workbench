@@ -32,14 +32,16 @@ from typing import Any
 import labels as labels_store
 from services import classification
 from services import labels as label_service
+from services import settings as settings_service
 
 from ._context import (
+    LOG_TEXT_SWITCH,
     ToolError,
     audit,
     resolve_conversation,
     resolve_log_character,
 )
-from ._registry import TAG_CLASSIFY, TAG_LOGS, prompt, tool
+from ._registry import TAG_CLASSIFY, TAG_LOG_TEXT, TAG_LOGS, prompt, tool
 
 #: Batch size. Deliberately small: each message carries its own text
 #: plus two context messages, so a batch of 40 runs to ~60 KB of JSON.
@@ -79,6 +81,14 @@ def get_classification_guidelines(language: str = "de") -> dict[str, Any]:
     except ValueError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
     result["workflow"] = _WORKFLOW
+    if not settings_service.log_text_over_mcp():
+        # The rulebook is the loop's first call; without this the model
+        # learns the switch is off only when its second call fails.
+        result["log_text"] = (
+            "get_messages_to_classify is off: it returns Log text, which "
+            f"MCP clients get only once {LOG_TEXT_SWITCH}. Ask the user "
+            "to turn it on before you start."
+        )
     return result
 
 
@@ -113,7 +123,7 @@ def classify_ic_ooc_prompt(language: str = "de") -> str:
 
 
 @tool(
-    tags=(TAG_LOGS, TAG_CLASSIFY),
+    tags=(TAG_LOGS, TAG_CLASSIFY, TAG_LOG_TEXT),
     title="Messages awaiting a verdict",
     read_only=True,
 )

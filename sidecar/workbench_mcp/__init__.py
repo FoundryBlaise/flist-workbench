@@ -30,13 +30,17 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import Prompt
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.concurrency import run_in_threadpool
 from starlette.routing import Route
 
+from ._context import LOG_TEXT_SWITCH, log_text_off
 from ._registry import (
     TAG_CHARACTER,
     TAG_CLASSIFY,
     TAG_CORE,
     TAG_LOGS,
+    hidden_tools,
+    listed_tools,
     registered_prompts,
     registered_resources,
     registered_tools,
@@ -76,12 +80,40 @@ Two things to keep straight:
 Characters are addressed by name; ids also work.
 """
 
+#: Said on every endpoint, /mcp/classify included: with the switch off
+#: its labelling loop has no tool to fetch messages with.
+_LOG_TEXT_NOTE = f"""
+Tools that return Log text (reading, searching and labelling messages)
+are listed only once
+{LOG_TEXT_SWITCH}.
+If you need them and they are missing, ask the user to turn it on.
+"""
+
+
+class _Endpoint(FastMCP):
+    """A server whose tool list follows the user's settings: a tool
+    `hidden_tools()` names is neither listed nor run.
+
+    FastMCP binds `list_tools` and `call_tool` as the protocol handlers
+    when it is built, so overriding them here is enough. Every tool is
+    still registered, so turning a switch needs no rebuild.
+    """
+
+    async def list_tools(self):  # noqa: ANN201
+        hidden = await run_in_threadpool(hidden_tools)
+        return [t for t in await super().list_tools() if t.name not in hidden]
+
+    async def call_tool(self, name, arguments):  # noqa: ANN001, ANN201
+        if name in await run_in_threadpool(hidden_tools):
+            raise log_text_off(name)
+        return await super().call_tool(name, arguments)
+
 
 def _build(name: str, tags: frozenset[str] | None) -> FastMCP:
     """Create one server and register the tools matching `tags`."""
-    server = FastMCP(
+    server = _Endpoint(
         name=name,
-        instructions=_INSTRUCTIONS,
+        instructions=_INSTRUCTIONS + _LOG_TEXT_NOTE,
         # The sub-app is mounted under /mcp[...] by `mount()`, so its
         # own route must sit at the mount root or the path would come
         # out as /mcp/mcp.
@@ -259,7 +291,7 @@ def describe(servers: dict[str, FastMCP], port: int) -> dict[str, object]:
                 "label": _ENDPOINT_LABELS[suffix],
                 "path": path,
                 "url": f"http://127.0.0.1:{port}{path}",
-                "tool_count": len(registered_tools(ENDPOINTS[suffix])),
+                "tool_count": len(listed_tools(ENDPOINTS[suffix])),
             }
         )
     from services import mcp_auth
