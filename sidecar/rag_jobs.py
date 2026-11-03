@@ -327,17 +327,12 @@ def _ingest_one_partner(
         job.progress.last_error = f"{character} / {partner}: {exc}"
         return
 
-    # Look up the full alias group so labels written under any of the
-    # member names apply to this conversation. (_resolve_targets has
-    # already normalised `partner` to the primary name for single-
-    # conversation scopes, but for character / all-characters scopes
-    # we still get the primary names from list_partners.) Also passed
-    # to the chunker as speaker_aliases so messages from the pre-
-    # rename name read as the canonical name in the LLM context.
+    # A conversation's Labels are those of the messages its Log holds
+    # (ADR 0004), looked up by hash. The alias group is passed to the
+    # chunker as speaker_aliases so messages from the pre-rename name
+    # read as the canonical name in the LLM context.
+    by_hash = labels_store.labels_for_messages(labels_conn, messages)
     alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-    by_hash = labels_store.labels_for_partner(
-        labels_conn, character, partner, partner_aliases=alias_group
-    )
     unlabeled_counter = [0]
     chunks = chunker.chunk_messages(
         messages,

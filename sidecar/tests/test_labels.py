@@ -100,11 +100,11 @@ def test_upsert_then_get_returns_label(tmp_path: Path) -> None:
             ts=1, speaker="Bob", label="IC", source="mcp",
             reason="long narrative",
         )
-        rows = labels_store.labels_for_partner(conn, "Char", "Bob")
-        assert "abc" in rows
-        assert rows["abc"]["label"] == "IC"
-        assert rows["abc"]["source"] == "mcp"
-        assert rows["abc"]["prior_label"] is None
+        row = labels_store.label_row(conn, "abc")
+        assert row is not None
+        assert row["label"] == "IC"
+        assert row["source"] == "mcp"
+        assert row["prior_label"] is None
     finally:
         conn.close()
 
@@ -120,11 +120,11 @@ def test_upsert_snapshots_prior_label_on_override(tmp_path: Path) -> None:
             conn, hash="h1", character="C", partner="P",
             ts=1, speaker="P", label="OOC", source="manual",
         )
-        rows = labels_store.labels_for_partner(conn, "C", "P")
-        assert rows["h1"]["label"] == "OOC"
-        assert rows["h1"]["source"] == "manual"
-        assert rows["h1"]["prior_label"] == "IC"
-        assert rows["h1"]["prior_source"] == "mcp"
+        row = labels_store.label_row(conn, "h1")
+        assert row["label"] == "OOC"
+        assert row["source"] == "manual"
+        assert row["prior_label"] == "IC"
+        assert row["prior_source"] == "mcp"
     finally:
         conn.close()
 
@@ -155,29 +155,7 @@ def test_delete_label_reverts_to_resolver(tmp_path: Path) -> None:
         )
         assert labels_store.delete_label(conn, "h") is True
         assert labels_store.delete_label(conn, "h") is False  # already gone
-        assert labels_store.labels_for_partner(conn, "C", "P") == {}
-    finally:
-        conn.close()
-
-
-def test_delete_labels_for_partner_scopes_correctly(tmp_path: Path) -> None:
-    """Bulk delete clears just the targeted conversation, not others."""
-    conn = _db(tmp_path)
-    try:
-        # Three labels: two for (C, P), one for (C, Q). The Q row must
-        # survive a delete on P.
-        for h, p in (("h1", "P"), ("h2", "P"), ("h3", "Q")):
-            labels_store.upsert_label(
-                conn, hash=h, character="C", partner=p,
-                ts=1, speaker="S", label="IC", source="mcp",
-            )
-        deleted = labels_store.delete_labels_for_partner(conn, "C", "P")
-        assert deleted == 2
-        assert labels_store.labels_for_partner(conn, "C", "P") == {}
-        # Q untouched
-        assert "h3" in labels_store.labels_for_partner(conn, "C", "Q")
-        # Idempotent: second call returns 0
-        assert labels_store.delete_labels_for_partner(conn, "C", "P") == 0
+        assert labels_store.label_row(conn, "h") is None
     finally:
         conn.close()
 
@@ -195,7 +173,7 @@ def test_stats_counts_three_buckets(tmp_path: Path) -> None:
             character="C", partner="P", ts=30, speaker="A",
             label="IC", source="mcp",
         )
-        counts = labels_store.stats(conn, "C", "P", [m_long, m_short, m_db_ic], _settings())
+        counts = labels_store.stats(conn, [m_long, m_short, m_db_ic], _settings())
         assert counts == {"IC": 1, "OOC": 1, "Unlabeled": 1}
     finally:
         conn.close()
@@ -284,11 +262,9 @@ def test_existing_databases_accept_an_mcp_verdict(tmp_path: Path) -> None:
             conn, hash="fresh", character="C", partner="P",
             ts=2, speaker="A", label="OOC", source="mcp",
         )
-        rows = labels_store.labels_for_partner(conn, "C", "P")
         # The pre-existing row survived the table rebuild.
-        assert set(rows) == {"old", "fresh"}
-        assert rows["old"]["source"] == "llm"
-        assert rows["fresh"]["source"] == "mcp"
+        assert labels_store.label_row(conn, "old")["source"] == "llm"
+        assert labels_store.label_row(conn, "fresh")["source"] == "mcp"
     finally:
         conn.close()
 
@@ -494,7 +470,7 @@ def test_fill_unlabeled_labels_only_the_unlabeled(tmp_path: Path) -> None:
         assert res["labeled"] == 1, "only message 2 was Unlabeled"
         assert res["already_labeled"] == 1
         assert res["decided_by_rules"] == 1, "the short one stays with the rules"
-        rows = labels_store.labels_for_partner(conn, "C", "P")
+        rows = labels_store.labels_for_messages(conn, msgs)
         assert rows[labels_store.msg_hash(msgs[0])]["label"] == "OOC"
         assert rows[labels_store.msg_hash(msgs[1])]["label"] == "IC"
         assert rows[labels_store.msg_hash(msgs[1])]["source"] == "manual"
@@ -517,7 +493,7 @@ def test_fill_unlabeled_is_reported_hash_by_hash_so_it_can_be_undone(
         removed = labels_store.delete_labels_by_hash(conn, res["hashes"])
 
         assert removed == 5
-        assert labels_store.labels_for_partner(conn, "C", "P") == {}
+        assert labels_store.labels_for_messages(conn, msgs) == {}
     finally:
         conn.close()
 
@@ -539,7 +515,7 @@ def test_undo_leaves_other_verdicts_alone(tmp_path: Path) -> None:
 
         labels_store.delete_labels_by_hash(conn, res["hashes"])
 
-        rows = labels_store.labels_for_partner(conn, "C", "P")
+        rows = labels_store.labels_for_messages(conn, msgs)
         assert list(rows) == [kept]
     finally:
         conn.close()

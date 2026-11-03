@@ -34,8 +34,8 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
 
     # Resolve each message's IC/OOC/Unlabeled label live — labels are
     # rule-on-read, so settings changes (e.g. threshold) take effect
-    # immediately without rebuilding the DB. Label rows written under
-    # any linked alternate name count too.
+    # immediately without rebuilding the DB. A stored Label is found by
+    # the message's hash, whichever of the user's Logs it was set in.
     for item in label_service.label_messages(char, partner, messages):
         m = item.message
         # Send the hash so the renderer can call /labels/override

@@ -29,7 +29,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import paths
 import settings as settings_store
@@ -608,42 +608,36 @@ def resolve(
     return LABEL_UNLABELED
 
 
-def labels_for_partner(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
+#: Hashes per `IN (...)` query, under SQLite's bound-parameter limit.
+_HASH_BATCH = 500
+
+
+def _rows_for_hashes(
+    conn: sqlite3.Connection, columns: str, hashes: Iterable[str]
+) -> Iterator[sqlite3.Row]:
+    ids = list(dict.fromkeys(h for h in hashes if h))
+    for start in range(0, len(ids), _HASH_BATCH):
+        batch = ids[start : start + _HASH_BATCH]
+        placeholders = ",".join("?" * len(batch))
+        yield from conn.execute(
+            f"SELECT {columns} FROM labels WHERE hash IN ({placeholders})", batch
+        )
+
+
+def labels_for_messages(
+    conn: sqlite3.Connection, messages: Iterable[dict]
 ) -> dict[str, sqlite3.Row]:
-    """All stored labels for one conversation, keyed by message hash.
+    """The stored Labels of `messages`, keyed by message hash.
 
-    `partner_aliases` lets the caller fold in labels written under any
-    alternate names a partner has been linked to via the aliases
-    module. When omitted, only rows with `partner = ?` are returned —
-    same behaviour as before aliases existed.
-
-    Loaded in one query so per-message resolution is a dict lookup —
-    a long conversation might have tens of thousands of messages but
-    only a few thousand explicit labels.
+    A Label belongs to the message (ADR 0004), so a conversation's
+    Labels are the Labels of the messages its Log holds, whichever
+    character or partner wrote them: pass the conversation's messages
+    (its whole alias group, as `logs.read_messages` reads it).
     """
-    names = _partner_query_set(partner, partner_aliases)
-    placeholders = ",".join("?" * len(names))
-    rows = conn.execute(
-        f"SELECT * FROM labels WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    ).fetchall()
-    return {row["hash"]: row for row in rows}
-
-
-def _partner_query_set(partner: str, alias_names: list[str] | None) -> list[str]:
-    """Dedupe the (partner, aliases) tuple → ordered list of names.
-
-    Order doesn't matter for the SQL IN clause but a stable list keeps
-    test assertions / cache keys predictable.
-    """
-    if not alias_names:
-        return [partner]
-    return sorted({partner, *alias_names})
+    return {
+        row["hash"]: row
+        for row in _rows_for_hashes(conn, "*", (msg_hash(m) for m in messages))
+    }
 
 
 def upsert_label(
@@ -796,32 +790,6 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     return cur.rowcount > 0
 
 
-def delete_labels_for_partner(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
-) -> int:
-    """Drop every explicit label for one (character, partner) pair,
-    reverting each message to rule-or-Unlabeled. Returns the number of
-    rows removed."""
-    names = _partner_query_set(partner, partner_aliases)
-    placeholders = ",".join("?" * len(names))
-    cur = conn.execute(
-        f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    )
-    conn.commit()
-    events.publish(
-        events.LABELS_CHANGED,
-        character=character,
-        partner=partner,
-        deleted=cur.rowcount,
-    )
-    return cur.rowcount
-
-
 #: Every column of a stored Label, in the order the Trash keeps them.
 LABEL_COLUMNS = (
     "hash", "character", "partner", "ts", "speaker", "label",
@@ -831,32 +799,18 @@ LABEL_COLUMNS = (
 
 
 def label_rows(
-    conn: sqlite3.Connection,
-    character: str | None = None,
-    partner: str | None = None,
-    *,
-    partner_aliases: list[str] | None = None,
+    conn: sqlite3.Connection, messages: Iterable[dict] | None = None
 ) -> list[dict]:
-    """The stored Labels of one conversation (`partner` given), of every
-    conversation of one character (`character` only), or all of them,
-    as plain dicts of `LABEL_COLUMNS`. What clearing them would take
-    away, so it can go to the Trash first."""
+    """The stored Labels of `messages` (one conversation's Log, or
+    every Log of a character), or every stored Label when `messages` is
+    None, as plain dicts of `LABEL_COLUMNS` in time order. What clearing
+    them would take away, so it can go to the Trash first."""
     cols = ", ".join(LABEL_COLUMNS)
-    if character is None:
-        cur = conn.execute(f"SELECT {cols} FROM labels ORDER BY character, ts")
-    elif partner is None:
-        cur = conn.execute(
-            f"SELECT {cols} FROM labels WHERE character = ? ORDER BY ts", (character,)
-        )
-    else:
-        names = _partner_query_set(partner, partner_aliases)
-        placeholders = ",".join("?" * len(names))
-        cur = conn.execute(
-            f"SELECT {cols} FROM labels WHERE character = ? "
-            f"AND partner IN ({placeholders}) ORDER BY ts",
-            (character, *names),
-        )
-    return [dict(r) for r in cur]
+    if messages is None:
+        return [dict(r) for r in conn.execute(f"SELECT {cols} FROM labels ORDER BY ts")]
+    rows = [dict(r) for r in _rows_for_hashes(conn, cols, (msg_hash(m) for m in messages))]
+    rows.sort(key=lambda r: (r["ts"], r["hash"]))
+    return rows
 
 
 def restore_labels(
@@ -900,7 +854,6 @@ def fill_unlabeled(
     settings: LabelsSettings,
     label: str,
     *,
-    partner_aliases: list[str] | None = None,
     source: str = "manual",
     reason: str = "bulk: all unlabeled",
 ) -> dict:
@@ -919,14 +872,17 @@ def fill_unlabeled(
     that is what the rules are for, and the user can still override a
     single row by hand.
 
+    `messages` is the conversation's Log; the Labels it already holds
+    are found through their hashes (ADR 0004). `character` and
+    `partner` are stamped on the new rows and named in the event.
+
     Returns the counts plus every hash written, so the caller can offer
     to undo exactly this write and nothing else.
     """
     if label not in (LABEL_IC, LABEL_OOC):
         raise ValueError(f"invalid label: {label!r}")
-    by_hash = labels_for_partner(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
+    messages = list(messages)
+    by_hash = labels_for_messages(conn, messages)
     targets: list[tuple[str, dict]] = []
     already_labelled = 0
     decided_by_rules = 0
@@ -1018,54 +974,37 @@ def delete_labels_by_hash(
 
 
 def max_label_time(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
+    conn: sqlite3.Connection, messages: Iterable[dict]
 ) -> float | None:
-    """Return the most recent labels.updated_at for a partner (or the
-    folded alias group), or None when no label rows exist.
+    """The newest `updated_at` among the stored Labels of `messages`
+    (one conversation's Log), or None when none of them has a Label.
 
     Used to flag stale-label rows in the partner list — compare against
     the log file's mtime to spot conversations that grew since their
     last classify run.
     """
-    names = list(partner_aliases) if partner_aliases else [partner]
-    if partner not in names:
-        names.append(partner)
-    placeholders = ",".join("?" * len(names))
-    row = conn.execute(
-        f"""
-        SELECT MAX(updated_at) FROM labels
-         WHERE character = ? AND partner IN ({placeholders})
-        """,
-        (character, *names),
-    ).fetchone()
-    val = row[0] if row else None
-    return float(val) if val is not None else None
+    newest = None
+    for row in _rows_for_hashes(conn, "updated_at", (msg_hash(m) for m in messages)):
+        if newest is None or row["updated_at"] > newest:
+            newest = row["updated_at"]
+    return float(newest) if newest is not None else None
 
 
 def stats(
     conn: sqlite3.Connection,
-    character: str,
-    partner: str,
     messages: Iterable[dict],
     settings: LabelsSettings,
-    *,
-    partner_aliases: list[str] | None = None,
 ) -> dict[str, int]:
     """Count IC / OOC / Unlabeled across the supplied messages.
 
-    Caller passes the already-parsed messages (we don't re-walk the
-    binary log) plus this conversation's stored labels. Pass
-    `partner_aliases` to fold in label rows written under any linked
-    alternate names. Cheap because the labels lookup is a single
-    query and resolution is a dict hit per message.
+    Caller passes the already-parsed messages of a conversation (we
+    don't re-walk the binary log, and its whole alias group is in
+    them); their stored Labels are looked up by hash. Cheap because
+    the lookup is a few batched queries and resolution is a dict hit
+    per message.
     """
-    by_hash = labels_for_partner(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
+    messages = list(messages)
+    by_hash = labels_for_messages(conn, messages)
     counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
         lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)

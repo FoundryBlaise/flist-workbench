@@ -475,18 +475,22 @@ replace = '''
 [[mutation]]
 id = "L06"
 suite = "sidecar"
-file = "sidecar/labels.py"
+file = "sidecar/services/label_trash.py"
 breaks = "Resetting Labels for one partner wipes that partner's Labels for every one of your characters."
 tests = ["@logs", "@mcp"]
 audit = "survived"
 spec = 9
 # audit: M06 delete_labels_for_partner ignores character
+# (re-anchored for #94: a reset is scoped by the conversation's Log)
 find = '''
-f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),'''
+            return list(log_store.read_messages(character, partner))'''
 replace = '''
-f"DELETE FROM labels WHERE partner IN ({placeholders})",
-        (*names,),'''
+            return [
+                m
+                for c in log_store.list_characters()
+                if (log_store.data_dir() / c.name / "logs" / partner).is_file()
+                for m in log_store.read_messages(c.name, partner)
+            ]'''
 
 [[mutation]]
 id = "L07"
@@ -631,14 +635,14 @@ tests = ["@logs", "@mcp"]
 audit = "survived"
 spec = 9
 # audit: M16 unlabeled_remaining ignores alias group (moved to the Labels service, #71)
+# (re-anchored for #94: a conversation's Labels are those of its Logs'
+# messages, so counting only the partner's own Log is the same bug)
 find = '''
-        partner_aliases=aliases_store.all_names_for(conn, character, partner),
-    )
-    return {'''
+def _messages(character: str, partner: str) -> list[dict]:
+    return list(log_store.read_messages(character, partner))'''
 replace = '''
-        partner_aliases=None,
-    )
-    return {'''
+def _messages(character: str, partner: str) -> list[dict]:
+    return list(log_store.parse_log(log_store.log_path(character, partner)))'''
 
 [[mutation]]
 id = "L17"
