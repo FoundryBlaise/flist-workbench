@@ -38,14 +38,25 @@ class SearchHit:
     label: str
     speakers: list[str]
     text: str
+    #: The fused (RRF) score: what the order before reranking rests on.
     score: float
     message_count: int
     ts_start: int
     ts_end: int
-    expanded: bool
+    #: 1-based place after fusing the dense and keyword halves.
+    fused_rank: int
+    #: 1-based place in each half; None when that half did not find it
+    #: (always None for `lexical_rank` when hybrid search is off).
+    dense_rank: int | None
+    lexical_rank: int | None
+    #: The cross-encoder's score; None when reranking did not run.
+    rerank_score: float | None
+    #: The chunks right before and after this one in its Log, in time
+    #: order: context for reading the hit, not matches themselves.
+    context: dict[str, list[dict[str, Any]]]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "chunk_id": self.chunk_id,
             "character": self.character,
             "partner": self.partner,
@@ -54,14 +65,19 @@ class SearchHit:
             "speakers": self.speakers,
             "text": self.text,
             "score": round(self.score, 4),
+            "fused_rank": self.fused_rank,
+            "dense_rank": self.dense_rank,
+            "lexical_rank": self.lexical_rank,
             "message_count": self.message_count,
             "ts_start": self.ts_start,
             "ts_end": self.ts_end,
-            # True when the chunk was pulled in as a neighbour of a
-            # match rather than matching itself — useful context, but
-            # not evidence the search found it.
-            "expanded": self.expanded,
+            "context": self.context,
         }
+        # Present exactly when reranking ran, so its absence is the
+        # answer rather than a null to interpret.
+        if self.rerank_score is not None:
+            out["rerank_score"] = round(self.rerank_score, 4)
+        return out
 
 
 @dataclass(frozen=True)
@@ -213,11 +229,32 @@ def _to_hit(raw: dict[str, Any]) -> SearchHit:
         label=str(payload.get("label") or ""),
         speakers=list(payload.get("speakers") or []),
         text=str(payload.get("text") or ""),
-        score=float(raw.get("score") or 0.0),
+        score=float(raw.get("fused_score") or 0.0),
         message_count=int(payload.get("msg_count") or 0),
         ts_start=int(payload.get("ts_start") or 0),
         ts_end=int(payload.get("ts_end") or 0),
-        # `expand_with_neighbors` marks the chunks it pulled in on
-        # the payload, not the hit envelope.
-        expanded=bool(payload.get("expanded")),
+        fused_rank=int(raw.get("fused_rank") or 0),
+        dense_rank=raw.get("dense_rank"),
+        lexical_rank=raw.get("lexical_rank"),
+        rerank_score=raw.get("rerank_score"),
+        context={
+            side: [_to_context(c) for c in chunks]
+            for side, chunks in (raw.get("context") or {}).items()
+        }
+        or {"before": [], "after": []},
     )
+
+
+def _to_context(raw: dict[str, Any]) -> dict[str, Any]:
+    """A neighbouring chunk: what it says and when, without the hit's
+    ranks (it was not ranked) or the conversation (the hit's own)."""
+    payload = raw.get("payload") or {}
+    return {
+        "chunk_id": str(payload.get("chunk_id") or ""),
+        "date": str(payload.get("date") or ""),
+        "speakers": list(payload.get("speakers") or []),
+        "text": str(payload.get("text") or ""),
+        "message_count": int(payload.get("msg_count") or 0),
+        "ts_start": int(payload.get("ts_start") or 0),
+        "ts_end": int(payload.get("ts_end") or 0),
+    }
