@@ -22,9 +22,16 @@
 >    unpacked itself to `%TEMP%\_MEI*` on every start and, killed at
 >    quit, left that folder behind; the app removes those leftovers
 >    once (`electron/onefileLeftovers.ts`, marker
->    `onefile-leftovers-removed.json` in userData).
+>    `onefile-leftovers-removed.json` in userData). The command
+>    excludes pytest and its plugins by name: a library's bundled
+>    `conftest.py` (fsspec ships one) would otherwise pull them in.
 > 3. `electron-builder --win` — wraps the lot into the NSIS installer
->    and the portable .exe under `dist-electron/`
+>    and the portable .exe under `dist-electron/`. It copies every
+>    package in `dependencies` into the app archive, so only what the
+>    main process loads belongs there (`electron-updater`, `keytar`);
+>    React, CodeMirror and the other renderer libraries are already in
+>    the renderer bundle and stay in `devDependencies`
+>    (`electron/packaging.test.ts` checks both rules).
 >
 > Then `npm run smoke:packaged` starts `dist-electron/win-unpacked`
 > against throwaway folders and checks that the sidecar answers

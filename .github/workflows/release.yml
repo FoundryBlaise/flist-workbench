@@ -1,7 +1,7 @@
-# Builds the Windows portable .exe on every tag matching v*, attaches
-# it to a GitHub Release along with a SHA256SUMS file. Mirrors what
-# build-win.ps1 does locally; the only thing CI does that local doesn't
-# is generate hashes + publish the release.
+# Builds the Windows installer and portable .exe on every tag matching
+# v*, attaches them to a GitHub Release along with latest.yml and a
+# SHA256SUMS file. The build itself is `npm run pack:win`, the same
+# command a local build runs; CI adds only the hashes and the release.
 #
 # Unsigned builds. See docs/INSTALL_WINDOWS.md for the SmartScreen
 # click-through users will see; code-signing is a separate decision.
