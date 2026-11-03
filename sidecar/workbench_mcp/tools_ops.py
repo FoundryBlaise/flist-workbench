@@ -5,9 +5,11 @@ user uploads, and the settings the rest of it reads.
 
 Two things run long enough to need progress: a pull walks a
 character's whole image set, and the backup sweep pulls every
-character on the account. Both report through `Context.report_progress`
-so a client can show something moving, and both are bounded by
-F-list's rate limit rather than by anything here.
+character on the account. Both run as jobs (`services.jobs`): waiting,
+they report through `Context.report_progress` so a client can show
+something moving; with `wait=false` they answer a job id for `get_job`
+and `cancel_job`. Both are bounded by F-list's rate limit rather than by
+anything here.
 
 On file paths: the export tool writes wherever the user running the app
 can. That is the same reach the app already has through its own file
@@ -22,10 +24,16 @@ import time
 from pathlib import Path
 from typing import Any
 
+import archive_backups
+import archive_images
+import archive_registry
+import archive_workbench
+import atomic_write
 import backup_origin
-import character_archive
-import rag_jobs
 from mcp.server.fastmcp import Context
+from refusals import INTERNAL_ERROR
+
+from services import jobs
 
 from ._context import (
     ToolError,
@@ -48,8 +56,49 @@ WAIT_BUDGET_SEC = 600
 # --------------------------------------------------------------------
 
 
+def _job_failure(job: jobs.Job, fallback: str) -> ToolError:
+    """A failed Pull's or Back up all's error as the tool's error: the
+    job's code and details (`services.sse.error`), `stage` among them."""
+    error = job.error or {}
+    code = str(error.get("code") or INTERNAL_ERROR)
+    message = str(error.get("message") or fallback)
+    if code == "not_signed_in":
+        message += " The user signs in inside the app window (F-list → Sign in)."
+    return ToolError(code, message, **(error.get("details") or {}))
+
+
+def _job_answer(job: jobs.Job, note: str) -> dict[str, Any]:
+    return {"job_id": job.id, "kind": job.kind, "state": job.state, "note": note}
+
+
+def _started(job: jobs.Job) -> dict[str, Any]:
+    """The answer of a tool asked not to wait (or done waiting)."""
+    return _job_answer(
+        job,
+        "Running in the background. Poll get_job for progress and the "
+        "result; cancel_job stops it.",
+    )
+
+
+async def _follow(job: jobs.Job, on_event: Any) -> bool:
+    """Follow a job's events into `on_event(event, data)` until it ends.
+    False when it still runs after WAIT_BUDGET_SEC: the caller answers
+    with the job id then. Leaving early never stops the job."""
+    try:
+        async with asyncio.timeout(WAIT_BUDGET_SEC):
+            async for event, data in jobs.follow(job):
+                await on_event(event, data)
+    except TimeoutError:
+        return False
+    return True
+
+
+def _cancelled(job: jobs.Job) -> dict[str, Any]:
+    return _job_answer(job, "Cancelled. What it wrote before the cancel stays.")
+
+
 @tool(tags=TAG_CHARACTER, title="Pull from F-list", open_world=True)
-async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
+async def pull_character(character: str, ctx: Context, wait: bool = True) -> dict[str, Any]:
     """Fetch a character's current profile and images from F-list into
     the local archive.
 
@@ -60,7 +109,9 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     sign-in tool, because credentials never travel through MCP.
 
     Takes a while: F-list is rate-limited to one request a second and
-    every gallery image is a request.
+    every gallery image is a request. `wait=false` returns a job id at
+    once, to poll with get_job (or stop with cancel_job). One Pull per
+    character at a time: another is refused `character_busy`.
     """
     from services import pull as pull_service
 
@@ -68,48 +119,43 @@ async def pull_character(character: str, ctx: Context) -> dict[str, Any]:
     if not name:
         raise ToolError("validation_failed", "character is empty")
 
-    summary: dict[str, Any] | None = None
-    failure: dict[str, Any] | None = None
+    job = pull_service.start(name)
+    audit("pull_character", character=name, job=job.id)
+    if not wait:
+        return _started(job)
+
     images_total = 0
 
-    async for event, data in pull_service.run(name):
-        if event == "error":
-            failure = data
-            break
-        if event == "images":
+    async def report(event: str, data: dict[str, Any]) -> None:
+        nonlocal images_total
+        if event == pull_service.IMAGES:
             images_total = int(data.get("total") or 0)
             await ctx.report_progress(0, images_total or None, "downloading images")
-        elif event == "image":
+        elif event == pull_service.IMAGE:
             await ctx.report_progress(
                 int(data.get("index") or 0),
                 images_total or None,
                 f"image {data.get('index')}/{images_total}",
             )
-        elif event == "fetching":
+        elif event == pull_service.FETCHING:
             await ctx.info(f"fetching {name} from F-list")
-        elif event == "done":
-            summary = data
 
-    if failure is not None:
-        stage = failure.get("stage")
-        message = str(failure.get("message") or "pull failed")
-        if stage == "ticket":
-            raise ToolError(
-                "not_signed_in",
-                f"{message} The user signs in inside the app "
-                "window (F-list → Sign in).",
-            )
-        raise ToolError("pull_failed", message, stage=stage)
-
+    if not await _follow(job, report):
+        return _started(job)
+    if job.state == "cancelled":
+        return _cancelled(job)
+    if job.state == "failed":
+        raise _job_failure(job, "pull failed")
+    summary = job.result
     if summary is None:
         raise ToolError("pull_failed", "the pull ended without a result")
 
-    audit("pull_character", character=name)
     return {
         "character": name,
         "character_id": summary.get("character_id"),
         "images": summary.get("image_count"),
         "changed": summary.get("changed"),
+        "job_id": job.id,
         "note": (
             "This updated the local copy of what is published. Edits "
             "live in the Workbench and were not touched. " + NO_PUSH_NOTE
@@ -131,7 +177,7 @@ def create_backup(
     Workbench already holds the same content.
     """
     target = resolve_character(character)
-    result = character_archive.save_zip_backup(
+    result = archive_backups.save_zip_backup(
         target.id,
         source=backup_origin.WORKBENCH,
         occasion=backup_origin.MANUAL,
@@ -143,7 +189,7 @@ def create_backup(
     if not result.get("saved"):
         if result.get("reason") == "no_live":
             raise ToolError(
-                "live_not_found",
+                "no_live",
                 f"No profile stored for {target.name}, so there is "
                 "nothing to back up. Pull the character first — its "
                 "Workbench starts from what was last fetched from F-list.",
@@ -161,13 +207,13 @@ def create_backup(
     if note:
         filename = result.get("filename")
         if filename:
-            character_archive.rename_zip_backup(target.id, filename, str(note))
+            archive_backups.rename_zip_backup(target.id, filename, str(note))
     audit("create_backup", character=target.name, filename=result.get("filename"))
     return {"character": target.name, **result}
 
 
 @tool(tags=TAG_CHARACTER, title="Back up every character", open_world=True)
-async def backup_all_characters(ctx: Context) -> dict[str, Any]:
+async def backup_all_characters(ctx: Context, wait: bool = True) -> dict[str, Any]:
     """Pull every character on the signed-in account and keep each one's
     Live, what F-list shows, as a Backup (`source: live, occasion:
     backup-all`). Workbenches are neither read nor changed.
@@ -175,46 +221,44 @@ async def backup_all_characters(ctx: Context) -> dict[str, Any]:
     Long: each character is a full pull, one at a time, at F-list's
     rate limit. Characters whose Live hasn't changed since their last
     Backup of Live are skipped rather than re-zipped. Tell the user this
-    will take a few minutes on a large account before starting it.
+    will take a few minutes on a large account before starting it, or
+    pass `wait=false` for a job id to poll with get_job (cancel_job
+    stops it). Refused `character_busy` while a Pull runs.
     """
     from services import backup_all as backup_all_service
 
-    summary: dict[str, Any] | None = None
-    failure: dict[str, Any] | None = None
+    job = backup_all_service.start()
+    audit("backup_all_characters", job=job.id)
+    if not wait:
+        return _started(job)
+
     total = 0
-    seen = 0
     rows: list[dict[str, Any]] = []
 
-    async for event, data in backup_all_service.run():
-        if event == "error":
-            failure = data
-            break
-        if event == "start":
+    async def report(event: str, data: dict[str, Any]) -> None:
+        nonlocal total
+        if event == backup_all_service.START:
             total = int(data.get("total") or 0)
             await ctx.report_progress(0, total or None, "starting")
-        elif event == "character":
-            if data.get("status") in ("saved", "unchanged", "error"):
-                seen += 1
-                rows.append(
-                    {
-                        "character": data.get("name"),
-                        "status": data.get("status"),
-                        "filename": data.get("filename"),
-                        "message": data.get("message"),
-                    }
-                )
-                await ctx.report_progress(
-                    seen, total or None, str(data.get("name") or "")
-                )
-        elif event == "done":
-            summary = data
+        elif event == backup_all_service.CHARACTER and data.get("status") in ("saved", "unchanged", "error"):
+            rows.append(
+                {
+                    "character": data.get("name"),
+                    "status": data.get("status"),
+                    "filename": data.get("filename"),
+                    "message": data.get("message"),
+                }
+            )
+            await ctx.report_progress(len(rows), total or None, str(data.get("name") or ""))
 
-    if failure is not None:
-        message = str(failure.get("message") or "the sweep failed")
-        raise ToolError("backup_failed", message, stage=failure.get("stage"))
-
-    audit("backup_all_characters", **(summary or {}))
-    return {"summary": summary or {}, "characters": rows}
+    if not await _follow(job, report):
+        return _started(job)
+    if job.state == "cancelled":
+        return {**_cancelled(job), "characters": rows}
+    if job.state == "failed":
+        raise _job_failure(job, "the sweep failed")
+    summary = {k: v for k, v in (job.result or {}).items() if k != "characters"}
+    return {"summary": summary, "characters": rows, "job_id": job.id}
 
 
 # --------------------------------------------------------------------
@@ -258,7 +302,8 @@ async def ingest_logs(
 
     Embedding runs in-process by default, so nothing needs to be
     installed. `wait=false` returns a job id to poll with get_job
-    instead of blocking.
+    instead of blocking. One ingest at a time: another is refused with
+    `index_busy`.
     """
     # Resolve to the on-disk spelling like every other conversation
     # tool: the Labels and alias links are keyed on it, so a different
@@ -267,7 +312,9 @@ async def ingest_logs(
     if include_channels:
         scope["include_channels"] = True
 
-    job = rag_jobs.start(scope, include_ooc=include_ooc, force_rewipe=rebuild)
+    from services import index as index_service
+
+    job = index_service.start_ingest(scope, include_ooc=include_ooc, force_rewipe=rebuild)
     audit(
         "ingest_logs",
         character=scope.get("character"),
@@ -283,45 +330,37 @@ async def ingest_logs(
 
     started = time.monotonic()
     last_reported = -1
-    while True:
-        current = rag_jobs.registry().get(job.id)
-        if current is None:
-            raise ToolError("job_lost", f"job {job.id} disappeared")
-        snapshot = current.to_dict()
-        if snapshot.get("state") in ("done", "cancelled", "failed"):
-            return _ingest_summary(snapshot)
-        done = int(snapshot.get("embedded") or 0)
-        if done != last_reported:
+    while not job.finished:
+        progress = job.progress
+        if progress.embedded != last_reported:
             await ctx.report_progress(
-                done,
-                int(snapshot.get("total_chunks") or 0) or None,
-                str(snapshot.get("current_partner") or "indexing"),
+                progress.embedded,
+                progress.total_chunks or None,
+                progress.current_partner or "indexing",
             )
-            last_reported = done
+            last_reported = progress.embedded
         if time.monotonic() - started > WAIT_BUDGET_SEC:
             return {
                 "job_id": job.id,
-                "state": snapshot.get("state"),
+                "state": job.state,
                 "note": (
                     "Still running after 10 minutes — left in the "
                     "background. Poll get_job for progress."
                 ),
             }
         await asyncio.sleep(0.5)
+    return _ingest_summary(job.to_dict())
 
 
-def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
     out = {
-        "job_id": snapshot.get("id"),
-        "state": snapshot.get("state"),
-        "chunks_indexed": snapshot.get("upserted"),
-        "chunks_already_present": snapshot.get("skipped_existing"),
-        "chunks_removed": snapshot.get("removed"),
-        "skipped_unlabeled": snapshot.get("skipped_unlabeled"),
-        "failed": snapshot.get("failed"),
-        "error": snapshot.get("error") or snapshot.get("last_error"),
+        "job_id": job["id"],
+        "state": job["state"],
+        **(job["result"] or {}),
+        "error": job["error"],
+        "last_error": job["progress"].get("last_error"),
     }
-    if out["skipped_unlabeled"]:
+    if out.get("skipped_unlabeled"):
         out["note"] = (
             f"{out['skipped_unlabeled']} message(s) were skipped for "
             "having no IC/OOC verdict — they aren't searchable. Run the "
@@ -330,9 +369,9 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
     elif out["state"] == "failed":
         out["note"] = (
-            "The embedding model failed to load — see `last_error`. "
-            "test_embedding_connection reports the same failure on its "
-            "own, which is the quicker way to see what went wrong."
+            "The ingest failed — see `error`. test_embedding_connection "
+            "reports an embedding model that will not load on its own, "
+            "which is the quicker way to see what went wrong there."
         )
     return out
 
@@ -343,26 +382,26 @@ def _ingest_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     read_only=True,
 )
 def get_job(job_id: str) -> dict[str, Any]:
-    """Progress of a background ingest started with wait=false."""
-    job = rag_jobs.registry().get(job_id)
-    if job is None:
-        raise ToolError(
-            "job_not_found",
-            f"No job {job_id!r}. Finished jobs are forgotten after a "
-            "few minutes.",
-        )
-    return job.to_dict()
+    """Progress of a job started with wait=false, of any kind: `state`,
+    `progress`, `result` once done, `error` ({code, message, details})
+    if it failed. Jobs are kept in memory, so an id from before a
+    restart is `job_not_found`."""
+    from services import jobs
+
+    return jobs.registry().get(job_id).to_dict()
 
 
 @tool(tags=(TAG_CORE, TAG_LOGS), title="Cancel a job")
 def cancel_job(job_id: str) -> dict[str, Any]:
-    """Ask a running ingest to stop. Chunks already written stay
-    indexed; the job stops at the next partner boundary."""
-    ok = rag_jobs.registry().cancel(job_id)
-    if not ok:
-        raise ToolError("job_not_found", f"No job {job_id!r}.")
+    """Ask a running job to stop, whatever its kind. It stops at its
+    next safe point (an ingest between batches; what it already wrote
+    stays) — poll get_job to see it end. A finished job is left as it
+    ended."""
+    from services import jobs
+
+    job = jobs.registry().cancel(job_id)
     audit("cancel_job", job=job_id)
-    return {"job_id": job_id, "cancel_requested": True}
+    return job.to_dict()
 
 
 @tool(tags=TAG_LOGS, title="Wipe the search index", destructive=True)
@@ -371,7 +410,8 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     untouched; only the search index goes.
 
     Needed when switching embedding models — an index built with one
-    model can't be searched with another.
+    model can't be searched with another. Refused with `index_busy`
+    while an ingest runs.
     """
     if not confirm:
         raise ToolError(
@@ -380,14 +420,9 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
             "re-embedding every message, which takes a while. Ask the "
             "user, then call again with confirm=true.",
         )
-    import rag_lexical
-    import rag_store
+    from services import index as index_service
 
-    with rag_store.RagStore() as store:
-        store.wipe()
-    rag_store.clear_manifest()
-    with rag_lexical.LexicalStore() as lex:
-        lex.wipe()
+    index_service.wipe()
     audit("wipe_search_index")
     return {"wiped": True, "note": "Run ingest_logs to rebuild."}
 
@@ -446,19 +481,24 @@ def export_restore_zip(
 
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = character_archive.export_payload(target.id, from_live=resolved.is_live)
-    if payload is None:
-        raise ToolError(
-            "live_not_found",
-            f"Nothing to export for {target.name} — pull the character first.",
+    # Payload and images in one step under the character's lock, as the
+    # window's export does.
+    with archive_registry.character_lock(target.id):
+        payload = archive_workbench.export_payload(
+            target.id, from_live=resolved.is_live
         )
+        if payload is None:
+            raise ToolError(
+                "no_live",
+                f"Nothing to export for {target.name} — pull the character first.",
+            )
 
-    data = zip_serialise.build_zip(
-        target.id,
-        payload,
-        images_dir=character_archive.images_dir(target.id),
-        avatar_path=character_archive.avatar_path_for(target.name),
-    )
+        data = zip_serialise.build_zip(
+            target.id,
+            payload,
+            images_dir=archive_images.images_dir(target.id),
+            avatar_path=archive_images.avatar_path_for(target.name),
+        )
     written = _write_file(path, data, suffix=".zip")
     audit("export_restore_zip", character=target.name, path=str(written))
     return {
@@ -481,10 +521,10 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
     "put it in Downloads" is a reasonable thing for a user to say. If
     that name is taken, a numbered one beside it is used instead.
 
-    An existing file is never overwritten: the file is created
-    exclusively, so a model can't clobber something the user keeps
-    there, even if it appears between a check and the write. A file
-    path that is taken gets an `exists` refusal.
+    An existing file is never overwritten: the name is claimed in the
+    same step that places the bytes, so a model can't clobber something
+    the user keeps there, even if it appears between a check and the
+    write. A file path that is taken gets an `exists` refusal.
     """
     target = Path(str(path)).expanduser()
     if target.is_dir():
@@ -495,33 +535,19 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
     else:
         candidates = [target]
 
-    for candidate in candidates:
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            handle = candidate.open("xb")
-        except FileExistsError:
-            continue
-        except OSError as exc:
-            raise ToolError(
-                "write_failed", f"Couldn't write {candidate}: {exc}"
-            ) from exc
-        try:
-            with handle:
-                handle.write(data)
-        except OSError as exc:
-            # Only ever our own half-written file: it was created above.
-            candidate.unlink(missing_ok=True)
-            raise ToolError(
-                "write_failed", f"Couldn't write {candidate}: {exc}"
-            ) from exc
-        return candidate
-
-    raise ToolError(
-        "exists",
-        f"{candidates[0]} already exists and an export never overwrites "
-        "a file. Ask the user for another name, or give a folder to get "
-        "a fresh file name.",
-    )
+    try:
+        return atomic_write.write_new(candidates, data)
+    except FileExistsError:
+        raise ToolError(
+            "exists",
+            f"{candidates[0]} already exists and an export never overwrites "
+            "a file. Ask the user for another name, or give a folder to get "
+            "a fresh file name.",
+        ) from None
+    except OSError as exc:
+        raise ToolError(
+            "write_failed", f"Couldn't write {candidates[0]}: {exc}"
+        ) from exc
 
 
 #: How many numbered names an export into a folder tries before giving
@@ -607,56 +633,29 @@ def update_settings(
 ) -> dict[str, Any]:
     """Change Workbench settings. Omitted values are left alone.
 
-    The embedding API key is deliberately not settable here — a secret
-    should be typed into Settings, not passed through a tool call that
-    ends up in a transcript. Changing `embed_model` invalidates the
+    Numbers out of range are clamped; `changed` reports what was
+    stored. An empty model name resets it to the default. The window
+    shows the change at once. Changing `embed_model` invalidates the
     search index: it was built with the old model's vectors.
     """
-    import rag as rag_settings
-    import settings as settings_store
+    from services import settings as settings_service
 
-    conn = settings_store.connect()
-    changed: dict[str, Any] = {}
-    try:
-        if ooc_threshold_chars is not None:
-            value = max(1, int(ooc_threshold_chars))
-            settings_store.set_value(
-                conn, settings_store.KEY_LABELS_THRESHOLD_CHARS, str(value)
-            )
-            changed["ooc_threshold_chars"] = value
-        if embed_model is not None:
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_EMBED_MODEL, str(embed_model)
-            )
-            changed["embed_model"] = embed_model
-        if top_k is not None:
-            value = max(1, min(50, int(top_k)))
-            settings_store.set_value(conn, settings_store.KEY_RAG_TOP_K, str(value))
-            changed["top_k"] = value
-        if neighbors is not None:
-            value = max(0, min(5, int(neighbors)))
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_NEIGHBORS, str(value)
-            )
-            changed["neighbors"] = value
-        if rerank_model is not None:
-            settings_store.set_value(
-                conn, settings_store.KEY_RAG_RERANK_MODEL, str(rerank_model)
-            )
-            changed["rerank_model"] = rerank_model
-        if hybrid_enabled is not None:
-            settings_store.set_value(
-                conn,
-                settings_store.KEY_RAG_HYBRID_ENABLED,
-                "1" if hybrid_enabled else "0",
-            )
-            changed["hybrid_enabled"] = bool(hybrid_enabled)
-    finally:
-        conn.close()
-
-    if not changed:
+    given = {
+        "ooc_threshold_chars": ooc_threshold_chars,
+        "embed_model": embed_model,
+        "top_k": top_k,
+        "neighbors": neighbors,
+        "rerank_model": rerank_model,
+        "hybrid_enabled": hybrid_enabled,
+    }
+    given = {param: value for param, value in given.items() if value is not None}
+    if not given:
         raise ToolError("validation_failed", "nothing to change")
 
+    stored = settings_service.update(
+        {_SETTINGS_FIELDS[param]: value for param, value in given.items()}
+    )
+    changed = {param: stored[_SETTINGS_FIELDS[param]] for param in given}
     audit("update_settings", **changed)
     out: dict[str, Any] = {"changed": changed}
     if "embed_model" in changed:
@@ -665,8 +664,18 @@ def update_settings(
             "vectors and can't be searched with this one. Run "
             "wipe_search_index then ingest_logs."
         )
-    del rag_settings  # imported for the settings-key names only
     return out
+
+
+#: `update_settings` parameters -> the settings service's field names.
+_SETTINGS_FIELDS = {
+    "ooc_threshold_chars": "labels.threshold_chars",
+    "embed_model": "rag.embed_model",
+    "top_k": "rag.top_k",
+    "neighbors": "rag.neighbors",
+    "rerank_model": "rag.rerank_model",
+    "hybrid_enabled": "rag.hybrid_enabled",
+}
 
 
 # --------------------------------------------------------------------
@@ -683,9 +692,8 @@ def add_alias(character: str, name: str, primary_name: str) -> dict[str, Any]:
     lookups, and the scope of a semantic search.
     """
     import aliases as aliases_store
-    import labels as labels_store
 
-    conn = labels_store.connect()
+    conn = aliases_store.connect()
     try:
         aliases_store.add_alias(conn, character, name, primary_name)
         group = aliases_store.all_names_for(conn, character, primary_name)
@@ -702,9 +710,8 @@ def remove_alias(character: str, name: str) -> dict[str, Any]:
     """Undo add_alias for one name, so it shows as its own conversation
     again."""
     import aliases as aliases_store
-    import labels as labels_store
 
-    conn = labels_store.connect()
+    conn = aliases_store.connect()
     try:
         removed = aliases_store.remove_alias(conn, character, name)
     finally:

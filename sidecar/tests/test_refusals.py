@@ -1,4 +1,4 @@
-"""Every refusal answers `{code, message}`.
+"""Every refusal answers `{code, message, details}`.
 
 The app window, the extension and MCP tooling show the reason a request
 was turned down without special cases, so the sidecar answers each
@@ -23,9 +23,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     import server
 
     return app_client(server.app)
@@ -58,7 +58,7 @@ def test_an_unknown_log_is_refused_as_log_not_found(
 ) -> None:
     res = client.get(url)
     assert res.status_code == 404, res.text
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
     assert res.json()["code"] == "log_not_found"
     # Names from the request are not echoed back.
     for name in ("nobody", "stranger"):
@@ -82,7 +82,7 @@ def test_a_log_name_that_cannot_name_a_file_is_refused_as_invalid_file_name(
 ) -> None:
     res = client.get(url)
     assert res.status_code == 400, res.text
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
     assert res.json()["code"] == "invalid_file_name"
     for name in ("..", "a/b", "partner"):
         assert name not in res.json()["message"]
@@ -96,11 +96,12 @@ def character(client: TestClient) -> str:
     """A character in the archive, with an empty backups folder."""
     import json
 
-    import character_archive
+    import archive_backups
+    import archive_registry
 
-    char = character_archive.create_character_dir("123")
+    char = archive_registry.create_character_dir("123")
     (char / "live.json").write_text(json.dumps({"id": 123, "name": "Someone"}), encoding="utf-8")
-    character_archive.backups_dir("123")
+    archive_backups.backups_dir("123")
     return "123"
 
 
@@ -124,7 +125,7 @@ def test_a_backup_name_that_is_not_one_is_refused_as_invalid_file_name(
         method, f"/flist/character/{character}/{suffix.replace('{name}', name)}", json=body
     )
     assert res.status_code == 400, res.text
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
     assert res.json()["code"] == "invalid_file_name"
 
 
@@ -133,10 +134,10 @@ def test_a_backup_from_before_the_stored_profile_is_refused_as_too_old(
 ) -> None:
     import zipfile
 
-    import character_archive
+    import archive_backups
 
     name = "2026-01-01T000000Z.zip"
-    with zipfile.ZipFile(character_archive.backups_dir(character) / name, "w") as zf:
+    with zipfile.ZipFile(archive_backups.backups_dir(character) / name, "w") as zf:
         zf.writestr("character.json", "{}")
 
     res = client.post(
@@ -155,7 +156,7 @@ def test_an_image_name_that_is_not_one_is_refused_as_invalid_file_name(
 ) -> None:
     res = client.get(f"/flist/character/{character}/{folder}/{name}")
     assert res.status_code == 400, res.text
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
     assert res.json()["code"] == "invalid_file_name"
 
 
@@ -169,7 +170,7 @@ def test_an_image_id_that_is_not_one_is_refused_as_invalid_file_name(
     ):
         res = client.get(url)
         assert res.status_code == 400, f"{url}: {res.text}"
-        assert set(res.json()) == {"code", "message"}, url
+        assert set(res.json()) == {"code", "message", "details"}, url
         assert res.json()["code"] == "invalid_file_name", url
 
 
@@ -186,7 +187,7 @@ def test_the_label_routes_refuse_an_unknown_log_the_same_way(
 ) -> None:
     res = client.request(method, url, json=body)
     assert res.status_code == 404, res.text
-    assert set(res.json()) == {"code", "message"}
+    assert set(res.json()) == {"code", "message", "details"}
     assert res.json()["code"] == "log_not_found"
     for name in ("nobody", "stranger"):
         assert name not in res.json()["message"]

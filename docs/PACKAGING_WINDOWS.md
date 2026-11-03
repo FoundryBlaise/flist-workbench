@@ -14,15 +14,35 @@
 >
 > That runs three things in order:
 > 1. `electron-vite build` — bundles main / preload / renderer into `out/`
-> 2. `npm run pack:sidecar` — PyInstaller bundles `sidecar/` into
->    `resources/sidecar.exe` (one-file, windowed/no-console)
-> 3. `electron-builder --win` — wraps the lot into a single portable
->    .exe at `dist-electron/F-list Workbench-0.0.0-x64-portable.exe`
+> 2. `npm run pack:sidecar` — PyInstaller bundles `sidecar/` into the
+>    folder `resources/sidecar/` (`--onedir`, windowed/no-console):
+>    `sidecar.exe` plus its runtime in `_internal/`. The packaged app
+>    starts `resources/sidecar/sidecar.exe` and unpacks nothing into
+>    `%TEMP%` (ADR 0005). Up to 0.2.16 it was a one-file exe that
+>    unpacked itself to `%TEMP%\_MEI*` on every start and, killed at
+>    quit, left that folder behind; the app removes those leftovers
+>    once (`electron/onefileLeftovers.ts`, marker
+>    `onefile-leftovers-removed.json` in userData).
+> 3. `electron-builder --win` — wraps the lot into the NSIS installer
+>    and the portable .exe under `dist-electron/`
 >
-> Output size: ~90 MB. No installer, no Python required on the target
-> machine, double-click to run. First launch shows a SmartScreen
+> Then `npm run smoke:packaged` starts `dist-electron/win-unpacked`
+> against throwaway folders and checks that the sidecar answers
+> `/health` from the sidecar folder and nothing lands in `%TEMP%`; the
+> release workflow runs it after packing.
+>
+> Output size: ~139 MB each. No Python required on the target
+> machine. First launch shows a SmartScreen
 > "unrecognized app" warning (unsigned binary) — click "More info" →
 > "Run anyway."
+>
+> **Path length:** the folder build puts the deepest sidecar file
+> (`resources\sidecar\_internal\pydantic_core\_pydantic_core.cp312-win_amd64.pyd`)
+> about 80 characters below the install folder. Past Windows' 260
+> character limit the sidecar fails to import it. The default install
+> folder and the portable build's `%TEMP%` stay well under it; a very
+> deep custom install folder (or a smoke run with `TEMP` set deep) does
+> not.
 >
 > **Prereqs on the build machine:** Node 22+, Python 3.12+, `uv` on
 > `PATH`, and a one-time `uv sync` inside `sidecar/` to create the venv
@@ -37,10 +57,26 @@
 > you ever move it; to try the extension against a dev build, quit the
 > installed app and start dev with `SIDECAR_PORT=27384`. The
 > `SIDECAR_PORT` env var overrides either default at runtime. If the
-> port is already taken, start-up stops: the reason goes to stderr and
-> `main-diag.log` (`sidecar:port-taken`), the packaged app shows it in
-> an error box, and the app quits instead of talking to whatever holds
-> the port.
+> port is already taken, the app asks the holder's `/health` and looks
+> up the process that owns the port (`electron/portOwner.ts`). A
+> Workbench sidecar (`sidecar.exe` from an app's `resources` folder, or
+> a dev build's python running `server.py` / `uvicorn server:app`) that
+> is older than the app, or whose app is gone, is killed and replaced
+> (`sidecar:replace-stale`). Anything else, or the sidecar of another
+> Workbench that still runs and is not older, stops start-up: the
+> reason goes to stderr and `main-diag.log` (`sidecar:port-taken`),
+> the packaged app shows it in an error box naming the port, and the
+> app quits instead of talking to whatever holds the port. The rules
+> are in `electron/sidecarLifecycle.ts`.
+>
+> **Sidecar lifecycle:** a sidecar that exits unexpectedly is
+> restarted after 1 s, waiting twice as long after each crash that
+> follows within a minute of its start, up to 15 s; after five such
+> crashes in a row the app stops trying and says so. At quit the app
+> asks the sidecar to stop over `POST /shutdown` (launch secret only,
+> ADR 0002); open requests get a second, then it exits on its own. The
+> app kills it (`taskkill /T /F`) only if it is still running after
+> 6 s (`sidecar:stopped` in `main-diag.log` says `clean` or `forced`).
 >
 > The rest of this doc is the original implementation spec, kept for
 > reference. The "Things that will probably bite you" section near the
@@ -503,12 +539,11 @@ Phase 6 — Windows packaging (electron-builder + PyInstaller sidecar)
   the packaged binary's startup. PyInstaller's `--collect-data
   certifi` flag handles this.
 
-- **First-launch sidecar startup time.** PyInstaller-bundled apps
-  unpack themselves on every launch (the `_MEIPASS` temp dir). On
-  cold boot from a slow disk this can take 2-3 seconds. The
-  `waitForHealth` timeout in `electron/sidecar.ts` is 30 seconds so
-  this is fine, but expect a brief delay before the green "sidecar:
-  ok" pill.
+- **First-launch sidecar startup time.** The folder build unpacks
+  nothing, but the first import of its ~150 MB runtime from a cold
+  disk still takes a few seconds. The `waitForHealth` timeout in
+  `electron/sidecar.ts` is 30 seconds so this is fine, but expect a
+  brief delay before the green "sidecar: ok" pill.
 
 - **Antivirus false positives.** Unsigned PyInstaller binaries get
   flagged by Windows Defender SmartScreen on first launch. Tell the

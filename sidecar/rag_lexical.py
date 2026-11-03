@@ -36,6 +36,8 @@ import labels as labels_store
 import rag_store
 
 
+#: The keyword table as `wipe` recreates it. labels.py's migrations
+#: create it in the first place; keep this in step with their latest.
 _SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(
     chunk_id    UNINDEXED,
@@ -54,14 +56,12 @@ class LexicalHit:
 
 
 def _connect(root: Path | None = None) -> sqlite3.Connection:
-    """Open labels.db and ensure the FTS5 virtual table exists.
+    """Open labels.db, where the FTS5 table lives (labels.py migrates it).
 
     Reuses labels.connect so this module shares the same database file
     as labels and rag_meta — same WAL, same backup story.
     """
-    conn = labels_store.connect(root)
-    conn.executescript(_SCHEMA)
-    return conn
+    return labels_store.connect(root)
 
 
 class LexicalStore:

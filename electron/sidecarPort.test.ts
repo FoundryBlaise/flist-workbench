@@ -6,7 +6,8 @@ import {
   PACKAGED_PORT,
   SidecarPortTaken,
   assertPortFree,
-  chooseSidecarPort
+  chooseSidecarPort,
+  waitForPortFree
 } from './sidecarPort'
 
 describe('chooseSidecarPort', () => {
@@ -49,6 +50,26 @@ describe('assertPortFree', () => {
     const err = await assertPortFree(port).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(SidecarPortTaken)
     expect(String(err)).toContain(`port ${port}`)
+  })
+
+  it('says in plain words what holds the port, naming it', () => {
+    expect(new SidecarPortTaken(27384).message).toBe(
+      'Another program is using port 27384 on this computer, so F-list Workbench cannot start ' +
+        'its sidecar there. Close that program, or start F-list Workbench with SIDECAR_PORT set to a free port.'
+    )
+    expect(new SidecarPortTaken(27384, '0.3.0').message).toBe(
+      'Another F-list Workbench (version 0.3.0) is running and uses port 27384. ' +
+        'Close it, then start this one again.'
+    )
+  })
+
+  it('waits for a port to come free, and gives up naming it', async () => {
+    const port = await listen()
+    const err = await waitForPortFree(port, 300).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SidecarPortTaken)
+    setTimeout(() => holder?.close(), 300)
+    await expect(waitForPortFree(port, 5000)).resolves.toBeUndefined()
+    holder = null
   })
 
   it('accepts a free port and leaves it free', async () => {

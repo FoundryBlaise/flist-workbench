@@ -19,14 +19,18 @@ import time
 from pathlib import Path
 from typing import Any
 
-import character_archive
-from services import image_trash, trash_ledger
+import archive_backups
+import archive_images
+import archive_registry
+from services import events, image_trash, trash_ledger
 
 FOLDER = "backups"
 INDEX_FILENAME = "index.json"
 
 _TRASH_SUFFIX_RE = re.compile(r"~\d+(?=\.zip$)")
 
+#: Taken inside the character's lock (`archive_registry.character_lock`),
+#: which every public function here holds first.
 _lock = threading.Lock()
 
 
@@ -54,7 +58,7 @@ def _free_id(
     stem = filename[: -len(".zip")]
     candidate, n = filename, 1
     while (folder / candidate).exists():
-        if character_archive.file_sha256(folder / candidate) == sha:
+        if archive_images.file_sha256(folder / candidate) == sha:
             earlier = (index.get(candidate) or {}).get("name")
             if not (name and earlier and name != earlier):
                 return candidate
@@ -68,31 +72,36 @@ def _list_filename(trash_id: str, filename: str) -> str | None:
     Backup had, else its trash id without the `~N` the Trash added."""
     for candidate in (filename, _TRASH_SUFFIX_RE.sub("", trash_id)):
         try:
-            character_archive.require_backup_filename(candidate)
+            archive_backups.require_backup_filename(candidate)
         except ValueError:
             continue
         return candidate
     return None
 
 
+def _announce(character_id: int | str) -> None:
+    events.publish(events.BACKUPS_CHANGED, character_id=str(character_id))
+
+
+@archive_registry.under_character_lock
 def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
     """Move one Backup into the Trash. Raises FileNotFoundError when the
     Backup list has no such file."""
-    character_archive.require_backup_filename(filename)
-    src = character_archive.backups_dir(character_id) / filename
+    archive_backups.require_backup_filename(filename)
+    src = archive_backups.backups_dir(character_id) / filename
     if not src.is_file():
         raise FileNotFoundError(filename)
     name = next(
         (
             row["name"]
-            for row in character_archive.list_zip_backups(character_id)
+            for row in archive_backups.list_zip_backups(character_id)
             if row["filename"] == filename
         ),
         None,
     )
     with _lock:
         folder = _dir(character_id)
-        sha = character_archive.file_sha256(src)
+        sha = archive_images.file_sha256(src)
         size = src.stat().st_size
         index = _read_index(character_id)
         trash_id = _free_id(folder, filename, sha, name, index)
@@ -111,7 +120,8 @@ def trash_backup(character_id: int | str, filename: str) -> dict[str, Any]:
         }
         index[trash_id] = entry
         _write_index(character_id, index)
-    character_archive.forget_backup_name(character_id, filename)
+    archive_backups.forget_backup_name(character_id, filename)
+    _announce(character_id)
     return entry
 
 
@@ -143,6 +153,7 @@ def list_backups(character_id: int | str) -> list[dict[str, Any]]:
     return rows
 
 
+@archive_registry.under_character_lock
 def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     """Put trashed Backups back in the Backup list, under the file name
     and user-set name they had. When the list already holds the same
@@ -153,11 +164,12 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     `conflicts`."""
     restored: list[str] = []
     conflicts: list[str] = []
-    with _lock:
+    # One change, however many Backups come back under their names.
+    with _lock, events.coalesced():
         rows = {r["id"]: r for r in list_backups(character_id)}
         index = _read_index(character_id)
         folder = _dir(character_id)
-        target_dir = character_archive.backups_dir(character_id)
+        target_dir = archive_backups.backups_dir(character_id)
         found, not_found = trash_ledger.resolve_ids(ids, rows.get)
         for trash_id, row in found:
             src = folder / trash_id
@@ -167,26 +179,29 @@ def restore_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
                 continue
             dest = target_dir / filename
             name = row["name"]
-            if dest.exists() and character_archive.file_sha256(
+            if dest.exists() and archive_images.file_sha256(
                 dest
-            ) == character_archive.file_sha256(src):
+            ) == archive_images.file_sha256(src):
                 src.unlink()
                 # The list's own name for these bytes wins over the
                 # Trash's; neither is lost when only one has one.
-                name = character_archive.backup_name(character_id, filename) or name
+                name = archive_backups.backup_name(character_id, filename) or name
             else:
                 if dest.exists():
-                    filename = character_archive.free_backup_filename(character_id, filename)
+                    filename = archive_backups.free_backup_filename(character_id, filename)
                     dest = target_dir / filename
                 src.replace(dest)
             index.pop(trash_id, None)
             if name:
-                character_archive.rename_zip_backup(character_id, filename, name)
+                archive_backups.rename_zip_backup(character_id, filename, name)
             restored.append(filename)
         _write_index(character_id, index)
+        if restored:
+            _announce(character_id)
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
 
 
+@archive_registry.under_character_lock
 def purge_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
     """Delete trashed Backups for good. The window's call only."""
     def drop(trash_id: str, _row: dict[str, Any]) -> None:
@@ -199,9 +214,12 @@ def purge_backups(character_id: int | str, ids: list[str]) -> dict[str, Any]:
         folder = _dir(character_id)
         result = trash_ledger.purge(ids, rows.get, drop)
         _write_index(character_id, index)
+    if result["purged"]:
+        _announce(character_id)
     return result
 
 
+@archive_registry.under_character_lock
 def empty(character_id: int | str) -> int:
     """Delete every trashed Backup for good. The window's call only."""
     ids = [r["id"] for r in list_backups(character_id)]

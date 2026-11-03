@@ -47,6 +47,8 @@ export function ImagesTrash({
   onCountChange: (n: number) => void
 }) {
   const loadCharacterImages = useStore((s) => s.flistLoadCharacterImages)
+  // Cleared Labels are Trash entries too; a model may clear them.
+  const labelsRevision = useStore((s) => s.labelsRevision)
   const [items, setItems] = useState<FlistTrashItem[] | null>(null)
   const [backups, setBackups] = useState<FlistTrashedBackup[]>([])
   const [labels, setLabels] = useState<FlistTrashedLabels[]>([])
@@ -68,7 +70,7 @@ export function ImagesTrash({
 
   useEffect(() => {
     void load()
-  }, [characterId, refreshKey])
+  }, [characterId, refreshKey, labelsRevision])
 
   const visible = useMemo(() => (items ?? []).map((i) => i.trash_id), [items])
   useEffect(() => {

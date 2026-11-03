@@ -17,6 +17,9 @@ from typing import Any
 import pytest
 from PIL import Image
 
+import archive_images
+import archive_live
+import archive_registry
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_edit import open_workbench, payload_of, seed_gallery, workbench  # noqa: F401
 from workbench_state import put_workbench
@@ -53,25 +56,20 @@ def gradient_png(size: tuple[int, int], *, alpha: int | None = None) -> bytes:
 @pytest.fixture
 def outputs(tmp_path: Path, workbench) -> Path:  # noqa: F811
     """A folder the user has cleared for import."""
-    import settings as settings_store
-    from services import image_import
+    from services import settings as settings_service
 
     folder = tmp_path / "Outputs"
     folder.mkdir()
-    conn = settings_store.connect()
-    try:
-        image_import.save_import_roots(conn, [str(folder)])
-    finally:
-        conn.close()
+    settings_service.update({"image_import_roots": [str(folder)]})
     return folder
 
 
 def pool_files(archive) -> set[str]:
-    return {p.name for p in archive.images_dir("42").iterdir() if p.is_file()}
+    return {p.name for p in archive_images.images_dir("42").iterdir() if p.is_file()}
 
 
 def put_on_disk(archive, image_id: str, data: bytes, ext: str = "jpg") -> None:
-    archive.write_character_image("42", image_id, ext, data)
+    archive_images.write_character_image("42", image_id, ext, data)
 
 
 # --------------------------------------------------------------------
@@ -278,7 +276,7 @@ async def test_convert_to_jpeg_shrinks_an_oversized_png(workbench, outputs) -> N
     assert body["bytes"] < 2_000_000
     assert body["warnings"] == []
     assert (body["width"], body["height"]) == (900, 900)
-    stored = workbench.images_dir("42") / f"{body['image_id']}.jpg"
+    stored = archive_images.images_dir("42") / f"{body['image_id']}.jpg"
     assert stored.read_bytes()[:3] == b"\xff\xd8\xff"
     assert big.read_bytes()[:4] == b"\x89PNG"  # the source is untouched
 
@@ -336,7 +334,7 @@ async def test_a_batch_replaces_each_image_in_its_own_place(workbench, outputs) 
         seed_gallery(workbench, old_ids)
         payload = payload_of(workbench)
         payload["images"][1]["description"] = "kept caption"
-        put_workbench(workbench, "42", payload)
+        put_workbench("42", payload)
 
         _, body = await call_tool(
             session,
@@ -437,11 +435,11 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     src = outputs / "Profil_final_07.png"
     src.write_bytes(png_bytes((30, 50)))
     put_on_disk(workbench, "555", jpeg_bytes((12, 12)))
-    live = workbench.read_live("42")
+    live = archive_live.read_live("42")
     live["images"] = [{"image_id": "555", "extension": "jpg", "description": "", "sort_order": 0}]
-    workbench.write_live("42", live)
+    archive_live.write_live("42", live)
     # A copy of Live an earlier version kept per Pull: nothing counts it.
-    old_copy = workbench.character_dir("42") / "snapshots" / "1000.json"
+    old_copy = archive_registry.character_dir("42") / "snapshots" / "1000.json"
     old_copy.parent.mkdir()
     old_copy.write_text('{"images": [{"image_id": "555"}]}', encoding="utf-8")
 

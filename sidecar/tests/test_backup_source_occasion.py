@@ -48,17 +48,18 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
     import restore as restore_svc
     import server
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
 
-    character_archive.register_character(CID, NAME)
-    character_archive.write_live(
+    archive_registry.register_character(CID, NAME)
+    archive_live.write_live(
         CID,
         {
             "name": NAME,
@@ -279,14 +280,14 @@ async def test_backing_up_before_a_restore_keeps_the_workbench(app) -> None:
 
 
 def _older_backup(filename: str, meta: dict | None) -> None:
-    import character_archive
+    import archive_backups
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("character.json", "{}")
         if meta is not None:
             zf.writestr("backup-meta.json", json.dumps(meta))
-    target = character_archive.backups_dir(CID)
+    target = archive_backups.backups_dir(CID)
     target.mkdir(parents=True, exist_ok=True)
     (target / filename).write_bytes(buf.getvalue())
 

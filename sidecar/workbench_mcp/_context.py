@@ -13,9 +13,12 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-import character_archive
+import archive_live
+import archive_registry
+import archive_workbench
 import flist_activity
 import logs as log_store
+from refusals import Refusal
 
 #: Sentinel a `working_set` argument can carry to address the read-only
 #: `live.json` pulled from F-list rather than the editable Workbench.
@@ -29,6 +32,10 @@ class ToolError(Exception):
     only payload is the string form, so the code and details have to
     survive in the text. Models read this, so it stays readable:
     `not_signed_in: ... {"detail": ...}`.
+
+    Codes and details are the REST error's for the same situation
+    (`refusals`); a `Refusal` raised under a tool reaches the model as
+    this, unchanged (`from_refusal`, applied in `_registry`).
     """
 
     def __init__(self, code: str, message: str, **details: Any) -> None:
@@ -39,6 +46,10 @@ class ToolError(Exception):
         if details:
             rendered += " " + json.dumps(details, ensure_ascii=False, default=str)
         super().__init__(rendered)
+
+    @classmethod
+    def from_refusal(cls, exc: Refusal) -> ToolError:
+        return cls(exc.code, exc.message, **exc.details)
 
 
 def not_signed_in() -> ToolError:
@@ -79,13 +90,13 @@ class ResolvedCharacter:
 
     @property
     def dir(self):  # noqa: ANN201 — Path, kept lazy to avoid the import
-        return character_archive.character_dir(self.id)
+        return archive_registry.character_dir(self.id)
 
 
 def _registry_rows() -> list[tuple[str, str]]:
     """`(character_id, name)` for every registered character."""
     rows: list[tuple[str, str]] = []
-    for cid, entry in character_archive.load_registry().items():
+    for cid, entry in archive_registry.load_registry().items():
         name = (entry.get("name") or "").strip()
         if name:
             rows.append((str(cid), name))
@@ -113,7 +124,7 @@ def resolve_character(character: str) -> ResolvedCharacter:
     # The registry only knows characters that were pulled through the
     # current code path. Fall back to a directory walk so archives from
     # older builds (and legacy id-named folders) still resolve.
-    for row in character_archive.list_archived_characters():
+    for row in archive_registry.list_archived_characters():
         name = str(row.get("name") or "")
         cid = str(row.get("id") or "")
         if name.lower() == needle.lower() or cid == needle:
@@ -123,7 +134,7 @@ def resolve_character(character: str) -> ResolvedCharacter:
         {name for _, name in rows}
         | {
             str(r.get("name"))
-            for r in character_archive.list_archived_characters()
+            for r in archive_registry.list_archived_characters()
             if r.get("name")
         }
     )
@@ -155,7 +166,7 @@ class WorkbenchOrLive:
 
 def workbench_target(character: ResolvedCharacter) -> WorkbenchOrLive:
     """The character's Workbench, under the one name a model sees."""
-    return WorkbenchOrLive(character=character, name=character_archive.WORKBENCH_NAME)
+    return WorkbenchOrLive(character=character, name=archive_workbench.WORKBENCH_NAME)
 
 
 def resolve_workbench_or_live(
@@ -202,9 +213,9 @@ def resolve_workbench_or_live(
     # Live the first time anything asks: for a read this is harmless,
     # and it spares every caller a "create one first" step the window
     # does not have either.
-    if character_archive.read_workbench(character.id, create=True) is None:
+    if archive_workbench.read_workbench(character.id, create=True) is None:
         raise ToolError(
-            "nothing_to_edit",
+            "no_workbench",
             f"{character.name} has never been pulled from F-list, so "
             "there is nothing to copy into a Workbench. Pull the "
             "character first.",
@@ -215,19 +226,19 @@ def resolve_workbench_or_live(
 def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:
     """Read the payload behind a resolved Workbench or Live."""
     if target.is_live:
-        live = character_archive.read_live(target.character.id)
+        live = archive_live.read_live(target.character.id)
         if live is None:
             raise ToolError(
-                "live_not_found",
+                "no_live",
                 f"No live profile stored for {target.character.name}. "
                 "Run pull_character first.",
             )
         return live
-    bench = character_archive.read_workbench(target.character.id)
+    bench = archive_workbench.read_workbench(target.character.id)
     payload = bench.payload if bench is not None else None
     if payload is None:
         raise ToolError(
-            "workbench_not_found",
+            "no_workbench",
             f"{target.character.name}'s Workbench has no payload on disk.",
         )
     return payload

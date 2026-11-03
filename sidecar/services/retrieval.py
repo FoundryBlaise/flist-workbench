@@ -22,9 +22,11 @@ import rag_embed
 import rag_lexical
 import rag_query
 import rag_store
+from refusals import NoIndex
+from services import index as index_service
 
 
-class NoIndexError(RuntimeError):
+class NoIndexError(NoIndex, RuntimeError):
     """The vector index has not been built yet."""
 
 
@@ -126,8 +128,9 @@ def search(
 
     `top_k`, `neighbors` and `hybrid` override the saved settings for
     this one call; None means "use what is configured". Raises
-    `NoIndexError` when nothing has been ingested, and
-    `rag_embed.EmbedError` when the embedding endpoint is unreachable.
+    `NoIndexError` when nothing has been ingested, `IndexBusy` while an
+    ingest holds the Index, and `rag_embed.EmbedError` when the
+    embedding endpoint is unreachable.
     """
     rag_set = rag_settings.load_settings()
     resolved_scope = expand_scope(scope)
@@ -140,6 +143,8 @@ def search(
     )
     use_hybrid = rag_set.hybrid_enabled if hybrid is None else bool(hybrid)
 
+    # The vector store opens once at a time; an ingest keeps it open.
+    index_service.ensure_idle()
     with rag_store.RagStore() as store:
         if not store.collection_exists():
             raise NoIndexError(

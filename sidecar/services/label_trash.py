@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import aliases as aliases_store
-import character_archive
+import archive_registry
+import atomic_write
 import labels as labels_store
 import paths
 from services import trash_ledger
@@ -68,10 +69,7 @@ def _write_entry(character: str, partner: str | None, rows: list[dict]) -> dict[
         "deleted_by": trash_ledger.actor(),
         "labels": rows,
     }
-    p = folder / f"{trash_id}.json"
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(p)
+    atomic_write.write_json(folder / f"{trash_id}.json", entry, ensure_ascii=False)
     return _summary(entry)
 
 
@@ -95,7 +93,7 @@ def _owned(trash_id: str, character: str | None) -> dict[str, Any] | None:
     entry = _read(trash_id)
     if entry is None or (
         character is not None
-        and not character_archive.same_character_name(entry.get("character"), character)
+        and not archive_registry.same_character_name(entry.get("character"), character)
     ):
         return None
     return entry

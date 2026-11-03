@@ -22,7 +22,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import character_archive
+import archive_images
+import archive_registry
 from services import trash_ledger
 
 TRASH_DIRNAME = "trash"
@@ -31,11 +32,13 @@ INDEX_FILENAME = "index.json"
 # Same shape as an image in the pool: `<image_id>.<ext>`.
 _FILE_RE = re.compile(r"^([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$")
 
+#: Taken inside the character's lock (`archive_registry.character_lock`),
+#: which every public function here holds first.
 _lock = threading.Lock()
 
 
 def trash_dir(character_id: int | str) -> Path:
-    p = character_archive.character_dir(character_id) / TRASH_DIRNAME
+    p = archive_registry.character_dir(character_id) / TRASH_DIRNAME
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -83,7 +86,7 @@ def _sha_of(path: Path, trash_id: str, index: dict[str, dict[str, Any]]) -> str 
     if isinstance(known, str) and known:
         return known
     try:
-        return character_archive.file_sha256(path)
+        return archive_images.file_sha256(path)
     except OSError:
         return None
 
@@ -103,7 +106,7 @@ def _trash_locked(
     the same id over time. Both stay. Only a copy with the very same
     bytes is dropped, because the newer delete holds them too."""
     target_dir = trash_dir(character_id)
-    sha = character_archive.file_sha256(src)
+    sha = archive_images.file_sha256(src)
     size = src.stat().st_size
     for trash_id, path in _files(target_dir).items():
         if _image_id_of(trash_id, index) == image_id and _sha_of(path, trash_id, index) == sha:
@@ -131,6 +134,7 @@ def _trash_locked(
     return entry
 
 
+@archive_registry.under_character_lock
 def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any]:
     """Move pool files into the trash. Ids not in the pool come back
     under `not_found` rather than failing the rest."""
@@ -139,7 +143,7 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
     meta = image_import.read_meta(character_id)
     trashed: list[dict[str, Any]] = []
     with _lock:
-        pool = _files(character_archive.images_dir(character_id))
+        pool = _files(archive_images.images_dir(character_id))
         index = _read_index(character_id)
         found, not_found = trash_ledger.resolve_ids(image_ids, pool.get)
         for image_id, src in found:
@@ -151,6 +155,7 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
     return {"trashed": trashed, "not_found": not_found}
 
 
+@archive_registry.under_character_lock
 def trash_pool_file(character_id: int | str, path: Path) -> dict[str, Any] | None:
     """Move one particular file out of `images/` into the Trash: the
     old file a Pull replaces, a stale copy gallery repair drops. None
@@ -158,7 +163,7 @@ def trash_pool_file(character_id: int | str, path: Path) -> dict[str, Any] | Non
     from services import image_import
 
     m = _FILE_RE.fullmatch(path.name)
-    if m is None or path.parent != character_archive.images_dir(character_id):
+    if m is None or path.parent != archive_images.images_dir(character_id):
         return None
     meta = image_import.read_meta(character_id)
     with _lock:
@@ -202,6 +207,7 @@ def list_trash(character_id: int | str) -> list[dict[str, Any]]:
     return rows
 
 
+@archive_registry.under_character_lock
 def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Put trashed files back into the pool — not onto the profile. When
     the pool already holds the same bytes (a pull fetched the picture
@@ -215,11 +221,11 @@ def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, A
     with _lock:
         files = _files(trash_dir(character_id))
         index = _read_index(character_id)
-        pool_dir = character_archive.images_dir(character_id)
+        pool_dir = archive_images.images_dir(character_id)
         found, not_found = trash_ledger.resolve_ids(trash_ids, files.get)
         for trash_id, src in found:
-            sha = character_archive.file_sha256(src)
-            existing = character_archive.find_image_with_sha(character_id, sha)
+            sha = archive_images.file_sha256(src)
+            existing = archive_images.find_image_with_sha(character_id, sha)
             if existing is not None:
                 src.unlink(missing_ok=True)
                 index.pop(trash_id, None)
@@ -245,6 +251,7 @@ def restore_images(character_id: int | str, trash_ids: list[str]) -> dict[str, A
     return {"restored": restored, "not_found": not_found, "conflicts": conflicts}
 
 
+@archive_registry.under_character_lock
 def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any]:
     """Delete trashed files for good. The window's call only."""
     def drop(trash_id: str, path: Path) -> None:
@@ -256,9 +263,12 @@ def purge_images(character_id: int | str, trash_ids: list[str]) -> dict[str, Any
         index = _read_index(character_id)
         result = trash_ledger.purge(trash_ids, files.get, drop)
         _write_index(character_id, index)
+    if result["purged"]:
+        _announce(character_id)
     return result
 
 
+@archive_registry.under_character_lock
 def empty_trash(character_id: int | str) -> int:
     """Delete everything in the trash for good. The window's call only."""
     files = _files(trash_dir(character_id))

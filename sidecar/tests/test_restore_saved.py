@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 
 import pytest
+import archive_images
+import archive_workbench
 from sidecar_client import app_client
 from workbench_state import put_workbench, workbench_payload
 
@@ -39,15 +41,16 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import restore as restore_svc
     import server
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             # live.json is the raw F-list payload: the name sits at the
@@ -69,9 +72,12 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     hs = restore_svc.begin_handshake()
     restore_svc.accept_handshake(hs["handshake_id"])
-    client = app_client(server.app)
-    client.headers.update({"X-Workbench-Auth": hs["token"]})
-    yield client, character_archive, server
+    # One event loop for the whole test, as the running sidecar has: the
+    # post-save Pull outlives the request that scheduled it.
+    importlib.reload(server)
+    with app_client(server.app) as client:
+        client.headers.update({"X-Workbench-Auth": hs["token"]})
+        yield client, server
     # The pairing lives in module state; leave the next test unpaired.
     restore_svc.revoke_token()
 
@@ -94,6 +100,7 @@ def fake_flist(httpx_mock):
     httpx_mock.add_response(
         url=flist_api.CHARACTER_DATA_URL,
         method="POST",
+        is_reusable=True,
         json={
             "error": "",
             "id": 42,
@@ -111,13 +118,14 @@ def fake_flist(httpx_mock):
         method="GET",
         content=PNG,
         is_optional=True,
+        is_reusable=True,
     )
     yield httpx_mock
     flist_api.ticket_store().clear()
 
 
 def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) -> None:
-    client, archive, _server = paired
+    client, _server = paired
     payload_url = "/flist/character/42/workbench/payload"
     current = client.get(payload_url).json()
     draft = current["payload"]
@@ -150,8 +158,62 @@ def test_the_workbench_is_not_touched_while_live_catches_up(paired, fake_flist) 
     assert client.get(payload_url).json() == before
 
 
+def _pulls_finished_since(client, since: float) -> list[dict]:
+    events = client.get("/flist/activity").json()["events"]
+    return [e for e in events if e["kind"] in ("pull-done", "pull-error") and e["t"] >= since]
+
+
+def _live_description(client) -> str | None:
+    return client.get("/flist/character/42/live").json().get("description")
+
+
+def test_a_save_while_the_character_is_busy_pulls_once_it_is_free(paired, fake_flist) -> None:
+    """A Back up all (or a Pull) holds the character when the user saves
+    on f-list.net: the post-save Pull is not dropped, it runs after."""
+    from refusals import CharacterBusy
+    from services import jobs, pull as pull_service
+
+    client, _server = paired
+    asked_at = time.time()
+    with jobs.registry().hold("backup-all", pull_service.CHARACTERS, busy=CharacterBusy):
+        res = client.post(
+            "/restore/saved",
+            json={"character": "Lady Amber Blaise", "delay_seconds": 0},
+        )
+        assert res.status_code == 200
+        assert res.json()["scheduled"] is True
+        time.sleep(0.3)
+        assert _pulls_finished_since(client, asked_at) == []
+
+    _wait_until(lambda: _pulls_finished_since(client, asked_at), timeout=10.0)
+    assert [e["kind"] for e in _pulls_finished_since(client, asked_at)] == ["pull-done"]
+    assert _live_description(client) == "[b]Just saved on f-list.net.[/b]"
+
+
+def test_a_pull_the_user_starts_during_the_delay_is_not_refused(paired, fake_flist) -> None:
+    """The post-save Pull waits a few seconds before it starts. A Pull
+    the user starts in the window meanwhile runs at once; the post-save
+    one follows it."""
+    client, _server = paired
+    asked_at = time.time()
+    res = client.post(
+        "/restore/saved",
+        json={"character": "Lady Amber Blaise", "delay_seconds": 1},
+    )
+    assert res.json()["scheduled"] is True
+
+    manual = client.post("/flist/character/Lady Amber Blaise/pull", params={"wait": "false"})
+    assert manual.status_code == 202, manual.text
+
+    _wait_until(lambda: len(_pulls_finished_since(client, asked_at)) >= 2, timeout=10.0)
+    assert [e["kind"] for e in _pulls_finished_since(client, asked_at)] == [
+        "pull-done",
+        "pull-done",
+    ]
+
+
 def test_it_needs_the_pairing_token(paired) -> None:
-    client, _archive, _server = paired
+    client, _server = paired
     res = client.post(
         "/restore/saved",
         json={"character": "Lady Amber Blaise"},
@@ -161,7 +223,7 @@ def test_it_needs_the_pairing_token(paired) -> None:
 
 
 def test_a_nameless_save_is_refused(paired) -> None:
-    client, _archive, _server = paired
+    client, _server = paired
     res = client.post("/restore/saved", json={"character": "   "})
     assert res.status_code == 422
 
@@ -177,13 +239,12 @@ def test_the_extensions_early_id_report_defers(paired) -> None:
     is saved — so the report must not rewrite anything. The fold-over to
     F-list's id happens at the pull that proves the picture is really on
     the profile (see test_dedupe_local_after_pull_*)."""
-    client, archive, _server = paired
-    local_id = archive.add_uploaded_image("42", PNG)["image_id"]
+    client, _server = paired
+    local_id = archive_images.add_uploaded_image("42", PNG)["image_id"]
     put_workbench(
-        archive,
         "42",
         {
-            "_schema_version": archive.WORKING_SCHEMA_VERSION,
+            "_schema_version": archive_workbench.WORKING_SCHEMA_VERSION,
             "_overlay": ["images"],
             "character": {"description": "x"},
             "images": [{"image_id": local_id, "description": "", "sort_order": 0}],
@@ -197,15 +258,15 @@ def test_the_extensions_early_id_report_defers(paired) -> None:
 
     assert res.status_code == 200
     assert res.json()["deferred"] is True
-    payload = workbench_payload(archive, "42")
+    payload = workbench_payload("42")
     assert [r["image_id"] for r in payload["images"]] == [local_id]
-    local_file = next(archive.images_dir("42").glob(f"{local_id}.*"))
+    local_file = next(archive_images.images_dir("42").glob(f"{local_id}.*"))
     assert local_file.exists()
-    assert not (archive.images_dir("42") / "47000849.png").exists()
+    assert not (archive_images.images_dir("42") / "47000849.png").exists()
 
 
 def test_reporting_ids_needs_the_pairing_token(paired) -> None:
-    client, _archive, _server = paired
+    client, _server = paired
     res = client.post(
         "/restore/image-ids",
         json={"character": "Lady Amber Blaise", "mapping": {}},
@@ -215,7 +276,7 @@ def test_reporting_ids_needs_the_pairing_token(paired) -> None:
 
 
 def test_an_unknown_character_is_a_404(paired) -> None:
-    client, _archive, _server = paired
+    client, _server = paired
     res = client.post(
         "/restore/image-ids",
         json={"character": "Nobody At All", "mapping": {}},

@@ -97,6 +97,13 @@ jobs:
           Write-Error "pack:win failed three times"
           exit 1
 
+      # The packed app must start its sidecar from the sidecar folder,
+      # unpack nothing into %TEMP% and answer /health; a build that
+      # cannot is never published. Runs against throwaway folders only.
+      - name: Smoke test the packaged app
+        shell: pwsh
+        run: npm run smoke:packaged
+
       # Capture both artifact paths so later steps don't repeat the
       # pattern. electron-builder emits:
       #   F-list-Workbench-<version>-x64-Setup.exe        (NSIS)

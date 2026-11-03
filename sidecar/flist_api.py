@@ -33,6 +33,9 @@ from urllib.parse import quote
 
 import httpx
 
+import atomic_write
+from refusals import FlistRefused
+
 USER_AGENT = "flist-workbench/0.1.0 (+https://github.com/FoundryBlaise/flist-workbench)"
 
 BASE = "https://www.f-list.net"
@@ -81,6 +84,17 @@ class TicketRequired(FlistApiError):
 
 class RateLimited(FlistApiError):
     """Hourly cap would be exceeded; refuse rather than risk a ban."""
+
+
+def refusal(exc: FlistApiError) -> FlistRefused:
+    """How a caller hears `exc`: no session (or a rejected one) is
+    `not_signed_in`, the hourly cap `rate_limited`, anything else F-list
+    said `flist_error`, with F-list's own words as the message."""
+    if isinstance(exc, (TicketRequired, AuthFailure)):
+        return FlistRefused("not_signed_in", str(exc))
+    if isinstance(exc, RateLimited):
+        return FlistRefused("rate_limited", str(exc))
+    return FlistRefused("flist_error", str(exc))
 
 
 @dataclass(slots=True)
@@ -222,16 +236,18 @@ class RateLimiter:
     """Token bucket at 1 req/s plus a rolling 1-hour counter.
 
     Async-friendly — `await acquire()` sleeps until the next slot is
-    free. Concurrent callers serialise through the asyncio.Lock so two
-    pulls hitting the limiter at the same instant can't burn through
-    the per-second budget.
+    free. Each caller claims its slot under a thread lock before it
+    sleeps, so two pulls hitting the limiter at the same instant get
+    consecutive slots and can't burn through the per-second budget.
+    The lock is never held across an await, so the limiter belongs to
+    no event loop and any thread's loop may share it.
     """
 
     per_second: float = HARD_PER_SECOND
     per_hour_cap: int = HARD_PER_HOUR
     _last_call: float = 0.0
     _hourly_calls: list[float] = field(default_factory=list)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _prune(self, now: float) -> None:
         cutoff = now - 3600.0
@@ -240,7 +256,7 @@ class RateLimiter:
             self._hourly_calls.pop(0)
 
     async def acquire(self) -> None:
-        async with self._lock:
+        with self._lock:
             now = time.monotonic()
             self._prune(now)
             if len(self._hourly_calls) >= self.per_hour_cap:
@@ -248,17 +264,16 @@ class RateLimiter:
                     f"F-list API hourly cap reached ({self.per_hour_cap} "
                     "requests). Wait a bit before trying again."
                 )
-            min_interval = 1.0 / self.per_second
-            wait = max(0.0, (self._last_call + min_interval) - now)
-            if wait > 0:
-                await asyncio.sleep(wait)
-                now = time.monotonic()
-            self._last_call = now
-            self._hourly_calls.append(now)
+            slot = max(now, self._last_call + 1.0 / self.per_second)
+            self._last_call = slot
+            self._hourly_calls.append(slot)
+        if slot > now:
+            await asyncio.sleep(slot - now)
 
     def hourly_count(self) -> int:
-        self._prune(time.monotonic())
-        return len(self._hourly_calls)
+        with self._lock:
+            self._prune(time.monotonic())
+            return len(self._hourly_calls)
 
 
 _LIMITER = RateLimiter()
@@ -423,17 +438,19 @@ def mcp_character_budget() -> HourlyBudget:
     return _MCP_CHARACTER_BUDGET
 
 
-_PULL_LOCK = asyncio.Lock()
-
-
-def pull_lock() -> asyncio.Lock:
-    """Serialises full character pulls so two concurrent requests don't
-    interleave their image-download bursts and starve each other on the
-    rate limiter."""
-    return _PULL_LOCK
+def reset_mcp_budget() -> None:
+    """Give MCP its full share back, as a restart does. Tests use it."""
+    with _MCP_CHARACTER_BUDGET._lock:
+        _MCP_CHARACTER_BUDGET._calls.clear()
 
 
 # ---- HTTP helpers ------------------------------------------------------
+
+
+def _unreachable(url: str, exc: httpx.HTTPError) -> FlistApiError:
+    """A request that got no answer from F-list (offline, refused,
+    timed out, cut off) as the F-list error a caller already handles."""
+    return FlistApiError(f"F-list could not be reached ({type(exc).__name__}) for {url}")
 
 
 def _default_client() -> httpx.AsyncClient:
@@ -454,7 +471,10 @@ async def _post_json(
     c = client or _default_client()
     try:
         await _LIMITER.acquire()
-        res = await c.post(url, data=data)
+        try:
+            res = await c.post(url, data=data)
+        except httpx.HTTPError as exc:
+            raise _unreachable(url, exc) from exc
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} from {url}")
         try:
@@ -745,9 +765,7 @@ async def fetch_mapping_list(
         if cached is not None:
             return cached
         raise
-    tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload), encoding="utf-8")
-    tmp.replace(cache_path)
+    atomic_write.write_json(cache_path, payload)
     return payload
 
 
@@ -777,14 +795,14 @@ async def download_to(
     c = client or _default_client()
     try:
         await rl.acquire()
-        res = await c.get(url)
+        try:
+            res = await c.get(url)
+        except httpx.HTTPError as exc:
+            raise _unreachable(url, exc) from exc
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} fetching {url}")
         data = res.content
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(dest)
+        atomic_write.write_bytes(dest, data)
         return len(data)
     finally:
         if own:
@@ -805,7 +823,10 @@ async def fetch_bytes(
     c = client or _default_client()
     try:
         await rl.acquire()
-        res = await c.get(url)
+        try:
+            res = await c.get(url)
+        except httpx.HTTPError as exc:
+            raise _unreachable(url, exc) from exc
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} fetching {url}")
         return res.content

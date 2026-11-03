@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+import archive_live
+import archive_workbench
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
 from workbench_state import put_workbench, workbench_payload
@@ -26,18 +28,19 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import importlib
     import json
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {
@@ -61,14 +64,14 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     mapping_service.invalidate()
     importlib.reload(server)
-    yield character_archive
+    yield
     mapping_service.invalidate()
 
 
 def payload_of(archive) -> dict[str, Any]:
     """The workbench payload. There is one per character, so nothing to
     address it by."""
-    bench = archive.read_workbench("42")
+    bench = archive_workbench.read_workbench("42")
     assert bench is not None, "no workbench yet"
     return bench.payload
 
@@ -125,7 +128,7 @@ async def test_live_is_never_writable(workbench) -> None:
         )
     text = tool_error_text(result)
     assert "live_is_read_only" in text
-    assert workbench.read_live("42")["character"]["description"] == "[b]Published.[/b]"
+    assert archive_live.read_live("42")["character"]["description"] == "[b]Published.[/b]"
 
 
 async def test_editing_without_naming_a_set_lands_in_the_workbench(
@@ -148,9 +151,9 @@ async def test_editing_without_naming_a_set_lands_in_the_workbench(
         )
     assert read["description"] == "written straight into the bench"
     # Live is untouched: editing never publishes.
-    import character_archive
+    import archive_live
 
-    live = character_archive.read_live("42")
+    live = archive_live.read_live("42")
     assert live["character"]["description"] == "[b]Published.[/b]"
 
 
@@ -561,11 +564,11 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
     published profile."""
     async with mcp_client("character") as session:
         await open_workbench(session)
-        payload = workbench_payload(workbench, "42")
+        payload = workbench_payload("42")
         payload["custom_kinks"] = {
             "7788": {"name": "From F-list", "description": "", "choice": "yes"}
         }
-        put_workbench(workbench, "42", payload)
+        put_workbench("42", payload)
 
         _, deleted = await call_tool(
             session,
@@ -639,12 +642,12 @@ async def test_reorder_custom_kinks_requires_the_complete_list(
 
 
 def seed_gallery(archive, image_ids: list[str]) -> None:
-    payload = workbench_payload(archive, "42")
+    payload = workbench_payload("42")
     payload["images"] = [
         {"image_id": i, "description": "", "sort_order": n}
         for n, i in enumerate(image_ids)
     ]
-    put_workbench(archive, "42", payload)
+    put_workbench("42", payload)
 
 
 async def test_reordering_the_gallery_renumbers_from_zero(workbench) -> None:
@@ -791,54 +794,7 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
             if_match=read["etag"],
             confirm=True,
         )
-    assert "etag_conflict" in tool_error_text(result)
-
-
-# ---- concurrency -------------------------------------------------------
-
-
-async def test_an_edit_retries_once_when_the_ui_saves_underneath(
-    workbench,
-) -> None:
-    """The app window and a model can both be editing. A save
-    landing between our read and write is expected, not an error — the
-    two are usually touching different fields."""
-    from services import payload_ops
-
-    async with mcp_client("character") as session:
-        await open_workbench(session)
-
-        original = payload_ops.edit
-        calls = {"n": 0}
-
-        def racing_edit(character_id, mutate):  # noqa: ANN001
-            def wrapper(payload):
-                calls["n"] += 1
-                if calls["n"] == 1:
-                    # Simulate the UI saving between our read and write.
-                    other = workbench_payload(workbench, "42")
-                    other["settings"] = {"public": True}
-                    put_workbench(workbench, "42", other)
-                return mutate(payload)
-
-            return original(character_id, wrapper)
-
-        payload_ops.edit = racing_edit
-        try:
-            _, body = await call_tool(
-                session,
-                "set_description",
-                character="Lady Amber Blaise",
-                text="mine",
-            )
-        finally:
-            payload_ops.edit = original
-
-    assert body["length"] == 4
-    payload = payload_of(workbench)
-    # Both writes survived: ours and the one that raced us.
-    assert payload["character"]["description"] == "mine"
-    assert payload["settings"] == {"public": True}
+    assert "etag_mismatch" in tool_error_text(result)
 
 
 # ---- annotations -------------------------------------------------------

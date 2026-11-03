@@ -97,7 +97,7 @@ Facts that shape the design:
 |---|---|---|---|---|---|
 | 1 | IC/OOC classifier (in-app LLM) | LLM | `labels_llm.py`, `labels_jobs.py`, `/labels/classify`, `/labels/jobs*`, `/labels/test-connection`, `/labels/failure-log`, `/labels/job-history`, `classify-failures.log` | `ClassifyDialog.tsx`, Logs-menu classify items, Settings `LabelsPane` inference section + `PromptPresetPicker` | **Remove** — replaced by client-driven classification through MCP (§3.9, D1) |
 | 1b | Label store, rule resolver, manual override, stats | — | `labels.py` (rules: empty / `< threshold_chars` / `((` ⇒ OOC), `/labels/stats*`, `/labels/override`, `/labels/clear*`, `/labels/rollup` | Label chips + right-click override in `LogViewer.tsx`, `PartnerList.tsx` pips, Settings coverage rollup + "Reset all labels" | **Keep**, expose via MCP |
-| 2 | RAG ingest (chunk → embed → Qdrant + FTS5) | Embeddings | `rag_jobs.py`, `chunker.py`, `rag_embed.py`, `rag_store.py`, `rag_lexical.py`, `/rag/ingest`, `/rag/jobs*`, `/rag/status`, `/rag/wipe`, `/rag/lexical/rebuild`, `/rag/test-embedding` | `IngestDialog.tsx`, Logs-menu ingest items, Settings `EmbeddingPane` | **Keep**, expose via MCP |
+| 2 | RAG ingest (chunk → embed → Qdrant + FTS5) | Embeddings | `rag_jobs.py`, `chunker.py`, `rag_embed.py`, `rag_store.py`, `rag_lexical.py`, `/rag/ingest`, `/jobs*`, `/rag/status`, `/rag/wipe`, `/rag/lexical/rebuild`, `/rag/test-embedding` | `IngestDialog.tsx`, Logs-menu ingest items, Settings `EmbeddingPane` | **Keep**, expose via MCP |
 | 3 | "Ask the logs" grounded chat (`/rag/query`) | Embeddings + LLM + reranker | `rag_query.py` (retrieval, LLM-free), `rag_chat.py` (streaming), route 2813-2977 | `ChatPanel.tsx` (802 lines), slash commands, citation → log jump | **Remove chat**; keep `rag_query.run_query` and wrap it as a *retrieval-only* MCP tool (new surface — none exists today) |
 | 4 | "Talk" free-form chat (`/rag/talk`) | LLM | route 2979-3032 | `ChatPanel.tsx` talk mode | **Remove** |
 | 5 | Multi-query expansion | LLM | `rag_expand.py` | Settings Quality toggle | **Remove** |
@@ -454,8 +454,8 @@ over `services/`.
   kink ids validated against the mapping list; infotag values
   validated per type (§3.5).
 - Writes only to an existing set; `live` is never writable.
-- `If-Match` used on every write (read etag → mutate → put), retried
-  once on 409 with a fresh read.
+- `If-Match` used on every write (read etag → mutate → put), all
+  under the character's lock (spec #4), so no save lands in between.
 
 ### 4.3 UI ↔ MCP concurrency (needs real work)
 
@@ -488,8 +488,13 @@ server-side job any more — it is a client loop (§3.9).
 Structured tool errors with a stable `code`: `not_signed_in`,
 `no_active_set`, `set_not_found`, `character_not_found`,
 `partner_not_found`, `validation_failed {field, reason, allowed}`,
-`etag_conflict`, `rate_limited {retry_after}`, `confirm_required`,
+`etag_mismatch {current_etag}`, `rate_limited {retry_after}`, `confirm_required`,
 `embedding_unreachable`, `unknown_hash`.
+
+Since #69 a tool error carries the same code and details as the REST
+error for the same situation (`{code, message, details}`,
+`sidecar/refusals.py`): a `Refusal` raised under a tool reaches the
+model unchanged.
 
 ---
 

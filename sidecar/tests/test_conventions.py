@@ -13,8 +13,19 @@ Rules:
   newline, so `.match` with `^...$` lets "name\\n" through. Prefix
   checks on message text are the legitimate exception.
 * typed-refusal: the sidecar refuses with a `refusals.Refusal`
-  subclass (one handler answers `{code, message}`), not a bare
-  `HTTPException`.
+  subclass (one handler answers `{code, message, details}`), not a
+  bare `HTTPException`.
+* atomic-write: the sidecar writes files only through `atomic_write`
+  (unique temp file, fsync, one-step replace), so a crash never
+  leaves a broken file. No `write_text`/`write_bytes`, no `open` for
+  writing and no fixed `.tmp` name anywhere else.
+* router-layering: every REST route lives in a router under
+  `sidecar/routers/`; only `server.py` (app setup and router
+  registration) imports routers, and nothing imports `server.py`.
+* label-layering: SQL on the labels table lives only in the Label
+  store (`labels.py`) and the Labels service (`services/labels.py`);
+  REST routers and MCP tools take only pure names from the store and
+  reach Labels through the service.
 * retired-term: user-facing prose (sidecar strings, MCP tool
   descriptions, renderer and main-process strings and JSX text) does
   not use a term GLOSSARY.md retired or avoids. Only text with a space
@@ -134,47 +145,9 @@ def test_the_fullmatch_allowlist_has_no_stale_entries():
 # ---------------------------------------------------------------------------
 # typed-refusal
 
-# Bare HTTPException sites per (file, enclosing function) when the rule
-# was introduced. May only shrink: new refusals subclass
-# refusals.Refusal.
-HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {
-    ("sidecar/server.py", "_foreign_http"): 1,
-    ("sidecar/server.py", "_require_restore_auth"): 1,
-    ("sidecar/server.py", "flist_avatar"): 3,
-    ("sidecar/server.py", "flist_character_export_zip"): 1,
-    ("sidecar/server.py", "flist_character_image"): 1,
-    ("sidecar/server.py", "flist_character_image_by_id"): 1,
-    ("sidecar/server.py", "flist_character_image_remove"): 1,
-    ("sidecar/server.py", "flist_character_image_upload"): 3,
-    ("sidecar/server.py", "flist_character_inline"): 1,
-    ("sidecar/server.py", "flist_character_live"): 1,
-    ("sidecar/server.py", "flist_character_trash_file"): 1,
-    ("sidecar/server.py", "flist_character_workbench_load_backup"): 3,
-    ("sidecar/server.py", "flist_character_workbench_load_preflight"): 2,
-    ("sidecar/server.py", "flist_character_zip_backup"): 1,
-    ("sidecar/server.py", "flist_character_zip_backup_delete"): 2,
-    ("sidecar/server.py", "flist_character_zip_backup_download"): 1,
-    ("sidecar/server.py", "flist_character_zip_backup_payload"): 4,
-    ("sidecar/server.py", "flist_character_zip_backup_rename"): 3,
-    ("sidecar/server.py", "flist_mapping_list"): 2,
-    ("sidecar/server.py", "flist_session_create"): 1,
-    ("sidecar/server.py", "foreign_character_avatar"): 3,
-    ("sidecar/server.py", "foreign_character_image"): 4,
-    ("sidecar/server.py", "labels_fill_unlabeled"): 1,
-    ("sidecar/server.py", "labels_override"): 1,
-    ("sidecar/server.py", "labels_override_many"): 1,
-    ("sidecar/server.py", "labels_rollup"): 1,
-    ("sidecar/server.py", "logs_characters"): 1,
-    ("sidecar/server.py", "profile"): 4,
-    ("sidecar/server.py", "rag_job_cancel"): 1,
-    ("sidecar/server.py", "rag_job_get"): 1,
-    ("sidecar/server.py", "rag_lexical_rebuild"): 1,
-    ("sidecar/server.py", "render_deliver"): 2,
-    ("sidecar/server.py", "restore_image_ids"): 2,
-    ("sidecar/server.py", "restore_saved"): 1,
-    ("sidecar/server.py", "restore_snapshot"): 1,
-    ("sidecar/server.py", "settings_update"): 2,
-}
+# Bare HTTPException sites per (file, enclosing function). Emptied by
+# #69 (errors have one shape); may only stay empty.
+HTTP_EXCEPTION_ALLOWED: dict[tuple[str, str], int] = {}
 
 
 def http_exception_sites(path: str) -> dict[tuple[str, str], list[str]]:
@@ -203,6 +176,246 @@ def test_refusals_are_typed():
     for path in sidecar_sources():
         found.update(http_exception_sites(path))
     check_ratchet("typed-refusal", found, HTTP_EXCEPTION_ALLOWED)
+
+
+# ---------------------------------------------------------------------------
+# atomic-write
+
+ATOMIC_WRITE_MODULE = "sidecar/atomic_write.py"
+
+# Writes that are not a file replaced whole, per (file, enclosing
+# function). May only shrink.
+WRITE_ALLOWED: dict[tuple[str, str], int] = {
+    # The activity log is appended a line at a time; a torn last line
+    # is skipped when it is read back.
+    ("sidecar/flist_activity.py", "_append_to_disk"): 1,
+}
+
+_WRITE_METHODS = {"write_text", "write_bytes"}
+
+
+def _write_mode(node: ast.Call) -> str | None:
+    """The mode of an `open(...)` or `<path>.open(...)` call, when it
+    writes."""
+    f = node.func
+    if isinstance(f, ast.Name) and f.id == "open":
+        position = 1
+    elif isinstance(f, ast.Attribute) and f.attr == "open":
+        position = 0
+    else:
+        return None
+    mode = node.args[position] if len(node.args) > position else None
+    for kw in node.keywords:
+        if kw.arg == "mode":
+            mode = kw.value
+    if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+        return mode.value if set(mode.value) & set("wax+") else None
+    return None
+
+
+def file_write_sites(path: str) -> dict[tuple[str, str], list[str]]:
+    found: dict[tuple[str, str], list[str]] = defaultdict(list)
+
+    def visit(node: ast.AST, func: str) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node.name
+        what = None
+        if isinstance(node, ast.Call):
+            f = node.func
+            if (
+                isinstance(f, ast.Attribute)
+                and f.attr in _WRITE_METHODS
+                and ast.unparse(f.value) != "atomic_write"
+            ):
+                what = f"{f.attr}("
+            elif (mode := _write_mode(node)) is not None:
+                what = f"open(..., {mode!r})"
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.endswith(".tmp")
+        ):
+            what = f"fixed temp name {node.value!r}"
+        if what is not None:
+            found[(path, func)].append(
+                f"{path}:{node.lineno}: {what} in {func} -> write through atomic_write"
+                " (rule atomic-write)"
+            )
+        for child in ast.iter_child_nodes(node):
+            visit(child, func)
+
+    visit(parse(path), "<module>")
+    return found
+
+
+def test_files_are_written_atomically():
+    found: dict[object, list[str]] = {}
+    for path in sidecar_sources():
+        if path != ATOMIC_WRITE_MODULE:
+            found.update(file_write_sites(path))
+    check_ratchet("atomic-write", found, WRITE_ALLOWED)
+
+
+# ---------------------------------------------------------------------------
+# router-layering
+
+ENTRY_MODULE = "sidecar/server.py"
+ROUTE_DECORATORS = {"get", "post", "put", "patch", "delete", "api_route", "websocket", "route"}
+
+
+def imported_names(path: str) -> list[tuple[int, str]]:
+    """(line, dotted name) of everything `path` imports; `from a import b`
+    gives both `a` and `a.b`, and a relative import gives `.`."""
+    names = []
+    for node in ast.walk(parse(path)):
+        if isinstance(node, ast.Import):
+            names.extend((node.lineno, alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                names.append((node.lineno, "."))
+                continue
+            names.append((node.lineno, node.module or ""))
+            names.extend((node.lineno, f"{node.module}.{alias.name}") for alias in node.names)
+    return names
+
+
+def test_only_the_entry_module_imports_routers():
+    """A router never imports another router, and nothing below the REST
+    surface (services, the archive, MCP tools) imports a router or the
+    entry module: what two routers share lives in services/."""
+    sites = [
+        f"{path}:{line}: imports {name} (rule router-layering)"
+        for path in sidecar_sources()
+        if path != ENTRY_MODULE
+        for line, name in imported_names(path)
+        if name in ("server", "routers")
+        or name.startswith(("server.", "routers."))
+        or (name == "." and path.startswith("sidecar/routers/"))
+    ]
+    assert not sites, report("router-layering", sites)
+
+
+def test_the_entry_module_declares_no_routes():
+    """server.py holds app setup, middleware, error handlers and router
+    registration; every route lives in a router under routers/."""
+    sites = [
+        f"{ENTRY_MODULE}:{node.lineno}: route {node.name} (rule router-layering)"
+        for node in ast.walk(parse(ENTRY_MODULE))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for deco in node.decorator_list
+        if isinstance(deco, ast.Call)
+        and isinstance(deco.func, ast.Attribute)
+        and deco.func.attr in ROUTE_DECORATORS
+    ]
+    assert not sites, report("router-layering", sites)
+
+
+# ---------------------------------------------------------------------------
+# label-layering
+
+LABEL_SQL_HOMES = {"sidecar/labels.py", "sidecar/services/labels.py"}
+ADAPTER_PREFIXES = ("sidecar/routers/", "sidecar/workbench_mcp/")
+#: What a router or MCP tool may take from the Label store: names and
+#: pure helpers that touch no database, and the rule settings (#70 owns
+#: those). Reading or writing Labels goes through services/labels.py.
+LABEL_STORE_PURE = {
+    "LABEL_IC",
+    "LABEL_OOC",
+    "LABEL_UNLABELED",
+    "COMPACT_RULES",
+    "PROMPT_PRESETS",
+    "DEFAULT_THRESHOLD_CHARS",
+    "LabelsSettings",
+    "msg_hash",
+    "resolve",
+    "load_settings",
+}
+_LABEL_SQL = re.compile(r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+labels\b", re.IGNORECASE)
+
+
+def label_sql_sites(path: str, tree: ast.Module | None = None) -> list[str]:
+    return [
+        f"{path}:{node.lineno}: SQL on the labels table (rule label-layering)"
+        for node in ast.walk(tree or parse(path))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _LABEL_SQL.search(node.value)
+    ]
+
+
+def label_store_uses(path: str, tree: ast.Module | None = None) -> list[str]:
+    """Uses of the Label store (`labels.py`) in `path` beyond its pure
+    names, however the module was imported."""
+    tree = tree or parse(path)
+    bound: set[str] = set()
+    sites = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound.update(a.asname or a.name for a in node.names if a.name == "labels")
+        elif isinstance(node, ast.ImportFrom) and node.module == "labels" and not node.level:
+            sites.extend(
+                f"{path}:{node.lineno}: imports labels.{a.name} (rule label-layering)"
+                for a in node.names
+                if a.name not in LABEL_STORE_PURE
+            )
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in bound
+            and node.attr not in LABEL_STORE_PURE
+        ):
+            sites.append(f"{path}:{node.lineno}: labels.{node.attr} (rule label-layering)")
+    return sites
+
+
+def test_label_sql_lives_in_the_label_store_and_service():
+    """Only the Label store and the Labels service speak SQL to the
+    labels table, so a Label behaviour cannot be implemented twice."""
+    sites = [
+        site
+        for path in sidecar_sources()
+        if path not in LABEL_SQL_HOMES
+        for site in label_sql_sites(path)
+    ]
+    assert not sites, report("label-layering", sites)
+
+
+def test_routes_and_tools_reach_labels_through_the_service():
+    """REST routes and MCP tools neither open the Label store nor call
+    its readers and writers: they parse, call services/labels.py and
+    shape the answer, so REST and MCP give the same result."""
+    sites = [
+        site
+        for path in sidecar_sources()
+        if path.startswith(ADAPTER_PREFIXES)
+        for site in label_store_uses(path)
+    ]
+    assert not sites, report("label-layering", sites)
+
+
+def test_the_label_layering_check_sees_store_calls_and_sql():
+    """The rule's scanners find what they are for (guards the guard)."""
+    import textwrap
+
+    src = textwrap.dedent(
+        """
+        import labels as store
+        from labels import upsert_label, msg_hash
+        store.LABEL_IC
+        store.connect()
+        conn.execute("DELETE FROM labels WHERE hash = ?")
+        """
+    )
+    path = "sidecar/workbench_mcp/_example.py"
+    tree = ast.parse(src)
+    uses = label_store_uses(path, tree)
+    sql = label_sql_sites(path, tree)
+    assert [u.split(": ", 1)[1] for u in uses] == [
+        "imports labels.upsert_label (rule label-layering)",
+        "labels.connect (rule label-layering)",
+    ]
+    assert len(sql) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +472,7 @@ CLASSIFICATION_ALLOWED: dict[str, int] = {
     "sidecar/workbench_mcp/tools_ops.py": 2,
 }
 
-TRANSCRIPT_ALLOWED: dict[str, int] = {
-    "sidecar/workbench_mcp/tools_ops.py": 1,
-}
+TRANSCRIPT_ALLOWED: dict[str, int] = {}
 
 RETIRED_TERM_ALLOWED: dict[str, dict[str, int]] = {
     "working set": WORKING_SET_ALLOWED,

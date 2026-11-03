@@ -4,7 +4,14 @@ import { app } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DEV_SERVER_ORIGIN } from './appPage'
-import { assertPortFree, chooseSidecarPort } from './sidecarPort'
+import { portOwnerChain } from './portOwner'
+import { RestartBackoff, classifyPortHolder, stopGracefully } from './sidecarLifecycle'
+import {
+  SidecarPortTaken,
+  assertPortFree,
+  chooseSidecarPort,
+  waitForPortFree
+} from './sidecarPort'
 
 export { SidecarPortTaken } from './sidecarPort'
 
@@ -29,21 +36,45 @@ function sidecarDiag(prefix: string, payload: unknown): void {
   }
 }
 
-let proc: ChildProcess | null = null
+/** A sidecar this app started. */
+type Running = {
+  child: ChildProcess
+  spawnedAt: number
+  /** Resolves when the process has exited. */
+  exited: Promise<void>
+  hasExited: boolean
+  /** Stopped on purpose, so its exit is not a crash. */
+  intended: boolean
+}
+
+let current: Running | null = null
+/** Set once the app stops its sidecar for good: nothing restarts after. */
+let stopping = false
+let restartTimer: ReturnType<typeof setTimeout> | null = null
+const backoff = new RestartBackoff()
+let gaveUpHandler: ((crashes: number) => void) | null = null
+let uvSynced = false
 let exitHandlersInstalled = false
+
+/** How long quit waits for the sidecar to stop when asked (it gives
+ *  open requests `GRACEFUL_SHUTDOWN_S` in sidecar/services/lifecycle.py)
+ *  before it is killed. */
+const SHUTDOWN_TIMEOUT_MS = 6000
+/** How long a replaced sidecar gets to let go of the port. */
+const STALE_RELEASE_MS = 10_000
 
 // Catch every termination path Electron's `before-quit` doesn't:
 // terminal Ctrl+C against `npm run dev` (electron-vite kills Electron
 // abruptly), main-process uncaught exceptions, parent SIGHUP from a
-// closed terminal, etc. process.on('exit') is sync-only — which is
-// fine because stopSidecar is now sync (spawnSync on Windows, signal
-// on POSIX).
+// closed terminal, etc. process.on('exit') is sync-only, so these kill
+// at once (spawnSync on Windows, signal on POSIX); a normal quit asks
+// first (stopSidecar).
 function installExitHandlers() {
   if (exitHandlersInstalled) return
   exitHandlersInstalled = true
   process.on('exit', () => {
     try {
-      stopSidecar()
+      killSidecarNow()
     } catch {
       /* nothing useful to do during exit */
     }
@@ -51,7 +82,7 @@ function installExitHandlers() {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => {
       try {
-        stopSidecar()
+        killSidecarNow()
       } catch {
         /* nothing useful to do during shutdown */
       }
@@ -74,7 +105,8 @@ export const sidecarPort = PORT
 // The sidecar answers only callers that carry this (ADR 0002): any web
 // page in the user's browser can reach the port, none can know a value
 // made fresh at every start. Main adds it to the app page's requests
-// (see main.ts) and to its own; the renderer never holds it.
+// (see main.ts) and to its own; the renderer never holds it. A
+// restarted sidecar gets the same one, so the window carries on.
 export const SECRET_HEADER = 'X-Workbench-Secret'
 const launchSecret = randomBytes(32).toString('hex')
 
@@ -97,7 +129,8 @@ function sidecarEnv(): NodeJS.ProcessEnv {
     SIDECAR_PORT: String(PORT),
     // So /health reports the app's version rather than a
     // hardcoded placeholder. The frozen sidecar has no
-    // package.json to read it from.
+    // package.json to read it from. The next start compares it
+    // with its own to tell an older sidecar on the port.
     FLIST_WORKBENCH_VERSION: app.getVersion(),
     FLIST_WORKBENCH_LAUNCH_SECRET: launchSecret
   }
@@ -111,6 +144,21 @@ function sidecarEnv(): NodeJS.ProcessEnv {
   return env
 }
 
+/**
+ * Called when the sidecar kept exiting right after each restart and the
+ * app has stopped trying, with the number of crashes in a row.
+ */
+export function onSidecarGaveUp(handler: (crashes: number) => void): void {
+  gaveUpHandler = handler
+}
+
+/**
+ * Starts the sidecar on its port. Rejects with SidecarPortTaken when the
+ * port belongs to something the app must not replace; our sidecar
+ * that is older, or left behind by its app, is stopped first and
+ * replaced. From then on a sidecar that exits unexpectedly is restarted
+ * with a backoff.
+ */
 export async function startSidecar(): Promise<void> {
   installExitHandlers()
   sidecarDiag('start', {
@@ -120,28 +168,86 @@ export async function startSidecar(): Promise<void> {
     resourcesPath: app.isPackaged ? process.resourcesPath : null
   })
   // Whatever already holds the port would answer the /health wait below,
-  // and the app would then talk to it. Stop here instead.
+  // and the app would then talk to it. Find out who it is first.
   try {
-    await assertPortFree(PORT)
+    await claimPort()
   } catch (err) {
     sidecarDiag('port-taken', err)
     throw err
   }
+  await runSidecar()
+}
+
+/** Makes the port free for our sidecar, or rejects with SidecarPortTaken. */
+async function claimPort(): Promise<void> {
+  try {
+    await assertPortFree(PORT)
+    return
+  } catch (err) {
+    if (!(err instanceof SidecarPortTaken)) throw err
+  }
+  const [health, chain] = await Promise.all([probeHealth(PORT), portOwnerChain(PORT)])
+  const holder = classifyPortHolder(health, chain, app.getVersion())
+  sidecarDiag('port-holder', {
+    holder,
+    health,
+    chain: chain?.map(({ pid, name, path }) => ({ pid, name, path })) ?? null
+  })
+  if (holder.kind === 'other-program') throw new SidecarPortTaken(PORT)
+  if (holder.kind === 'app-running') throw new SidecarPortTaken(PORT, holder.version)
+  // Older, or left behind by its app. It cannot be asked to stop (no
+  // shutdown route before this version, and it does not know this
+  // launch's secret), so it is killed: that process and its children
+  // only. A one-file bootloader above it then cleans up and exits.
+  sidecarDiag('replace-stale', holder)
+  killTree(holder.pid)
+  await waitForPortFree(PORT, STALE_RELEASE_MS)
+}
+
+/** What the port's holder answers on /health, or null. */
+async function probeHealth(port: number): Promise<unknown> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(3000)
+    })
+    return res.ok ? await res.json() : null
+  } catch {
+    return null
+  }
+}
+
+/** Spawns the sidecar and waits for it to answer /health. */
+async function runSidecar(): Promise<void> {
+  const running = await spawnSidecar()
+  current = running
+  try {
+    await waitForHealth(PORT, running)
+    sidecarDiag('healthy', { port: PORT, pid: running.child.pid ?? null })
+  } catch (err) {
+    sidecarDiag('health-failed', err)
+    throw err
+  }
+}
+
+async function spawnSidecar(): Promise<Running> {
+  let child: ChildProcess
   if (app.isPackaged) {
-    const exe = join(process.resourcesPath, 'sidecar.exe')
+    // A folder build (ADR 0005): the exe runs from its own folder and
+    // unpacks nothing.
+    const exe = join(process.resourcesPath, 'sidecar', 'sidecar.exe')
     sidecarDiag('spawn-packaged', { exe })
     // Pipe stdout/stderr so we can tee them into the diag log — a
     // PyInstaller bundle that crashes on startup prints the traceback
     // to stderr, and we want that traceback in a place a user can
     // grep without attaching a debugger.
-    proc = spawn(exe, [], {
+    child = spawn(exe, [], {
       env: sidecarEnv(),
       stdio: ['ignore', 'pipe', 'pipe']
     })
-    proc.stdout?.on('data', (chunk: Buffer) =>
+    child.stdout?.on('data', (chunk: Buffer) =>
       sidecarDiag('stdout', chunk.toString('utf8').trimEnd())
     )
-    proc.stderr?.on('data', (chunk: Buffer) =>
+    child.stderr?.on('data', (chunk: Buffer) =>
       sidecarDiag('stderr', chunk.toString('utf8').trimEnd())
     )
   } else {
@@ -151,86 +257,192 @@ export async function startSidecar(): Promise<void> {
     // so we run it on every dev launch — that way a `git pull` that
     // adds a Python dep doesn't crash the next run with a confusing
     // ModuleNotFoundError. Cost is negligible when nothing's stale.
-    await runUvSync(sidecarDir)
+    // A restart within the same run skips it.
+    if (!uvSynced) {
+      await runUvSync(sidecarDir)
+      uvSynced = true
+    }
     // Skip the `uv run` indirection and invoke the venv's python
     // directly. Going through `uv run` builds a multi-layer chain
     // (uv.exe → venv launcher → uv-managed cpython on Windows) that
     // taskkill /T won't always walk to completion — multiple python
-    // processes can survive shutdown. Direct spawn makes Electron the
-    // immediate parent of the single python process running uvicorn.
+    // processes can survive shutdown. `server.py` runs the server loop
+    // as the packaged exe does, so POST /shutdown can end it.
     //
     // detached: true on POSIX puts the python in its own process
-    // group so we can SIGTERM the whole group from stopSidecar.
+    // group so we can SIGTERM the whole group from killSidecar.
     const pythonExe =
       process.platform === 'win32'
         ? join(sidecarDir, '.venv', 'Scripts', 'python.exe')
         : join(sidecarDir, '.venv', 'bin', 'python')
-    proc = spawn(
-      pythonExe,
-      ['-m', 'uvicorn', 'server:app', '--port', String(PORT)],
-      {
-        cwd: sidecarDir,
-        env: sidecarEnv(),
-        stdio: ['ignore', 'inherit', 'inherit'],
-        detached: process.platform !== 'win32',
-        // Electron has no console of its own, so on Windows a console
-        // child would open its own window and take the focus.
-        windowsHide: true
-      }
-    )
+    child = spawn(pythonExe, ['server.py'], {
+      cwd: sidecarDir,
+      env: sidecarEnv(),
+      stdio: ['ignore', 'inherit', 'inherit'],
+      detached: process.platform !== 'win32',
+      // Electron has no console of its own, so on Windows a console
+      // child would open its own window and take the focus.
+      windowsHide: true
+    })
   }
 
-  sidecarDiag('spawned', { pid: proc.pid ?? null })
-
-  proc.on('exit', (code, signal) => {
-    sidecarDiag('exited', { code, signal })
-    proc = null
+  sidecarDiag('spawned', { pid: child.pid ?? null })
+  let markExited: () => void = () => undefined
+  const running: Running = {
+    child,
+    spawnedAt: Date.now(),
+    exited: new Promise<void>((resolve) => (markExited = resolve)),
+    hasExited: false,
+    intended: false
+  }
+  const onGone = (): void => {
+    if (running.hasExited) return
+    running.hasExited = true
+    markExited()
+    if (current !== running) return
+    current = null
+    if (running.intended || stopping) return
+    scheduleRestart(Date.now() - running.spawnedAt)
+  }
+  child.on('exit', (code, signal) => {
+    sidecarDiag('exited', {
+      pid: child.pid ?? null,
+      code,
+      signal,
+      intended: running.intended || stopping
+    })
+    onGone()
   })
-  proc.on('error', (err) => {
+  child.on('error', (err) => {
     sidecarDiag('spawn-error', err)
+    // A spawn that failed outright emits no 'exit'.
+    if (child.pid === undefined) onGone()
   })
+  return running
+}
 
+/** Restarts after an unexpected exit, waiting longer after each fast crash. */
+function scheduleRestart(ranMs: number): void {
+  if (stopping || restartTimer !== null) return
+  const decision = backoff.next(ranMs)
+  if (decision.kind === 'give-up') {
+    sidecarDiag('gave-up', decision)
+    gaveUpHandler?.(decision.crashes)
+    return
+  }
+  sidecarDiag('restart-scheduled', decision)
+  restartTimer = setTimeout(() => {
+    restartTimer = null
+    void restartSidecar()
+  }, decision.delayMs)
+}
+
+async function restartSidecar(): Promise<void> {
+  if (stopping) return
   try {
-    await waitForHealth(PORT)
-    sidecarDiag('healthy', { port: PORT })
+    // A restart never replaces anything: whoever took the port in the
+    // meantime keeps it, and this counts as one more failed start.
+    await assertPortFree(PORT)
+    await runSidecar()
+    sidecarDiag('restarted', { pid: current?.child.pid ?? null })
   } catch (err) {
-    sidecarDiag('health-failed', err)
-    throw err
+    sidecarDiag('restart-failed', err)
+    const running = current
+    if (running && !running.hasExited) {
+      // Started but never answered: kill it; its exit schedules the next try.
+      killSidecar(running)
+    } else if (running === null) {
+      scheduleRestart(0)
+    }
   }
 }
 
-export function stopSidecar(): void {
-  if (!proc || proc.killed || proc.pid == null) {
-    proc = null
+/**
+ * Stops the sidecar for good (at quit): asks it over POST /shutdown,
+ * which needs this launch's secret, waits for it to exit, and kills it
+ * only if it has not exited within SHUTDOWN_TIMEOUT_MS. Nothing restarts
+ * it afterwards.
+ */
+export async function stopSidecar(): Promise<void> {
+  stopping = true
+  if (restartTimer !== null) {
+    clearTimeout(restartTimer)
+    restartTimer = null
+  }
+  const running = current
+  if (!running || running.hasExited) {
+    current = null
     return
   }
+  running.intended = true
+  const outcome = await stopGracefully({
+    requestShutdown: () =>
+      sidecarFetch('/shutdown', { method: 'POST', signal: AbortSignal.timeout(2000) }),
+    exited: running.exited,
+    forceKill: () => killSidecar(running),
+    timeoutMs: SHUTDOWN_TIMEOUT_MS
+  })
+  sidecarDiag('stopped', { pid: running.child.pid ?? null, outcome })
+  if (current === running) current = null
+}
+
+/** Kills the sidecar at once, for exits that cannot wait (installExitHandlers). */
+export function killSidecarNow(): void {
+  stopping = true
+  if (restartTimer !== null) {
+    clearTimeout(restartTimer)
+    restartTimer = null
+  }
+  const running = current
+  current = null
+  if (running && !running.hasExited) {
+    running.intended = true
+    killSidecar(running)
+  }
+}
+
+function killSidecar(running: Running): void {
+  const pid = running.child.pid
+  if (pid == null) return
   if (process.platform === 'win32') {
-    // taskkill /T walks parent-PID descendants. With direct python
-    // spawn the chain is just Electron → python.exe, so /T is mostly
-    // defensive — but uvicorn may spawn workers, and we want every
-    // descendant gone. spawnSync so app.quit() / process.exit() can't
-    // race ahead of the kill.
-    spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
-      stdio: 'ignore',
-      windowsHide: true
-    })
-  } else {
-    // Negative pid → SIGTERM to the whole process group. With direct
-    // python spawn the group only contains the uvicorn process and any
-    // worker children it forks, all of which we want gone.
+    killTree(pid)
+    return
+  }
+  // Negative pid → SIGTERM to the whole process group. With direct
+  // python spawn the group only contains the sidecar process and any
+  // worker children it forks, all of which we want gone.
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    // Process group already gone — fall through to a direct kill
+    // so we still try the leader.
     try {
-      process.kill(-proc.pid, 'SIGTERM')
+      running.child.kill('SIGTERM')
     } catch {
-      // Process group already gone — fall through to a direct kill
-      // so we still try the leader.
-      try {
-        proc.kill('SIGTERM')
-      } catch {
-        /* nothing left to kill */
-      }
+      /* nothing left to kill */
     }
   }
-  proc = null
+}
+
+/**
+ * Kills a process and its descendants. On Windows taskkill /T walks
+ * parent-PID descendants (a dev sidecar's venv launcher has the real
+ * python below it); spawnSync so app.quit() / process.exit() can't
+ * race ahead of the kill.
+ */
+function killTree(pid: number): void {
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      /* already gone */
+    }
+    return
+  }
+  spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    stdio: 'ignore',
+    windowsHide: true
+  })
 }
 
 function runUvSync(cwd: string): Promise<void> {
@@ -259,13 +471,13 @@ function runUvSync(cwd: string): Promise<void> {
   })
 }
 
-async function waitForHealth(port: number, timeoutMs = 30_000): Promise<void> {
+async function waitForHealth(port: number, running: Running, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   let lastErr: unknown
   while (Date.now() < deadline) {
     // Our sidecar is gone (e.g. it lost a race for the port), so a
     // /health answer could only come from someone else's process.
-    if (proc === null) throw new Error('sidecar exited before it answered /health')
+    if (running.hasExited) throw new Error('sidecar exited before it answered /health')
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`)
       if (res.ok) return

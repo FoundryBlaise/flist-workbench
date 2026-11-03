@@ -10,9 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 import aliases as aliases_store
-import labels as labels_store
 import logs as log_store
-import settings as settings_store
+from services import labels as label_service
 
 from ._context import ToolError, resolve_conversation, resolve_log_character
 from ._registry import TAG_CLASSIFY, TAG_LOGS, tool
@@ -105,36 +104,23 @@ def read_log_messages(
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
 
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-        by_hash = labels_store.labels_for_partner(
-            labels_conn, character, partner, partner_aliases=alias_group
-        )
-        resolved = []
-        for msg in messages:
-            h = labels_store.msg_hash(msg)
-            row = by_hash.get(h)
-            label = labels_store.resolve(msg, row, lab_settings)
-            if wanted and label.lower() not in wanted:
-                continue
-            entry: dict[str, Any] = {
-                "hash": h,
-                "timestamp": msg.get("iso"),
-                "speaker": msg.get("speaker"),
-                "text": msg.get("text"),
-                "label": label,
-            }
-            if msg.get("type") == 1:
-                entry["is_action"] = True
-            if row is not None:
-                entry["label_source"] = row["source"]
-            resolved.append(entry)
-    finally:
-        settings_conn.close()
-        labels_conn.close()
+    resolved = []
+    for item in label_service.label_messages(character, partner, messages):
+        if wanted and item.label.lower() not in wanted:
+            continue
+        msg = item.message
+        entry: dict[str, Any] = {
+            "hash": item.hash,
+            "timestamp": msg.get("iso"),
+            "speaker": msg.get("speaker"),
+            "text": msg.get("text"),
+            "label": item.label,
+        }
+        if msg.get("type") == 1:
+            entry["is_action"] = True
+        if item.stored is not None:
+            entry["label_source"] = item.stored["source"]
+        resolved.append(entry)
 
     start = max(0, int(offset))
     window = resolved[start : start + capped]
@@ -293,67 +279,34 @@ def get_label_stats(
         character, partner = conv.character, conv.partner
     else:
         character = resolve_log_character(character)
-    settings_conn = settings_store.connect()
-    labels_conn = labels_store.connect()
-    try:
-        lab_settings = labels_store.load_settings(settings_conn)
-        if partner:
-            counts = _stats_for(
-                labels_conn, lab_settings, character, partner
-            )
-            return {
-                "character": character,
-                "partner": partner,
-                **counts,
-                "note": _coverage_note(counts),
-            }
-
-        try:
-            entries = log_store.list_partners(character)
-        except log_store.LogDirError as exc:
-            raise _log_dir_error(exc) from exc
-        rows = []
-        totals = {"ic": 0, "ooc": 0, "unlabeled": 0, "total": 0}
-        for entry in entries:
-            if entry.name.startswith("#"):
-                continue
-            counts = _stats_for(
-                labels_conn, lab_settings, character, entry.name
-            )
-            rows.append({"partner": entry.name, **counts})
-            for key in totals:
-                totals[key] += counts[key]
-        rows.sort(key=lambda r: -int(r["unlabeled"]))
+    if partner:
+        counts = label_service.conversation_stats(character, partner)
         return {
             "character": character,
-            "totals": totals,
-            "partners": rows,
-            "note": _coverage_note(totals),
+            "partner": partner,
+            **counts,
+            "note": _coverage_note(counts),
         }
-    finally:
-        settings_conn.close()
-        labels_conn.close()
 
-
-def _stats_for(labels_conn, lab_settings, character: str, partner: str) -> dict[str, int]:  # noqa: ANN001
     try:
-        messages = list(log_store.read_messages(character, partner))
-    except log_store.LogDirError:
-        messages = []
-    alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-    counts = labels_store.stats(
-        labels_conn,
-        character,
-        partner,
-        messages,
-        lab_settings,
-        partner_aliases=alias_group,
-    )
+        per_partner = label_service.character_stats(character)
+    except log_store.LogDirError as exc:
+        raise _log_dir_error(exc) from exc
+    rows = []
+    totals = {"ic": 0, "ooc": 0, "unlabeled": 0, "total": 0}
+    for row in per_partner:
+        if row["partner"].startswith("#"):
+            continue
+        counts = {key: row[key] for key in totals}
+        rows.append({"partner": row["partner"], **counts})
+        for key in totals:
+            totals[key] += counts[key]
+    rows.sort(key=lambda r: -int(r["unlabeled"]))
     return {
-        "ic": counts.get(labels_store.LABEL_IC, 0),
-        "ooc": counts.get(labels_store.LABEL_OOC, 0),
-        "unlabeled": counts.get(labels_store.LABEL_UNLABELED, 0),
-        "total": sum(counts.values()),
+        "character": character,
+        "totals": totals,
+        "partners": rows,
+        "note": _coverage_note(totals),
     }
 
 
@@ -375,7 +328,7 @@ def list_aliases(character: str) -> dict[str, Any]:
     viewer, label lookups and search scope.
     """
     character = resolve_log_character(character, required=False)
-    conn = labels_store.connect()
+    conn = aliases_store.connect()
     try:
         groups = aliases_store.list_groups(conn, character)
     finally:

@@ -5,12 +5,15 @@ import {
   RefusalError,
   type CharacterEntry,
   type FlistAccountCharacter,
+  type FlistBackupAllHandlers,
+  type FlistPullHandlers,
   type FlistZipBackupEntry,
   type FlistCharacterImage,
   type FlistRosterEntry,
   type FlistSessionStatus,
   type ForeignProfilePayload,
   type InlineImage,
+  type Job,
   type LogMessage,
   type PartnerEntry
 } from './lib/api'
@@ -120,10 +123,20 @@ type State = {
         forceRewipe: boolean
       }
     | null
+  /** Bumped whenever the sidecar says the Index changed (an ingest
+   *  started or ended, a wipe). Views that show the Index status
+   *  re-read it when this moves. */
+  indexRevision: number
+  /** Bumped whenever another writer changed Labels (a model labelled
+   *  or cleared them). Views listing cleared Labels re-read it. */
+  labelsRevision: number
 
   messagesByPartner: Record<string, LogMessage[]>
   messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
   messagesError: Record<string, string | null>
+  /** Counts settings changes made outside this window. An open
+   *  Settings re-reads them when it moves. */
+  settingsRevision: number
 
   editorContent: string
   editorTitle: string
@@ -178,6 +191,8 @@ type State = {
       pullStage?: string
       pullProgress?: { done: number; total: number }
       pullError?: string | null
+      /** The running Pull job, for Cancel. */
+      pullJobId?: string | null
       lastPullAt?: number | null
       // On-disk integrity status: was the prior pull complete, or was
       // it interrupted / did some images fail? Sourced from
@@ -209,9 +224,9 @@ type State = {
     /** 'loading' → backup ZIP being fetched and parsed.
      *  'ready'   → payload available, tabs can render.
      *  'error'   → fetch failed, header pill shows reason. The most
-     *              common error is HTTP 410 — backup predates the
-     *              Browse-support write that bundles working.json
-     *              into the ZIP. */
+     *              common error is 409 `backup_too_old` — backup
+     *              predates the Browse-support write that bundles
+     *              working.json into the ZIP. */
     status: 'loading' | 'ready' | 'error'
     /** The decoded working.json payload from the ZIP. Set when
      *  status === 'ready'; null otherwise. */
@@ -301,7 +316,7 @@ type State = {
    *  stream is open; the banner reads currentName + (done/total) live,
    *  then summary `phase = 'done'` for 6s before auto-clearing. */
   flistBackupAllStatus: {
-    phase: 'idle' | 'running' | 'done' | 'error'
+    phase: 'idle' | 'running' | 'done' | 'cancelled' | 'error'
     total: number
     done: number
     saved: number
@@ -309,6 +324,9 @@ type State = {
     failed: number
     currentName: string | null
     errorMessage: string | null
+    /** The running Back up all job, for Cancel. Null for a single
+     *  character's Backup, which is no job. */
+    jobId?: string | null
   }
   /** "F-list-side change in N fields since you started editing — review."
    *  Set after a Live re-pull when the new Live differs from what the
@@ -422,12 +440,20 @@ type State = {
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
+  /** Something outside this window changed settings (the
+   *  `settings-changed` event); `fields` names them, as the sidecar's
+   *  settings service does (`labels.threshold_chars`, `rag.top_k`). */
+  noteSettingsChanged: (fields: string[]) => void
   openIngest: (
     scope: { character?: string | null; partner?: string | null },
     label: string,
     opts?: { forceRewipe?: boolean }
   ) => void
   closeIngest: () => void
+  /** The Index changed elsewhere: views showing its status re-read. */
+  noteIndexChanged: () => void
+  /** Labels changed elsewhere: views listing cleared Labels re-read. */
+  noteLabelsChanged: () => void
   /** One message by hash, or every message in a set of hashes. */
   applyLabelOverride: (
     char: string,
@@ -474,7 +500,21 @@ type State = {
   flistLoadRoster: () => Promise<void>
   flistSelectCharacter: (characterId: string | null) => Promise<void>
   flistLoadArchive: (characterId: string) => Promise<void>
-  flistPullCharacter: (name: string, characterId?: string | null) => Promise<void>
+  /** Pull a character from F-list into its slot. `skipWhenBusy`: when
+   *  a job already holds the character, leave the slot without an
+   *  error (Refresh all) instead of saying so. */
+  flistPullCharacter: (
+    name: string,
+    characterId?: string | null,
+    opts?: { skipWhenBusy?: boolean }
+  ) => Promise<void>
+  /** Cancel the character's running Pull (a job): it stops at its next
+   *  step, keeping what it already wrote. */
+  flistCancelPull: (characterId: string) => Promise<void>
+  /** Follow the Pulls and Back up all the sidecar is still running, as
+   *  after the window reloaded: their progress shows again and they
+   *  can be cancelled. */
+  flistResumeJobs: () => Promise<void>
   /** Manual "Refresh all" — unconditionally pulls every account
    *  character on the current roster. Single-flight: triggering while
    *  a sweep is running (either this or the sign-in sweep) is a no-op. */
@@ -532,6 +572,9 @@ type State = {
   /** Ask the sidecar whether the character has a Workbench yet and
    *  when it last changed, for the Workbench row. Creates nothing. */
   flistLoadWorkbenchInfo: (characterId: string) => Promise<void>
+  /** Re-read the character's Backup list, after a Backup this window
+   *  did not make. A failure leaves the list as it was. */
+  flistLoadBackups: (characterId: string) => Promise<void>
   /** Show the character's Live, read-only, in place of its Workbench.
    *  Saves pending Workbench edits first. */
   flistShowLive: (characterId: string) => Promise<void>
@@ -561,6 +604,9 @@ type State = {
    *  writes a userscript-restoreable ZIP per character. Single-flight:
    *  a second call while one is running is a no-op. */
   flistBackupAll: () => Promise<void>
+  /** Cancel the running Back up all: it stops at its next step; the
+   *  Backups it already wrote stay. */
+  flistCancelBackupAll: () => Promise<void>
   /** Right-click → "Back up now" on a single character row. Pulls
    *  the character (full, with images), then forces a ZIP backup write
    *  to `characters/<id>/backups/<ISO>.zip`. Uses the same Backup-all
@@ -817,16 +863,16 @@ function _cancelAllPendingTimers(): void {
 // Tracks whether an account-wide sweep is in flight. Shared between
 // the sign-in auto-refresh and the picker's manual "↻ Refresh all",
 // so a second trigger while one is running is a no-op rather than
-// stacking two passes onto pull_lock.
+// running two passes over the same characters.
 let _flistAccountSweepInFlight = false
 
 /** Re-read a character's Backup list so a Backup the sidecar just
- *  wrote shows up. Fire-and-forget: a failure leaves the list stale. */
+ *  wrote shows up. A failure leaves the list stale. */
 function _refreshBackupList(
   characterId: string,
   set: (fn: (s: State) => Partial<State>) => void
-): void {
-  void api
+): Promise<void> {
+  return api
     .flistZipBackups(characterId)
     .then((r) => {
       set((s) => {
@@ -1090,6 +1136,370 @@ function _showWorkbench(
   }
 }
 
+type StoreSet = typeof useStore.setState
+
+const IDLE_BACKUP_ALL_STATUS: State['flistBackupAllStatus'] = {
+  phase: 'idle',
+  total: 0,
+  done: 0,
+  saved: 0,
+  unchanged: 0,
+  failed: 0,
+  currentName: null,
+  errorMessage: null,
+  jobId: null
+}
+
+/** The job holding a character that a Pull or Back up all was refused
+ *  for (`character_busy`), or null when `err` is another failure. */
+function _characterBusyWith(err: unknown): 'pull' | 'backup-all' | null {
+  if (!(err instanceof RefusalError) || err.code !== 'character_busy') return null
+  return err.details.kind === 'backup-all' ? 'backup-all' : 'pull'
+}
+
+/** Follow a Pull job into the character's slot: its progress, its job
+ *  id (for Cancel), and on `done` the reloads a finished Pull needs.
+ *  `open` starts the Pull or follows one already running; aborting the
+ *  signal (sign-out) only stops following, the job runs on. A Pull
+ *  refused because a job holds the character says so in plain words,
+ *  or with `skipWhenBusy` leaves the slot idle, its stage `busy`. */
+async function _followPull(
+  get: () => State,
+  set: StoreSet,
+  targetId: string | null,
+  open: (handlers: FlistPullHandlers, signal: AbortSignal) => Promise<void>,
+  opts: { skipWhenBusy?: boolean } = {}
+): Promise<void> {
+  const setStatus = (
+    patch: Partial<{
+      pullStatus: 'idle' | 'queued' | 'running' | 'done' | 'error'
+      pullStage: string
+      pullProgress: { done: number; total: number }
+      pullError: string | null
+      pullJobId: string | null
+    }>
+  ) => {
+    if (!targetId) return
+    set((s) => ({
+      flistArchive: {
+        ...s.flistArchive,
+        [targetId]: {
+          ...(s.flistArchive[targetId] ?? {
+            live: null,
+            pullStatus: 'idle'
+          }),
+          ...patch
+        }
+      }
+    }))
+  }
+  setStatus({ pullStatus: 'queued', pullError: null })
+  const ctrl = new AbortController()
+  set({ flistPullAbortController: ctrl })
+  try {
+    await open({
+      onJob: (job) => setStatus({ pullJobId: job.id }),
+      onCancelled: () =>
+        setStatus({ pullStatus: 'idle', pullStage: 'cancelled', pullError: null, pullJobId: null }),
+      onTicket: () =>
+        setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
+      onFetching: () =>
+        setStatus({ pullStatus: 'running', pullStage: 'fetching' }),
+      onImages: ({ total }) =>
+        setStatus({
+          pullStatus: 'running',
+          pullStage: 'images',
+          pullProgress: { done: 0, total }
+        }),
+      onImage: ({ index, total, ok, cached }) => {
+        setStatus({ pullProgress: { done: index, total } })
+        // Refresh the per-character images map so the Images tab's
+        // thumbnails update as files arrive. Only every 10th image to
+        // avoid hammering the sidecar with one HTTP GET per download
+        // (the rate-limited CDN already paces us at ~2/s, so a 10x
+        // skip means the Images tab refreshes every ~5 seconds during
+        // a long pull). Cached events don't change disk state.
+        if (targetId && ok && !cached && (index % 10 === 0 || index === total)) {
+          void get().flistLoadCharacterImages(targetId)
+        }
+      },
+      onDone: async (info) => {
+        // We know the character_id now even if we didn't before. Make
+        // sure the per-id slot exists and gets reloaded.
+        set((s) => ({
+          flistArchive: {
+            ...s.flistArchive,
+            [info.character_id]: {
+              ...(s.flistArchive[info.character_id] ?? {
+                live: null,
+                pullStatus: 'idle'
+              }),
+              pullStatus: 'done',
+              pullStage: 'done',
+              pullJobId: null
+            }
+          }
+        }))
+        await get().flistLoadArchive(info.character_id)
+        await get().flistLoadCharacterImages(info.character_id)
+        await get().flistLoadRoster()
+        // If the user is sitting on this character's working copy and
+        // hasn't typed anything yet, refresh the editor with the
+        // freshly-pulled Live content. Skip when the working copy is
+        // dirty OR when the live editorContent has already diverged
+        // from the seeded content — covers the race where keystrokes
+        // arrived between the dirty=false snapshot we took and now.
+        const isActive =
+          get().flistActiveCharacterId === info.character_id &&
+          !get().editorReadOnly
+        const working = get().flistWorking[info.character_id]
+        // After a Live re-pull, only stream the new description into
+        // a non-materialised seed-from-Live slot (no edits yet AND
+        // never written to disk). Materialised working copies are
+        // user-authoritative — drift detection runs via the banner
+        // (§5.1) instead.
+        const safe =
+          isActive && (!working || (!working.materialised && !working.unsavedDirty))
+        if (safe) {
+          if (working) {
+            // Drop the seeded slot so flistOpenWorking re-seeds from
+            // the new Live on the next open.
+            set((s) => {
+              const next = { ...s.flistWorking }
+              delete next[info.character_id]
+              return { flistWorking: next }
+            })
+          }
+          void get().flistOpenWorking(info.character_id)
+        } else if (isActive && working?.materialised) {
+          // Materialised working copy active: surface drift for non-
+          // overlaid paths against the new Live.
+          const newLive = get().flistArchive[info.character_id]?.live ?? null
+          const oldLive = working.payload as Record<string, unknown>
+          const allPaths = collectOverlayCandidates(working.payload)
+          const ignore = new Set(working.overlay)
+          const drift = detectLiveDrift(
+            oldLive,
+            newLive as Record<string, unknown>,
+            allPaths,
+            [...ignore]
+          )
+          if (drift.length > 0) {
+            set((s) => ({
+              flistDriftBanners: {
+                ...s.flistDriftBanners,
+                [info.character_id]: { paths: drift, dismissedAt: null }
+              }
+            }))
+          }
+          // A saved workbench stays user-authoritative, but the slot
+          // still in memory is a snapshot from whenever it was last
+          // opened — after an external change (another session wrote
+          // the file, a bundle import) the window showed a gallery or
+          // fields that no longer matched what is on disk, and only
+          // clicking back into the character fixed it. Re-reading the
+          // persisted set is what "Refresh" should mean for the open
+          // window: disk is the truth for a saved copy. flistOpenWorking
+          // keeps unsaved keystrokes and refuses to reseed over them.
+          void get().flistOpenWorking(info.character_id)
+        }
+      },
+      onError: ({ message }) => {
+        setStatus({ pullStatus: 'error', pullError: message, pullJobId: null })
+      }
+    }, ctrl.signal)
+  } catch (err) {
+    // AbortError = user-initiated (sign-out / explicit cancel).
+    // Don't surface as a scary error to the user.
+    const raw = err instanceof Error ? err.message : String(err)
+    const busyWith = _characterBusyWith(err)
+    if (err instanceof Error && err.name === 'AbortError') {
+      setStatus({ pullStatus: 'idle', pullError: null })
+    } else if (busyWith && opts.skipWhenBusy) {
+      setStatus({ pullStatus: 'idle', pullStage: 'busy', pullError: null })
+    } else if (busyWith) {
+      setStatus({
+        pullStatus: 'error',
+        pullError:
+          busyWith === 'backup-all'
+            ? 'Back up all is running; it pulls this character too.'
+            : 'This character is already being pulled.'
+      })
+    } else {
+      setStatus({ pullStatus: 'error', pullError: raw })
+    }
+  } finally {
+    if (get().flistPullAbortController === ctrl) {
+      set({ flistPullAbortController: null })
+    }
+  }
+}
+
+/** Follow a Back up all job into the banner's status. `open` starts it
+ *  or follows one already running. */
+async function _followBackupAll(
+  get: () => State,
+  set: StoreSet,
+  open: (handlers: FlistBackupAllHandlers) => Promise<void>
+): Promise<void> {
+  try {
+    await open({
+      onJob: (job) => {
+        set((s) => ({ flistBackupAllStatus: { ...s.flistBackupAllStatus, jobId: job.id } }))
+      },
+      onCancelled: () => {
+        set((s) => ({
+          flistBackupAllStatus: {
+            ...s.flistBackupAllStatus,
+            phase: 'cancelled',
+            currentName: null,
+            jobId: null
+          }
+        }))
+        _clearBackupAllStatusLater(get, set, 'cancelled')
+      },
+      onStart: ({ total }) => {
+        set((s) => ({
+          flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
+        }))
+      },
+      onCharacter: (info) => {
+        set((s) => {
+          const cur = s.flistBackupAllStatus
+          if (info.status === 'fetching') {
+            return {
+              flistBackupAllStatus: { ...cur, currentName: info.name }
+            }
+          }
+          // Per-character terminal status: bump counters + done.
+          const next = {
+            ...cur,
+            done: cur.done + 1,
+            saved: cur.saved + (info.status === 'saved' ? 1 : 0),
+            unchanged:
+              cur.unchanged + (info.status === 'unchanged' ? 1 : 0),
+            failed: cur.failed + (info.status === 'error' ? 1 : 0)
+          }
+          return { flistBackupAllStatus: next }
+        })
+        // Refresh the archive slot from disk after each successful
+        // per-character pull. Both 'saved' (ZIP written, content
+        // changed) and 'unchanged' (ZIP dedup'd, content matched
+        // last backup) imply the per-character pull preceded the
+        // ZIP step and put fresh live.json + images on disk. Without
+        // this, the picker would keep showing 'pulled 16h ago' for
+        // every character even though Back up all just
+        // updated all of them — wasted disk + network on subsequent
+        // manual REFRESH ALL clicks. flistLoadArchive reads from
+        // local /flist/character/{id}/live (no F-list network),
+        // updates the live payload + zipBackups +
+        // lastPullAt in one pass.
+        const refreshable =
+          (info.status === 'saved' || info.status === 'unchanged') &&
+          info.character_id
+        if (refreshable) {
+          void get().flistLoadArchive(info.character_id!)
+        }
+      },
+      onDone: () => {
+        set((s) => ({
+          flistBackupAllStatus: {
+            ...s.flistBackupAllStatus,
+            phase: 'done',
+            currentName: null
+          }
+        }))
+        // Auto-clear the summary banner after 6s so it doesn't
+        // linger past usefulness.
+        setTimeout(() => {
+          const cur = get().flistBackupAllStatus
+          if (cur.phase === 'done') {
+            set({
+              flistBackupAllStatus: {
+                phase: 'idle',
+                total: 0,
+                done: 0,
+                saved: 0,
+                unchanged: 0,
+                failed: 0,
+                currentName: null,
+                errorMessage: null
+              }
+            })
+          }
+        }, 6000)
+      },
+      onError: ({ message }) => {
+        set((s) => ({
+          flistBackupAllStatus: {
+            ...s.flistBackupAllStatus,
+            phase: 'error',
+            errorMessage: message,
+            currentName: null
+          }
+        }))
+      }
+    })
+  } catch (err) {
+    const busyWith = _characterBusyWith(err)
+    const message =
+      busyWith === 'pull'
+        ? 'A Pull is running. Start Back up all again once it has finished.'
+        : busyWith === 'backup-all'
+          ? 'Back up all is already running.'
+          : ((err as Error).message ?? 'backup-all failed')
+    set((s) => ({
+      flistBackupAllStatus: {
+        ...s.flistBackupAllStatus,
+        phase: 'error',
+        errorMessage: message,
+        currentName: null
+      }
+    }))
+  }
+}
+
+function _startBackupAllStatus(set: StoreSet, jobId: string | null): void {
+  set({
+    flistBackupAllStatus: {
+      phase: 'running',
+      total: 0,
+      done: 0,
+      saved: 0,
+      unchanged: 0,
+      failed: 0,
+      currentName: null,
+      errorMessage: null,
+      jobId
+    }
+  })
+}
+
+/** Back to idle after 6 s, unless something else started meanwhile. */
+function _clearBackupAllStatusLater(
+  get: () => State,
+  set: StoreSet,
+  phase: 'done' | 'cancelled'
+): void {
+  setTimeout(() => {
+    if (get().flistBackupAllStatus.phase !== phase) return
+    set({ flistBackupAllStatus: { ...IDLE_BACKUP_ALL_STATUS } })
+  }, 6000)
+}
+
+/** The character a running Pull job writes: the one its resource names
+ *  (`character:<id>`), else the roster entry with its name, else the id
+ *  it reported once F-list answered. */
+function _pullTarget(state: State, job: Job): string | null {
+  const held = /^character:(\d+)$/.exec(job.resource)
+  if (held) return held[1]
+  const name = typeof job.params.name === 'string' ? job.params.name.toLowerCase() : null
+  const entry = name ? state.flistRoster.find((r) => r.name.toLowerCase() === name) : undefined
+  if (entry?.id != null) return String(entry.id)
+  const reported = job.progress.character_id
+  return typeof reported === 'string' ? reported : null
+}
+
 /** Pull every account character on the current roster.
  *  - `thresholdSec === null` → unconditional (manual Refresh all).
  *  - `thresholdSec >= 0`     → skip characters fresher than threshold.
@@ -1119,6 +1529,9 @@ async function _flistAccountSweep(
       // Bail if the user signed out mid-sweep so we don't keep firing
       // pulls against a session that no longer exists.
       if (!get().flistSession.active) break
+      // Already being pulled, and this window follows it.
+      const status = get().flistArchive[t.id]?.pullStatus
+      if (status === 'queued' || status === 'running') continue
       if (thresholdSec !== null) {
         const age =
           t.lastPulledAt === null
@@ -1128,10 +1541,10 @@ async function _flistAccountSweep(
       }
       // selectCharacter would change the active character; we want
       // a silent background refresh, so go straight to the pull.
-      // The pull endpoint's pull_lock serialises us behind any
-      // manual single-character ↻ Refresh the user kicked off.
+      // One Pull at a time here; a character another job holds (a
+      // Pull the user started by hand, Back up all) is skipped.
       try {
-        await get().flistPullCharacter(t.name, t.id)
+        await get().flistPullCharacter(t.name, t.id, { skipWhenBusy: true })
       } catch {
         // Per-character failures are surfaced via the picker badge
         // (slot.pullError). Don't abort the rest of the sweep.
@@ -1432,10 +1845,13 @@ export const useStore = create<State>((set, get) => ({
   activePartner: null,
 
   ingestTarget: null,
+  indexRevision: 0,
+  labelsRevision: 0,
 
   messagesByPartner: {},
   messagesStatus: {},
   messagesError: {},
+  settingsRevision: 0,
 
   editorContent: '',
   editorTitle: '',
@@ -1717,8 +2133,8 @@ export const useStore = create<State>((set, get) => ({
       // for every account character whose local copy is older than
       // the user's configured threshold (Settings → F-list). 0
       // minutes = always re-pull. The picker's per-row badges show
-      // progress; pull_lock serialises so a manual ↻ Refresh
-      // interleaves cleanly. Fire-and-forget.
+      // progress; a character already being pulled (a manual ↻
+      // Refresh) is skipped as busy. Fire-and-forget.
       void _flistAutoRefreshOnLogin(get)
     } catch (err) {
       // The modal shows "Invalid account name or password", not
@@ -1741,10 +2157,15 @@ export const useStore = create<State>((set, get) => ({
       }
     }
     _cancelAllPendingTimers()
-    // Abort any in-flight pull BEFORE clearing the ticket so the
-    // sidecar's producer task doesn't keep writing live.json + image
-    // bytes against a torn-down session. The pull-lock and httpx
-    // client clean up via the producer's try/finally on disconnect.
+    // Cancel running Pulls and Back up all BEFORE clearing the ticket so
+    // the sidecar doesn't keep writing live.json + image bytes against a
+    // torn-down session. They are jobs: closing their streams would not
+    // stop them, a cancel by id does.
+    const jobIds = [
+      ...Object.values(get().flistArchive).map((slot) => slot.pullJobId),
+      get().flistBackupAllStatus.jobId
+    ].filter((id): id is string => Boolean(id))
+    await Promise.all(jobIds.map((id) => api.jobCancel(id).catch(() => undefined)))
     const ctrl = get().flistPullAbortController
     if (ctrl) {
       try { ctrl.abort() } catch { /* already aborted */ }
@@ -1961,154 +2382,45 @@ export const useStore = create<State>((set, get) => ({
     await _flistAccountSweep(get, null)
   },
 
-  async flistPullCharacter(name, characterId) {
-    const targetId = characterId ?? null
-    const setStatus = (
-      patch: Partial<{
-        pullStatus: 'idle' | 'queued' | 'running' | 'done' | 'error'
-        pullStage: string
-        pullProgress: { done: number; total: number }
-        pullError: string | null
-      }>
-    ) => {
-      if (!targetId) return
-      set((s) => ({
-        flistArchive: {
-          ...s.flistArchive,
-          [targetId]: {
-            ...(s.flistArchive[targetId] ?? {
-              live: null,
-              pullStatus: 'idle'
-            }),
-            ...patch
-          }
-        }
-      }))
-    }
-    setStatus({ pullStatus: 'queued', pullError: null })
-    const ctrl = new AbortController()
-    set({ flistPullAbortController: ctrl })
+  async flistPullCharacter(name, characterId, opts) {
+    await _followPull(
+      get,
+      set,
+      characterId ?? null,
+      (handlers, signal) => api.flistPull(name, handlers, { signal }),
+      opts
+    )
+  },
+
+  async flistCancelPull(characterId) {
+    const jobId = get().flistArchive[characterId]?.pullJobId
+    if (!jobId) return
+    // The Pull stops at its next await and its stream ends with
+    // `cancelled`, which sets the slot back to idle.
+    await api.jobCancel(jobId)
+  },
+
+  async flistResumeJobs() {
+    let jobs: Job[]
     try {
-      await api.flistPull(name, {
-        onQueued: () => setStatus({ pullStatus: 'queued', pullStage: 'queued' }),
-        onTicket: () =>
-          setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
-        onFetching: () =>
-          setStatus({ pullStatus: 'running', pullStage: 'fetching' }),
-        onImages: ({ total }) =>
-          setStatus({
-            pullStatus: 'running',
-            pullStage: 'images',
-            pullProgress: { done: 0, total }
-          }),
-        onImage: ({ index, total, ok, cached }) => {
-          setStatus({ pullProgress: { done: index, total } })
-          // Refresh the per-character images map so the Images tab's
-          // thumbnails update as files arrive. Only every 10th image to
-          // avoid hammering the sidecar with one HTTP GET per download
-          // (the rate-limited CDN already paces us at ~2/s, so a 10x
-          // skip means the Images tab refreshes every ~5 seconds during
-          // a long pull). Cached events don't change disk state.
-          if (targetId && ok && !cached && (index % 10 === 0 || index === total)) {
-            void get().flistLoadCharacterImages(targetId)
-          }
-        },
-        onDone: async (info) => {
-          // We know the character_id now even if we didn't before. Make
-          // sure the per-id slot exists and gets reloaded.
-          set((s) => ({
-            flistArchive: {
-              ...s.flistArchive,
-              [info.character_id]: {
-                ...(s.flistArchive[info.character_id] ?? {
-                  live: null,
-                  pullStatus: 'idle'
-                }),
-                pullStatus: 'done',
-                pullStage: 'done'
-              }
-            }
-          }))
-          await get().flistLoadArchive(info.character_id)
-          await get().flistLoadCharacterImages(info.character_id)
-          await get().flistLoadRoster()
-          // If the user is sitting on this character's working copy and
-          // hasn't typed anything yet, refresh the editor with the
-          // freshly-pulled Live content. Skip when the working copy is
-          // dirty OR when the live editorContent has already diverged
-          // from the seeded content — covers the race where keystrokes
-          // arrived between the dirty=false snapshot we took and now.
-          const isActive =
-            get().flistActiveCharacterId === info.character_id &&
-            !get().editorReadOnly
-          const working = get().flistWorking[info.character_id]
-          // After a Live re-pull, only stream the new description into
-          // a non-materialised seed-from-Live slot (no edits yet AND
-          // never written to disk). Materialised working copies are
-          // user-authoritative — drift detection runs via the banner
-          // (§5.1) instead.
-          const safe =
-            isActive && (!working || (!working.materialised && !working.unsavedDirty))
-          if (safe) {
-            if (working) {
-              // Drop the seeded slot so flistOpenWorking re-seeds from
-              // the new Live on the next open.
-              set((s) => {
-                const next = { ...s.flistWorking }
-                delete next[info.character_id]
-                return { flistWorking: next }
-              })
-            }
-            void get().flistOpenWorking(info.character_id)
-          } else if (isActive && working?.materialised) {
-            // Materialised working copy active: surface drift for non-
-            // overlaid paths against the new Live.
-            const newLive = get().flistArchive[info.character_id]?.live ?? null
-            const oldLive = working.payload as Record<string, unknown>
-            const allPaths = collectOverlayCandidates(working.payload)
-            const ignore = new Set(working.overlay)
-            const drift = detectLiveDrift(
-              oldLive,
-              newLive as Record<string, unknown>,
-              allPaths,
-              [...ignore]
-            )
-            if (drift.length > 0) {
-              set((s) => ({
-                flistDriftBanners: {
-                  ...s.flistDriftBanners,
-                  [info.character_id]: { paths: drift, dismissedAt: null }
-                }
-              }))
-            }
-            // A saved workbench stays user-authoritative, but the slot
-            // still in memory is a snapshot from whenever it was last
-            // opened — after an external change (another session wrote
-            // the file, a bundle import) the window showed a gallery or
-            // fields that no longer matched what is on disk, and only
-            // clicking back into the character fixed it. Re-reading the
-            // persisted set is what "Refresh" should mean for the open
-            // window: disk is the truth for a saved copy. flistOpenWorking
-            // keeps unsaved keystrokes and refuses to reseed over them.
-            void get().flistOpenWorking(info.character_id)
-          }
-        },
-        onError: ({ message }) => {
-          setStatus({ pullStatus: 'error', pullError: message })
-        }
-      }, { signal: ctrl.signal })
-    } catch (err) {
-      // AbortError = user-initiated (sign-out / explicit cancel).
-      // Don't surface as a scary error to the user.
-      const raw = err instanceof Error ? err.message : String(err)
-      if (err instanceof Error && err.name === 'AbortError') {
-        setStatus({ pullStatus: 'idle', pullError: null })
-      } else {
-        setStatus({ pullStatus: 'error', pullError: raw })
-      }
-    } finally {
-      if (get().flistPullAbortController === ctrl) {
-        set({ flistPullAbortController: null })
+      jobs = (await api.jobsList()).jobs
+    } catch {
+      return
+    }
+    for (const job of jobs) {
+      if (job.state !== 'pending' && job.state !== 'running') continue
+      if (job.kind === 'backup-all') {
+        if (get().flistBackupAllStatus.jobId === job.id) continue
+        _startBackupAllStatus(set, job.id)
+        void _followBackupAll(get, set, (handlers) =>
+          api.flistBackupAllFollow(job.id, handlers)
+        )
+      } else if (job.kind === 'pull') {
+        const cid = _pullTarget(get(), job)
+        if (cid && get().flistArchive[cid]?.pullJobId === job.id) continue
+        void _followPull(get, set, cid, (handlers, signal) =>
+          api.flistPullFollow(job.id, handlers, { signal })
+        )
       }
     }
   },
@@ -2625,7 +2937,7 @@ export const useStore = create<State>((set, get) => ({
     }, RESET_UNDO_MS + 50)
     _resetUndoTimers.set(characterId, t)
     // The Backup the sidecar just kept belongs in the list.
-    if (kept) _refreshBackupList(characterId, set)
+    if (kept) void _refreshBackupList(characterId, set)
   },
 
   // ---- The Live and Workbench rows ----------------------------------
@@ -2640,6 +2952,10 @@ export const useStore = create<State>((set, get) => ({
     } catch {
       // The row keeps what it showed; nothing to correct.
     }
+  },
+
+  flistLoadBackups(characterId) {
+    return _refreshBackupList(characterId, set)
   },
 
   async flistLoadBackupIntoWorkbench(characterId, filename) {
@@ -2792,121 +3108,14 @@ export const useStore = create<State>((set, get) => ({
 
   async flistBackupAll() {
     if (get().flistBackupAllStatus.phase === 'running') return
-    set({
-      flistBackupAllStatus: {
-        phase: 'running',
-        total: 0,
-        done: 0,
-        saved: 0,
-        unchanged: 0,
-        failed: 0,
-        currentName: null,
-        errorMessage: null
-      }
-    })
-    try {
-      await api.flistBackupAll({
-        onStart: ({ total }) => {
-          set((s) => ({
-            flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
-          }))
-        },
-        onQueued: () => {
-          set((s) => ({
-            flistBackupAllStatus: {
-              ...s.flistBackupAllStatus,
-              currentName: 'waiting for another pull to finish…'
-            }
-          }))
-        },
-        onCharacter: (info) => {
-          set((s) => {
-            const cur = s.flistBackupAllStatus
-            if (info.status === 'fetching') {
-              return {
-                flistBackupAllStatus: { ...cur, currentName: info.name }
-              }
-            }
-            // Per-character terminal status: bump counters + done.
-            const next = {
-              ...cur,
-              done: cur.done + 1,
-              saved: cur.saved + (info.status === 'saved' ? 1 : 0),
-              unchanged:
-                cur.unchanged + (info.status === 'unchanged' ? 1 : 0),
-              failed: cur.failed + (info.status === 'error' ? 1 : 0)
-            }
-            return { flistBackupAllStatus: next }
-          })
-          // Refresh the archive slot from disk after each successful
-          // per-character pull. Both 'saved' (ZIP written, content
-          // changed) and 'unchanged' (ZIP dedup'd, content matched
-          // last backup) imply the per-character pull preceded the
-          // ZIP step and put fresh live.json + images on disk. Without
-          // this, the picker would keep showing 'pulled 16h ago' for
-          // every character even though Back up all just
-          // updated all of them — wasted disk + network on subsequent
-          // manual REFRESH ALL clicks. flistLoadArchive reads from
-          // local /flist/character/{id}/live (no F-list network),
-          // updates the live payload + zipBackups +
-          // lastPullAt in one pass.
-          const refreshable =
-            (info.status === 'saved' || info.status === 'unchanged') &&
-            info.character_id
-          if (refreshable) {
-            void get().flistLoadArchive(info.character_id!)
-          }
-        },
-        onDone: () => {
-          set((s) => ({
-            flistBackupAllStatus: {
-              ...s.flistBackupAllStatus,
-              phase: 'done',
-              currentName: null
-            }
-          }))
-          // Auto-clear the summary banner after 6s so it doesn't
-          // linger past usefulness.
-          setTimeout(() => {
-            const cur = get().flistBackupAllStatus
-            if (cur.phase === 'done') {
-              set({
-                flistBackupAllStatus: {
-                  phase: 'idle',
-                  total: 0,
-                  done: 0,
-                  saved: 0,
-                  unchanged: 0,
-                  failed: 0,
-                  currentName: null,
-                  errorMessage: null
-                }
-              })
-            }
-          }, 6000)
-        },
-        onError: ({ message }) => {
-          set((s) => ({
-            flistBackupAllStatus: {
-              ...s.flistBackupAllStatus,
-              phase: 'error',
-              errorMessage: message,
-              currentName: null
-            }
-          }))
-        }
-      })
-    } catch (err) {
-      const message = (err as Error).message ?? 'backup-all failed'
-      set((s) => ({
-        flistBackupAllStatus: {
-          ...s.flistBackupAllStatus,
-          phase: 'error',
-          errorMessage: message,
-          currentName: null
-        }
-      }))
-    }
+    _startBackupAllStatus(set, null)
+    await _followBackupAll(get, set, (handlers) => api.flistBackupAll(handlers))
+  },
+
+  async flistCancelBackupAll() {
+    const jobId = get().flistBackupAllStatus.jobId
+    if (!jobId) return
+    await api.jobCancel(jobId)
   },
 
   async flistBackupCharacter(name, opts) {
@@ -4087,6 +4296,17 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  noteSettingsChanged(fields) {
+    set((s) => ({ settingsRevision: s.settingsRevision + 1 }))
+    // The OOC threshold is applied when a Log is read, so the open
+    // Log's Labels are only current after a re-read.
+    const { activeCharacter: char, activePartner: partner } = get()
+    if (fields.includes('labels.threshold_chars') && char && partner) {
+      get().invalidateMessages(char, partner)
+      void get().loadMessages(char, partner, { force: true })
+    }
+  },
+
   openIngest(scope, label, opts) {
     set({
       ingestTarget: { scope, label, forceRewipe: opts?.forceRewipe ?? false }
@@ -4095,6 +4315,14 @@ export const useStore = create<State>((set, get) => ({
 
   closeIngest() {
     set({ ingestTarget: null })
+  },
+
+  noteIndexChanged() {
+    set((s) => ({ indexRevision: s.indexRevision + 1 }))
+  },
+
+  noteLabelsChanged() {
+    set((s) => ({ labelsRevision: s.labelsRevision + 1 }))
   },
 
   // Patches one message's label fields in place, or those of every

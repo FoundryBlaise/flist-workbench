@@ -23,18 +23,19 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {
@@ -62,7 +63,7 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     mapping_service.invalidate()
     importlib.reload(server)
-    yield character_archive
+    yield
     mapping_service.invalidate()
 
 

@@ -1,20 +1,20 @@
 """Read-only cache for *other people's* F-list profiles.
 
-Deliberately a separate store from `character_archive`, with its own
-root:
+Deliberately a separate store from the character archive (the
+`archive_*` modules), with its own root:
 
     <userdata>/foreign/<slug>/profile.json     character-data.php verbatim
     <userdata>/foreign/<slug>/avatar.png
     <userdata>/foreign/<slug>/images/<image_id>.<ext>
 
-`profile.json` carries exactly the shape `character_archive.write_live`
+`profile.json` carries exactly the shape `archive_live.write_live`
 stores — the same `character-data.php` payload with a `fetched_at`
 stamp — so the renderer's existing profile panes read it without a
 translation layer.
 
 The separate root is the point. Everything that can copy, back up,
 export or edit a character resolves its paths through
-`character_archive.character_dir()`, and nothing under `foreign/` is
+`archive_registry.character_dir()`, and nothing under `foreign/` is
 reachable that way. Copying one of these into a Workbench is still
 *possible* for anyone with a file manager; what the app must not offer
 is a button that does it.
@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import atomic_write
 import paths
 
 FOREIGN_DIRNAME = "foreign"
@@ -53,7 +54,7 @@ def root() -> Path:
 def slug_for(name: str) -> str:
     """On-disk folder name for a character name.
 
-    Mirrors `character_archive._slug_for` — readable folder when the
+    Mirrors `archive_registry._slug_for` — readable folder when the
     name is filesystem-safe, sha1 fallback otherwise — with two
     differences. The fallback prefix is `f_`, so a directory listing
     distinguishes these from the `c_` folders of the user's own
@@ -76,7 +77,7 @@ def slug_for(name: str) -> str:
         raise ValueError("character name is empty")
     # Reuse the archive's safety predicate rather than keeping a second
     # copy of the Windows reserved-name list in sync.
-    from character_archive import _is_folder_safe
+    from archive_registry import _is_folder_safe
 
     if _is_folder_safe(n):
         return n
@@ -130,25 +131,12 @@ def read_profile(name: str) -> dict[str, Any] | None:
 def write_profile(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Store `payload` with a `fetched_at` stamp. Returns what landed.
 
-    Written the same way the archive writes `live.json` — temp file
-    then replace — so a half-written profile is never readable.
+    Written atomically, like the archive's `live.json`, so a
+    half-written profile is never readable.
     """
     stamped = dict(payload)
     stamped["fetched_at"] = int(time.time())
-    target = _profile_path(name)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(stamped, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    try:
-        tmp.replace(target)
-    except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    atomic_write.write_json(_profile_path(name), stamped, indent=2, ensure_ascii=False)
     return stamped
 
 

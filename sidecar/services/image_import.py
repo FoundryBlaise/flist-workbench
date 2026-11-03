@@ -28,8 +28,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import character_archive
+import archive_backups
+import archive_images
+import archive_live
+import archive_registry
+import archive_workbench
+import atomic_write
 import settings as settings_store
+from refusals import Refusal
 
 #: F-list's upload limits, as the user reports them: under 2.0 MB and
 #: under 4000 px on either side. A file over them is still imported —
@@ -48,15 +54,18 @@ META_FILENAME = "image_meta.json"
 _meta_lock = threading.Lock()
 
 
-class ImportRefused(Exception):
+class ImportRefused(Refusal):
     """A source that cannot be imported, with a stable code the MCP
-    layer turns into a ToolError."""
+    layer turns into a ToolError. A source the sidecar may not or
+    cannot read is the caller's to fix (400); one it could not store
+    is not (500)."""
+
+    STATUS_BY_CODE = {"store_failed": 500}
 
     def __init__(self, code: str, message: str, **details: Any) -> None:
-        super().__init__(f"{code}: {message}")
+        super().__init__(message, details=details)
         self.code = code
-        self.message = message
-        self.details = details
+        self.status = self.STATUS_BY_CODE.get(code, 400)
 
 
 # --------------------------------------------------------------------
@@ -85,9 +94,10 @@ def import_roots(conn: Any = None) -> list[Path]:
     return [Path(v) for v in values if isinstance(v, str) and v.strip()]
 
 
-def save_import_roots(conn: Any, roots: list[str]) -> list[str]:
-    """Validate and store the folder list. Raises ValueError naming the
-    first entry that is not an existing absolute directory."""
+def clean_import_roots(roots: list[str]) -> list[str]:
+    """The folder list as it is stored: blanks and repeats dropped.
+    Raises ValueError naming the first entry that is not an existing
+    absolute directory."""
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in roots:
@@ -104,12 +114,6 @@ def save_import_roots(conn: Any, roots: list[str]) -> list[str]:
             continue
         seen.add(key)
         cleaned.append(str(p))
-    if cleaned:
-        settings_store.set_value(
-            conn, settings_store.KEY_IMAGE_IMPORT_ROOTS, json.dumps(cleaned)
-        )
-    else:
-        settings_store.clear(conn, settings_store.KEY_IMAGE_IMPORT_ROOTS)
     return cleaned
 
 
@@ -264,7 +268,7 @@ def prepare(
         data = path.read_bytes()
     except OSError as exc:
         raise ImportRefused("source_unreadable", f"Cannot read '{source_path}'.") from exc
-    ext = character_archive.detect_image_ext(data)
+    ext = archive_images.detect_image_ext(data)
     if ext is None:
         raise ImportRefused(
             "not_an_image",
@@ -298,7 +302,7 @@ def prepare(
 def store(character_id: int | str, prepared: PreparedImage) -> dict[str, Any]:
     """Put prepared bytes into the character's image folder (or find the
     identical file already there) and remember where they came from."""
-    row = character_archive.add_uploaded_image(character_id, prepared.data)
+    row = archive_images.add_uploaded_image(character_id, prepared.data)
     if row is None:
         # prepare() already sniffed the format; this is a disk problem.
         raise ImportRefused("store_failed", f"Could not store {prepared.source_name}.")
@@ -317,7 +321,7 @@ def store(character_id: int | str, prepared: PreparedImage) -> dict[str, Any]:
 
 
 def _meta_path(character_id: int | str) -> Path:
-    return character_archive.character_dir(character_id) / META_FILENAME
+    return archive_registry.character_dir(character_id) / META_FILENAME
 
 
 def read_meta(character_id: int | str) -> dict[str, dict[str, Any]]:
@@ -329,6 +333,7 @@ def read_meta(character_id: int | str) -> dict[str, dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
+@archive_registry.under_character_lock
 def record_source(character_id: int | str, sha: str, source_name: str) -> None:
     """Remember the name a file was imported under. The first name wins:
     importing the same bytes again under another name changes nothing."""
@@ -337,10 +342,7 @@ def record_source(character_id: int | str, sha: str, source_name: str) -> None:
         if sha in meta and meta[sha].get("source_name"):
             return
         meta[sha] = {"source_name": source_name, "imported_at": int(time.time())}
-        p = _meta_path(character_id)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(p)
+        atomic_write.write_json(_meta_path(character_id), meta, ensure_ascii=False, indent=1)
 
 
 # --------------------------------------------------------------------
@@ -416,13 +418,13 @@ def references(character_id: int | str) -> dict[str, dict[str, Any]]:
         }
 
     out: dict[str, dict[str, Any]] = defaultdict(empty)
-    bench = character_archive.read_workbench(character_id)
+    bench = archive_workbench.read_workbench(character_id)
     for image_id in _image_ids(bench.payload if bench else None):
         out[image_id]["workbench"] = True
-    for image_id in _image_ids(character_archive.read_live(character_id)):
+    for image_id in _image_ids(archive_live.read_live(character_id)):
         out[image_id]["live"] = True
-    backups = character_archive.backups_dir(character_id)
-    for backup in character_archive.list_zip_backups(character_id):  # newest first
+    backups = archive_backups.backups_dir(character_id)
+    for backup in archive_backups.list_zip_backups(character_id):  # newest first
         ids = _ids_in_backup(backups / backup["filename"])
         if not backup["holds_profile"]:
             for image_id in ids:

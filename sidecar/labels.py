@@ -33,6 +33,8 @@ from typing import Iterable
 
 import paths
 import settings as settings_store
+import sqlite_db
+from services import events
 
 # Three-state result the resolver returns. The labels table only ever
 # stores IC or OOC; "Unlabeled" is what the resolver returns when no
@@ -380,44 +382,143 @@ PROMPT_PRESETS: tuple[PromptPreset, ...] = (
     ),
 )
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS labels (
-    hash         TEXT PRIMARY KEY,
-    character    TEXT NOT NULL,
-    partner      TEXT NOT NULL,
-    ts           INTEGER NOT NULL,
-    speaker      TEXT NOT NULL,
-    label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
-    confidence   REAL NOT NULL,
-    reason       TEXT,
-    -- 'mcp': a verdict from the model the user connected over MCP.
-    -- 'manual': the user's own right-click override.
-    -- 'llm': written by the in-app classifier that existed before the
-    -- MCP migration; kept so old rows stay readable.
-    source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
-    prior_label  TEXT,
-    prior_source TEXT,
-    updated_at   REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner);
-CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
+# labels.db holds more than Labels: the partner aliases (aliases.py),
+# the Index manifest (rag_store.py) and the keyword index
+# (rag_lexical.py) live in the same file. Its whole schema is created
+# and migrated here, so every connection to the file, whichever module
+# opens it, gets the same version, WAL and busy timeout.
+#
+# Released steps never change; a schema change is a new step at the end.
 
--- Partner aliases share this DB so every labels.connect() is
--- automatically alias-aware. aliases.py owns the read/write logic;
--- duplicating the CREATE here just guarantees the table exists for
--- callers (rag_jobs, server.py) that pass the labels connection
--- straight into aliases_store helpers.
-CREATE TABLE IF NOT EXISTS partner_aliases (
-    character     TEXT NOT NULL,
-    name          TEXT NOT NULL,
-    primary_name  TEXT NOT NULL,
-    created_at    REAL NOT NULL,
-    PRIMARY KEY (character, name)
-);
-CREATE INDEX IF NOT EXISTS idx_aliases_primary
-    ON partner_aliases(character, primary_name);
 
-"""
+def _create_tables(conn: sqlite3.Connection) -> None:
+    """The schema as of the first versioned release.
+
+    Every statement is IF NOT EXISTS: an unversioned database from an
+    earlier release already has most of these tables, in shapes the
+    following steps bring up to date.
+    """
+    for statement in (
+        """
+        CREATE TABLE IF NOT EXISTS labels (
+            hash         TEXT PRIMARY KEY,
+            character    TEXT NOT NULL,
+            partner      TEXT NOT NULL,
+            ts           INTEGER NOT NULL,
+            speaker      TEXT NOT NULL,
+            label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+            confidence   REAL NOT NULL,
+            reason       TEXT,
+            -- 'mcp': a verdict from the model the user connected over MCP.
+            -- 'manual': the user's own right-click override.
+            -- 'llm': written by the in-app classifier that existed before the
+            -- MCP migration; kept so old rows stay readable.
+            source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
+            prior_label  TEXT,
+            prior_source TEXT,
+            updated_at   REAL NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner)",
+        "CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts)",
+        """
+        CREATE TABLE IF NOT EXISTS partner_aliases (
+            character     TEXT NOT NULL,
+            name          TEXT NOT NULL,
+            primary_name  TEXT NOT NULL,
+            created_at    REAL NOT NULL,
+            PRIMARY KEY (character, name)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_aliases_primary
+            ON partner_aliases(character, primary_name)
+        """,
+        # The Index manifest: embedding model, dimension, last ingest.
+        """
+        CREATE TABLE IF NOT EXISTS rag_meta (
+            key         TEXT PRIMARY KEY,
+            value       TEXT NOT NULL,
+            updated_at  REAL NOT NULL
+        )
+        """,
+        # The keyword index, mirroring the Index's chunk text.
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(
+            chunk_id    UNINDEXED,
+            char_owner  UNINDEXED,
+            partner     UNINDEXED,
+            text,
+            tokenize='unicode61 remove_diacritics 2'
+        )
+        """,
+    ):
+        conn.execute(statement)
+
+
+#: Tables that belonged to the in-app classifier: failed classify
+#: attempts, and the history of classify jobs. Nothing writes either
+#: since classification moved to the connected MCP client, so they are
+#: dropped rather than left to sit in every existing labels.db. The
+#: `labels` table itself — the actual verdicts — is untouched.
+_drop_retired_tables = sqlite_db.statements(
+    "DROP TABLE IF EXISTS label_failures",
+    "DROP TABLE IF EXISTS label_jobs",
+)
+
+
+def _widen_source_check(conn: sqlite3.Connection) -> None:
+    """Let databases from before the MCP migration accept `source = 'mcp'`.
+
+    The CHECK constraint used to allow only 'llm' and 'manual', so the
+    first verdict written by a connected model would fail with an
+    IntegrityError. SQLite cannot alter a constraint in place, so the
+    table is rebuilt, rows and all.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'labels'"
+    ).fetchone()
+    if row is None or "'mcp'" in (row["sql"] or ""):
+        return
+    for statement in (
+        """
+        CREATE TABLE labels_migrated (
+            hash         TEXT PRIMARY KEY,
+            character    TEXT NOT NULL,
+            partner      TEXT NOT NULL,
+            ts           INTEGER NOT NULL,
+            speaker      TEXT NOT NULL,
+            label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+            confidence   REAL NOT NULL,
+            reason       TEXT,
+            source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
+            prior_label  TEXT,
+            prior_source TEXT,
+            updated_at   REAL NOT NULL
+        )
+        """,
+        """
+        INSERT INTO labels_migrated SELECT
+            hash, character, partner, ts, speaker, label, confidence,
+            reason, source, prior_label, prior_source, updated_at
+        FROM labels
+        """,
+        "DROP TABLE labels",
+        "ALTER TABLE labels_migrated RENAME TO labels",
+        "CREATE INDEX IF NOT EXISTS idx_labels_partner ON labels(character, partner)",
+        "CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts)",
+    ):
+        conn.execute(statement)
+
+
+MIGRATIONS: tuple[sqlite_db.Migration, ...] = (
+    _create_tables,
+    _drop_retired_tables,
+    _widen_source_check,
+)
+
+#: The `user_version` of a labels.db that has every migration.
+SCHEMA_VERSION = len(MIGRATIONS)
 
 
 def db_path(root: Path | None = None) -> Path:
@@ -427,106 +528,8 @@ def db_path(root: Path | None = None) -> Path:
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    # check_same_thread=False — FastAPI runs generator dependencies in
-    # the anyio threadpool and may schedule the dep setup, the endpoint
-    # body, and the teardown on three different worker threads. SQLite's
-    # default same-thread guard then throws cross-thread errors. Per-
-    # request open + close means concurrent use of a single connection
-    # isn't a risk.
-    conn = sqlite3.connect(db_path(root), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA)
-    _drop_retired_tables(conn)
-    _widen_source_check(conn)
-    return conn
-
-
-#: Tables that belonged to the in-app classifier: failed classify
-#: attempts, and the history of classify jobs. Nothing writes either
-#: since classification moved to the connected MCP client, so they are
-#: dropped rather than left to sit in every existing labels.db. The
-#: `labels` table itself — the actual verdicts — is untouched.
-_RETIRED_TABLES = ("label_failures", "label_jobs")
-
-
-def _drop_retired_tables(conn: sqlite3.Connection) -> None:
-    try:
-        for table in _RETIRED_TABLES:
-            conn.execute(f"DROP TABLE IF EXISTS {table}")
-        conn.commit()
-    except sqlite3.DatabaseError:
-        # Never let cleanup stop the sidecar from serving labels.
-        pass
-
-
-def _widen_source_check(conn: sqlite3.Connection) -> None:
-    """Let existing databases accept `source = 'mcp'`.
-
-    The CHECK constraint predates the MCP migration and only allowed
-    'llm' and 'manual', so the first verdict written by a connected
-    model would fail with an IntegrityError on any install created
-    before this version. SQLite cannot alter a constraint in place, so
-    the table is rebuilt — rows and all — the one time it is needed.
-    """
-    try:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'labels'"
-        ).fetchone()
-        if row is None or "'mcp'" in (row["sql"] or ""):
-            return
-        conn.executescript(
-            """
-            PRAGMA foreign_keys = off;
-            BEGIN;
-            CREATE TABLE labels_migrated (
-                hash         TEXT PRIMARY KEY,
-                character    TEXT NOT NULL,
-                partner      TEXT NOT NULL,
-                ts           INTEGER NOT NULL,
-                speaker      TEXT NOT NULL,
-                label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
-                confidence   REAL NOT NULL,
-                reason       TEXT,
-                source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
-                prior_label  TEXT,
-                prior_source TEXT,
-                updated_at   REAL NOT NULL
-            );
-            INSERT INTO labels_migrated SELECT
-                hash, character, partner, ts, speaker, label, confidence,
-                reason, source, prior_label, prior_source, updated_at
-            FROM labels;
-            DROP TABLE labels;
-            ALTER TABLE labels_migrated RENAME TO labels;
-            CREATE INDEX IF NOT EXISTS idx_labels_partner
-                ON labels(character, partner);
-            CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
-            COMMIT;
-            PRAGMA foreign_keys = on;
-            """
-        )
-    except sqlite3.DatabaseError:
-        # A failed widening leaves the old table intact: MCP writes will
-        # error visibly, which beats losing the user's curated verdicts.
-        try:
-            conn.rollback()
-        except sqlite3.DatabaseError:
-            pass
-
-
-def _publish(event: str, **data) -> None:
-    """Announce a label change on the event bus, if one is running.
-
-    Here rather than in the callers so the manual override from the
-    log viewer and a model's verdict through MCP both reach the
-    window. Never fails a write.
-    """
-    try:
-        from services import events
-
-        events.publish(event, **data)
-    except Exception:  # noqa: BLE001
-        pass
+    """Open labels.db, migrated to the latest version (see sqlite_db)."""
+    return sqlite_db.connect(db_path(root), MIGRATIONS)
 
 
 def msg_hash(msg: dict) -> str:
@@ -669,38 +672,12 @@ def upsert_label(
     column is effectively dead weight. Leaving it in place avoids a
     migration; no callers read it anymore.
     """
-    if label not in (LABEL_IC, LABEL_OOC):
-        raise ValueError(f"invalid label: {label!r}")
-    if source not in ("mcp", "manual", "llm"):
-        raise ValueError(f"invalid source: {source!r}")
-    existing = conn.execute(
-        "SELECT label, source FROM labels WHERE hash = ?", (hash,)
-    ).fetchone()
-    prior_label = existing["label"] if existing else None
-    prior_source = existing["source"] if existing else None
-    conn.execute(
-        """
-        INSERT INTO labels (
-            hash, character, partner, ts, speaker, label,
-            confidence, reason, source, prior_label, prior_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET
-            label = excluded.label,
-            confidence = excluded.confidence,
-            reason = excluded.reason,
-            source = excluded.source,
-            prior_label = excluded.prior_label,
-            prior_source = excluded.prior_source,
-            updated_at = excluded.updated_at
-        """,
-        (
-            hash, character, partner, ts, speaker, label,
-            1.0, reason, source, prior_label, prior_source, time.time(),
-        ),
-    )
-    conn.commit()
-    _publish(
-        "labels-changed", character=character, partner=partner, hashes=1
+    upsert_verdicts(
+        conn,
+        [(hash, ts, speaker, label, reason)],
+        character=character,
+        partner=partner,
+        source=source,
     )
 
 
@@ -719,13 +696,37 @@ def upsert_labels_many(
     multi-select: the user picks rows scattered through a conversation
     and gives them all the same verdict. Each row still keeps its own
     prior label for the badge tooltip."""
-    if label not in (LABEL_IC, LABEL_OOC):
-        raise ValueError(f"invalid label: {label!r}")
+    return upsert_verdicts(
+        conn,
+        [(h, ts, speaker, label, reason) for h, ts, speaker in items],
+        character=character,
+        partner=partner,
+        source=source,
+    )
+
+
+def upsert_verdicts(
+    conn: sqlite3.Connection,
+    items: Iterable[tuple[str, int, str, str, str | None]],
+    *,
+    character: str,
+    partner: str,
+    source: str,
+) -> int:
+    """Store `(hash, ts, speaker, label, reason)` verdicts, each with its
+    own label and reason, in one transaction and one `labels-changed`
+    event. Every row snapshots the label it replaces as its prior one.
+    Returns how many messages were written."""
     if source not in ("mcp", "manual", "llm"):
         raise ValueError(f"invalid source: {source!r}")
     # One row per hash, the last mention winning, so a doubled entry
     # cannot snapshot its own new label as the prior one.
-    rows = {h: (ts, speaker) for h, ts, speaker in items if h}
+    rows: dict[str, tuple[int, str, str, str | None]] = {}
+    for h, ts, speaker, label, reason in items:
+        if label not in (LABEL_IC, LABEL_OOC):
+            raise ValueError(f"invalid label: {label!r}")
+        if h:
+            rows[h] = (ts, speaker, label, reason)
     if not rows:
         return 0
     prior: dict[str, tuple[str | None, str | None]] = {}
@@ -759,14 +760,31 @@ def upsert_labels_many(
                 h, character, partner, ts, speaker, label,
                 1.0, reason, source, *prior.get(h, (None, None)), now,
             )
-            for h, (ts, speaker) in rows.items()
+            for h, (ts, speaker, label, reason) in rows.items()
         ],
     )
     conn.commit()
-    _publish(
-        "labels-changed", character=character, partner=partner, hashes=len(rows)
+    events.publish(
+        events.LABELS_CHANGED, character=character, partner=partner, hashes=len(rows)
     )
     return len(rows)
+
+
+def label_row(conn: sqlite3.Connection, hash: str) -> dict | None:
+    """The stored Label of one message as a dict of `LABEL_COLUMNS`, or
+    None when it has none."""
+    row = conn.execute(
+        f"SELECT {', '.join(LABEL_COLUMNS)} FROM labels WHERE hash = ?", (hash,)
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def count_by_source(conn: sqlite3.Connection, source: str) -> int:
+    """How many stored Labels came from `source` ('manual', 'mcp', 'llm')."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM labels WHERE source = ?", (source,)
+    ).fetchone()
+    return int(row[0] or 0)
 
 
 def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
@@ -774,7 +792,7 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     cur = conn.execute("DELETE FROM labels WHERE hash = ?", (hash,))
     conn.commit()
     if cur.rowcount:
-        _publish("labels-changed", hashes=cur.rowcount)
+        events.publish(events.LABELS_CHANGED, hashes=cur.rowcount)
     return cur.rowcount > 0
 
 
@@ -795,8 +813,8 @@ def delete_labels_for_partner(
         (character, *names),
     )
     conn.commit()
-    _publish(
-        "labels-changed",
+    events.publish(
+        events.LABELS_CHANGED,
         character=character,
         partner=partner,
         deleted=cur.rowcount,
@@ -870,7 +888,7 @@ def restore_labels(
     conn.commit()
     per_conversation = Counter((r["character"], r["partner"]) for r in todo)
     for (character, partner), n in sorted(per_conversation.items()):
-        _publish("labels-changed", character=character, partner=partner, hashes=n)
+        events.publish(events.LABELS_CHANGED, character=character, partner=partner, hashes=n)
     return len(todo), [h for h in wanted if h in present]
 
 
@@ -951,8 +969,8 @@ def fill_unlabeled(
     )
     conn.commit()
     if targets:
-        _publish(
-            "labels-changed",
+        events.publish(
+            events.LABELS_CHANGED,
             character=character,
             partner=partner,
             hashes=len(targets),
@@ -990,8 +1008,8 @@ def delete_labels_by_hash(
         removed += cur.rowcount
     conn.commit()
     if removed:
-        _publish(
-            "labels-changed",
+        events.publish(
+            events.LABELS_CHANGED,
             character=character,
             partner=partner,
             deleted=removed,

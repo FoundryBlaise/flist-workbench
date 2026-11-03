@@ -10,6 +10,12 @@ two things:
 * a single place that enforces the house style from
   docs/MCP_DESIGN.md §7: every tool carries annotations, and every
   destructive tool takes a `confirm` flag.
+
+FastMCP calls a plain `def` tool on the event loop, where a semantic
+search or a zip build would stall the window and every other client
+until it returned. So every sync tool and resource is served through an
+async twin that runs it in the threadpool (`_off_loop`); its name and
+schema come from the original, which tests can still call directly.
 """
 
 from __future__ import annotations
@@ -21,8 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcp.types import ToolAnnotations
+from starlette.concurrency import run_in_threadpool
 
+from refusals import Refusal
 from services import events
+
+from ._context import ToolError
 
 #: Tag applied to tools that belong on the character-editing endpoint.
 TAG_CHARACTER = "character"
@@ -112,12 +122,14 @@ def tool(
 
 def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     """Tag everything a tool publishes on the event bus as coming from
-    MCP, naming the tool.
+    MCP, naming the tool, and report a `Refusal` from anywhere under the
+    tool as a `ToolError` with its code and details.
 
     The renderer ignores changes it made itself and reloads for
     everything else, so a write has to say where it came from — and
     "the set you have open just changed" is far more useful to a user
-    when it can name `set_description` as the cause.
+    when it can name `set_description` as the cause. A refusal reads
+    the same to a model as to the window (`refusals`).
     """
 
     if inspect.iscoroutinefunction(fn):
@@ -125,16 +137,39 @@ def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             with events.origin(f"mcp:{tool_name}"):
-                return await fn(*args, **kwargs)
+                try:
+                    return await fn(*args, **kwargs)
+                except Refusal as exc:
+                    raise ToolError.from_refusal(exc) from exc
 
         return async_wrapper
 
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        with events.origin(f"mcp:{tool_name}"):
-            return fn(*args, **kwargs)
+    # A call is one change to the window, however many files it writes
+    # (an import of several images, a Backup and its name). Only the
+    # quick ones: a streaming tool (a Pull, Back up all) groups its own.
+    def call(*args: Any, **kwargs: Any) -> Any:
+        with events.origin(f"mcp:{tool_name}"), events.coalesced():
+            try:
+                return fn(*args, **kwargs)
+            except Refusal as exc:
+                raise ToolError.from_refusal(exc) from exc
 
-    return wrapper
+    return _off_loop(fn, call)
+
+
+def _off_loop(
+    fn: Callable[..., Any], call: Callable[..., Any] | None = None
+) -> Callable[..., Any]:
+    """An async stand-in for the sync `fn` that runs `call` (default:
+    `fn`) in the threadpool. `functools.wraps` carries the name,
+    docstring and signature FastMCP builds the schema from."""
+    run = call or fn
+
+    @functools.wraps(fn)
+    async def in_threadpool(*args: Any, **kwargs: Any) -> Any:
+        return await run_in_threadpool(run, *args, **kwargs)
+
+    return in_threadpool
 
 
 def registered_tools(tags: frozenset[str] | None = None) -> list[ToolSpec]:
@@ -211,7 +246,7 @@ def resource(
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
         _RESOURCES.append(
             ResourceSpec(
-                fn=fn,
+                fn=fn if inspect.iscoroutinefunction(fn) else _off_loop(fn),
                 uri=uri,
                 name=name or fn.__name__,
                 description=description,

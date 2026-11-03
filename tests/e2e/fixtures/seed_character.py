@@ -25,12 +25,14 @@ def main() -> None:
     sys.path.insert(0, str(REPO / "sidecar"))
     sys.path.insert(0, str(REPO / "sidecar" / "tests"))
 
-    import character_archive  # noqa: E402
+    import archive_live  # noqa: E402
+    import archive_registry  # noqa: E402
+    import archive_workbench  # noqa: E402
     from test_mcp_reads import MAPPING  # noqa: E402
 
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
-    character_archive.write_live(
+    archive_live.write_live(
         character_id,
         {
             "id": int(character_id),
@@ -45,7 +47,7 @@ def main() -> None:
         },
     )
     # Its Workbench too, as for a character the user has edited before.
-    character_archive.read_workbench(character_id, create=True)
+    archive_workbench.read_workbench(character_id, create=True)
 
 
 if __name__ == "__main__":

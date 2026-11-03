@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+import archive_backups
+import archive_images
+import archive_live
+import archive_registry
 from sidecar_client import app_client
 from PIL import Image
 
@@ -81,7 +85,7 @@ def test_restoring_bytes_the_pool_already_has_makes_no_duplicate(client, workben
     iid = upload(client, 3)
     client.delete(f"/flist/character/42/images/{iid}")
     # A pull fetches the same picture again under F-list's id.
-    workbench.write_character_image("42", "47000001", "png", png(3))
+    archive_images.write_character_image("42", "47000001", "png", png(3))
 
     res = client.post("/flist/character/42/trash/restore", json={"image_ids": [iid]}).json()
 
@@ -92,9 +96,9 @@ def test_restoring_bytes_the_pool_already_has_makes_no_duplicate(client, workben
 
 def test_the_window_can_ask_where_an_image_is_used(client, workbench) -> None:  # noqa: F811
     iid = upload(client, 13)
-    live = workbench.read_live("42")
+    live = archive_live.read_live("42")
     live["images"] = [{"image_id": iid, "description": "", "sort_order": 0}]
-    workbench.write_live("42", live)
+    archive_live.write_live("42", live)
 
     refs = client.get("/flist/character/42/image-references").json()
 
@@ -124,16 +128,16 @@ def _back_up(client: TestClient) -> str:
 
 def test_image_usage_counts_the_workbench_live_and_backups(client, workbench) -> None:  # noqa: F811
     kept, parked, pulled, older, loose = (upload(client, n) for n in (30, 31, 32, 33, 34))
-    live = workbench.read_live("42")
+    live = archive_live.read_live("42")
     live["images"] = [{"image_id": pulled, "description": "", "sort_order": 0}]
-    workbench.write_live("42", live)
+    archive_live.write_live("42", live)
     _set_gallery(client, [parked, kept])
     first = _back_up(client)
     _set_gallery(client, [kept])
     second = _back_up(client)
     # A copy of Live an earlier version kept per Pull names `older`;
     # nothing counts it any more.
-    old_copies = workbench.character_dir("42") / "snapshots"
+    old_copies = archive_registry.character_dir("42") / "snapshots"
     old_copies.mkdir()
     (old_copies / "1000.json").write_text(
         '{"images": [{"image_id": "%s"}]}' % older, encoding="utf-8"
@@ -233,9 +237,9 @@ async def test_a_model_can_trash_pool_images_but_not_gallery_ones(
     on_profile = upload(client, 20)
     loose = upload(client, 21)
     pulled = upload(client, 22)
-    live = workbench.read_live("42")
+    live = archive_live.read_live("42")
     live["images"] = [{"image_id": pulled, "description": "", "sort_order": 0}]
-    workbench.write_live("42", live)
+    archive_live.write_live("42", live)
 
     async with mcp_client("character") as session:
         await open_workbench(session)
@@ -260,16 +264,12 @@ async def test_a_model_can_trash_pool_images_but_not_gallery_ones(
 def test_the_trash_remembers_where_an_import_came_from(
     client, workbench, tmp_path: Path  # noqa: F811
 ) -> None:
-    import settings as settings_store
     from services import image_import
+    from services import settings as settings_service
 
     folder = tmp_path / "Outputs"
     folder.mkdir()
-    conn = settings_store.connect()
-    try:
-        image_import.save_import_roots(conn, [str(folder)])
-    finally:
-        conn.close()
+    settings_service.update({"image_import_roots": [str(folder)]})
     src = folder / "Profil_final_03.png"
     src.write_bytes(png(10))
     prepared = image_import.prepare(str(src), roots=image_import.import_roots())
@@ -291,7 +291,7 @@ async def test_backups_leave_the_trash_out(client, workbench) -> None:  # noqa: 
     seed_gallery(workbench, [keep])
     client.delete(f"/flist/character/42/images/{gone}")
 
-    backup = workbench.save_zip_backup("42", source="workbench", occasion="manual", force=True)
+    backup = archive_backups.save_zip_backup("42", source="workbench", occasion="manual", force=True)
 
     names = zipfile.ZipFile(backup["path"]).namelist()
     assert any(keep in n for n in names), names
@@ -323,9 +323,9 @@ def test_two_different_files_trashed_under_one_id_are_both_kept(
     client, workbench  # noqa: F811
 ) -> None:
     # A Pull can put other bytes under an id the pool already had.
-    workbench.write_character_image("42", "47000002", "png", png(30))
+    archive_images.write_character_image("42", "47000002", "png", png(30))
     client.delete("/flist/character/42/images/47000002")
-    workbench.write_character_image("42", "47000002", "jpg", png(31))
+    archive_images.write_character_image("42", "47000002", "jpg", png(31))
     client.delete("/flist/character/42/images/47000002")
 
     items = client.get("/flist/character/42/trash").json()["items"]
@@ -342,9 +342,9 @@ def test_two_different_files_trashed_under_one_id_are_both_kept(
 
 
 def test_trashing_the_same_bytes_twice_keeps_one_copy(client, workbench) -> None:  # noqa: F811
-    workbench.write_character_image("42", "47000003", "png", png(32))
+    archive_images.write_character_image("42", "47000003", "png", png(32))
     client.delete("/flist/character/42/images/47000003")
-    workbench.write_character_image("42", "47000003", "png", png(32))
+    archive_images.write_character_image("42", "47000003", "png", png(32))
     client.delete("/flist/character/42/images/47000003")
 
     assert list(trash_bytes(client).values()) == [png(32)]
@@ -355,10 +355,10 @@ def test_restoring_onto_a_pool_file_with_other_bytes_keeps_both(
 ) -> None:
     import hashlib
 
-    workbench.write_character_image("42", "47000004", "png", png(33))
+    archive_images.write_character_image("42", "47000004", "png", png(33))
     client.delete("/flist/character/42/images/47000004")
     # Meanwhile the pool got a different picture under the same name.
-    workbench.write_character_image("42", "47000004", "png", png(34))
+    archive_images.write_character_image("42", "47000004", "png", png(34))
 
     res = client.post(
         "/flist/character/42/trash/restore", json={"image_ids": ["47000004"]}

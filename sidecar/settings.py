@@ -12,16 +12,10 @@ import sqlite3
 from pathlib import Path
 
 import paths
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-"""
+import sqlite_db
 
 # Keys we know about. Untyped here intentionally — keeps the table
-# trivial; the API layer is where shape validation happens.
+# trivial; services/settings.py validates every change, REST or MCP.
 KEY_FCHAT_DATA_DIR = "fchat_data_dir"
 
 # Labels settings (see sidecar/labels.py for defaults + resolver).
@@ -76,16 +70,21 @@ def db_path(root: Path | None = None) -> Path:
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:
-    # check_same_thread=False — FastAPI runs generator dependencies in
-    # the anyio threadpool and may schedule dep setup, endpoint body,
-    # and teardown on different worker threads. SQLite's same-thread
-    # guard would then 500 every /settings call. Per-request open +
-    # close means concurrent use of a single connection isn't a risk.
-    conn = sqlite3.connect(db_path(root), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA)
-    _drop_retired_keys(conn)
-    return conn
+    """Open settings.db, migrated to the latest version (see sqlite_db)."""
+    return sqlite_db.connect(db_path(root), MIGRATIONS)
+
+
+# Released migration steps never change; a schema change, or another
+# key to retire, is a new step at the end of MIGRATIONS.
+
+_create_table = sqlite_db.statements(
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """
+)
 
 
 # Keys of removed features: mostly the in-app LLM features (RAG chat,
@@ -138,33 +137,32 @@ _RENAMED_KEYS = {"rag.local_embed_model": KEY_RAG_EMBED_MODEL}
 
 
 def _drop_retired_keys(conn: sqlite3.Connection) -> None:
-    """Clean up settings rows left over from removed features.
-
-    Runs on every connect and is a no-op once done — a DELETE of rows
-    that aren't there costs nothing, and this way an install that
-    downgrades and upgrades again is still tidied.
-    """
-    try:
-        for old, new in _RENAMED_KEYS.items():
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key = ?", (old,)
-            ).fetchone()
-            if row is None:
-                continue
-            # Don't clobber a value already written under the new name.
-            conn.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-                (new, row["value"]),
-            )
-            conn.execute("DELETE FROM settings WHERE key = ?", (old,))
-        placeholders = ",".join("?" * len(RETIRED_KEYS))
+    """Clean up settings rows left over from removed features."""
+    for old, new in _RENAMED_KEYS.items():
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (old,)
+        ).fetchone()
+        if row is None:
+            continue
+        # Don't clobber a value already written under the new name.
         conn.execute(
-            f"DELETE FROM settings WHERE key IN ({placeholders})", RETIRED_KEYS
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (new, row["value"]),
         )
-        conn.commit()
-    except sqlite3.DatabaseError:
-        # A settings cleanup must never stop the sidecar from starting.
-        pass
+        conn.execute("DELETE FROM settings WHERE key = ?", (old,))
+    placeholders = ",".join("?" * len(RETIRED_KEYS))
+    conn.execute(
+        f"DELETE FROM settings WHERE key IN ({placeholders})", RETIRED_KEYS
+    )
+
+
+MIGRATIONS: tuple[sqlite_db.Migration, ...] = (
+    _create_table,
+    _drop_retired_keys,
+)
+
+#: The `user_version` of a settings.db that has every migration.
+SCHEMA_VERSION = len(MIGRATIONS)
 
 
 def get(conn: sqlite3.Connection, key: str) -> str | None:
@@ -184,6 +182,21 @@ def set_value(conn: sqlite3.Connection, key: str, value: str) -> None:
 def clear(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM settings WHERE key = ?", (key,))
     conn.commit()
+
+
+def write_many(conn: sqlite3.Connection, values: dict[str, str | None]) -> None:
+    """Store several keys in one transaction: all of them land or none.
+    None deletes the key (it reads as its default again)."""
+    with conn:
+        for key, value in values.items():
+            if value is None:
+                conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
 
 
 def all_settings(conn: sqlite3.Connection) -> dict[str, str]:

@@ -19,6 +19,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import archive_backups
+import archive_errors
+import archive_live
+import archive_registry
+import refusals
 from sidecar_client import (
     api_routes,
     app_client,
@@ -47,13 +52,13 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_registry
     import restore as restore_svc
 
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
     importlib.reload(restore_svc)
-    character_archive.root()
-    yield character_archive
+    archive_registry.root()
+    yield
     restore_svc.revoke_token()
 
 
@@ -97,12 +102,12 @@ def test_the_archive_refuses_a_hostile_id_directly(archive) -> None:  # noqa: AN
     """The rule lives where the id becomes a path, so MCP tools and
     services that bypass the routes are held to it too."""
     for cid in ["..", "..\\..\\escaped", "a/b", "CON", "_registry.json", ""]:
-        with pytest.raises(archive.InvalidCharacterId):
-            archive.character_dir(cid)
+        with pytest.raises(archive_errors.InvalidCharacterId):
+            archive_registry.character_dir(cid)
 
 
 def test_a_real_id_still_works(client: TestClient, archive) -> None:  # noqa: ANN001
-    archive.create_character_dir("123")
+    archive_registry.create_character_dir("123")
     assert client.get("/flist/character/123/zip-backups").status_code == 200
 
 
@@ -117,7 +122,7 @@ def test_the_backup_payload_route_checks_the_file_name(
     client: TestClient, archive  # noqa: ANN001
 ) -> None:
     """A zip next to backups/, not in it, must not be readable."""
-    char = archive.create_character_dir("123")
+    char = archive_registry.create_character_dir("123")
     (char / "outside.zip").write_bytes(_zip_with_working({"secret": True}))
     res = client.get("/flist/character/123/zip-backups/..%5Coutside.zip/payload")
     assert res.status_code == 400
@@ -131,7 +136,7 @@ def _pair(client: TestClient) -> dict[str, str]:
 
 
 def _archive_character(archive, name: str = "Someone") -> Path:  # noqa: ANN001
-    char = archive.create_character_dir("123")
+    char = archive_registry.create_character_dir("123")
     (char / "live.json").write_text(json.dumps({"id": 123, "name": name}), encoding="utf-8")
     return char
 
@@ -144,7 +149,7 @@ def test_upload_resolves_a_source_only_among_listed_backups(
 ) -> None:
     char = _archive_character(archive)
     (char / "outside.zip").write_bytes(b"PK not a backup")
-    archive.backups_dir("123")
+    archive_backups.backups_dir("123")
     (char / "backups" / "outside.zip").write_bytes(b"PK not listed either")
     res = client.get(
         f"/restore/snapshot/{snapshot_id}",
@@ -228,9 +233,9 @@ BACKUP_NAME = "2026-10-01T120000Z.zip"
 
 def _pulled_character(archive) -> None:  # noqa: ANN001
     """Character `123`, as a Pull leaves it, with one Backup."""
-    archive.write_live("123", {"id": 123, "name": "Someone"})
-    char = archive.character_dir("123")
-    archive.backups_dir("123")
+    archive_live.write_live("123", {"id": 123, "name": "Someone"})
+    char = archive_registry.character_dir("123")
+    archive_backups.backups_dir("123")
     (char / "backups" / BACKUP_NAME).write_bytes(_zip_with_working({"a": 1}))
 
 
@@ -256,8 +261,8 @@ def test_a_character_id_ending_in_a_newline_is_refused_on_every_route(
 
 
 def test_the_archive_refuses_an_id_ending_in_a_newline_directly(archive) -> None:  # noqa: ANN001
-    with pytest.raises(archive.InvalidCharacterId):
-        archive.character_dir("123\n")
+    with pytest.raises(archive_errors.InvalidCharacterId):
+        archive_registry.character_dir("123\n")
 
 
 def test_a_file_name_ending_in_a_newline_is_refused_on_every_route(
@@ -283,8 +288,8 @@ def test_a_file_name_ending_in_a_newline_is_refused_on_every_route(
 
 
 def test_a_backup_name_ending_in_a_newline_is_refused_by_the_archive(archive) -> None:  # noqa: ANN001
-    with pytest.raises(archive.InvalidFileName):
-        archive.require_backup_filename(f"{BACKUP_NAME}\n")
+    with pytest.raises(refusals.InvalidFileName):
+        archive_backups.require_backup_filename(f"{BACKUP_NAME}\n")
 
 
 def test_an_image_id_ending_in_a_newline_is_refused(client: TestClient, archive) -> None:  # noqa: ANN001

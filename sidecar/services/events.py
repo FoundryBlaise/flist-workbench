@@ -37,6 +37,12 @@ INDEX_CHANGED = "index-changed"
 #: Files were added to (or taken from) a character's image folder, so
 #: the window's pool listing is stale even if no payload changed.
 IMAGES_CHANGED = "images-changed"
+#: A character's Backup list changed: a Backup written, named, moved to
+#: or from the Trash, or deleted from the Trash for good.
+BACKUPS_CHANGED = "backups-changed"
+#: The character list changed: a character came into the archive, or
+#: its name (and with it its folder) changed on F-list.
+CHARACTERS_CHANGED = "characters-changed"
 
 #: Who caused the change. The renderer ignores its own writes — it
 #: already has that state — and reacts to everything else. Set by the
@@ -57,6 +63,49 @@ def origin(name: str) -> Iterator[None]:
 
 def current_origin() -> str:
     return _origin.get()
+
+
+@dataclass(eq=False)
+class _Held:
+    """The events a `coalesced` block holds back, by what they are
+    about. Closed once the block has sent them: a task the block
+    started outlives it with the block's context, and what that task
+    publishes later must go out, not into a list nobody sends."""
+
+    events: dict[tuple, dict[str, Any]] = field(default_factory=dict)
+    open: bool = True
+
+
+#: The innermost `coalesced` block's held events; None outside any.
+_held: contextvars.ContextVar[_Held | None] = contextvars.ContextVar("held", default=None)
+
+
+@contextlib.contextmanager
+def coalesced() -> Iterator[None]:
+    """Publish what this block changes once, when it ends.
+
+    A Pull writes one file per picture and each write announces itself;
+    without this the window would reload its pool once per picture. In
+    the block, events about the same thing (name, character, Log
+    conversation) collapse into the last of them, which describes the
+    current state, and go out together at the end, also when the block
+    fails partway: what landed did change. A nested block sends its own
+    at its own end.
+    """
+    held = _Held()
+    token = _held.set(held)
+    try:
+        yield
+    finally:
+        held.open = False
+        try:
+            _held.reset(token)
+        except ValueError:
+            # Closed from another context: an async generator finalised
+            # by the loop rather than by its consumer.
+            pass
+        for payload in held.events.values():
+            _send(payload)
 
 
 #: Per-subscriber buffer. A renderer that stops reading — a paused
@@ -98,6 +147,16 @@ def publish(event: str, **data: Any) -> None:
         "origin": _origin.get(),
         **data,
     }
+    held = _held.get()
+    if held is not None and held.open:
+        key = (event, data.get("character_id"), data.get("character"), data.get("partner"))
+        held.events.pop(key, None)
+        held.events[key] = payload
+        return
+    _send(payload)
+
+
+def _send(payload: dict[str, Any]) -> None:
     loop = _loop
     if loop is None or loop.is_closed():
         return

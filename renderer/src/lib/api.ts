@@ -220,8 +220,15 @@ export type WorkbenchInfoWire = {
   updated_at: number
 }
 
-export type FlistPullHandlers = {
-  onQueued?: () => void
+/** A Pull or Back up all runs as a job: the stream's first event is the
+ *  job (its id is what Cancel and a reopened view use), and a cancel by
+ *  id ends the events with `cancelled`. */
+type JobStreamHandlers = {
+  onJob?: (job: Job) => void
+  onCancelled?: () => void
+}
+
+export type FlistPullHandlers = JobStreamHandlers & {
   onTicket?: () => void
   onFetching?: () => void
   onImages?: (info: { total: number }) => void
@@ -243,7 +250,7 @@ export type FlistPullHandlers = {
     pull_status?: FlistPullStatus['status']
     pull_missing?: number
   }) => void
-  onError?: (info: { stage: string; message: string }) => void
+  onError?: (info: StreamError) => void
 }
 
 export type FlistBackupAllCharacterEvent = {
@@ -254,9 +261,8 @@ export type FlistBackupAllCharacterEvent = {
   message?: string
 }
 
-export type FlistBackupAllHandlers = {
+export type FlistBackupAllHandlers = JobStreamHandlers & {
   onStart?: (info: { total: number }) => void
-  onQueued?: () => void
   onCharacter?: (info: FlistBackupAllCharacterEvent) => void
   onDone?: (info: {
     total: number
@@ -264,7 +270,7 @@ export type FlistBackupAllHandlers = {
     unchanged: number
     failed: number
   }) => void
-  onError?: (info: { stage: string; message: string }) => void
+  onError?: (info: StreamError) => void
 }
 
 export type Profile = {
@@ -381,16 +387,31 @@ export type IngestJobScope = {
   partner?: string | null
 }
 
-export type IngestJob = {
+export type JobState = 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+
+/** Long work the sidecar runs as a job, of any kind: started by its
+ *  own route, then polled and cancelled by id (`/jobs/{id}`). `error`
+ *  is set when it failed. */
+export type Job<Params = Record<string, unknown>, Progress = Record<string, unknown>, Result = Record<string, unknown>> = {
   id: string
-  scope: { character?: string; partner?: string }
-  include_ooc: boolean
-  force_rewipe: boolean
-  state: 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+  kind: string
+  resource: string
+  state: JobState
+  params: Params
+  progress: Progress
+  result: Result | null
+  error: ErrorBody | null
+  cancel_requested: boolean
+  created_at: number
+  finished_at: number | null
+}
+
+export type IngestProgress = {
   chunked: number
   embedded: number
   upserted: number
   skipped_existing: number
+  removed: number
   /** Messages dropped for lack of an IC/OOC verdict. A high count
    *  means the classification flow should run first — an unjudged
    *  message could be either IC prose or OOC chatter, and indexing OOC
@@ -398,21 +419,34 @@ export type IngestJob = {
   skipped_unlabeled: number
   failed: number
   total_chunks: number
-  current_partner?: string | null
-  last_error?: string | null
-  error?: string | null
-  model_swap: boolean
-  embed_model?: string | null
-  embed_dimension?: number | null
-  created_at: number
-  finished_at?: number | null
+  current_partner: string | null
+  last_error: string | null
+  embed_model: string | null
+  embed_dimension: number | null
 }
+
+export type IngestJob = Job<
+  {
+    scope: { character?: string; partner?: string }
+    include_ooc: boolean
+    force_rewipe: boolean
+  },
+  IngestProgress
+>
+
+/** The `error.code` of an ingest stopped because the Index was built
+ *  with another embedding model; the dialog offers wipe + re-ingest. */
+export const EMBEDDING_MODEL_CHANGED = 'embedding_model_changed'
 
 export type RagStatus = {
   embed_model: string | null
   embed_dimension: number | null
   last_ingest_at: number | null
-  chunk_count: number
+  /** A job (an ingest, a wipe) holds the Index right now: `job` is it,
+   *  and `chunk_count` is null because the Index can't be counted. */
+  busy: boolean
+  job: Job | null
+  chunk_count: number | null
 }
 
 /** One MCP endpoint the sidecar serves. `all` carries every tool; the
@@ -501,21 +535,65 @@ type WindowCreds = {
   getPassword: () => Promise<string | null>
 }
 
+/** Every error the sidecar answers: a code to switch on, a message to
+ *  show, and whatever else the situation carries (the etag on disk,
+ *  the field that was wrong). */
+export type ErrorBody = {
+  code: string
+  message: string
+  details: Record<string, unknown>
+}
+
+/** A Pull's or Back up all's `error` event: where it stopped, then
+ *  the same three fields a REST error carries. */
+export type StreamError = ErrorBody & { stage: string }
+
 /**
- * A request the sidecar turned down with a code (`{code, message}`), so
- * a caller can tell "not signed in" from "no such character" without
+ * A request the sidecar turned down (`{code, message, details}`), so a
+ * caller can tell "not signed in" from "no such character" without
  * matching on prose. Narrow with `instanceof`.
  */
 export class RefusalError extends Error {
   readonly code: string
   readonly status: number
+  readonly details: Record<string, unknown>
 
-  constructor(code: string, status: number, message: string) {
+  constructor(
+    code: string,
+    status: number,
+    message: string,
+    details: Record<string, unknown> = {}
+  ) {
     super(message)
     this.name = 'RefusalError'
     this.code = code
     this.status = status
+    this.details = details
   }
+}
+
+function isErrorBody(body: unknown): body is ErrorBody {
+  if (!body || typeof body !== 'object') return false
+  const b = body as Partial<ErrorBody>
+  return typeof b.code === 'string' && typeof b.message === 'string'
+}
+
+/** The error a failed response stands for: a `RefusalError` carrying
+ *  the sidecar's code, message and details, or a plain `HTTP <status>`
+ *  error when the body is not one (a proxy, a crash mid-stream). */
+async function failure(res: Response): Promise<Error> {
+  const body: unknown = await res.json().catch(() => null)
+  if (isErrorBody(body)) {
+    const details =
+      body.details && typeof body.details === 'object' ? body.details : {}
+    return new RefusalError(
+      body.code,
+      res.status,
+      `HTTP ${res.status}: ${body.message}`,
+      details
+    )
+  }
+  return new Error(`HTTP ${res.status}: ${res.statusText}`)
 }
 
 /** What a failed request says, without the `HTTP <status>: ` prefix
@@ -558,43 +636,7 @@ async function request<T>(
     // the kink picker and diff silently empty.
     window.dispatchEvent(new CustomEvent('flist-session-expired'))
   }
-  if (!res.ok) {
-    let detail: string | undefined
-    try {
-      const body = (await res.json()) as {
-        code?: unknown
-        message?: unknown
-        detail?: unknown
-      } | null
-      // Every refusal answers `{code, message}` at the top level, so the
-      // caller can tell "not signed in" from "no such character" without
-      // matching on prose. Older answers nest it, or a plain string, in
-      // `detail`; a nested object would otherwise stringify to
-      // "[object Object]".
-      const raw =
-        body && typeof body.code === 'string' && typeof body.message === 'string'
-          ? body
-          : body?.detail
-      if (typeof raw === 'string') {
-        detail = raw
-      } else if (raw && typeof raw === 'object') {
-        const obj = raw as { message?: unknown; code?: unknown }
-        if (typeof obj.message === 'string') detail = obj.message
-        if (typeof obj.code === 'string') {
-          throw new RefusalError(
-            obj.code,
-            res.status,
-            `HTTP ${res.status}: ${detail ?? res.statusText}`
-          )
-        }
-      }
-    } catch (e) {
-      // A refusal thrown above is the real failure — re-raise it.
-      // Anything else means the body simply wasn't JSON.
-      if (e instanceof RefusalError) throw e
-    }
-    throw new Error(`HTTP ${res.status}: ${detail ?? res.statusText}`)
-  }
+  if (!res.ok) throw await failure(res)
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
@@ -880,13 +922,12 @@ export const api = {
         force_rewipe: opts.force_rewipe ?? false
       })
     }),
-  ragJobGet: (id: string, opts?: ApiOptions) =>
-    get<IngestJob>(`/rag/jobs/${encodeURIComponent(id)}`, opts),
-  ragJobCancel: (id: string) =>
-    request<{ id: string; cancel_requested: boolean }>(
-      `/rag/jobs/${encodeURIComponent(id)}`,
-      { method: 'DELETE' }
-    ),
+  /** Any job by id, whatever its kind. */
+  jobGet: <J extends Job = Job>(id: string, opts?: ApiOptions) =>
+    get<J>(`/jobs/${encodeURIComponent(id)}`, opts),
+  /** Ask a job to stop; answers the job as it stands. */
+  jobCancel: <J extends Job = Job>(id: string) =>
+    request<J>(`/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   ragStatus: () => get<RagStatus>('/rag/status'),
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */
@@ -965,7 +1006,7 @@ export const api = {
         body: JSON.stringify({ name })
       }
     )
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    if (!res.ok) throw await failure(res)
     return (await res.json()) as FlistZipBackupEntry
   },
   /** Move a single backup ZIP to the character's Trash. Idempotent
@@ -980,9 +1021,7 @@ export const api = {
       `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
       { method: 'DELETE' }
     )
-    if (!res.ok && res.status !== 404) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
+    if (!res.ok && res.status !== 404) throw await failure(res)
   },
   /** Raw ZIP bytes for Sidebar → Backups → right-click → Download.
    *  The renderer pipes these through `window.workbench.writeFile`
@@ -994,13 +1033,14 @@ export const api = {
     const res = await fetch(
       `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/download`
     )
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    if (!res.ok) throw await failure(res)
     return new Uint8Array(await res.arrayBuffer())
   },
   /** Read the embedded `working.json` (+ `backup-meta.json` if
    *  present) out of a ZIP backup for read-only Browse Backup mode.
-   *  410 Gone when the backup predates the working.json write — the
-   *  renderer surfaces that as a header pill message. `meta` is
+   *  409 `backup_too_old` when the backup predates the working.json
+   *  write, as Restore answers it — the renderer surfaces that as a
+   *  header pill message. `meta` is
    *  `null` for backups created before the metadata write shipped
    *  (2026-06-17). */
   flistZipBackupPayload: (
@@ -1065,18 +1105,16 @@ export const api = {
       `${base()}/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
       { method: 'PUT', headers, body: JSON.stringify(payload) }
     )
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => null)) as
-        | { code?: string; current_etag?: string | null }
-        | null
-      const err = new Error('etag_mismatch') as Error & {
-        currentEtag: string | null
-      }
-      err.currentEtag = body?.current_etag ?? null
-      throw err
-    }
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      const err = await failure(res)
+      if (res.status === 409) {
+        const etag =
+          err instanceof RefusalError ? err.details.current_etag : undefined
+        throw Object.assign(new Error('etag_mismatch'), {
+          currentEtag: typeof etag === 'string' ? etag : null
+        })
+      }
+      throw err
     }
     return (await res.json()) as { etag: string }
   },
@@ -1172,16 +1210,7 @@ export const api = {
       `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images`,
       { method: 'POST', body: data }
     )
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`
-      try {
-        const body = (await res.json()) as { detail?: string }
-        if (typeof body?.detail === 'string') detail = body.detail
-      } catch {
-        // best-effort — server may not have returned JSON
-      }
-      throw new Error(detail)
-    }
+    if (!res.ok) throw await failure(res)
     return (await res.json()) as FlistCharacterImage
   },
   /** Move `images/<image_id>.<ext>` into the character's trash. */
@@ -1264,87 +1293,42 @@ export const api = {
     ),
   flistExportZipUrl: (characterId: string | number) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
-  /** Streams the Backup-all SSE protocol. Tools → "Back up all
-   *  characters" walks the signed-in account roster, pulls each
+  /** Starts Back up all and follows its progress (SSE). Tools → "Back
+   *  up all characters" walks the signed-in account roster, pulls each
    *  character, and keeps its Live as a Backup when the F-list
    *  content has actually changed. Per-character status is
    *  surfaced as `character` events the renderer's progress banner
-   *  renders. */
-  flistBackupAll: async (
+   *  renders. It runs as a job: aborting `opts.signal` only stops
+   *  following; `jobCancel` stops the sweep. */
+  flistBackupAll: (handlers: FlistBackupAllHandlers, opts?: ApiOptions): Promise<void> =>
+    followStream(`${base()}/flist/backup-all`, { method: 'POST', signal: opts?.signal }, (block) =>
+      dispatchBackupAllStream(block, handlers)
+    ),
+  /** Starts a Pull of `name` and follows its progress (SSE). A job, like
+   *  Back up all: aborting `opts.signal` only stops following. */
+  flistPull: (name: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
+    followStream(
+      `${base()}/flist/character/${encodeURIComponent(name)}/pull`,
+      { method: 'POST', signal: opts?.signal },
+      (block) => dispatchPullStream(block, handlers)
+    ),
+  /** Every job the sidecar remembers: running ones, and finished ones
+   *  for a few minutes. A reopened window finds its Pulls here. */
+  jobsList: (opts?: ApiOptions) => get<{ jobs: Job[] }>('/jobs', opts),
+  /** Follow a running Pull from the start of its events. */
+  flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
+    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
+      dispatchPullStream(block, handlers)
+    ),
+  /** Follow a running Back up all from the start of its events. */
+  flistBackupAllFollow: (
+    jobId: string,
     handlers: FlistBackupAllHandlers,
     opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/flist/backup-all`, {
-      method: 'POST',
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchBackupAllStream(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) dispatchBackupAllStream(buffer, handlers)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
-  },
-  flistPull: async (
-    name: string,
-    handlers: FlistPullHandlers,
-    opts?: ApiOptions
-  ): Promise<void> => {
-    const res = await fetch(`${base()}/flist/character/${encodeURIComponent(name)}/pull`, {
-      method: 'POST',
-      headers: { Accept: 'text/event-stream' },
-      signal: opts?.signal
-    })
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    try {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let sep
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep)
-          buffer = buffer.slice(sep + 2)
-          dispatchPullStream(block, handlers)
-        }
-      }
-      buffer += decoder.decode()
-      if (buffer.trim()) dispatchPullStream(buffer, handlers)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        // best-effort
-      }
-    }
-  },
+  ): Promise<void> =>
+    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
+      dispatchBackupAllStream(block, handlers)
+    ),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () =>
@@ -1373,24 +1357,85 @@ export const api = {
     request<{ version: string | null; seen_at: number | null }>('/restore/extension')
 }
 
-function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
+function jobEventsUrl(jobId: string): string {
+  return `${base()}/jobs/${encodeURIComponent(jobId)}/events`
+}
+
+/** Open an SSE route and hand each block to `onBlock` until the stream
+ *  ends. A refused start (busy, not signed in) throws its RefusalError. */
+async function followStream(
+  url: string,
+  init: Pick<RequestInit, 'method' | 'signal'>,
+  onBlock: (block: string) => void
+): Promise<void> {
+  const res = await fetch(url, { ...init, headers: { Accept: 'text/event-stream' } })
+  await readEventStream(res, onBlock)
+}
+
+/** Read an SSE response block by block until it ends. */
+async function readEventStream(res: Response, onBlock: (block: string) => void): Promise<void> {
+  if (!res.ok) throw await failure(res)
+  if (!res.body) throw new Error(`HTTP ${res.status}: no body`)
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let sep
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const block = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + 2)
+        onBlock(block)
+      }
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) onBlock(buffer)
+  } finally {
+    try {
+      reader.releaseLock()
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/** One SSE block as its event name and JSON data. */
+function parseBlock(block: string): { event: string | null; data: unknown } {
   let event: string | null = null
   const dataLines: string[] = []
   for (const line of block.split('\n')) {
     if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
     else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim())
   }
-  if (!event) return
-  let parsed: unknown = {}
+  let data: unknown = {}
   try {
-    parsed = JSON.parse(dataLines.join('\n'))
+    data = JSON.parse(dataLines.join('\n'))
   } catch {
-    parsed = {}
+    data = {}
   }
+  return { event, data }
+}
+
+/** The events every job stream carries. True when `event` was one. */
+function dispatchJobEvent(event: string, data: unknown, handlers: JobStreamHandlers): boolean {
+  if (event === 'job') {
+    handlers.onJob?.(data as Job)
+    return true
+  }
+  if (event === 'cancelled') {
+    handlers.onCancelled?.()
+    return true
+  }
+  return false
+}
+
+function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
+  const { event, data: parsed } = parseBlock(block)
+  if (!event || dispatchJobEvent(event, parsed, handlers)) return
   switch (event) {
-    case 'queued':
-      handlers.onQueued?.()
-      break
     case 'ticket':
       handlers.onTicket?.()
       break
@@ -1407,7 +1452,7 @@ function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
       handlers.onDone?.(parsed as Parameters<NonNullable<FlistPullHandlers['onDone']>>[0])
       break
     case 'error':
-      handlers.onError?.(parsed as { stage: string; message: string })
+      handlers.onError?.(parsed as StreamError)
       break
   }
 }
@@ -1416,26 +1461,11 @@ function dispatchBackupAllStream(
   block: string,
   handlers: FlistBackupAllHandlers
 ): void {
-  let event: string | null = null
-  const dataLines: string[] = []
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) event = line.slice('event:'.length).trim()
-    else if (line.startsWith('data:'))
-      dataLines.push(line.slice('data:'.length).trim())
-  }
-  if (!event) return
-  let parsed: unknown = {}
-  try {
-    parsed = JSON.parse(dataLines.join('\n'))
-  } catch {
-    parsed = {}
-  }
+  const { event, data: parsed } = parseBlock(block)
+  if (!event || dispatchJobEvent(event, parsed, handlers)) return
   switch (event) {
     case 'start':
       handlers.onStart?.(parsed as { total: number })
-      break
-    case 'queued':
-      handlers.onQueued?.()
       break
     case 'character':
       handlers.onCharacter?.(parsed as FlistBackupAllCharacterEvent)
@@ -1446,7 +1476,7 @@ function dispatchBackupAllStream(
       )
       break
     case 'error':
-      handlers.onError?.(parsed as { stage: string; message: string })
+      handlers.onError?.(parsed as StreamError)
       break
   }
 }

@@ -27,6 +27,7 @@ export type RecordedRequest = {
 
 export type FakeReply =
   | { kind: 'json'; status: number; body: unknown }
+  | { kind: 'sse'; events: [string, unknown][] }
   | { kind: 'error'; error: Error }
 
 export type Route = string | RegExp
@@ -56,6 +57,12 @@ export type FakeApi = {
 /** A JSON reply. Any status outside 2xx reaches the app as an error. */
 export function json(body: unknown, status = 200): FakeReply {
   return { kind: 'json', status, body }
+}
+
+/** A server-sent event stream that sends `events` and ends, the way a
+ *  job's progress stream (Pull, Back up all) does. */
+export function sse(...events: [string, unknown][]): FakeReply {
+  return { kind: 'sse', events }
 }
 
 /** The fetch itself fails, the way it does when the sidecar is down. */
@@ -92,6 +99,12 @@ function parseBody(body: unknown): unknown {
 
 function toResponse(reply: FakeReply): Response {
   if (reply.kind === 'error') throw reply.error
+  if (reply.kind === 'sse') {
+    const text = reply.events
+      .map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      .join('')
+    return new Response(text, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+  }
   const noBody = reply.status === 204 || reply.status === 304
   return new Response(noBody ? null : JSON.stringify(reply.body ?? null), {
     status: reply.status,

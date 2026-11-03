@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -68,14 +69,6 @@ _PAYLOAD_FIELDS = (
 )
 
 
-_MANIFEST_SCHEMA = """
-CREATE TABLE IF NOT EXISTS rag_meta (
-    key         TEXT PRIMARY KEY,
-    value       TEXT NOT NULL,
-    updated_at  REAL NOT NULL
-);
-"""
-
 _KEY_EMBED_MODEL = "embed_model"
 _KEY_EMBED_DIMENSION = "embed_dimension"
 _KEY_LAST_INGEST_AT = "last_ingest_at"
@@ -109,14 +102,12 @@ def qdrant_dir(root: Path | None = None) -> Path:
 
 
 def _manifest_conn(root: Path | None = None) -> sqlite3.Connection:
-    """Open the same labels.db connection and ensure rag_meta exists.
+    """Open labels.db, where the rag_meta table lives (labels.py migrates it).
 
     Stashing manifest rows next to labels keeps the user's app data in
     one SQLite file — easier to back up, no second migration story.
     """
-    conn = labels_store.connect(root)
-    conn.executescript(_MANIFEST_SCHEMA)
-    return conn
+    return labels_store.connect(root)
 
 
 def read_manifest(conn: sqlite3.Connection | None = None, root: Path | None = None) -> Manifest:
@@ -192,6 +183,21 @@ def clear_manifest(conn: sqlite3.Connection | None = None, root: Path | None = N
 # -- vector store --------------------------------------------------------
 
 
+#: How long opening the store waits for another opener in this process
+#: to close it. Status reads and searches hold it for milliseconds; an
+#: ingest holds it for its whole run, and `services.index` refuses
+#: those callers as busy before they get here.
+OPEN_WAIT_SECONDS = 10.0
+
+_OPEN_LOCKS: dict[Path, threading.Lock] = {}
+_OPEN_LOCKS_GUARD = threading.Lock()
+
+
+def _open_lock(path: Path) -> threading.Lock:
+    with _OPEN_LOCKS_GUARD:
+        return _OPEN_LOCKS.setdefault(path.resolve(), threading.Lock())
+
+
 class RagStore:
     """Thin wrapper around an embedded QdrantClient.
 
@@ -204,7 +210,19 @@ class RagStore:
 
     def __init__(self, *, path: Path | None = None, root: Path | None = None) -> None:
         self._path = path or qdrant_dir(root)
-        self._client = QdrantClient(path=str(self._path))
+        # Qdrant refuses a second open of the folder outright; waiting
+        # for the one in this process to close turns a status read that
+        # overlaps the start of an ingest into a short wait, not a
+        # failed ingest.
+        self._open = _open_lock(self._path)
+        if not self._open.acquire(timeout=OPEN_WAIT_SECONDS):
+            raise RuntimeError(f"the vector store at {self._path} stayed open elsewhere")
+        try:
+            self._client = QdrantClient(path=str(self._path))
+        except BaseException:
+            self._open.release()
+            raise
+        self._held = True
 
     @property
     def path(self) -> Path:
@@ -218,6 +236,9 @@ class RagStore:
             self._client.close()
         except Exception:  # noqa: BLE001 — close should never block teardown
             pass
+        if self._held:
+            self._held = False
+            self._open.release()
 
     def __enter__(self) -> RagStore:
         return self

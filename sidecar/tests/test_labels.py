@@ -395,7 +395,7 @@ def test_override_delete_with_null_label(api_client: TestClient) -> None:
 def test_override_rejects_invalid_label(api_client: TestClient) -> None:
     res = api_client.post("/labels/override", json=_override_body("MAYBE"))
     assert res.status_code == 400
-    assert "IC or OOC" in res.json()["detail"]
+    assert "IC or OOC" in res.json()["message"]
 
 
 # ---- /labels/override-many ----------------------------------------------

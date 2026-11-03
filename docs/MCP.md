@@ -183,6 +183,10 @@ retrieved, and this one never scored. Ask about the *thing* instead —
 
 **Operations** — `pull_character`, `create_backup`,
 `backup_all_characters`, `ingest_logs`, `export_restore_zip`.
+A Pull, Back up all and an ingest are jobs: they wait and report
+progress by default, and with `wait=false` return a `job_id` at once,
+to poll with `get_job` and stop with `cancel_job` (the same two calls
+for every kind). A job runs on when the call that started it ends.
 
 ## The classification loop
 
@@ -295,20 +299,29 @@ tool made, prefixed `mcp:`.
 
 ## When something goes wrong
 
-Tool errors carry a stable code as their first word:
+Tool errors carry a stable code as their first word, then the message
+and, where there is more to say, a JSON object of details (the etag on
+disk, the field that was wrong). Code and details are the ones the app
+window gets for the same situation:
 
 | Code | Means |
 |---|---|
 | `character_not_found` | no local archive for that name — the error lists the ones that exist |
-| `nothing_to_edit` | the character was never pulled, so there is no Live to make a Workbench from |
+| `no_workbench` | the character was never pulled, so there is no Live to make a Workbench from |
+| `no_live` | the character was never pulled, so there is no Live to read, back up or export |
 | `live_is_read_only` | tried to edit Live |
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
 | `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
-| `etag_conflict` | the window saved while the edit was in flight |
+| `etag_mismatch` | the Workbench changed since it was read (`put_working_set_payload` with an old `if_match`); details carry the `current_etag` |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
 | `workbench_not_kept` | loading a Backup would replace the Workbench, but the Backup of it could not be written first, so nothing was replaced |
+| `backup_too_old` | the Backup comes from before the app stored a loadable profile in it; it can only be downloaded |
 | `no_index` | nothing ingested yet |
+| `index_busy` | an ingest (or a wipe) is changing the Index; details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
+| `character_busy` | a Pull of that character, or Back up all, is running (one at a time); details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
+| `index_unreadable` | the Index is there but could not be read; not the same as empty |
+| `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |
 

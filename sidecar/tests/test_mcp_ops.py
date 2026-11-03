@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+import archive_registry
 from fchat_logs import chat, utc, write_log
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
@@ -25,18 +26,19 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {
@@ -60,7 +62,7 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(settings_store)
     mapping_service.invalidate()
     importlib.reload(server)
-    yield character_archive
+    yield
     mapping_service.invalidate()
 
 
@@ -89,7 +91,6 @@ async def test_pull_reports_progress_and_returns_a_summary(
     from services import pull as pull_service
 
     async def fake_run(name: str):
-        yield "queued", {"name": name}
         yield "ticket", {}
         yield "fetching", {"name": name}
         yield "images", {"total": 2, "downloaded": 0, "failed": 0}
@@ -115,8 +116,13 @@ async def test_a_pull_failure_surfaces_its_stage(
     from services import pull as pull_service
 
     async def fake_run(name: str):
-        yield "queued", {"name": name}
-        yield "error", {"stage": "fetching", "message": "HTTP 503"}
+        yield "ticket", {}
+        yield "error", {
+            "stage": "fetching",
+            "code": "flist_error",
+            "message": "HTTP 503",
+            "details": {},
+        }
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     async with mcp_client("character") as session:
@@ -124,8 +130,9 @@ async def test_a_pull_failure_surfaces_its_stage(
             session, "pull_character", character="Lady Amber Blaise"
         )
     text = tool_error_text(result)
-    assert "pull_failed" in text
+    assert "flist_error" in text
     assert "HTTP 503" in text
+    assert '"stage": "fetching"' in text
 
 
 # ---- backups -----------------------------------------------------------
@@ -195,13 +202,13 @@ async def test_a_backup_loads_back_into_the_workbench(workbench) -> None:
 
 
 async def test_backing_up_a_character_never_pulled(workbench) -> None:
-    workbench.register_character("99", "Ghost Character")
+    archive_registry.register_character("99", "Ghost Character")
     async with mcp_client("character") as session:
         result, _ = await call_tool(
             session, "create_backup", character="Ghost Character"
         )
     text = tool_error_text(result)
-    assert "live_not_found" in text
+    assert "no_live" in text
     assert "Pull the character first" in text
 
 
@@ -231,7 +238,7 @@ def amber_has_logs(workbench, tmp_path: Path) -> None:  # noqa: ARG001
 async def test_ingest_can_run_in_the_background(
     amber_has_logs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import rag_jobs
+    from services import index as index_service
 
     started: dict[str, Any] = {}
 
@@ -245,7 +252,7 @@ async def test_ingest_can_run_in_the_background(
         )
         return _FakeJob()
 
-    monkeypatch.setattr(rag_jobs, "start", fake_start)
+    monkeypatch.setattr(index_service, "start_ingest", fake_start)
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
@@ -263,31 +270,31 @@ async def test_ingest_reports_skipped_unlabeled_and_what_to_do(
 ) -> None:
     """Silently indexing half a log and reporting success is the
     failure mode this guards against."""
-    import rag_jobs
+    from services import index as index_service
 
     snapshot = {
         "id": "job1",
         "state": "done",
-        "upserted": 4,
-        "skipped_existing": 0,
-        "skipped_unlabeled": 120,
-        "failed": 0,
+        "progress": {"last_error": None},
+        "result": {
+            "chunks_indexed": 4,
+            "chunks_already_present": 0,
+            "chunks_removed": 0,
+            "skipped_unlabeled": 120,
+            "failed": 0,
+        },
         "error": None,
     }
 
     class _Job:
         id = "job1"
         state = "done"
+        finished = True
 
         def to_dict(self):
             return snapshot
 
-    class _Registry:
-        def get(self, job_id):
-            return _Job()
-
-    monkeypatch.setattr(rag_jobs, "start", lambda *a, **k: _Job())
-    monkeypatch.setattr(rag_jobs, "registry", lambda: _Registry())
+    monkeypatch.setattr(index_service, "start_ingest", lambda *a, **k: _Job())
 
     async with mcp_client("logs") as session:
         _, body = await call_tool(
@@ -452,7 +459,7 @@ async def test_changing_the_embedding_model_warns_about_the_index(
     another's — silently leaving it in place looks like data loss."""
     async with mcp_client("character") as session:
         _, body = await call_tool(
-            session, "update_settings", embed_model="some-other-model"
+            session, "update_settings", embed_model="org/some-other-model"
         )
     assert "wipe_search_index" in body["warning"]
 
@@ -511,14 +518,16 @@ def test_the_pull_route_still_streams_sse(
     importlib.reload(server)
 
     async def fake_run(name: str):
-        yield "queued", {"name": name}
+        yield "ticket", {}
         yield "done", {"character_id": "42", "image_count": 0}
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     client = app_client(server.app)
     with client.stream("POST", "/flist/character/Someone/pull") as resp:
         body = b"".join(resp.iter_bytes()).decode("utf-8")
-    assert "event: queued" in body
+    # The stream follows the Pull's job: the job first, then its events.
+    assert body.startswith("event: job\n")
+    assert "event: ticket" in body
     assert "event: done" in body
     assert '"character_id": "42"' in body or '"character_id":"42"' in body
 

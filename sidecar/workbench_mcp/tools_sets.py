@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from typing import Any
 
-import character_archive
+import archive_backups
+import archive_images
+import archive_live
+import archive_registry
 
 from ._context import (
     ToolError,
@@ -38,7 +41,7 @@ def list_characters(include_log_only: bool = True) -> dict[str, Any]:
     from logs import LogDirError
     from logs import list_characters as list_log_characters
 
-    archived = character_archive.list_archived_characters()
+    archived = archive_registry.list_archived_characters()
     rows: list[dict[str, Any]] = []
     for row in archived:
         cid = str(row.get("id") or "")
@@ -89,10 +92,10 @@ def get_live_profile(
     which can be tens of kilobytes.
     """
     target = resolve_character(character)
-    live = character_archive.read_live(target.id)
+    live = archive_live.read_live(target.id)
     if live is None:
         raise ToolError(
-            "live_not_found",
+            "no_live",
             f"No profile has been pulled for {target.name} yet. "
             "Run pull_character first.",
         )
@@ -551,7 +554,7 @@ def list_backups(character: str) -> dict[str, Any]:
     target = resolve_character(character)
     return {
         "character": target.name,
-        "backups": character_archive.list_zip_backups(target.id),
+        "backups": archive_backups.list_zip_backups(target.id),
     }
 
 
@@ -591,15 +594,15 @@ def list_images(
 
     meta = image_import.read_meta(target.id)
     refs = image_import.references(target.id)
-    images_dir = character_archive.images_dir(target.id)
+    images_dir = archive_images.images_dir(target.id)
     pool = []
-    for row in character_archive.list_character_images(target.id):
+    for row in archive_images.list_character_images(target.id):
         image_id = str(row.get("image_id") or row.get("id") or "")
         if not image_id or image_id in on_profile:
             continue
         path = images_dir / f"{image_id}.{row.get('extension')}"
         try:
-            sha = character_archive.file_sha256(path)
+            sha = archive_images.file_sha256(path)
             width, height = image_import.dimensions(path)
         except OSError:
             sha, width, height = None, None, None

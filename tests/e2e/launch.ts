@@ -43,6 +43,9 @@ export type LaunchOptions = {
   dataDir?: string
   /** Extra environment for the app, applied last. */
   env?: Record<string, string>
+  /** Run the sidecar on this port instead of a free one: a spec that
+   *  put something there first. */
+  port?: number
 }
 
 function e2eEnv(name: string): string {
@@ -54,7 +57,7 @@ function e2eEnv(name: string): string {
 // A port nothing listens on, so the app's sidecar can never collide
 // with (or be mistaken for) a sidecar the developer has running on the
 // default port against their real data.
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
     const server = createServer()
     server.unref()
@@ -109,7 +112,7 @@ async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> {
     'FLIST_WORKBENCH_UPDATE_FEED'
   ])
     delete env[k]
-  const port = await freePort()
+  const port = opts.port ?? (await freePort())
   Object.assign(env, {
     NODE_ENV: 'test',
     FLIST_WORKBENCH_DATA_DIR: dataDir,

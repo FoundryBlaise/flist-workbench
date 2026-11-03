@@ -53,12 +53,13 @@ it rather than beside it.
 | `electron/` | main process, preload bridge, native menu, sidecar spawn |
 | `renderer/src/features/` | editor, logs, flist (profile tabs), sidebar, settings |
 | `renderer/src/state.ts` | one Zustand store; `state/flist.ts` holds the payload helpers |
-| `sidecar/server.py` | the REST surface the renderer and extension call |
+| `sidecar/server.py` | the sidecar app: lifespan, middleware, error handlers, router registration |
+| `sidecar/routers/` | the REST surface the renderer and extension call, one router per area |
 | `sidecar/services/` | orchestration shared by REST routes and MCP tools |
 | `sidecar/workbench_mcp/` | the MCP server: tool registry + tool modules |
 | `sidecar/services/render.py` | parks a render request until the app draws it |
 | `electron/renderProfile.ts` | offscreen capture of a profile, for `render_profile_image` |
-| `sidecar/character_archive.py` | on-disk character archive (Live, the Workbench, Backups, images) |
+| `sidecar/archive_*.py` | on-disk character archive: `archive_registry` (folders, registry, roster), `archive_live`, `archive_workbench`, `archive_images`, `archive_backups`; each imports only the ones before it |
 | `sidecar/foreign_cache.py` | read-only cache of *other people's* profiles, under its own root |
 | `sidecar/labels.py` | IC/OOC verdicts + the read-time rule resolver |
 | `sidecar/rag_*.py`, `chunker.py` | chunking, embedding, Qdrant, BM25, reranking |
@@ -73,7 +74,7 @@ Per character under `%APPDATA%\flist-workbench\characters\<Folder>\`:
 - `workbench/payload.json` and `workbench/meta.json` — the
   **Workbench**, the one editable copy, and when it was made and last
   saved. Every reader and writer goes through
-  `character_archive.read_workbench` / `write_workbench`.
+  `archive_workbench.read_workbench` / `write_workbench`.
 - `backups/*.zip` (the Backups), `images/`, `inlines/`, `trash/`.
 - `layout.json` — written once the folder has this shape.
 
@@ -161,7 +162,7 @@ The payloads cache under `%APPDATA%\flist-workbench\foreign\<name>\`
 in the same shape `live.json` uses, with a 24-hour TTL and a manual ↻.
 That root is deliberately not `characters/`: every path that can copy,
 back up, export or edit a character resolves through
-`character_archive.character_dir()`, and nothing under `foreign/` is
+`archive_registry.character_dir()`, and nothing under `foreign/` is
 reachable that way. Copying a profile by hand in a file manager is of
 course still possible — what the app must not offer is a button that
 does it, and it offers none, in the window or over MCP.

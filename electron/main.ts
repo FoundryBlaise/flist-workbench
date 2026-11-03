@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import {
   SidecarPortTaken,
+  onSidecarGaveUp,
   sidecarFetch,
   sidecarPort,
   sidecarUrl,
@@ -15,6 +16,7 @@ import {
 import { startRenderLoop, stopRenderLoop } from './renderLoop'
 import { buildMenu } from './menu'
 import { syncBrowserExtension } from './browserExtension'
+import { removeOnefileLeftoversOnce } from './onefileLeftovers'
 import { FileGrants } from './fileGrants'
 import { APP_PAGE_URL, isAppPage, registerAppScheme, serveAppScheme } from './appPage'
 import { saveEditsAndAllowClose, saveEditsOnClose } from './unsavedEdits'
@@ -755,6 +757,22 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   serveAppScheme()
+  // The sidecar is restarted on its own after a crash; when it keeps
+  // crashing on start the app stops trying and says so.
+  onSidecarGaveUp((crashes) => {
+    appendDiagLog('sidecar-gave-up', { crashes })
+    if (isDev) return
+    const options = {
+      type: 'error' as const,
+      title: 'F-list Workbench',
+      message: 'The sidecar, the part of F-list Workbench that reads and saves your data, stopped and could not be restarted.',
+      detail:
+        `It stopped ${crashes} times in a row right after starting. Your saved work is safe; ` +
+        'changes made from now on cannot be saved. Quit F-list Workbench and start it again. ' +
+        `If this keeps happening, the file main-diag.log in ${app.getPath('userData')} says why.`
+    }
+    void (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+  })
   appendDiagLog('whenReady', 'app ready, starting sidecar')
   try {
     await startSidecar()
@@ -800,6 +818,18 @@ app.whenReady().then(async () => {
     (status) => appendDiagLog('browser-extension', status),
     (err) => appendDiagLog('browser-extension-sync-failed', err)
   )
+  // Older versions' one-file sidecar left its unpacked runtime in %TEMP%
+  // at every quit; the folder build unpacks nothing. A dev run leaves
+  // the user's temp folder alone.
+  if (app.isPackaged && process.platform === 'win32') {
+    removeOnefileLeftoversOnce({
+      tempDir: app.getPath('temp'),
+      markerPath: join(app.getPath('userData'), 'onefile-leftovers-removed.json')
+    }).then(
+      (sweep) => appendDiagLog('onefile-leftovers', sweep),
+      (err) => appendDiagLog('onefile-leftovers-failed', err)
+    )
+  }
   if (updaterActive) {
     setTimeout(() => runStartupUpdateCheck('fallback timer'), 45_000)
   }
@@ -815,18 +845,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Quit-time ticket invalidation. The TicketStore lives in sidecar RAM,
-// which normally dies with the SIGTERM in stopSidecar() — but `uv run`
-// in dev doesn't always propagate the signal cleanly to its uvicorn
-// child, and any orphaned sidecar process would keep answering with
-// the cached ticket on the next launch (same port → renderer talks to
-// the survivor). Belt-and-braces fix: explicitly tell the sidecar to
-// clear the ticket via the same endpoint the renderer's sign-out path
-// uses, then kill the process. Bounded to 1.5s so a frozen sidecar
-// can't hang the shutdown.
-//
-// Before any of that, the window's page saves its pending edits while
-// the sidecar still runs; the window then closes without asking again.
+// At quit, the window's page first saves its pending edits while the
+// sidecar still runs; the window then closes without asking again.
+// The F-list session is signed out next, so the sign-out lands in the
+// activity log (bounded to 1.5 s so a frozen sidecar cannot hang the
+// quit). Then the sidecar is asked to stop over its authenticated
+// shutdown route and is killed only if it has not exited by the
+// timeout (stopSidecar).
 let quitInvalidationDone = false
 app.on('before-quit', async (event) => {
   if (quitInvalidationDone) return
@@ -841,9 +866,13 @@ app.on('before-quit', async (event) => {
       )
     ])
   } catch {
-    // Sidecar unreachable / already gone — SIGTERM below covers it.
+    // Sidecar unreachable / already gone — the stop below covers it.
   }
   stopRenderLoop()
-  stopSidecar()
+  try {
+    await stopSidecar()
+  } catch (err) {
+    appendDiagLog('sidecar-stop-failed', err)
+  }
   app.quit()
 })

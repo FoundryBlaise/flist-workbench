@@ -19,9 +19,27 @@ export type WorkbenchEvent = {
   etag?: string | null
   character?: string
   partner?: string
+  /** `settings-changed`: each changed field as stored, keyed by the
+   *  settings service's names (`rag.top_k`); null = back to default. */
+  changed?: Record<string, unknown>
 }
 
 export type EventHandler = (event: WorkbenchEvent) => void
+
+/** Every event the sidecar publishes (`services/events.py`). It names
+ *  each frame, so a generic `message` listener never fires: an event
+ *  missing here never reaches the window. */
+export const WORKBENCH_EVENT_NAMES = [
+  'set-payload-changed',
+  'sets-changed',
+  'live-changed',
+  'labels-changed',
+  'settings-changed',
+  'index-changed',
+  'images-changed',
+  'backups-changed',
+  'characters-changed'
+] as const
 
 /** Open the stream. Returns a function that closes it.
  *
@@ -50,21 +68,10 @@ export function subscribeToWorkbenchEvents(
     onEvent(parsed)
   }
 
-  // The sidecar names each frame, so a generic `message` listener
-  // never fires — every event type has to be subscribed by name.
-  const NAMES = [
-    'set-payload-changed',
-    'sets-changed',
-    'live-changed',
-    'labels-changed',
-    'settings-changed',
-    'index-changed',
-    'images-changed'
-  ]
-  for (const name of NAMES) source.addEventListener(name, handle)
+  for (const name of WORKBENCH_EVENT_NAMES) source.addEventListener(name, handle)
 
   return () => {
-    for (const name of NAMES) source.removeEventListener(name, handle)
+    for (const name of WORKBENCH_EVENT_NAMES) source.removeEventListener(name, handle)
     source.close()
   }
 }

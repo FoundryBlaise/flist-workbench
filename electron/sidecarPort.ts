@@ -24,13 +24,23 @@ export function chooseSidecarPort(env: NodeJS.ProcessEnv, isPackaged: boolean): 
   return port
 }
 
-/** Something else already listens on the port the sidecar needs. */
+/**
+ * Something the app must not replace holds the port the sidecar needs:
+ * another program, or the sidecar of another F-list Workbench that is
+ * still running and not older than this one (`otherAppVersion`).
+ */
 export class SidecarPortTaken extends Error {
-  constructor(readonly port: number) {
+  constructor(
+    readonly port: number,
+    readonly otherAppVersion?: string
+  ) {
     super(
-      `port ${port} on 127.0.0.1 is already in use, so the sidecar cannot start. ` +
-        'Another F-list Workbench (installed, dev or a leftover sidecar) or another ' +
-        `program holds it. Close it, or start with SIDECAR_PORT set to a free port.`
+      otherAppVersion === undefined
+        ? `Another program is using port ${port} on this computer, so F-list Workbench ` +
+            'cannot start its sidecar there. Close that program, or start F-list Workbench ' +
+            'with SIDECAR_PORT set to a free port.'
+        : `Another F-list Workbench (version ${otherAppVersion}) is running and uses ` +
+            `port ${port}. Close it, then start this one again.`
     )
     this.name = 'SidecarPortTaken'
   }
@@ -52,4 +62,18 @@ export function assertPortFree(port: number): Promise<void> {
       probe.close(() => resolve())
     })
   })
+}
+
+/** Resolves once the port can be bound again, or rejects with SidecarPortTaken after `timeoutMs`. */
+export async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      await assertPortFree(port)
+      return
+    } catch (err) {
+      if (!(err instanceof SidecarPortTaken) || Date.now() >= deadline) throw err
+    }
+    await new Promise((r) => setTimeout(r, 200))
+  }
 }

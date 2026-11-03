@@ -17,10 +17,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+import archive_backups
+import archive_images
+import archive_workbench
 import bbcode_rules
-import character_archive
-from archive_errors import WorkbenchConflict, WorkbenchNotKept
-from refusals import BackupHoldsNoProfile, BackupTooOld
 
 from ._context import (
     ToolError,
@@ -70,12 +70,11 @@ def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
         return payload_ops.edit(target.id, mutate)
     except payload_ops.PayloadError as exc:
         raise ToolError("validation_failed", str(exc)) from exc
-    except character_archive.EtagMismatch as exc:
+    except archive_workbench.EtagMismatch as exc:
         raise ToolError(
-            "etag_conflict",
-            "The app window saved the Workbench while the edit was in "
-            "flight, twice in a row. Read the field again and redo the "
-            "change.",
+            "etag_mismatch",
+            "The Workbench changed while the edit was in flight. Read "
+            "the field again and redo the change.",
             current_etag=exc.current_etag,
         ) from exc
 
@@ -125,18 +124,7 @@ def load_backup_into_workbench(
             "Workbench; the Workbench is saved as a Backup first. Call "
             "this again with confirm=true.",
         )
-    try:
-        replaced = character_archive.load_zip_backup_into_workbench(
-            target.id, backup
-        )
-    except FileNotFoundError as exc:
-        raise ToolError("backup_not_found", str(exc)) from exc
-    except (
-        WorkbenchNotKept, WorkbenchConflict, BackupHoldsNoProfile, BackupTooOld
-    ) as exc:
-        raise ToolError(exc.code, exc.message) from exc
-    except ValueError as exc:
-        raise ToolError("validation_failed", str(exc)) from exc
+    replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
     kept = replaced.kept["filename"] if replaced.kept else None
     audit(
         "load_backup_into_workbench",
@@ -146,7 +134,7 @@ def load_backup_into_workbench(
     )
     return {
         "character": target.name,
-        "set": character_archive.WORKBENCH_NAME,
+        "set": archive_workbench.WORKBENCH_NAME,
         "loaded": backup,
         "kept_as": kept,
         "note": NO_PUSH_NOTE,
@@ -1000,7 +988,7 @@ def add_image(
     target, resolved = _writable(character, working_set)
     on_disk = {
         str(row.get("image_id"))
-        for row in character_archive.list_character_images(target.id)
+        for row in archive_images.list_character_images(target.id)
     }
     if str(image_id) not in on_disk:
         raise ToolError(
@@ -1065,7 +1053,7 @@ def _import_batch(
     working_set: str | None,
     convert_to_jpeg: bool,
 ) -> dict[str, Any]:
-    from services import events, image_import, payload_ops
+    from services import image_import, payload_ops
 
     target = resolve_character(character)
     if not items:
@@ -1120,8 +1108,6 @@ def _import_batch(
         stored = [image_import.store(target.id, p) for p in prepared]
     except image_import.ImportRefused as exc:
         raise ToolError(exc.code, exc.message, **exc.details) from exc
-    if any(not row["deduplicated"] for row in stored):
-        events.publish(events.IMAGES_CHANGED, character_id=str(target.id))
 
     replaced: dict[int, str] = {}
     if touches_gallery:
@@ -1223,7 +1209,7 @@ def _workbench_for_reporting(target, working_set: str | None):  # noqa: ANN001, 
     editing."""
     if working_set is not None:
         return resolve_workbench_or_live(target, working_set)
-    if character_archive.read_workbench(target.id) is None:
+    if archive_workbench.read_workbench(target.id) is None:
         return None
     return workbench_target(target)
 
@@ -1323,12 +1309,14 @@ def get_working_set_payload(
     """
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, working_set)
-    payload = load_payload(resolved)
-    etag = (
-        None
-        if resolved.is_live
-        else character_archive.workbench_etag(target.id)
-    )
+    if resolved.is_live:
+        payload, etag = load_payload(resolved), None
+    else:
+        # The payload and its etag from one read, so the etag a model
+        # sends back names exactly what it was shown.
+        bench = archive_workbench.read_workbench(target.id)
+        payload = bench.payload if bench is not None else load_payload(resolved)
+        etag = bench.etag if bench is not None else None
     return {
         "character": target.name,
         "set": resolved.name,
@@ -1370,14 +1358,14 @@ def put_working_set_payload(
     if if_match is None:
         # Without `if_match` this overwrites whatever is there, as the
         # docstring warns: the caller has confirmed it.
-        if_match = character_archive.workbench_etag(target.id)
+        if_match = archive_workbench.workbench_etag(target.id)
     try:
-        etag = character_archive.write_workbench(
+        etag = archive_workbench.write_workbench(
             target.id, payload, expected_etag=if_match
         )
-    except character_archive.EtagMismatch as exc:
+    except archive_workbench.EtagMismatch as exc:
         raise ToolError(
-            "etag_conflict",
+            "etag_mismatch",
             "The Workbench changed since you read it. Read it again and redo "
             "the change.",
             current_etag=exc.current_etag,

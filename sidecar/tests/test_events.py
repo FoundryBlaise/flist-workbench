@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import archive_images
 from sidecar_client import SECRET_HEADER, TEST_LAUNCH_SECRET
 from mcp_helpers import call_tool, mcp_client
 from test_mcp_reads import MAPPING
@@ -30,18 +31,19 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import importlib
     import json
 
-    import character_archive
+    import archive_live
+    import archive_registry
     import paths
 
     importlib.reload(paths)
-    importlib.reload(character_archive)
+    importlib.reload(archive_registry)
 
-    cache = character_archive.cache_root() / "mapping-list.json"
+    cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(MAPPING), encoding="utf-8")
 
-    character_archive.register_character("42", "Lady Amber Blaise")
-    character_archive.write_live(
+    archive_registry.register_character("42", "Lady Amber Blaise")
+    archive_live.write_live(
         "42",
         {
             "character": {"id": 42, "name": "Lady Amber Blaise", "description": "x"},
@@ -59,7 +61,7 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     mapping_service.invalidate()
     importlib.reload(server)
-    yield character_archive
+    yield
     mapping_service.invalidate()
 
 
@@ -88,12 +90,12 @@ async def test_a_payload_write_is_announced_with_its_etag(workbench) -> None:
     from services import events
 
     events.bind_loop(asyncio.get_running_loop())
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
 
     async def write() -> None:
         await asyncio.sleep(0.05)
         payload["character"]["description"] = "changed"
-        etag = put_workbench(workbench, "42", payload)
+        etag = put_workbench("42", payload)
         written.append(etag)
 
     written: list[str] = []
@@ -110,11 +112,11 @@ async def test_a_ui_write_is_attributed_to_the_ui(workbench) -> None:
     from services import events
 
     events.bind_loop(asyncio.get_running_loop())
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
 
     async def write() -> None:
         await asyncio.sleep(0.05)
-        put_workbench(workbench, "42", payload)
+        put_workbench("42", payload)
 
     collector = asyncio.create_task(collect())
     await write()
@@ -129,7 +131,7 @@ async def test_an_mcp_write_names_the_tool_that_made_it(workbench) -> None:
     from services import events
 
     events.bind_loop(asyncio.get_running_loop())
-    workbench_payload(workbench, "42")
+    workbench_payload("42")
 
     async def write() -> None:
         await asyncio.sleep(0.05)
@@ -162,16 +164,16 @@ async def test_a_repair_says_so_instead_of_becoming_a_phantom_conflict(
     from services import events
 
     events.bind_loop(asyncio.get_running_loop())
-    payload = workbench_payload(workbench, "42")
+    payload = workbench_payload("42")
     payload["images"] = [
         {"image_id": "47001", "description": "", "sort_order": 0},
         {"image_id": "47001", "description": "", "sort_order": 1},
     ]
-    put_workbench(workbench, "42", payload)
+    put_workbench("42", payload)
 
     async def repair() -> None:
         await asyncio.sleep(0.05)
-        workbench.repair_gallery("42")
+        archive_images.repair_gallery("42")
 
     collector = asyncio.create_task(collect())
     await repair()
