@@ -129,8 +129,6 @@ def test_job_runs_single_partner_to_done(
             labels_store.upsert_label(
                 labels_conn,
                 hash=labels_store.msg_hash(m),
-                character="Char",
-                partner="Partner",
                 ts=m["ts"],
                 speaker=m["speaker"],
                 label="IC",
@@ -456,8 +454,6 @@ def test_job_writes_manifest_after_first_ingest(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -512,8 +508,6 @@ def test_job_detects_dim_mismatch_and_aborts(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -559,8 +553,6 @@ def test_job_detects_orphan_collection_as_model_swap(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -652,8 +644,6 @@ def test_job_scoped_force_rewipe_deletes_only_that_scope(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="A",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -697,8 +687,6 @@ def test_job_with_force_rewipe_recreates_collection(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -953,8 +941,6 @@ def test_ingest_endpoint_returns_job_id(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -1003,8 +989,6 @@ def test_rag_status_after_ingest(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",

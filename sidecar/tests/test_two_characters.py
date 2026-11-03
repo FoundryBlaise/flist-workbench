@@ -314,3 +314,51 @@ async def test_unlinking_an_alias_keeps_its_labels(
     two_characters.unlink_alias()
 
     assert two_characters.message(AZURE, OLD_NAME, OLD_NAME_LINE)["label"] == "IC"
+
+
+async def test_resetting_every_label_keeps_each_characters_labels_apart_in_the_trash(
+    two_characters: TwoCharacters,
+) -> None:
+    # The shared line is in both characters' Logs; one more Label is on
+    # a message no Log holds any more.
+    await _label_over_mcp(two_characters, AZURE, AMBER, {SHARED_LINE: "IC"})
+    await _label_over_mcp(two_characters, AZURE, PARTNER, {PARTNER_LINE: "OOC"})
+    await _label_over_mcp(two_characters, AMBER, PARTNER, {AMBER_PARTNER_LINE: "IC"})
+    res = two_characters.client.post(
+        "/labels/override",
+        json={
+            "character": AZURE, "partner": PARTNER, "hash": "0123456789abcdef",
+            "ts": 1700000000, "speaker": PARTNER, "label": "IC",
+        },
+    )
+    assert res.status_code == 200, res.text
+    labelled = {
+        (c, p, line): two_characters.message(c, p, line)["label"]
+        for c, p, line in (
+            (AZURE, AMBER, SHARED_LINE),
+            (AMBER, AZURE, SHARED_LINE),
+            (AZURE, PARTNER, PARTNER_LINE),
+            (AMBER, PARTNER, AMBER_PARTNER_LINE),
+        )
+    }
+
+    cleared = two_characters.client.post("/labels/clear-all").json()
+
+    assert cleared["labels_deleted"] == 4
+    entries = two_characters.client.get("/labels/trash").json()["labels"]
+    assert sorted(e["id"] for e in entries) == sorted(cleared["trash_ids"])
+    # One entry per character whose Logs hold the messages, the shared
+    # line in only one of them, and one for the message in no Log.
+    assert {e["character"] for e in entries} == {AZURE, AMBER, None}
+    assert sum(e["count"] for e in entries) == 4
+    assert all(e["partner"] is None for e in entries)
+    assert two_characters.message(AMBER, AZURE, SHARED_LINE)["label"] == "Unlabeled"
+
+    put_back = two_characters.client.post(
+        "/labels/trash/put-back", json={"ids": cleared["trash_ids"]}
+    ).json()
+
+    assert sum(r["restored"] for r in put_back["restored"]) == 4
+    assert {
+        key: two_characters.message(*key)["label"] for key in labelled
+    } == labelled

@@ -9,6 +9,7 @@ in-app classifier's tables and its narrower `source` CHECK).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -62,8 +63,7 @@ def test_an_unversioned_label_database_migrates_with_its_data_intact(
         assert aliases_store.all_names_for(conn, "Ayla", "Brin Old") == ["Brin", "Brin Old"]
         # A connected model's verdict is accepted, whatever the old CHECK said.
         labels_store.upsert_label(
-            conn, hash="h-new", character="Ayla", partner="Brin",
-            ts=1700000200, speaker="Brin", label="OOC", source="mcp",
+            conn, hash="h-new", ts=1700000200, speaker="Brin", label="OOC", source="mcp",
         )
         assert labels_store.label_row(conn, "h-new")["source"] == "mcp"
         tables = {
@@ -81,6 +81,157 @@ def test_an_unversioned_label_database_migrates_with_its_data_intact(
     assert [h.chunk_id for h in hits] == ["Ayla|Brin|2023-11-14|0"]
 
     assert _user_version(path) == labels_store.SCHEMA_VERSION > 0
+
+
+def _verdicts(path: Path) -> dict[str, tuple]:
+    """Every stored Label of the database at `path`, by message hash:
+    the verdict, who gave it and the Label it replaced."""
+    db = sqlite3.connect(path)
+    try:
+        return {
+            row[0]: row[1:]
+            for row in db.execute(
+                "SELECT hash, ts, speaker, label, reason, source, prior_label,"
+                " prior_source, updated_at FROM labels"
+            )
+        }
+    finally:
+        db.close()
+
+
+@pytest.fixture
+def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The app's data folder, so the data invariants hold the test to
+    keeping what the user owns."""
+    data = tmp_path / "wb"
+    data.mkdir()
+    monkeypatch.setenv("FLIST_WORKBENCH_DATA_DIR", str(data))
+    monkeypatch.setenv("FCHAT_DATA_DIR", str(tmp_path / "fchat"))
+    monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    return data
+
+
+@pytest.mark.parametrize("release", RELEASES)
+def test_a_label_no_longer_stores_a_character_or_partner(
+    release: str, data_dir: Path
+) -> None:
+    """A Label belongs to the message (ADR 0004): the owner columns and
+    their index go, every verdict stays as it was."""
+    path = _restore(release, "labels", data_dir)
+    before = _verdicts(path)
+
+    labels_store.connect(data_dir).close()
+
+    db = sqlite3.connect(path)
+    try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(labels)")}
+        indexes = {row[1] for row in db.execute("PRAGMA index_list(labels)")}
+    finally:
+        db.close()
+    assert not columns & {"character", "partner"}
+    assert "idx_labels_partner" not in indexes
+    assert _verdicts(path) == before
+
+
+def _old_trash_entry(path: Path, root: Path) -> str:
+    """Clear every Label of the old database at `path` the way releases
+    before the migration did: each row, character and partner included,
+    kept in a Trash entry under `root`, then deleted. Returns its id."""
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    try:
+        rows = [dict(r) for r in db.execute("SELECT * FROM labels ORDER BY ts")]
+        db.execute("DELETE FROM labels")
+        db.commit()
+    finally:
+        db.close()
+    assert rows and all({"character", "partner"} <= set(r) for r in rows)
+    trash_id = "1793000000-0123456789ab"
+    folder = root / "trash" / "labels"
+    folder.mkdir(parents=True)
+    (folder / f"{trash_id}.json").write_text(
+        json.dumps(
+            {
+                "id": trash_id,
+                "character": "Ayla",
+                "partner": None,
+                "count": len(rows),
+                "deleted_at": 1793000000,
+                "deleted_by": "ui",
+                "labels": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return trash_id
+
+
+@pytest.mark.parametrize("release", RELEASES)
+def test_labels_cleared_before_the_migration_can_be_put_back_after_it(
+    release: str, data_dir: Path
+) -> None:
+    path = _restore(release, "labels", data_dir)
+    before = _verdicts(path)
+    trash_id = _old_trash_entry(path, data_dir)
+    from server import app
+
+    client = app_client(app)
+
+    res = client.post("/labels/trash/put-back", json={"ids": [trash_id]})
+
+    assert res.status_code == 200, res.text
+    assert res.json()["restored"] == [
+        {"id": trash_id, "restored": len(before), "skipped": []}
+    ]
+    assert _verdicts(path) == before
+    assert _user_version(path) == labels_store.SCHEMA_VERSION
+
+
+def test_two_verdicts_on_one_message_merge_into_the_one_that_wins(
+    data_dir: Path,
+) -> None:
+    """Should an older database ever hold more than one verdict for a
+    message, a manual Label beats a model's, and within one source the
+    newer verdict beats the older."""
+    # A labels table whose hash is not unique, at the version before
+    # the owner columns were dropped.
+    path = _restore("v0.2.16", "labels", data_dir)
+    db = sqlite3.connect(path)
+    db.executescript(
+        """
+        ALTER TABLE labels RENAME TO labels_keyed;
+        CREATE TABLE labels AS SELECT * FROM labels_keyed;
+        DROP TABLE labels_keyed;
+        INSERT INTO labels VALUES
+            ('h-manual', 'Brin', 'Ayla', 1700000060, 'Ayla', 'OOC', 1.0,
+             NULL, 'mcp', NULL, NULL, 1893456000.0),
+            ('h-mcp', 'Brin', 'Ayla', 1700000000, 'Brin', 'OOC', 1.0,
+             'newer', 'mcp', 'IC', 'mcp', 1893456000.0),
+            ('h-llm', 'Cass', 'Ayla', 1690000000, 'Cass', 'IC', 1.0,
+             'older', 'llm', NULL, NULL, 1600000000.0);
+        PRAGMA user_version = 3;
+        """
+    )
+    db.close()
+
+    conn = labels_store.connect(data_dir)
+    try:
+        kept = {
+            h: labels_store.label_row(conn, h) for h in ("h-manual", "h-mcp", "h-llm")
+        }
+        count = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert count == 3
+    # Manual beats a newer model verdict.
+    assert (kept["h-manual"]["label"], kept["h-manual"]["source"]) == ("IC", "manual")
+    assert kept["h-manual"]["prior_label"] == "OOC"
+    # Within one source, the newer verdict wins with its own prior Label.
+    assert (kept["h-mcp"]["label"], kept["h-mcp"]["reason"]) == ("OOC", "newer")
+    assert kept["h-mcp"]["prior_label"] == "IC"
+    # The older duplicate loses.
+    assert (kept["h-llm"]["label"], kept["h-llm"]["reason"]) == ("OOC", None)
 
 
 # ---- settings.db -----------------------------------------------------------

@@ -148,8 +148,6 @@ def test_aliases_and_labels_coexist_in_one_db(conn, tmp_path: Path) -> None:
     labels_store.upsert_label(
         conn,
         hash="aaaaaaaaaaaaaaaa",
-        character="C",
-        partner="P",
         ts=1,
         speaker="X",
         label="IC",

@@ -197,8 +197,6 @@ async def test_label_writes_are_announced(workbench) -> None:
             labels_store.upsert_label(
                 conn,
                 hash="abcdef0123456789",
-                character="C",
-                partner="P",
                 ts=1,
                 speaker="C",
                 label="IC",

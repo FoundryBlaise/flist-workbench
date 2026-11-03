@@ -238,8 +238,6 @@ def override(
         labels_store.upsert_label(
             conn,
             hash=hash,
-            character=character,
-            partner=aliases_store.primary_for(conn, character, partner),
             ts=ts,
             speaker=speaker,
             label=label,
@@ -273,16 +271,8 @@ def override_many(
     conn = labels_store.connect()
     try:
         if label is None:
-            return labels_store.delete_labels_by_hash(
-                conn, [h for h, _ts, _speaker in items], character=character, partner=partner
-            )
-        return labels_store.upsert_labels_many(
-            conn,
-            items,
-            character=character,
-            partner=aliases_store.primary_for(conn, character, partner),
-            label=label,
-        )
+            return labels_store.delete_labels_by_hash(conn, [h for h, _ts, _speaker in items])
+        return labels_store.upsert_labels_many(conn, items, label=label)
     finally:
         conn.close()
 
@@ -357,13 +347,7 @@ def record_verdicts(
         rows = [row for row in rows if row[0] not in manual]
         result.written = [row[0] for row in rows]
         if rows:
-            labels_store.upsert_verdicts(
-                conn,
-                rows,
-                character=character,
-                partner=aliases_store.primary_for(conn, character, partner),
-                source="mcp",
-            )
+            labels_store.upsert_verdicts(conn, rows, source="mcp")
         result.unlabeled_remaining = _counts(conn, settings, messages)["unlabeled"]
     return result
 
@@ -381,14 +365,7 @@ def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
     label = verdict(label)
     messages = _messages(character, partner)
     with _store() as (conn, settings):
-        return labels_store.fill_unlabeled(
-            conn,
-            character,
-            aliases_store.primary_for(conn, character, partner),
-            messages,
-            settings,
-            label,
-        )
+        return labels_store.fill_unlabeled(conn, messages, settings, label)
 
 
 def delete(character: str, partner: str, hashes: Iterable[str]) -> int:
@@ -396,9 +373,7 @@ def delete(character: str, partner: str, hashes: Iterable[str]) -> int:
     `fill_unlabeled`. Returns how many were removed."""
     conn = labels_store.connect()
     try:
-        return labels_store.delete_labels_by_hash(
-            conn, list(hashes), character=character, partner=partner
-        )
+        return labels_store.delete_labels_by_hash(conn, list(hashes))
     finally:
         conn.close()
 
@@ -411,6 +386,7 @@ def clear(character: str, partner: str | None = None) -> dict[str, Any]:
 
 
 def clear_all() -> dict[str, Any]:
-    """Clear every Label there is, one Trash entry per character.
-    Returns `{deleted, trash_ids}`."""
+    """Clear every Label there is, one Trash entry per character whose
+    Logs hold the messages (see `label_trash.clear_all`). Returns
+    `{deleted, trash_ids}`."""
     return label_trash.clear_all()
