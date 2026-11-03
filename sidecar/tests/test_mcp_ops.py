@@ -238,19 +238,65 @@ async def test_wiping_the_index_needs_confirmation(workbench) -> None:
     assert body["wiped"] is True
 
 
-async def test_embedding_probe_reports_an_unreachable_endpoint(
+async def test_index_status_reports_an_embedding_model_that_loads(
     workbench, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import rag_embed
 
+    monkeypatch.setattr(
+        rag_embed, "probe", lambda settings, timeout=60.0: (4, [0.1, 0.2, 0.3, 0.4])
+    )
+    async with mcp_client("logs") as session:
+        _, body = await call_tool(session, "get_rag_status", check_embedding=True)
+    assert body["embedding"]["state"] == "ready"
+    assert body["embedding"]["dimension"] == 4
+    assert body["embedding"]["model"]
+
+
+async def test_index_status_reports_a_model_that_fails_to_load_with_a_code(
+    workbench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model that won't load is a state of the Index, reported with a
+    code; the status call itself still answers."""
+    import rag_embed
+
     def boom(settings, timeout=60.0):
-        raise rag_embed.EmbedError("connection refused")
+        raise rag_embed.EmbedError("the download was interrupted")
 
     monkeypatch.setattr(rag_embed, "probe", boom)
     async with mcp_client("logs") as session:
-        _, body = await call_tool(session, "test_embedding_connection")
-    assert body["ok"] is False
-    assert "connection refused" in body["error"]
+        result, body = await call_tool(
+            session, "get_rag_status", check_embedding=True
+        )
+    assert not result.isError
+    assert "ok" not in body and "ok" not in body["embedding"]
+    assert body["embedding"]["state"] == "failed"
+    assert body["embedding"]["error"]["code"] == "embedding_failed"
+    assert "download was interrupted" in body["embedding"]["error"]["message"]
+
+
+async def test_index_status_leaves_the_model_alone_unless_asked(
+    workbench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first load downloads the model; a plain status read must not."""
+    import rag_embed
+
+    loads = []
+    monkeypatch.setattr(
+        rag_embed, "probe", lambda settings, timeout=60.0: loads.append(1) or (4, [])
+    )
+    async with mcp_client("character") as session:
+        _, body = await call_tool(session, "get_rag_status")
+    assert loads == []
+    assert body["embedding"]["state"] == "not_checked"
+    assert body["embedding"]["model"]
+
+
+async def test_the_embedding_check_is_not_a_tool_of_its_own(workbench) -> None:
+    for suffix in ("", "character", "logs", "classify"):
+        async with mcp_client(suffix) as session:
+            names = {t.name for t in (await session.list_tools()).tools}
+        assert "test_embedding_connection" not in names, suffix
 
 
 # ---- exports -----------------------------------------------------------
