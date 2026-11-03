@@ -72,6 +72,19 @@ def put_on_disk(archive, image_id: str, data: bytes, ext: str = "jpg") -> None:
     archive_images.write_character_image("42", image_id, ext, data)
 
 
+async def import_one(session, source_path: str, **options: Any) -> tuple[Any, Any]:
+    """`import_images` with one file: the call's result, and that file's
+    entry in it (None when the call was refused)."""
+    result, body = await call_tool(
+        session,
+        "import_images",
+        character=CHAR,
+        items=[{"source_path": source_path}],
+        **options,
+    )
+    return result, (None if result.isError else body["results"][0])
+
+
 # --------------------------------------------------------------------
 # Into the pool
 # --------------------------------------------------------------------
@@ -82,12 +95,8 @@ async def test_a_file_lands_in_the_pool_and_is_stored_once(workbench, outputs) -
     src.write_bytes(jpeg_bytes((64, 96)))
 
     async with mcp_client("character") as session:
-        _, first = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(src)
-        )
-        _, second = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(src)
-        )
+        _, first = await import_one(session, str(src))
+        _, second = await import_one(session, str(src))
 
     assert first["image_id"].startswith("local-")
     assert first["deduplicated"] is False
@@ -111,9 +120,7 @@ async def test_a_file_already_pulled_from_f_list_keeps_its_f_list_id(
     src.write_bytes(data)
 
     async with mcp_client("character") as session:
-        _, body = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(src)
-        )
+        _, body = await import_one(session, str(src))
 
     assert body["image_id"] == "47000849"
     assert body["deduplicated"] is True
@@ -127,12 +134,8 @@ async def test_the_format_is_judged_by_content_not_name(workbench, outputs) -> N
     text.write_text("not an image", encoding="utf-8")
 
     async with mcp_client("character") as session:
-        _, body = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(disguised)
-        )
-        refused, _ = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(text)
-        )
+        _, body = await import_one(session, str(disguised))
+        refused, _ = await import_one(session, str(text))
 
     assert body["extension"] == "png"
     assert "not_an_image" in tool_error_text(refused)
@@ -154,15 +157,9 @@ async def test_a_path_outside_the_cleared_folders_is_refused(
     sneaky = outputs / ".." / "Private" / "secret.png"
 
     async with mcp_client("character") as session:
-        direct, _ = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(secret)
-        )
-        dotdot, _ = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(sneaky)
-        )
-        relative, _ = await call_tool(
-            session, "import_image", character=CHAR, source_path="secret.png"
-        )
+        direct, _ = await import_one(session, str(secret))
+        dotdot, _ = await import_one(session, str(sneaky))
+        relative, _ = await import_one(session, "secret.png")
 
     assert "source_not_allowed" in tool_error_text(direct)
     # The refusal lists the cleared folders (JSON-escaped in the details).
@@ -176,12 +173,7 @@ async def test_outside_a_cleared_folder_existence_is_not_revealed(
     workbench, outputs, tmp_path: Path  # noqa: F811
 ) -> None:
     async with mcp_client("character") as session:
-        missing, _ = await call_tool(
-            session,
-            "import_image",
-            character=CHAR,
-            source_path=str(tmp_path / "nowhere" / "x.png"),
-        )
+        missing, _ = await import_one(session, str(tmp_path / "nowhere" / "x.png"))
     assert "source_not_allowed" in tool_error_text(missing)
 
 
@@ -191,9 +183,7 @@ async def test_with_no_cleared_folders_nothing_can_be_imported(
     src = tmp_path / "a.png"
     src.write_bytes(png_bytes((8, 8)))
     async with mcp_client("character") as session:
-        result, _ = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(src)
-        )
+        result, _ = await import_one(session, str(src))
     text = tool_error_text(result)
     assert "no_import_folders" in text
     assert "Settings" in text
@@ -263,13 +253,7 @@ async def test_convert_to_jpeg_shrinks_an_oversized_png(workbench, outputs) -> N
     big.write_bytes(gradient_png((900, 900)))
 
     async with mcp_client("character") as session:
-        _, body = await call_tool(
-            session,
-            "import_image",
-            character=CHAR,
-            source_path=str(big),
-            convert_to_jpeg=True,
-        )
+        _, body = await import_one(session, str(big), convert_to_jpeg=True)
 
     assert body["converted"] is True
     assert body["extension"] == "jpg"
@@ -286,13 +270,7 @@ async def test_convert_to_jpeg_leaves_transparency_alone(workbench, outputs) -> 
     seethrough.write_bytes(gradient_png((800, 800), alpha=100))
 
     async with mcp_client("character") as session:
-        _, body = await call_tool(
-            session,
-            "import_image",
-            character=CHAR,
-            source_path=str(seethrough),
-            convert_to_jpeg=True,
-        )
+        _, body = await import_one(session, str(seethrough), convert_to_jpeg=True)
 
     assert body["converted"] is False
     assert body["extension"] == "png"
@@ -303,13 +281,7 @@ async def test_convert_to_jpeg_ignores_files_within_the_limits(workbench, output
     small = outputs / "small.png"
     small.write_bytes(png_bytes((16, 16)))
     async with mcp_client("character") as session:
-        _, body = await call_tool(
-            session,
-            "import_image",
-            character=CHAR,
-            source_path=str(small),
-            convert_to_jpeg=True,
-        )
+        _, body = await import_one(session, str(small), convert_to_jpeg=True)
     assert body["converted"] is False
     assert body["extension"] == "png"
 
@@ -446,9 +418,7 @@ async def test_the_pool_listing_says_what_a_file_is_and_who_uses_it(
     async with mcp_client("character") as session:
         await open_workbench(session)
         seed_gallery(workbench, [])
-        _, imported = await call_tool(
-            session, "import_image", character=CHAR, source_path=str(src)
-        )
+        _, imported = await import_one(session, str(src))
         _, listing = await call_tool(session, "list_images", character=CHAR)
 
     pool = {r["image_id"]: r for r in listing["not_on_profile"]}

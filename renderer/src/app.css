@@ -4864,6 +4864,7 @@ body {
 }
 .flist-images-gallery-item__btn:hover { background: var(--row-hover, rgba(255, 255, 255, 0.04)); }
 .flist-images-gallery-item__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.flist-images-gallery-item__btn--danger { border-color: #d04a4a; color: #d04a4a; }
 .flist-images-gallery-item:focus-visible {
   outline: 2px solid var(--accent, #6aa3ff);
   outline-offset: -2px;

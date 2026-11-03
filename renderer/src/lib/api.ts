@@ -1222,15 +1222,18 @@ export const api = {
     if (!res.ok) throw await failure(res)
     return (await res.json()) as FlistCharacterImage
   },
-  /** Move `images/<image_id>.<ext>` into the character's trash. */
-  flistImageRemove: (characterId: string | number, imageId: string) =>
-    request<{ trashed: boolean; image_id: string }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(imageId)}`,
-      { method: 'DELETE' }
-    ),
-  /** Move several pool files into the trash in one call. */
+  /** Delete images, in the gallery or only in the pool: the route MCP's
+   *  `trash_images` takes too. The sidecar takes gallery images off the
+   *  Workbench's gallery (`off_gallery`) and answers the Workbench's new
+   *  `etag`, null when the gallery was left alone; every file goes to
+   *  the Trash. */
   flistImagesTrash: (characterId: string | number, imageIds: string[]) =>
-    request<{ trashed: FlistTrashItem[]; not_found: string[] }>(
+    request<{
+      trashed: FlistTrashItem[]
+      not_found: string[]
+      off_gallery: string[]
+      etag: string | null
+    }>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
       { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
     ),
