@@ -23,6 +23,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+import foreign_cache
 import model_weights
 import rag as rag_settings
 import settings as settings_store
@@ -49,6 +50,9 @@ _INT_RANGES: dict[str, tuple[str, int, int | None]] = {
     "rag.hybrid_bm25_candidates": (settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES, 1, 200),
     "rag.chunk_max_chars": (settings_store.KEY_RAG_CHUNK_MAX_CHARS, 500, 20000),
     "rag.chunk_overlap_msgs": (settings_store.KEY_RAG_CHUNK_OVERLAP_MSGS, 0, 5),
+    # At least one megabyte: the profile being viewed always stays,
+    # whatever the cap, so a smaller one would only mean "keep one".
+    "foreign.cache_cap_mb": (settings_store.KEY_FOREIGN_CACHE_CAP_MB, 1, None),
 }
 
 #: The fields naming a model, whose old weights go when they change.
@@ -101,6 +105,9 @@ def update(changes: Mapping[str, Any], conn: sqlite3.Connection | None = None) -
         switched = [kind for field, kind in _MODEL_KINDS.items() if field in changes]
         if switched:
             model_weights.remove_stale(switched)
+        if "foreign.cache_cap_mb" in changes:
+            # A lower cap takes effect now, not at the next profile.
+            foreign_cache.enforce_cap(foreign_cache_cap_bytes(conn))
     finally:
         if own:
             conn.close()
@@ -229,6 +236,28 @@ def log_text_over_mcp(conn: sqlite3.Connection | None = None) -> bool:
     finally:
         if own:
             conn.close()
+
+
+def foreign_cache_cap_mb(conn: sqlite3.Connection | None = None) -> int:
+    """The Foreign profile cache's cap in megabytes, as set in Settings
+    or the default. Asking creates nothing."""
+    if conn is None and not settings_store.db_exists():
+        return foreign_cache.DEFAULT_CAP_MB
+    own = conn is None
+    conn = conn or settings_store.connect()
+    try:
+        stored = _stored_int(
+            conn, settings_store.KEY_FOREIGN_CACHE_CAP_MB, foreign_cache.DEFAULT_CAP_MB
+        )
+    finally:
+        if own:
+            conn.close()
+    _, lo, hi = _INT_RANGES["foreign.cache_cap_mb"]
+    return _clamp(stored, lo, hi)
+
+
+def foreign_cache_cap_bytes(conn: sqlite3.Connection | None = None) -> int:
+    return foreign_cache_cap_mb(conn) * foreign_cache.MB
 
 
 def _image_import_roots(

@@ -62,6 +62,10 @@ KEY_IMAGE_IMPORT_ROOTS = "images.import_roots"
 # able to grant itself the user's partners' words.
 KEY_MCP_LOG_TEXT = "mcp.log_text"
 
+# How much disk the Foreign profile cache may take, in whole megabytes.
+# Absent means the default (foreign_cache.DEFAULT_CAP_MB).
+KEY_FOREIGN_CACHE_CAP_MB = "foreign.cache_cap_mb"
+
 _DB_NAME = "settings.db"
 
 
