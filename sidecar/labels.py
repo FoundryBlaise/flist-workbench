@@ -710,6 +710,9 @@ def upsert_verdicts(
     """Store `(hash, ts, speaker, label, reason)` verdicts, each with its
     own label and reason, in one transaction and one `labels-changed`
     event. Every row snapshots the label it replaces as its prior one.
+    A manual Label is only ever replaced by another manual one: a
+    write from any other source leaves it untouched (callers that
+    report skips find them first with `manual_hashes`).
     Returns how many messages were written."""
     if source not in ("mcp", "manual", "llm"):
         raise ValueError(f"invalid source: {source!r}")
@@ -748,6 +751,7 @@ def upsert_verdicts(
             prior_label = excluded.prior_label,
             prior_source = excluded.prior_source,
             updated_at = excluded.updated_at
+        WHERE labels.source != 'manual' OR excluded.source = 'manual'
         """,
         [
             (
@@ -771,6 +775,26 @@ def label_row(conn: sqlite3.Connection, hash: str) -> dict | None:
         f"SELECT {', '.join(LABEL_COLUMNS)} FROM labels WHERE hash = ?", (hash,)
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def manual_hashes(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[str]:
+    """Which of `hashes` carry a Label the user set by hand. Only the
+    window changes those; `upsert_verdicts` from any other source
+    leaves them as they are."""
+    ids = list(dict.fromkeys(hashes))
+    found: set[str] = set()
+    for start in range(0, len(ids), 500):
+        batch = ids[start : start + 500]
+        placeholders = ",".join("?" * len(batch))
+        found.update(
+            r["hash"]
+            for r in conn.execute(
+                "SELECT hash FROM labels WHERE source = 'manual' "
+                f"AND hash IN ({placeholders})",
+                batch,
+            )
+        )
+    return found
 
 
 def count_by_source(conn: sqlite3.Connection, source: str) -> int:

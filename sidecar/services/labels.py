@@ -37,6 +37,11 @@ VERDICTS = (labels_store.LABEL_IC, labels_store.LABEL_OOC)
 #: How much of a model's reason is kept with its verdict.
 REASON_MAX_CHARS = 500
 
+#: Why a model's Label was not written over one the user set.
+MANUAL_SKIP_REASON = (
+    "The user set this Label by hand; only the user changes it, in the window."
+)
+
 
 def not_a_verdict(label: object) -> ValidationFailed:
     return ValidationFailed(
@@ -291,8 +296,11 @@ class Verdicts:
     unknown: list[str] = field(default_factory=list)
     #: Items that carried no usable verdict, with the reason.
     rejected: list[dict[str, str]] = field(default_factory=list)
+    #: Messages whose Label the user set by hand, `{hash, reason}`
+    #: each: only the window changes those.
+    skipped: list[dict[str, str]] = field(default_factory=list)
     #: Messages of the conversation still without a verdict, counted
-    #: after the write (None when nothing was written). A caller that
+    #: after the write (None when no hash was known). A caller that
     #: only ever hears `written: 20` has nothing to check its own
     #: bookkeeping against; this number says whether the work is done.
     unlabeled_remaining: int | None = None
@@ -306,7 +314,8 @@ def record_verdicts(
     Only hashes of this conversation's messages are written: a wrong
     hash would label some other message, so it is reported back as
     unknown instead. An item without a verdict is rejected on its own;
-    the rest of the batch is still written, in one go.
+    the rest of the batch is still written, in one go. A message whose
+    Label the user set by hand keeps it and is reported as skipped.
     """
     messages = _messages(character, partner)
     by_hash = {labels_store.msg_hash(m): m for m in messages}
@@ -337,17 +346,24 @@ def record_verdicts(
                 str(reason)[:REASON_MAX_CHARS] if reason else None,
             )
         )
-        result.written.append(h)
     if not rows:
         return result
     with _store() as (conn, settings):
-        labels_store.upsert_verdicts(
-            conn,
-            rows,
-            character=character,
-            partner=aliases_store.primary_for(conn, character, partner),
-            source="mcp",
-        )
+        known = list(dict.fromkeys(row[0] for row in rows))
+        manual = labels_store.manual_hashes(conn, known)
+        result.skipped = [
+            {"hash": h, "reason": MANUAL_SKIP_REASON} for h in known if h in manual
+        ]
+        rows = [row for row in rows if row[0] not in manual]
+        result.written = [row[0] for row in rows]
+        if rows:
+            labels_store.upsert_verdicts(
+                conn,
+                rows,
+                character=character,
+                partner=aliases_store.primary_for(conn, character, partner),
+                source="mcp",
+            )
         result.unlabeled_remaining = _counts(conn, settings, messages)["unlabeled"]
     return result
 
