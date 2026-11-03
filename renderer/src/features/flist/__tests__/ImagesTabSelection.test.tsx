@@ -1,7 +1,8 @@
 // Pool multi-select and the Trash, as the user asked for them: ten
 // images picked with Shift-click go to the Trash with one confirm, the
 // confirm says which are still used elsewhere, and they come back from
-// the Trash view.
+// the Trash view. An image on the profile goes to the Trash through the
+// same request as one in the pool.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -61,7 +62,7 @@ beforeEach(() => {
         deleted_by: 'ui',
         source_name: null
       }))
-      return json({ trashed: trash, not_found: [] })
+      return json({ trashed: trash, not_found: [], off_gallery: [], etag: null })
     })
     .on(`POST ${TRASH}/restore`, (req) => {
       const ids = (req.body as { image_ids: string[] }).image_ids
@@ -224,4 +225,86 @@ it('two files trashed under one image id are listed and restored one by one', as
     image_ids: ['47000002']
   })
   await waitFor(() => expect(screen.getAllByTestId('flist-images-trash-item')).toHaveLength(1))
+})
+
+it('a gallery image goes to the Trash through the same request as a pool image', async () => {
+  const gallery = [
+    { image_id: IDS[0], description: 'first', sort_order: 0 },
+    { image_id: IDS[1], description: 'second', sort_order: 1 }
+  ]
+  useStore.setState((s) => ({
+    flistWorking: {
+      [CID]: {
+        ...s.flistWorking[CID],
+        payload: { _schema_version: 2, _overlay: ['images'], images: gallery },
+        overlay: ['images']
+      }
+    }
+  }))
+  fake.on(`POST ${IMAGES}/trash`, (req) => {
+    const ids = (req.body as { image_ids: string[] }).image_ids
+    return json({
+      trashed: ids.map((id) => ({ trash_id: id, image_id: id })),
+      not_found: [],
+      off_gallery: ids,
+      etag: 'after-delete'
+    })
+  })
+  render(<ImagesTab characterId={CID} />)
+  expect(screen.getAllByTestId('flist-images-pool-item')).toHaveLength(10)
+
+  fireEvent.click(screen.getAllByTestId('flist-images-gallery-trash')[0])
+  const confirm = await screen.findByTestId('flist-images-delete-confirm')
+  expect(confirm.textContent).toContain('Move 1 image to the Trash?')
+  expect(confirm.textContent).toContain('off the profile')
+  fireEvent.click(within(confirm).getByTestId('flist-images-delete-confirm-btn'))
+
+  await waitFor(() => expect(fake.requestsTo(`POST ${IMAGES}/trash`)).toHaveLength(1))
+  expect(fake.requestsTo(`POST ${IMAGES}/trash`)[0].body).toEqual({ image_ids: [IDS[0]] })
+  // The sidecar took it off the gallery: the window shows that, and its
+  // next save goes over the etag it was given, with nothing left to save.
+  await waitFor(() => expect(useStore.getState().flistWorking[CID].etag).toBe('after-delete'))
+  const slot = useStore.getState().flistWorking[CID]
+  expect(slot.payload.images).toEqual([{ image_id: IDS[1], description: 'second', sort_order: 0 }])
+  expect(slot.unsavedDirty).toBe(false)
+  expect(useStore.getState().flistCharacterImages[CID].byId[IDS[0]]).toBeUndefined()
+  expect(fake.requestsTo(/^PUT /)).toHaveLength(0)
+  // It went to the Trash, not into the pool.
+  expect(screen.getAllByTestId('flist-images-pool-item')).toHaveLength(10)
+})
+
+it('what was typed is saved before a gallery image goes to the Trash', async () => {
+  useStore.setState((s) => ({
+    flistWorking: {
+      [CID]: {
+        ...s.flistWorking[CID],
+        payload: {
+          _schema_version: 2,
+          _overlay: ['images'],
+          images: [{ image_id: IDS[0], description: 'typed', sort_order: 0 }]
+        },
+        overlay: ['images'],
+        unsavedDirty: true
+      }
+    }
+  }))
+  fake
+    .on(`PUT /flist/character/${CID}/workbench/payload`, json({ etag: 'saved' }))
+    .on(`POST ${IMAGES}/trash`, (req) =>
+      json({
+        trashed: [],
+        not_found: [],
+        off_gallery: (req.body as { image_ids: string[] }).image_ids,
+        etag: 'after-delete'
+      })
+    )
+
+  await useStore.getState().flistTrashImages(CID, [IDS[0]])
+
+  const order = fake.requests.map((r) => `${r.method} ${r.path.split('?')[0]}`)
+  expect(order.indexOf(`PUT /flist/character/${CID}/workbench/payload`)).toBeGreaterThanOrEqual(0)
+  expect(order.indexOf(`PUT /flist/character/${CID}/workbench/payload`)).toBeLessThan(
+    order.indexOf(`POST ${IMAGES}/trash`)
+  )
+  expect(useStore.getState().flistWorking[CID].etag).toBe('after-delete')
 })
