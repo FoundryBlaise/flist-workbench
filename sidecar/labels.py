@@ -30,7 +30,6 @@ import hashlib
 import re
 import sqlite3
 import time
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -515,10 +514,55 @@ def _widen_source_check(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _drop_label_owner(conn: sqlite3.Connection) -> None:
+    """A Label belongs to the message (ADR 0004), so the character and
+    partner each row stored, and their index, go.
+
+    Should a database ever hold more than one verdict for a message,
+    one is kept: a manual Label over a model's, and within the same
+    kind the newer one. Every kept row keeps its verdict, source and
+    prior Label.
+    """
+    for statement in (
+        """
+        CREATE TABLE labels_migrated (
+            hash         TEXT PRIMARY KEY,
+            ts           INTEGER NOT NULL,
+            speaker      TEXT NOT NULL,
+            label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+            confidence   REAL NOT NULL,
+            reason       TEXT,
+            source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
+            prior_label  TEXT,
+            prior_source TEXT,
+            updated_at   REAL NOT NULL
+        )
+        """,
+        """
+        INSERT INTO labels_migrated
+        SELECT hash, ts, speaker, label, confidence, reason, source,
+               prior_label, prior_source, updated_at
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY hash
+                ORDER BY source = 'manual' DESC, updated_at DESC
+            ) AS pick
+            FROM labels
+        )
+        WHERE pick = 1
+        """,
+        "DROP TABLE labels",
+        "ALTER TABLE labels_migrated RENAME TO labels",
+        "CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts)",
+    ):
+        conn.execute(statement)
+
+
 MIGRATIONS: tuple[sqlite_db.Migration, ...] = (
     _create_tables,
     _drop_retired_tables,
     _widen_source_check,
+    _drop_label_owner,
 )
 
 #: The `user_version` of a labels.db that has every migration.
@@ -668,8 +712,6 @@ def upsert_label(
     conn: sqlite3.Connection,
     *,
     hash: str,
-    character: str,
-    partner: str,
     ts: int,
     speaker: str,
     label: str,
@@ -690,21 +732,13 @@ def upsert_label(
     column is effectively dead weight. Leaving it in place avoids a
     migration; no callers read it anymore.
     """
-    upsert_verdicts(
-        conn,
-        [(hash, ts, speaker, label, reason)],
-        character=character,
-        partner=partner,
-        source=source,
-    )
+    upsert_verdicts(conn, [(hash, ts, speaker, label, reason)], source=source)
 
 
 def upsert_labels_many(
     conn: sqlite3.Connection,
     items: Iterable[tuple[str, int, str]],
     *,
-    character: str,
-    partner: str,
     label: str,
     source: str = "manual",
     reason: str | None = "manual override",
@@ -717,8 +751,6 @@ def upsert_labels_many(
     return upsert_verdicts(
         conn,
         [(h, ts, speaker, label, reason) for h, ts, speaker in items],
-        character=character,
-        partner=partner,
         source=source,
     )
 
@@ -727,8 +759,6 @@ def upsert_verdicts(
     conn: sqlite3.Connection,
     items: Iterable[tuple[str, int, str, str, str | None]],
     *,
-    character: str,
-    partner: str,
     source: str,
 ) -> int:
     """Store `(hash, ts, speaker, label, reason)` verdicts, each with its
@@ -764,9 +794,9 @@ def upsert_verdicts(
     conn.executemany(
         """
         INSERT INTO labels (
-            hash, character, partner, ts, speaker, label,
+            hash, ts, speaker, label,
             confidence, reason, source, prior_label, prior_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET
             label = excluded.label,
             confidence = excluded.confidence,
@@ -778,17 +808,12 @@ def upsert_verdicts(
         WHERE labels.source != 'manual' OR excluded.source = 'manual'
         """,
         [
-            (
-                h, character, partner, ts, speaker, label,
-                1.0, reason, source, *prior.get(h, (None, None)), now,
-            )
+            (h, ts, speaker, label, 1.0, reason, source, *prior.get(h, (None, None)), now)
             for h, (ts, speaker, label, reason) in rows.items()
         ],
     )
     conn.commit()
-    events.publish(
-        events.LABELS_CHANGED, character=character, partner=partner, hashes=len(rows)
-    )
+    events.publish(events.LABELS_CHANGED, hashes=len(rows))
     return len(rows)
 
 
@@ -839,8 +864,10 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
 
 
 #: Every column of a stored Label, in the order the Trash keeps them.
+#: Trash entries from before the owner columns were dropped also carry
+#: `character` and `partner`; putting them back ignores both.
 LABEL_COLUMNS = (
-    "hash", "character", "partner", "ts", "speaker", "label",
+    "hash", "ts", "speaker", "label",
     "confidence", "reason", "source", "prior_label", "prior_source",
     "updated_at",
 )
@@ -888,16 +915,13 @@ def restore_labels(
         [tuple((defaults | r)[c] for c in LABEL_COLUMNS) for r in todo],
     )
     conn.commit()
-    per_conversation = Counter((r["character"], r["partner"]) for r in todo)
-    for (character, partner), n in sorted(per_conversation.items()):
-        events.publish(events.LABELS_CHANGED, character=character, partner=partner, hashes=n)
+    if todo:
+        events.publish(events.LABELS_CHANGED, hashes=len(todo))
     return len(todo), [h for h in wanted if h in present]
 
 
 def fill_unlabeled(
     conn: sqlite3.Connection,
-    character: str,
-    partner: str,
     messages: Iterable[dict],
     settings: LabelsSettings,
     label: str,
@@ -921,8 +945,7 @@ def fill_unlabeled(
     single row by hand.
 
     `messages` is the conversation's Log; the Labels it already holds
-    are found through their hashes (ADR 0004). `character` and
-    `partner` are stamped on the new rows and named in the event.
+    are found through their hashes (ADR 0004).
 
     Returns the counts plus every hash written, so the caller can offer
     to undo exactly this write and nothing else.
@@ -950,16 +973,14 @@ def fill_unlabeled(
     conn.executemany(
         """
         INSERT INTO labels (
-            hash, character, partner, ts, speaker, label,
+            hash, ts, speaker, label,
             confidence, reason, source, prior_label, prior_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
         ON CONFLICT(hash) DO NOTHING
         """,
         [
             (
                 h,
-                character,
-                partner,
                 int(msg.get("ts") or 0),
                 msg.get("speaker") or "",
                 label,
@@ -973,12 +994,7 @@ def fill_unlabeled(
     )
     conn.commit()
     if targets:
-        events.publish(
-            events.LABELS_CHANGED,
-            character=character,
-            partner=partner,
-            hashes=len(targets),
-        )
+        events.publish(events.LABELS_CHANGED, hashes=len(targets))
     return {
         "label": label,
         "labeled": len(targets),
@@ -992,9 +1008,6 @@ def fill_unlabeled(
 def delete_labels_by_hash(
     conn: sqlite3.Connection,
     hashes: Iterable[str],
-    *,
-    character: str | None = None,
-    partner: str | None = None,
 ) -> int:
     """Remove specific labels, reverting those messages to
     rule-or-Unlabeled. Undoes one `fill_unlabeled` without touching
@@ -1012,12 +1025,7 @@ def delete_labels_by_hash(
         removed += cur.rowcount
     conn.commit()
     if removed:
-        events.publish(
-            events.LABELS_CHANGED,
-            character=character,
-            partner=partner,
-            deleted=removed,
-        )
+        events.publish(events.LABELS_CHANGED, deleted=removed)
     return removed
 
 

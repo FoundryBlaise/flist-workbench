@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sidecar_client import app_client
 
-import labels as labels_store
 import rag_embed
 import rag_rerank
 import rag_store
@@ -191,47 +190,3 @@ def test_search_scope_expands_to_the_alias_group(
         "MyChar__Asmira__2026-01-02__IC#0",
         "MyChar__Daelan_Envale__2026-01-01__IC#0",
     }
-
-
-# ---- override normalization -------------------------------------------
-
-
-def test_override_normalises_partner_to_primary(
-    client: TestClient, tmp_path: Path
-) -> None:
-    """Manual override under the alias name writes the row under the
-    primary, so subsequent reads via the merged conversation see it
-    without needing a SQL migration."""
-    # Pre-link the rename.
-    client.post(
-        "/aliases",
-        json={
-            "character": "MyChar",
-            "name": "Daelan Envale",
-            "primary_name": "Asmira",
-        },
-    )
-
-    # Override sent under the OLD name → row should land under the
-    # NEW (primary) name in the DB.
-    client.post(
-        "/labels/override",
-        json={
-            "character": "MyChar",
-            "partner": "Daelan Envale",
-            "hash": "ffffffffffffffff",
-            "ts": 1,
-            "speaker": "X",
-            "label": "OOC",
-        },
-    )
-
-    labels_conn = labels_store.connect()
-    try:
-        row = labels_conn.execute(
-            "SELECT partner FROM labels WHERE hash = ?",
-            ("ffffffffffffffff",),
-        ).fetchone()
-    finally:
-        labels_conn.close()
-    assert row["partner"] == "Asmira"

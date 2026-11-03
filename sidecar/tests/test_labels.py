@@ -96,7 +96,7 @@ def test_upsert_then_get_returns_label(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     try:
         labels_store.upsert_label(
-            conn, hash="abc", character="Char", partner="Bob",
+            conn, hash="abc",
             ts=1, speaker="Bob", label="IC", source="mcp",
             reason="long narrative",
         )
@@ -113,11 +113,11 @@ def test_upsert_snapshots_prior_label_on_override(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     try:
         labels_store.upsert_label(
-            conn, hash="h1", character="C", partner="P",
+            conn, hash="h1",
             ts=1, speaker="P", label="IC", source="mcp",
         )
         labels_store.upsert_label(
-            conn, hash="h1", character="C", partner="P",
+            conn, hash="h1",
             ts=1, speaker="P", label="OOC", source="manual",
         )
         row = labels_store.label_row(conn, "h1")
@@ -134,12 +134,12 @@ def test_upsert_rejects_invalid_label(tmp_path: Path) -> None:
     try:
         with pytest.raises(ValueError):
             labels_store.upsert_label(
-                conn, hash="h", character="C", partner="P",
+                conn, hash="h",
                 ts=1, speaker="P", label="MAYBE", source="manual",
             )
         with pytest.raises(ValueError):
             labels_store.upsert_label(
-                conn, hash="h", character="C", partner="P",
+                conn, hash="h",
                 ts=1, speaker="P", label="IC", source="bogus",
             )
     finally:
@@ -150,7 +150,7 @@ def test_delete_label_reverts_to_resolver(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     try:
         labels_store.upsert_label(
-            conn, hash="h", character="C", partner="P",
+            conn, hash="h",
             ts=1, speaker="P", label="IC", source="manual",
         )
         assert labels_store.delete_label(conn, "h") is True
@@ -170,7 +170,7 @@ def test_stats_counts_three_buckets(tmp_path: Path) -> None:
         m_db_ic = _msg(ts=30, speaker="A", text=long_text)
         labels_store.upsert_label(
             conn, hash=labels_store.msg_hash(m_db_ic),
-            character="C", partner="P", ts=30, speaker="A",
+            ts=30, speaker="A",
             label="IC", source="mcp",
         )
         counts = labels_store.stats(conn, [m_long, m_short, m_db_ic], _settings())
@@ -259,7 +259,7 @@ def test_existing_databases_accept_an_mcp_verdict(tmp_path: Path) -> None:
     conn = labels_store.connect(tmp_path)
     try:
         labels_store.upsert_label(
-            conn, hash="fresh", character="C", partner="P",
+            conn, hash="fresh",
             ts=2, speaker="A", label="OOC", source="mcp",
         )
         # The pre-existing row survived the table rebuild.
@@ -459,12 +459,12 @@ def test_fill_unlabeled_labels_only_the_unlabeled(tmp_path: Path) -> None:
         msgs = [_long(1, 100), _long(2, 200), _msg(ts=300, text="ok")]
         # A verdict already in the DB must survive untouched.
         labels_store.upsert_label(
-            conn, hash=labels_store.msg_hash(msgs[0]), character="C",
-            partner="P", ts=100, speaker="Alice", label="OOC", source="mcp",
+            conn, hash=labels_store.msg_hash(msgs[0]),
+            ts=100, speaker="Alice", label="OOC", source="mcp",
         )
 
         res = labels_store.fill_unlabeled(
-            conn, "C", "P", msgs, _settings(), "IC"
+            conn, msgs, _settings(), "IC"
         )
 
         assert res["labeled"] == 1, "only message 2 was Unlabeled"
@@ -486,7 +486,7 @@ def test_fill_unlabeled_is_reported_hash_by_hash_so_it_can_be_undone(
     try:
         msgs = [_long(i, 100 + i) for i in range(5)]
         res = labels_store.fill_unlabeled(
-            conn, "C", "P", msgs, _settings(), "IC"
+            conn, msgs, _settings(), "IC"
         )
         assert len(res["hashes"]) == 5
 
@@ -506,11 +506,11 @@ def test_undo_leaves_other_verdicts_alone(tmp_path: Path) -> None:
         msgs = [_long(i, 100 + i) for i in range(3)]
         kept = labels_store.msg_hash(msgs[0])
         labels_store.upsert_label(
-            conn, hash=kept, character="C", partner="P", ts=100,
+            conn, hash=kept, ts=100,
             speaker="Alice", label="OOC", source="mcp",
         )
         res = labels_store.fill_unlabeled(
-            conn, "C", "P", msgs, _settings(), "IC"
+            conn, msgs, _settings(), "IC"
         )
 
         labels_store.delete_labels_by_hash(conn, res["hashes"])
@@ -528,7 +528,7 @@ def test_fill_unlabeled_rejects_a_label_that_is_not_a_verdict(
     try:
         with pytest.raises(ValueError):
             labels_store.fill_unlabeled(
-                conn, "C", "P", [_long(1, 100)], _settings(), "Unlabeled"
+                conn, [_long(1, 100)], _settings(), "Unlabeled"
             )
     finally:
         conn.close()
