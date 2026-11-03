@@ -101,9 +101,10 @@ class TwoCharacters:
         return self.message(character, partner, text)["hash"]
 
     def label_by_hand(
-        self, character: str, partner: str, text: str, label: str
+        self, character: str, partner: str, text: str, label: str | None
     ) -> None:
-        """A manual Label, as the log viewer's right-click sets it."""
+        """A manual Label, as the log viewer's right-click sets it (None
+        clears it)."""
         msg = self.message(character, partner, text)
         res = self.client.post(
             "/labels/override",

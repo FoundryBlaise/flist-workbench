@@ -300,6 +300,8 @@ async def ingest_logs(
     longer labelled for the Index are deleted (`chunks_removed`).
     `rebuild=true` first deletes the scope's chunks (all of them when
     unscoped; a character's channel chunks only with include_channels).
+    A day that could not be written to the Index is listed in
+    `failed_days` (`last_error` says why); ingest again to retry it.
 
     Embedding runs in-process. `wait=false` returns a job id at once,
     for get_job and cancel_job. One ingest at a time: another is

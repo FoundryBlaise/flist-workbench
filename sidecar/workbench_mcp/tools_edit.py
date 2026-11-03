@@ -1167,7 +1167,9 @@ def import_images(
 
     Each item names an absolute `source_path`. Only folders the user has
     cleared under Settings → Security can be read; there is no tool to
-    change that list. The source file is copied, never moved or changed.
+    change that list. Nothing under the app's own data folder is read,
+    even inside a cleared folder (`source_in_app_data`). The source file
+    is copied, never moved or changed.
 
     - `replace_image_id`: the new picture takes exactly that image's
       place in the gallery, keeping its description unless `description`

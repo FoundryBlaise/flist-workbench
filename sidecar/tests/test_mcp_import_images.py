@@ -11,6 +11,7 @@ the folders the user cleared.
 from __future__ import annotations
 
 import io
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -53,12 +54,18 @@ def gradient_png(size: tuple[int, int], *, alpha: int | None = None) -> bytes:
     return out.getvalue()
 
 
+def folder_outside_data(tmp_path_factory: pytest.TempPathFactory, name: str = "Outputs") -> Path:
+    """A fresh folder beside, not inside, the test's data folder
+    (`tmp_path`): nothing under the data folder can be imported."""
+    return tmp_path_factory.mktemp("elsewhere") / name
+
+
 @pytest.fixture
-def outputs(tmp_path: Path, workbench) -> Path:  # noqa: F811
-    """A folder the user has cleared for import."""
+def outputs(tmp_path_factory: pytest.TempPathFactory, workbench) -> Path:  # noqa: F811
+    """A folder the user has cleared for import, outside the data folder."""
     from services import settings as settings_service
 
-    folder = tmp_path / "Outputs"
+    folder = folder_outside_data(tmp_path_factory)
     folder.mkdir()
     settings_service.update({"image_import_roots": [str(folder)]})
     return folder
@@ -147,9 +154,9 @@ async def test_the_format_is_judged_by_content_not_name(workbench, outputs) -> N
 
 
 async def test_a_path_outside_the_cleared_folders_is_refused(
-    workbench, outputs, tmp_path: Path  # noqa: F811
+    workbench, outputs  # noqa: F811
 ) -> None:
-    elsewhere = tmp_path / "Private"
+    elsewhere = outputs.parent / "Private"
     elsewhere.mkdir()
     secret = elsewhere / "secret.png"
     secret.write_bytes(png_bytes((8, 8)))
@@ -202,12 +209,110 @@ async def test_a_model_can_read_the_folders_but_not_change_them(
     assert not any("import" in p or "folder" in p for p in params), params
 
 
-def test_the_window_validates_the_folders_it_saves(workbench, tmp_path: Path) -> None:  # noqa: F811
+# --------------------------------------------------------------------
+# Never from the app's own data folder
+# --------------------------------------------------------------------
+
+
+@pytest.fixture
+def data_folder_parent_cleared(workbench) -> Path:  # noqa: F811
+    """The user cleared a folder that holds the app's data folder (the
+    `workbench` fixture points the data folder at `tmp_path`), with a
+    cached Foreign image inside it. Returns that image."""
+    import paths
+    from services import settings as settings_service
+
+    data = paths.user_data_dir()
+    settings_service.update({"image_import_roots": [str(data.parent)]})
+    cached = data / "foreign" / "some-one" / "images" / "1001.png"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(png_bytes((8, 8)))
+    return cached
+
+
+async def test_a_file_under_the_data_folder_is_refused_even_when_a_parent_is_cleared(
+    workbench, data_folder_parent_cleared: Path  # noqa: F811
+) -> None:
+    async with mcp_client("character") as session:
+        result, _ = await import_one(session, str(data_folder_parent_cleared))
+
+    text = tool_error_text(result)
+    assert "source_in_app_data" in text
+    assert "data folder" in text
+    assert pool_files(workbench) == set()
+
+
+def link_folder(link: Path, target: Path) -> None:
+    """A junction on Windows (needs no admin rights), a symlink elsewhere."""
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+async def test_a_link_or_another_spelling_does_not_lead_into_the_data_folder(
+    workbench, outputs, data_folder_parent_cleared: Path  # noqa: F811
+) -> None:
+    """A junction in a cleared folder that points into the data folder,
+    and the data folder's path in other letter case, are the data folder."""
+    from services import settings as settings_service
+
+    settings_service.update(
+        {"image_import_roots": [str(outputs), str(data_folder_parent_cleared.parents[4])]}
+    )
+    link_folder(outputs / "linked", data_folder_parent_cleared.parent)
+    via_link = outputs / "linked" / data_folder_parent_cleared.name
+    other_case = str(data_folder_parent_cleared).swapcase()
+    if sys.platform != "win32":
+        other_case = str(data_folder_parent_cleared)
+
+    async with mcp_client("character") as session:
+        linked, _ = await import_one(session, str(via_link))
+        cased, _ = await import_one(session, other_case)
+
+    assert "source_in_app_data" in tool_error_text(linked)
+    assert "source_in_app_data" in tool_error_text(cased)
+    assert pool_files(workbench) == set()
+
+
+def test_the_window_will_not_clear_a_folder_inside_the_data_folder(
+    workbench, tmp_path: Path  # noqa: F811
+) -> None:
+    """Clearing it would import nothing, so the window says why at once.
+    A folder that holds the data folder can still be cleared."""
+    from sidecar_client import app_client
+
+    import paths
+    import server
+
+    data = paths.user_data_dir()
+    inside = data / "foreign"
+    inside.mkdir()
+    with app_client(server.app) as client:
+        refused = [
+            client.put("/settings", json={"image_import_roots": [str(folder)]})
+            for folder in (data, inside)
+        ]
+        parent = client.put("/settings", json={"image_import_roots": [str(data.parent)]})
+
+    for response in refused:
+        assert response.status_code == 400
+        assert "data folder" in response.text
+    assert parent.status_code == 200
+    assert parent.json()["image_import_roots"] == [str(data.parent)]
+
+
+def test_the_window_validates_the_folders_it_saves(
+    workbench, tmp_path_factory: pytest.TempPathFactory  # noqa: F811
+) -> None:
     from sidecar_client import app_client
 
     import server
 
-    real = tmp_path / "Outputs"
+    real = folder_outside_data(tmp_path_factory)
+    tmp_path = real.parent
     real.mkdir()
     with app_client(server.app) as client:
         bad = client.put(
