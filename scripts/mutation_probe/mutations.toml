@@ -289,7 +289,7 @@ id = "A12"
 suite = "sidecar"
 file = "sidecar/archive_registry.py"
 breaks = "A Foreign profile slug starting with a dot (such as `..`) is accepted, so its cache can escape its folder."
-tests = ["@archive", "@mcp"]
+tests = ["@archive", "@mcp", "sidecar/tests/test_foreign.py"]
 audit = "survived"
 spec = 5
 # audit: M12 slug safety: leading-dot check dropped ('..' escapes cache)

@@ -240,6 +240,7 @@ SERVER_ERROR_MESSAGE = (
 
 def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
     """The cached copy, served because F-list could not answer for it."""
+    foreign_cache.mark_viewed(clean)
     return {
         "name": cached.get("name") or clean,
         "profile": cached,
@@ -292,6 +293,7 @@ async def get_profile(
 
     cached = foreign_cache.read_profile(clean)
     if cached is not None and not refresh and foreign_cache.is_fresh(cached, ttl_sec):
+        foreign_cache.mark_viewed(clean)
         return {
             "name": cached.get("name") or clean,
             "profile": cached,
@@ -348,7 +350,9 @@ async def get_profile(
         if isinstance(canonical, str) and canonical.strip()
         else clean
     )
-    stored = foreign_cache.write_profile(key, payload)
+    stored = foreign_cache.store_fetched(
+        key, payload, gallery_index(payload), cache_cap_bytes()
+    )
     return {
         "name": key,
         "profile": stored,
@@ -356,6 +360,31 @@ async def get_profile(
         "age_sec": 0.0,
         "fetched_at": stored.get("fetched_at"),
     }
+
+
+def cache_cap_bytes() -> int:
+    """The Foreign profile cache's cap, from Settings."""
+    from services import settings as settings_service
+
+    return settings_service.foreign_cache_cap_bytes()
+
+
+def file_landed(name: str) -> None:
+    """A gallery image or avatar was just cached for `name`: count it,
+    and evict other profiles if the cache no longer fits its cap."""
+    foreign_cache.file_landed(name, cache_cap_bytes())
+
+
+def cache_usage() -> dict[str, int]:
+    """`{bytes, profiles, cap_bytes}`: what the cache holds, and what it
+    may hold."""
+    return {**foreign_cache.usage(), "cap_bytes": cache_cap_bytes()}
+
+
+def clear_cache() -> dict[str, int]:
+    """Delete every cached Foreign profile. `{removed, bytes, profiles,
+    cap_bytes}`: how many went, and what the cache holds after."""
+    return {**foreign_cache.clear(), "cap_bytes": cache_cap_bytes()}
 
 
 def gallery_index(profile: dict[str, Any]) -> dict[str, str]:
