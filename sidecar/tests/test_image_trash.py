@@ -9,7 +9,6 @@ never delete for good.
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -304,12 +303,14 @@ async def test_a_model_trashes_gallery_and_pool_images_and_puts_every_one_back(
 
 
 def test_the_trash_remembers_where_an_import_came_from(
-    client, workbench, tmp_path: Path  # noqa: F811
+    client, workbench, tmp_path_factory: pytest.TempPathFactory  # noqa: F811
 ) -> None:
     from services import image_import
     from services import settings as settings_service
 
-    folder = tmp_path / "Outputs"
+    # Beside the data folder (`tmp_path`), not in it: nothing under the
+    # data folder can be imported.
+    folder = tmp_path_factory.mktemp("elsewhere") / "Outputs"
     folder.mkdir()
     settings_service.update({"image_import_roots": [str(folder)]})
     src = folder / "Profil_final_03.png"

@@ -212,34 +212,41 @@ export function UnknownField({
   )
 }
 
-function InfotagFieldShell({
+/** The label-over-control frame every infotag field sits in. The
+ *  editor's fields pass their descriptor; the Foreign view passes a
+ *  label and a read-only input, so a field reads the same on both. */
+export function InfotagFieldShell({
   descriptor,
-  overlaid,
-  liveValue,
+  label = descriptor?.label ?? '',
+  testId = descriptor ? `infotag-field-${descriptor.id}` : undefined,
+  overlaid = false,
+  liveValue = null,
   children,
   onReset
 }: {
-  descriptor: InfotagDescriptor
-  overlaid: boolean
-  liveValue: string | null
+  descriptor?: InfotagDescriptor
+  label?: string
+  testId?: string
+  overlaid?: boolean
+  liveValue?: string | null
   children: React.ReactNode
-  onReset: () => void
+  onReset?: () => void
 }) {
   return (
     <div
       className={`infotag-field${overlaid ? ' infotag-field-overlaid' : ''}`}
-      data-testid={`infotag-field-${descriptor.id}`}
+      data-testid={testId}
     >
       <label className="infotag-field-label">
-        <span className="infotag-field-name">{descriptor.label}</span>
+        <span className="infotag-field-name">{label}</span>
         {overlaid && (
           <button
             type="button"
             className="infotag-field-reset"
             onClick={onReset}
             title="Reset to F-list value"
-            aria-label={`Reset ${descriptor.label} to F-list value`}
-            data-testid={`infotag-${descriptor.id}-reset`}
+            aria-label={`Reset ${label} to F-list value`}
+            data-testid={descriptor ? `infotag-${descriptor.id}-reset` : undefined}
           >
             ↺ reset
           </button>

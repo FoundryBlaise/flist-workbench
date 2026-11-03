@@ -36,7 +36,12 @@ CHAR = "Lady Amber Blaise"
 
 
 @pytest.fixture
-def scene(workbench, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
+def scene(
+    workbench,  # noqa: F811
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """One character with a Live, F-Chat Logs, an image in the pool, a
     folder cleared for import, and stubbed embedding: enough for any
     tool to do its work for real."""
@@ -49,7 +54,10 @@ def scene(workbench, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     monkeypatch.setattr(jobs, "_registry", jobs.JobRegistry())
     _stub_index_services(monkeypatch)
     archive_images.write_character_image("42", "7", "png", _png())
-    folder = tmp_path / "Outputs"
+    (tmp_path / "Outputs").mkdir()
+    # Beside the data folder (`tmp_path`), not in it: nothing under the
+    # data folder can be imported.
+    folder = tmp_path_factory.mktemp("elsewhere") / "Cleared"
     folder.mkdir()
     (folder / "new.png").write_bytes(_png(2))
     settings_service.update({"image_import_roots": [str(folder)]})
@@ -291,8 +299,10 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
 
 
 @writes("import_images")
-async def _(session, data_dir):  # noqa: ANN001, ANN202
-    items = [{"source_path": str(data_dir / "Outputs" / "new.png")}]
+async def _(session, _dir):  # noqa: ANN001, ANN202
+    from services import image_import
+
+    items = [{"source_path": str(image_import.import_roots()[0] / "new.png")}]
     return await _call(session, "import_images", character=CHAR, items=items)
 
 

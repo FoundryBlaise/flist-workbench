@@ -782,6 +782,12 @@ function _isNewestOpen(characterId: string, token: number): boolean {
   return _openTokens.get(characterId) === token
 }
 
+// Request token for foreignLoad: the number of the newest load. Picking
+// profiles quickly leaves several reads in flight, landing in any
+// order; only the newest may apply its answer, so the view always ends
+// on the profile the user picked last. foreignUnload bumps it as well.
+let _foreignLoadToken = 0
+
 /** The editor patch that shows a character's Workbench as the slot in
  *  memory holds it, unsaved keystrokes included. */
 function _workbenchInEditor(s: State, characterId: string): Partial<State> {
@@ -4209,6 +4215,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   foreignUnload() {
+    // Emptying the slot is a newer pick too: a read still in flight
+    // must not fill it again.
+    _foreignLoadToken++
     set({
       foreignName: null,
       foreignProfile: null,
@@ -4224,9 +4233,11 @@ export const useStore = create<State>((set, get) => ({
   async foreignLoad(name, refresh = false) {
     const clean = name.trim()
     if (!clean) return
+    const token = ++_foreignLoadToken
     set({ foreignStatus: 'loading', foreignError: null, foreignActive: true })
     try {
       const res = await api.foreignProfile(clean, refresh)
+      if (token !== _foreignLoadToken) return
       set({
         foreignName: res.name,
         foreignProfile: res.profile,
@@ -4238,6 +4249,7 @@ export const useStore = create<State>((set, get) => ({
         foreignError: null
       })
     } catch (err) {
+      if (token !== _foreignLoadToken) return
       // The sidecar answers these with a code so the window can say
       // something useful instead of echoing an HTTP status at someone
       // who mistyped a name.

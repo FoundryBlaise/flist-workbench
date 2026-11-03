@@ -174,7 +174,9 @@ by accident, with either.
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
 swap each one into the place of an existing gallery image
-(`replace_image_id`) in the same call. Files over F-list's limits come
+(`replace_image_id`) in the same call. Nothing under the app's own
+data folder is imported, even when a cleared folder holds it, so cached
+Foreign profile images never reach the pool. Files over F-list's limits come
 with a warning; `convert_to_jpeg` re-encodes them where that helps.
 `trash_images` deletes into the character's Trash, taking an image off
 the gallery first; only you empty the Trash, in the window.
@@ -259,6 +261,11 @@ get_unlabeled_messages(character, partner)   a batch, with context
 set_message_labels(character, partner, [...]) the Labels
                                               repeat while remaining > 0
 ```
+
+A Label the user set by hand in the app is never replaced by a model.
+`set_message_labels` leaves it as it is, writes the rest of the call
+and lists the hashes it left alone under `skipped`, each with the
+reason. Only the user changes or clears such a Label, in the window.
 
 Some conversations do not need judging at all. A user who knows a
 chat is in-character from the first line to the last can say so once —
@@ -373,6 +380,7 @@ window gets for the same situation:
 | `index_busy` | an ingest (or a wipe) is changing the Index; details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `character_busy` | a Pull of that character, or Back up all, is running (one at a time); details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `index_unreadable` | the Index is there but could not be read; not the same as empty |
+| `keyword_backfill_failed` | a hybrid search found the keyword half of the Index empty and could not fill it from the vector half; search with `hybrid=false` meanwhile |
 | `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use); `get_rag_status` with `check_embedding=true` checks it |
 | `embedding_model_changed` | an ingest found an Index built with another embedding model; `wipe_search_index`, then ingest again |

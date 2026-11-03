@@ -230,6 +230,25 @@ it('lays the profile fields out as a vertical list', async () => {
   expect(screen.getByTestId('foreign-row').getAttribute('data-split')).toBe('split')
 })
 
+it('folds a field group away and back', async () => {
+  seedLoaded()
+  render(<ForeignWorkspace />)
+  fireEvent.click(screen.getByRole('tab', { name: 'Profile fields' }))
+
+  const species = await screen.findByTestId('foreign-field-Species')
+  const toggle = species
+    .closest('.profile-fields-section')!
+    .querySelector<HTMLButtonElement>('.profile-fields-section-toggle')!
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryByTestId('foreign-field-Species')).toBeNull()
+
+  fireEvent.click(toggle)
+  expect(screen.getByTestId('foreign-field-Species')).toBeDefined()
+})
+
 it('renders the Info preview beside the profile fields', async () => {
   // The editor's own preview component, fed the foreign payload —
   // one implementation for both sides instead of two that drift.
