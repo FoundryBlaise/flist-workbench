@@ -6,7 +6,9 @@ written to the Trash as one entry, which the window's Trash view lists
 under the character and Restore puts back.
 
 An entry keeps each Label by message hash and verdict, with the rest of
-its row for the current labels table. A Label belongs to the message,
+its row for the current labels table. Entries written before the labels
+table dropped its character and partner columns still carry both on
+every row; putting them back ignores them. A Label belongs to the message,
 not to a character (ADR 0004), so the entries live in one place,
 `<userdata>/trash/labels/`, and not in a character folder: a character
 that has Logs but no Workbench still gets its cleared Labels kept.
@@ -49,7 +51,9 @@ def _dir() -> Path:
     return p
 
 
-def _write_entry(character: str, partner: str | None, rows: list[dict]) -> dict[str, Any]:
+def _write_entry(
+    character: str | None, partner: str | None, rows: list[dict]
+) -> dict[str, Any]:
     now = int(time.time())
     digest = hashlib.sha256(
         json.dumps([character, partner, sorted(r["hash"] for r in rows)]).encode("utf-8")
@@ -100,7 +104,7 @@ def _owned(trash_id: str, character: str | None) -> dict[str, Any] | None:
 
 
 def _clear_rows(
-    conn: sqlite3.Connection, character: str, partner: str | None, rows: list[dict]
+    conn: sqlite3.Connection, character: str | None, partner: str | None, rows: list[dict]
 ) -> dict[str, Any]:
     """Trash `rows`, then delete exactly those Labels. The copy is on
     disk before anything is deleted."""
@@ -108,9 +112,7 @@ def _clear_rows(
         return {"deleted": 0, "trash_id": None}
     with _lock:
         entry = _write_entry(character, partner, rows)
-    deleted = labels_store.delete_labels_by_hash(
-        conn, [r["hash"] for r in rows], character=character, partner=partner
-    )
+    deleted = labels_store.delete_labels_by_hash(conn, [r["hash"] for r in rows])
     return {"deleted": deleted, "trash_id": entry["id"]}
 
 
@@ -154,13 +156,19 @@ def _log_messages(character: str, partner: str | None) -> list[dict]:
 
 
 def clear_all() -> dict[str, Any]:
-    """Clear every Label there is: one Trash entry per character, so
-    each character's Trash view shows and restores its own."""
+    """Clear every Label there is: one Trash entry per character whose
+    Logs hold the messages, so each character's Trash view shows and
+    restores its own. A message in several characters' Logs goes into
+    the first one's entry, in the order the Logs list the characters.
+    Labels of messages in no Log go into one entry of their own, with
+    no character, which Settings → Labels lists."""
     conn = labels_store.connect()
     try:
-        by_character: dict[str, list[dict]] = {}
-        for row in labels_store.label_rows(conn):
-            by_character.setdefault(row["character"], []).append(row)
+        rows = labels_store.label_rows(conn)
+        owners = _log_characters_by_hash() if rows else {}
+        by_character: dict[str | None, list[dict]] = {}
+        for row in rows:
+            by_character.setdefault(owners.get(row["hash"]), []).append(row)
         deleted = 0
         trash_ids: list[str] = []
         for character, rows in by_character.items():
@@ -170,6 +178,21 @@ def clear_all() -> dict[str, Any]:
         return {"deleted": deleted, "trash_ids": trash_ids}
     finally:
         conn.close()
+
+
+def _log_characters_by_hash() -> dict[str, str]:
+    """Which character's Logs hold each message, by message hash: the
+    first character, in the order the Logs list them, for a message in
+    several."""
+    try:
+        characters = log_store.list_characters()
+    except log_store.LogDirError:
+        return {}
+    owners: dict[str, str] = {}
+    for entry in characters:
+        for msg in _log_messages(entry.name, None):
+            owners.setdefault(labels_store.msg_hash(msg), entry.name)
+    return owners
 
 
 def list_labels(character: str | None) -> list[dict[str, Any]]:

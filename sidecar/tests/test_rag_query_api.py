@@ -370,8 +370,6 @@ def test_no_collision_with_labels_db(client: TestClient, tmp_path: Path) -> None
         labels_store.upsert_label(
             conn,
             hash="aaaaaaaaaaaaaaaa",
-            character="C",
-            partner="P",
             ts=1,
             speaker="X",
             label="IC",

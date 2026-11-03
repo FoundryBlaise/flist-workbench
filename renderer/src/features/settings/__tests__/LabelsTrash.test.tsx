@@ -142,3 +142,16 @@ it('Labels a model cleared show up without reopening Settings', async () => {
 
   expect(await within(section).findAllByTestId('flist-trash-labels-item')).toHaveLength(1)
 })
+
+it('an entry of Labels whose messages are in no Log says so', async () => {
+  // Reset all labels keeps those in an entry of their own, with no character.
+  vi.spyOn(api, 'labelsTrashList').mockResolvedValue({
+    labels: [{ ...ENTRY, character: null, partner: null, count: 2 }]
+  })
+  openLabels()
+
+  const [row] = await screen.findAllByTestId('flist-trash-labels-item')
+  expect(row.textContent).toContain('2 Labels')
+  expect(row.textContent).toContain('messages in none of the Logs')
+  expect(row.textContent).not.toContain('null')
+})

@@ -138,8 +138,9 @@ export type FlistTrashedBackup = {
 export type FlistTrashedLabels = {
   /** What put-back and purge take. */
   id: string
-  /** The Log character they were cleared for. */
-  character: string
+  /** The Log character they were cleared for; null for Labels whose
+   *  messages were in none of the Logs when every Label was reset. */
+  character: string | null
   /** The conversation cleared; null when every conversation was. */
   partner: string | null
   /** How many Labels the entry holds. */

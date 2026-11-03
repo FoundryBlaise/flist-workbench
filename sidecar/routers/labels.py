@@ -93,9 +93,10 @@ def labels_clear_all() -> dict:
 
     The Settings → Labels "Reset all labels…" button calls this. After
     it returns, every message in every conversation falls back to
-    rule-on-read — manual overrides are gone too. Each character's
-    cleared Labels go to its Trash first, as one entry per character;
-    the renderer still confirms before invoking this.
+    rule-on-read — manual overrides are gone too. The cleared Labels go
+    to the Trash first, one entry per character whose Logs hold the
+    messages and one, with no character, for messages in none of the
+    Logs; the renderer still confirms before invoking this.
     """
     cleared = label_service.clear_all()
     return {"labels_deleted": cleared["deleted"], "trash_ids": cleared["trash_ids"]}
