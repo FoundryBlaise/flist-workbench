@@ -267,37 +267,6 @@ def edit_description(
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Append to the description")
-def append_description(
-    character: str,
-    text: str,
-) -> dict[str, Any]:
-    """Add text to the end of the description, on a new line."""
-    from services import payload_ops
-
-    target = _writable(character)
-    addition = payload_ops.normalise_newlines(str(text))
-
-    def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        current = payload_ops.get_description(payload)
-        joined = f"{current}\n{addition}" if current else addition
-        _guard_bbcode(joined)
-        payload_ops.set_description(payload, joined)
-        return payload_ops.EditResult(
-            etag="",
-            changed=[payload_ops.DESCRIPTION_PATH],
-            detail={"length": len(joined)},
-        )
-
-    result = _apply(target, mutate)
-    audit("append_description", character=target.name)
-    return {
-        "character": target.name,
-        "length": result.detail.get("length"),
-        "note": NO_PUSH_NOTE,
-    }
-
-
 @tool(tags=TAG_CHARACTER, title="Set the custom title")
 def set_custom_title(
     character: str,
@@ -459,55 +428,12 @@ def set_profile_settings(
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Set a kink choice")
-async def set_kink(
-    character: str,
-    kink: str,
-    choice: str,
-) -> dict[str, Any]:
-    """Set one standard kink to fave, yes, maybe, no — or `undecided`
-    to remove the entry, which is how F-list represents no opinion.
-
-    `kink` is the name as F-list lists it, or its id.
-    """
-    from services import payload_ops, profile_fields
-
-    target = _writable(character)
-    catalogue = await _catalogue()
-    kink_id = catalogue.kink_id_for(kink)
-    if kink_id is None:
-        raise ToolError(
-            "kink_not_found",
-            f"F-list has no standard kink called {kink!r}. "
-            "list_kinks(include_unset=true) shows the catalogue; for "
-            "something F-list doesn't have, use add_custom_kink.",
-        )
-    try:
-        value = profile_fields.validate_kink_choice(choice)
-    except profile_fields.FieldValidationError as exc:
-        raise ToolError(
-            "validation_failed", exc.reason, allowed=exc.allowed
-        ) from exc
-
-    def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        path = payload_ops.set_kink(payload, kink_id, value)
-        return payload_ops.EditResult(etag="", changed=[path])
-
-    _apply(target, mutate)
-    audit("set_kink", character=target.name, kink=kink)
-    return {
-        "character": target.name,
-        "kink": catalogue.kinks.get(kink_id, kink_id),
-        "choice": value,
-    }
-
-
-@tool(tags=TAG_CHARACTER, title="Set several kinks")
+@tool(tags=TAG_CHARACTER, title="Set kinks")
 async def set_kinks(
     character: str,
     items: list[dict[str, str]],
 ) -> dict[str, Any]:
-    """Set many kinks in one call. Each item is
+    """Set one or many kinks. Each item is
     `{"kink": name or id, "choice": fave|yes|maybe|no|undecided}`.
 
     Everything is validated before anything is written, so one bad
@@ -529,12 +455,20 @@ async def set_kinks(
         name = str(raw.get("kink") or "")
         kink_id = catalogue.kink_id_for(name)
         if kink_id is None:
-            problems.append({"kink": name, "reason": "no such kink on F-list"})
+            problems.append(
+                {
+                    "kink": name,
+                    "reason": "no such kink on F-list; list_kinks(include_unset=true) "
+                    "shows the catalogue, add_custom_kink adds one of your own",
+                }
+            )
             continue
         try:
             value = profile_fields.validate_kink_choice(raw.get("choice"))
         except profile_fields.FieldValidationError as exc:
-            problems.append({"kink": name, "reason": exc.reason})
+            problems.append(
+                {"kink": name, "reason": exc.reason, "allowed": exc.allowed}
+            )
             continue
         prepared.append((kink_id, value, catalogue.kinks.get(kink_id, kink_id)))
 
@@ -815,13 +749,9 @@ def reorder_images(
 def remove_image(
     character: str,
     image_id: str,
-    delete_file: bool = False,
 ) -> dict[str, Any]:
-    """Take an image off the profile.
-
-    The file stays in the pool and can be put back with add_image.
-    `delete_file=true` moves it to the character's Trash instead, where
-    `restore_image` can bring it back; only the user can empty the Trash.
+    """Take an image off the profile. The file stays in the pool, and
+    add_image can put it back. To delete the image, use trash_images.
     """
     from services import payload_ops
 
@@ -839,41 +769,25 @@ def remove_image(
         )
 
     _apply(target, mutate)
-    file_trashed = False
-    if delete_file:
-        from services import image_trash
-
-        file_trashed = bool(
-            image_trash.trash_images(target.id, [str(image_id)])["trashed"]
-        )
-    audit(
-        "remove_image",
-        character=target.name,
-        image_id=image_id,
-        file_trashed=file_trashed,
-    )
+    audit("remove_image", character=target.name, image_id=image_id)
     return {
         "character": target.name,
         "image_id": image_id,
-        "file_trashed": file_trashed,
-        "note": (
-            "The file is in the Trash; restore_image puts it back in the pool."
-            if file_trashed
-            else "The file is still in the pool; add_image can put it back."
-        ),
+        "note": "The file is still in the pool; add_image can put it back.",
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Move pool images to the Trash")
+@tool(tags=TAG_CHARACTER, title="Move images to the Trash")
 def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
-    """Move images that are in the pool — on disk, not on the profile —
-    to the character's Trash. `restore_image` brings them back; only the
-    user can empty the Trash, in the window.
+    """Delete images: move their files to the character's Trash. An
+    image in the Workbench's gallery is taken off it first
+    (`off_gallery`); one only in the pool just leaves the pool.
+    `restore_image` brings each back into the pool, not onto the
+    profile; only the user can empty the Trash, in the window.
 
-    An image still in the Workbench's gallery is refused (take it off
-    with `remove_image` first), so no gallery is left pointing at a file
-    that is gone. An image on the live profile can be trashed, but the
-    next pull fetches it again; the result says which.
+    To take an image off the profile and keep it, use remove_image. An
+    image on the live profile can be trashed, but the next pull fetches
+    it again; the result says which.
     """
     from services import image_import, image_trash
 
@@ -882,21 +796,19 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     if not ids:
         raise ToolError("validation_failed", "Give at least one image id.")
     refs = image_import.references(target.id)
-    in_gallery = [i for i in ids if refs.get(i, {}).get("workbench")]
-    if in_gallery:
-        raise ToolError(
-            "image_on_profile",
-            "Still in the Workbench's gallery, so not trashed: "
-            + ", ".join(in_gallery)
-            + ". Take them off with remove_image first. Nothing was moved.",
-        )
-    result = image_trash.trash_images(target.id, ids)
+    result = image_trash.delete_images(target.id, ids)
     moved = [t["image_id"] for t in result["trashed"]]
     on_live = [i for i in moved if refs.get(i, {}).get("live")]
-    audit("trash_images", character=target.name, image_ids=moved)
+    audit(
+        "trash_images",
+        character=target.name,
+        image_ids=moved,
+        off_gallery=result["off_gallery"],
+    )
     out: dict[str, Any] = {
         "character": target.name,
         "trashed": moved,
+        "off_gallery": result["off_gallery"],
         "not_found": result["not_found"],
     }
     if on_live:
@@ -911,10 +823,10 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
 @tool(tags=TAG_CHARACTER, title="List the Trash", read_only=True)
 def list_trash(character: str) -> dict[str, Any]:
     """What the character's Trash holds, newest first, with when and by
-    whom (`ui` or `mcp`): `items` are images deleted from the pool,
-    which `restore_image` puts back by `trash_id` (the image id, unless
-    the Trash holds several files under one id because a Pull replaced
-    it); `backups` are deleted Backups and `labels` are cleared Labels
+    whom (`ui` or `mcp`): `items` are deleted images, which
+    `restore_image` puts back into the pool by `trash_id` (the image id,
+    unless the Trash holds several files under one id because a Pull
+    replaced it); `backups` are deleted Backups and `labels` are cleared Labels
     (one entry per clear, with its conversation, or `partner` null for
     every conversation, and how many Labels it holds), both of which the
     user restores in the window. Emptying the Trash is the user's job,
@@ -1238,37 +1150,6 @@ def import_images(
     )
     out["note"] = NO_PUSH_NOTE
     return out
-
-
-@tool(tags=TAG_CHARACTER, title="Import an image into the pool")
-def import_image(
-    character: str,
-    source_path: str,
-    add_to_gallery: bool = False,
-    replace_image_id: str | None = None,
-    description: str | None = None,
-    convert_to_jpeg: bool = False,
-) -> dict[str, Any]:
-    """One-file form of `import_images`, which has the details. Prefer
-    `import_images` for more than one file: it is one call, and a
-    gallery change from it is one write."""
-    out = _import_batch(
-        character,
-        [
-            ImportItem(
-                source_path=source_path,
-                replace_image_id=replace_image_id,
-                description=description,
-            )
-        ],
-        add_to_gallery=add_to_gallery,
-        convert_to_jpeg=convert_to_jpeg,
-    )
-    return {
-        "character": out["character"],
-        **out["results"][0],
-        "note": NO_PUSH_NOTE,
-    }
 
 
 # --------------------------------------------------------------------

@@ -108,10 +108,10 @@ def flist_character_images_repair(character_id: str) -> dict:
 def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> dict:
-    """Move `images/<image_id>.<ext>` into the character's trash, where
-    it can be restored until the trash is emptied. The renderer drops
-    any gallery row pointing at it."""
-    result = image_trash_service.trash_images(character_id, [image_id])
+    """Delete one image: off the Workbench's gallery if it is there,
+    and into the character's Trash, where it can be restored until the
+    Trash is emptied. The same as the batch route below."""
+    result = image_trash_service.delete_images(character_id, [image_id])
     if not result["trashed"]:
         raise ImageNotFound("image not found")
     return {"trashed": True, "image_id": image_id}
@@ -123,8 +123,12 @@ class _ImageIdsBody(BaseModel):
 
 @router.post("/flist/character/{character_id}/images/trash")
 def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
-    """Move several pool files into the trash at once."""
-    return image_trash_service.trash_images(character_id, body.image_ids)
+    """Delete images, whether in the gallery or only in the pool: the
+    window's delete, and the same function MCP's `trash_images` calls.
+    A gallery image is taken off the Workbench's gallery first; the
+    answer's `etag` is the Workbench's new one (None when the gallery
+    was left alone), which the window saves its next edit over."""
+    return image_trash_service.delete_images(character_id, body.image_ids)
 
 
 # Not under /images/: that prefix is taken by the `{filename}` route.

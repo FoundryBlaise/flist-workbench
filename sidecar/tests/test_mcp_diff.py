@@ -145,17 +145,15 @@ async def test_kink_changes_use_names_and_name_the_undecided_state(
         await draft(session)
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="undecided",
+            items=[{"kink": "Rough Housing", "choice": "undecided"}],
         )
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Long Walks",
-            choice="fave",
+            items=[{"kink": "Long Walks", "choice": "fave"}],
         )
         _, body = await call_tool(
             session, "diff_working_set", character="Lady Amber Blaise"

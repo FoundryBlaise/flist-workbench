@@ -59,12 +59,10 @@ TAKES_WORKING_SET: dict[str, dict[str, Any]] = {
 EDITING_TOOLS = (
     "set_description",
     "edit_description",
-    "append_description",
     "set_custom_title",
     "set_profile_field",
     "clear_profile_field",
     "set_profile_settings",
-    "set_kink",
     "set_kinks",
     "add_custom_kink",
     "update_custom_kink",
@@ -76,7 +74,6 @@ EDITING_TOOLS = (
     "remove_image",
     "add_image",
     "import_images",
-    "import_image",
     "put_workbench_payload",
 )
 
