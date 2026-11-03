@@ -41,6 +41,9 @@ def labels_stats_all(char: str) -> dict:
     return {"character": char, "partners": label_service.character_stats(char)}
 
 
+# `character` and `partner` in the override and delete bodies name the
+# conversation the window shows; a Label belongs to the message (ADR
+# 0004), so they decide nothing and are only echoed back.
 class LabelOverride(BaseModel):
     character: str
     partner: str
@@ -153,15 +156,13 @@ def labels_delete_hashes(body: LabelsDeleteHashes) -> dict:
     return {
         "character": body.character,
         "partner": body.partner,
-        "deleted": label_service.delete(body.character, body.partner, body.hashes),
+        "deleted": label_service.delete(body.hashes),
     }
 
 
 @router.post("/labels/override")
 def labels_override(body: LabelOverride) -> dict:
     return label_service.override(
-        body.character,
-        body.partner,
         hash=body.hash,
         ts=body.ts,
         speaker=body.speaker,
@@ -174,10 +175,7 @@ def labels_override_many(body: LabelOverrideMany) -> dict:
     """`/labels/override` for the log view's multi-select: one verdict,
     or a reset, for any set of messages in one conversation."""
     changed = label_service.override_many(
-        body.character,
-        body.partner,
-        [(i.hash, i.ts, i.speaker) for i in body.items],
-        body.label,
+        [(i.hash, i.ts, i.speaker) for i in body.items], body.label
     )
     return {
         "character": body.character,

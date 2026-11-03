@@ -130,7 +130,7 @@ def read_log_messages(
         raise _log_dir_error(exc) from exc
 
     resolved = []
-    for item in label_service.label_messages(character, partner, messages):
+    for item in label_service.label_messages(messages):
         if wanted and (item.label is None or item.label.lower() not in wanted):
             continue
         msg = item.message

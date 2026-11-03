@@ -182,9 +182,7 @@ class LabelledMessage:
     stored: dict | None
 
 
-def label_messages(
-    character: str, partner: str, messages: Iterable[dict]
-) -> list[LabelledMessage]:
+def label_messages(messages: Iterable[dict]) -> list[LabelledMessage]:
     """Resolve each of `messages` from one conversation to IC, OOC or
     Unlabeled, live: a stored Label first, then the rules at the current
     threshold. A system line resolves to no Label."""
@@ -213,8 +211,6 @@ def label_messages(
 
 
 def override(
-    character: str,
-    partner: str,
     *,
     hash: str,
     ts: int,
@@ -259,14 +255,11 @@ def override(
 
 
 def override_many(
-    character: str,
-    partner: str,
-    items: Iterable[tuple[str, int, str]],
-    label: str | None,
+    items: Iterable[tuple[str, int, str]], label: str | None
 ) -> int:
-    """`override` for any set of `(hash, ts, speaker)` in one
-    conversation: one verdict for all, or with `label` None their
-    removal. Returns how many Labels changed."""
+    """`override` for any set of `(hash, ts, speaker)`: one verdict for
+    all, or with `label` None their removal. Returns how many Labels
+    changed."""
     if label is not None:
         label = verdict(label)
     items = list(items)
@@ -370,7 +363,7 @@ def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
         return labels_store.fill_unlabeled(conn, messages, settings, label)
 
 
-def delete(character: str, partner: str, hashes: Iterable[str]) -> int:
+def delete(hashes: Iterable[str]) -> int:
     """Remove the named Labels and nothing else: the undo of one
     `fill_unlabeled`. Returns how many were removed."""
     conn = labels_store.connect()
