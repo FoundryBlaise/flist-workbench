@@ -21,7 +21,7 @@ import json
 import math
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TypeVar
 
 import foreign_cache
 import model_weights
@@ -30,6 +30,8 @@ import settings as settings_store
 from refusals import ValidationFailed
 from services import events
 from services import image_import
+
+_T = TypeVar("_T")
 
 #: Text fields where an empty value clears the setting back to its default.
 _TEXT = {
@@ -220,6 +222,20 @@ def _bool(field: str, key: str, cleared: bool | None) -> Callable[..., _Result]:
     return validate
 
 
+def _read(conn: sqlite3.Connection | None, default: _T, read: Callable[[sqlite3.Connection], _T]) -> _T:
+    """`read` on `conn`, or on settings.db opened for the call; `default`
+    when there is no settings.db, so asking creates nothing."""
+    if conn is not None:
+        return read(conn)
+    if not settings_store.db_exists():
+        return default
+    own = settings_store.connect()
+    try:
+        return read(own)
+    finally:
+        own.close()
+
+
 def log_text_over_mcp(conn: sqlite3.Connection | None = None) -> bool:
     """Whether the user has let MCP clients have the tools that return
     Log text. Off until they turn it on in Settings → MCP.
@@ -227,31 +243,20 @@ def log_text_over_mcp(conn: sqlite3.Connection | None = None) -> bool:
     Asked on every MCP tool listing, so asking creates nothing: without
     a settings.db nothing was ever turned on.
     """
-    if conn is None and not settings_store.db_exists():
-        return False
-    own = conn is None
-    conn = conn or settings_store.connect()
-    try:
-        return settings_store.get(conn, settings_store.KEY_MCP_LOG_TEXT) == "1"
-    finally:
-        if own:
-            conn.close()
+    return _read(
+        conn, False, lambda c: settings_store.get(c, settings_store.KEY_MCP_LOG_TEXT) == "1"
+    )
 
 
 def foreign_cache_cap_mb(conn: sqlite3.Connection | None = None) -> int:
     """The Foreign profile cache's cap in megabytes, as set in Settings
     or the default. Asking creates nothing."""
-    if conn is None and not settings_store.db_exists():
-        return foreign_cache.DEFAULT_CAP_MB
-    own = conn is None
-    conn = conn or settings_store.connect()
-    try:
-        stored = _stored_int(
-            conn, settings_store.KEY_FOREIGN_CACHE_CAP_MB, foreign_cache.DEFAULT_CAP_MB
-        )
-    finally:
-        if own:
-            conn.close()
+    default = foreign_cache.DEFAULT_CAP_MB
+    stored = _read(
+        conn,
+        default,
+        lambda c: _stored_int(c, settings_store.KEY_FOREIGN_CACHE_CAP_MB, default),
+    )
     _, lo, hi = _INT_RANGES["foreign.cache_cap_mb"]
     return _clamp(stored, lo, hi)
 
