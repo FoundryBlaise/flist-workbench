@@ -6,6 +6,9 @@ Here a tool names a path instead, so the first question is whether it
 may read that path at all: only folders the user listed under
 Settings → Security qualify, and only the window can change that list.
 A model that could widen its own reach would make the list pointless.
+Nothing under the app's own data folder is ever read, even when a
+listed folder holds it: cached Foreign profiles live there, and other
+people's pictures must not end up in the user's pool.
 
 Everything else follows the upload path: the format is judged by the
 bytes, identical bytes are stored once, and the id is `local-<sha8>`
@@ -34,6 +37,7 @@ import archive_live
 import archive_registry
 import archive_workbench
 import atomic_write
+import paths
 import settings as settings_store
 from refusals import Refusal
 
@@ -97,7 +101,8 @@ def import_roots(conn: Any = None) -> list[Path]:
 def clean_import_roots(roots: list[str]) -> list[str]:
     """The folder list as it is stored: blanks and repeats dropped.
     Raises ValueError naming the first entry that is not an existing
-    absolute directory."""
+    absolute directory, or that lies inside the app's data folder (it
+    could never be imported from)."""
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in roots:
@@ -109,6 +114,11 @@ def clean_import_roots(roots: list[str]) -> list[str]:
             raise ValueError(f"not an absolute path: {text}")
         if not p.is_dir():
             raise ValueError(f"directory does not exist: {text}")
+        if in_data_folder(p.resolve()):
+            raise ValueError(
+                f"inside the app's own data folder, which images are never "
+                f"imported from: {text}"
+            )
         key = os.path.normcase(str(p.resolve()))
         if key in seen:
             continue
@@ -162,9 +172,40 @@ def check_source(source_path: str, roots: list[Path]) -> Path:
             f"'{raw}' is outside the folders cleared for importing images.",
             allowed=[str(r) for r in roots],
         )
+    if in_data_folder(real):
+        raise ImportRefused(
+            "source_in_app_data",
+            f"'{raw}' is inside the app's own data folder, which images are "
+            "never imported from, whichever folders are cleared: it holds "
+            "cached Foreign profiles and the app's own files.",
+        )
     if not real.is_file():
         raise ImportRefused("source_not_found", f"No file at '{raw}'.")
     return real
+
+
+def in_data_folder(path: Path) -> bool:
+    """Whether `path` (already resolved) is the app's data folder or lies
+    under it. Both sides are resolved, so a symlink or junction into the
+    data folder, or a data folder reached through one, still counts, and
+    case is ignored where the file system ignores it. Comparing each
+    parent with the data folder by identity catches spellings that
+    resolve() leaves different (a mapped drive, a short 8.3 name)."""
+    data = paths.user_data_dir()
+    if _inside(path, data):
+        return True
+    try:
+        data_stat = data.stat()
+    except OSError:
+        return False
+    for folder in (path, *path.parents):
+        try:
+            st = folder.stat()
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) == (data_stat.st_dev, data_stat.st_ino):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------
