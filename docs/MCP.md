@@ -146,7 +146,8 @@ read-only, and there is no tool that copies one of these into the
 user's own characters — if asked to, say the app does not do that.
 Results cache for 24 hours, and fetching spends a quarter-share of
 the hourly F-list budget so a model browsing profiles cannot leave
-the user unable to pull their own.
+the user unable to pull their own. When F-list says a profile is gone
+or not visible, its cached copy is deleted on the spot.
 
 **Looking at the result** — `render_profile_image` returns the profile
 as a picture, rendered by the app's own preview: same BBCode renderer,
@@ -376,6 +377,10 @@ window gets for the same situation:
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use); `get_rag_status` with `check_embedding=true` checks it |
 | `embedding_model_changed` | an ingest found an Index built with another embedding model; `wipe_search_index`, then ingest again |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |
+| `not_found` | F-list will not show that Foreign profile: no such character, or it is deleted, private or blocks the account (F-list's answer does not say which); any cached copy has been deleted |
+| `rate_limited` | MCP's share of the hourly F-list budget is spent; details carry the stale cached copy under `cached` when there is one |
+| `flist_unreachable` | F-list could not be reached (offline, timed out) and nothing is cached; with a cached copy the tool answers with it marked `stale` instead |
+| `flist_server_error` | F-list's server failed (HTTP 5xx) and nothing is cached; says nothing about whether the character exists |
 
 ## Tools by endpoint
 

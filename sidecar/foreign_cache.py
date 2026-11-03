@@ -20,14 +20,17 @@ reachable that way. Copying one of these into a Workbench is still
 is a button that does it.
 
 Nothing here is user data in the durable sense — it is a cache so a
-second look at a profile does not re-download a 40-image gallery. It
-is never cleared automatically: a stale profile still answers "how was
-this written", which is what the viewer is for.
+second look at a profile does not re-download a 40-image gallery. Age
+alone never clears an entry: a stale profile still answers "how was
+this written", which is what the viewer is for. What does clear one is
+F-list saying the profile is gone or not for us (deleted, private,
+blocked): `delete_profile` drops it with its images and avatar.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -138,6 +141,27 @@ def write_profile(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     stamped["fetched_at"] = int(time.time())
     atomic_write.write_json(_profile_path(name), stamped, indent=2, ensure_ascii=False)
     return stamped
+
+
+def delete_profile(name: str) -> bool:
+    """Delete the cached Foreign profile for `name`: its `profile.json`,
+    its gallery images and its avatar, the whole folder. Returns whether
+    there was anything to delete.
+
+    `profile.json` goes first, so a folder that cannot be removed in
+    full (a file another program holds open) is no longer served as a
+    cached copy. Any failure is raised: a profile its owner withdrew
+    must not quietly stay on disk.
+
+    Not the Trash: the recoverability rule protects the user's own data,
+    and this is a copy of somebody else's.
+    """
+    folder = profile_dir(name)
+    if not folder.exists():
+        return False
+    _profile_path(name).unlink(missing_ok=True)
+    shutil.rmtree(folder)
+    return True
 
 
 def age_sec(payload: dict[str, Any] | None) -> float | None:

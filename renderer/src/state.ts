@@ -4245,13 +4245,15 @@ export const useStore = create<State>((set, get) => ({
       const message =
         code === 'not_found'
           ? `F-list has no character called "${clean}".`
-          : code === 'rate_limited'
-            ? 'F-list is rate-limiting us. Give it a minute and try again.'
-            : code === 'not_signed_in'
-              ? 'Your F-list session expired. Sign in again to look up profiles.'
-              : err instanceof Error
-                ? err.message
-                : String(err)
+          : code === 'flist_server_error'
+            ? 'F-list’s server reported an error. That says nothing about whether the character exists; try again in a while.'
+            : code === 'rate_limited'
+              ? 'F-list is rate-limiting us. Give it a minute and try again.'
+              : code === 'not_signed_in'
+                ? 'Your F-list session expired. Sign in again to look up profiles.'
+                : err instanceof Error
+                  ? err.message
+                  : String(err)
       set({ foreignStatus: 'error', foreignError: message })
     }
   },

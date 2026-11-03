@@ -66,6 +66,8 @@ class ForeignError(FlistRefused):
         **FlistRefused.STATUS_BY_CODE,
         "validation_failed": ValidationFailed.status,
         "log_dir_unavailable": LogDirUnavailable.status,
+        "flist_unreachable": 503,
+        "flist_server_error": 502,
     }
 
 
@@ -227,6 +229,39 @@ async def search(query: str, source: str) -> dict[str, Any]:
     }
 
 
+UNREACHABLE_MESSAGE = (
+    "F-list could not be reached. Check the internet connection and try again."
+)
+SERVER_ERROR_MESSAGE = (
+    "F-list's server reported an error. This says nothing about the "
+    "character; try again in a while."
+)
+
+
+def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
+    """The cached copy, served because F-list could not answer for it."""
+    return {
+        "name": cached.get("name") or clean,
+        "profile": cached,
+        "from_cache": True,
+        "stale": True,
+        "age_sec": foreign_cache.age_sec(cached),
+        "fetched_at": cached.get("fetched_at"),
+        "refresh_error": str(exc),
+    }
+
+
+def _rate_limited(
+    cached: dict[str, Any] | None, clean: str, exc: flist_api.RateLimited
+) -> ForeignError:
+    """A spent budget, said as `rate_limited` so the caller backs off,
+    with the cached copy in `details.cached` when there is one: the
+    caller asked again because it was stale, and stale beats nothing."""
+    if cached is None:
+        return ForeignError("rate_limited", str(exc))
+    return ForeignError("rate_limited", str(exc), cached=_stale(cached, clean, exc))
+
+
 async def get_profile(
     name: str,
     *,
@@ -243,6 +278,13 @@ async def get_profile(
 
     `budget`, when given, is charged one call before F-list is asked.
     The app window passes none; MCP passes its own share.
+
+    What F-list answered decides what happens to the cached copy. F-list
+    refusing the profile (deleted, private, blocked; indistinguishable)
+    deletes it and says `not_found`. No answer, or a server error,
+    serves it marked `stale`, and without one says `flist_unreachable`
+    or `flist_server_error`. A spent budget says `rate_limited`, the
+    stale copy in `details.cached`.
     """
     clean = (name or "").strip()
     if not clean:
@@ -262,7 +304,7 @@ async def get_profile(
         try:
             budget.charge()
         except flist_api.RateLimited as exc:
-            raise ForeignError("rate_limited", str(exc)) from exc
+            raise _rate_limited(cached, clean, exc) from exc
     try:
         payload = await flist_api.fetch_character_data(clean)
     except (flist_api.TicketRequired, flist_api.AuthFailure) as exc:
@@ -272,22 +314,30 @@ async def get_profile(
     except flist_api.RateLimited as exc:
         if budget is not None:
             budget.refund()
-        raise ForeignError("rate_limited", str(exc)) from exc
-    except flist_api.FlistApiError as exc:
-        # Either the name does not exist or F-list is having a moment.
-        # A stale copy still answers "how was this written", so serve
-        # it rather than losing a profile the user could read.
-        if cached is not None:
-            return {
-                "name": cached.get("name") or clean,
-                "profile": cached,
-                "from_cache": True,
-                "stale": True,
-                "age_sec": foreign_cache.age_sec(cached),
-                "fetched_at": cached.get("fetched_at"),
-                "refresh_error": str(exc),
-            }
+        raise _rate_limited(cached, clean, exc) from exc
+    except flist_api.FlistAnswerError as exc:
+        # F-list answered and will not show this profile: deleted,
+        # private, or its owner blocked the account (the answer does not
+        # say which). The owner's choice wins over the copy, at once.
+        foreign_cache.delete_profile(clean)
         raise ForeignError("not_found", str(exc)) from exc
+    except flist_api.FlistUnreachable as exc:
+        # A network blip says nothing about the profile. A stale copy
+        # still answers "how was this written", so serve it.
+        if cached is not None:
+            return _stale(cached, clean, exc)
+        raise ForeignError("flist_unreachable", UNREACHABLE_MESSAGE) from exc
+    except flist_api.FlistServerError as exc:
+        # F-list's own outage, not an answer about this profile.
+        if cached is not None:
+            return _stale(cached, clean, exc)
+        raise ForeignError("flist_server_error", SERVER_ERROR_MESSAGE) from exc
+    except flist_api.FlistApiError as exc:
+        # Some other answer that is not F-list's word on the profile
+        # (an HTTP 4xx, a page that is not JSON): never "not found".
+        if cached is not None:
+            return _stale(cached, clean, exc)
+        raise ForeignError("flist_error", str(exc)) from exc
 
     # Key the cache on the spelling F-list considers canonical, not on
     # whatever the caller typed, so a lookup from a lowercased log

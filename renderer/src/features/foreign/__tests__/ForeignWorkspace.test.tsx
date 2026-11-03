@@ -162,6 +162,23 @@ it('explains a name F-list does not know', async () => {
   expect(alert.textContent).toContain('no character called')
 })
 
+it('says an F-list server error is one, not that the character is missing', async () => {
+  vi.mocked(api.foreignProfile).mockRejectedValue(
+    new RefusalError(
+      'flist_server_error',
+      502,
+      'HTTP 502: HTTP 503 from https://www.f-list.net/json/api/character-data.php'
+    )
+  )
+  render(<ForeignWorkspace />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('F-list’s server reported an error')
+  expect(alert.textContent).not.toContain('no character called')
+  expect(alert.textContent).not.toContain('HTTP')
+})
+
 // ---- loaded profile ---------------------------------------------------
 
 it('is marked read-only on screen', async () => {

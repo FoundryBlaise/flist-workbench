@@ -86,6 +86,24 @@ class RateLimited(FlistApiError):
     """Hourly cap would be exceeded; refuse rather than risk a ban."""
 
 
+class FlistAnswerError(FlistApiError):
+    """F-list answered the request and turned it down: a 200 whose
+    `error` field is set, carrying F-list's own words. For
+    character-data.php that is how a deleted profile, a private one and
+    a blocked account all arrive. Nothing in the answer tells those
+    apart reliably, so callers treat them alike."""
+
+
+class FlistUnreachable(FlistApiError):
+    """No answer from F-list at all: offline, refused, timed out or cut
+    off halfway."""
+
+
+class FlistServerError(FlistApiError):
+    """F-list's server failed the request (an HTTP 5xx) instead of
+    answering it. Says nothing about what was asked for."""
+
+
 def refusal(exc: FlistApiError) -> FlistRefused:
     """How a caller hears `exc`: no session (or a rejected one) is
     `not_signed_in`, the hourly cap `rate_limited`, anything else F-list
@@ -450,7 +468,7 @@ def reset_mcp_budget() -> None:
 def _unreachable(url: str, exc: httpx.HTTPError) -> FlistApiError:
     """A request that got no answer from F-list (offline, refused,
     timed out, cut off) as the F-list error a caller already handles."""
-    return FlistApiError(f"F-list could not be reached ({type(exc).__name__}) for {url}")
+    return FlistUnreachable(f"F-list could not be reached ({type(exc).__name__}) for {url}")
 
 
 def _default_client() -> httpx.AsyncClient:
@@ -475,6 +493,8 @@ async def _post_json(
             res = await c.post(url, data=data)
         except httpx.HTTPError as exc:
             raise _unreachable(url, exc) from exc
+        if res.status_code >= 500:
+            raise FlistServerError(f"HTTP {res.status_code} from {url}")
         if res.status_code >= 400:
             raise FlistApiError(f"HTTP {res.status_code} from {url}")
         try:
@@ -493,7 +513,7 @@ async def _post_json(
         # paraphrase.
         if url == TICKET_URL:
             raise AuthFailure(err)
-        raise FlistApiError(err)
+        raise FlistAnswerError(err)
     return payload
 
 
