@@ -126,9 +126,9 @@ def _credential_ok(method: str, path: str, headers: dict[bytes, str]) -> bool:
     if (method, path) in OPEN_ROUTES:
         return True
     if _is_extension_route(path):
-        import restore
+        from services import upload
 
-        return restore.auth_token_valid(headers.get(PAIRING_HEADER))
+        return upload.auth_token_valid(headers.get(PAIRING_HEADER))
     return _matches(headers.get(SECRET_HEADER), launch_secret())
 
 

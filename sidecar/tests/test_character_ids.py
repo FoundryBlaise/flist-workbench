@@ -53,13 +53,13 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     import importlib
 
     import archive_registry
-    import restore as restore_svc
+    from services import upload as upload_service
 
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     archive_registry.root()
     yield
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture

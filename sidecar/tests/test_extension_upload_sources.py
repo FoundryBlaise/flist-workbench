@@ -49,20 +49,20 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import archive_live
     import archive_registry
     import paths
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
 
     for cid, name in (("42", AMBER), ("77", CORVIN)):
         archive_registry.register_character(cid, name)
         archive_live.write_live(cid, _live(int(cid), name, f"[b]{name}, as published.[/b]"))
         (archive_images.images_dir(cid) / "5551001.png").write_bytes(PNG)
 
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     window = app_client(server.app)
     # The headers extension 0.1.1 sends on every call.
     extension = app_client(
@@ -74,7 +74,7 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     yield window, extension
     # The pairing lives in module state; leave the next test unpaired.
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 def _edit_workbench(window, character_id: str, description: str) -> None:

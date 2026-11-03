@@ -304,14 +304,17 @@ async def test_the_embedding_check_is_not_a_tool_of_its_own(workbench) -> None:
 
 @pytest.mark.parametrize("suffix", ["", "character"])
 async def test_the_export_for_an_upload_is_named_for_upload(
-    workbench, suffix: str
+    workbench, tmp_path: Path, suffix: str
 ) -> None:
     """Upload and Restore are different things: Restore loads a Backup
     into the Workbench. The old name is gone, with no alias."""
     async with mcp_client(suffix) as session:
         names = {t.name for t in (await session.list_tools()).tools}
         result, _ = await call_tool(
-            session, "export_restore_zip", character="Lady Amber Blaise", path="x.zip"
+            session,
+            "export_restore_zip",
+            character="Lady Amber Blaise",
+            path=str(tmp_path / "never-written.zip"),
         )
     assert "export_upload_zip" in names
     assert "export_restore_zip" not in names

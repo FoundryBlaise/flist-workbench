@@ -506,14 +506,14 @@ def get_extension_pairing_status() -> dict[str, Any]:
     F-list. Pairing is accepted by the user in the app window and
     cannot be done from here.
     """
-    import restore as restore_svc
+    from services import upload as upload_service
 
-    paired = restore_svc.is_paired()
+    paired = upload_service.is_paired()
     return {
         "paired": paired,
         "note": (
-            "The extension can fetch backups from this Workbench and "
-            "restore them to F-list."
+            "The extension can fetch the Workbench or a Backup and "
+            "upload it to F-list."
             if paired
             else "Not paired. The user pairs it from the extension; "
             "Workbench then shows an accept prompt. That has to be a "

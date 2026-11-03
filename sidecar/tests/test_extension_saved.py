@@ -43,18 +43,18 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     import archive_live
     import archive_registry
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
 
     archive_registry.register_character("42", "Lady Amber Blaise")
     archive_live.write_live(
         "42",
         {
             # live.json is the raw F-list payload: the name sits at the
-            # top level, which is where restore._character_id_for_name
+            # top level, which is where upload.character_id_for_name
             # looks for it.
             "name": "Lady Amber Blaise",
             "character": {
@@ -70,8 +70,8 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "fetched_at": 1000,
         },
     )
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     # One event loop for the whole test, as the running sidecar has: the
     # post-save Pull outlives the request that scheduled it.
     importlib.reload(server)
@@ -79,7 +79,7 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         client.headers.update({"X-Workbench-Auth": hs["token"]})
         yield client, server
     # The pairing lives in module state; leave the next test unpaired.
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture

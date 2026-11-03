@@ -55,12 +55,12 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import archive_live
     import archive_registry
     import paths
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
 
     archive_registry.register_character("42", NAME)
     archive_live.write_live(
@@ -83,12 +83,12 @@ def paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     avatar.parent.mkdir(parents=True, exist_ok=True)
     avatar.write_bytes(AVATAR)
 
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     client = app_client(server.app)
     extension = app_client(server.app, headers={"X-Workbench-Auth": hs["token"]})
     yield client, extension
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 def _upload_starts(extension) -> str:
@@ -346,9 +346,9 @@ def test_an_old_backup_taken_before_an_upload_is_an_upload_source_that_keeps_the
 def images_fail_to_pack(paired, monkeypatch: pytest.MonkeyPatch):
     """Packing the gallery fails once (a locked file, say); the Backup is
     then taken without the image files."""
-    import restore as restore_svc
+    from services import upload as upload_service
 
-    real = restore_svc.zip_serialise.build_zip
+    real = upload_service.zip_serialise.build_zip
     calls = {"n": 0}
 
     def flaky(*args, **kwargs):
@@ -357,7 +357,7 @@ def images_fail_to_pack(paired, monkeypatch: pytest.MonkeyPatch):
             raise OSError("the image file is locked")
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(restore_svc.zip_serialise, "build_zip", flaky)
+    monkeypatch.setattr(upload_service.zip_serialise, "build_zip", flaky)
     return paired
 
 
