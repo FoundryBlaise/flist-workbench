@@ -173,7 +173,9 @@ by accident, with either.
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
 swap each one into the place of an existing gallery image
-(`replace_image_id`) in the same call. Files over F-list's limits come
+(`replace_image_id`) in the same call. Nothing under the app's own
+data folder is imported, even when a cleared folder holds it, so cached
+Foreign profile images never reach the pool. Files over F-list's limits come
 with a warning; `convert_to_jpeg` re-encodes them where that helps.
 `trash_images` deletes into the character's Trash, taking an image off
 the gallery first; only you empty the Trash, in the window.
