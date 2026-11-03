@@ -259,6 +259,11 @@ set_message_labels(character, partner, [...]) the Labels
                                               repeat while remaining > 0
 ```
 
+A Label the user set by hand in the app is never replaced by a model.
+`set_message_labels` leaves it as it is, writes the rest of the call
+and lists the hashes it left alone under `skipped`, each with the
+reason. Only the user changes or clears such a Label, in the window.
+
 Some conversations do not need judging at all. A user who knows a
 chat is in-character from the first line to the last can say so once —
 `label_all_unlabeled(character, partner, "IC", confirm=true)`, or
