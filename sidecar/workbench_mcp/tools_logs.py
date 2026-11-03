@@ -135,18 +135,23 @@ def read_log_messages(
     }
 
 
-@tool(tags=TAG_LOGS, title="Search one conversation", read_only=True)
+@tool(tags=TAG_LOGS, title="Search Logs for a phrase", read_only=True)
 def search_logs(
-    character: str, partner: str, query: str, limit: int = 50
+    character: str, query: str, partner: str | None = None, limit: int = 50
 ) -> dict[str, Any]:
-    """Literal substring search in one conversation.
+    """Literal substring search in one character's Logs.
 
-    Case-insensitive, matched against the message text with BBCode
-    stripped. For "what did we say about X" questions across a whole
-    corpus, search_logs_semantic is usually the better tool.
+    With `partner`, searches that conversation. Without it, searches
+    every partner of the character and groups the hits by partner, at
+    most 20 per partner (`truncated` says there were more: search that
+    partner on its own to see them). Case-insensitive, matched against
+    the message text with BBCode stripped. For "what did we say about X"
+    questions, search_logs_semantic is usually the better tool.
     """
     if not (query or "").strip():
         raise ToolError("validation_failed", "query is empty")
+    if not partner:
+        return _search_every_partner(character, query, limit)
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
     try:
@@ -159,52 +164,47 @@ def search_logs(
         "partner": partner,
         "query": query,
         "total_hits": len(hits),
-        "hits": [
-            {
-                "timestamp": h.get("iso"),
-                "speaker": h.get("speaker"),
-                "text": h.get("text"),
-            }
-            for h in hits[:capped]
-        ],
+        "hits": [_hit(h) for h in hits[:capped]],
         "truncated": len(hits) > capped,
     }
 
 
-@tool(tags=TAG_LOGS, title="Search all partners", read_only=True)
-def search_all_partners(
-    character: str, query: str, limit_per_partner: int = 20
-) -> dict[str, Any]:
-    """Literal substring search across every conversation of one
-    character. Linear scan — slow on a large corpus."""
-    if not (query or "").strip():
-        raise ToolError("validation_failed", "query is empty")
+#: Without a partner one search can touch hundreds of conversations; a
+#: per-partner cap keeps the answer readable and still shows where the
+#: phrase comes up.
+MAX_HITS_PER_PARTNER = 20
+
+
+def _search_every_partner(character: str, query: str, limit: int) -> dict[str, Any]:
     character = resolve_log_character(character)
+    per_partner = max(1, min(MAX_HITS_PER_PARTNER, int(limit)))
     try:
         result = log_store.search_all_partners(
-            character, query, limit_per_partner=max(1, int(limit_per_partner))
+            character, query, limit_per_partner=per_partner
         )
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
     return {
         "character": character,
         "query": query,
+        "limit_per_partner": per_partner,
         "partners": [
             {
                 "partner": row.get("partner"),
                 "hit_count": len(row.get("hits") or []),
                 "truncated": row.get("truncated", False),
-                "hits": [
-                    {
-                        "timestamp": h.get("iso"),
-                        "speaker": h.get("speaker"),
-                        "text": h.get("text"),
-                    }
-                    for h in (row.get("hits") or [])
-                ],
+                "hits": [_hit(h) for h in (row.get("hits") or [])],
             }
             for row in (result.get("partners") or [])
         ],
+    }
+
+
+def _hit(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp": message.get("iso"),
+        "speaker": message.get("speaker"),
+        "text": message.get("text"),
     }
 
 

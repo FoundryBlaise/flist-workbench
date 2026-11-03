@@ -369,9 +369,10 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
         )
     elif out["state"] == "failed":
         out["note"] = (
-            "The ingest failed — see `error`. test_embedding_connection "
-            "reports an embedding model that will not load on its own, "
-            "which is the quicker way to see what went wrong there."
+            "The ingest failed — see `error`. get_rag_status with "
+            "check_embedding=true reports an embedding model that will "
+            "not load on its own, which is the quicker way to see what "
+            "went wrong there."
         )
     return out
 
@@ -425,40 +426,6 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     index_service.wipe()
     audit("wipe_search_index")
     return {"wiped": True, "note": "Run ingest_logs to rebuild."}
-
-
-@tool(
-    tags=(TAG_CORE, TAG_LOGS),
-    title="Test the embedding model",
-    read_only=True,
-)
-def test_embedding_connection() -> dict[str, Any]:
-    """Check that the embedding model loads, and report its dimension.
-
-    Embedding runs inside Workbench — there is no server to start and
-    nothing to configure. The first call downloads the model, so it can
-    take a moment; after that it is milliseconds.
-    """
-    import rag as rag_settings
-    import rag_embed
-
-    settings = rag_settings.load_settings()
-    started = time.monotonic()
-    try:
-        dimension, _vec = rag_embed.probe(settings, timeout=60.0)
-    except rag_embed.EmbedError as exc:
-        return {
-            "ok": False,
-            "model": settings.embed_model,
-            "error": str(exc),
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-        }
-    return {
-        "ok": True,
-        "model": settings.embed_model,
-        "dimension": dimension,
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-    }
 
 
 # --------------------------------------------------------------------

@@ -8,6 +8,7 @@ Workbench — see the module docstring in `services/retrieval.py`.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ._context import ToolError, resolve_conversation, resolve_log_character
@@ -88,18 +89,25 @@ def search_logs_semantic(
 
 
 @tool(tags=(TAG_CORE, TAG_LOGS), title="Index status", read_only=True)
-def get_rag_status() -> dict[str, Any]:
-    """What the local search index currently holds.
+def get_rag_status(check_embedding: bool = False) -> dict[str, Any]:
+    """What the local search index currently holds, and the embedding
+    model's state.
 
     An index is built per embedding model; switching models means the
     old chunks can't be searched with the new one, which is why
     `embed_model` is reported alongside the count. While an ingest
     runs, `busy` is true, `job` is that ingest and `chunk_count` is
     null: the Index can't be counted until it finishes.
+
+    `embedding` names the configured model. With `check_embedding=true`
+    the model is loaded and its `state` is `ready` (with `dimension`) or
+    `failed` (with `error`: a code and a message). The first load
+    downloads the model, so it can take a moment.
     """
     from services import index as index_service
 
     out = index_service.status()
+    out["embedding"] = _embedding_state(check_embedding)
     if out["busy"]:
         out["note"] = (
             "A job is changing the Index right now (see `job`), so it "
@@ -111,3 +119,33 @@ def get_rag_status() -> dict[str, Any]:
     else:
         out["note"] = "Only messages with an IC/OOC verdict are indexed."
     return out
+
+
+def _embedding_state(check: bool) -> dict[str, Any]:
+    """The configured embedding model, loaded only when asked: embedding
+    runs inside the app and the first load is a download, which a plain
+    status read must not start."""
+    import rag as rag_settings
+    import rag_embed
+
+    settings = rag_settings.load_settings()
+    if not check:
+        return {"model": settings.embed_model, "state": "not_checked"}
+    started = time.monotonic()
+    try:
+        dimension, _vec = rag_embed.probe(settings, timeout=60.0)
+    except rag_embed.EmbedError as exc:
+        # A model that will not load is a state of the Index, not a
+        # failure of this call: the rest of the status is still true.
+        return {
+            "model": settings.embed_model,
+            "state": "failed",
+            "error": {"code": "embedding_failed", "message": str(exc)},
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+    return {
+        "model": settings.embed_model,
+        "state": "ready",
+        "dimension": dimension,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
