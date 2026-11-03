@@ -822,6 +822,41 @@ async def test_a_semantic_search_caps_its_hits_and_pages_the_rest(scene: Path) -
     assert both == {hit["chunk_id"] for hit in asked_too_much["hits"]}
 
 
+async def test_a_semantic_search_hit_says_where_it_ranked(scene: Path) -> None:
+    """Each hit carries its fused rank and score, where the dense and
+    keyword halves put it, and its neighbours inside it; with too few
+    candidates to reorder, no reranking ran and no hit claims it did."""
+    async with mcp_client("logs") as session:
+        for partner in (PARTNER, "Azure Viper"):
+            await _call(
+                session,
+                "label_all_unlabeled",
+                character=CHAR,
+                partner=partner,
+                label="IC",
+                confirm=True,
+            )
+        await _call(session, "ingest_logs", character=CHAR)
+        body = await _call(
+            session,
+            "search_logs_semantic",
+            question="lighthouse",
+            character=CHAR,
+            neighbors=1,
+            hybrid=True,
+        )
+
+    hits = body["hits"]
+    assert body["retrieval"]["rerank_applied"] is False
+    assert [hit["fused_rank"] for hit in hits] == [1, 2]
+    assert body["page"]["returned"] == 2
+    for hit in hits:
+        assert hit["score"] > 0
+        assert {"dense_rank", "lexical_rank"} <= set(hit)
+        assert set(hit["context"]) == {"before", "after"}
+        assert "rerank_score" not in hit
+
+
 # ---- the error codes MCP.md lists ------------------------------------------
 
 SIDECAR = Path(__file__).resolve().parents[1]

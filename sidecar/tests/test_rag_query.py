@@ -236,14 +236,12 @@ def test_run_query_neighbors_expand(
         top_k=1,
         neighbors=1,
     )
-    # Hit on "a"; neighbors pull "b". c is two hops away and skipped.
-    ids = sorted((h.get("payload") or {}).get("chunk_id") for h in result.hits)
-    assert ids == ["a", "b"]
-    # The expanded chunk carries the marker so the renderer can style it.
-    expanded = [
-        h for h in result.hits if (h.get("payload") or {}).get("chunk_id") == "b"
-    ]
-    assert expanded and (expanded[0].get("payload") or {}).get("expanded") is True
+    # Hit on "a"; its neighbour "b" rides inside it rather than as a hit
+    # of its own. c is two hops away and skipped.
+    assert [(h.get("payload") or {}).get("chunk_id") for h in result.hits] == ["a"]
+    context = result.hits[0]["context"]
+    assert context["before"] == []
+    assert [c["payload"]["chunk_id"] for c in context["after"]] == ["b"]
 
 
 def test_run_query_handles_empty_hits(

@@ -39,9 +39,16 @@ def search_logs_semantic(
     something, rather than containing a particular word.
 
     Returns whole chunks with their text, date and speakers — read them
-    and answer from what they say. Scope it with `character` and
-    `partner` when the question is about one relationship; leave both
-    out to search everything. At most 20 matches (`top_k`) a page.
+    and answer from what they say. Hits come most relevant first. Each
+    says where it ranked: `fused_rank` and `score` after combining the
+    meaning-based and keyword searches, `dense_rank` and `lexical_rank`
+    in each (null where that search did not find it), and
+    `rerank_score` only when reranking ran. `context` holds the chunks
+    just before and after the hit in its Log (`neighbors` of them).
+
+    Scope it with `character` and `partner` when the question is about
+    one relationship; leave both out to search everything. At most 20
+    matches (`top_k`) a page.
 
     Only messages with an IC/OOC Label are in the Index. If results
     look thin, check get_label_stats: unjudged messages are skipped at
@@ -97,7 +104,7 @@ def search_logs_semantic(
 
     payload = result.to_dict()
     payload["question"] = question
-    matches = sum(1 for hit in result.hits if not hit.expanded)
+    matches = len(result.hits)
     # Ranking stops one past the page, so the matches beyond it are not
     # counted: `total` is unknown.
     payload["page"] = page_info(
