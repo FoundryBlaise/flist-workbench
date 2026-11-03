@@ -36,10 +36,10 @@ async def test_calling_a_near_duplicate_is_an_unknown_tool(
     assert "Unknown tool" in tool_error_text(result)
 
 
-async def test_the_character_endpoint_has_at_most_48_tools(workbench) -> None:  # noqa: F811
+async def test_the_character_endpoint_has_at_most_47_tools(workbench) -> None:  # noqa: F811
     async with mcp_client("character") as session:
         tools = (await session.list_tools()).tools
-    assert len(tools) <= 48, sorted(t.name for t in tools)
+    assert len(tools) <= 47, sorted(t.name for t in tools)
 
 
 async def test_remove_image_has_no_delete_option(workbench) -> None:  # noqa: F811

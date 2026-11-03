@@ -28,7 +28,8 @@
 > Restore; `get_messages_to_classify` is `get_unlabeled_messages` and the
 > prompt `classify_ic_ooc` is `label_ic_ooc`; `get_workbench_status` is
 > `get_app_status`, since a bare "Workbench" is the editable copy, not
-> the app.
+> the app; `get_live_profile` is gone, since `get_workbench` reads Live
+> with `source="live"`.
 
 Status at the time: **v4, 2026-09-11 — implemented.** Phases 0–7 were
 built and shipped on `feat/mcp-server`. Where the build differed from

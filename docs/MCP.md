@@ -136,8 +136,8 @@ ones worth knowing about:
 
 **Reading a profile** — `get_workbench` (the Workbench by section,
 or Live with `source="live"`), `get_description` (pages through a long
-one), `list_profile_fields`, `list_kinks`, `list_images`,
-`get_live_profile`.
+one), `list_profile_fields`, `list_kinks`, `list_images`. Each
+reads Live with `source="live"` too; Live has no read tool of its own.
 
 **Reading somebody else's profile** — `search_foreign_characters`
 finds a name in the user's bookmarks, friends list or chat logs;
@@ -381,7 +381,7 @@ switch is off, which is the default: tools marked *Log text, opt-in*
 appear only once you turn it on. A test compares these tables with the
 server, so they cannot drift from it.
 
-### `/mcp`: 67 tools (63 while Log text is off)
+### `/mcp`: 66 tools (62 while Log text is off)
 
 | Tool | What it does |
 |---|---|
@@ -391,8 +391,7 @@ server, so they cannot drift from it.
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
 | `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
-| `get_workbench` | The Workbench by section; `source="live"` reads Live. |
-| `get_live_profile` | Live: the profile as last pulled from F-list. |
+| `get_workbench` | The Workbench by section; `source="live"` reads Live, the profile as last pulled. |
 | `get_description` | The description in BBCode, a page at a time for a long one. |
 | `list_profile_fields` | Profile fields with their type, allowed options and current value. |
 | `list_kinks` | Kink choices by name, custom kinks included. |
@@ -453,7 +452,7 @@ server, so they cannot drift from it.
 | `get_job` | Progress and result of a job started with `wait=false`. |
 | `cancel_job` | Stop a running job; what it already wrote stays. |
 
-### `/mcp/character`: 48 tools
+### `/mcp/character`: 47 tools
 
 | Tool | What it does |
 |---|---|
@@ -463,8 +462,7 @@ server, so they cannot drift from it.
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
 | `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
-| `get_workbench` | The Workbench by section; `source="live"` reads Live. |
-| `get_live_profile` | Live: the profile as last pulled from F-list. |
+| `get_workbench` | The Workbench by section; `source="live"` reads Live, the profile as last pulled. |
 | `get_description` | The description in BBCode, a page at a time for a long one. |
 | `list_profile_fields` | Profile fields with their type, allowed options and current value. |
 | `list_kinks` | Kink choices by name, custom kinks included. |
