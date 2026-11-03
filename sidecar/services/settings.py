@@ -199,23 +199,18 @@ def _rerank_min_ratio(conn: sqlite3.Connection, changes: Mapping[str, Any], valu
     return key, str(ratio), ratio
 
 
-def _hybrid_enabled(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
-    key = settings_store.KEY_RAG_HYBRID_ENABLED
-    if value is None:
-        return key, None, None
-    if not isinstance(value, bool):
-        raise ValidationFailed("rag.hybrid_enabled", "not true or false", allowed=[True, False])
-    # Stored as "1" / "0" so the table stays TEXT.
-    return key, "1" if value else "0", value
+def _bool(field: str, key: str, cleared: bool | None) -> Callable[..., _Result]:
+    """A true-or-false field; None clears it, reported as `cleared`."""
 
+    def validate(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
+        if value is None:
+            return key, None, cleared
+        if not isinstance(value, bool):
+            raise ValidationFailed(field, "not true or false", allowed=[True, False])
+        # Stored as "1" / "0" so the table stays TEXT.
+        return key, "1" if value else "0", value
 
-def _log_text(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
-    key = settings_store.KEY_MCP_LOG_TEXT
-    if value is None:
-        return key, None, False
-    if not isinstance(value, bool):
-        raise ValidationFailed("mcp.log_text", "not true or false", allowed=[True, False])
-    return key, "1" if value else "0", value
+    return validate
 
 
 def log_text_over_mcp(conn: sqlite3.Connection | None = None) -> bool:
@@ -258,9 +253,10 @@ _VALIDATORS: dict[str, Callable[..., _Result]] = {
     **{field: _clamped_int(field) for field in _INT_RANGES},
     "rag.chunk_soft_split_chars": _chunk_soft_split_chars,
     "rag.rerank_min_ratio": _rerank_min_ratio,
-    "rag.hybrid_enabled": _hybrid_enabled,
+    "rag.hybrid_enabled": _bool("rag.hybrid_enabled", settings_store.KEY_RAG_HYBRID_ENABLED, None),
     "image_import_roots": _image_import_roots,
-    "mcp.log_text": _log_text,
+    # Off unless the user turned it on: cleared reads as off.
+    "mcp.log_text": _bool("mcp.log_text", settings_store.KEY_MCP_LOG_TEXT, False),
 }
 
 

@@ -25,8 +25,7 @@ from ._context import (
     resolve_character,
     resolve_workbench_or_live,
 )
-from ._registry import TAG_CHARACTER, TAG_CORE, tool
-from .tools_session import NO_PUSH_NOTE
+from ._registry import NO_PUSH_NOTE, TAG_CHARACTER, TAG_CORE, tool
 
 #: The most rows one call of a list tool returns; `offset` pages on.
 MAX_CHARACTERS = 100

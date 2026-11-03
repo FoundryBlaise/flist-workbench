@@ -11,18 +11,10 @@ from logs import LogDirError, list_characters
 from paths import user_data_dir
 
 from ._context import page
-from ._registry import TAG_CHARACTER, TAG_CORE, TAG_LOGS, tool
+from ._registry import NO_PUSH_NOTE, TAG_CHARACTER, TAG_CORE, TAG_LOGS, tool
 
 #: The most events one get_activity_log call returns.
 MAX_ACTIVITY_EVENTS = 100
-
-#: Said by reads that show profile data. Every write says it too, in
-#: its own words (`_registry.NOT_PUBLISHED`): the single most important
-#: thing a connected model must not get wrong.
-NO_PUSH_NOTE = (
-    "The app never writes to f-list.net; the user uploads changes "
-    "themselves in the browser."
-)
 
 
 @tool(

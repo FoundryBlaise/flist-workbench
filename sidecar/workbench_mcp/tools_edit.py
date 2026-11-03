@@ -50,6 +50,12 @@ def _writable(character: str) -> ResolvedCharacter:
     return target
 
 
+def _kept_as(replaced: archive_backups.WorkbenchReplaced) -> str | None:
+    """The file name of the Backup a whole-Workbench replacement kept,
+    or None when there was no Workbench to keep."""
+    return replaced.kept["filename"] if replaced.kept else None
+
+
 def _guard_bbcode(updated: str) -> None:
     """Stop a description F-list's own parser would reject.
 
@@ -151,7 +157,7 @@ def load_backup_into_workbench(
     """
     target = resolve_character(character)
     replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
-    kept = replaced.kept["filename"] if replaced.kept else None
+    kept = _kept_as(replaced)
     audit(
         "load_backup_into_workbench",
         character=target.name,
@@ -1011,8 +1017,7 @@ def _import_batch(
     # Everything that can be refused is refused before the first file is
     # copied: a half-done batch leaves the model guessing what landed.
     if touches_gallery:
-        target = _writable(character)
-        resolved = workbench_target(target)
+        resolved = resolve_workbench(target)
         on_profile = {r["image_id"] for r in payload_ops.gallery(load_payload(resolved))}
         missing = [t for t in targets if t not in on_profile]
         if missing:
@@ -1266,7 +1271,7 @@ def put_workbench_payload(
     except ValueError as exc:
         # Not a payload the Workbench takes; refused before any Backup.
         raise ToolError("validation_failed", str(exc)) from exc
-    kept = replaced.kept["filename"] if replaced.kept else None
+    kept = _kept_as(replaced)
     audit("put_workbench_payload", character=target.name, kept_as=kept)
     return {
         "character": target.name,

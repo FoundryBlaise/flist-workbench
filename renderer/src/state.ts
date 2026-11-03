@@ -1102,6 +1102,15 @@ async function _saveTypedEdits(get: () => State, characterId: string): Promise<b
 
 /** The slot for a Workbench payload the sidecar answered with, and the
  *  etag the next save goes over. */
+type GalleryRow = { image_id: string; description: string; sort_order: number }
+
+/** The gallery rows of a Workbench slot's payload; none without one. */
+function galleryOf(slot: FlistWorkingSlot | undefined): GalleryRow[] {
+  return slot && Array.isArray((slot.payload as { images?: unknown }).images)
+    ? (slot.payload as { images: GalleryRow[] }).images
+    : []
+}
+
 function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot {
   return {
     ...emptyWorkingSlot(),
@@ -2492,11 +2501,6 @@ export const useStore = create<State>((set, get) => ({
 
   async flistTrashImages(characterId, imageIds) {
     if (imageIds.length === 0) return []
-    type GalleryRow = { image_id: string; description: string; sort_order: number }
-    const galleryOf = (slot: FlistWorkingSlot | undefined): GalleryRow[] =>
-      slot && Array.isArray((slot.payload as { images?: unknown }).images)
-        ? (slot.payload as { images: GalleryRow[] }).images
-        : []
     // A gallery image comes off the Workbench's gallery on the sidecar,
     // which writes the Workbench. What was typed is saved first (after
     // any save in flight), or that save would be refused as stale.
@@ -2548,9 +2552,7 @@ export const useStore = create<State>((set, get) => ({
   flistMoveImageToProfile(characterId, imageId) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
-    const images = Array.isArray((slot.payload as { images?: unknown }).images)
-      ? ((slot.payload as { images: { image_id: string; description: string; sort_order: number }[] }).images)
-      : []
+    const images = galleryOf(slot)
     if (images.some((e) => e.image_id === imageId)) return
     const nextOrder =
       images.length === 0
@@ -2565,9 +2567,7 @@ export const useStore = create<State>((set, get) => ({
   flistMoveImageToPool(characterId, imageId) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
-    const images = Array.isArray((slot.payload as { images?: unknown }).images)
-      ? ((slot.payload as { images: { image_id: string; description: string; sort_order: number }[] }).images)
-      : []
+    const images = galleryOf(slot)
     if (!images.some((e) => e.image_id === imageId)) return
     get().flistSetGalleryImages(
       characterId,

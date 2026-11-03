@@ -59,23 +59,24 @@ async def test_every_destructive_tool_refuses_a_call_without_confirm(
         assert "confirm_required: " in text, (name, text)
 
 
+#: The tools that ask for `confirm` only sometimes. Registering one
+#: takes `confirm_when`, saying when (see the test below this one).
+SOMETIMES = {"set_description", "edit_description"}
+
+
 @pytest.mark.parametrize("suffix", sorted(ENDPOINTS))
 async def test_every_tool_taking_confirm_is_destructive_or_asks_only_sometimes(
     suffix: str,
 ) -> None:
-    """The tools that ask only sometimes are registered as such."""
-    sometimes = {s.name for s in _registry.registered_tools() if s.confirm_when}
     async with mcp_client(suffix) as session:
         tools = (await session.list_tools()).tools
-    undeclared = [
+    not_destructive = {
         t.name
         for t in tools
         if "confirm" in t.inputSchema.get("properties", {})
         and not t.annotations.destructiveHint
-        and t.name not in sometimes
-    ]
-    assert undeclared == []
-    assert sometimes == {"set_description", "edit_description"}
+    }
+    assert not_destructive == SOMETIMES & {t.name for t in tools}
 
 
 def test_registering_a_destructive_tool_without_confirm_fails() -> None:
