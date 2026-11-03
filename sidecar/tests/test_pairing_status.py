@@ -25,13 +25,13 @@ def server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import restore as restore_svc
+    from services import upload as upload_service
     import server as server_module
 
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     yield server_module
     # The pairing lives in module state; leave the next test unpaired.
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture

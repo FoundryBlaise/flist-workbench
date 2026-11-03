@@ -43,8 +43,8 @@ archive = [
   "sidecar/tests/test_pool_api.py",
   "sidecar/tests/test_adopt_image_ids.py",
   "sidecar/tests/test_repair_gallery.py",
-  "sidecar/tests/test_restore_extension.py",
-  "sidecar/tests/test_restore_saved.py",
+  "sidecar/tests/test_extension_version.py",
+  "sidecar/tests/test_extension_saved.py",
   "sidecar/tests/test_zip_serialise.py",
   "sidecar/tests/test_profile.py",
   "sidecar/tests/test_flist_api.py",
@@ -337,7 +337,7 @@ replace = '''
 [[mutation]]
 id = "A15"
 suite = "sidecar"
-file = "sidecar/restore.py"
+file = "sidecar/services/upload.py"
 breaks = "The Upload source list leaves out the Workbench."
 tests = ["@archive", "@mcp"]
 audit = "killed"

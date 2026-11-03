@@ -38,15 +38,15 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
 
     import archive_images
     import archive_registry
-    import restore as restore_svc
+    from services import upload as upload_service
 
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     archive_registry.register_character(str(CID), NAME)
     # What an earlier Pull left in the pool: image 777 as a png.
     archive_images.write_character_image(str(CID), IMAGE_ID, "png", OLD_PNG)
     yield
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture

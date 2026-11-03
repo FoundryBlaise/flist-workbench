@@ -12,8 +12,6 @@ default) or `live`; no tool takes `working_set` any more.
 from __future__ import annotations
 
 import re
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -52,9 +50,6 @@ TAKES_SOURCE: dict[str, dict[str, Any]] = {
     "list_images": {},
     "diff_workbench": {},
     "render_profile_image": {},
-    # Outside the source tree: a call that is wrongly let through must
-    # not leave a zip behind in the checkout.
-    "export_restore_zip": {"path": str(Path(tempfile.gettempdir()) / "never-written.zip")},
 }
 
 #: The tools that edit the Workbench, which took `working_set` until

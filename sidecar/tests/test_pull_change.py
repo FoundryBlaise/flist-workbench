@@ -35,13 +35,13 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     import archive_registry
     import paths
-    import restore as restore_svc
+    from services import upload as upload_service
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     yield data
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture

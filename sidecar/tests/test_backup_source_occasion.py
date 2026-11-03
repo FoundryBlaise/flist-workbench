@@ -51,12 +51,12 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import archive_live
     import archive_registry
     import paths
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
 
     archive_registry.register_character(CID, NAME)
     archive_live.write_live(
@@ -72,12 +72,12 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "fetched_at": 1000,
         },
     )
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     window = app_client(server.app)
     extension = app_client(server.app, headers={"X-Workbench-Auth": hs["token"]})
     yield window, extension
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture

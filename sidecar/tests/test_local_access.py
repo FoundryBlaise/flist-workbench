@@ -62,13 +62,13 @@ def server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import restore as restore_svc
+    from services import upload as upload_service
     import server as server_module
 
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     yield server_module
     # The pairing lives in module state; leave the next test unpaired.
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture
@@ -430,6 +430,37 @@ def test_extension_routes_want_the_pairing_token_not_the_secret(
 
 def _extension_headers(token: str) -> dict[str, str]:
     return {"X-Workbench-Auth": token, "X-Workbench-Extension-Version": "0.1.1"}
+
+
+#: Every path under /restore/, exactly as the released extension and the
+#: app window's pairing prompt call it. The code behind them is named for
+#: Upload; the paths change only with an extension release that knows
+#: new ones, and keeps these for one more version.
+RESTORE_PATHS = {
+    ("POST", "/restore/handshake"),
+    ("GET", "/restore/handshake-status"),
+    ("GET", "/restore/handshake/pending"),
+    ("POST", "/restore/handshake/accept"),
+    ("POST", "/restore/handshake/reject"),
+    ("DELETE", "/restore/token"),
+    ("GET", "/restore/extension"),
+    ("GET", "/restore/characters"),
+    ("GET", "/restore/snapshots"),
+    ("GET", "/restore/snapshot/{snapshot_id}"),
+    ("POST", "/restore/snapshot/fresh"),
+    ("POST", "/restore/image-ids"),
+    ("POST", "/restore/saved"),
+    ("POST", "/restore/done"),
+}
+
+
+def test_every_path_the_extension_knows_is_still_served(server) -> None:  # noqa: ANN001
+    served = {
+        (route.method, route.path)
+        for route in api_routes(server.app)
+        if route.path.startswith("/restore/")
+    }
+    assert served == RESTORE_PATHS
 
 
 def test_extension_0_1_1_pairs_from_its_background_worker(

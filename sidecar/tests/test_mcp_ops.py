@@ -302,6 +302,55 @@ async def test_the_embedding_check_is_not_a_tool_of_its_own(workbench) -> None:
 # ---- exports -----------------------------------------------------------
 
 
+@pytest.mark.parametrize("suffix", ["", "character"])
+async def test_the_export_for_an_upload_is_named_for_upload(
+    workbench, tmp_path: Path, suffix: str
+) -> None:
+    """Upload and Restore are different things: Restore loads a Backup
+    into the Workbench. The old name is gone, with no alias."""
+    async with mcp_client(suffix) as session:
+        names = {t.name for t in (await session.list_tools()).tools}
+        result, _ = await call_tool(
+            session,
+            "export_restore_zip",
+            character="Lady Amber Blaise",
+            path=str(tmp_path / "never-written.zip"),
+        )
+    assert "export_upload_zip" in names
+    assert "export_restore_zip" not in names
+    assert "Unknown tool" in tool_error_text(result)
+
+
+async def test_the_export_for_an_upload_packs_the_workbench(
+    workbench, tmp_path: Path
+) -> None:
+    """Live is never an Upload source, so there is no copy to pick."""
+    import zipfile
+
+    async with mcp_client("character") as session:
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="[b]Edited in the Workbench.[/b]",
+        )
+        _, body = await call_tool(
+            session,
+            "export_upload_zip",
+            character="Lady Amber Blaise",
+            path=str(tmp_path / "upload.zip"),
+        )
+    assert set(tools["export_upload_zip"].inputSchema["properties"]) == {
+        "character",
+        "path",
+    }
+    with zipfile.ZipFile(body["path"]) as zf:
+        packed = zf.read("character.json").decode("utf-8")
+    assert "Edited in the Workbench." in packed
+    assert "Published." not in packed
+
+
 async def test_exporting_to_a_directory_generates_a_filename(
     workbench, tmp_path: Path
 ) -> None:
@@ -311,7 +360,7 @@ async def test_exporting_to_a_directory_generates_a_filename(
     async with mcp_client("character") as session:
         _, body = await call_tool(
             session,
-            "export_restore_zip",
+            "export_upload_zip",
             character="Lady Amber Blaise",
             path=str(folder),
         )
@@ -320,7 +369,7 @@ async def test_exporting_to_a_directory_generates_a_filename(
     assert written.suffix == ".zip"
 
 
-async def test_export_restore_zip_names_the_manual_step(
+async def test_export_upload_zip_names_the_manual_step(
     workbench, tmp_path: Path
 ) -> None:
     """The hand-off point: a model must not claim this published
@@ -328,7 +377,7 @@ async def test_export_restore_zip_names_the_manual_step(
     async with mcp_client("character") as session:
         _, body = await call_tool(
             session,
-            "export_restore_zip",
+            "export_upload_zip",
             character="Lady Amber Blaise",
             path=str(tmp_path / "restore.zip"),
         )
@@ -337,7 +386,7 @@ async def test_export_restore_zip_names_the_manual_step(
     assert "cannot do it for them" in body["next_step"]
 
 
-EXPORT_TOOLS = ("export_restore_zip",)
+EXPORT_TOOLS = ("export_upload_zip",)
 
 
 @pytest.mark.parametrize("tool", EXPORT_TOOLS)
