@@ -2,7 +2,7 @@ from pathlib import Path
 
 import parser
 from fchat_logs import chat, encode
-from parser import classify_kind, extract_mentions, parse_log, strip_bbcode
+from parser import classify_kind, extract_mentions, strip_bbcode
 
 
 def test_strip_bbcode_removes_balanced_tags() -> None:

@@ -19,7 +19,6 @@ the caller wait out a timeout.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from mcp.server.fastmcp.utilities.types import Image
 

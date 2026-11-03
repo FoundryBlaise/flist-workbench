@@ -20,7 +20,7 @@ import archive_registry
 from sidecar_client import app_client
 from PIL import Image
 
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import call_tool, mcp_client
 from test_mcp_edit import open_workbench, payload_of, seed_gallery, workbench  # noqa: F401
 
 CHAR = "Lady Amber Blaise"

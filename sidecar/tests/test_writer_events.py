@@ -30,7 +30,6 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-import archive_backups
 from mcp_helpers import call_tool, mcp_client
 from sidecar_client import app_client
 from test_mcp_edit import workbench  # noqa: F401

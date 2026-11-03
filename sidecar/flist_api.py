@@ -688,7 +688,7 @@ async def ensure_fresh_ticket(
     try:
         import flist_activity
         flist_activity.record("ticket-refresh", account=refreshed.account)
-    except Exception:  # noqa: BLE001 — telemetry is best-effort
+    except Exception:  # noqa: BLE001, S110 — telemetry is best-effort
         pass
     return refreshed
 

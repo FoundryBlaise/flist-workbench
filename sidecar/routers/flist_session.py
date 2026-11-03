@@ -89,7 +89,7 @@ async def _prefetch_avatars(names: list[str]) -> None:
                 await flist_api.download_to(
                     flist_api.avatar_url(name), dest, client=client
                 )
-            except Exception:  # noqa: BLE001 — best-effort warmup
+            except Exception:  # noqa: BLE001, S110 — best-effort warmup
                 pass
 
         await asyncio.gather(*(one(n) for n in names), return_exceptions=True)

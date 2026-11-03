@@ -78,7 +78,7 @@ class LexicalStore:
     def close(self) -> None:
         try:
             self._conn.close()
-        except Exception:  # noqa: BLE001 — close must never block teardown
+        except Exception:  # noqa: BLE001, S110 — close must never block teardown
             pass
 
     def __enter__(self) -> "LexicalStore":
