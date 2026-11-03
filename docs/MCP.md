@@ -182,7 +182,7 @@ retrieved, and this one never scored. Ask about the *thing* instead —
 **Labels** — see below.
 
 **Operations** — `pull_character`, `create_backup`,
-`backup_all_characters`, `ingest_logs`, `export_restore_zip`.
+`backup_all_characters`, `ingest_logs`, `export_upload_zip`.
 A Pull, Back up all and an ingest are jobs: they wait and report
 progress by default, and with `wait=false` return a `job_id` at once,
 to poll with `get_job` and stop with `cancel_job` (the same two calls

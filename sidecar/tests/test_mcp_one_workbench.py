@@ -11,8 +11,6 @@ copy to address at all: they change the Workbench. A read that takes
 from __future__ import annotations
 
 import re
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -49,9 +47,6 @@ TAKES_WORKING_SET: dict[str, dict[str, Any]] = {
     "list_images": {},
     "diff_working_set": {},
     "render_profile_image": {},
-    # Outside the source tree: a call that is wrongly let through must
-    # not leave a zip behind in the checkout.
-    "export_restore_zip": {"path": str(Path(tempfile.gettempdir()) / "never-written.zip")},
 }
 
 #: The tools that edit the Workbench, which took `working_set` until

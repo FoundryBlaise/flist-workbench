@@ -42,7 +42,6 @@ from ._context import (
     audit,
     resolve_character,
     resolve_ingest_scope,
-    resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 from .tools_session import NO_PUSH_NOTE
@@ -415,10 +414,8 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
 
 
 @tool(tags=TAG_CHARACTER, title="Export for upload to F-list")
-def export_restore_zip(
-    character: str, path: str, working_set: str | None = None
-) -> dict[str, Any]:
-    """Save the ZIP the user uploads to F-list themselves.
+def export_upload_zip(character: str, path: str) -> dict[str, Any]:
+    """Save the Workbench as the ZIP the user uploads to F-list themselves.
 
     This is the hand-off point. The app does not publish anything:
     the user opens f-list.net in their browser and uploads this file
@@ -428,13 +425,12 @@ def export_restore_zip(
     import zip_serialise
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
     # Payload and images in one step under the character's lock, as the
-    # window's export does.
+    # window's export does. Live is never an Upload source; it stands in
+    # only for a character that has no Workbench yet, which would hold
+    # the same profile.
     with archive_registry.character_lock(target.id):
-        payload = archive_workbench.export_payload(
-            target.id, from_live=resolved.is_live
-        )
+        payload = archive_workbench.export_payload(target.id)
         if payload is None:
             raise ToolError(
                 "no_live",
@@ -448,7 +444,7 @@ def export_restore_zip(
             avatar_path=archive_images.avatar_path_for(target.name),
         )
     written = _write_file(path, data, suffix=".zip")
-    audit("export_restore_zip", character=target.name, path=str(written))
+    audit("export_upload_zip", character=target.name, path=str(written))
     return {
         "character": target.name,
         "path": str(written),
