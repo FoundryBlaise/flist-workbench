@@ -144,9 +144,12 @@ finds a name in the user's bookmarks, friends list or chat logs;
 `get_foreign_profile` and `get_foreign_kinks` then read it. Strictly
 read-only, and there is no tool that copies one of these into the
 user's own characters — if asked to, say the app does not do that.
-Results cache for 24 hours, and fetching spends a quarter-share of
+A fetched profile is cached on disk until the cache's size cap evicts
+it or the user clears it (Settings → Foreign profiles); after 24 hours
+the next read fetches it again. Fetching spends a quarter-share of
 the hourly F-list budget so a model browsing profiles cannot leave
-the user unable to pull their own. When F-list says a profile is gone
+the user unable to pull their own. The activity log records each
+profile a model read, by name. When F-list says a profile is gone
 or not visible, its cached copy is deleted on the spot.
 
 **Looking at the result** — `render_profile_image` returns the profile
@@ -351,7 +354,7 @@ that happens the window shows a banner and asks which version to keep
 show up in the window without a reload.
 
 The activity log (Help → F-list Activity Log) records every change a
-tool made, prefixed `mcp:`.
+tool made, and every Foreign profile a tool read, prefixed `mcp:`.
 
 ## When something goes wrong
 

@@ -51,6 +51,7 @@ _DISK_ALLOWED_FIELDS = frozenset({
     "account",          # user-entered account name — public-ish
     "character_count",  # int
     "name",             # character name — public
+    "character",        # character an MCP tool acted on or read — public
     "character_id",     # public F-list id
     "image_count",      # int
     "image_failed",     # int

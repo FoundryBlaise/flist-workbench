@@ -93,9 +93,10 @@ type State = {
    *  It is a slot, not a character. It has no id, no archive entry, no
    *  working set and no `flistActiveCharacterId` — which is exactly
    *  what stops every edit, pull, backup and export path from finding
-   *  anything to act on. Nothing here is persisted: the profile lives
-   *  in memory for as long as the app runs and is never written to the
-   *  character archive. */
+   *  anything to act on. The slot itself is not persisted: it lives in
+   *  memory for as long as the app runs and is never written to the
+   *  character archive. The sidecar's Foreign profile cache keeps the
+   *  profile on disk until its size cap evicts it. */
   foreignActive: boolean
   foreignName: string | null
   foreignProfile: ForeignProfilePayload | null
