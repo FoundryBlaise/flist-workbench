@@ -82,6 +82,24 @@ class TicketRequired(FlistApiError):
     """No active ticket and no cached password to auto-refresh."""
 
 
+class TicketRejected(TicketRequired):
+    """F-list turned the request down because of the ticket, not because
+    of what was asked for: a 200 whose `error` is about the ticket or
+    the login ("Invalid ticket.", "Login required."). The session is
+    gone; the profile may be fine."""
+
+
+#: Words in a 200-with-`error` answer that put the blame on the ticket
+#: or the login. F-list's texts for a refused profile ("No such
+#: character.", "This profile is not available.") carry none of them.
+_TICKET_ERROR_WORDS = ("ticket", "login", "log in", "logged in", "sign in")
+
+
+def _is_ticket_error(err: str) -> bool:
+    lowered = err.lower()
+    return any(word in lowered for word in _TICKET_ERROR_WORDS)
+
+
 class RateLimited(FlistApiError):
     """Hourly cap would be exceeded; refuse rather than risk a ban."""
 
@@ -91,7 +109,8 @@ class FlistAnswerError(FlistApiError):
     `error` field is set, carrying F-list's own words. For
     character-data.php that is how a deleted profile, a private one and
     a blocked account all arrive. Nothing in the answer tells those
-    apart reliably, so callers treat them alike."""
+    apart reliably, so callers treat them alike. An answer about the
+    ticket or login is a `TicketRejected` instead."""
 
 
 class FlistUnreachable(FlistApiError):
@@ -513,6 +532,8 @@ async def _post_json(
         # paraphrase.
         if url == TICKET_URL:
             raise AuthFailure(err)
+        if _is_ticket_error(err):
+            raise TicketRejected(err)
         raise FlistAnswerError(err)
     return payload
 
@@ -689,7 +710,7 @@ async def ensure_fresh_ticket(
         # Idle watchdog already cleared the cached password; we can no
         # longer auto-refresh. The current ticket may still be valid
         # for a few minutes — return it; if the F-list API rejects it,
-        # the caller surfaces a TicketRequired naturally on next call.
+        # `_post_json` raises a TicketRejected (a TicketRequired).
         if t.is_expired:
             raise TicketRequired(
                 "session timed out from inactivity — sign in again"

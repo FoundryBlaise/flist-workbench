@@ -750,6 +750,26 @@ def test_a_profile_f_list_will_not_show_is_dropped_with_its_files(
     assert again.json()["code"] == "profile_not_cached"
 
 
+@pytest.mark.parametrize(
+    "error", ["Invalid ticket.", "Ticket expired.", "Login required."]
+)
+def test_a_rejected_ticket_says_not_signed_in_and_keeps_the_cached_copy(
+    client: TestClient, flist, error: str
+) -> None:
+    folder = _open_with_files(client, flist)
+    _flist_answers(flist, json={"error": error})
+
+    res = client.get("/foreign/character/Anexample Person", params={"refresh": "true"})
+
+    assert res.status_code == 401, res.text
+    assert res.json()["code"] == "not_signed_in"
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == [
+        "900.png",
+        "avatar.png",
+        "profile.json",
+    ]
+
+
 async def test_a_model_asking_for_a_profile_f_list_will_not_show_drops_it_too(
     flist, monkeypatch: pytest.MonkeyPatch
 ) -> None:
