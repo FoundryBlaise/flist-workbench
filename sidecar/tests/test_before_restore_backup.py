@@ -1,7 +1,8 @@
 """Replacing the whole Workbench first keeps it as a Backup.
 
-Restore, reset to Live and the MCP tool that loads a Backup each throw
-away every edit in the Workbench at once. So each of them first saves
+Restore, reset to Live, the MCP tool that loads a Backup and the one
+that replaces the raw payload each throw away every edit in the
+Workbench at once. So each of them first saves
 the Workbench as a Backup (source `workbench`, occasion
 `before-restore`), always, and replaces nothing when that Backup cannot
 be written (ADR 0003). Undoing any of them is then a Restore away.
@@ -168,6 +169,94 @@ async def test_loading_a_backup_over_mcp_keeps_the_workbench_it_replaces(
     assert _workbench(window)["character"]["description"] == PARKED
 
 
+# ---- the MCP tool that replaces the raw payload ------------------------
+
+
+async def _put_payload(text: str, **arguments: Any) -> tuple[Any, Any]:
+    """Replace the Workbench's raw payload over MCP with one whose
+    description is `text`. The payload tools are on the full endpoint
+    only."""
+    async with mcp_client() as session:
+        _, read = await call_tool(session, "get_workbench_payload", character=NAME)
+        payload = read["payload"]
+        payload["character"]["description"] = text
+        return await call_tool(
+            session,
+            "put_workbench_payload",
+            character=NAME,
+            payload=payload,
+            confirm=True,
+            **arguments,
+        )
+
+
+async def test_replacing_the_payload_keeps_the_workbench_it_replaces(
+    window,
+) -> None:
+    await _edit_workbench(EDITED)
+    previous_workbench = _workbench(window)
+    previous_backups = _backups(window)
+
+    result, body = await _put_payload(PARKED)
+    assert not result.isError, body
+
+    made = _before_restore(window, previous_backups)
+    assert body["kept_as"] == made["filename"]
+    assert _held(window, made["filename"]) == previous_workbench
+    assert _workbench(window)["character"]["description"] == PARKED
+
+
+async def test_a_payload_replacement_is_undone_by_restoring_its_backup(
+    window,
+) -> None:
+    await _edit_workbench(EDITED)
+    _, body = await _put_payload(PARKED)
+
+    async with mcp_client("character") as session:
+        result, _ = await call_tool(
+            session,
+            "load_backup_into_workbench",
+            character=NAME,
+            backup=body["kept_as"],
+            confirm=True,
+        )
+    assert not result.isError
+    assert _workbench(window)["character"]["description"] == EDITED
+
+
+async def test_a_stale_payload_replacement_keeps_no_backup(window) -> None:
+    """`if_match` is checked before anything is written: a refused
+    replacement leaves neither a changed Workbench nor a Backup."""
+    await _edit_workbench(EDITED)
+    previous_workbench = _workbench(window)
+    previous_backups = _backups(window)
+
+    result, _ = await _put_payload(PARKED, if_match="0" * 64)
+
+    assert "etag_mismatch" in tool_error_text(result)
+    assert _workbench(window) == previous_workbench
+    assert _backups(window) == previous_backups
+
+
+async def test_a_payload_the_workbench_cannot_take_keeps_no_backup(window) -> None:
+    await _edit_workbench(EDITED)
+    previous_workbench = _workbench(window)
+    previous_backups = _backups(window)
+
+    async with mcp_client() as session:
+        result, _ = await call_tool(
+            session,
+            "put_workbench_payload",
+            character=NAME,
+            payload={"character": {"description": PARKED}},
+            confirm=True,
+        )
+
+    assert "validation_failed" in tool_error_text(result)
+    assert _workbench(window) == previous_workbench
+    assert _backups(window) == previous_backups
+
+
 # ---- when the Backup cannot be written ---------------------------------
 
 
@@ -212,10 +301,15 @@ async def _load_over_mcp(_window, parked: str) -> str:
     return tool_error_text(result)
 
 
+async def _put_over_mcp(_window, _parked: str) -> str:
+    result, _ = await _put_payload(PARKED)
+    return tool_error_text(result)
+
+
 @pytest.mark.parametrize(
     "replace",
-    [_restore, _reset_to_live, _load_over_mcp],
-    ids=["restore", "reset to Live", "MCP load-Backup"],
+    [_restore, _reset_to_live, _load_over_mcp, _put_over_mcp],
+    ids=["restore", "reset to Live", "MCP load-Backup", "MCP payload"],
 )
 async def test_a_workbench_that_cannot_be_kept_is_not_replaced(
     window, disk_full, replace

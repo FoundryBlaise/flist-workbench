@@ -163,7 +163,6 @@ async def test_naming_no_set_means_the_workbench(workbench) -> None:
         _, body = await call_tool(
             session, "get_description", character="Lady Amber Blaise"
         )
-    assert body["set"] == "Workbench"
     assert body["read_only"] is False
     # Seeded from what is published, so the first read is not empty.
     assert body["description"] == "[b]A published profile.[/b]"

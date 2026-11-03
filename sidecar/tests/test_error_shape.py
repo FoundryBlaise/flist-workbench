@@ -212,7 +212,7 @@ async def test_mcp_reports_a_stale_workbench_write_as_rest_does(
     async with mcp_client() as session:
         result, _ = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character=NAME,
             payload=read["payload"],
             if_match="0" * 64,

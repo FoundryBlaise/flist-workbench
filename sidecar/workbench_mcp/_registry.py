@@ -48,6 +48,9 @@ TAG_CORE = "core"
 #: running the loop at 12k context could not fit one batch alongside
 #: them. Eight tools cost a quarter of that.
 TAG_CLASSIFY = "classify"
+#: Served on `/mcp` only, which carries every tool whatever its tags:
+#: blunt tools a narrow endpoint's model should not be offered.
+TAG_FULL = "full"
 
 
 @dataclass(frozen=True)

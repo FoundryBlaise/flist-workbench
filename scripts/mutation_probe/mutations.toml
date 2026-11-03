@@ -263,16 +263,26 @@ replace = '''
 [[mutation]]
 id = "A11"
 suite = "sidecar"
-file = "sidecar/workbench_mcp/_context.py"
+file = "sidecar/services/payload_ops.py"
 breaks = "An MCP edit may write to Live, which is read-only."
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 6
 # audit: M11 MCP write to 'live' no longer refused
+# Re-anchored for #84: editing tools take no argument naming a copy, so
+# the refusal of `live` is gone; every MCP edit writes through
+# payload_ops.edit, which this makes write Live too.
 find = '''
-        if not allow_live or for_write:'''
+        result.etag = archive_workbench.write_workbench(
+            character_id, payload, expected_etag=bench.etag
+        )'''
 replace = '''
-        if not allow_live:'''
+        import archive_live
+
+        archive_live.write_live(character_id, payload)
+        result.etag = archive_workbench.write_workbench(
+            character_id, payload, expected_etag=bench.etag
+        )'''
 
 [[mutation]]
 id = "A12"

@@ -267,6 +267,20 @@ def write_workbench(
     current = workbench_etag(character_id)
     if expected_etag is None:
         raise EtagRequired(current)
+    payload = checked_payload(payload)
+    if current is None or current != expected_etag:
+        raise EtagMismatch(current)
+    return _store_workbench(character_id, payload)
+
+
+def checked_payload(payload: Any) -> dict[str, Any]:
+    """`payload` as a Workbench write stores it, schema version stamped.
+
+    Raises ValueError for one that is not a Workbench: `_overlay` must
+    be a list of strings and at least one content key present. A caller
+    that does something costly before writing (keeping a Backup) checks
+    first, so a payload that would be refused costs nothing.
+    """
     if not isinstance(payload, dict):
         raise ValueError("the Workbench payload must be an object")
     payload = _migrate_working_payload(dict(payload))
@@ -278,9 +292,7 @@ def write_workbench(
             "the Workbench payload must carry at least one of "
             f"{sorted(_WORKING_TOP_LEVEL_KEYS)}"
         )
-    if current is None or current != expected_etag:
-        raise EtagMismatch(current)
-    return _store_workbench(character_id, payload)
+    return payload
 
 
 def export_payload(

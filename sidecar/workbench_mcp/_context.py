@@ -170,33 +170,41 @@ def workbench_target(character: ResolvedCharacter) -> WorkbenchOrLive:
     return WorkbenchOrLive(character=character, name=archive_workbench.WORKBENCH_NAME)
 
 
+def resolve_workbench(character: ResolvedCharacter) -> WorkbenchOrLive:
+    """The character's Workbench, made from Live if it has none yet.
+
+    This is what every editing tool works on: they take no argument
+    naming a copy, so none can reach Live. It is also what a read gets
+    when it names no copy. Seeding from Live on first ask is harmless
+    for a read, and spares every caller a "create one first" step the
+    window does not have either.
+    """
+    if archive_workbench.read_workbench(character.id, create=True) is None:
+        raise ToolError(
+            "no_workbench",
+            f"{character.name} has never been pulled from F-list, so "
+            "there is nothing to copy into a Workbench. Pull the "
+            "character first.",
+        )
+    return workbench_target(character)
+
+
 def resolve_workbench_or_live(
     character: ResolvedCharacter,
     workbench_or_live: str | None,
     *,
-    allow_live: bool = True,
-    for_write: bool = False,
     param: str = "working_set",
 ) -> WorkbenchOrLive:
-    """Resolve `working_set`: omitted (or `"workbench"`) is the
-    character's Workbench, `"live"` is Live. Anything else is refused:
-    a character has one Workbench, so there is nothing else to name.
-
-    `for_write=True` refuses Live. `param` is the argument's name, for
-    the error message.
+    """Resolve a read's choice of copy: omitted (or `"workbench"`) is
+    the character's Workbench, `"live"` is Live. Anything else is
+    refused: a character has one Workbench, so there is nothing else to
+    name. `param` is the argument's name, for the error message.
     """
     needle = (
         "" if workbench_or_live is None else str(workbench_or_live).strip().lower()
     )
 
     if needle == LIVE:
-        if not allow_live or for_write:
-            raise ToolError(
-                "live_is_read_only",
-                "'live' is the last profile pulled from F-list and is "
-                f"never edited. Leave {param} out to edit the "
-                "Workbench instead.",
-            )
         return WorkbenchOrLive(character=character, name=LIVE, is_live=True)
 
     if needle not in ("", WORKBENCH):
@@ -209,19 +217,7 @@ def resolve_workbench_or_live(
             field=param,
             allowed=list(SOURCES),
         )
-
-    # The Workbench, which is what the window shows. It is seeded from
-    # Live the first time anything asks: for a read this is harmless,
-    # and it spares every caller a "create one first" step the window
-    # does not have either.
-    if archive_workbench.read_workbench(character.id, create=True) is None:
-        raise ToolError(
-            "no_workbench",
-            f"{character.name} has never been pulled from F-list, so "
-            "there is nothing to copy into a Workbench. Pull the "
-            "character first.",
-        )
-    return workbench_target(character)
+    return resolve_workbench(character)
 
 
 def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:

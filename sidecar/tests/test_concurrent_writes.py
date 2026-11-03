@@ -135,7 +135,8 @@ def test_a_window_save_and_a_model_edit_never_overwrite_each_other_silently(
 
     def model() -> None:
         async def run() -> None:
-            async with mcp_client("character") as session:
+            # The full endpoint: it alone carries the raw payload read.
+            async with mcp_client() as session:
                 for j in range(ROUNDS):
                     line = f"model {j}"
                     result, _ = await call_tool(
@@ -143,7 +144,7 @@ def test_a_window_save_and_a_model_edit_never_overwrite_each_other_silently(
                     )
                     (model_refused if result.isError else model_saved).append(line)
                     _, raw = await call_tool(
-                        session, "get_working_set_payload", character=NAME
+                        session, "get_workbench_payload", character=NAME
                     )
                     seen.append(
                         (raw["etag"], raw["payload"]["character"]["description"])
