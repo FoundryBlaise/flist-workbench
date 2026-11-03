@@ -6,13 +6,17 @@ Rules are recomputed at every read against the current settings, so
 changing the threshold is instant; no DB rebuild needed.
 
 Resolver precedence:
-    1. DB label (model or manual)           -> stored row's label
-    2. empty body                           -> OOC  (rule:empty)
-    3. text_len < settings.threshold_chars  -> OOC  (rule:short)
-    4. body starts with "((" (LRP convention) -> OOC (rule:parens)
-    5. otherwise                            -> Unlabeled
+    1. system line (ad, roll, warn, event)  -> OOC  (rule:system)
+    2. DB label (model or manual)           -> stored row's label
+    3. empty body                           -> OOC  (rule:empty)
+    4. text_len < settings.threshold_chars  -> OOC  (rule:short)
+    5. body starts with "((" (LRP convention) -> OOC (rule:parens)
+    6. otherwise                            -> Unlabeled
 
-Case 5 is what `services.classification` hands to the connected model,
+`text_len` is what the user wrote: a `/me` action is measured without
+the speaker name the parser puts in front.
+
+Case 6 is what `services.classification` hands to the connected model,
 and what `chunker` refuses to index.
 
 Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
@@ -580,6 +584,21 @@ def load_settings(conn: sqlite3.Connection | None = None) -> LabelsSettings:
 _PARENS_PREFIX = re.compile(r"^\s*\(\(")
 
 
+def _written_text(msg: dict) -> str:
+    """What the user wrote, as the short-message rule measures it.
+
+    The parser puts the speaker's name in front of a `/me` action so it
+    reads naturally; that name is not part of what the user typed, so a
+    long name must not reach the threshold earlier (decided on #5).
+    """
+    text = (msg.get("text") or "").strip()
+    if msg.get("type_name") == "action":
+        prefix = f"{msg.get('speaker') or ''} "
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    return text
+
+
 def resolve(
     msg: dict,
     db_label: sqlite3.Row | dict | None,
@@ -591,13 +610,18 @@ def resolve(
     None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
     matching what `parser.parse_log` yields.
 
-    Precedence: explicit DB label wins; otherwise rules (empty / short /
-    `((` prefix) decide; otherwise "Unlabeled".
+    Precedence: a system line (ad, roll, warning, status event) is OOC
+    before anything else, because a Label is a verdict on a message a
+    person wrote and system lines never get one; then an explicit DB
+    label wins; otherwise rules (empty / short / `((` prefix) decide;
+    otherwise "Unlabeled".
     """
+    if msg.get("kind") == "system":
+        return LABEL_OOC
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
         return db_label["label"]
-    text = (msg.get("text") or "").strip()
+    text = _written_text(msg)
     if not text:
         return LABEL_OOC
     if len(text) < settings.threshold_chars:

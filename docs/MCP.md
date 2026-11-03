@@ -247,8 +247,11 @@ about their weekend, and indexing the latter poisons results — so
 ingest skips them.
 
 Three rules decide the easy cases without a model: an empty message, a
-message shorter than the threshold (200 characters by default), and one
-starting with `((` are all OOC. Everything else is Unlabeled until
+message shorter than the threshold (200 characters by default; a `/me`
+action counts without the speaker name in front), and one starting
+with `((` are all OOC. System lines (ads, rolls, warnings, status
+events) never get a Label and are never handed to the model. Everything
+else is Unlabeled until
 something judges it. The app used to run a classifier for that; now
 the model you connect does it. It needs the [Log text](#log-text)
 switch on:
