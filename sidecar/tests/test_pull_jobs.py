@@ -463,7 +463,7 @@ async def test_mcp_job_started_without_waiting_is_followed_and_stopped_over_mcp(
         _, ended = await call_tool(session, "get_job", job_id=started["job_id"])
 
     # The same answer an ingest gives.
-    assert set(started) == {"job_id", "kind", "state", "note"}
+    assert set(started) == {"job_id", "kind", "state", "note", "not_published"}
     assert started["kind"] == kind
     assert "get_job" in started["note"] and "cancel_job" in started["note"]
     assert polled["kind"] == kind and polled["state"] == "running"

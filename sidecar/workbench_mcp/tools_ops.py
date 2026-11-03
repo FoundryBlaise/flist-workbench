@@ -46,7 +46,6 @@ from ._context import (
     resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
-from .tools_session import NO_PUSH_NOTE
 
 #: How long a tool will sit waiting on a job before handing the caller
 #: a job id to poll instead. Ten minutes covers any realistic single
@@ -60,13 +59,18 @@ WAIT_BUDGET_SEC = 600
 
 
 def _job_failure(job: jobs.Job, fallback: str) -> ToolError:
-    """A failed Pull's or Back up all's error as the tool's error: the
-    job's code and details (`services.sse.error`), `stage` among them."""
+    """A failed job's error as the tool's error: the job's code and
+    details (`services.sse.error`), a Pull's `stage` among them."""
     error = job.error or {}
     code = str(error.get("code") or INTERNAL_ERROR)
     message = str(error.get("message") or fallback)
     if code == "not_signed_in":
         message += " The user signs in inside the app window (F-list → Sign in)."
+    elif code == "embedding_failed":
+        message += (
+            " get_rag_status with check_embedding=true shows whether the "
+            "model loads on its own."
+        )
     return ToolError(code, message, **(error.get("details") or {}))
 
 
@@ -161,7 +165,7 @@ async def pull_character(character: str, ctx: Context, wait: bool = True) -> dic
         "job_id": job.id,
         "note": (
             "This updated the local copy of what is published. Edits "
-            "live in the Workbench and were not touched. " + NO_PUSH_NOTE
+            "live in the Workbench and were not touched."
         ),
     }
 
@@ -332,6 +336,8 @@ async def ingest_logs(
         if time.monotonic() - started > WAIT_BUDGET_SEC:
             return _started(job)
         await asyncio.sleep(0.5)
+    if job.state == "failed":
+        raise _job_failure(job, "the ingest failed")
     return _ingest_summary(job.to_dict())
 
 
@@ -340,7 +346,6 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
         "job_id": job["id"],
         "state": job["state"],
         **(job["result"] or {}),
-        "error": job["error"],
         "last_error": job["progress"].get("last_error"),
     }
     if out.get("skipped_unlabeled"):
@@ -349,13 +354,6 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
             "having no IC/OOC verdict — they aren't searchable. Run the "
             "classification flow (get_messages_to_classify) and ingest "
             "again to include them."
-        )
-    elif out["state"] == "failed":
-        out["note"] = (
-            "The ingest failed — see `error`. get_rag_status with "
-            "check_embedding=true reports an embedding model that will "
-            "not load on its own, which is the quicker way to see what "
-            "went wrong there."
         )
     return out
 

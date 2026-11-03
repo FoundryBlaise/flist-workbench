@@ -12,10 +12,11 @@ from paths import user_data_dir
 
 from ._registry import TAG_CHARACTER, TAG_CORE, TAG_LOGS, tool
 
-#: Repeated in every tool description that touches profile data. The
-#: single most important thing a connected model must not get wrong.
+#: Said by reads that show profile data. Every write says it too, in
+#: its own words (`_registry.NOT_PUBLISHED`): the single most important
+#: thing a connected model must not get wrong.
 NO_PUSH_NOTE = (
-    "Workbench never writes to f-list.net; the user uploads changes "
+    "The app never writes to f-list.net; the user uploads changes "
     "themselves in the browser."
 )
 

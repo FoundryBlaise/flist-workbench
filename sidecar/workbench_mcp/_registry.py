@@ -12,6 +12,8 @@ two things:
   destructive tool takes a `confirm` flag. Registering one without it
   fails at start-up, and a call without `confirm=true` is refused here,
   before the tool's own code runs, so no tool can forget to check.
+  Likewise every tool that is not read-only gets `NOT_PUBLISHED` in its
+  result here, so no write can leave a model thinking it reached F-list.
 
 FastMCP calls a plain `def` tool on the event loop, where a semantic
 search or a zip build would stall the window and every other client
@@ -56,6 +58,15 @@ TAG_FULL = "full"
 #: provider receives everything a tool returns, so these tools are left
 #: out of every endpoint until the user turns them on in Settings → MCP.
 TAG_LOG_TEXT = "log_text"
+
+#: Added to the result of every tool not marked read-only. A model that
+#: has just changed something tends to report it as done, and "done"
+#: must never mean "on F-list": the app does not publish.
+NOT_PUBLISHED = "not_published"
+NOT_PUBLISHED_NOTE = (
+    "Nothing was published to F-list. The user uploads changes "
+    "themselves, in the browser."
+)
 
 
 @dataclass(frozen=True)
@@ -121,8 +132,13 @@ def tool(
                 f"MCP tool {tool_name!r} takes `confirm` but is not marked "
                 "destructive, nor says in `confirm_when` when it asks"
             )
+        if not read_only and not _returns_a_dict(fn):
+            raise ValueError(
+                f"MCP tool {tool_name!r} writes, so it must return a dict "
+                f"for `{NOT_PUBLISHED}` to go in"
+            )
         guard = _confirm_guard(fn, tool_name, warning) if destructive else None
-        wrapped = _attributed(fn, tool_name, guard)
+        wrapped = _attributed(fn, tool_name, guard, writes=not read_only)
         previous = _SEEN.get(tool_name)
         if previous is not None and previous != origin:
             raise ValueError(
@@ -155,6 +171,15 @@ def tool(
 
     return decorate
 
+
+
+def _returns_a_dict(fn: Callable[..., Any]) -> bool:
+    returns = inspect.signature(fn).return_annotation
+    return returns is dict or str(returns).startswith(("dict", "Dict"))
+
+
+def _not_published(result: dict[str, Any]) -> dict[str, Any]:
+    return {**result, NOT_PUBLISHED: NOT_PUBLISHED_NOTE}
 
 
 def _confirm_guard(
@@ -198,6 +223,8 @@ def _attributed(
     fn: Callable[..., Any],
     tool_name: str,
     require_confirm: Callable[..., None] | None = None,
+    *,
+    writes: bool = False,
 ) -> Callable[..., Any]:
     """Tag everything a tool publishes on the event bus as coming from
     MCP, naming the tool, and report a `Refusal` from anywhere under the
@@ -210,8 +237,10 @@ def _attributed(
     the same to a model as to the window (`refusals`).
 
     `require_confirm`, when given, runs first and refuses the call
-    before the tool body can.
+    before the tool body can. A tool that `writes` gets the
+    `NOT_PUBLISHED` note in its result.
     """
+    finish = _not_published if writes else (lambda result: result)
 
     if inspect.iscoroutinefunction(fn):
 
@@ -221,7 +250,7 @@ def _attributed(
                 try:
                     if require_confirm is not None:
                         await run_in_threadpool(require_confirm, *args, **kwargs)
-                    return await fn(*args, **kwargs)
+                    return finish(await fn(*args, **kwargs))
                 except Refusal as exc:
                     raise ToolError.from_refusal(exc) from exc
 
@@ -235,7 +264,7 @@ def _attributed(
             try:
                 if require_confirm is not None:
                     require_confirm(*args, **kwargs)
-                return fn(*args, **kwargs)
+                return finish(fn(*args, **kwargs))
             except Refusal as exc:
                 raise ToolError.from_refusal(exc) from exc
 

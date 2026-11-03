@@ -140,7 +140,6 @@ def load_backup_into_workbench(
         "character": target.name,
         "loaded": backup,
         "kept_as": kept,
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -203,7 +202,6 @@ def set_description(
         "character": target.name,
         "length": len(body),
         "previous_length": result.detail.get("previous_length"),
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -263,7 +261,6 @@ def edit_description(
         "character": target.name,
         "replacements": result.detail.get("replacements"),
         "length": result.detail.get("length"),
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -1013,7 +1010,6 @@ def add_image(
     return {
         "character": target.name,
         "image_id": image_id,
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -1236,7 +1232,6 @@ def import_images(
         add_to_gallery=add_to_gallery,
         convert_to_jpeg=convert_to_jpeg,
     )
-    out["note"] = NO_PUSH_NOTE
     return out
 
 
@@ -1351,5 +1346,4 @@ def put_workbench_payload(
         "character": target.name,
         "etag": replaced.etag,
         "kept_as": kept,
-        "note": NO_PUSH_NOTE,
     }

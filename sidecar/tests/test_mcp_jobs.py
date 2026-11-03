@@ -113,7 +113,7 @@ async def test_an_ingest_started_without_waiting_runs_to_the_end_and_is_searchab
     async with mcp_client("classify") as session:
         _, started = await call_tool(session, "ingest_logs", character=AZURE, wait=False)
         # The same answer Pull and Back up all give.
-        assert set(started) == {"job_id", "kind", "state", "note"}
+        assert set(started) == {"job_id", "kind", "state", "note", "not_published"}
         assert started["kind"] == "ingest"
         assert "get_job" in started["note"] and "cancel_job" in started["note"]
 

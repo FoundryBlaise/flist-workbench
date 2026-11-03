@@ -105,7 +105,7 @@ async def test_pull_reports_progress_and_returns_a_summary(
     assert body["images"] == 2
     assert body["changed"] is False
     # A pull refreshes what is published; it must not imply an upload.
-    assert "never writes to f-list.net" in body["note"]
+    assert "Nothing was published to F-list" in body["not_published"]
 
 
 async def test_a_pull_failure_surfaces_its_stage(
