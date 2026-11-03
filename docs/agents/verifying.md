@@ -1,0 +1,41 @@
+# Verifying a change
+
+Which checks a change needs, what each one costs, and the couplings that make a rename break something far away. Commands run from the repo root of a checkout or worktree, in Git Bash.
+
+## Checks
+
+| Check | Command | Time | Run when |
+|---|---|---|---|
+| sidecar lint | `cd sidecar && uv run --no-sync ruff check` | 1 s | any `.py` change |
+| sidecar tests | `cd sidecar && uv run --no-sync pytest -q` | 4 min | any sidecar change, before handing back |
+| one test file | `cd sidecar && uv run --no-sync pytest -q tests/test_mcp_mount.py` | seconds | inner loop |
+| probe catalogue | `sidecar/.venv/Scripts/python.exe scripts/mutation_probe/probe.py --check` | 1 s | a file named in `scripts/mutation_probe/mutations.toml` changed, or a test file was renamed or deleted |
+| probe self-tests | `uv run --project sidecar --no-sync python -m pytest -q -p no:cacheprovider scripts/mutation_probe` | seconds | `probe.py` changed |
+| e2e seed | `sidecar/.venv/Scripts/python.exe tests/e2e/fixtures/seed_character.py "$(mktemp -d)" 12345 "Test Char" "An invented description."` | seconds | a sidecar function or test constant the seed imports was renamed (see Couplings) |
+| renderer tests | `npx vitest run` | 1 min | renderer or electron change |
+| typecheck, lint | `npm run typecheck && npm run lint` | 1 min | any `.ts`, `.tsx` or `.mjs` change |
+| e2e | `npm run build && npx playwright test` | 2 min | the window's behaviour changed, or the e2e seed changed |
+| packaged smoke | `npm run pack:win && npm run smoke:packaged` | 10 min | packaging, PyInstaller flags or dependencies changed |
+
+A full pytest run prints a lot. Send it to a log file and read the summary lines: `pytest -q > log 2>&1; tail -3 log; grep -E '^(FAILED|ERROR) ' log`. pyproject's `-rfEs` lists every failed test by name, so the summary shows what failed.
+
+## Couplings
+
+- **e2e seed.** `tests/e2e/fixtures/seed_character.py` puts `sidecar/` and `sidecar/tests/` on `sys.path` and imports sidecar functions plus `test_mcp_reads.MAPPING`. If you rename or move any of them, Playwright's global setup fails before the first spec runs.
+- **Mutation probe.** `probe.py --check` raises `BadMutationList` when a test file named in `mutations.toml` (a `[groups]` entry or a mutation's `tests`) no longer exists. It also fails when a mutation's anchor text has moved. Re-anchor the mutation; never drop one.
+- **Glossary terms.** `sidecar/tests/test_conventions.py` scans user-facing prose: sidecar string literals, MCP tool descriptions, renderer and electron strings, JSX text. It checks that prose for retired and avoided glossary terms. Its allowlists are a ratchet: when an allowlisted count drops, the test fails until you lower the entry in the same commit.
+- **MCP docs.** `sidecar/tests/test_mcp_docs.py` checks the tool tables in `docs/MCP.md` against the registry, per endpoint. If you add, remove or rename a tool, update the table in the same change.
+- **Data invariants.** `sidecar/tests/data_invariants.py` (autouse) fails a test when a Log changes or a user's file disappears anywhere but into the Trash or a Backup. A test that deletes files through the app has to go through the Trash.
+
+## Worktrees
+
+- `npm run pack:win` starts with `rebuild:native`, which runs electron-rebuild on the shared `node_modules`. In a worktree, run the steps after it by hand: `npm run build && npm run fetch:extension && npm run pack:sidecar && npx electron-builder --win --publish never`.
+- Moving a package between `dependencies` and `devDependencies` changes `package-lock.json`, and `npm ci` in CI fails on a stale lock. Regenerate it with `npm install --package-lock-only`, in the main checkout.
+- A worktree under a long path can fail `git worktree remove` with "Filename too long". `git config core.longpaths true` fixes that.
+
+## Shell
+
+- Write helper scripts with the Write tool and run them as `python -I <path>`. Heredocs on this machine eat backslashes and break on unbalanced quotes inside the script.
+- Windows Python prints in cp1252 unless `PYTHONUTF8=1` is set. Set it when a script prints glossary arrows or umlauts.
+- Git Bash here has no `jq`. Filter GitHub output with `gh ... --jq '<expr>'`. A watch loop that pipes into `jq` fails on every pass and never reports anything.
+- A shell started from VS Code inherits `ELECTRON_RUN_AS_NODE=1`. Unset it before `npm run smoke:packaged` or any run of the packaged app. Otherwise `F-list Workbench.exe` runs as plain Node and exits 0 at once, without a window.

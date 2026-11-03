@@ -40,7 +40,7 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
-from collections import Counter, defaultdict
+from collections import defaultdict
 from functools import cache
 from pathlib import Path
 

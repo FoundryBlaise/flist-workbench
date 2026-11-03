@@ -234,7 +234,7 @@ class RagStore:
         # already accessed by another instance" errors.
         try:
             self._client.close()
-        except Exception:  # noqa: BLE001 — close should never block teardown
+        except Exception:  # noqa: BLE001, S110 — close should never block teardown
             pass
         if self._held:
             self._held = False
@@ -282,7 +282,7 @@ class RagStore:
         # but the lock-file dance burns us on Windows.
         try:
             self._client.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 — the rmtree below is what matters
             pass
         if self._path.exists():
             shutil.rmtree(self._path, ignore_errors=False)
@@ -301,7 +301,7 @@ class RagStore:
         """
         try:
             self._client.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 — the rmtree below is what matters
             pass
         if self._path.exists():
             shutil.rmtree(self._path, ignore_errors=False)

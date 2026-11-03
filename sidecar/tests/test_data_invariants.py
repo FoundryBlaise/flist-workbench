@@ -108,7 +108,11 @@ def run(pytester: pytest.Pytester, body: str, *, app: bool = False) -> pytest.Ru
     else:
         pytester.makeconftest(CONFTEST)
     pytester.makepyfile(test_inner=PRELUDE + textwrap.dedent(body))
-    return pytester.runpytest_inprocess("-p", "no:cacheprovider")
+    # The inner run has no pyproject, so it gets the loop scope here;
+    # without it pytest-asyncio warns once per inner run.
+    return pytester.runpytest_inprocess(
+        "-p", "no:cacheprovider", "-o", "asyncio_default_fixture_loop_scope=function"
+    )
 
 
 # ---- a Log is never changed ----------------------------------------------

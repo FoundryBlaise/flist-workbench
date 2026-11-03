@@ -21,7 +21,6 @@ import sqlite3
 from dataclasses import dataclass
 
 import chunker
-import labels as labels_store
 import rag_embed_local
 import rag_rerank
 import settings as settings_store

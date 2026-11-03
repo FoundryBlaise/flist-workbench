@@ -239,7 +239,7 @@ def _store_image(cid: str, image_id: str, ext: str, data: bytes) -> None:
     # show up as a phantom pool entry. Collapse the duplicate.
     try:
         archive_images.dedupe_local_after_pull(cid, image_id, data)
-    except Exception:  # noqa: BLE001 — best-effort
+    except Exception:  # noqa: BLE001, S110 — best-effort
         pass
 
 

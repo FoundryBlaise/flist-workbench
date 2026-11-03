@@ -318,7 +318,7 @@ def audit(tool_name: str, **fields: Any) -> None:
     """
     try:
         flist_activity.record(f"mcp:{tool_name}", source="mcp", **fields)
-    except Exception:  # noqa: BLE001 — auditing must never fail a tool
+    except Exception:  # noqa: BLE001, S110 — auditing must never fail a tool
         pass
 
 

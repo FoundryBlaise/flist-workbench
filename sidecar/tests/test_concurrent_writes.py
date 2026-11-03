@@ -24,7 +24,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 import pytest
 

@@ -541,7 +541,7 @@ def write_pre_upload_backup(
             backup_source=backup_origin.LIVE,
             backup_occasion=backup_origin.BEFORE_UPLOAD,
         )
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:  # noqa: BLE001 — a partial Backup beats none
         # Without the image files if packing them fails: a partial
         # Backup beats none when the user is about to overwrite the
         # profile. working.json still lists the gallery, so it restores
