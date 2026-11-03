@@ -396,6 +396,7 @@ window gets for the same situation:
 | `rate_limited` | MCP's share of the hourly F-list budget is spent; details carry the stale cached copy under `cached` when there is one |
 | `flist_unreachable` | F-list could not be reached (offline, timed out) and nothing is cached; with a cached copy the tool answers with it marked `stale` instead |
 | `flist_server_error` | F-list's server failed (HTTP 5xx) and nothing is cached; says nothing about whether the character exists |
+| `flist_error` | F-list answered in a way no other code covers (an HTTP 4xx, a page that is not JSON, its own error text); the message carries F-list's words. For a Foreign profile with a cached copy the tool answers with it marked `stale` instead, and it never means the character does not exist |
 
 ## Tools by endpoint
 

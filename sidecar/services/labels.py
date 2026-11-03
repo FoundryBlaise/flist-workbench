@@ -11,8 +11,7 @@ A Label belongs to the message (ADR 0004). A conversation's Labels are
 the Labels of the messages its Log holds, the partner's whole alias
 group included, found by message hash: a line in two of the user's own
 Logs shows one Label in both, and a rename or an unlinked alias orphans
-none. New Labels are still stamped with the primary name. The SQL itself stays
-in the Label store (`labels.py`), which announces every change on the
+none; a Label stores no owner. The SQL itself stays in the Label store (`labels.py`), which announces every change on the
 event bus once; clearing goes through the Trash (`label_trash`).
 
 The rule threshold is a setting; it is read here, never validated.

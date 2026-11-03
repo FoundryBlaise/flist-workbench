@@ -732,11 +732,10 @@ def upsert_label(
     so old rows round-trip).
 
     Note: the schema still carries a `confidence REAL NOT NULL` column
-    for backwards compatibility with on-disk DBs from earlier versions.
-    We always write 1.0 — the model never returned anything informative
-    below 0.95 and the field was dropped from the v4 prompt, so the
-    column is effectively dead weight. Leaving it in place avoids a
-    migration; no callers read it anymore.
+    from earlier versions. We always write 1.0 and nothing reads it.
+    The rebuild that dropped the owner columns kept it, because Label
+    rows in the Trash (`LABEL_COLUMNS`) carry it and restore as they
+    are.
     """
     upsert_verdicts(conn, [(hash, ts, speaker, label, reason)], source=source)
 
