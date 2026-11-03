@@ -117,8 +117,12 @@ def rerank_hits(
     top_k: int = DEFAULT_TOP_K,
     min_ratio: float = DEFAULT_RERANK_MIN_RATIO,
     cache_dir: Path | None = None,
+    keep: int | None = None,
 ) -> list[dict]:
     """Re-score hits with the cross-encoder, return the top_k re-ranked.
+
+    `keep` returns that many instead (later pages of a search) while
+    `top_k`, the page size, still decides whether reranking is worth it.
 
     No-ops gracefully when rerank is disabled, when there are fewer
     hits than top_k (no point reranking 3 candidates to 5), or when the
@@ -134,15 +138,16 @@ def rerank_hits(
     """
     if not hits:
         return []
+    keep = top_k if keep is None else keep
     if is_disabled(model_name):
-        return hits[:top_k]
+        return hits[:keep]
     # Cheap path: when nothing would be re-ordered AND no threshold
     # filter is requested, skip the encoder entirely. Keeps the
     # common-case latency unchanged. With min_ratio > 0 we still need
     # scores even on small pools so the threshold has something to
     # filter against.
     if len(hits) <= top_k and min_ratio <= 0.0:
-        return hits[:top_k]
+        return hits[:keep]
     try:
         encoder = get_encoder(model_name, cache_dir=cache_dir)
         docs = [h["payload"]["text"] for h in hits]
@@ -150,7 +155,7 @@ def rerank_hits(
     except Exception as exc:  # noqa: BLE001 — rerank must never fail a search
         for h in hits:
             h["rerank_error"] = str(exc)
-        return hits[:top_k]
+        return hits[:keep]
     for h, s in zip(hits, scores):
         h["rerank_score"] = float(s)
     hits.sort(key=lambda h: -float(h.get("rerank_score", 0.0)))
@@ -162,4 +167,4 @@ def rerank_hits(
         if top > 0.0:
             threshold = top * min_ratio
             hits = [h for h in hits if float(h.get("rerank_score", 0.0)) >= threshold]
-    return hits[:top_k]
+    return hits[:keep]

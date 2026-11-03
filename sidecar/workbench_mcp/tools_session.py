@@ -10,12 +10,14 @@ import flist_api
 from logs import LogDirError, list_characters
 from paths import user_data_dir
 
+from ._context import page
 from ._registry import TAG_CHARACTER, TAG_CORE, TAG_LOGS, tool
 
-#: Repeated in every tool description that touches profile data. The
-#: single most important thing a connected model must not get wrong.
+#: Said by reads that show profile data. Every write says it too, in
+#: its own words (`_registry.NOT_PUBLISHED`): the single most important
+#: thing a connected model must not get wrong.
 NO_PUSH_NOTE = (
-    "Workbench never writes to f-list.net; the user uploads changes "
+    "The app never writes to f-list.net; the user uploads changes "
     "themselves in the browser."
 )
 
@@ -91,19 +93,25 @@ def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
     title="Activity log",
     read_only=True,
 )
-def get_activity_log(limit: int = 50) -> dict[str, Any]:
-    """Recent Workbench activity: sign-ins, pulls, backups and every
+def get_activity_log(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Recent activity, newest first: sign-ins, pulls, backups and every
     change an MCP tool made (those are prefixed `mcp:`).
 
     Useful to check what already happened before acting, and to show
     the user what you changed.
     """
     snap = flist_activity.snapshot()
-    events = snap.get("events") or []
-    if limit > 0:
-        events = events[-limit:]
+    newest_first = list(reversed(snap.get("events") or []))
+    events, paged = page(
+        newest_first, offset=offset, limit=limit, cap=MAX_ACTIVITY_EVENTS
+    )
     return {
         "started_at": snap.get("started_at"),
         "event_count": snap.get("event_count"),
         "events": events,
+        "page": paged,
     }
+
+
+#: The most events one get_activity_log call returns.
+MAX_ACTIVITY_EVENTS = 100

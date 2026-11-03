@@ -814,7 +814,7 @@ async def test_write_tools_say_workbench_does_not_publish(workbench) -> None:
             text="x",
             confirm=True,  # shorter than half of Live's description
         )
-    assert "never writes to f-list.net" in body["note"]
+    assert "Nothing was published to F-list" in body["not_published"]
 
 
 # ---- BBCode F-list would refuse -----------------------------------------

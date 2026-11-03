@@ -49,6 +49,8 @@ class QueryResult:
     rerank_applied: bool
     hybrid_applied: bool = False
     hybrid_lexical_hits: int = 0
+    #: More matches rank below the last one returned (`offset` + `top_k`).
+    has_more: bool = False
 
 
 def expand_with_neighbors(
@@ -189,6 +191,7 @@ def run_query(
     lex: rag_lexical.LexicalStore | None = None,
     hybrid_bm25_candidates: int = rag_settings.DEFAULT_HYBRID_BM25_CANDIDATES,
     cache_dir: Path | None = None,
+    offset: int = 0,
 ) -> QueryResult:
     """Retrieve the log chunks most relevant to `question`.
 
@@ -199,9 +202,14 @@ def run_query(
 
     `lex` — a LexicalStore instance — enables BM25 hybrid retrieval
     fused via RRF.
+
+    `offset` skips that many of the best matches: a later page of the
+    same search, with the same `top_k`. One match more than the page is
+    ranked to tell whether another page follows (`has_more`).
     """
     rerank_disabled = rag_rerank.is_disabled(rerank_model)
-    retrieve_n = top_k if rerank_disabled else max(rerank_candidates, top_k)
+    ranked_n = max(0, offset) + top_k + 1
+    retrieve_n = ranked_n if rerank_disabled else max(rerank_candidates, ranked_n)
 
     # 1. Dense retrieval.
     variants = [question]
@@ -273,21 +281,26 @@ def run_query(
     # 4. Rerank + min-ratio filter (unchanged from the single-variant
     #    path). When rerank is disabled we still cap at top_k so the
     #    chat context doesn't balloon.
+    #    Whether to rerank depends on the page size only, so every page
+    #    of one search is cut from the same ranking.
     if not rerank_disabled and len(ordered_hits) > top_k:
         hits = rag_rerank.rerank_hits(
             ordered_hits,
             question,
             model_name=rerank_model,
             top_k=top_k,
+            keep=ranked_n,
             min_ratio=rerank_min_ratio,
             cache_dir=cache_dir,
         )
         rerank_applied = True
     else:
-        hits = ordered_hits[:top_k]
+        hits = ordered_hits[:ranked_n]
         rerank_applied = False
 
-    hits = expand_with_neighbors(store, hits, hops=neighbors)
+    start = max(0, offset)
+    has_more = len(hits) > start + top_k
+    hits = expand_with_neighbors(store, hits[start : start + top_k], hops=neighbors)
 
     return QueryResult(
         hits=hits,
@@ -296,6 +309,7 @@ def run_query(
         rerank_applied=rerank_applied,
         hybrid_applied=hybrid_applied,
         hybrid_lexical_hits=len(lexical_hits),
+        has_more=has_more,
     )
 
 
