@@ -340,7 +340,7 @@ async def test_no_character_listing_counts_old_copies_of_live(workbench) -> None
     old_copy.write_text("{}", encoding="utf-8")
     async with mcp_client() as session:
         _, listed = await call_tool(session, "list_characters")
-        _, status = await call_tool(session, "get_workbench_status")
+        _, status = await call_tool(session, "get_app_status")
     for rows in (listed["characters"], status["characters"]):
         row = next(c for c in rows if c["name"] == "Lady Amber Blaise")
         assert row["backup_count"] == 0

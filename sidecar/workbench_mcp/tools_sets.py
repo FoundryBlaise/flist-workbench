@@ -470,7 +470,7 @@ def get_bbcode_reference() -> dict[str, Any]:
             "inside a size tag and answers 'The [color] tag is not "
             "allowed here' when the profile is saved. Put the colour "
             "outermost — [color=cyan][big][b]Name[/b][/big][/color], "
-            "not [big][b][color=cyan]Name[/color][/b][/big]. Workbench "
+            "not [big][b][color=cyan]Name[/color][/b][/big]. The app "
             "renders both, so a preview will not warn you; the site "
             "does, at upload time.",
         ],

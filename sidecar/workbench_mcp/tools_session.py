@@ -27,7 +27,7 @@ NO_PUSH_NOTE = (
     title="App status",
     read_only=True,
 )
-def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
+def get_app_status(include_label_rollup: bool = False) -> dict[str, Any]:
     """Overall state of the app: version, data directory, F-list
     session, archived characters, the Logs and the Index.
 

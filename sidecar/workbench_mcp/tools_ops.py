@@ -449,8 +449,8 @@ def export_upload_zip(character: str, path: str) -> dict[str, Any]:
         "bytes": len(data),
         "next_step": (
             "The user uploads this in their browser — f-list.net with "
-            "the FlistCharExporter userscript, or the paired Workbench "
-            "extension. The app cannot do it for them."
+            "the FlistCharExporter userscript, or the paired extension. "
+            "The app cannot do it for them."
         ),
     }
 
@@ -514,7 +514,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
             "upload it to F-list."
             if paired
             else "Not paired. The user pairs it from the extension; "
-            "Workbench then shows an accept prompt. That has to be a "
+            "the app window then asks them to accept. That has to be a "
             "human action."
         ),
     }

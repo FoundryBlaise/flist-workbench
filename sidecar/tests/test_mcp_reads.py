@@ -385,7 +385,7 @@ async def test_the_narrow_endpoints_carry_their_own_tools() -> None:
     assert "list_partners" in log_tools
     assert "list_profile_fields" not in log_tools
     # Core tools are on both, so a model on either endpoint can orient.
-    assert "get_workbench_status" in character_tools & log_tools
+    assert "get_app_status" in character_tools & log_tools
 
 
 async def test_every_read_tool_is_annotated_read_only() -> None:

@@ -131,7 +131,7 @@ the switch on; only you can, in the window.
 The full list is under [Tools by endpoint](#tools-by-endpoint). The
 ones worth knowing about:
 
-**Finding your way around** — `get_workbench_status` first, then
+**Finding your way around** — `get_app_status` first, then
 `list_characters`.
 
 **Reading a profile** — `get_workbench` (the Workbench by section,
@@ -385,7 +385,7 @@ server, so they cannot drift from it.
 
 | Tool | What it does |
 |---|---|
-| `get_workbench_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
+| `get_app_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
@@ -457,7 +457,7 @@ server, so they cannot drift from it.
 
 | Tool | What it does |
 |---|---|
-| `get_workbench_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
+| `get_app_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
@@ -510,7 +510,7 @@ server, so they cannot drift from it.
 
 | Tool | What it does |
 |---|---|
-| `get_workbench_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
+| `get_app_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
