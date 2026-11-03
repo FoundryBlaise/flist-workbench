@@ -8,10 +8,9 @@ same library, same ONNX runtime, same on-disk model cache, no torch and
 no CUDA.
 
 Trade-off, stated plainly: this puts a second model inside a process
-that was designed to run none. What it buys is that `rag.embed_backend`
-defaults to "local" and the whole embedding configuration disappears
-from the app. The endpoint backend stays in `rag_embed` for anyone who
-would rather spend a GPU on it and wants a long-context model.
+that was designed to run none. What it buys is that the embedding
+configuration shrinks to the choice of model. The endpoint backend that
+`rag_embed` once offered is gone.
 
 Two things measured rather than assumed, both of which bite silently:
 

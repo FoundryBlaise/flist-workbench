@@ -9,16 +9,16 @@ Why fastembed and not sentence-transformers / torch:
 Why a module-level cache for the encoder:
   Constructing TextCrossEncoder deserialises the ONNX graph (~5–10 s
   the first time, ~1–2 s afterwards). Per-request init would dominate
-  the chat latency budget. We hold one instance per model name and
-  swap if the user changes their RAG settings.
+  a search's latency. We hold one instance per model name and swap if
+  the user changes their search settings.
 
 Why first-use download is a UX concern:
   fastembed downloads the model on the first encoder construction —
-  e.g. ~1.1 GB for jina-reranker-v2-base-multilingual. We download
-  into ~/Documents/flist-workbench/models/ so cleanup is easy.
-  Callers (the query endpoint) should surface a "downloading reranker"
-  hint when `is_ready()` returns False so the chat panel doesn't look
-  like it hung for a minute.
+  e.g. ~1.1 GB for jina-reranker-v2-base-multilingual. It goes into
+  `models_dir()`: `models/` in the app's data folder
+  (`paths.user_data_dir()`, %APPDATA%/flist-workbench on Windows),
+  beside the embedding model. The first search with a reranker set
+  waits for that download, and nothing reports its progress yet.
 
 Skipping rerank:
   The settings string "disabled" (or empty) means "skip rerank entirely
@@ -41,8 +41,8 @@ DEFAULT_NEIGHBORS = 1
 # Default 0.0 = preserve old behaviour for users who upgrade. The setting
 # is most useful for "needle in haystack" questions where the reranker
 # clearly singles out 1-2 chunks: dropping noisy candidates below
-# top_score × ratio reduces the distractor surface the chat LLM has to
-# anchor on (which is how the "Baal echo" hallucination class arises).
+# top_score × ratio leaves fewer distractors for the model reading the
+# results to anchor on.
 DEFAULT_RERANK_MIN_RATIO = 0.0
 RERANK_DISABLED = "disabled"
 
@@ -147,7 +147,7 @@ def rerank_hits(
         encoder = get_encoder(model_name, cache_dir=cache_dir)
         docs = [h["payload"]["text"] for h in hits]
         scores = list(encoder.rerank(query, docs))
-    except Exception as exc:  # noqa: BLE001 — rerank must never crash chat
+    except Exception as exc:  # noqa: BLE001 — rerank must never fail a search
         for h in hits:
             h["rerank_error"] = str(exc)
         return hits[:top_k]

@@ -25,9 +25,8 @@ KEY_FCHAT_DATA_DIR = "fchat_data_dir"
 # endpoint / model / prompt / context keys are gone.
 KEY_LABELS_THRESHOLD_CHARS = "labels.threshold_chars"
 
-# RAG / embedding settings. Endpoint defaults to the labels endpoint
-# (most users run one LM Studio with both a chat model and an embedding
-# model loaded). Prefixes only matter for nomic-* models; default empty.
+# Search settings. Embedding runs in-process (rag_embed_local), so the
+# model is the only embedding setting left.
 #: A fastembed model id, always "org/name". Values without a slash are
 #: leftovers from the removed endpoint backend and are ignored on read.
 KEY_RAG_EMBED_MODEL = "rag.embed_model"
@@ -44,11 +43,6 @@ KEY_RAG_NEIGHBORS = "rag.neighbors"
 KEY_RAG_RERANK_MIN_RATIO = "rag.rerank_min_ratio"
 KEY_RAG_HYBRID_ENABLED = "rag.hybrid_enabled"
 KEY_RAG_HYBRID_BM25_CANDIDATES = "rag.hybrid_bm25_candidates"
-# Per-query keep_alive sent to the embed endpoint. Empty string ("")
-# suppresses the field — Ollama then keeps the model resident for its
-# default ~5 minutes. A short value like "30s" lets bge-m3 drop quickly
-# on VRAM-tight setups. Free-text so users can write Ollama's duration
-# grammar verbatim ("30s" / "1m" / "0").
 
 # Chunking tunables. Changing any of these requires a re-ingest with
 # wipe for existing data — chunk_ids encode the subchunk index, so
