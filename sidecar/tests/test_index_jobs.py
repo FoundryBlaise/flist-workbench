@@ -25,7 +25,7 @@ from sidecar_client import app_client, is_refusal_shaped
 import rag_embed
 from refusals import IndexBusy
 from fchat_logs import chat, utc, write_log
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 from test_rag_jobs import ME, OPENING, PARTNER, REPLY, _label, _stub_index_services
 
 CONV = {"character": ME, "partner": PARTNER}
@@ -312,7 +312,7 @@ async def test_an_index_that_cannot_be_read_is_an_error_not_zero_chunks(
     async with mcp_client("logs") as session:
         result, _ = await call_tool(session, "get_rag_status")
         assert "index_unreadable" in tool_error_text(result)
-        _, overall = await call_tool(session, "get_workbench_status")
+        _, overall = await call_tool(session, "get_app_status")
     assert overall["vector_index"]["error"]["code"] == "index_unreadable"
 
 
@@ -320,6 +320,7 @@ async def test_a_search_while_an_ingest_runs_is_refused_as_busy(index: Index) ->
     """The vector store opens once at a time, and the ingest has it: a
     search is told so instead of failing on the store's lock."""
     running = index.running_ingest()
+    allow_log_text()
 
     async with mcp_client("logs") as session:
         result, _ = await call_tool(session, "search_logs_semantic", question="lighthouse")

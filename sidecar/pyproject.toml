@@ -6,21 +6,20 @@ requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
-  # python-multipart powers UploadFile/Form handling on the working-set
-  # import endpoint. FastAPI doesn't pull it in automatically; without
-  # it the route registration fails at import time.
+  # python-multipart: no route here reads form data or file uploads
+  # any more. The mcp SDK depends on it anyway (its OAuth handlers read
+  # forms), so dropping this line would not take it out of the build.
   "python-multipart>=0.0.20",
   "httpx>=0.28",
   # qdrant-client in embedded mode persists vectors to a folder on
   # disk — no docker, no port 6333. Pin major because the local-mode
-  # API still tightens occasionally. fastembed/onnxruntime are NOT
-  # pulled in here for embedding (we use LM Studio for that); we add
-  # fastembed directly below for the cross-encoder reranker.
+  # API still tightens occasionally.
   "qdrant-client>=1.12,<2",
-  # fastembed: ONNX-runtime-based cross-encoder reranking. Avoids
-  # torch (~2 GB) and CUDA detection — the reranker model is ~568 MB
-  # for bge-reranker-v2-m3 and downloads to a user cache on first use.
-  # Embedding stays in LM Studio; fastembed is rerank-only here.
+  # fastembed runs both models in-process on onnxruntime: the embedding
+  # model (rag_embed_local) and the cross-encoder reranker (rag_rerank).
+  # Avoids torch (~2 GB) and CUDA detection. Each model downloads on
+  # first use into `models/` in the app's data folder: ~220 MB for the
+  # default embedding model, ~1.1 GB for the default reranker.
   "fastembed>=0.7,<1",
   # Model Context Protocol server, mounted at /mcp. This is the
   # reference SDK's bundled FastMCP (`mcp.server.fastmcp`), not the
@@ -28,16 +27,16 @@ dependencies = [
   # picked fastmcp 2.x, but it eagerly imports redis, docket, authlib,
   # joserfc, opentelemetry, cloudpickle and beartype at `import
   # fastmcp` time — 20+ extra packages that PyInstaller would have to
-  # bundle into the portable sidecar.exe for features (distributed
-  # task queues, OAuth providers, server proxying) this app never
-  # uses. The reference SDK carries everything we do need: typed tool
+  # pack into the sidecar for features (distributed task queues, OAuth
+  # providers, server proxying) this app never uses. The reference SDK carries everything we do need: typed tool
   # decorators with annotations, Context.report_progress,
   # streamable_http_app(), prompts, resources and
   # TransportSecuritySettings for DNS-rebinding protection.
   "mcp>=1.18,<2",
   # Pillow reads image dimensions and re-encodes oversized imports as
-  # JPEG (import_image's convert_to_jpeg). fastembed already pulls it
-  # in; naming it here keeps that working if fastembed ever drops it.
+  # JPEG (services/image_import, `convert_to_jpeg`). fastembed already
+  # pulls it in; naming it here keeps that working if fastembed ever
+  # drops it.
   "pillow>=10",
 ]
 
@@ -48,9 +47,8 @@ dev = [
   "pytest-httpx>=0.32",
   "httpx>=0.28",
   # PyInstaller is what `npm run pack:sidecar` invokes to produce
-  # sidecar.exe for the Windows portable build. It only runs on the
-  # build host, never inside the shipped binary, so dev-group is the
-  # right home. Pinned major to avoid surprise PyInstaller-5→6 style
+  # sidecar.exe for the Windows builds. It only runs on the build host,
+  # never inside the shipped app, so dev-group is the right home. Pinned major to avoid surprise PyInstaller-5→6 style
   # CLI breakage; bump the floor when the build script needs a newer
   # one.
   "pyinstaller>=6,<7",

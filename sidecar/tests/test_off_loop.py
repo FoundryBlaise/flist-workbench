@@ -34,7 +34,7 @@ import pytest
 import archive_live
 import archive_registry
 import archive_workbench
-from mcp_helpers import call_tool, mcp_client
+from mcp_helpers import allow_log_text, call_tool, mcp_client
 from sidecar_client import BASE_URL, SECRET_HEADER, TEST_LAUNCH_SECRET
 from test_mcp_reads import MAPPING
 
@@ -71,6 +71,8 @@ def sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
+    # A semantic search returns Log text.
+    allow_log_text()
 
     cache = archive_registry.cache_root() / "mapping-list.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -457,7 +459,7 @@ MCP_WORK = {
     "an export for Upload": (
         _zip,
         "character",
-        "export_restore_zip",
+        "export_upload_zip",
         {"character": NAME, "path": "{exports}"},
     ),
     "a Foreign search of the Logs": (

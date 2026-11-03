@@ -1,15 +1,19 @@
 """The Model Context Protocol server(s) exposed by the sidecar.
 
-Everything the Workbench UI can do is reachable here as a tool, so a
+Everything the app window can do is reachable here as a tool, so a
 local model (LM Studio) or Claude can edit profiles, read logs and
-drive classification without touching the UI. See docs/MCP_DESIGN.md.
+drive IC/OOC labelling without touching the UI. See docs/MCP_DESIGN.md.
 
-Three endpoints are served, all built from the same tool
+Four endpoints are served, all built from the same tool
 implementations and differing only in which tags they include:
 
     /mcp             everything
     /mcp/character   profile editing only
-    /mcp/logs        logs, labels, classification, retrieval
+    /mcp/logs        Logs, Labels, retrieval
+    /mcp/classify    the IC/OOC labelling loop only
+
+docs/MCP.md lists each endpoint's tools; tests/test_mcp_docs.py
+keeps that list true.
 
 The package is deliberately *not* called `mcp`: `sidecar/` is on
 `sys.path`, so that name would shadow the MCP SDK itself.
@@ -30,13 +34,17 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import Prompt
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.concurrency import run_in_threadpool
 from starlette.routing import Route
 
+from ._context import LOG_TEXT_SWITCH, log_text_off
 from ._registry import (
     TAG_CHARACTER,
     TAG_CLASSIFY,
     TAG_CORE,
     TAG_LOGS,
+    hidden_tools,
+    listed_tools,
     registered_prompts,
     registered_resources,
     registered_tools,
@@ -65,23 +73,55 @@ Two things to keep straight:
 
 1. The app NEVER writes to f-list.net. Every tool here changes local
    files only. When the user wants a profile on F-list they review it
-   in the app window and upload it themselves in the browser.
+   in the app window and Upload it themselves in the browser.
    Never tell the user a change is live on F-list.
-2. `live` is the last profile pulled down from F-list and is
-   read-only. Each character has one Workbench beside it: the local
-   copy every editing tool changes. Leave `working_set` out to work on
-   the Workbench; editing creates it from Live when it does not exist
-   yet. Pass `working_set="live"` only to read Live.
+2. Each character has its Live, the profile as last pulled from
+   F-list, which is read-only, and one Workbench beside it: the local
+   copy the editing tools change. Editing tools always work on the
+   Workbench; the first edit makes it from Live. Read tools read the
+   Workbench unless asked for Live. Replacing the whole Workbench saves
+   it as a Backup first, and a Restore (load_backup_into_workbench)
+   loads a Backup back into the Workbench.
 
-Characters are addressed by name; ids also work.
+Characters are addressed by name; ids also work. Lists and searches
+come a page at a time: when a result's `page.next_offset` is not null,
+pass it as `offset` for the next page.
 """
+
+#: Said on every endpoint, /mcp/classify included: with the switch off
+#: its labelling loop has no tool to fetch messages with.
+_LOG_TEXT_NOTE = f"""
+Tools that return Log text (reading, searching and labelling messages)
+are listed only once
+{LOG_TEXT_SWITCH}.
+If you need them and they are missing, ask the user to turn it on.
+"""
+
+
+class _Endpoint(FastMCP):
+    """A server whose tool list follows the user's settings: a tool
+    `hidden_tools()` names is neither listed nor run.
+
+    FastMCP binds `list_tools` and `call_tool` as the protocol handlers
+    when it is built, so overriding them here is enough. Every tool is
+    still registered, so turning a switch needs no rebuild.
+    """
+
+    async def list_tools(self):  # noqa: ANN201
+        hidden = await run_in_threadpool(hidden_tools)
+        return [t for t in await super().list_tools() if t.name not in hidden]
+
+    async def call_tool(self, name, arguments):  # noqa: ANN001, ANN201
+        if name in await run_in_threadpool(hidden_tools):
+            raise log_text_off(name)
+        return await super().call_tool(name, arguments)
 
 
 def _build(name: str, tags: frozenset[str] | None) -> FastMCP:
     """Create one server and register the tools matching `tags`."""
-    server = FastMCP(
+    server = _Endpoint(
         name=name,
-        instructions=_INSTRUCTIONS,
+        instructions=_INSTRUCTIONS + _LOG_TEXT_NOTE,
         # The sub-app is mounted under /mcp[...] by `mount()`, so its
         # own route must sit at the mount root or the path would come
         # out as /mcp/mcp.
@@ -211,7 +251,7 @@ class _TokenGate:
                 {
                     "type": "http.response.body",
                     "body": (
-                        b"This Workbench requires a token on /mcp. It is "
+                        b"F-list Workbench requires a token on /mcp. It is "
                         b"shown in Settings -> MCP; send it as "
                         b"'Authorization: Bearer <token>'."
                     ),
@@ -259,7 +299,7 @@ def describe(servers: dict[str, FastMCP], port: int) -> dict[str, object]:
                 "label": _ENDPOINT_LABELS[suffix],
                 "path": path,
                 "url": f"http://127.0.0.1:{port}{path}",
-                "tool_count": len(registered_tools(ENDPOINTS[suffix])),
+                "tool_count": len(listed_tools(ENDPOINTS[suffix])),
             }
         )
     from services import mcp_auth

@@ -116,29 +116,32 @@ async def test_list_characters_reports_the_archive(workbench) -> None:
     assert row["has_archive"] is True
 
 
-async def test_get_live_profile_omits_the_description_by_default(
+async def test_live_is_read_with_the_tools_that_read_the_workbench(
     workbench,
 ) -> None:
-    async with mcp_client() as session:
-        _, short = await call_tool(
-            session, "get_live_profile", character="Lady Amber Blaise"
+    """One read per thing: Live is `source="live"` on the Workbench's
+    reads, with no tool of its own beside them."""
+    async with mcp_client("character") as session:
+        names = {t.name for t in (await session.list_tools()).tools}
+        _, live = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise", source="live"
         )
-        _, full = await call_tool(
-            session,
-            "get_live_profile",
-            character="Lady Amber Blaise",
-            include_description=True,
+        _, text = await call_tool(
+            session, "get_description", character="Lady Amber Blaise", source="live"
         )
-    assert "description" not in short
-    assert short["description_length"] == len("[b]A published profile.[/b]")
-    assert full["description"] == "[b]A published profile.[/b]"
-    assert full["custom_title"] == "Innkeeper"
+    assert "get_live_profile" not in names
+    assert live["read_only"] is True
+    assert live["id"] == "42"
+    assert live["summary"]["fetched_at"] == 1700000000
+    assert live["summary"]["custom_title"] == "Innkeeper"
+    assert live["summary"]["description_length"] == len("[b]A published profile.[/b]")
+    assert text["description"] == "[b]A published profile.[/b]"
 
 
 async def test_characters_resolve_case_insensitively(workbench) -> None:
     async with mcp_client() as session:
         _, body = await call_tool(
-            session, "get_live_profile", character="lady amber blaise"
+            session, "get_workbench", character="lady amber blaise", source="live"
         )
     assert body["character"] == "Lady Amber Blaise"
 
@@ -146,7 +149,7 @@ async def test_characters_resolve_case_insensitively(workbench) -> None:
 async def test_an_unknown_character_lists_the_known_ones(workbench) -> None:
     async with mcp_client() as session:
         result, _ = await call_tool(
-            session, "get_live_profile", character="Nobody At All"
+            session, "get_workbench", character="Nobody At All", source="live"
         )
     text = tool_error_text(result)
     assert "character_not_found" in text
@@ -163,7 +166,6 @@ async def test_naming_no_set_means_the_workbench(workbench) -> None:
         _, body = await call_tool(
             session, "get_description", character="Lady Amber Blaise"
         )
-    assert body["set"] == "Workbench"
     assert body["read_only"] is False
     # Seeded from what is published, so the first read is not empty.
     assert body["description"] == "[b]A published profile.[/b]"
@@ -183,10 +185,32 @@ async def test_a_character_never_pulled_has_nothing_to_open(workbench) -> None:
 async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:
     async with mcp_client() as session:
         _, body = await call_tool(
-            session, "get_description", character="Lady Amber Blaise", working_set="live"
+            session, "get_description", character="Lady Amber Blaise", source="live"
         )
     assert body["read_only"] is True
     assert body["description"] == "[b]A published profile.[/b]"
+
+
+async def test_get_workbench_reads_the_workbench_or_live_by_source(workbench) -> None:
+    payload = workbench_payload("42")
+    payload["character"]["custom_title"] = "Landlady"
+    put_workbench("42", payload)
+
+    async with mcp_client("character") as session:
+        _, bench = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise"
+        )
+        _, named = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise", source="workbench"
+        )
+        _, live = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise", source="live"
+        )
+    assert bench == named
+    assert bench["read_only"] is False
+    assert bench["summary"]["custom_title"] == "Landlady"
+    assert live["read_only"] is True
+    assert live["summary"]["custom_title"] == "Innkeeper"
 
 
 # ---- description paging ------------------------------------------------
@@ -360,11 +384,11 @@ async def test_the_narrow_endpoints_carry_their_own_tools() -> None:
         log_tools = {t.name for t in (await session.list_tools()).tools}
 
     assert "list_profile_fields" in character_tools
-    assert "read_log_messages" not in character_tools
-    assert "read_log_messages" in log_tools
+    assert "list_partners" not in character_tools
+    assert "list_partners" in log_tools
     assert "list_profile_fields" not in log_tools
     # Core tools are on both, so a model on either endpoint can orient.
-    assert "get_workbench_status" in character_tools & log_tools
+    assert "get_app_status" in character_tools & log_tools
 
 
 async def test_every_read_tool_is_annotated_read_only() -> None:

@@ -80,7 +80,7 @@ async def open_workbench(session) -> dict[str, Any]:
     """Read the character's Workbench, which seeds it from Live the
     first time, the way the window's first look does."""
     _, body = await call_tool(
-        session, "get_working_set", character="Lady Amber Blaise"
+        session, "get_workbench", character="Lady Amber Blaise"
     )
     return body
 
@@ -91,7 +91,6 @@ async def open_workbench(session) -> dict[str, Any]:
 async def test_the_workbench_starts_as_a_copy_of_live(workbench) -> None:
     async with mcp_client("character") as session:
         body = await open_workbench(session)
-    assert body["set"] == "Workbench"
     assert body["read_only"] is False
     payload = payload_of(workbench)
     assert payload["character"]["description"] == "[b]Published.[/b]"
@@ -106,10 +105,9 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
         await open_workbench(session)
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="fave",
+            items=[{"kink": "Rough Housing", "choice": "fave"}],
         )
     payload = payload_of(workbench)
     assert isinstance(payload["kinks"], dict)
@@ -117,35 +115,39 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
 
 
 async def test_live_is_never_writable(workbench) -> None:
+    """An editing tool has no argument that could name Live: whatever
+    it is called with, the edit lands in the Workbench."""
     async with mcp_client("character") as session:
-        await open_workbench(session)
-        result, _ = await call_tool(
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+        await call_tool(
             session,
             "set_description",
             character="Lady Amber Blaise",
-            working_set="live",
-            text="should not land",
+            text="[b]Lands in the Workbench.[/b]",
         )
-    text = tool_error_text(result)
-    assert "live_is_read_only" in text
+    assert "working_set" not in tools["set_description"].inputSchema["properties"]
     assert archive_live.read_live("42")["character"]["description"] == "[b]Published.[/b]"
+    assert payload_of(workbench)["character"]["description"] == (
+        "[b]Lands in the Workbench.[/b]"
+    )
 
 
-async def test_editing_without_naming_a_set_lands_in_the_workbench(
+async def test_the_first_edit_makes_the_workbench(
     workbench,
 ) -> None:
-    """No set named means the Workbench, created on the spot if this is
-    the first edit. Refusing with "create one first" belonged to the
-    era of several named sets; there is one now, and the window makes
-    it without asking either."""
+    """An edit lands in the Workbench, made on the spot if this is the
+    first edit. Refusing with "create one first" belonged to the era of
+    several named copies; there is one now, and the window makes it
+    without asking either."""
+    assert archive_workbench.read_workbench("42") is None
     async with mcp_client("character") as session:
-        _, body = await call_tool(
+        result, _ = await call_tool(
             session,
             "set_description",
             character="Lady Amber Blaise",
             text="written straight into the bench",
         )
-        assert body["set"] == "Workbench"
+        assert not result.isError
         _, read = await call_tool(
             session, "get_description", character="Lady Amber Blaise"
         )
@@ -260,18 +262,6 @@ async def test_edit_description_says_how_to_recover_from_a_miss(
     assert "get_description" in tool_error_text(result)
 
 
-async def test_append_description_starts_a_new_line(workbench) -> None:
-    async with mcp_client("character") as session:
-        await open_workbench(session)
-        await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="first"
-        )
-        await call_tool(
-            session, "append_description", character="Lady Amber Blaise", text="second"
-        )
-    assert payload_of(workbench)["character"]["description"] == "first\nsecond"
-
-
 # ---- overlay -----------------------------------------------------------
 
 
@@ -281,7 +271,11 @@ async def test_every_edit_records_its_path_in_the_overlay(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="mine"
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="mine",
+            confirm=True,  # shorter than half of Live's description
         )
         await call_tool(
             session,
@@ -292,10 +286,9 @@ async def test_every_edit_records_its_path_in_the_overlay(workbench) -> None:
         )
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="yes",
+            items=[{"kink": "Rough Housing", "choice": "yes"}],
         )
     overlay = set(payload_of(workbench)["_overlay"])
     assert "character.description" in overlay
@@ -443,17 +436,15 @@ async def test_undecided_removes_the_kink_entry(workbench) -> None:
         await open_workbench(session)
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="fave",
+            items=[{"kink": "Rough Housing", "choice": "fave"}],
         )
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="undecided",
+            items=[{"kink": "Rough Housing", "choice": "undecided"}],
         )
     assert payload_of(workbench)["kinks"] == {}
 
@@ -463,10 +454,9 @@ async def test_an_invalid_choice_lists_the_valid_ones(workbench) -> None:
         await open_workbench(session)
         result, _ = await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="sure why not",
+            items=[{"kink": "Rough Housing", "choice": "sure why not"}],
         )
     text = tool_error_text(result)
     assert "fave" in text and "maybe" in text
@@ -546,9 +536,10 @@ async def test_deleting_a_local_custom_kink_drops_it_outright(
             "delete_custom_kink",
             character="Lady Amber Blaise",
             kink_id=added["id"],
+            confirm=True,
         )
     assert deleted["outcome"] == "dropped"
-    assert deleted["restorable"] is False
+    assert deleted["can_put_back"] is False
     payload = payload_of(workbench)
     assert added["id"] not in payload["custom_kinks"]
     assert payload["_custom_kinks_order"] == []
@@ -575,9 +566,10 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
             "delete_custom_kink",
             character="Lady Amber Blaise",
             kink_id="7788",
+            confirm=True,
         )
         assert deleted["outcome"] == "tombstoned"
-        assert deleted["restorable"] is True
+        assert deleted["can_put_back"] is True
 
         _, listed = await call_tool(
             session, "list_kinks", character="Lady Amber Blaise"
@@ -586,7 +578,7 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
 
         await call_tool(
             session,
-            "restore_custom_kink",
+            "put_back_custom_kink",
             character="Lady Amber Blaise",
             kink_id="7788",
         )
@@ -596,14 +588,14 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
     assert [c["name"] for c in restored["custom_kinks"]] == ["From F-list"]
 
 
-async def test_restoring_a_dropped_local_kink_explains_it_is_gone(
+async def test_putting_back_a_dropped_local_kink_explains_it_is_gone(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         result, _ = await call_tool(
             session,
-            "restore_custom_kink",
+            "put_back_custom_kink",
             character="Lady Amber Blaise",
             kink_id="local:never-existed",
         )
@@ -679,7 +671,6 @@ async def test_removing_an_image_closes_the_gap_in_sort_order(
         _, body = await call_tool(
             session, "remove_image", character="Lady Amber Blaise", image_id="2"
         )
-        assert body["file_trashed"] is False
     rows = payload_of(workbench)["images"]
     assert [(r["image_id"], r["sort_order"]) for r in rows] == [("1", 0), ("3", 1)]
 
@@ -754,30 +745,30 @@ async def test_profile_settings_needs_at_least_one(workbench) -> None:
 
 
 async def test_raw_payload_write_needs_confirmation(workbench) -> None:
-    async with mcp_client("character") as session:
+    async with mcp_client() as session:
         await open_workbench(session)
         result, _ = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character="Lady Amber Blaise",
             payload={"_overlay": [], "character": {"description": "raw"}},
         )
     text = tool_error_text(result)
     assert "confirm_required" in text
-    assert "targeted editing tools" in text
+    assert "targeted tools" in text
 
 
 async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
-    async with mcp_client("character") as session:
+    async with mcp_client() as session:
         await open_workbench(session)
         _, read = await call_tool(
-            session, "get_working_set_payload", character="Lady Amber Blaise"
+            session, "get_workbench_payload", character="Lady Amber Blaise"
         )
         body = read["payload"]
         body["character"]["description"] = "written raw"
         _, written = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character="Lady Amber Blaise",
             payload=body,
             if_match=read["etag"],
@@ -788,7 +779,7 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
         # A second write with the stale etag must be refused.
         result, _ = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character="Lady Amber Blaise",
             payload=body,
             if_match=read["etag"],
@@ -801,11 +792,12 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
 
 
 async def test_destructive_tools_are_annotated_as_such() -> None:
-    async with mcp_client("character") as session:
+    async with mcp_client() as session:
         tools = {t.name: t for t in (await session.list_tools()).tools}
     for name in (
         "delete_custom_kink",
-        "put_working_set_payload",
+        "put_workbench_payload",
+        "load_backup_into_workbench",
     ):
         assert tools[name].annotations.destructiveHint is True, name
     assert tools["set_description"].annotations.readOnlyHint is False
@@ -816,9 +808,13 @@ async def test_write_tools_say_workbench_does_not_publish(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         _, body = await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="x"
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="x",
+            confirm=True,  # shorter than half of Live's description
         )
-    assert "never writes to f-list.net" in body["note"]
+    assert "Nothing was published to F-list" in body["not_published"]
 
 
 # ---- BBCode F-list would refuse -----------------------------------------
@@ -881,7 +877,7 @@ async def test_the_same_markup_with_the_colour_outside_goes_through(
     assert body["length"] == len("[color=cyan][big][b]Athali[/b][/big][/color]")
 
 
-async def test_appending_something_invalid_is_refused_too(workbench) -> None:
+async def test_editing_in_something_invalid_is_refused_too(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         await call_tool(
@@ -892,8 +888,9 @@ async def test_appending_something_invalid_is_refused_too(workbench) -> None:
         )
         result, _ = await call_tool(
             session,
-            "append_description",
+            "edit_description",
             character="Lady Amber Blaise",
-            text="[big][i][color=red]and this[/color][/i][/big]",
+            old_string="An opening paragraph.",
+            new_string="An opening paragraph.\n[big][i][color=red]and this[/color][/i][/big]",
         )
     assert "not allowed here" in tool_error_text(result)

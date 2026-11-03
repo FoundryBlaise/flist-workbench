@@ -1,4 +1,4 @@
-"""`diff_working_set` — what would change if this were published.
+"""`diff_workbench` — what would change if this were published.
 
 Structural rather than textual (design D6): a model needs facts it can
 act on, not a side-by-side rendering.
@@ -70,7 +70,7 @@ def workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 async def draft(session) -> dict[str, Any]:
     """Read the character's Workbench, which seeds it from Live."""
     _, body = await call_tool(
-        session, "get_working_set", character="Lady Amber Blaise"
+        session, "get_workbench", character="Lady Amber Blaise"
     )
     return body
 
@@ -79,7 +79,7 @@ async def test_an_untouched_draft_matches_live(workbench) -> None:
     async with mcp_client("character") as session:
         await draft(session)
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     assert body["changes"] == {"identical": True}
     assert "matches live exactly" in body["note"]
@@ -105,7 +105,7 @@ async def test_a_field_change_names_the_field_and_the_option(
             value="Gay",
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     changes = {c["field"]: c for c in body["changes"]["profile_fields"]}
     assert changes["Species"] == {
@@ -130,7 +130,7 @@ async def test_the_description_is_summarised_not_diffed(workbench) -> None:
             text="Published text. And quite a lot more besides.",
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     description = body["changes"]["description"]
     assert description["changed"] is True
@@ -145,20 +145,18 @@ async def test_kink_changes_use_names_and_name_the_undecided_state(
         await draft(session)
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="undecided",
+            items=[{"kink": "Rough Housing", "choice": "undecided"}],
         )
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Long Walks",
-            choice="fave",
+            items=[{"kink": "Long Walks", "choice": "fave"}],
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     changes = {c["field"]: c for c in body["changes"]["kinks"]}
     assert changes["Rough Housing"]["after"] == "undecided"
@@ -183,9 +181,10 @@ async def test_custom_kink_changes_are_classified(workbench) -> None:
             "delete_custom_kink",
             character="Lady Amber Blaise",
             kink_id="7788",
+            confirm=True,
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     by_change = {c["change"]: c for c in body["changes"]["custom_kinks"]}
     assert by_change["added"]["name"] == "Thunderstorms"
@@ -203,7 +202,7 @@ async def test_a_gallery_reorder_is_called_out_as_such(workbench) -> None:
             image_ids=["2", "1"],
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     images = body["changes"]["images"]
     assert images["reordered"] is True
@@ -218,7 +217,7 @@ async def test_a_removed_image_is_listed(workbench) -> None:
             session, "remove_image", character="Lady Amber Blaise", image_id="1"
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     assert body["changes"]["images"]["removed"] == ["1"]
 
@@ -228,9 +227,9 @@ async def test_comparing_a_side_with_itself_is_refused(workbench) -> None:
         await draft(session)
         result, _ = await call_tool(
             session,
-            "diff_working_set",
+            "diff_workbench",
             character="Lady Amber Blaise",
-            working_set="live",
+            source="live",
             against="live",
         )
     assert "nothing to compare" in tool_error_text(result)
@@ -246,7 +245,7 @@ async def test_the_custom_title_change_is_reported(workbench) -> None:
             title="Landlady",
         )
         _, body = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise"
+            session, "diff_workbench", character="Lady Amber Blaise"
         )
     assert body["changes"]["custom_title"] == {
         "field": "custom_title",

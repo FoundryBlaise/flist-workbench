@@ -257,7 +257,7 @@ async def test_system_lines_are_never_offered_to_the_model(window) -> None:
 
     async with mcp_client("logs") as session:
         _, body = await call_tool(
-            session, "get_messages_to_classify", character=ME, partner=PARTNER
+            session, "get_unlabeled_messages", character=ME, partner=PARTNER
         )
 
     assert body["messages"] == []

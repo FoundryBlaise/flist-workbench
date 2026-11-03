@@ -20,7 +20,7 @@ import flist_activity
 import logs as log_store
 from refusals import Refusal
 
-#: Sentinel a `working_set` argument can carry to address the read-only
+#: What a read's `source` argument names to address the read-only
 #: `live.json` pulled from F-list rather than the editable Workbench.
 LIVE = "live"
 
@@ -61,11 +61,30 @@ def not_signed_in() -> ToolError:
     )
 
 
-def confirm_required(what: str) -> ToolError:
+def confirm_required(warning: str) -> ToolError:
+    """The refusal of a call that needs `confirm=true`. `warning` says
+    what the call would do to the user's work, in a sentence or two."""
     return ToolError(
         "confirm_required",
-        f"{what} is destructive and permanent. Ask the user, then call "
-        "again with confirm=true.",
+        f"{warning} Ask the user, then call again with confirm=true.",
+    )
+
+
+#: Where the user turns on the tools that return Log text, said the
+#: same way in the server instructions, refusals and notes.
+LOG_TEXT_SWITCH = (
+    "the user turns on \"Let MCP clients read Log text\" in Settings → MCP"
+)
+
+
+def log_text_off(tool_name: str) -> ToolError:
+    """The refusal of a Log-text tool while the user has not turned
+    those tools on."""
+    return ToolError(
+        "log_text_off",
+        f"{tool_name} returns Log text, which is off. It works once "
+        f"{LOG_TEXT_SWITCH}; ask them to.",
+        tool=tool_name,
     )
 
 
@@ -74,6 +93,52 @@ def validation_failed(field: str, reason: str, allowed: Any = None) -> ToolError
     if allowed is not None:
         details["allowed"] = allowed
     return ToolError("validation_failed", f"{field}: {reason}", **details)
+
+
+# --------------------------------------------------------------------
+# Pages
+# --------------------------------------------------------------------
+
+
+def clamp_limit(limit: int, cap: int) -> int:
+    """`limit`, at least 1 and never more than `cap`. A limit over the
+    cap is not refused: the caller gets the cap, so one call can never
+    flood a small model's context."""
+    return max(1, min(cap, int(limit)))
+
+
+def page_info(
+    *, offset: int, limit: int, returned: int, total: int | None, next_offset: int | None
+) -> dict[str, Any]:
+    """The `page` every paged result carries, the same keys whichever
+    tool answers: `next_offset` is the `offset` that fetches the rest
+    (null on the last page), and `total` is null for a tool that cannot
+    count its rows without reading them all (a semantic search)."""
+    return {
+        "offset": offset,
+        "limit": limit,
+        "returned": returned,
+        "total": total,
+        "next_offset": next_offset,
+    }
+
+
+def page(
+    rows: list[Any], *, offset: int, limit: int, cap: int
+) -> tuple[list[Any], dict[str, Any]]:
+    """The rows from `offset` on, `limit` of them but never more than
+    `cap` (`clamp_limit`), and the `page` a result carries beside them."""
+    start = max(0, int(offset))
+    size = clamp_limit(limit, cap)
+    window = rows[start : start + size]
+    end = start + len(window)
+    return window, page_info(
+        offset=start,
+        limit=size,
+        returned=len(window),
+        total=len(rows),
+        next_offset=end if end < len(rows) else None,
+    )
 
 
 # --------------------------------------------------------------------
@@ -150,7 +215,7 @@ def resolve_character(character: str) -> ResolvedCharacter:
 # Workbench or Live
 # --------------------------------------------------------------------
 
-#: What a `working_set` argument may name besides leaving it out.
+#: What a read's `source` argument may name.
 WORKBENCH = "workbench"
 SOURCES = (WORKBENCH, LIVE)
 
@@ -169,33 +234,41 @@ def workbench_target(character: ResolvedCharacter) -> WorkbenchOrLive:
     return WorkbenchOrLive(character=character, name=archive_workbench.WORKBENCH_NAME)
 
 
+def resolve_workbench(character: ResolvedCharacter) -> WorkbenchOrLive:
+    """The character's Workbench, made from Live if it has none yet.
+
+    This is what every editing tool works on: they take no argument
+    naming a copy, so none can reach Live. It is also what a read gets
+    when it names no copy. Seeding from Live on first ask is harmless
+    for a read, and spares every caller a "create one first" step the
+    window does not have either.
+    """
+    if archive_workbench.read_workbench(character.id, create=True) is None:
+        raise ToolError(
+            "no_workbench",
+            f"{character.name} has never been pulled from F-list, so "
+            "there is nothing to copy into a Workbench. Pull the "
+            "character first.",
+        )
+    return workbench_target(character)
+
+
 def resolve_workbench_or_live(
     character: ResolvedCharacter,
     workbench_or_live: str | None,
     *,
-    allow_live: bool = True,
-    for_write: bool = False,
-    param: str = "working_set",
+    param: str = "source",
 ) -> WorkbenchOrLive:
-    """Resolve `working_set`: omitted (or `"workbench"`) is the
-    character's Workbench, `"live"` is Live. Anything else is refused:
-    a character has one Workbench, so there is nothing else to name.
-
-    `for_write=True` refuses Live. `param` is the argument's name, for
-    the error message.
+    """Resolve a read's choice of copy: omitted (or `"workbench"`) is
+    the character's Workbench, `"live"` is Live. Anything else is
+    refused: a character has one Workbench, so there is nothing else to
+    name. `param` is the argument's name, for the error message.
     """
     needle = (
         "" if workbench_or_live is None else str(workbench_or_live).strip().lower()
     )
 
     if needle == LIVE:
-        if not allow_live or for_write:
-            raise ToolError(
-                "live_is_read_only",
-                "'live' is the last profile pulled from F-list and is "
-                f"never edited. Leave {param} out to edit the "
-                "Workbench instead.",
-            )
         return WorkbenchOrLive(character=character, name=LIVE, is_live=True)
 
     if needle not in ("", WORKBENCH):
@@ -208,19 +281,7 @@ def resolve_workbench_or_live(
             field=param,
             allowed=list(SOURCES),
         )
-
-    # The Workbench, which is what the window shows. It is seeded from
-    # Live the first time anything asks: for a read this is harmless,
-    # and it spares every caller a "create one first" step the window
-    # does not have either.
-    if archive_workbench.read_workbench(character.id, create=True) is None:
-        raise ToolError(
-            "no_workbench",
-            f"{character.name} has never been pulled from F-list, so "
-            "there is nothing to copy into a Workbench. Pull the "
-            "character first.",
-        )
-    return workbench_target(character)
+    return resolve_workbench(character)
 
 
 def load_payload(target: WorkbenchOrLive) -> dict[str, Any]:
@@ -290,7 +351,7 @@ def resolve_log_character(character: str, *, required: bool = True) -> str:
     Windows, so `lady amber blaise` opens the right directory. The
     `labels` and `partner_aliases` tables are keyed on the string the
     caller passed and match it exactly, so the same call finds no
-    verdicts and no alias group. The result is not an error but a
+    Labels and no alias group. The result is not an error but a
     plausible-looking count with `ic: 0` and every judged message back in
     `unlabeled`. Resolving once, here, keeps both halves in agreement.
 

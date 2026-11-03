@@ -27,9 +27,10 @@ Rules:
   REST routers and MCP tools take only pure names from the store and
   reach Labels through the service.
 * retired-term: user-facing prose (sidecar strings, MCP tool
-  descriptions, renderer and main-process strings and JSX text) does
-  not use a term GLOSSARY.md retired or avoids. Only text with a space
-  in it counts as prose, so a route, field or MCP tool still named
+  descriptions, renderer and main-process strings and JSX text, and
+  the overview and install guide) does not use a term GLOSSARY.md
+  retired or avoids. Only text with a space in it counts as prose, so
+  a route, field or MCP tool still named
   "snapshot" or "bundle" is not a hit until docs/CLEANUP_PLAN.md
   removes it, but "Live snapshot" in a message is.
 """
@@ -74,6 +75,14 @@ def ui_sources() -> list[str]:
         for p in tracked("renderer/src", "electron")
         if p.endswith((".ts", ".tsx")) and not is_test(p)
     ]
+
+
+def user_docs() -> list[str]:
+    """Docs a user reads to learn the app: the overview, the install
+    guide every release links to, and the guide to connecting a model.
+    Design records and plans are history and keep the words of their
+    day."""
+    return ["docs/OVERVIEW.md", "docs/INSTALL_WINDOWS.md", "docs/MCP.md"]
 
 
 @cache
@@ -459,17 +468,11 @@ VERDICT_ALLOWED: dict[str, int] = {
     "renderer/src/features/logs/LogViewer.tsx": 5,
     "renderer/src/features/settings/SettingsModal.tsx": 1,
     "sidecar/labels.py": 3,
-    "sidecar/workbench_mcp/tools_classify.py": 15,
-    "sidecar/workbench_mcp/tools_logs.py": 4,
-    "sidecar/workbench_mcp/tools_ops.py": 2,
-    "sidecar/workbench_mcp/tools_rag.py": 2,
 }
 
 CLASSIFICATION_ALLOWED: dict[str, int] = {
     "sidecar/labels.py": 2,
     "sidecar/services/retrieval.py": 1,
-    "sidecar/workbench_mcp/tools_classify.py": 2,
-    "sidecar/workbench_mcp/tools_ops.py": 2,
 }
 
 TRANSCRIPT_ALLOWED: dict[str, int] = {}
@@ -630,6 +633,8 @@ def retired_term_sites() -> dict[str, dict[str, list[str]]]:
         src = strip_ts_comments((ROOT / path).read_text(encoding="utf-8"))
         for line, text in ts_texts(src):
             scan(path, line, text)
+    for path in user_docs():
+        scan(path, 1, (ROOT / path).read_text(encoding="utf-8"))
     return found
 
 

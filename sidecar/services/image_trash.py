@@ -1,9 +1,11 @@
 """The pool's wastebasket: `characters/<name>/trash/`.
 
 Deleting an image used to unlink it, and the confirm dialog was the
-only thing between a slip and lost bytes. Now a delete — from the
-window or from `remove_image(delete_file=true)` over MCP — moves the
-file here, and it can be put back until the user empties the trash.
+only thing between a slip and lost bytes. Now a delete moves the file
+here, and it can be put back until the user empties the trash. The
+window and MCP's `trash_images` delete through the same function,
+`delete_images`, whether the image is in the gallery or only in the
+pool.
 
 Only the window can delete for good. A model can move files in and
 take them out again, never make them vanish; the user wants to be the
@@ -153,6 +155,47 @@ def trash_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any
     if trashed:
         _announce(character_id)
     return {"trashed": trashed, "not_found": not_found}
+
+
+@archive_registry.under_character_lock
+def delete_images(character_id: int | str, image_ids: list[str]) -> dict[str, Any]:
+    """Delete images: take any still in the Workbench's gallery off it,
+    then move their files into the Trash.
+
+    One route for an image on the profile and one only in the pool, so
+    the window and a model deleting the same picture do the same thing,
+    and no gallery is left pointing at a file in the Trash. A character
+    without a Workbench has no gallery to change. Besides what
+    `trash_images` answers: `off_gallery`, the ids taken off the
+    gallery, and `etag`, the Workbench's new etag (None when the gallery
+    was left alone)."""
+    import archive_workbench
+    from services import payload_ops
+
+    ids = list(dict.fromkeys(str(i) for i in image_ids))
+    wanted = set(ids)
+    off_gallery: list[str] = []
+    etag: str | None = None
+    bench = archive_workbench.read_workbench(character_id)
+    if bench is not None:
+        # Read first so an image only in the pool leaves the Workbench
+        # untouched: an edit writes, and a write tells the window the
+        # Workbench changed.
+        off_gallery = [
+            r["image_id"] for r in payload_ops.gallery(bench.payload) if r["image_id"] in wanted
+        ]
+    if off_gallery:
+
+        def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
+            rows = payload_ops.gallery(payload)
+            remaining = [r for r in rows if r["image_id"] not in wanted]
+            return payload_ops.EditResult(
+                etag="", changed=payload_ops.set_gallery(payload, remaining)
+            )
+
+        etag = payload_ops.edit(str(character_id), mutate).etag
+    result = trash_images(character_id, ids)
+    return {**result, "off_gallery": off_gallery, "etag": etag}
 
 
 @archive_registry.under_character_lock

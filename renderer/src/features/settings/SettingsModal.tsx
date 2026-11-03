@@ -814,12 +814,18 @@ function McpPane() {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // null until the sidecar has said whether the switch is on.
+  const [logText, setLogText] = useState<boolean | null>(null)
 
   useEffect(() => {
     let alive = true
     api
       .mcpInfo()
       .then((next) => alive && setInfo(next))
+      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+    api
+      .settingsGet()
+      .then((s) => alive && setLogText(s.mcp?.log_text ?? false))
       .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
     return () => {
       alive = false
@@ -881,6 +887,21 @@ function McpPane() {
     }
   }
 
+  // Saved at once, like the token: there is no draft to lose. The
+  // endpoints' tool counts change with it, so they are read again.
+  const setLogTextOn = async (on: boolean) => {
+    setBusy(true)
+    try {
+      const s = await api.settingsUpdate({ mcp: { log_text: on } })
+      setLogText(s.mcp.log_text)
+      setInfo(await api.mcpInfo())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <>
       <PaneHeader
@@ -922,7 +943,7 @@ function McpPane() {
               {copied === `url-${endpoint.id}` ? 'Copied' : 'Copy'}
             </button>
           </div>
-          <p className="settings-help">
+          <p className="settings-help" data-testid={`settings-mcp-tools-${endpoint.id}`}>
             {endpoint.tool_count} tools.
             {endpoint.id === 'all'
               ? ' Use this one unless your model struggles with long tool lists.'
@@ -930,6 +951,34 @@ function McpPane() {
           </p>
         </div>
       ))}
+
+      <h3 className="settings-section-h">Log text</h3>
+      <div className="settings-row settings-row-grid">
+        <span className="settings-label">Let MCP clients read Log text</span>
+        <div className="settings-inline-input">
+          <strong data-testid="settings-mcp-log-text-state">
+            {logText === null ? '…' : logText ? 'On' : 'Off'}
+          </strong>
+          <button
+            type="button"
+            className="settings-clear"
+            disabled={busy || logText === null}
+            onClick={() => void setLogTextOn(!logText)}
+            data-testid="settings-mcp-log-text-toggle"
+          >
+            {logText ? 'Turn off' : 'Turn on'}
+          </button>
+        </div>
+        <p className="settings-help">
+          Off by default. The tools that read, search or label your Logs
+          return the messages themselves, your partners&apos; lines
+          included. When the client runs a cloud model (Claude, ChatGPT
+          and the like), its provider receives that text. With a local
+          model in LM Studio or Ollama it stays on this computer. While
+          this is off, those tools are missing from every endpoint, and
+          IC/OOC labelling over MCP cannot fetch messages.
+        </p>
+      </div>
 
       <h3 className="settings-section-h">Access</h3>
       <div className="settings-row settings-row-grid">
@@ -1379,7 +1428,7 @@ function LabelsPane({
 
   // Every cleared-Labels entry, whichever character it was cleared for:
   // a Log character with no Workbench has no character Trash view, so
-  // this is the one place its cleared Labels can always be restored.
+  // this is the one place its cleared Labels can always be put back.
   const [trashed, setTrashed] = useState<FlistTrashedLabels[]>([])
   const [trashError, setTrashError] = useState<string | null>(null)
   const loadTrash = async () => {
@@ -1410,8 +1459,8 @@ function LabelsPane({
         'Every stored IC/OOC verdict for every conversation reverts to ' +
         'Unlabeled. Rule-based hints (short messages, "((", etc.) keep ' +
         'firing as OOC. A copy of each character’s labels goes to the ' +
-        'Trash, listed below under Cleared Labels, where Restore puts ' +
-        'them back.'
+        'Trash, listed below under Cleared Labels, where Put back returns ' +
+        'them.'
     )
     if (!confirmed) return
     setResetStatus('resetting')
@@ -1487,7 +1536,7 @@ function LabelsPane({
         <h3 className="settings-section-title">Cleared Labels</h3>
         <p className="settings-help">
           Labels you clear, here or in a Log, go to the Trash and wait
-          here for every character until you restore them or delete them
+          here for every character until you put them back or delete them
           for good.
         </p>
         {trashError && <p className="settings-help">Couldn’t read the Trash: {trashError}</p>}
@@ -1498,7 +1547,7 @@ function LabelsPane({
           heading="In the Trash"
           items={trashed}
           readOnly={false}
-          restore={(ids) => api.labelsTrashRestore(ids)}
+          putBack={(ids) => api.labelsTrashPutBack(ids)}
           purge={(ids) => api.labelsTrashPurge(ids)}
           onChanged={loadTrash}
         />

@@ -1,8 +1,12 @@
 """Reading the user's F-Chat logs and their IC/OOC labels (§3.9).
 
-These logs are the user's own private roleplay. Tools here read them
-from disk; nothing is sent anywhere. F-Chat's data directory is never
-written to.
+These logs are the user's own private roleplay, and their partners'
+lines are in them too. Tools here read them from disk and never write
+to F-Chat's data directory, but whatever a tool returns goes to the
+connected client: to a cloud model's provider, when that is the client.
+So the tools that return message text carry `TAG_LOG_TEXT` and stay
+hidden until the user turns them on in Settings → MCP; names, counts
+and Labels are not message text and stay available.
 """
 
 from __future__ import annotations
@@ -13,13 +17,28 @@ import aliases as aliases_store
 import logs as log_store
 from services import labels as label_service
 
-from ._context import ToolError, resolve_conversation, resolve_log_character
-from ._registry import TAG_CLASSIFY, TAG_LOGS, tool
+from ._context import (
+    ToolError,
+    clamp_limit,
+    page,
+    resolve_conversation,
+    resolve_log_character,
+)
+from ._registry import TAG_CLASSIFY, TAG_LOG_TEXT, TAG_LOGS, tool
 
-#: A single read can pull in a lot of text; keep the default modest and
-#: let the caller page with `offset`.
-DEFAULT_MESSAGE_LIMIT = 200
-MAX_MESSAGE_LIMIT = 1000
+#: The most rows one call returns; `offset` pages on.
+MAX_LOG_CHARACTERS = 100
+MAX_PARTNERS = 100
+MAX_CONTACTS = 100
+#: Lower than the rest: every message is text a small model has to hold.
+MAX_MESSAGES = 200
+#: The most hits one search of a conversation returns.
+MAX_HITS = 100
+#: Without a partner one search can touch hundreds of conversations; a
+#: per-partner cap and a page of partners keep the answer readable and
+#: still show where the phrase comes up.
+MAX_HITS_PER_PARTNER = 20
+PARTNERS_PER_PAGE = 10
 
 
 # Note: every `except` below names the exception through `log_store`
@@ -35,23 +54,28 @@ def _log_dir_error(exc: Exception) -> ToolError:
 
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Characters with logs", read_only=True)
-def list_log_characters() -> dict[str, Any]:
+def list_log_characters(limit: int = MAX_LOG_CHARACTERS, offset: int = 0) -> dict[str, Any]:
     """Which of the user's characters have F-Chat logs on this machine."""
     try:
         chars = log_store.list_characters()
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
-    return {
-        "characters": [
-            {"name": c.name, "last_activity": c.mtime} for c in chars
-        ],
-        "log_dir": str(log_store.data_dir()),
-    }
+    rows, paged = page(
+        [{"name": c.name, "last_activity": c.mtime} for c in chars],
+        offset=offset,
+        limit=limit,
+        cap=MAX_LOG_CHARACTERS,
+    )
+    return {"characters": rows, "page": paged, "log_dir": str(log_store.data_dir())}
 
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Conversation partners", read_only=True)
 def list_partners(
-    character: str, include_channels: bool = False, query: str | None = None
+    character: str,
+    include_channels: bool = False,
+    query: str | None = None,
+    limit: int = MAX_PARTNERS,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Everyone a character has logs with.
 
@@ -76,27 +100,27 @@ def list_partners(
             row["also_known_as"] = list(entry.aliases)
         rows.append(row)
     rows.sort(key=lambda r: -int(r["bytes"]))
-    return {"character": character, "partners": rows}
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_PARTNERS)
+    return {"character": character, "partners": rows, "page": paged}
 
 
-@tool(tags=TAG_LOGS, title="Read a conversation", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Read a conversation", read_only=True)
 def read_log_messages(
     character: str,
     partner: str,
     offset: int = 0,
-    limit: int = DEFAULT_MESSAGE_LIMIT,
+    limit: int = MAX_MESSAGES,
     labels: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Messages from one conversation, oldest first.
+    """Messages from one conversation, oldest first, at most 200 a page.
 
     Each message carries its `hash` (needed to set a label) and its
-    resolved IC/OOC verdict. `labels` filters to any of IC, OOC or
+    resolved IC/OOC Label. `labels` filters to any of IC, OOC or
     Unlabeled. Long conversations run to tens of thousands of messages
     — page with `offset`.
     """
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
-    capped = max(1, min(MAX_MESSAGE_LIMIT, int(limit)))
     wanted = {str(l).strip().lower() for l in (labels or [])}
 
     try:
@@ -122,94 +146,102 @@ def read_log_messages(
             entry["label_source"] = item.stored["source"]
         resolved.append(entry)
 
-    start = max(0, int(offset))
-    window = resolved[start : start + capped]
+    window, paged = page(resolved, offset=offset, limit=limit, cap=MAX_MESSAGES)
     return {
         "character": character,
         "partner": partner,
-        "total_matching": len(resolved),
-        "offset": start,
-        "returned": len(window),
-        "has_more": start + len(window) < len(resolved),
+        "page": paged,
         "messages": window,
     }
 
 
-@tool(tags=TAG_LOGS, title="Search one conversation", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Search Logs for a phrase", read_only=True)
 def search_logs(
-    character: str, partner: str, query: str, limit: int = 50
+    character: str,
+    query: str,
+    partner: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    hits_per_partner: int = MAX_HITS_PER_PARTNER,
 ) -> dict[str, Any]:
-    """Literal substring search in one conversation.
+    """Literal substring search in one character's Logs.
 
+    `limit` and `offset` page what the result lists: with `partner`, the
+    hits in that conversation (at most 100 a page); without it, the
+    partners whose conversations hold the phrase (at most 10 a page),
+    each with at most `hits_per_partner` hits (20 at most; `truncated`
+    says there were more: search that partner on its own to see them).
     Case-insensitive, matched against the message text with BBCode
-    stripped. For "what did we say about X" questions across a whole
-    corpus, search_logs_semantic is usually the better tool.
+    stripped. For "what did we say about X" questions,
+    search_logs_semantic is usually the better tool.
     """
     if not (query or "").strip():
         raise ToolError("validation_failed", "query is empty")
+    if not partner:
+        return _search_every_partner(character, query, limit, offset, hits_per_partner)
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
     try:
         hits = log_store.search_messages(character, partner, query)
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
-    capped = max(1, int(limit))
+    window, paged = page(hits, offset=offset, limit=limit, cap=MAX_HITS)
     return {
         "character": character,
         "partner": partner,
         "query": query,
         "total_hits": len(hits),
-        "hits": [
-            {
-                "timestamp": h.get("iso"),
-                "speaker": h.get("speaker"),
-                "text": h.get("text"),
-            }
-            for h in hits[:capped]
-        ],
-        "truncated": len(hits) > capped,
+        "hits": [_hit(h) for h in window],
+        "page": paged,
     }
 
 
-@tool(tags=TAG_LOGS, title="Search all partners", read_only=True)
-def search_all_partners(
-    character: str, query: str, limit_per_partner: int = 20
+def _search_every_partner(
+    character: str, query: str, limit: int, offset: int, hits_per_partner: int
 ) -> dict[str, Any]:
-    """Literal substring search across every conversation of one
-    character. Linear scan — slow on a large corpus."""
-    if not (query or "").strip():
-        raise ToolError("validation_failed", "query is empty")
     character = resolve_log_character(character)
+    per_partner = clamp_limit(hits_per_partner, MAX_HITS_PER_PARTNER)
     try:
         result = log_store.search_all_partners(
-            character, query, limit_per_partner=max(1, int(limit_per_partner))
+            character, query, limit_per_partner=per_partner
         )
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
+    partners, paged = page(
+        result.get("partners") or [],
+        offset=offset,
+        limit=limit,
+        cap=PARTNERS_PER_PAGE,
+    )
     return {
         "character": character,
         "query": query,
+        "hits_per_partner": per_partner,
         "partners": [
             {
                 "partner": row.get("partner"),
                 "hit_count": len(row.get("hits") or []),
                 "truncated": row.get("truncated", False),
-                "hits": [
-                    {
-                        "timestamp": h.get("iso"),
-                        "speaker": h.get("speaker"),
-                        "text": h.get("text"),
-                    }
-                    for h in (row.get("hits") or [])
-                ],
+                "hits": [_hit(h) for h in (row.get("hits") or [])],
             }
-            for row in (result.get("partners") or [])
+            for row in partners
         ],
+        "page": paged,
+    }
+
+
+def _hit(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp": message.get("iso"),
+        "speaker": message.get("speaker"),
+        "text": message.get("text"),
     }
 
 
 @tool(tags=TAG_LOGS, title="Find a contact", read_only=True)
-def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
+def find_contacts(
+    name: str, partial: bool = False, limit: int = MAX_CONTACTS, offset: int = 0
+) -> dict[str, Any]:
     """Have I ever talked to this person, on any of my characters?
 
     Searches every one of the user's characters for a one-to-one log
@@ -226,14 +258,21 @@ def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
             result = log_store.find_contacts(needle)
         except log_store.LogDirError as exc:
             raise _log_dir_error(exc) from exc
-        return {
-            "name": needle,
-            "matched": "exact",
-            "conversations": result.get("dm") or [],
-        }
+        found = result.get("dm") or []
+    else:
+        found = _partial_contacts(needle)
+    rows, paged = page(found, offset=offset, limit=limit, cap=MAX_CONTACTS)
+    return {
+        "name": needle,
+        "matched": "partial" if partial else "exact",
+        "conversations": rows,
+        "page": paged,
+    }
 
-    # Substring search: walk the partner directories, which is only a
-    # directory listing per character — no message parsing.
+
+def _partial_contacts(needle: str) -> list[dict[str, Any]]:
+    """Every one-to-one partner whose name holds `needle`: a directory
+    listing per character, no message parsing."""
     lowered = needle.lower()
     found: list[dict[str, Any]] = []
     try:
@@ -260,7 +299,7 @@ def find_contacts(name: str, partial: bool = False) -> dict[str, Any]:
                 }
             )
     found.sort(key=lambda r: (str(r["character"]).lower(), -int(r["bytes"])))
-    return {"name": needle, "matched": "partial", "conversations": found}
+    return found
 
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Label coverage", read_only=True)
@@ -268,7 +307,7 @@ def get_label_stats(
     character: str, partner: str | None = None
 ) -> dict[str, Any]:
     """How much of a conversation — or of everything — has an IC/OOC
-    verdict.
+    Label.
 
     Unlabeled messages are the ones a model can still decide, and the
     ones ingest skips. Omitting `partner` walks every conversation of
@@ -312,10 +351,10 @@ def get_label_stats(
 
 def _coverage_note(counts: dict[str, int]) -> str:
     if counts.get("unlabeled", 0) == 0:
-        return "Everything has a verdict; this conversation is ready to ingest."
+        return "Everything has a Label; this conversation is ready to ingest."
     return (
-        f"{counts['unlabeled']} message(s) have no IC/OOC verdict. They are "
-        "skipped by ingest. Use get_messages_to_classify to judge them."
+        f"{counts['unlabeled']} message(s) have no IC/OOC Label. They are "
+        "skipped by ingest. Use get_unlabeled_messages to judge them."
     )
 
 

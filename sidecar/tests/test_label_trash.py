@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from sidecar_client import app_client
 
 from fchat_logs import chat, write_log
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 from test_mcp_edit import workbench  # noqa: F401
 
 CID = "42"
@@ -44,6 +44,8 @@ def conversation(workbench) -> Path:  # noqa: F811
             chat(DAELAN, LONG_C, at=1700000120),
         ],
     )
+    # Labelling fetches its batches with a tool that returns Log text.
+    allow_log_text()
     return root
 
 
@@ -58,7 +60,7 @@ def client(conversation) -> TestClient:
 async def label_everything(session) -> dict[str, str]:
     """Give the conversation's messages IC, IC, OOC; return hash -> verdict."""
     _, batch = await call_tool(
-        session, "get_messages_to_classify", character=AMBER, partner=DAELAN
+        session, "get_unlabeled_messages", character=AMBER, partner=DAELAN
     )
     verdicts = dict(zip((m["hash"] for m in batch["messages"]), ("IC", "IC", "OOC")))
     await call_tool(
@@ -126,7 +128,7 @@ async def test_the_window_clears_a_conversation_and_restore_brings_the_labels_ba
     assert entry["id"] == res.json()["trash_id"]
     assert (entry["partner"], entry["count"], entry["deleted_by"]) == (DAELAN, 3, "ui")
 
-    restored = client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]})
+    restored = client.post(f"{TRASH}/labels/put-back", json={"ids": [entry["id"]]})
 
     assert restored.status_code == 200
     assert restored.json() == {
@@ -157,7 +159,7 @@ async def test_a_message_labelled_again_since_the_clear_keeps_its_newer_label(
     )
     [entry] = trashed(client)
 
-    res = client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]}).json()
+    res = client.post(f"{TRASH}/labels/put-back", json={"ids": [entry["id"]]}).json()
 
     assert res["restored"] == [{"id": entry["id"], "restored": 2, "skipped": [relabelled]}]
     assert stored_labels() == {**verdicts, relabelled: "OOC"}
@@ -175,7 +177,7 @@ async def test_resetting_every_label_keeps_each_characters_labels_in_its_trash(
     [entry] = trashed(client)
     assert (entry["partner"], entry["count"]) == (None, 3)
 
-    client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]})
+    client.post(f"{TRASH}/labels/put-back", json={"ids": [entry["id"]]})
 
     assert stored_labels() == verdicts
 
@@ -238,7 +240,7 @@ async def test_cleared_labels_of_a_log_only_character_are_listed_and_restored(
 ) -> None:
     async with mcp_client() as session:
         _, batch = await call_tool(
-            session, "get_messages_to_classify", character=CORIN, partner=DAELAN
+            session, "get_unlabeled_messages", character=CORIN, partner=DAELAN
         )
         items = [{"hash": m["hash"], "label": "IC"} for m in batch["messages"]]
         await call_tool(
@@ -255,7 +257,7 @@ async def test_cleared_labels_of_a_log_only_character_are_listed_and_restored(
     [entry] = listing.json()["labels"]
     assert (entry["id"], entry["character"], entry["count"]) == (cleared["trash_id"], CORIN, 2)
 
-    restored = client.post(f"{LABELS_TRASH}/restore", json={"ids": [entry["id"], "nope"]})
+    restored = client.post(f"{LABELS_TRASH}/put-back", json={"ids": [entry["id"], "nope"]})
 
     assert restored.json() == {
         "restored": [{"id": entry["id"], "restored": 2, "skipped": []}],

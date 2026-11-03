@@ -3,13 +3,15 @@
 Pulling from F-list, backing up, ingesting logs, writing the file the
 user uploads, and the settings the rest of it reads.
 
-Two things run long enough to need progress: a pull walks a
-character's whole image set, and the backup sweep pulls every
-character on the account. Both run as jobs (`services.jobs`): waiting,
-they report through `Context.report_progress` so a client can show
-something moving; with `wait=false` they answer a job id for `get_job`
-and `cancel_job`. Both are bounded by F-list's rate limit rather than by
-anything here.
+Three things run long enough to need progress: a pull walks a
+character's whole image set, the backup sweep pulls every character on
+the account, and an ingest embeds Logs. All three run as jobs
+(`services.jobs`): waiting, they report through
+`Context.report_progress` so a client can show something moving; with
+`wait=false` they answer a job id, the same answer for each, for
+`get_job` and `cancel_job`, which every endpoint carrying one of them
+carries too. A pull and the sweep are bounded by F-list's rate limit
+rather than by anything here.
 
 On file paths: the export tool writes wherever the user running the app
 can. That is the same reach the app already has through its own file
@@ -40,15 +42,17 @@ from ._context import (
     audit,
     resolve_character,
     resolve_ingest_scope,
-    resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
-from .tools_session import NO_PUSH_NOTE
 
 #: How long a tool will sit waiting on a job before handing the caller
 #: a job id to poll instead. Ten minutes covers any realistic single
 #: pull; a full-corpus ingest can run far longer.
 WAIT_BUDGET_SEC = 600
+
+#: How many numbered names an export into a folder tries before giving
+#: up with an `exists` refusal.
+_MAX_NAME_TRIES = 100
 
 
 # --------------------------------------------------------------------
@@ -57,13 +61,18 @@ WAIT_BUDGET_SEC = 600
 
 
 def _job_failure(job: jobs.Job, fallback: str) -> ToolError:
-    """A failed Pull's or Back up all's error as the tool's error: the
-    job's code and details (`services.sse.error`), `stage` among them."""
+    """A failed job's error as the tool's error: the job's code and
+    details (`services.sse.error`), a Pull's `stage` among them."""
     error = job.error or {}
     code = str(error.get("code") or INTERNAL_ERROR)
     message = str(error.get("message") or fallback)
     if code == "not_signed_in":
         message += " The user signs in inside the app window (F-list → Sign in)."
+    elif code == "embedding_failed":
+        message += (
+            " get_rag_status with check_embedding=true shows whether the "
+            "model loads on its own."
+        )
     return ToolError(code, message, **(error.get("details") or {}))
 
 
@@ -158,7 +167,7 @@ async def pull_character(character: str, ctx: Context, wait: bool = True) -> dic
         "job_id": job.id,
         "note": (
             "This updated the local copy of what is published. Edits "
-            "live in the Workbench and were not touched. " + NO_PUSH_NOTE
+            "live in the Workbench and were not touched."
         ),
     }
 
@@ -276,34 +285,25 @@ async def ingest_logs(
     rebuild: bool = False,
     wait: bool = True,
 ) -> dict[str, Any]:
-    """Chunk and embed logs so search_logs_semantic can find them.
+    """Chunk and embed Logs so search_logs_semantic can find them.
 
-    Only messages with an IC/OOC verdict are indexed — the count of
-    those skipped comes back as `skipped_unlabeled`, and a high number
-    means the classification flow should run first. OOC is excluded
-    unless `include_ooc=true`; it is usually noise in a search over
-    roleplay. Pass include_ooc=true on every ingest to keep OOC chunks;
-    one without it deletes them.
+    Only messages with an IC or OOC Label are indexed;
+    `skipped_unlabeled` counts the rest, and a high number means
+    get_unlabeled_messages should run first. OOC is left out: pass
+    include_ooc=true on every ingest to keep OOC chunks.
+    Channel Logs are left out unless `include_channels=true`, as in
+    list_partners: group chat buries a character's roleplay.
 
-    Channel logs are excluded unless `include_channels=true`, matching
-    list_partners. They are group chat rather than this character's
-    roleplay, and they are large enough to bury everything else.
+    Re-running it brings new messages and Label changes to search: only
+    conversation days whose messages or Labels changed are embedded
+    again (`chunks_already_present` counts the rest), and chunks no
+    longer labelled for the Index are deleted (`chunks_removed`).
+    `rebuild=true` first deletes the scope's chunks (all of them when
+    unscoped; a character's channel chunks only with include_channels).
 
-    Re-running it is how new messages and Label changes reach search:
-    each conversation day is recomputed from the Logs and the current
-    Labels, only days whose messages or Labels changed are embedded
-    again (`chunks_already_present` counts the rest), and chunks for
-    messages that are no longer labelled for the Index are deleted
-    (`chunks_removed`).
-
-    `rebuild=true` first deletes only the scope's chunks (all of them
-    when unscoped; a character's channel chunks only with
-    include_channels).
-
-    Embedding runs in-process by default, so nothing needs to be
-    installed. `wait=false` returns a job id to poll with get_job
-    instead of blocking. One ingest at a time: another is refused with
-    `index_busy`.
+    Embedding runs in-process. `wait=false` returns a job id at once,
+    for get_job and cancel_job. One ingest at a time: another is
+    refused `index_busy`.
     """
     # Resolve to the on-disk spelling like every other conversation
     # tool: the Labels and alias links are keyed on it, so a different
@@ -322,11 +322,7 @@ async def ingest_logs(
         job=job.id,
     )
     if not wait:
-        return {
-            "job_id": job.id,
-            "state": job.state,
-            "note": "Running in the background — poll get_job for progress.",
-        }
+        return _started(job)
 
     started = time.monotonic()
     last_reported = -1
@@ -340,15 +336,10 @@ async def ingest_logs(
             )
             last_reported = progress.embedded
         if time.monotonic() - started > WAIT_BUDGET_SEC:
-            return {
-                "job_id": job.id,
-                "state": job.state,
-                "note": (
-                    "Still running after 10 minutes — left in the "
-                    "background. Poll get_job for progress."
-                ),
-            }
+            return _started(job)
         await asyncio.sleep(0.5)
+    if job.state == "failed":
+        raise _job_failure(job, "the ingest failed")
     return _ingest_summary(job.to_dict())
 
 
@@ -357,21 +348,14 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
         "job_id": job["id"],
         "state": job["state"],
         **(job["result"] or {}),
-        "error": job["error"],
         "last_error": job["progress"].get("last_error"),
     }
     if out.get("skipped_unlabeled"):
         out["note"] = (
             f"{out['skipped_unlabeled']} message(s) were skipped for "
-            "having no IC/OOC verdict — they aren't searchable. Run the "
-            "classification flow (get_messages_to_classify) and ingest "
+            "having no IC/OOC Label — they aren't searchable. Label them "
+            "(get_unlabeled_messages, set_message_labels) and ingest "
             "again to include them."
-        )
-    elif out["state"] == "failed":
-        out["note"] = (
-            "The ingest failed — see `error`. test_embedding_connection "
-            "reports an embedding model that will not load on its own, "
-            "which is the quicker way to see what went wrong there."
         )
     return out
 
@@ -391,12 +375,10 @@ def get_job(job_id: str) -> dict[str, Any]:
     return jobs.registry().get(job_id).to_dict()
 
 
-@tool(tags=(TAG_CORE, TAG_LOGS), title="Cancel a job")
+@tool(tags=(TAG_CORE, TAG_LOGS, TAG_CLASSIFY), title="Cancel a job")
 def cancel_job(job_id: str) -> dict[str, Any]:
-    """Ask a running job to stop, whatever its kind. It stops at its
-    next safe point (an ingest between batches; what it already wrote
-    stays) — poll get_job to see it end. A finished job is left as it
-    ended."""
+    """Stop a running job of any kind at its next safe point; what it
+    already wrote stays. get_job shows it end."""
     from services import jobs
 
     job = jobs.registry().cancel(job_id)
@@ -404,7 +386,15 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     return job.to_dict()
 
 
-@tool(tags=TAG_LOGS, title="Wipe the search index", destructive=True)
+@tool(
+    tags=TAG_LOGS,
+    title="Wipe the search index",
+    destructive=True,
+    warning=(
+        "This deletes the whole search index. Re-indexing means "
+        "re-embedding every message, which takes a while."
+    ),
+)
 def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     """Delete every indexed chunk. The logs and their labels are
     untouched; only the search index goes.
@@ -413,52 +403,11 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     model can't be searched with another. Refused with `index_busy`
     while an ingest runs.
     """
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            "This deletes the whole search index. Re-indexing means "
-            "re-embedding every message, which takes a while. Ask the "
-            "user, then call again with confirm=true.",
-        )
     from services import index as index_service
 
     index_service.wipe()
     audit("wipe_search_index")
     return {"wiped": True, "note": "Run ingest_logs to rebuild."}
-
-
-@tool(
-    tags=(TAG_CORE, TAG_LOGS),
-    title="Test the embedding model",
-    read_only=True,
-)
-def test_embedding_connection() -> dict[str, Any]:
-    """Check that the embedding model loads, and report its dimension.
-
-    Embedding runs inside Workbench — there is no server to start and
-    nothing to configure. The first call downloads the model, so it can
-    take a moment; after that it is milliseconds.
-    """
-    import rag as rag_settings
-    import rag_embed
-
-    settings = rag_settings.load_settings()
-    started = time.monotonic()
-    try:
-        dimension, _vec = rag_embed.probe(settings, timeout=60.0)
-    except rag_embed.EmbedError as exc:
-        return {
-            "ok": False,
-            "model": settings.embed_model,
-            "error": str(exc),
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-        }
-    return {
-        "ok": True,
-        "model": settings.embed_model,
-        "dimension": dimension,
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-    }
 
 
 # --------------------------------------------------------------------
@@ -467,26 +416,23 @@ def test_embedding_connection() -> dict[str, Any]:
 
 
 @tool(tags=TAG_CHARACTER, title="Export for upload to F-list")
-def export_restore_zip(
-    character: str, path: str, working_set: str | None = None
-) -> dict[str, Any]:
-    """Save the ZIP the user uploads to F-list themselves.
+def export_upload_zip(character: str, path: str) -> dict[str, Any]:
+    """Save the Workbench as the ZIP the user uploads to F-list themselves.
 
-    This is the hand-off point. Workbench does not publish anything:
-    the user opens f-list.net in their browser and restores this file
+    This is the hand-off point. The app does not publish anything:
+    the user opens f-list.net in their browser and uploads this file
     with the FlistCharExporter userscript or the paired extension.
     Never tell them a profile is live because this file was written.
     """
     import zip_serialise
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
     # Payload and images in one step under the character's lock, as the
-    # window's export does.
+    # window's export does. Live is never an Upload source; it stands in
+    # only for a character that has no Workbench yet, which would hold
+    # the same profile.
     with archive_registry.character_lock(target.id):
-        payload = archive_workbench.export_payload(
-            target.id, from_live=resolved.is_live
-        )
+        payload = archive_workbench.export_payload(target.id)
         if payload is None:
             raise ToolError(
                 "no_live",
@@ -500,16 +446,15 @@ def export_restore_zip(
             avatar_path=archive_images.avatar_path_for(target.name),
         )
     written = _write_file(path, data, suffix=".zip")
-    audit("export_restore_zip", character=target.name, path=str(written))
+    audit("export_upload_zip", character=target.name, path=str(written))
     return {
         "character": target.name,
-        "set": resolved.name,
         "path": str(written),
         "bytes": len(data),
         "next_step": (
             "The user uploads this in their browser — f-list.net with "
-            "the FlistCharExporter userscript, or the paired Workbench "
-            "extension. Workbench cannot do it for them."
+            "the FlistCharExporter userscript, or the paired extension. "
+            "The app cannot do it for them."
         ),
     }
 
@@ -550,30 +495,25 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
         ) from exc
 
 
-#: How many numbered names an export into a folder tries before giving
-#: up with an `exists` refusal.
-_MAX_NAME_TRIES = 100
-
-
 @tool(tags=TAG_CORE, title="Extension pairing status", read_only=True)
 def get_extension_pairing_status() -> dict[str, Any]:
-    """Whether the browser extension is paired with this Workbench.
+    """Whether the browser extension is paired with the app.
 
     The extension is one of the two ways the user uploads a profile to
     F-list. Pairing is accepted by the user in the app window and
     cannot be done from here.
     """
-    import restore as restore_svc
+    from services import upload as upload_service
 
-    paired = restore_svc.is_paired()
+    paired = upload_service.is_paired()
     return {
         "paired": paired,
         "note": (
-            "The extension can fetch backups from this Workbench and "
-            "restore them to F-list."
+            "The extension can fetch the Workbench or a Backup and "
+            "upload it to F-list."
             if paired
             else "Not paired. The user pairs it from the extension; "
-            "Workbench then shows an accept prompt. That has to be a "
+            "the app window then asks them to accept. That has to be a "
             "human action."
         ),
     }
@@ -586,7 +526,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
 
 @tool(tags=TAG_CORE, title="Settings", read_only=True)
 def get_settings() -> dict[str, Any]:
-    """Workbench's settings: the F-Chat log directory, the IC/OOC rule
+    """The app's settings: the F-Chat log directory, the IC/OOC rule
     threshold, the embedding model and the retrieval tuning, and the
     folders `import_images` may read from (which only the user can
     change, in Settings → Security).
@@ -631,12 +571,15 @@ def update_settings(
     rerank_model: str | None = None,
     hybrid_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Change Workbench settings. Omitted values are left alone.
+    """Change the app's settings. Omitted values are left alone.
 
     Numbers out of range are clamped; `changed` reports what was
     stored. An empty model name resets it to the default. The window
     shows the change at once. Changing `embed_model` invalidates the
     search index: it was built with the old model's vectors.
+
+    Changing `embed_model` or `rerank_model` deletes the old model's
+    weights from disk; choosing it again downloads them again.
     """
     from services import settings as settings_service
 
@@ -705,10 +648,18 @@ def add_alias(character: str, name: str, primary_name: str) -> dict[str, Any]:
     return {"character": character, "primary": primary_name, "group": group}
 
 
-@tool(tags=TAG_LOGS, title="Unlink a partner name", destructive=True)
-def remove_alias(character: str, name: str) -> dict[str, Any]:
+@tool(
+    tags=TAG_LOGS,
+    title="Unlink a partner name",
+    destructive=True,
+    warning=(
+        "Unlinking splits the name's conversation off again; only "
+        "add_alias brings it back."
+    ),
+)
+def remove_alias(character: str, name: str, confirm: bool = False) -> dict[str, Any]:
     """Undo add_alias for one name, so it shows as its own conversation
-    again."""
+    again. Needs `confirm=true`."""
     import aliases as aliases_store
 
     conn = aliases_store.connect()

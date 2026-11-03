@@ -1,13 +1,11 @@
 """Characters, their Workbench and Live, and descriptions (design §3.2–3.4).
 
 Addressing note that runs through all of these: `character` takes a
-name or an id. `working_set` is left out for the character's Workbench,
-or is the string `"live"` for the read-only profile last pulled from
-F-list; nothing else is accepted.
-
-The parameter is not called `set`: that shadows the Python builtin
-inside every tool body, and the first tool that reached for `set(...)`
-to de-duplicate a list called `None` instead.
+name or an id. A read that can look at either copy takes `source`:
+`"workbench"` (the default) for the character's Workbench, or `"live"`
+for the read-only profile last pulled from F-list; nothing else is
+accepted. Results do not name the copy back; `read_only` is true for
+Live.
 """
 
 from __future__ import annotations
@@ -16,22 +14,34 @@ from typing import Any
 
 import archive_backups
 import archive_images
-import archive_live
 import archive_registry
 
 from ._context import (
+    LIVE,
+    WORKBENCH,
     ToolError,
     load_payload,
+    page,
     resolve_character,
     resolve_workbench_or_live,
 )
-from ._registry import TAG_CHARACTER, TAG_CORE, tool
-from .tools_session import NO_PUSH_NOTE
+from ._registry import NO_PUSH_NOTE, TAG_CHARACTER, TAG_CORE, tool
+
+#: The most rows one call of a list tool returns; `offset` pages on.
+MAX_CHARACTERS = 100
+MAX_PROFILE_FIELDS = 100
+MAX_KINKS = 100
+MAX_BACKUPS = 50
+#: Lower than the rest: a pool image is read from disk for its hash and
+#: size, and each row says a lot.
+MAX_IMAGES = 50
 
 
 @tool(tags=(TAG_CORE, TAG_CHARACTER), title="List characters", read_only=True)
-def list_characters(include_log_only: bool = True) -> dict[str, Any]:
-    """Every character this Workbench knows about.
+def list_characters(
+    include_log_only: bool = True, limit: int = MAX_CHARACTERS, offset: int = 0
+) -> dict[str, Any]:
+    """Every character the app has locally.
 
     Characters with a local archive can be edited; ones that only
     appear in the F-Chat logs can be read about but have no profile
@@ -78,74 +88,39 @@ def list_characters(include_log_only: bool = True) -> dict[str, Any]:
             row["on_account"] = str(row["name"]).lower() in on_account
 
     rows.sort(key=lambda r: str(r.get("name") or "").lower())
-    return {"characters": rows}
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_CHARACTERS)
+    return {"characters": rows, "page": paged}
 
 
-@tool(tags=TAG_CHARACTER, title="Live profile", read_only=True)
-def get_live_profile(
-    character: str, include_description: bool = False
-) -> dict[str, Any]:
-    """The profile as it stood at the last pull from F-list.
-
-    Read-only by definition — this is the record of what is published,
-    not the Workbench. Pass include_description=true to also get the BBCode,
-    which can be tens of kilobytes.
-    """
-    target = resolve_character(character)
-    live = archive_live.read_live(target.id)
-    if live is None:
-        raise ToolError(
-            "no_live",
-            f"No profile has been pulled for {target.name} yet. "
-            "Run pull_character first.",
-        )
-    char = live.get("character") if isinstance(live.get("character"), dict) else live
-    out: dict[str, Any] = {
-        "character": target.name,
-        "id": target.id,
-        "fetched_at": live.get("fetched_at"),
-        "custom_title": (char or {}).get("custom_title"),
-        "infotag_count": len(live.get("infotags") or {}),
-        "kink_count": len(live.get("kinks") or {}),
-        "custom_kink_count": len(live.get("custom_kinks") or {}),
-        "image_count": len(live.get("images") or []),
-    }
-    description = (char or {}).get("description") or ""
-    out["description_length"] = len(description)
-    if include_description:
-        out["description"] = description
-    return out
-
-
-#: What `get_working_set` can be asked for. Descriptions are excluded by
+#: What `get_workbench` can be asked for. Descriptions are excluded by
 #: default because a single one can run to 30 KB.
-SET_SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "settings")
+SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "settings")
 
 
 @tool(tags=TAG_CHARACTER, title="Read the Workbench", read_only=True)
-async def get_working_set(
+async def get_workbench(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     include: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The Workbench's contents, by section; working_set="live" reads
-    Live instead.
+    """The Workbench's contents, by section; source="live" reads Live
+    instead, the profile as last pulled from F-list.
 
     `include` picks from summary, infotags, kinks, custom_kinks, images
-    and settings; the default is summary only. The description is not
-    in here at any setting — use get_description, which can page
-    through it.
+    and settings; the default is summary only. Live's summary says when
+    it was pulled (`fetched_at`). The description is not in here at any
+    setting — use get_description, which can page through it.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     sections = [s.strip().lower() for s in (include or ["summary"])]
-    unknown = [s for s in sections if s not in SET_SECTIONS]
+    unknown = [s for s in sections if s not in SECTIONS]
     if unknown:
         raise ToolError(
             "validation_failed",
             f"unknown section(s): {', '.join(unknown)}",
-            allowed=list(SET_SECTIONS),
+            allowed=list(SECTIONS),
         )
 
     from services import mapping as mapping_service
@@ -160,7 +135,7 @@ async def get_working_set(
 
     out: dict[str, Any] = {
         "character": target.name,
-        "set": resolved.name,
+        "id": target.id,
         "read_only": resolved.is_live,
     }
 
@@ -178,6 +153,8 @@ async def get_working_set(
             "images": len(images),
             "edited_paths": len(payload.get("_overlay") or []),
         }
+        if resolved.is_live:
+            out["summary"]["fetched_at"] = payload.get("fetched_at")
 
     if "infotags" in sections:
         out["profile_fields"] = [
@@ -239,18 +216,18 @@ def _describe_infotag(catalogue, key: str, value: Any) -> dict[str, Any]:  # noq
 @tool(tags=TAG_CHARACTER, title="Read the description", read_only=True)
 def get_description(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     offset: int = 0,
     length: int | None = None,
 ) -> dict[str, Any]:
     """The profile description, in F-list BBCode.
 
     Descriptions run long; `offset` and `length` page through one.
-    Reads the Workbench; pass working_set="live" to read what is
-    currently published.
+    Reads the Workbench; pass source="live" to read what is currently
+    published.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     char = payload.get("character") if isinstance(payload.get("character"), dict) else {}
     text = (char or {}).get("description") or ""
@@ -260,7 +237,6 @@ def get_description(
     slice_ = text[start:end]
     return {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
         "total_length": len(text),
         "offset": start,
@@ -273,10 +249,12 @@ def get_description(
 @tool(tags=TAG_CHARACTER, title="Profile fields", read_only=True)
 async def list_profile_fields(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     group: str | None = None,
     only_set: bool = False,
     query: str | None = None,
+    limit: int = MAX_PROFILE_FIELDS,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """The structured profile fields — species, height, orientation and
     the rest — with each field's type, allowed options and current value.
@@ -286,7 +264,7 @@ async def list_profile_fields(
     value; `group` and `query` filter by category and by name.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     values = payload.get("infotags") or {}
 
@@ -322,11 +300,12 @@ async def list_profile_fields(
         if catalogue.field_by_id(str(k)) is None
     ]
 
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_PROFILE_FIELDS)
     return {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
         "fields": rows,
+        "page": paged,
         "unknown_fields": unknown,
         "groups": sorted({f.group for f in catalogue.fields if f.group}),
     }
@@ -335,10 +314,12 @@ async def list_profile_fields(
 @tool(tags=TAG_CHARACTER, title="Kinks", read_only=True)
 async def list_kinks(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     choice: str | None = None,
     query: str | None = None,
     include_unset: bool = False,
+    limit: int = MAX_KINKS,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """The character's kink choices, by name.
 
@@ -348,7 +329,7 @@ async def list_kinks(
     separately — they are free text the user wrote.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     chosen = payload.get("kinks") or {}
 
@@ -378,6 +359,7 @@ async def list_kinks(
             }
         )
     rows.sort(key=lambda r: (str(r["group"] or ""), str(r["kink"]).lower()))
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_KINKS)
 
     custom = [
         {
@@ -392,9 +374,9 @@ async def list_kinks(
 
     return {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
         "kinks": rows,
+        "page": paged,
         "custom_kinks": custom,
         "counts": _choice_counts(chosen),
     }
@@ -453,7 +435,7 @@ def get_bbcode_reference() -> dict[str, Any]:
             "inside a size tag and answers 'The [color] tag is not "
             "allowed here' when the profile is saved. Put the colour "
             "outermost — [color=cyan][big][b]Name[/b][/big][/color], "
-            "not [big][b][color=cyan]Name[/color][/b][/big]. Workbench "
+            "not [big][b][color=cyan]Name[/color][/b][/big]. The app "
             "renders both, so a preview will not warn you; the site "
             "does, at upload time.",
         ],
@@ -495,23 +477,22 @@ _BBCODE_TAGS: list[dict[str, str]] = [
 
 
 @tool(tags=TAG_CHARACTER, title="Compare the Workbench with Live", read_only=True)
-async def diff_working_set(
+async def diff_workbench(
     character: str,
-    working_set: str | None = None,
-    against: str = "live",
+    source: str = WORKBENCH,
+    against: str = LIVE,
 ) -> dict[str, Any]:
     """What differs between the Workbench and Live.
 
-    Compares the Workbench against `live`, the published profile, which
-    answers "what would change if I uploaded this". Pass
-    working_set="live" and against="workbench" to read the change the
-    other way round.
+    Compares the Workbench against Live, what F-list shows, which
+    answers "what would change if I uploaded this". Pass source="live"
+    and against="workbench" to read the change the other way round.
 
     The description is summarised rather than diffed line by line;
     read both with get_description if the text itself matters.
     """
     target = resolve_character(character)
-    left = resolve_workbench_or_live(target, working_set)
+    left = resolve_workbench_or_live(target, source)
     right = resolve_workbench_or_live(target, against, param="against")
     if left.is_live == right.is_live:
         raise ToolError(
@@ -540,28 +521,35 @@ async def diff_working_set(
 
 
 @tool(tags=TAG_CHARACTER, title="List backups", read_only=True)
-def list_backups(character: str) -> dict[str, Any]:
+def list_backups(
+    character: str, limit: int = MAX_BACKUPS, offset: int = 0
+) -> dict[str, Any]:
     """ZIP backups of a character, newest first.
 
     Each entry says what it holds, `source`: `live` or `workbench`
     (`unknown` for older Backups), and why it was made, `occasion`:
-    `manual`, `before-upload`, `before-restore`, `migration` or
-    `backup-all` (null for older Backups).
+    `manual`, `before-upload`, `before-restore`, `before-replace`,
+    `migration` or `backup-all` (null for older Backups).
 
     Backups include images and the avatar. load_backup_into_workbench
     restores one into the Workbench.
     """
     target = resolve_character(character)
-    return {
-        "character": target.name,
-        "backups": archive_backups.list_zip_backups(target.id),
-    }
+    backups, paged = page(
+        archive_backups.list_zip_backups(target.id),
+        offset=offset,
+        limit=limit,
+        cap=MAX_BACKUPS,
+    )
+    return {"character": target.name, "backups": backups, "page": paged}
 
 
 @tool(tags=TAG_CHARACTER, title="List images", read_only=True)
 def list_images(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
+    limit: int = MAX_IMAGES,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """The character's gallery, plus any images on disk that are not
     currently on the profile.
@@ -573,11 +561,13 @@ def list_images(
     how many Backups hold it (each with its own copy of the file), and
     whether the older copies from before the upgrade name it
     (`migration_backup`; that Backup holds no image files).
+
+    Pages run through the gallery first, then the rest.
     """
     from services import image_import
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
 
     gallery = [
@@ -590,16 +580,25 @@ def list_images(
         for row in (payload.get("images") or [])
         if isinstance(row, dict) and row.get("image_id")
     ]
+    gallery.sort(key=lambda r: r.get("sort_order") or 0)
     on_profile = {row["image_id"] for row in gallery}
+    rest = [
+        row
+        for row in archive_images.list_character_images(target.id)
+        if _image_id(row) and _image_id(row) not in on_profile
+    ]
+    # One page over both lists; only the pool rows on it are read from
+    # disk.
+    window, paged = page(gallery + rest, offset=offset, limit=limit, cap=MAX_IMAGES)
 
     meta = image_import.read_meta(target.id)
     refs = image_import.references(target.id)
     images_dir = archive_images.images_dir(target.id)
     pool = []
-    for row in archive_images.list_character_images(target.id):
-        image_id = str(row.get("image_id") or row.get("id") or "")
-        if not image_id or image_id in on_profile:
+    for row in window:
+        if row.get("on_profile"):
             continue
+        image_id = _image_id(row)
         path = images_dir / f"{image_id}.{row.get('extension')}"
         try:
             sha = archive_images.file_sha256(path)
@@ -628,7 +627,11 @@ def list_images(
 
     return {
         "character": target.name,
-        "set": resolved.name,
-        "gallery": sorted(gallery, key=lambda r: r.get("sort_order") or 0),
+        "gallery": [row for row in window if row.get("on_profile")],
         "not_on_profile": pool,
+        "page": paged,
     }
+
+
+def _image_id(row: dict[str, Any]) -> str:
+    return str(row.get("image_id") or row.get("id") or "")

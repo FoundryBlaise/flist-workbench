@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 from fchat_logs import chat, write_log
 
 LONG_A = "She set the lantern down and listened to the rain. " * 6
@@ -48,6 +48,9 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     importlib.reload(settings)
     importlib.reload(labels)
     importlib.reload(server)
+    # The tools under test return Log text, which MCP clients get only
+    # once the user turns it on.
+    allow_log_text()
     return root
 
 
@@ -56,7 +59,7 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 async def test_guidelines_come_with_the_workflow(conversation) -> None:
     async with mcp_client("logs") as session:
-        _, body = await call_tool(session, "get_classification_guidelines")
+        _, body = await call_tool(session, "get_labelling_guidelines")
     assert body["id"] == "de-default"
     assert "Klassifikator" in body["guidelines"]
     # The rules already applied must be stated, or the model will
@@ -67,9 +70,9 @@ async def test_guidelines_come_with_the_workflow(conversation) -> None:
 
 async def test_guidelines_available_in_english_and_minimal(conversation) -> None:
     async with mcp_client("logs") as session:
-        _, en = await call_tool(session, "get_classification_guidelines", language="en")
+        _, en = await call_tool(session, "get_labelling_guidelines", language="en")
         _, minimal = await call_tool(
-            session, "get_classification_guidelines", language="minimal"
+            session, "get_labelling_guidelines", language="minimal"
         )
     assert en["id"] == "en-default"
     assert minimal["id"] == "minimal"
@@ -78,7 +81,7 @@ async def test_guidelines_available_in_english_and_minimal(conversation) -> None
 async def test_an_unknown_language_lists_the_options(conversation) -> None:
     async with mcp_client("logs") as session:
         result, _ = await call_tool(
-            session, "get_classification_guidelines", language="klingon"
+            session, "get_labelling_guidelines", language="klingon"
         )
     text = tool_error_text(result)
     assert "validation_failed" in text
@@ -88,8 +91,8 @@ async def test_an_unknown_language_lists_the_options(conversation) -> None:
 async def test_the_prompt_twin_is_exposed(conversation) -> None:
     async with mcp_client("logs") as session:
         prompts = {p.name for p in (await session.list_prompts()).prompts}
-        assert "classify_ic_ooc" in prompts
-        rendered = await session.get_prompt("classify_ic_ooc", {"language": "en"})
+        assert "label_ic_ooc" in prompts
+        rendered = await session.get_prompt("label_ic_ooc", {"language": "en"})
     body = rendered.messages[0].content.text
     assert "classifier" in body.lower()
 
@@ -101,7 +104,7 @@ async def test_only_rule_undecidable_messages_are_offered(conversation) -> None:
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -115,7 +118,7 @@ async def test_batches_carry_context_around_each_message(conversation) -> None:
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -130,7 +133,7 @@ async def test_context_can_be_switched_off(conversation) -> None:
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             context_before=0,
@@ -144,7 +147,7 @@ async def test_a_limited_batch_reports_what_is_left(conversation) -> None:
     async with mcp_client("logs") as session:
         _, first = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             limit=1,
@@ -155,7 +158,7 @@ async def test_a_limited_batch_reports_what_is_left(conversation) -> None:
 
         _, second = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             limit=1,
@@ -169,7 +172,7 @@ async def test_an_unknown_partner_is_named_as_such(conversation) -> None:
     async with mcp_client("logs") as session:
         result, _ = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Nobody",
         )
@@ -192,7 +195,7 @@ async def test_the_full_flow_labels_a_conversation(conversation) -> None:
 
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -233,7 +236,7 @@ async def test_the_full_flow_labels_a_conversation(conversation) -> None:
         # Nothing left to offer.
         _, empty = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -247,7 +250,7 @@ async def test_verdicts_are_readable_back_with_their_reason(
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -294,7 +297,7 @@ async def test_a_write_that_stores_nothing_raises(conversation) -> None:
     text = tool_error_text(result)
     assert "nothing_written" in text
     assert "0123456789abcdef" in text
-    assert "get_messages_to_classify" in text
+    assert "get_unlabeled_messages" in text
 
 
 async def test_a_partial_write_keeps_the_good_verdicts_and_says_so(
@@ -303,7 +306,7 @@ async def test_a_partial_write_keeps_the_good_verdicts_and_says_so(
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -329,7 +332,7 @@ async def test_every_write_reports_what_is_still_unjudged(conversation) -> None:
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             limit=1,
@@ -346,7 +349,7 @@ async def test_every_write_reports_what_is_still_unjudged(conversation) -> None:
 
         _, batch2 = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             cursor=0,
@@ -366,7 +369,7 @@ async def test_a_bad_label_is_rejected_per_item(conversation) -> None:
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -390,7 +393,7 @@ async def test_labels_are_accepted_case_insensitively(conversation) -> None:
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -436,7 +439,7 @@ async def test_clearing_reverts_to_unlabeled(conversation) -> None:
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -489,7 +492,7 @@ async def test_verdicts_survive_a_differently_cased_address(conversation) -> Non
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -532,7 +535,7 @@ async def test_writing_labels_through_a_cased_address_hits_one_row_set(
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="lady amber blaise",
             partner="daelan envale",
         )
@@ -596,7 +599,7 @@ async def test_progress_fields_come_before_the_messages(conversation) -> None:
     async with mcp_client("logs") as session:
         result, body = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
@@ -614,7 +617,7 @@ async def test_cursor_zero_walks_the_whole_conversation(conversation) -> None:
         for _ in range(10):
             _, batch = await call_tool(
                 session,
-                "get_messages_to_classify",
+                "get_unlabeled_messages",
                 character="Lady Amber Blaise",
                 partner="Daelan Envale",
                 cursor=0,
@@ -652,13 +655,13 @@ async def test_asking_for_more_than_ten_is_answered_with_a_warning(
     async with mcp_client("logs") as session:
         _, small = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
         _, big = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             limit=80,
@@ -685,13 +688,13 @@ async def test_every_batch_carries_the_decision_rule(conversation) -> None:
     async with mcp_client("logs") as session:
         _, de = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
         _, en = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
             language="en",
@@ -709,7 +712,7 @@ async def test_the_rule_survives_a_truncated_read(conversation) -> None:
     async with mcp_client("logs") as session:
         result, _ = await call_tool(
             session,
-            "get_messages_to_classify",
+            "get_unlabeled_messages",
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )

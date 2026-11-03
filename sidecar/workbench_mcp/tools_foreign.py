@@ -9,7 +9,7 @@ Two constraints shape this module.
 into a Workbench, a Backup or an export, and none should be added.
 The cache is a separate on-disk root precisely so no existing write
 path can reach it. A model asked to "copy this profile" should say
-that Workbench does not do that.
+that the app does not do that.
 
 *It spends a quarter of the hourly F-list budget, at most.* The user's
 own pulls and the model's browsing share one 200-requests-per-hour
@@ -144,7 +144,7 @@ async def get_foreign_profile(
 
     This is for looking at how a profile is put together — how the
     BBCode is structured, which infotags are filled, how the kink
-    lists are arranged. Workbench offers no way to copy one of these
+    lists are arranged. The app offers no way to copy one of these
     into the user's own characters, and this tool is not a step
     towards one: there is no Workbench, Backup or export behind it.
 

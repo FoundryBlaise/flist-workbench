@@ -1,8 +1,10 @@
 """Upload: the userscript ZIP, and the paired browser extension.
 
 The extension's own routes take its pairing token
-(`_require_restore_auth`); pairing itself is accepted from the app
-window.
+(`_require_pairing`); pairing itself is accepted from the app
+window. Their paths say `/restore/` and `snapshot` because the released
+extension calls them so; they move only with an extension release that
+knows new ones (services/upload.py).
 """
 
 from typing import Any
@@ -13,11 +15,11 @@ from pydantic import BaseModel
 import archive_images
 import archive_registry
 import archive_workbench
-import restore as restore_svc
 from archive_errors import CharacterNotFound, NoLive
 from refusals import BackupNotFound, InvalidRequest, NotPaired
 from services import events
 from services import pull as pull_service
+from services import upload as upload_service
 
 router = APIRouter()
 
@@ -27,7 +29,7 @@ EXTENSION = "extension"
 
 @router.get("/flist/character/{character_id}/export.zip")
 def flist_character_export_zip(character_id: str) -> Response:
-    """Build the userscript-compatible restore ZIP (Tier 6).
+    """Build the userscript-compatible Upload ZIP (Tier 6).
 
     Bundles `character.json` + every image referenced by the
     Workbench's gallery + the avatar. The renderer triggers a
@@ -93,53 +95,53 @@ class _PairAcceptBody(BaseModel):
     handshake_id: str
 
 
-class _PreRestoreSnapshotBody(BaseModel):
+class _PreUploadBackupBody(BaseModel):
     character: str
     payload: dict[str, Any]
 
 
-class _RestoreDoneBody(BaseModel):
+class _UploadDoneBody(BaseModel):
     character: str | None = None
 
 
-def _require_restore_auth(
+def _require_pairing(
     x_workbench_auth: str | None = Header(default=None),
     x_workbench_extension_version: str | None = Header(default=None),
 ) -> str:
-    if not restore_svc.auth_token_valid(x_workbench_auth):
+    if not upload_service.auth_token_valid(x_workbench_auth):
         raise NotPaired()
-    restore_svc.note_extension_version(x_workbench_extension_version)
+    upload_service.note_extension_version(x_workbench_extension_version)
     return x_workbench_auth  # type: ignore[return-value]
 
 
 @router.post("/restore/handshake")
-def restore_handshake_begin() -> dict[str, str]:
-    return restore_svc.begin_handshake()
+def handshake_begin() -> dict[str, str]:
+    return upload_service.begin_handshake()
 
 
 @router.get("/restore/handshake-status")
-def restore_handshake_status(handshake_id: str) -> dict[str, str]:
-    return restore_svc.handshake_status(handshake_id)
+def handshake_status(handshake_id: str) -> dict[str, str]:
+    return upload_service.handshake_status(handshake_id)
 
 
 @router.get("/restore/handshake/pending")
-def restore_handshake_pending() -> dict[str, Any]:
-    return {"pending": restore_svc.list_pending_handshakes()}
+def handshake_pending() -> dict[str, Any]:
+    return {"pending": upload_service.list_pending_handshakes()}
 
 
 @router.post("/restore/handshake/accept")
-def restore_handshake_accept(body: _PairAcceptBody) -> dict[str, Any]:
-    return restore_svc.accept_handshake(body.handshake_id)
+def handshake_accept(body: _PairAcceptBody) -> dict[str, Any]:
+    return upload_service.accept_handshake(body.handshake_id)
 
 
 @router.post("/restore/handshake/reject")
-def restore_handshake_reject(body: _PairAcceptBody) -> dict[str, Any]:
-    return restore_svc.reject_handshake(body.handshake_id)
+def handshake_reject(body: _PairAcceptBody) -> dict[str, Any]:
+    return upload_service.reject_handshake(body.handshake_id)
 
 
 @router.delete("/restore/token")
-def restore_token_revoke() -> dict[str, bool]:
-    restore_svc.revoke_token()
+def pairing_token_revoke() -> dict[str, bool]:
+    upload_service.revoke_token()
     return {"ok": True}
 
 
@@ -150,55 +152,57 @@ def pairing_status() -> dict[str, bool]:
     Outside `/restore/` on purpose: it answers the app window only
     (launch secret), never the extension, and never returns the token.
     """
-    return {"paired": restore_svc.is_paired()}
+    return {"paired": upload_service.is_paired()}
 
 
 @router.get("/restore/extension")
-def restore_extension_seen() -> dict[str, Any]:
+def extension_seen() -> dict[str, Any]:
     """Which extension version the browser is running, as of its last
     authenticated call. `version` is null until it has made one."""
-    return restore_svc.extension_seen()
+    return upload_service.extension_seen()
 
 
 @router.get("/restore/characters")
-def restore_characters(
-    _auth: str = Depends(_require_restore_auth),
+def upload_characters(
+    _auth: str = Depends(_require_pairing),
 ) -> list[dict[str, Any]]:
-    return restore_svc.list_archived_characters()
+    return upload_service.list_archived_characters()
 
 
 @router.get("/restore/snapshots")
-def restore_snapshots(
+def upload_sources(
     character: str,
-    _auth: str = Depends(_require_restore_auth),
+    _auth: str = Depends(_require_pairing),
 ) -> list[dict[str, Any]]:
-    return restore_svc.list_snapshots(character)
+    return upload_service.list_upload_sources(character)
 
 
 @router.get("/restore/snapshot/{snapshot_id}")
-def restore_snapshot(
+def upload_source(
     snapshot_id: str,
     character: str,
-    _auth: str = Depends(_require_restore_auth),
+    _auth: str = Depends(_require_pairing),
 ) -> Response:
-    data = restore_svc.fetch_snapshot_zip(character, snapshot_id)
+    """One Upload source as a ZIP; `snapshot_id` is the id the source
+    list gave it."""
+    data = upload_service.fetch_upload_source(character, snapshot_id)
     if data is None:
         raise BackupNotFound("no such Backup")
     return Response(content=data, media_type="application/zip")
 
 
 @router.post("/restore/snapshot/fresh")
-def restore_snapshot_fresh(
-    body: _PreRestoreSnapshotBody,
-    _auth: str = Depends(_require_restore_auth),
+def pre_upload_backup(
+    body: _PreUploadBackupBody,
+    _auth: str = Depends(_require_pairing),
 ) -> dict[str, Any]:
     # The extension's writes are not the window's: attributed to the
     # default `ui`, the window would skip them as its own echo.
     with events.origin(EXTENSION):
-        return restore_svc.write_pre_restore_snapshot(body.character, body.payload)
+        return upload_service.write_pre_upload_backup(body.character, body.payload)
 
 
-class _RestoreSavedBody(BaseModel):
+class _UploadSavedBody(BaseModel):
     character: str
     #: Seconds to wait before pulling. The extension reports the click
     #: on F-list's save button, which is a moment before the POST has
@@ -211,16 +215,16 @@ def _character_required() -> InvalidRequest:
     return InvalidRequest(("body", "character"), "character is required")
 
 
-class _RestoreImageIdsBody(BaseModel):
+class _UploadImageIdsBody(BaseModel):
     character: str
     #: `local-<sha8>` -> the id F-list minted for it on upload.
     mapping: dict[str, str]
 
 
 @router.post("/restore/image-ids")
-def restore_image_ids(
-    body: _RestoreImageIdsBody,
-    _auth: str = Depends(_require_restore_auth),
+def upload_image_ids(
+    body: _UploadImageIdsBody,
+    _auth: str = Depends(_require_pairing),
 ) -> dict[str, Any]:
     """The extension reporting what F-list called our uploads — noted, not applied.
 
@@ -247,16 +251,16 @@ def restore_image_ids(
     name = body.character.strip()
     if not name:
         raise _character_required()
-    character_id = restore_svc._character_id_for_name(name)
+    character_id = upload_service.character_id_for_name(name)
     if character_id is None:
         raise CharacterNotFound(name)
     return {"character": name, "deferred": True}
 
 
 @router.post("/restore/saved")
-async def restore_saved(
-    body: _RestoreSavedBody,
-    _auth: str = Depends(_require_restore_auth),
+async def upload_saved(
+    body: _UploadSavedBody,
+    _auth: str = Depends(_require_pairing),
 ) -> dict[str, Any]:
     """The user pressed Save on f-list.net — re-pull so Live matches
     what is published again.
@@ -265,7 +269,7 @@ async def restore_saved(
     the images; the Workbench must come through untouched: the user
     may well have gone on editing it while the upload happened, and
     quietly replacing their draft with what they just published would
-    be the rudest possible interpretation of "restore finished".
+    be the rudest possible interpretation of "the Upload finished".
 
     Returns immediately. A pull takes seconds and the extension has a
     page to get on with; it is fire-and-forget by design, and the
@@ -286,8 +290,8 @@ async def restore_saved(
 
 
 @router.post("/restore/done")
-def restore_done(
-    body: _RestoreDoneBody,
-    _auth: str = Depends(_require_restore_auth),
+def upload_done(
+    body: _UploadDoneBody,
+    _auth: str = Depends(_require_pairing),
 ) -> dict[str, bool]:
     return {"ok": True}

@@ -308,8 +308,8 @@ def delete_custom_kink(payload: dict[str, Any], kink_id: str) -> tuple[str, list
     return "tombstoned", [f"custom_kinks.{kink_id}._deleted"]
 
 
-def restore_custom_kink(payload: dict[str, Any], kink_id: str) -> list[str]:
-    """Undo a tombstone. A dropped `local:` kink cannot be restored —
+def put_back_custom_kink(payload: dict[str, Any], kink_id: str) -> list[str]:
+    """Undo a tombstone. A dropped `local:` kink cannot be put back —
     nothing was kept."""
     kinks = container(payload, "custom_kinks")
     entry = kinks.get(kink_id)

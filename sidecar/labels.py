@@ -54,7 +54,7 @@ DEFAULT_THRESHOLD_CHARS = 200
 # Classifier prompt, lifted from Chat_RAG/classify.py (German RP).
 # Workbench no longer runs a classifier itself; this and the two
 # presets below are handed to the connected MCP client through
-# `get_classification_guidelines` so its verdicts stay comparable with
+# `get_labelling_guidelines` so its Labels stay comparable with
 # everything labelled before the migration.
 DEFAULT_SYSTEM_PROMPT = """Du bist ein Klassifikator für deutschsprachige Roleplay-Chat-Logs aus F-Chat.
 Klassifiziere die ZIELNACHRICHT zwingend als "IC" (in-character) oder "OOC" (out-of-character).
@@ -199,7 +199,7 @@ URTEIL: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klamm
 FORMAT:
 Gib die Urteile über das Tool `set_message_labels` zurück — ein Eintrag pro
 Nachricht: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
-Der Hash muss exakt der aus `get_messages_to_classify` sein; ein falscher
+Der Hash muss exakt der aus `get_unlabeled_messages` sein; ein falscher
 Hash beschriftet eine fremde Nachricht.
 Beurteile jede Nachricht des Batches, lass keine aus.
 
@@ -298,7 +298,7 @@ decides. A trailing parenthetical does not turn an IC post into OOC.
 FORMAT:
 Return the verdicts through the `set_message_labels` tool — one entry per
 message: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
-The hash must be exactly the one from `get_messages_to_classify`; a wrong
+The hash must be exactly the one from `get_unlabeled_messages`; a wrong
 hash labels someone else's message.
 Judge every message in the batch, skip none.
 

@@ -700,7 +700,7 @@ export function LogViewer() {
                 `${stats.labeled.toLocaleString()} message(s) will revert to Unlabeled. ` +
                 `Rule-based hints (short messages, "((", etc.) keep firing as OOC. ` +
                 `A copy goes to the Trash: Settings → Labels lists it under Cleared Labels, ` +
-                `where Restore puts the labels back.`
+                `where Put back returns the labels.`
             )
             if (!confirmed) return
             try {

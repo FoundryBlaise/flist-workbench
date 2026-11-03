@@ -108,10 +108,10 @@ def flist_character_images_repair(character_id: str) -> dict:
 def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> dict:
-    """Move `images/<image_id>.<ext>` into the character's trash, where
-    it can be restored until the trash is emptied. The renderer drops
-    any gallery row pointing at it."""
-    result = image_trash_service.trash_images(character_id, [image_id])
+    """Delete one image: off the Workbench's gallery if it is there,
+    and into the character's Trash, where it can be restored until the
+    Trash is emptied. The same as the batch route below."""
+    result = image_trash_service.delete_images(character_id, [image_id])
     if not result["trashed"]:
         raise ImageNotFound("image not found")
     return {"trashed": True, "image_id": image_id}
@@ -123,8 +123,12 @@ class _ImageIdsBody(BaseModel):
 
 @router.post("/flist/character/{character_id}/images/trash")
 def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
-    """Move several pool files into the trash at once."""
-    return image_trash_service.trash_images(character_id, body.image_ids)
+    """Delete images, whether in the gallery or only in the pool: the
+    window's delete, and the same function MCP's `trash_images` calls.
+    A gallery image is taken off the Workbench's gallery first; the
+    answer's `etag` is the Workbench's new one (None when the gallery
+    was left alone), which the window saves its next edit over."""
+    return image_trash_service.delete_images(character_id, body.image_ids)
 
 
 # Not under /images/: that prefix is taken by the `{filename}` route.
@@ -158,8 +162,8 @@ def flist_character_trash_file(character_id: str, filename: str) -> FileResponse
     return FileResponse(path)
 
 
-@router.post("/flist/character/{character_id}/trash/restore")
-def flist_character_trash_restore(character_id: str, body: _ImageIdsBody) -> dict:
+@router.post("/flist/character/{character_id}/trash/put-back")
+def flist_character_trash_put_back(character_id: str, body: _ImageIdsBody) -> dict:
     """Put trashed files back into the pool (not onto the profile)."""
     return image_trash_service.restore_images(character_id, body.image_ids)
 
@@ -168,8 +172,8 @@ class _TrashIdsBody(BaseModel):
     ids: list[str]
 
 
-@router.post("/flist/character/{character_id}/trash/backups/restore")
-def flist_character_trash_backups_restore(
+@router.post("/flist/character/{character_id}/trash/backups/put-back")
+def flist_character_trash_backups_put_back(
     character_id: str, body: _TrashIdsBody
 ) -> dict:
     """Put trashed Backups back in the Backup list, under their names."""
@@ -182,13 +186,13 @@ def _trash_owner(character_id: str) -> str:
     it: an unsafe one is refused with `invalid_character_id` (400), one
     the archive does not hold with `character_not_found` (404). A
     character without a name owns no cleared Labels: its listing shows
-    none and a restore or purge finds none (`""` matches no entry)."""
+    none and a put-back or purge finds none (`""` matches no entry)."""
     archive_registry.character_dir(character_id)
     return archive_registry.character_name(character_id) or ""
 
 
-@router.post("/flist/character/{character_id}/trash/labels/restore")
-def flist_character_trash_labels_restore(
+@router.post("/flist/character/{character_id}/trash/labels/put-back")
+def flist_character_trash_labels_put_back(
     character_id: str, body: _TrashIdsBody
 ) -> dict:
     """Put cleared Labels back. A message labelled again since keeps
@@ -247,8 +251,8 @@ def labels_trash_list() -> dict:
     return {"labels": label_trash_service.list_labels(None)}
 
 
-@router.post("/labels/trash/restore")
-def labels_trash_restore(body: _TrashIdsBody) -> dict:
+@router.post("/labels/trash/put-back")
+def labels_trash_put_back(body: _TrashIdsBody) -> dict:
     """Put cleared Labels back, whichever character they were cleared
     for. A message labelled again since keeps its newer Label and is
     reported under `skipped`."""

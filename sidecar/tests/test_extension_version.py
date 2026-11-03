@@ -22,17 +22,17 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
     import importlib
 
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
-    importlib.reload(restore_svc)
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    importlib.reload(upload_service)
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     c = app_client(server.app)
     c.token = hs["token"]  # type: ignore[attr-defined]
     yield c
     # The pairing lives in module state; leave the next test unpaired.
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 def test_nothing_reported_before_the_extension_calls(client: TestClient) -> None:

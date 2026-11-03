@@ -20,25 +20,40 @@ from pydantic import BaseModel
 import archive_backups
 import archive_images
 import archive_workbench
+import backup_origin
 import bbcode_rules
 
 from ._context import (
+    ResolvedCharacter,
     ToolError,
     audit,
+    confirm_required,
     load_payload,
+    page,
     resolve_character,
-    resolve_workbench_or_live,
+    resolve_workbench,
     workbench_target,
 )
-from ._registry import TAG_CHARACTER, tool
-from .tools_session import NO_PUSH_NOTE
+from ._registry import TAG_CHARACTER, TAG_FULL, tool
+
+#: The most images one import_images call takes.
+MAX_IMPORT_ITEMS = 200
+#: The most Trash entries one list_trash call returns; `offset` pages on.
+MAX_TRASH_ENTRIES = 50
 
 
-def _writable(character: str, workbench_or_live: str | None):  # noqa: ANN202
-    """Resolve a character and its Workbench for writing, refusing `live`."""
+def _writable(character: str) -> ResolvedCharacter:
+    """Resolve a character for an edit, making its Workbench from Live
+    if it has none yet. An edit has no other copy it could change."""
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, workbench_or_live, for_write=True)
-    return target, resolved
+    resolve_workbench(target)
+    return target
+
+
+def _kept_as(replaced: archive_backups.WorkbenchReplaced) -> str | None:
+    """The file name of the Backup a whole-Workbench replacement kept,
+    or None when there was no Workbench to keep."""
+    return replaced.kept["filename"] if replaced.kept else None
 
 
 def _guard_bbcode(updated: str) -> None:
@@ -63,7 +78,23 @@ def _guard_bbcode(updated: str) -> None:
         )
 
 
-def _apply(target, resolved, mutate) -> Any:  # noqa: ANN001, ANN202
+#: When set_description and edit_description ask for `confirm`.
+SHRINK_CONFIRM_WHEN = "the description would end up less than half as long as it was"
+
+
+def _guard_shrink(previous: str, updated: str, confirm: bool, instead: str) -> None:
+    """Refuse a change that leaves less than half the description,
+    unless `confirm`. Measured against the text on disk, under the
+    lock: a much shorter text is a summary written over the original
+    as often as it is a deliberate cut. `instead` names the safer way."""
+    if len(updated) * 2 < len(previous) and not confirm:
+        raise confirm_required(
+            f"The description would go from {len(previous)} characters "
+            f"to {len(updated)}, so most of the text would go. {instead}"
+        )
+
+
+def _apply(target, mutate) -> Any:  # noqa: ANN001, ANN202
     from services import payload_ops
 
     try:
@@ -104,7 +135,15 @@ async def _catalogue():  # noqa: ANN202
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Load a backup into the workbench")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Load a backup into the workbench",
+    destructive=True,
+    warning=(
+        "Loading a backup replaces everything currently in the "
+        "Workbench; the Workbench is saved as a Backup first."
+    ),
+)
 def load_backup_into_workbench(
     character: str, backup: str, confirm: bool = False
 ) -> dict[str, Any]:
@@ -117,15 +156,8 @@ def load_backup_into_workbench(
     replaced. `backup` is a filename from `list_backups`.
     """
     target = resolve_character(character)
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            "Loading a backup replaces everything currently in the "
-            "Workbench; the Workbench is saved as a Backup first. Call "
-            "this again with confirm=true.",
-        )
     replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
-    kept = replaced.kept["filename"] if replaced.kept else None
+    kept = _kept_as(replaced)
     audit(
         "load_backup_into_workbench",
         character=target.name,
@@ -134,10 +166,8 @@ def load_backup_into_workbench(
     )
     return {
         "character": target.name,
-        "set": archive_workbench.WORKBENCH_NAME,
         "loaded": backup,
         "kept_as": kept,
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -146,28 +176,37 @@ def load_backup_into_workbench(
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Replace the description")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Replace the description",
+    confirm_when=SHRINK_CONFIRM_WHEN,
+)
 def set_description(
     character: str,
     text: str,
-    working_set: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Replace a profile's whole description with `text`, in F-list
     BBCode.
 
     This overwrites everything — for a targeted change use
-    edit_description, which is far less likely to lose work. Call
-    get_bbcode_reference first if unsure which tags F-list supports.
+    edit_description, which is far less likely to lose work. A `text`
+    less than half as long as the description it replaces needs
+    `confirm=true`. Call get_bbcode_reference first if unsure which
+    tags F-list supports.
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     body = payload_ops.normalise_newlines(str(text))
 
     _guard_bbcode(body)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         previous = payload_ops.get_description(payload)
+        _guard_shrink(
+            previous, body, confirm, "For a targeted change use edit_description."
+        )
         payload_ops.set_description(payload, body)
         return payload_ops.EditResult(
             etag="",
@@ -175,40 +214,42 @@ def set_description(
             detail={"previous_length": len(previous)},
         )
 
-    result = _apply(target, resolved, mutate)
+    result = _apply(target, mutate)
     audit(
         "set_description",
         character=target.name,
-        set=resolved.name,
         length=len(body),
     )
     return {
         "character": target.name,
-        "set": resolved.name,
         "length": len(body),
         "previous_length": result.detail.get("previous_length"),
-        "note": NO_PUSH_NOTE,
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Edit part of the description")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Edit part of the description",
+    confirm_when=SHRINK_CONFIRM_WHEN,
+)
 def edit_description(
     character: str,
     old_string: str,
     new_string: str,
-    working_set: str | None = None,
     replace_all: bool = False,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Replace an exact piece of text inside the description.
 
     `old_string` must appear exactly once, or nothing is changed —
     which is the point: it makes a targeted edit safe on a description
     that is tens of kilobytes long. Pass replace_all=true to change
-    every occurrence instead.
+    every occurrence instead. An edit leaving less than half the
+    description needs `confirm=true`.
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     needle = payload_ops.normalise_newlines(str(old_string))
     replacement = payload_ops.normalise_newlines(str(new_string))
     if not needle:
@@ -234,6 +275,9 @@ def edit_description(
             if replace_all
             else current.replace(needle, replacement, 1)
         )
+        _guard_shrink(
+            current, updated, confirm, "Name a smaller piece in old_string."
+        )
         _guard_bbcode(updated)
         payload_ops.set_description(payload, updated)
         return payload_ops.EditResult(
@@ -242,47 +286,12 @@ def edit_description(
             detail={"replacements": count if replace_all else 1, "length": len(updated)},
         )
 
-    result = _apply(target, resolved, mutate)
-    audit("edit_description", character=target.name, set=resolved.name)
+    result = _apply(target, mutate)
+    audit("edit_description", character=target.name)
     return {
         "character": target.name,
-        "set": resolved.name,
         "replacements": result.detail.get("replacements"),
         "length": result.detail.get("length"),
-        "note": NO_PUSH_NOTE,
-    }
-
-
-@tool(tags=TAG_CHARACTER, title="Append to the description")
-def append_description(
-    character: str,
-    text: str,
-    working_set: str | None = None,
-) -> dict[str, Any]:
-    """Add text to the end of the description, on a new line."""
-    from services import payload_ops
-
-    target, resolved = _writable(character, working_set)
-    addition = payload_ops.normalise_newlines(str(text))
-
-    def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        current = payload_ops.get_description(payload)
-        joined = f"{current}\n{addition}" if current else addition
-        _guard_bbcode(joined)
-        payload_ops.set_description(payload, joined)
-        return payload_ops.EditResult(
-            etag="",
-            changed=[payload_ops.DESCRIPTION_PATH],
-            detail={"length": len(joined)},
-        )
-
-    result = _apply(target, resolved, mutate)
-    audit("append_description", character=target.name, set=resolved.name)
-    return {
-        "character": target.name,
-        "set": resolved.name,
-        "length": result.detail.get("length"),
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -290,12 +299,11 @@ def append_description(
 def set_custom_title(
     character: str,
     title: str,
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Set the line shown under the character's name on their profile."""
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     value = str(title).strip()
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
@@ -305,9 +313,9 @@ def set_custom_title(
             etag="", changed=["character.custom_title"]
         )
 
-    _apply(target, resolved, mutate)
-    audit("set_custom_title", character=target.name, set=resolved.name)
-    return {"character": target.name, "set": resolved.name, "custom_title": value}
+    _apply(target, mutate)
+    audit("set_custom_title", character=target.name)
+    return {"character": target.name, "custom_title": value}
 
 
 # --------------------------------------------------------------------
@@ -320,7 +328,6 @@ async def set_profile_field(
     character: str,
     field: str,
     value: str,
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Set one structured profile field — species, height, orientation
     and so on.
@@ -333,7 +340,7 @@ async def set_profile_field(
     """
     from services import payload_ops, profile_fields
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     catalogue = await _catalogue()
     field_def = catalogue.resolve_field(field)
     if field_def is None:
@@ -356,16 +363,14 @@ async def set_profile_field(
         path = payload_ops.set_infotag(payload, field_def.id, stored)
         return payload_ops.EditResult(etag="", changed=[path])
 
-    _apply(target, resolved, mutate)
+    _apply(target, mutate)
     audit(
         "set_profile_field",
         character=target.name,
-        set=resolved.name,
         field=field_def.label,
     )
     out = {
         "character": target.name,
-        "set": resolved.name,
         "field": field_def.label,
         "value": field_def.option_label(stored) or stored,
     }
@@ -378,7 +383,6 @@ async def set_profile_field(
 async def clear_profile_field(
     character: str,
     field: str,
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Remove a profile field so it doesn't appear at all.
 
@@ -387,7 +391,7 @@ async def clear_profile_field(
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     catalogue = await _catalogue()
     field_def = catalogue.resolve_field(field)
     field_id = field_def.id if field_def else str(field).strip()
@@ -399,11 +403,10 @@ async def clear_profile_field(
             etag="", changed=[path], detail={"existed": existed}
         )
 
-    result = _apply(target, resolved, mutate)
-    audit("clear_profile_field", character=target.name, set=resolved.name, field=label)
+    result = _apply(target, mutate)
+    audit("clear_profile_field", character=target.name, field=label)
     return {
         "character": target.name,
-        "set": resolved.name,
         "field": label,
         "was_set": result.detail.get("existed", False),
     }
@@ -412,7 +415,6 @@ async def clear_profile_field(
 @tool(tags=TAG_CHARACTER, title="Profile visibility settings")
 def set_profile_settings(
     character: str,
-    working_set: str | None = None,
     customs_first: bool | None = None,
     show_friends: bool | None = None,
     guestbook: bool | None = None,
@@ -423,7 +425,7 @@ def set_profile_settings(
     left alone."""
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     wanted = {
         "customs_first": customs_first,
         "show_friends": show_friends,
@@ -440,11 +442,10 @@ def set_profile_settings(
             detail={"settings": dict(payload.get("settings") or {})},
         )
 
-    result = _apply(target, resolved, mutate)
-    audit("set_profile_settings", character=target.name, set=resolved.name)
+    result = _apply(target, mutate)
+    audit("set_profile_settings", character=target.name)
     return {
         "character": target.name,
-        "set": resolved.name,
         "settings": result.detail.get("settings"),
         "meanings": payload_ops.PROFILE_SETTINGS,
     }
@@ -455,66 +456,20 @@ def set_profile_settings(
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Set a kink choice")
-async def set_kink(
-    character: str,
-    kink: str,
-    choice: str,
-    working_set: str | None = None,
-) -> dict[str, Any]:
-    """Set one standard kink to fave, yes, maybe, no — or `undecided`
-    to remove the entry, which is how F-list represents no opinion.
-
-    `kink` is the name as F-list lists it, or its id.
-    """
-    from services import payload_ops, profile_fields
-
-    target, resolved = _writable(character, working_set)
-    catalogue = await _catalogue()
-    kink_id = catalogue.kink_id_for(kink)
-    if kink_id is None:
-        raise ToolError(
-            "kink_not_found",
-            f"F-list has no standard kink called {kink!r}. "
-            "list_kinks(include_unset=true) shows the catalogue; for "
-            "something F-list doesn't have, use add_custom_kink.",
-        )
-    try:
-        value = profile_fields.validate_kink_choice(choice)
-    except profile_fields.FieldValidationError as exc:
-        raise ToolError(
-            "validation_failed", exc.reason, allowed=exc.allowed
-        ) from exc
-
-    def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        path = payload_ops.set_kink(payload, kink_id, value)
-        return payload_ops.EditResult(etag="", changed=[path])
-
-    _apply(target, resolved, mutate)
-    audit("set_kink", character=target.name, set=resolved.name, kink=kink)
-    return {
-        "character": target.name,
-        "set": resolved.name,
-        "kink": catalogue.kinks.get(kink_id, kink_id),
-        "choice": value,
-    }
-
-
-@tool(tags=TAG_CHARACTER, title="Set several kinks")
+@tool(tags=TAG_CHARACTER, title="Set kinks")
 async def set_kinks(
     character: str,
     items: list[dict[str, str]],
-    working_set: str | None = None,
 ) -> dict[str, Any]:
-    """Set many kinks in one call. Each item is
+    """Set one or many kinks. Each item is
     `{"kink": name or id, "choice": fave|yes|maybe|no|undecided}`.
 
     Everything is validated before anything is written, so one bad
-    entry doesn't leave the set half-updated.
+    entry doesn't leave the Workbench half-updated.
     """
     from services import payload_ops, profile_fields
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     if not isinstance(items, list) or not items:
         raise ToolError("validation_failed", "items is empty")
     catalogue = await _catalogue()
@@ -528,12 +483,20 @@ async def set_kinks(
         name = str(raw.get("kink") or "")
         kink_id = catalogue.kink_id_for(name)
         if kink_id is None:
-            problems.append({"kink": name, "reason": "no such kink on F-list"})
+            problems.append(
+                {
+                    "kink": name,
+                    "reason": "no such kink on F-list; list_kinks(include_unset=true) "
+                    "shows the catalogue, add_custom_kink adds one of your own",
+                }
+            )
             continue
         try:
             value = profile_fields.validate_kink_choice(raw.get("choice"))
         except profile_fields.FieldValidationError as exc:
-            problems.append({"kink": name, "reason": exc.reason})
+            problems.append(
+                {"kink": name, "reason": exc.reason, "allowed": exc.allowed}
+            )
             continue
         prepared.append((kink_id, value, catalogue.kinks.get(kink_id, kink_id)))
 
@@ -551,13 +514,12 @@ async def set_kinks(
         ]
         return payload_ops.EditResult(etag="", changed=touched)
 
-    _apply(target, resolved, mutate)
+    _apply(target, mutate)
     audit(
-        "set_kinks", character=target.name, set=resolved.name, count=len(prepared)
+        "set_kinks", character=target.name, count=len(prepared)
     )
     return {
         "character": target.name,
-        "set": resolved.name,
         "updated": [
             {"kink": label, "choice": value} for _, value, label in prepared
         ],
@@ -570,7 +532,6 @@ async def add_custom_kink(
     name: str,
     description: str = "",
     choice: str = "yes",
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Add a kink of the user's own wording, for something F-list's
     catalogue doesn't cover.
@@ -579,7 +540,7 @@ async def add_custom_kink(
     """
     from services import payload_ops, profile_fields
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     label = str(name).strip()
     if not label:
         raise ToolError("validation_failed", "name is empty")
@@ -596,11 +557,10 @@ async def add_custom_kink(
             etag="", changed=touched, detail={"id": kink_id}
         )
 
-    result = _apply(target, resolved, mutate)
-    audit("add_custom_kink", character=target.name, set=resolved.name, name=label)
+    result = _apply(target, mutate)
+    audit("add_custom_kink", character=target.name, name=label)
     return {
         "character": target.name,
-        "set": resolved.name,
         "id": result.detail.get("id"),
         "name": label,
         "choice": value,
@@ -614,13 +574,12 @@ async def update_custom_kink(
     name: str | None = None,
     description: str | None = None,
     choice: str | None = None,
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Change a custom kink's name, description or choice. Omitted
     fields are left alone. `kink_id` comes from list_kinks."""
     from services import payload_ops, profile_fields
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     fields: dict[str, Any] = {}
     if name is not None:
         fields["name"] = str(name)
@@ -642,32 +601,38 @@ async def update_custom_kink(
         touched = payload_ops.update_custom_kink(payload, kink_id, **fields)
         return payload_ops.EditResult(etag="", changed=touched)
 
-    _apply(target, resolved, mutate)
-    audit("update_custom_kink", character=target.name, set=resolved.name, id=kink_id)
+    _apply(target, mutate)
+    audit("update_custom_kink", character=target.name, id=kink_id)
     return {
         "character": target.name,
-        "set": resolved.name,
         "id": kink_id,
         "changed": sorted(fields),
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Delete a custom kink", destructive=True)
+@tool(
+    tags=TAG_CHARACTER,
+    title="Delete a custom kink",
+    destructive=True,
+    warning=(
+        "Deleting a custom kink that was never uploaded drops it and "
+        "its description for good."
+    ),
+)
 def delete_custom_kink(
     character: str,
     kink_id: str,
-    working_set: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
-    """Remove a custom kink from the profile.
+    """Remove a custom kink from the profile; needs `confirm=true`.
 
     One that already exists on F-list is kept as a tombstone so the
-    upload knows to remove it, and can be brought back with
-    restore_custom_kink. One added locally and never uploaded is
-    dropped for good.
+    upload knows to remove it, and put_back_custom_kink puts it back.
+    One added locally and never uploaded is dropped for good.
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         how, touched = payload_ops.delete_custom_kink(payload, kink_id)
@@ -675,43 +640,40 @@ def delete_custom_kink(
             etag="", changed=touched, detail={"how": how}
         )
 
-    result = _apply(target, resolved, mutate)
+    result = _apply(target, mutate)
     how = result.detail.get("how")
-    audit("delete_custom_kink", character=target.name, set=resolved.name, id=kink_id)
+    audit("delete_custom_kink", character=target.name, id=kink_id)
     return {
         "character": target.name,
-        "set": resolved.name,
         "id": kink_id,
         "outcome": how,
-        "restorable": how == "tombstoned",
+        "can_put_back": how == "tombstoned",
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Restore a deleted custom kink")
-def restore_custom_kink(
+@tool(tags=TAG_CHARACTER, title="Put back a deleted custom kink")
+def put_back_custom_kink(
     character: str,
     kink_id: str,
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Undo delete_custom_kink for a kink that was tombstoned."""
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        touched = payload_ops.restore_custom_kink(payload, kink_id)
+        touched = payload_ops.put_back_custom_kink(payload, kink_id)
         return payload_ops.EditResult(etag="", changed=touched)
 
-    _apply(target, resolved, mutate)
-    audit("restore_custom_kink", character=target.name, set=resolved.name, id=kink_id)
-    return {"character": target.name, "set": resolved.name, "id": kink_id}
+    _apply(target, mutate)
+    audit("put_back_custom_kink", character=target.name, id=kink_id)
+    return {"character": target.name, "id": kink_id}
 
 
 @tool(tags=TAG_CHARACTER, title="Reorder custom kinks")
 def reorder_custom_kinks(
     character: str,
     kink_ids: list[str],
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Set the order custom kinks appear in on the profile.
 
@@ -720,15 +682,15 @@ def reorder_custom_kinks(
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         touched = payload_ops.reorder_custom_kinks(payload, list(kink_ids))
         return payload_ops.EditResult(etag="", changed=touched)
 
-    _apply(target, resolved, mutate)
-    audit("reorder_custom_kinks", character=target.name, set=resolved.name)
-    return {"character": target.name, "set": resolved.name, "order": list(kink_ids)}
+    _apply(target, mutate)
+    audit("reorder_custom_kinks", character=target.name)
+    return {"character": target.name, "order": list(kink_ids)}
 
 
 # --------------------------------------------------------------------
@@ -741,12 +703,11 @@ def set_image_description(
     character: str,
     image_id: str,
     description: str,
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Set the caption shown under a gallery image."""
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         rows = payload_ops.gallery(payload)
@@ -761,11 +722,10 @@ def set_image_description(
             etag="", changed=payload_ops.set_gallery(payload, rows)
         )
 
-    _apply(target, resolved, mutate)
-    audit("set_image_description", character=target.name, set=resolved.name)
+    _apply(target, mutate)
+    audit("set_image_description", character=target.name)
     return {
         "character": target.name,
-        "set": resolved.name,
         "image_id": image_id,
         "description": description,
     }
@@ -775,7 +735,6 @@ def set_image_description(
 def reorder_images(
     character: str,
     image_ids: list[str],
-    working_set: str | None = None,
 ) -> dict[str, Any]:
     """Set the order images appear in on the profile.
 
@@ -783,7 +742,7 @@ def reorder_images(
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     wanted = [str(i) for i in image_ids]
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
@@ -808,27 +767,22 @@ def reorder_images(
             changed=payload_ops.set_gallery(payload, [by_id[i] for i in wanted]),
         )
 
-    _apply(target, resolved, mutate)
-    audit("reorder_images", character=target.name, set=resolved.name)
-    return {"character": target.name, "set": resolved.name, "order": wanted}
+    _apply(target, mutate)
+    audit("reorder_images", character=target.name)
+    return {"character": target.name, "order": wanted}
 
 
 @tool(tags=TAG_CHARACTER, title="Remove an image from the profile")
 def remove_image(
     character: str,
     image_id: str,
-    working_set: str | None = None,
-    delete_file: bool = False,
 ) -> dict[str, Any]:
-    """Take an image off the profile.
-
-    The file stays in the pool and can be put back with add_image.
-    `delete_file=true` moves it to the character's Trash instead, where
-    `restore_image` can bring it back; only the user can empty the Trash.
+    """Take an image off the profile. The file stays in the pool, and
+    add_image can put it back. To delete the image, use trash_images.
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         rows = payload_ops.gallery(payload)
@@ -841,44 +795,26 @@ def remove_image(
             etag="", changed=payload_ops.set_gallery(payload, remaining)
         )
 
-    _apply(target, resolved, mutate)
-    file_trashed = False
-    if delete_file:
-        from services import image_trash
-
-        file_trashed = bool(
-            image_trash.trash_images(target.id, [str(image_id)])["trashed"]
-        )
-    audit(
-        "remove_image",
-        character=target.name,
-        set=resolved.name,
-        image_id=image_id,
-        file_trashed=file_trashed,
-    )
+    _apply(target, mutate)
+    audit("remove_image", character=target.name, image_id=image_id)
     return {
         "character": target.name,
-        "set": resolved.name,
         "image_id": image_id,
-        "file_trashed": file_trashed,
-        "note": (
-            "The file is in the Trash; restore_image puts it back in the pool."
-            if file_trashed
-            else "The file is still in the pool; add_image can put it back."
-        ),
+        "note": "The file is still in the pool; add_image can put it back.",
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Move pool images to the Trash")
+@tool(tags=TAG_CHARACTER, title="Move images to the Trash")
 def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
-    """Move images that are in the pool — on disk, not on the profile —
-    to the character's Trash. `restore_image` brings them back; only the
-    user can empty the Trash, in the window.
+    """Delete images: move their files to the character's Trash. An
+    image in the Workbench's gallery is taken off it first
+    (`off_gallery`); one only in the pool just leaves the pool.
+    `put_back_images` puts each back into the pool, not onto the
+    profile; only the user can empty the Trash, in the window.
 
-    An image still in the Workbench's gallery is refused (take it off
-    with `remove_image` first), so no gallery is left pointing at a file
-    that is gone. An image on the live profile can be trashed, but the
-    next pull fetches it again; the result says which.
+    To take an image off the profile and keep it, use remove_image. An
+    image on the live profile can be trashed, but the next pull fetches
+    it again; the result says which.
     """
     from services import image_import, image_trash
 
@@ -887,21 +823,19 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     if not ids:
         raise ToolError("validation_failed", "Give at least one image id.")
     refs = image_import.references(target.id)
-    in_gallery = [i for i in ids if refs.get(i, {}).get("workbench")]
-    if in_gallery:
-        raise ToolError(
-            "image_on_profile",
-            "Still in the Workbench's gallery, so not trashed: "
-            + ", ".join(in_gallery)
-            + ". Take them off with remove_image first. Nothing was moved.",
-        )
-    result = image_trash.trash_images(target.id, ids)
+    result = image_trash.delete_images(target.id, ids)
     moved = [t["image_id"] for t in result["trashed"]]
     on_live = [i for i in moved if refs.get(i, {}).get("live")]
-    audit("trash_images", character=target.name, image_ids=moved)
+    audit(
+        "trash_images",
+        character=target.name,
+        image_ids=moved,
+        off_gallery=result["off_gallery"],
+    )
     out: dict[str, Any] = {
         "character": target.name,
         "trashed": moved,
+        "off_gallery": result["off_gallery"],
         "not_found": result["not_found"],
     }
     if on_live:
@@ -914,29 +848,43 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
 
 
 @tool(tags=TAG_CHARACTER, title="List the Trash", read_only=True)
-def list_trash(character: str) -> dict[str, Any]:
+def list_trash(
+    character: str, limit: int = MAX_TRASH_ENTRIES, offset: int = 0
+) -> dict[str, Any]:
     """What the character's Trash holds, newest first, with when and by
-    whom (`ui` or `mcp`): `items` are images deleted from the pool,
-    which `restore_image` puts back by `trash_id` (the image id, unless
-    the Trash holds several files under one id because a Pull replaced
-    it); `backups` are deleted Backups and `labels` are cleared Labels
-    (one entry per clear, with its conversation, or `partner` null for
-    every conversation, and how many Labels it holds), both of which the
-    user restores in the window. Emptying the Trash is the user's job,
-    in the window."""
+    whom (`ui` or `mcp`): `items` are deleted images, which
+    `put_back_images` puts back into the pool by `trash_id` (the image
+    id, unless the Trash holds several files under one id because a Pull
+    replaced it); `backups` are deleted Backups and `labels` are cleared
+    Labels (one entry per clear, with its conversation, or `partner` null
+    for every conversation, and how many Labels it holds), both of which
+    the user puts back in the window. Emptying the Trash is the user's
+    job, in the window. Pages run through the images first, then the
+    Backups, then the Labels."""
     from services import backup_trash, image_trash, label_trash
 
     target = resolve_character(character)
-    return {
-        "character": target.name,
+    kinds = {
         "items": image_trash.list_trash(target.id),
         "backups": backup_trash.list_backups(target.id),
         "labels": label_trash.list_labels(target.name),
     }
+    # One page over the three lists, each row still under its own key.
+    window, paged = page(
+        [(kind, row) for kind, rows in kinds.items() for row in rows],
+        offset=offset,
+        limit=limit,
+        cap=MAX_TRASH_ENTRIES,
+    )
+    out: dict[str, Any] = {"character": target.name}
+    for kind in kinds:
+        out[kind] = [row for row_kind, row in window if row_kind == kind]
+    out["page"] = paged
+    return out
 
 
-@tool(tags=TAG_CHARACTER, title="Restore images from the Trash")
-def restore_image(
+@tool(tags=TAG_CHARACTER, title="Put images back from the Trash")
+def put_back_images(
     character: str,
     image_id: str | None = None,
     image_ids: list[str] | None = None,
@@ -946,7 +894,7 @@ def restore_image(
     `image_ids`, as list_trash's `trash_id`. If the pool already holds
     the same bytes, the Trash entry is dropped and the existing id is
     reported instead. If it holds a different picture under that id,
-    the restored one comes back as `local-<sha8>`, so both are kept.
+    the one put back comes as `local-<sha8>`, so both are kept.
     """
     from services import image_trash
 
@@ -957,25 +905,30 @@ def restore_image(
     if not ids:
         raise ToolError("validation_failed", "Give image_id or image_ids.")
     result = image_trash.restore_images(target.id, ids)
-    if not result["restored"] and result["not_found"]:
+    put_back = result["restored"]
+    if not put_back and result["not_found"]:
         raise ToolError(
             "image_not_found",
             f"Not in {target.name}'s Trash: {result['not_found']}. "
             "list_trash shows what is there.",
         )
     audit(
-        "restore_image",
+        "put_back_images",
         character=target.name,
-        image_ids=[r["image_id"] for r in result["restored"]],
+        image_ids=[r["image_id"] for r in put_back],
     )
-    return {"character": target.name, **result}
+    return {
+        "character": target.name,
+        "put_back": put_back,
+        "not_found": result["not_found"],
+        "conflicts": result["conflicts"],
+    }
 
 
 @tool(tags=TAG_CHARACTER, title="Put an image on the profile")
 def add_image(
     character: str,
     image_id: str,
-    working_set: str | None = None,
     description: str = "",
 ) -> dict[str, Any]:
     """Add an image that is already in the character's image folder to
@@ -985,7 +938,7 @@ def add_image(
     """
     from services import payload_ops
 
-    target, resolved = _writable(character, working_set)
+    target = _writable(character)
     on_disk = {
         str(row.get("image_id"))
         for row in archive_images.list_character_images(target.id)
@@ -1014,13 +967,11 @@ def add_image(
             etag="", changed=payload_ops.set_gallery(payload, rows)
         )
 
-    _apply(target, resolved, mutate)
-    audit("add_image", character=target.name, set=resolved.name, image_id=image_id)
+    _apply(target, mutate)
+    audit("add_image", character=target.name, image_id=image_id)
     return {
         "character": target.name,
-        "set": resolved.name,
         "image_id": image_id,
-        "note": NO_PUSH_NOTE,
     }
 
 
@@ -1033,8 +984,6 @@ def add_image(
 # remove and a full reorder per swapped image. One batch call does it
 # now, with every source checked before anything is written.
 # --------------------------------------------------------------------
-
-MAX_IMPORT_ITEMS = 200
 
 
 class ImportItem(BaseModel):
@@ -1050,7 +999,6 @@ def _import_batch(
     items: list[ImportItem],
     *,
     add_to_gallery: bool,
-    working_set: str | None,
     convert_to_jpeg: bool,
 ) -> dict[str, Any]:
     from services import image_import, payload_ops
@@ -1069,7 +1017,7 @@ def _import_batch(
     # Everything that can be refused is refused before the first file is
     # copied: a half-done batch leaves the model guessing what landed.
     if touches_gallery:
-        target, resolved = _writable(character, working_set)
+        resolved = resolve_workbench(target)
         on_profile = {r["image_id"] for r in payload_ops.gallery(load_payload(resolved))}
         missing = [t for t in targets if t not in on_profile]
         if missing:
@@ -1086,7 +1034,7 @@ def _import_batch(
                 "Nothing was imported.",
             )
     else:
-        resolved = _workbench_for_reporting(target, working_set)
+        resolved = _workbench_for_reporting(target)
 
     roots = image_import.import_roots()
     prepared: list[image_import.PreparedImage] = []
@@ -1159,7 +1107,7 @@ def _import_batch(
                 etag="", changed=payload_ops.set_gallery(payload, rows)
             )
 
-        _apply(target, resolved, mutate)
+        _apply(target, mutate)
 
     positions: dict[str, int] = {}
     if resolved is not None:
@@ -1192,23 +1140,16 @@ def _import_batch(
     audit(
         "import_images",
         character=target.name,
-        set=resolved.name if resolved else None,
         image_ids=[r["image_id"] for r in results],
         replaced=[r["replaced"] for r in results if r["replaced"]],
     )
-    return {
-        "character": target.name,
-        "set": resolved.name if resolved else None,
-        "results": results,
-    }
+    return {"character": target.name, "results": results}
 
 
-def _workbench_for_reporting(target, working_set: str | None):  # noqa: ANN001, ANN202
-    """The Workbench (or Live) whose gallery a pool-only import reports
-    against. Never creates a Workbench: importing into the pool is not
-    editing."""
-    if working_set is not None:
-        return resolve_workbench_or_live(target, working_set)
+def _workbench_for_reporting(target):  # noqa: ANN001, ANN202
+    """The Workbench whose gallery a pool-only import reports against,
+    or None when there is none yet. Never creates one: importing into
+    the pool is not editing."""
     if archive_workbench.read_workbench(target.id) is None:
         return None
     return workbench_target(target)
@@ -1219,7 +1160,6 @@ def import_images(
     character: str,
     items: list[ImportItem],
     add_to_gallery: bool = False,
-    working_set: str | None = None,
     convert_to_jpeg: bool = False,
 ) -> dict[str, Any]:
     """Copy image files from this machine into the character's image
@@ -1249,45 +1189,9 @@ def import_images(
         character,
         items,
         add_to_gallery=add_to_gallery,
-        working_set=working_set,
         convert_to_jpeg=convert_to_jpeg,
     )
-    out["note"] = NO_PUSH_NOTE
     return out
-
-
-@tool(tags=TAG_CHARACTER, title="Import an image into the pool")
-def import_image(
-    character: str,
-    source_path: str,
-    add_to_gallery: bool = False,
-    replace_image_id: str | None = None,
-    description: str | None = None,
-    working_set: str | None = None,
-    convert_to_jpeg: bool = False,
-) -> dict[str, Any]:
-    """One-file form of `import_images`, which has the details. Prefer
-    `import_images` for more than one file: it is one call, and a
-    gallery change from it is one write."""
-    out = _import_batch(
-        character,
-        [
-            ImportItem(
-                source_path=source_path,
-                replace_image_id=replace_image_id,
-                description=description,
-            )
-        ],
-        add_to_gallery=add_to_gallery,
-        working_set=working_set,
-        convert_to_jpeg=convert_to_jpeg,
-    )
-    return {
-        "character": out["character"],
-        "set": out["set"],
-        **out["results"][0],
-        "note": NO_PUSH_NOTE,
-    }
 
 
 # --------------------------------------------------------------------
@@ -1295,88 +1199,82 @@ def import_image(
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Raw payload", read_only=True)
-def get_working_set_payload(
-    character: str,
-    working_set: str | None = None,
-) -> dict[str, Any]:
-    """The complete raw payload of the Workbench, including `_overlay`;
-    working_set="live" reads Live instead.
+#
+# Both tools are on the full endpoint only (`TAG_FULL`): a narrow
+# endpoint is for a small model, and the targeted tools are what it
+# should reach for.
+
+
+@tool(tags=TAG_FULL, title="Raw Workbench payload", read_only=True)
+def get_workbench_payload(character: str) -> dict[str, Any]:
+    """The complete raw payload of the Workbench, including `_overlay`,
+    and the `etag` to send back to put_workbench_payload.
 
     Large — a description alone can be tens of kilobytes. The targeted
     read tools are almost always the better choice; this exists for
     inspecting something they don't expose.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
-    if resolved.is_live:
-        payload, etag = load_payload(resolved), None
-    else:
-        # The payload and its etag from one read, so the etag a model
-        # sends back names exactly what it was shown.
-        bench = archive_workbench.read_workbench(target.id)
-        payload = bench.payload if bench is not None else load_payload(resolved)
-        etag = bench.etag if bench is not None else None
-    return {
-        "character": target.name,
-        "set": resolved.name,
-        "read_only": resolved.is_live,
-        "etag": etag,
-        "payload": payload,
-    }
+    resolve_workbench(target)
+    # The payload and its etag from one read, so the etag a model sends
+    # back names exactly what it was shown.
+    bench = archive_workbench.read_workbench(target.id)
+    if bench is None:
+        raise ToolError(
+            "no_workbench",
+            f"{target.name}'s Workbench has no payload on disk.",
+        )
+    return {"character": target.name, "etag": bench.etag, "payload": bench.payload}
 
 
-@tool(tags=TAG_CHARACTER, title="Write raw payload", destructive=True)
-def put_working_set_payload(
+@tool(
+    tags=TAG_FULL,
+    title="Replace the raw Workbench payload",
+    destructive=True,
+    warning=(
+        "This replaces the whole Workbench without any of the validation "
+        "the targeted editing tools apply; the Workbench is saved as a "
+        "Backup first. Use the targeted tools unless there is no "
+        "alternative."
+    ),
+)
+def put_workbench_payload(
     character: str,
     payload: dict[str, Any],
-    working_set: str | None = None,
     if_match: str | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
-    """Replace the Workbench's entire payload.
+    """Replace the Workbench's entire payload; needs `confirm=true`.
 
     The escape hatch, and a blunt one: none of the rules the targeted
     tools enforce are applied, so a malformed payload here can lose the
     overlay, scramble the gallery order, or write field ids F-list
     drops on upload. Prefer the targeted tools. Pass `if_match` with
-    the etag from get_working_set_payload to avoid overwriting a change
+    the etag from get_workbench_payload to avoid overwriting a change
     made in the meantime.
+
+    The Workbench it replaces is saved as a Backup first (occasion
+    `before-replace`), named in `kept_as`; load_backup_into_workbench
+    with that Backup undoes this. If that Backup cannot be written,
+    nothing is replaced.
     """
-    target, resolved = _writable(character, working_set)
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            "This replaces the whole payload without any of the "
-            "validation the targeted editing tools apply. Use those "
-            "unless there is no alternative; if there isn't, call again "
-            "with confirm=true.",
-        )
+    target = resolve_character(character)
     if not isinstance(payload, dict):
         raise ToolError("validation_failed", "payload must be an object")
-
-    if if_match is None:
-        # Without `if_match` this overwrites whatever is there, as the
-        # docstring warns: the caller has confirmed it.
-        if_match = archive_workbench.workbench_etag(target.id)
     try:
-        etag = archive_workbench.write_workbench(
-            target.id, payload, expected_etag=if_match
+        replaced = archive_backups.replace_workbench(
+            target.id,
+            payload,
+            expected_etag=if_match,
+            occasion=backup_origin.BEFORE_REPLACE,
         )
-    except archive_workbench.EtagMismatch as exc:
-        raise ToolError(
-            "etag_mismatch",
-            "The Workbench changed since you read it. Read it again and redo "
-            "the change.",
-            current_etag=exc.current_etag,
-        ) from exc
     except ValueError as exc:
+        # Not a payload the Workbench takes; refused before any Backup.
         raise ToolError("validation_failed", str(exc)) from exc
-
-    audit("put_working_set_payload", character=target.name, set=resolved.name)
+    kept = _kept_as(replaced)
+    audit("put_workbench_payload", character=target.name, kept_as=kept)
     return {
         "character": target.name,
-        "set": resolved.name,
-        "etag": etag,
-        "note": NO_PUSH_NOTE,
+        "etag": replaced.etag,
+        "kept_as": kept,
     }

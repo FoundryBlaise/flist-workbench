@@ -9,16 +9,16 @@ Why fastembed and not sentence-transformers / torch:
 Why a module-level cache for the encoder:
   Constructing TextCrossEncoder deserialises the ONNX graph (~5–10 s
   the first time, ~1–2 s afterwards). Per-request init would dominate
-  the chat latency budget. We hold one instance per model name and
-  swap if the user changes their RAG settings.
+  a search's latency. We hold one instance per model name and swap if
+  the user changes their search settings.
 
 Why first-use download is a UX concern:
   fastembed downloads the model on the first encoder construction —
-  e.g. ~1.1 GB for jina-reranker-v2-base-multilingual. We download
-  into ~/Documents/flist-workbench/models/ so cleanup is easy.
-  Callers (the query endpoint) should surface a "downloading reranker"
-  hint when `is_ready()` returns False so the chat panel doesn't look
-  like it hung for a minute.
+  e.g. ~1.1 GB for jina-reranker-v2-base-multilingual. It goes into
+  `models_dir()`: `models/` in the app's data folder
+  (`paths.user_data_dir()`, %APPDATA%/flist-workbench on Windows),
+  beside the embedding model. The first search with a reranker set
+  waits for that download, and nothing reports its progress yet.
 
 Skipping rerank:
   The settings string "disabled" (or empty) means "skip rerank entirely
@@ -41,8 +41,8 @@ DEFAULT_NEIGHBORS = 1
 # Default 0.0 = preserve old behaviour for users who upgrade. The setting
 # is most useful for "needle in haystack" questions where the reranker
 # clearly singles out 1-2 chunks: dropping noisy candidates below
-# top_score × ratio reduces the distractor surface the chat LLM has to
-# anchor on (which is how the "Baal echo" hallucination class arises).
+# top_score × ratio leaves fewer distractors for the model reading the
+# results to anchor on.
 DEFAULT_RERANK_MIN_RATIO = 0.0
 RERANK_DISABLED = "disabled"
 
@@ -117,8 +117,12 @@ def rerank_hits(
     top_k: int = DEFAULT_TOP_K,
     min_ratio: float = DEFAULT_RERANK_MIN_RATIO,
     cache_dir: Path | None = None,
+    keep: int | None = None,
 ) -> list[dict]:
     """Re-score hits with the cross-encoder, return the top_k re-ranked.
+
+    `keep` returns that many instead (later pages of a search) while
+    `top_k`, the page size, still decides whether reranking is worth it.
 
     No-ops gracefully when rerank is disabled, when there are fewer
     hits than top_k (no point reranking 3 candidates to 5), or when the
@@ -134,23 +138,24 @@ def rerank_hits(
     """
     if not hits:
         return []
+    keep = top_k if keep is None else keep
     if is_disabled(model_name):
-        return hits[:top_k]
+        return hits[:keep]
     # Cheap path: when nothing would be re-ordered AND no threshold
     # filter is requested, skip the encoder entirely. Keeps the
     # common-case latency unchanged. With min_ratio > 0 we still need
     # scores even on small pools so the threshold has something to
     # filter against.
     if len(hits) <= top_k and min_ratio <= 0.0:
-        return hits[:top_k]
+        return hits[:keep]
     try:
         encoder = get_encoder(model_name, cache_dir=cache_dir)
         docs = [h["payload"]["text"] for h in hits]
         scores = list(encoder.rerank(query, docs))
-    except Exception as exc:  # noqa: BLE001 — rerank must never crash chat
+    except Exception as exc:  # noqa: BLE001 — rerank must never fail a search
         for h in hits:
             h["rerank_error"] = str(exc)
-        return hits[:top_k]
+        return hits[:keep]
     for h, s in zip(hits, scores):
         h["rerank_score"] = float(s)
     hits.sort(key=lambda h: -float(h.get("rerank_score", 0.0)))
@@ -162,4 +167,4 @@ def rerank_hits(
         if top > 0.0:
             threshold = top * min_ratio
             hits = [h for h in hits if float(h.get("rerank_score", 0.0)) >= threshold]
-    return hits[:top_k]
+    return hits[:keep]

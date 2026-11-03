@@ -54,14 +54,14 @@ def archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
 
     import archive_live
     import archive_registry
-    import restore as restore_svc
+    from services import upload as upload_service
 
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     archive_registry.register_character(CID, NAME)
     archive_live.write_live(CID, {"id": int(CID), "name": NAME, "character": {"name": NAME}})
     yield
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture
@@ -212,7 +212,7 @@ async def test_mcp_reports_a_stale_workbench_write_as_rest_does(
     async with mcp_client() as session:
         result, _ = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character=NAME,
             payload=read["payload"],
             if_match="0" * 64,

@@ -75,7 +75,7 @@ def test_ten_images_go_to_the_trash_and_come_back(client) -> None:
     assert pool_ids(client) == set()
     assert set(trash_ids(client)) == set(ids)
 
-    restored = client.post("/flist/character/42/trash/restore", json={"image_ids": ids}).json()
+    restored = client.post("/flist/character/42/trash/put-back", json={"image_ids": ids}).json()
     assert sorted(r["image_id"] for r in restored["restored"]) == sorted(ids)
     assert pool_ids(client) == set(ids)
     assert trash_ids(client) == []
@@ -87,7 +87,7 @@ def test_restoring_bytes_the_pool_already_has_makes_no_duplicate(client, workben
     # A pull fetches the same picture again under F-list's id.
     archive_images.write_character_image("42", "47000001", "png", png(3))
 
-    res = client.post("/flist/character/42/trash/restore", json={"image_ids": [iid]}).json()
+    res = client.post("/flist/character/42/trash/put-back", json={"image_ids": [iid]}).json()
 
     assert res["restored"] == [{"image_id": "47000001", "deduplicated": True, "from": iid}]
     assert pool_ids(client) == {"47000001"}
@@ -161,6 +161,49 @@ def test_image_usage_counts_the_workbench_live_and_backups(client, workbench) ->
     assert loose not in refs
 
 
+def test_the_window_deletes_a_gallery_image_and_a_pool_image_in_one_request(
+    client, workbench  # noqa: F811
+) -> None:
+    stays, on_profile, loose = (upload(client, n) for n in (14, 15, 16))
+    _set_gallery(client, [on_profile, stays])
+
+    res = client.post(
+        "/flist/character/42/images/trash", json={"image_ids": [on_profile, loose]}
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert [t["image_id"] for t in body["trashed"]] == [on_profile, loose]
+    assert body["off_gallery"] == [on_profile]
+    read = client.get("/flist/character/42/workbench/payload").json()
+    # The window saves its next edit over the etag it is given here.
+    assert body["etag"] == read["etag"]
+    assert [(r["image_id"], r["sort_order"]) for r in read["payload"]["images"]] == [
+        (stays, 0)
+    ]
+    assert pool_ids(client) == {stays}
+    assert set(trash_ids(client)) == {on_profile, loose}
+    assert {i["deleted_by"] for i in client.get("/flist/character/42/trash").json()["items"]} == {
+        "ui"
+    }
+
+
+def test_deleting_only_pool_images_leaves_the_workbench_alone(
+    client, workbench  # noqa: F811
+) -> None:
+    stays, loose = upload(client, 17), upload(client, 18)
+    _set_gallery(client, [stays])
+    before = client.get("/flist/character/42/workbench/payload").json()["etag"]
+
+    body = client.post(
+        "/flist/character/42/images/trash", json={"image_ids": [loose]}
+    ).json()
+
+    assert body["off_gallery"] == []
+    assert body["etag"] is None
+    assert client.get("/flist/character/42/workbench/payload").json()["etag"] == before
+
+
 def test_unknown_ids_are_reported_not_fatal(client) -> None:
     iid = upload(client, 4)
     res = client.post(
@@ -192,13 +235,13 @@ def test_only_the_window_deletes_for_good(client) -> None:
 async def test_mcp_has_no_way_to_delete_for_good(workbench) -> None:  # noqa: F811
     async with mcp_client() as session:
         names = {t.name for t in (await session.list_tools()).tools}
-    assert {"list_trash", "restore_image"} <= names
+    assert {"list_trash", "put_back_images"} <= names
     assert not any(
         ("purge" in n or "empty" in n) and ("trash" in n or "image" in n) for n in names
     ), names
 
 
-async def test_remove_image_with_delete_file_trashes_and_restore_brings_it_back(
+async def test_remove_image_takes_it_off_the_gallery_and_keeps_the_file(
     workbench, client  # noqa: F811
 ) -> None:
     keep = upload(client, 8)
@@ -207,58 +250,57 @@ async def test_remove_image_with_delete_file_trashes_and_restore_brings_it_back(
         await open_workbench(session)
         seed_gallery(workbench, [keep, drop])
         _, removed = await call_tool(
-            session,
-            "remove_image",
-            character=CHAR,
-            image_id=drop,
-            delete_file=True,
-        )
-        _, listed = await call_tool(session, "list_trash", character=CHAR)
-        _, restored = await call_tool(
-            session, "restore_image", character=CHAR, image_id=drop
-        )
-        missing, _ = await call_tool(
-            session, "restore_image", character=CHAR, image_id="not-there"
+            session, "remove_image", character=CHAR, image_id=drop
         )
 
-    assert removed["file_trashed"] is True
-    assert [i["image_id"] for i in listed["items"]] == [drop]
-    assert listed["items"][0]["deleted_by"] == "mcp"
-    assert restored["restored"] == [{"image_id": drop, "deduplicated": False, "from": drop}]
-    # Back in the pool, not on the profile.
-    assert drop in pool_ids(client)
+    assert removed["image_id"] == drop
     assert [r["image_id"] for r in payload_of(workbench)["images"]] == [keep]
-    assert "image_not_found" in tool_error_text(missing)
+    assert pool_ids(client) == {keep, drop}
+    assert trash_ids(client) == []
 
 
-async def test_a_model_can_trash_pool_images_but_not_gallery_ones(
+async def test_a_model_trashes_gallery_and_pool_images_and_puts_every_one_back(
     workbench, client  # noqa: F811
 ) -> None:
     on_profile = upload(client, 20)
     loose = upload(client, 21)
     pulled = upload(client, 22)
+    stays = upload(client, 23)
     live = archive_live.read_live("42")
     live["images"] = [{"image_id": pulled, "description": "", "sort_order": 0}]
     archive_live.write_live("42", live)
 
     async with mcp_client("character") as session:
         await open_workbench(session)
-        seed_gallery(workbench, [on_profile])
-        refused, _ = await call_tool(
-            session, "trash_images", character=CHAR, image_ids=[loose, on_profile]
-        )
+        seed_gallery(workbench, [stays, on_profile])
         _, body = await call_tool(
-            session, "trash_images", character=CHAR, image_ids=[loose, pulled, "ghost"]
+            session,
+            "trash_images",
+            character=CHAR,
+            image_ids=[on_profile, loose, pulled, "ghost"],
+        )
+        _, listed = await call_tool(session, "list_trash", character=CHAR)
+        gallery_after_trash = [r["image_id"] for r in payload_of(workbench)["images"]]
+        _, put_back = await call_tool(
+            session,
+            "put_back_images",
+            character=CHAR,
+            image_ids=[i["trash_id"] for i in listed["items"]],
         )
 
-    text = tool_error_text(refused)
-    assert "image_on_profile" in text and on_profile in text
-    assert body["trashed"] == [loose, pulled]
+    assert body["trashed"] == [on_profile, loose, pulled]
+    assert body["off_gallery"] == [on_profile]
     assert body["not_found"] == ["ghost"]
     assert body["on_live_profile"] == [pulled]
-    assert set(trash_ids(client)) == {loose, pulled}
-    assert pool_ids(client) == {on_profile}
-    assert [r["image_id"] for r in payload_of(workbench)["images"]] == [on_profile]
+    assert gallery_after_trash == [stays]
+    assert {i["deleted_by"] for i in listed["items"]} == {"mcp"}
+    # Every one comes back, into the pool and not onto the profile.
+    assert sorted(r["image_id"] for r in put_back["put_back"]) == sorted(
+        [on_profile, loose, pulled]
+    )
+    assert pool_ids(client) == {on_profile, loose, pulled, stays}
+    assert trash_ids(client) == []
+    assert [r["image_id"] for r in payload_of(workbench)["images"]] == [stays]
 
 
 def test_the_trash_remembers_where_an_import_came_from(
@@ -334,7 +376,7 @@ def test_two_different_files_trashed_under_one_id_are_both_kept(
 
     # Both come back, and neither overwrites the other.
     res = client.post(
-        "/flist/character/42/trash/restore",
+        "/flist/character/42/trash/put-back",
         json={"image_ids": [i["trash_id"] for i in items]},
     ).json()
     assert len(res["restored"]) == 2
@@ -361,7 +403,7 @@ def test_restoring_onto_a_pool_file_with_other_bytes_keeps_both(
     archive_images.write_character_image("42", "47000004", "png", png(34))
 
     res = client.post(
-        "/flist/character/42/trash/restore", json={"image_ids": ["47000004"]}
+        "/flist/character/42/trash/put-back", json={"image_ids": ["47000004"]}
     ).json()
 
     local = f"local-{hashlib.sha256(png(33)).hexdigest()[:8]}"

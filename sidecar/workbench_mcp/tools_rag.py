@@ -3,18 +3,29 @@
 `search_logs_semantic` is the tool that makes "what did I tell her
 about my sister" answerable. It returns chunks of the user's own logs;
 the connected model reads them and answers. No language model runs in
-Workbench — see the module docstring in `services/retrieval.py`.
+the app — see the module docstring in `services/retrieval.py`.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
-from ._context import ToolError, resolve_conversation, resolve_log_character
-from ._registry import TAG_CORE, TAG_LOGS, tool
+from ._context import (
+    ToolError,
+    clamp_limit,
+    page_info,
+    resolve_conversation,
+    resolve_log_character,
+)
+from ._registry import TAG_CORE, TAG_LOG_TEXT, TAG_LOGS, tool
+
+#: The most matches one search returns: each is a whole chunk of text,
+#: and its neighbours come with it.
+MAX_SEMANTIC_HITS = 20
 
 
-@tool(tags=TAG_LOGS, title="Search logs by meaning", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Search logs by meaning", read_only=True)
 def search_logs_semantic(
     question: str,
     character: str | None = None,
@@ -22,6 +33,7 @@ def search_logs_semantic(
     top_k: int | None = None,
     neighbors: int | None = None,
     hybrid: bool | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Find passages in the user's roleplay logs that are *about*
     something, rather than containing a particular word.
@@ -29,9 +41,9 @@ def search_logs_semantic(
     Returns whole chunks with their text, date and speakers — read them
     and answer from what they say. Scope it with `character` and
     `partner` when the question is about one relationship; leave both
-    out to search everything.
+    out to search everything. At most 20 matches (`top_k`) a page.
 
-    Only messages with an IC/OOC verdict are in the index. If results
+    Only messages with an IC/OOC Label are in the Index. If results
     look thin, check get_label_stats: unjudged messages are skipped at
     ingest time.
     """
@@ -58,13 +70,20 @@ def search_logs_semantic(
             "character, their character) pair",
         )
 
+    if top_k is None:
+        import rag as rag_settings
+
+        top_k = rag_settings.load_settings().top_k
+    size = clamp_limit(top_k, MAX_SEMANTIC_HITS)
+    start = max(0, int(offset))
     try:
         result = retrieval.search(
             question,
             scope=scope,
-            top_k=top_k,
+            top_k=size,
             neighbors=neighbors,
             hybrid=hybrid,
+            offset=start,
         )
     except retrieval.NoIndexError as exc:
         raise ToolError("no_index", str(exc)) from exc
@@ -72,12 +91,22 @@ def search_logs_semantic(
         raise ToolError(
             "embedding_failed",
             f"The embedding model could not be used: {exc}. It runs "
-            "inside Workbench and downloads itself on first use, so "
+            "inside the app and downloads itself on first use, so "
             "this is usually a download problem rather than a setting.",
         ) from exc
 
     payload = result.to_dict()
     payload["question"] = question
+    matches = sum(1 for hit in result.hits if not hit.expanded)
+    # Ranking stops one past the page, so the matches beyond it are not
+    # counted: `total` is unknown.
+    payload["page"] = page_info(
+        offset=start,
+        limit=size,
+        returned=matches,
+        total=None,
+        next_offset=start + matches if result.has_more else None,
+    )
     if not payload["hits"]:
         payload["note"] = (
             "Nothing matched. Either this hasn't been ingested yet "
@@ -88,18 +117,25 @@ def search_logs_semantic(
 
 
 @tool(tags=(TAG_CORE, TAG_LOGS), title="Index status", read_only=True)
-def get_rag_status() -> dict[str, Any]:
-    """What the local search index currently holds.
+def get_rag_status(check_embedding: bool = False) -> dict[str, Any]:
+    """What the local search index currently holds, and the embedding
+    model's state.
 
     An index is built per embedding model; switching models means the
     old chunks can't be searched with the new one, which is why
     `embed_model` is reported alongside the count. While an ingest
     runs, `busy` is true, `job` is that ingest and `chunk_count` is
     null: the Index can't be counted until it finishes.
+
+    `embedding` names the configured model. With `check_embedding=true`
+    the model is loaded and its `state` is `ready` (with `dimension`) or
+    `failed` (with `error`: a code and a message). The first load
+    downloads the model, so it can take a moment.
     """
     from services import index as index_service
 
     out = index_service.status()
+    out["embedding"] = _embedding_state(check_embedding)
     if out["busy"]:
         out["note"] = (
             "A job is changing the Index right now (see `job`), so it "
@@ -109,5 +145,35 @@ def get_rag_status() -> dict[str, Any]:
     elif not out["chunk_count"]:
         out["note"] = "Nothing indexed yet — run ingest_logs."
     else:
-        out["note"] = "Only messages with an IC/OOC verdict are indexed."
+        out["note"] = "Only messages with an IC/OOC Label are indexed."
     return out
+
+
+def _embedding_state(check: bool) -> dict[str, Any]:
+    """The configured embedding model, loaded only when asked: embedding
+    runs inside the app and the first load is a download, which a plain
+    status read must not start."""
+    import rag as rag_settings
+    import rag_embed
+
+    settings = rag_settings.load_settings()
+    if not check:
+        return {"model": settings.embed_model, "state": "not_checked"}
+    started = time.monotonic()
+    try:
+        dimension, _vec = rag_embed.probe(settings, timeout=60.0)
+    except rag_embed.EmbedError as exc:
+        # A model that will not load is a state of the Index, not a
+        # failure of this call: the rest of the status is still true.
+        return {
+            "model": settings.embed_model,
+            "state": "failed",
+            "error": {"code": "embedding_failed", "message": str(exc)},
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+    return {
+        "model": settings.embed_model,
+        "state": "ready",
+        "dimension": dimension,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }

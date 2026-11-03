@@ -130,6 +130,8 @@ class JobRegistry:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
         self.retention_seconds = retention_seconds
+        #: `(resource, run)` waiting for no job to hold the resource.
+        self._waiting: list[tuple[str, Callable[[], None]]] = []
 
     def start(
         self,
@@ -218,6 +220,19 @@ class JobRegistry:
             job.state = "done"
         finally:
             job.finished_at = time.time()
+            self._run_waiting()
+
+    def when_free(self, resource: str, run: Callable[[], None]) -> None:
+        """Call `run()` once no job holds `resource`: at once, in the
+        caller's thread, when none does; otherwise in the thread of the
+        job that lets go of it. For work a running job must not have
+        pulled from under it, but that should not wait for someone to
+        ask again."""
+        with self._lock:
+            if self._active_locked(resource) is not None:
+                self._waiting.append((resource, run))
+                return
+        run()
 
     def get(self, job_id: str) -> Job:
         """The job with this id. Raises `JobNotFound` for an id this
@@ -306,6 +321,19 @@ class JobRegistry:
                 on_finish(job)
             except Exception:  # noqa: BLE001 — the job itself is over
                 log.exception("job %s (%s): on_finish failed", job.id, job.kind)
+        self._run_waiting()
+
+    def _run_waiting(self) -> None:
+        """Run what `when_free` left waiting on a resource no job holds
+        any more."""
+        with self._lock:
+            ready = [w for w in self._waiting if self._active_locked(w[0]) is None]
+            self._waiting = [w for w in self._waiting if w not in ready]
+        for resource, run in ready:
+            try:
+                run()
+            except Exception:  # noqa: BLE001 — the job that let go is over
+                log.exception("waiting on %s failed", resource)
 
     def _sweep_locked(self) -> None:
         now = time.time()

@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 import archive_registry
-from fchat_logs import chat, utc, write_log
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
 
@@ -107,7 +105,7 @@ async def test_pull_reports_progress_and_returns_a_summary(
     assert body["images"] == 2
     assert body["changed"] is False
     # A pull refreshes what is published; it must not imply an upload.
-    assert "never writes to f-list.net" in body["note"]
+    assert "Nothing was published to F-list" in body["not_published"]
 
 
 async def test_a_pull_failure_surfaces_its_stage(
@@ -213,6 +211,7 @@ async def test_backing_up_a_character_never_pulled(workbench) -> None:
 
 
 # ---- ingest ------------------------------------------------------------
+# A real ingest over fixture Logs, waiting and not: test_mcp_jobs.
 
 
 async def test_ingest_rejects_a_partner_without_a_character(
@@ -223,85 +222,6 @@ async def test_ingest_rejects_a_partner_without_a_character(
             session, "ingest_logs", partner="Daelan Envale"
         )
     assert "validation_failed" in tool_error_text(result)
-
-
-@pytest.fixture
-def amber_has_logs(workbench, tmp_path: Path) -> None:  # noqa: ARG001
-    """One Log for Lady Amber Blaise, so ingest has a character to
-    resolve."""
-    write_log(
-        tmp_path / "fchat" / "Lady Amber Blaise" / "logs" / "Daelan Envale",
-        [chat("Daelan Envale", "Evening.", at=utc(2024, 1, 5, 20))],
-    )
-
-
-async def test_ingest_can_run_in_the_background(
-    amber_has_logs, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from services import index as index_service
-
-    started: dict[str, Any] = {}
-
-    class _FakeJob:
-        id = "abc123"
-        state = "pending"
-
-    def fake_start(scope, *, include_ooc=False, force_rewipe=False):
-        started.update(
-            scope=scope, include_ooc=include_ooc, force_rewipe=force_rewipe
-        )
-        return _FakeJob()
-
-    monkeypatch.setattr(index_service, "start_ingest", fake_start)
-    async with mcp_client("logs") as session:
-        _, body = await call_tool(
-            session,
-            "ingest_logs",
-            character="Lady Amber Blaise",
-            wait=False,
-        )
-    assert body["job_id"] == "abc123"
-    assert started["scope"] == {"character": "Lady Amber Blaise"}
-    assert "get_job" in body["note"]
-
-
-async def test_ingest_reports_skipped_unlabeled_and_what_to_do(
-    amber_has_logs, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Silently indexing half a log and reporting success is the
-    failure mode this guards against."""
-    from services import index as index_service
-
-    snapshot = {
-        "id": "job1",
-        "state": "done",
-        "progress": {"last_error": None},
-        "result": {
-            "chunks_indexed": 4,
-            "chunks_already_present": 0,
-            "chunks_removed": 0,
-            "skipped_unlabeled": 120,
-            "failed": 0,
-        },
-        "error": None,
-    }
-
-    class _Job:
-        id = "job1"
-        state = "done"
-        finished = True
-
-        def to_dict(self):
-            return snapshot
-
-    monkeypatch.setattr(index_service, "start_ingest", lambda *a, **k: _Job())
-
-    async with mcp_client("logs") as session:
-        _, body = await call_tool(
-            session, "ingest_logs", character="Lady Amber Blaise"
-        )
-    assert body["skipped_unlabeled"] == 120
-    assert "get_messages_to_classify" in body["note"]
 
 
 async def test_get_job_on_an_unknown_id(workbench) -> None:
@@ -318,22 +238,117 @@ async def test_wiping_the_index_needs_confirmation(workbench) -> None:
     assert body["wiped"] is True
 
 
-async def test_embedding_probe_reports_an_unreachable_endpoint(
+async def test_index_status_reports_an_embedding_model_that_loads(
     workbench, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import rag_embed
 
+    monkeypatch.setattr(
+        rag_embed, "probe", lambda settings, timeout=60.0: (4, [0.1, 0.2, 0.3, 0.4])
+    )
+    async with mcp_client("logs") as session:
+        _, body = await call_tool(session, "get_rag_status", check_embedding=True)
+    assert body["embedding"]["state"] == "ready"
+    assert body["embedding"]["dimension"] == 4
+    assert body["embedding"]["model"]
+
+
+async def test_index_status_reports_a_model_that_fails_to_load_with_a_code(
+    workbench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model that won't load is a state of the Index, reported with a
+    code; the status call itself still answers."""
+    import rag_embed
+
     def boom(settings, timeout=60.0):
-        raise rag_embed.EmbedError("connection refused")
+        raise rag_embed.EmbedError("the download was interrupted")
 
     monkeypatch.setattr(rag_embed, "probe", boom)
     async with mcp_client("logs") as session:
-        _, body = await call_tool(session, "test_embedding_connection")
-    assert body["ok"] is False
-    assert "connection refused" in body["error"]
+        result, body = await call_tool(
+            session, "get_rag_status", check_embedding=True
+        )
+    assert not result.isError
+    assert "ok" not in body and "ok" not in body["embedding"]
+    assert body["embedding"]["state"] == "failed"
+    assert body["embedding"]["error"]["code"] == "embedding_failed"
+    assert "download was interrupted" in body["embedding"]["error"]["message"]
+
+
+async def test_index_status_leaves_the_model_alone_unless_asked(
+    workbench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first load downloads the model; a plain status read must not."""
+    import rag_embed
+
+    loads = []
+    monkeypatch.setattr(
+        rag_embed, "probe", lambda settings, timeout=60.0: loads.append(1) or (4, [])
+    )
+    async with mcp_client("character") as session:
+        _, body = await call_tool(session, "get_rag_status")
+    assert loads == []
+    assert body["embedding"]["state"] == "not_checked"
+    assert body["embedding"]["model"]
+
+
+async def test_the_embedding_check_is_not_a_tool_of_its_own(workbench) -> None:
+    for suffix in ("", "character", "logs", "classify"):
+        async with mcp_client(suffix) as session:
+            names = {t.name for t in (await session.list_tools()).tools}
+        assert "test_embedding_connection" not in names, suffix
 
 
 # ---- exports -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("suffix", ["", "character"])
+async def test_the_export_for_an_upload_is_named_for_upload(
+    workbench, tmp_path: Path, suffix: str
+) -> None:
+    """Upload and Restore are different things: Restore loads a Backup
+    into the Workbench. The old name is gone, with no alias."""
+    async with mcp_client(suffix) as session:
+        names = {t.name for t in (await session.list_tools()).tools}
+        result, _ = await call_tool(
+            session,
+            "export_restore_zip",
+            character="Lady Amber Blaise",
+            path=str(tmp_path / "never-written.zip"),
+        )
+    assert "export_upload_zip" in names
+    assert "export_restore_zip" not in names
+    assert "Unknown tool" in tool_error_text(result)
+
+
+async def test_the_export_for_an_upload_packs_the_workbench(
+    workbench, tmp_path: Path
+) -> None:
+    """Live is never an Upload source, so there is no copy to pick."""
+    import zipfile
+
+    async with mcp_client("character") as session:
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="[b]Edited in the Workbench.[/b]",
+        )
+        _, body = await call_tool(
+            session,
+            "export_upload_zip",
+            character="Lady Amber Blaise",
+            path=str(tmp_path / "upload.zip"),
+        )
+    assert set(tools["export_upload_zip"].inputSchema["properties"]) == {
+        "character",
+        "path",
+    }
+    with zipfile.ZipFile(body["path"]) as zf:
+        packed = zf.read("character.json").decode("utf-8")
+    assert "Edited in the Workbench." in packed
+    assert "Published." not in packed
 
 
 async def test_exporting_to_a_directory_generates_a_filename(
@@ -345,7 +360,7 @@ async def test_exporting_to_a_directory_generates_a_filename(
     async with mcp_client("character") as session:
         _, body = await call_tool(
             session,
-            "export_restore_zip",
+            "export_upload_zip",
             character="Lady Amber Blaise",
             path=str(folder),
         )
@@ -354,7 +369,7 @@ async def test_exporting_to_a_directory_generates_a_filename(
     assert written.suffix == ".zip"
 
 
-async def test_export_restore_zip_names_the_manual_step(
+async def test_export_upload_zip_names_the_manual_step(
     workbench, tmp_path: Path
 ) -> None:
     """The hand-off point: a model must not claim this published
@@ -362,7 +377,7 @@ async def test_export_restore_zip_names_the_manual_step(
     async with mcp_client("character") as session:
         _, body = await call_tool(
             session,
-            "export_restore_zip",
+            "export_upload_zip",
             character="Lady Amber Blaise",
             path=str(tmp_path / "restore.zip"),
         )
@@ -371,7 +386,7 @@ async def test_export_restore_zip_names_the_manual_step(
     assert "cannot do it for them" in body["next_step"]
 
 
-EXPORT_TOOLS = ("export_restore_zip",)
+EXPORT_TOOLS = ("export_upload_zip",)
 
 
 @pytest.mark.parametrize("tool", EXPORT_TOOLS)
@@ -494,6 +509,7 @@ async def test_aliases_link_and_unlink(workbench) -> None:
             "remove_alias",
             character="Lady Amber Blaise",
             name="Daelan Envale",
+            confirm=True,
         )
     assert removed["removed"] is True
 

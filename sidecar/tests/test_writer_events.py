@@ -190,16 +190,16 @@ async def test_pulling_a_known_character_leaves_the_roster_alone(client, flist) 
 def extension(client, flist):  # noqa: ANN001, ANN201
     """The paired extension, for a character it finds by name: pulled
     once, as it is before any Upload."""
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
     pull(client)
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     # Entered, so a task a request schedules outlives the request.
     with app_client(server.app, headers={"X-Workbench-Auth": hs["token"]}) as c:
         yield c
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 async def test_the_pull_after_an_upload_reaches_the_window(extension) -> None:
@@ -265,7 +265,7 @@ async def test_moving_images_to_the_trash_and_back_is_announced(client) -> None:
         lambda: client.post(f"{IMAGES}/trash", json={"image_ids": [image_id]})
     )
     restored = await published(
-        lambda: client.post(f"{TRASH}/restore", json={"image_ids": [image_id]})
+        lambda: client.post(f"{TRASH}/put-back", json={"image_ids": [image_id]})
     )
 
     assert counts(trashed)["images-changed"] == 1, trashed
@@ -379,7 +379,7 @@ async def test_moving_a_backup_to_the_trash_and_back_is_announced(client) -> Non
     trashed = await published(lambda: client.delete(f"{BACKUPS}/{filename}"))
     [entry] = client.get(TRASH).json()["backups"]
     restored = await published(
-        lambda: client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]})
+        lambda: client.post(f"{TRASH}/backups/put-back", json={"ids": [entry["id"]]})
     )
 
     assert counts(trashed)["backups-changed"] == 1, trashed

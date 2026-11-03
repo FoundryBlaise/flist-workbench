@@ -51,15 +51,15 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     import archive_registry
     import paths
-    import restore as restore_svc
+    from services import upload as upload_service
     from services import jobs
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
-    importlib.reload(restore_svc)
+    importlib.reload(upload_service)
     monkeypatch.setattr(jobs, "_registry", jobs.JobRegistry())
     yield data
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 @pytest.fixture
@@ -440,22 +440,36 @@ def test_cancelling_back_up_all_by_id_stops_it_and_keeps_what_it_wrote(
 # ---- MCP ---------------------------------------------------------------------
 
 
-async def test_mcp_pull_without_waiting_answers_a_job_that_get_job_and_cancel_job_take(
-    client: TestClient, flist: Gate
+@pytest.mark.parametrize(
+    ("tool", "arguments", "held", "kind"),
+    [
+        ("pull_character", {"character": NAME}, f"{CID}{IMAGES[1]}", "pull"),
+        ("backup_all_characters", {}, f"{OTHER_CID}{IMAGES[0]}", "backup-all"),
+    ],
+    ids=["pull", "back-up-all"],
+)
+async def test_mcp_job_started_without_waiting_is_followed_and_stopped_over_mcp(
+    client: TestClient, flist: Gate, tool: str, arguments: dict, held: str, kind: str
 ) -> None:
     from mcp_helpers import call_tool, mcp_client
 
-    flist.hold(f"{CID}{IMAGES[1]}")
+    flist.hold(held)
     async with mcp_client("character") as session:
-        _, started = await call_tool(session, "pull_character", character=NAME, wait=False)
+        _, started = await call_tool(session, tool, **arguments, wait=False)
         assert await asyncio.to_thread(flist.reached.wait, 10)
         _, polled = await call_tool(session, "get_job", job_id=started["job_id"])
         _, asked = await call_tool(session, "cancel_job", job_id=started["job_id"])
+        finished = await asyncio.to_thread(wait_finished, client, started["job_id"])
+        _, ended = await call_tool(session, "get_job", job_id=started["job_id"])
 
-    assert polled["kind"] == "pull" and polled["state"] == "running"
+    # The same answer an ingest gives.
+    assert set(started) == {"job_id", "kind", "state", "note", "not_published"}
+    assert started["kind"] == kind
+    assert "get_job" in started["note"] and "cancel_job" in started["note"]
+    assert polled["kind"] == kind and polled["state"] == "running"
     assert asked["cancel_requested"] is True
-    finished = await asyncio.to_thread(wait_finished, client, started["job_id"])
     assert finished["state"] == "cancelled"
+    assert ended["state"] == "cancelled"
 
 
 async def test_mcp_back_up_all_without_waiting_answers_a_job_that_finishes_on_its_own(

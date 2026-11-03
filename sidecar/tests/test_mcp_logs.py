@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from fchat_logs import chat, write_log
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 
 LONG = "A" * 260  # above the 200-char rule threshold, so: Unlabeled
 SHORT = "ok"  # below it, so: OOC by rule
@@ -51,6 +51,9 @@ def corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     importlib.reload(paths)
     importlib.reload(server)
+    # The tools under test return Log text, which MCP clients get only
+    # once the user turns it on.
+    allow_log_text()
     return root
 
 
@@ -92,7 +95,7 @@ async def test_read_log_messages_resolves_labels_and_hashes(corpus) -> None:
             character="Lady Amber Blaise",
             partner="Daelan Envale",
         )
-    assert body["total_matching"] == 3
+    assert body["page"]["total"] == 3
     labels = [m["label"] for m in body["messages"]]
     # Rule: short messages are OOC without anyone judging them.
     assert labels == ["Unlabeled", "OOC", "Unlabeled"]
@@ -108,7 +111,7 @@ async def test_read_log_messages_filters_by_label(corpus) -> None:
             partner="Daelan Envale",
             labels=["Unlabeled"],
         )
-    assert body["total_matching"] == 2
+    assert body["page"]["total"] == 2
     assert {m["label"] for m in body["messages"]} == {"Unlabeled"}
 
 
@@ -129,10 +132,10 @@ async def test_read_log_messages_pages(corpus) -> None:
             offset=2,
             limit=2,
         )
-    assert first["returned"] == 2
-    assert first["has_more"] is True
-    assert second["returned"] == 1
-    assert second["has_more"] is False
+    assert first["page"]["returned"] == 2
+    assert first["page"]["next_offset"] == 2
+    assert second["page"]["returned"] == 1
+    assert second["page"]["next_offset"] is None
 
 
 async def test_a_missing_log_directory_says_where_to_set_it(
@@ -181,16 +184,72 @@ async def test_search_logs_rejects_an_empty_query(corpus) -> None:
     assert "validation_failed" in tool_error_text(result)
 
 
-async def test_search_all_partners_reports_per_partner_hits(corpus) -> None:
+async def test_search_logs_without_a_partner_groups_hits_by_partner(
+    corpus,
+) -> None:
+    write_log(
+        corpus / "Lady Amber Blaise" / "logs" / "Aina Sato",
+        [
+            chat("Aina Sato", "Woodsmoke again, and rain.", at=1700000500),
+            chat("Aina Sato", "Nothing to see here.", at=1700000560),
+        ],
+    )
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
-            "search_all_partners",
+            "search_logs",
             character="Lady Amber Blaise",
             query="woodsmoke",
         )
-    hits = {p["partner"]: p["hit_count"] for p in body["partners"]}
-    assert hits.get("Daelan Envale") == 1
+    assert body["character"] == "Lady Amber Blaise"
+    grouped = {p["partner"]: p for p in body["partners"]}
+    assert set(grouped) == {"Daelan Envale", "Aina Sato"}
+    assert grouped["Aina Sato"]["hit_count"] == 1
+    assert grouped["Aina Sato"]["hits"][0]["text"] == "Woodsmoke again, and rain."
+    assert grouped["Daelan Envale"]["hits"][0]["speaker"] == "Daelan Envale"
+
+
+async def test_search_logs_without_a_partner_caps_the_hits_per_partner(
+    corpus,
+) -> None:
+    """One chatty conversation must not flood the answer: past the cap a
+    partner reports `truncated`, and the model narrows to that partner."""
+    write_log(
+        corpus / "Lady Amber Blaise" / "logs" / "Aina Sato",
+        [
+            chat("Aina Sato", f"Woodsmoke, line {n}.", at=1700000500 + n)
+            for n in range(30)
+        ],
+    )
+    async with mcp_client("logs") as session:
+        _, body = await call_tool(
+            session,
+            "search_logs",
+            character="Lady Amber Blaise",
+            query="woodsmoke",
+            limit=1000,
+        )
+    grouped = {p["partner"]: p for p in body["partners"]}
+    assert len(grouped["Aina Sato"]["hits"]) == 20
+    assert grouped["Aina Sato"]["truncated"] is True
+    assert grouped["Daelan Envale"]["truncated"] is False
+
+
+async def test_search_logs_without_a_partner_rejects_an_empty_query(
+    corpus,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(
+            session, "search_logs", character="Lady Amber Blaise", query=" "
+        )
+    assert "validation_failed" in tool_error_text(result)
+
+
+async def test_searching_all_partners_is_not_a_tool_of_its_own() -> None:
+    for suffix in ("", "character", "logs", "classify"):
+        async with mcp_client(suffix) as session:
+            names = {t.name for t in (await session.list_tools()).tools}
+        assert "search_all_partners" not in names, suffix
 
 
 # ---- find_contacts -----------------------------------------------------
@@ -245,7 +304,7 @@ async def test_label_stats_counts_rule_and_unlabeled(corpus) -> None:
     assert body["total"] == 3
     assert body["ooc"] == 1  # the short one, by rule
     assert body["unlabeled"] == 2
-    assert "get_messages_to_classify" in body["note"]
+    assert "get_unlabeled_messages" in body["note"]
 
 
 async def test_label_stats_without_a_partner_walks_the_character(corpus) -> None:

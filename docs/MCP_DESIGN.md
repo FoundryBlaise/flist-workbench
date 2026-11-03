@@ -1,12 +1,40 @@
 # MCP server — replacing the in-app AI
 
-Status: **v4, 2026-09-11 — implemented.** Phases 0–7 are built and
-shipped on `feat/mcp-server`. This document is kept as the record of
-*why*; `docs/MCP.md` is the guide for using the result, and
-`docs/OVERVIEW.md` describes the app as it now stands.
+> **Historical design record.** This is the v4 plan of 2026-09-11 and
+> what changed while building it (§9). It is kept for the *why*, and
+> keeps the words of its day. It does not describe the tools the server
+> offers now: `docs/MCP.md` lists those per endpoint, checked against
+> the server by a test, and `GLOSSARY.md` has the current terms.
+>
+> Since then (spec #6) the working sets became one Workbench per
+> character, and the tool surface followed: no tool takes
+> `working_set`; `get_working_set` and `diff_working_set` are
+> `get_workbench` and `diff_workbench`, which read Live with
+> `source="live"`; the raw payload tools are `get_workbench_payload` and
+> `put_workbench_payload`, on `/mcp` only; `export_restore_zip` is
+> `export_upload_zip`, and `restore.py` is `services/upload.py`;
+> `get_classification_guidelines` is `get_labelling_guidelines`;
+> `set_kink`, `append_description`, `import_image`,
+> `search_all_partners`, `test_embedding_connection` and the
+> working-set, snapshot and bundle tools are gone; `remove_image` lost
+> `delete_file`, and `trash_images` takes gallery images too. Every
+> destructive tool needs `confirm=true`, and Log-text tools are off
+> until the user turns them on. A fourth endpoint, `/mcp/classify`,
+> added after this record, carries the labelling loop alone.
+>
+> The review of spec #6 renamed more: `restore_image` is
+> `put_back_images` and `restore_custom_kink` is `put_back_custom_kink`,
+> since taking something out of the Trash is putting it back, not a
+> Restore; `get_messages_to_classify` is `get_unlabeled_messages` and the
+> prompt `classify_ic_ooc` is `label_ic_ooc`; `get_workbench_status` is
+> `get_app_status`, since a bare "Workbench" is the editable copy, not
+> the app; `get_live_profile` is gone, since `get_workbench` reads Live
+> with `source="live"`. The Backup `put_workbench_payload` keeps first
+> has its own occasion, `before-replace`.
 
-Where the build differs from the plan, §9 says so and why. Everything
-else landed as written.
+Status at the time: **v4, 2026-09-11 — implemented.** Phases 0–7 were
+built and shipped on `feat/mcp-server`. Where the build differed from
+the plan, §9 says so and why.
 
 Goal: every action the Workbench UI can perform becomes reachable for
 an LLM client (LM Studio primarily, Claude Code for debugging, Claude
