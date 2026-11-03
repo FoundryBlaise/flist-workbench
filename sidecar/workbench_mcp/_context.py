@@ -20,7 +20,7 @@ import flist_activity
 import logs as log_store
 from refusals import Refusal
 
-#: Sentinel a `working_set` argument can carry to address the read-only
+#: What a read's `source` argument names to address the read-only
 #: `live.json` pulled from F-list rather than the editable Workbench.
 LIVE = "live"
 
@@ -169,7 +169,7 @@ def resolve_character(character: str) -> ResolvedCharacter:
 # Workbench or Live
 # --------------------------------------------------------------------
 
-#: What a `working_set` argument may name besides leaving it out.
+#: What a read's `source` argument may name.
 WORKBENCH = "workbench"
 SOURCES = (WORKBENCH, LIVE)
 
@@ -211,7 +211,7 @@ def resolve_workbench_or_live(
     character: ResolvedCharacter,
     workbench_or_live: str | None,
     *,
-    param: str = "working_set",
+    param: str = "source",
 ) -> WorkbenchOrLive:
     """Resolve a read's choice of copy: omitted (or `"workbench"`) is
     the character's Workbench, `"live"` is Live. Anything else is

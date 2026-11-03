@@ -80,7 +80,7 @@ async def open_workbench(session) -> dict[str, Any]:
     """Read the character's Workbench, which seeds it from Live the
     first time, the way the window's first look does."""
     _, body = await call_tool(
-        session, "get_working_set", character="Lady Amber Blaise"
+        session, "get_workbench", character="Lady Amber Blaise"
     )
     return body
 
