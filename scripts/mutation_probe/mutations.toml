@@ -518,7 +518,7 @@ audit = "killed"
 spec = 5
 # audit: M08 chunker keeps system lines
 find = '''
-        if m.get("kind") == "system":
+        if labels_store.is_system_line(m):
             continue'''
 replace = '''
         pass'''
@@ -662,12 +662,12 @@ replace = '''
 id = "L18"
 suite = "sidecar"
 file = "sidecar/labels.py"
-breaks = "System lines (ads, rolls, status events) count as Unlabeled and are offered to the model for a Label."
+breaks = "System lines (ads, rolls, status events) get a Label: they are counted as OOC or Unlabeled and shown with one."
 tests = ["@logs", "@mcp"]
 spec = 5
 find = '''
-    if msg.get("kind") == "system":
-        return LABEL_OOC
+    if is_system_line(msg):
+        return None
     if db_label is not None:'''
 replace = '''
     if db_label is not None:'''
