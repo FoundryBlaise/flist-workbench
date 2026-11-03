@@ -144,7 +144,7 @@ async def test_a_waiting_ingest_says_what_it_skipped_unlabeled_and_what_to_do(
     assert body["state"] == "done", body
     assert body["chunks_indexed"] == 2
     assert body["skipped_unlabeled"] == 1
-    assert "get_messages_to_classify" in body["note"]
+    assert "get_unlabeled_messages" in body["note"]
 
 
 async def test_an_ingest_is_stopped_by_cancel_job_on_the_classify_endpoint(

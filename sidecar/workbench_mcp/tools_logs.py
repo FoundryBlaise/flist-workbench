@@ -343,7 +343,7 @@ def _coverage_note(counts: dict[str, int]) -> str:
         return "Everything has a Label; this conversation is ready to ingest."
     return (
         f"{counts['unlabeled']} message(s) have no IC/OOC Label. They are "
-        "skipped by ingest. Use get_messages_to_classify to judge them."
+        "skipped by ingest. Use get_unlabeled_messages to judge them."
     )
 
 

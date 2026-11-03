@@ -285,7 +285,7 @@ async def ingest_logs(
 
     Only messages with an IC or OOC Label are indexed;
     `skipped_unlabeled` counts the rest, and a high number means
-    get_messages_to_classify should run first. OOC is left out: pass
+    get_unlabeled_messages should run first. OOC is left out: pass
     include_ooc=true on every ingest to keep OOC chunks.
     Channel Logs are left out unless `include_channels=true`, as in
     list_partners: group chat buries a character's roleplay.
@@ -350,7 +350,7 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
         out["note"] = (
             f"{out['skipped_unlabeled']} message(s) were skipped for "
             "having no IC/OOC Label — they aren't searchable. Label them "
-            "(get_messages_to_classify, set_message_labels) and ingest "
+            "(get_unlabeled_messages, set_message_labels) and ingest "
             "again to include them."
         )
     return out

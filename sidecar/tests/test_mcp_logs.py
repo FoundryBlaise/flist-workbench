@@ -304,7 +304,7 @@ async def test_label_stats_counts_rule_and_unlabeled(corpus) -> None:
     assert body["total"] == 3
     assert body["ooc"] == 1  # the short one, by rule
     assert body["unlabeled"] == 2
-    assert "get_messages_to_classify" in body["note"]
+    assert "get_unlabeled_messages" in body["note"]
 
 
 async def test_label_stats_without_a_partner_walks_the_character(corpus) -> None:

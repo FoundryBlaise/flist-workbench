@@ -10,7 +10,7 @@ model:
 
     get_label_stats            how much is left
     get_labelling_guidelines   the rulebook, once
-    get_messages_to_classify   a batch, with context
+    get_unlabeled_messages     a batch, with context
     set_message_labels         the Labels
     ...repeat until remaining == 0
 
@@ -85,7 +85,7 @@ def get_labelling_guidelines(language: str = "de") -> dict[str, Any]:
         # The rulebook is the loop's first call; without this the model
         # learns the switch is off only when its second call fails.
         result["log_text"] = (
-            "get_messages_to_classify is off: it returns Log text, which "
+            "get_unlabeled_messages is off: it returns Log text, which "
             f"MCP clients get only once {LOG_TEXT_SWITCH}. Ask the user "
             "to turn it on before you start."
         )
@@ -94,10 +94,10 @@ def get_labelling_guidelines(language: str = "de") -> dict[str, Any]:
 
 _WORKFLOW = [
     "get_label_stats(character, partner) — see how many are unjudged",
-    "get_messages_to_classify(character, partner) — a batch with context",
+    "get_unlabeled_messages(character, partner) — a batch with context",
     "decide IC or OOC for each, using the guidelines above",
     "set_message_labels(character, partner, items) — send the Labels",
-    "get_messages_to_classify takes 10 messages at a time — leave the "
+    "get_unlabeled_messages takes 10 messages at a time — leave the "
     "limit alone; a bigger batch risks a truncated response and silently "
     "skipped messages",
     "repeat while `remaining` > 0 — calling again with cursor=0 is "
@@ -107,10 +107,10 @@ _WORKFLOW = [
 
 @prompt(
     tags=TAG_LOGS,
-    name="classify_ic_ooc",
+    name="label_ic_ooc",
     description="Guidelines for labelling F-Chat log messages IC or OOC.",
 )
-def classify_ic_ooc_prompt(language: str = "de") -> str:
+def label_ic_ooc_prompt(language: str = "de") -> str:
     """Prompt twin of get_labelling_guidelines, for clients that
     support prompts. LM Studio, the primary client, does not — so the
     tool is the load-bearing surface and this is a convenience."""
@@ -127,7 +127,7 @@ def classify_ic_ooc_prompt(language: str = "de") -> str:
     title="Messages awaiting a Label",
     read_only=True,
 )
-def get_messages_to_classify(
+def get_unlabeled_messages(
     character: str,
     partner: str,
     limit: int = DEFAULT_BATCH,
@@ -246,7 +246,7 @@ def set_message_labels(
     viewer's tooltip and is how the user audits a Label they
     disagree with.
 
-    Only hashes from get_messages_to_classify (or read_log_messages)
+    Only hashes from get_unlabeled_messages (or read_log_messages)
     are accepted; an unknown hash is reported back rather than
     silently written, because a wrong hash would label some other
     message. If nothing at all could be written this raises instead of
@@ -284,7 +284,7 @@ def set_message_labels(
             "nothing_written",
             "None of the Labels could be stored, so this batch is "
             "unchanged. Hashes must be copied verbatim from "
-            "get_messages_to_classify — fetch a fresh batch and try "
+            "get_unlabeled_messages — fetch a fresh batch and try "
             "again with the hashes it returns.",
             unknown_hashes=unknown,
             rejected=rejected,
@@ -311,7 +311,7 @@ def set_message_labels(
         notes.append(
             f"NOT FINISHED: {remaining} message(s) in this conversation "
             "still have no Label and stay out of the Index. Call "
-            "get_messages_to_classify again (cursor=0) and keep going."
+            "get_unlabeled_messages again (cursor=0) and keep going."
         )
     else:
         notes.append(

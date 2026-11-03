@@ -199,7 +199,7 @@ URTEIL: {"label":"OOC","reason":"Spieler-Absprache zu Würfelwurf in (…) Klamm
 FORMAT:
 Gib die Urteile über das Tool `set_message_labels` zurück — ein Eintrag pro
 Nachricht: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
-Der Hash muss exakt der aus `get_messages_to_classify` sein; ein falscher
+Der Hash muss exakt der aus `get_unlabeled_messages` sein; ein falscher
 Hash beschriftet eine fremde Nachricht.
 Beurteile jede Nachricht des Batches, lass keine aus.
 
@@ -298,7 +298,7 @@ decides. A trailing parenthetical does not turn an IC post into OOC.
 FORMAT:
 Return the verdicts through the `set_message_labels` tool — one entry per
 message: {"hash": ..., "label": "IC"|"OOC", "reason": ...}.
-The hash must be exactly the one from `get_messages_to_classify`; a wrong
+The hash must be exactly the one from `get_unlabeled_messages`; a wrong
 hash labels someone else's message.
 Judge every message in the batch, skip none.
 

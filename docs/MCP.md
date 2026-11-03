@@ -250,7 +250,7 @@ switch on:
 ```
 get_label_stats(character, partner)          how much is left
 get_labelling_guidelines("de")               the rulebook, once
-get_messages_to_classify(character, partner) a batch, with context
+get_unlabeled_messages(character, partner)   a batch, with context
 set_message_labels(character, partner, [...]) the Labels
                                               repeat while remaining > 0
 ```
@@ -442,7 +442,7 @@ server, so they cannot drift from it.
 | `remove_alias` | Unlink a partner name. Needs `confirm=true`. |
 | `get_label_stats` | How much of a conversation, or of all of them, has an IC/OOC Label. |
 | `get_labelling_guidelines` | The rulebook for labelling a message IC or OOC. |
-| `get_messages_to_classify` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
+| `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
 | `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
@@ -528,7 +528,7 @@ server, so they cannot drift from it.
 | `remove_alias` | Unlink a partner name. Needs `confirm=true`. |
 | `get_label_stats` | How much of a conversation, or of all of them, has an IC/OOC Label. |
 | `get_labelling_guidelines` | The rulebook for labelling a message IC or OOC. |
-| `get_messages_to_classify` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
+| `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
 | `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
@@ -547,7 +547,7 @@ server, so they cannot drift from it.
 | `list_partners` | Everyone a character has Logs with. |
 | `get_label_stats` | How much of a conversation, or of all of them, has an IC/OOC Label. |
 | `get_labelling_guidelines` | The rulebook for labelling a message IC or OOC. |
-| `get_messages_to_classify` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
+| `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |

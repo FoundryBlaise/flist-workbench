@@ -60,7 +60,7 @@ def client(conversation) -> TestClient:
 async def label_everything(session) -> dict[str, str]:
     """Give the conversation's messages IC, IC, OOC; return hash -> verdict."""
     _, batch = await call_tool(
-        session, "get_messages_to_classify", character=AMBER, partner=DAELAN
+        session, "get_unlabeled_messages", character=AMBER, partner=DAELAN
     )
     verdicts = dict(zip((m["hash"] for m in batch["messages"]), ("IC", "IC", "OOC")))
     await call_tool(
@@ -240,7 +240,7 @@ async def test_cleared_labels_of_a_log_only_character_are_listed_and_restored(
 ) -> None:
     async with mcp_client() as session:
         _, batch = await call_tool(
-            session, "get_messages_to_classify", character=CORIN, partner=DAELAN
+            session, "get_unlabeled_messages", character=CORIN, partner=DAELAN
         )
         items = [{"hash": m["hash"], "label": "IC"} for m in batch["messages"]]
         await call_tool(

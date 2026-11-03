@@ -55,7 +55,7 @@ class IngestProgress:
     removed: int = 0
     # Messages dropped because nothing has judged them IC or OOC yet.
     # A high count means the user should run the classification flow
-    # (MCP: get_messages_to_classify / set_message_labels) first.
+    # (MCP: get_unlabeled_messages / set_message_labels) first.
     skipped_unlabeled: int = 0
     failed: int = 0
     total_chunks: int = 0

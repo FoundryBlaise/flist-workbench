@@ -21,7 +21,7 @@ LOG_TEXT_TOOLS = {
     "read_log_messages",
     "search_logs",
     "search_logs_semantic",
-    "get_messages_to_classify",
+    "get_unlabeled_messages",
 }
 
 #: Each endpoint and the Log-text tools it carries once they are on.
@@ -29,7 +29,7 @@ CARRIED = {
     "": LOG_TEXT_TOOLS,
     "character": set(),
     "logs": LOG_TEXT_TOOLS,
-    "classify": {"get_messages_to_classify"},
+    "classify": {"get_unlabeled_messages"},
 }
 
 
@@ -60,7 +60,7 @@ async def test_a_hidden_log_text_tool_refuses_a_call(
 ) -> None:
     async with mcp_client(suffix) as session:
         result, _ = await call_tool(
-            session, "get_messages_to_classify", character=AZURE, partner=PARTNER
+            session, "get_unlabeled_messages", character=AZURE, partner=PARTNER
         )
         text = tool_error_text(result)
     assert text.startswith("log_text_off: ")

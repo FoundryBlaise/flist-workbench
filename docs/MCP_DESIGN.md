@@ -25,7 +25,8 @@
 > The review of spec #6 renamed more: `restore_image` is
 > `put_back_images` and `restore_custom_kink` is `put_back_custom_kink`,
 > since taking something out of the Trash is putting it back, not a
-> Restore.
+> Restore; `get_messages_to_classify` is `get_unlabeled_messages` and the
+> prompt `classify_ic_ooc` is `label_ic_ooc`.
 
 Status at the time: **v4, 2026-09-11 — implemented.** Phases 0–7 were
 built and shipped on `feat/mcp-server`. Where the build differed from
