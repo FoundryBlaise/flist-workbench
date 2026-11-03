@@ -33,7 +33,6 @@ from ._context import (
     workbench_target,
 )
 from ._registry import TAG_CHARACTER, TAG_FULL, tool
-from .tools_session import NO_PUSH_NOTE
 
 
 def _writable(character: str) -> ResolvedCharacter:

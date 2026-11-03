@@ -178,11 +178,6 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     )
 
 
-@writes("append_description")
-async def _(session, _dir):  # noqa: ANN001, ANN202
-    return await _call(session, "append_description", character=CHAR, text=" More.")
-
-
 @writes("set_custom_title")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     return await _call(session, "set_custom_title", character=CHAR, title="Innkeeper")
@@ -203,13 +198,6 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
 @writes("set_profile_settings")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     return await _call(session, "set_profile_settings", character=CHAR, public=True)
-
-
-@writes("set_kink")
-async def _(session, _dir):  # noqa: ANN001, ANN202
-    return await _call(
-        session, "set_kink", character=CHAR, kink="Rough Housing", choice="fave"
-    )
 
 
 @writes("set_kinks")
@@ -308,16 +296,6 @@ async def _(session, data_dir):  # noqa: ANN001, ANN202
     return await _call(session, "import_images", character=CHAR, items=items)
 
 
-@writes("import_image")
-async def _(session, data_dir):  # noqa: ANN001, ANN202
-    return await _call(
-        session,
-        "import_image",
-        character=CHAR,
-        source_path=str(data_dir / "Outputs" / "new.png"),
-    )
-
-
 @writes("put_workbench_payload")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     payload = (await _call(session, "get_workbench_payload", character=CHAR))["payload"]
@@ -360,10 +338,10 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     return await _call(session, "wipe_search_index", confirm=True)
 
 
-@writes("export_restore_zip")
+@writes("export_upload_zip")
 async def _(session, data_dir):  # noqa: ANN001, ANN202
     return await _call(
-        session, "export_restore_zip", character=CHAR, path=str(data_dir / "Outputs")
+        session, "export_upload_zip", character=CHAR, path=str(data_dir / "Outputs")
     )
 
 

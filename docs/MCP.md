@@ -310,7 +310,7 @@ window gets for the same situation:
 | `no_workbench` | the character was never pulled, so there is no Live to make a Workbench from |
 | `no_live` | the character was never pulled, so there is no Live to read, back up or export |
 | `not_signed_in` | needs an F-list session — sign in from the app window |
-| `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
+| `field_not_found` | F-list has no such field; `list_profile_fields` shows what exists (an unknown kink in `set_kinks` is a `validation_failed` naming it under `problems`) |
 | `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
 | `etag_mismatch` | the Workbench changed since it was read (`put_working_set_payload` with an old `if_match`); details carry the `current_etag` |
 | `confirm_required` | a destructive tool; ask the user, then pass `confirm=true` |
