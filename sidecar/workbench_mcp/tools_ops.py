@@ -38,6 +38,7 @@ from refusals import INTERNAL_ERROR
 from services import jobs
 
 from ._context import (
+    WORKBENCH,
     ToolError,
     audit,
     resolve_character,
@@ -416,7 +417,7 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
 
 @tool(tags=TAG_CHARACTER, title="Export for upload to F-list")
 def export_restore_zip(
-    character: str, path: str, working_set: str | None = None
+    character: str, path: str, source: str = WORKBENCH
 ) -> dict[str, Any]:
     """Save the ZIP the user uploads to F-list themselves.
 
@@ -428,7 +429,7 @@ def export_restore_zip(
     import zip_serialise
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     # Payload and images in one step under the character's lock, as the
     # window's export does.
     with archive_registry.character_lock(target.id):
