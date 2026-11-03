@@ -282,8 +282,8 @@ async def ingest_logs(
 
     Only messages with an IC or OOC Label are indexed;
     `skipped_unlabeled` counts the rest, and a high number means
-    get_messages_to_classify should run first. OOC is left out unless
-    `include_ooc=true`, and an ingest without it deletes OOC chunks.
+    get_messages_to_classify should run first. OOC is left out: pass
+    include_ooc=true on every ingest to keep OOC chunks.
     Channel Logs are left out unless `include_channels=true`, as in
     list_partners: group chat buries a character's roleplay.
 
