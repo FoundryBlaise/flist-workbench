@@ -1,15 +1,12 @@
 """Labels and aliases across two of the user's own characters.
 
 Built on the `two_characters` scenario: one line in both own
-characters' Logs, and a partner known under two names. What works today
-is pinned by passing tests; the Label bugs #5 fixes (ADR 0004: a Label
-belongs to the message) are strict xfails named after the behaviour
-they expect, so each flips to a pass without rewording.
+characters' Logs, and a partner known under two names. A Label
+belongs to the message (ADR 0004): a conversation's Labels are those of
+the messages its Logs hold, whichever character labelled them.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from mcp_helpers import allow_log_text, call_tool, mcp_client
 from two_characters import (  # noqa: F401  (the fixture is used by name)
@@ -162,10 +159,6 @@ async def test_the_unlabeled_count_follows_the_alias_group(
 # ---- Label bugs #5 fixes (ADR 0004) ----------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#5: a Label is stored under one character and filtered by it",
-)
 async def test_one_label_on_a_shared_line_shows_for_both_characters(
     two_characters: TwoCharacters,
 ) -> None:
@@ -174,15 +167,12 @@ async def test_one_label_on_a_shared_line_shows_for_both_characters(
     assert two_characters.message(AMBER, AZURE, SHARED_LINE)["label"] == "IC"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#5: a Label is stored under one character and filtered by it",
-)
 async def test_a_labelled_shared_line_is_not_offered_to_the_other_character(
     two_characters: TwoCharacters,
 ) -> None:
     await _label_over_mcp(two_characters, AZURE, AMBER, {SHARED_LINE: "IC"})
 
+    allow_log_text()  # batches carry Log text
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
             session, "get_unlabeled_messages", character=AMBER, partner=AZURE
@@ -190,10 +180,6 @@ async def test_a_labelled_shared_line_is_not_offered_to_the_other_character(
     assert batch["messages"] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#5: resetting a conversation deletes by stored partner, not by its Log",
-)
 async def test_resetting_a_conversation_leaves_the_labels_of_a_log_unlinked_from_it(
     two_characters: TwoCharacters,
 ) -> None:
@@ -268,10 +254,58 @@ def test_the_window_still_changes_and_clears_a_manual_label(
     assert two_characters.message(AZURE, PARTNER, PARTNER_LINE)["label"] == "Unlabeled"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#5: Labels written under the primary detach from an unlinked alias",
-)
+async def test_clearing_every_conversation_of_a_character_follows_her_logs(
+    two_characters: TwoCharacters,
+) -> None:
+    # The shared line is labelled from Lady Amber Blaise's side, yet it
+    # is in Azure Viper's Log as well.
+    await _label_over_mcp(two_characters, AMBER, AZURE, {SHARED_LINE: "IC"})
+    await _label_over_mcp(two_characters, AZURE, PARTNER, {OLD_NAME_LINE: "IC"})
+    await _label_over_mcp(two_characters, AMBER, PARTNER, {AMBER_PARTNER_LINE: "IC"})
+
+    async with mcp_client() as session:
+        result, cleared = await call_tool(
+            session, "clear_labels", character=AZURE, confirm=True
+        )
+    assert not result.isError, cleared
+
+    assert cleared["deleted"] == 2
+    assert two_characters.message(AMBER, AZURE, SHARED_LINE)["label"] == "Unlabeled"
+    assert two_characters.message(AZURE, PARTNER, OLD_NAME_LINE)["label"] == "Unlabeled"
+    assert two_characters.message(AMBER, PARTNER, AMBER_PARTNER_LINE)["label"] == "IC"
+
+
+async def test_a_cleared_conversation_comes_back_from_the_trash_with_the_same_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    await _label_over_mcp(
+        two_characters, AZURE, PARTNER, {PARTNER_LINE: "IC", OLD_NAME_LINE: "OOC"}
+    )
+    await _label_over_mcp(two_characters, AMBER, PARTNER, {AMBER_PARTNER_LINE: "IC"})
+    before = {
+        m["hash"]: (m["label"], m.get("label_source"))
+        for m in two_characters.messages(AZURE, PARTNER)
+    }
+
+    cleared = two_characters.client.post(
+        "/labels/clear", json={"character": AZURE, "partner": PARTNER}
+    ).json()
+    assert cleared["deleted"] == 2
+    put_back = two_characters.client.post(
+        "/labels/trash/put-back", json={"ids": [cleared["trash_id"]]}
+    ).json()
+
+    assert put_back["restored"] == [
+        {"id": cleared["trash_id"], "restored": 2, "skipped": []}
+    ]
+    after = {
+        m["hash"]: (m["label"], m.get("label_source"))
+        for m in two_characters.messages(AZURE, PARTNER)
+    }
+    assert after == before
+    assert two_characters.message(AMBER, PARTNER, AMBER_PARTNER_LINE)["label"] == "IC"
+
+
 async def test_unlinking_an_alias_keeps_its_labels(
     two_characters: TwoCharacters,
 ) -> None:

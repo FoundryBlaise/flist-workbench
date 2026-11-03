@@ -8,8 +8,10 @@ Labels and clearing them all live here once. The REST router
 these and shape the answer, so the two surfaces cannot drift.
 
 A Label belongs to the message (ADR 0004). A conversation's Labels are
-read across the partner's whole alias group and written under its
-primary name, so a rename does not orphan them. The SQL itself stays
+the Labels of the messages its Log holds, the partner's whole alias
+group included, found by message hash: a line in two of the user's own
+Logs shows one Label in both, and a rename or an unlinked alias orphans
+none. New Labels are still stamped with the primary name. The SQL itself stays
 in the Label store (`labels.py`), which announces every change on the
 event bus once; clearing goes through the Trash (`label_trash`).
 
@@ -75,18 +77,9 @@ def _messages(character: str, partner: str) -> list[dict]:
 def _counts(
     conn: sqlite3.Connection,
     settings: labels_store.LabelsSettings,
-    character: str,
-    partner: str,
     messages: list[dict],
 ) -> dict[str, int]:
-    counts = labels_store.stats(
-        conn,
-        character,
-        partner,
-        messages,
-        settings,
-        partner_aliases=aliases_store.all_names_for(conn, character, partner),
-    )
+    counts = labels_store.stats(conn, messages, settings)
     return {
         "ic": counts[labels_store.LABEL_IC],
         "ooc": counts[labels_store.LABEL_OOC],
@@ -103,7 +96,7 @@ def conversation_stats(character: str, partner: str) -> dict[str, int]:
     alias group included."""
     messages = _messages(character, partner)
     with _store() as (conn, settings):
-        return _counts(conn, settings, character, partner, messages)
+        return _counts(conn, settings, messages)
 
 
 def character_stats(character: str) -> list[dict[str, Any]]:
@@ -136,11 +129,9 @@ def character_stats(character: str) -> list[dict[str, Any]]:
             rows.append(
                 {
                     "partner": entry.name,
-                    **_counts(conn, settings, character, entry.name, messages),
+                    **_counts(conn, settings, messages),
                     "log_mtime": log_mtime if log_mtime > 0 else None,
-                    "last_label_at": labels_store.max_label_time(
-                        conn, character, entry.name, partner_aliases=alias_group
-                    ),
+                    "last_label_at": labels_store.max_label_time(conn, messages),
                 }
             )
     return rows
@@ -167,7 +158,7 @@ def rollup() -> dict[str, Any]:
                     messages = _messages(char.name, entry.name)
                 except log_store.LogDirError:
                     continue
-                counts = _counts(conn, settings, char.name, entry.name, messages)
+                counts = _counts(conn, settings, messages)
                 for key in totals:
                     totals[key] += counts[key]
     return {
@@ -198,13 +189,9 @@ def label_messages(
     """Resolve each of `messages` from one conversation to IC, OOC or
     Unlabeled, live: a stored Label first, then the rules at the current
     threshold."""
+    messages = list(messages)
     with _store() as (conn, settings):
-        by_hash = labels_store.labels_for_partner(
-            conn,
-            character,
-            partner,
-            partner_aliases=aliases_store.all_names_for(conn, character, partner),
-        )
+        by_hash = labels_store.labels_for_messages(conn, messages)
         out = []
         for msg in messages:
             h = labels_store.msg_hash(msg)
@@ -377,9 +364,7 @@ def record_verdicts(
                 partner=aliases_store.primary_for(conn, character, partner),
                 source="mcp",
             )
-        result.unlabeled_remaining = _counts(
-            conn, settings, character, partner, messages
-        )["unlabeled"]
+        result.unlabeled_remaining = _counts(conn, settings, messages)["unlabeled"]
     return result
 
 
@@ -403,7 +388,6 @@ def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
             messages,
             settings,
             label,
-            partner_aliases=aliases_store.all_names_for(conn, character, partner),
         )
 
 

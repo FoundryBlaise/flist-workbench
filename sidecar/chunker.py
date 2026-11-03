@@ -221,7 +221,7 @@ def chunk_messages(
 ) -> list[Chunk]:
     """Group an in-memory conversation into retrieval chunks.
 
-    `labels_by_hash` is what `labels.labels_for_partner` returns (just
+    `labels_by_hash` is what `labels.labels_for_messages` returns (just
     the DB rows). The resolver fills in rule-driven IC/OOC outcomes
     on the fly — we never trust a Unlabeled message into the corpus.
 
