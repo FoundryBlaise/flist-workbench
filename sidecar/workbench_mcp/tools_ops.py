@@ -404,7 +404,15 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     return job.to_dict()
 
 
-@tool(tags=TAG_LOGS, title="Wipe the search index", destructive=True)
+@tool(
+    tags=TAG_LOGS,
+    title="Wipe the search index",
+    destructive=True,
+    warning=(
+        "This deletes the whole search index. Re-indexing means "
+        "re-embedding every message, which takes a while."
+    ),
+)
 def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     """Delete every indexed chunk. The logs and their labels are
     untouched; only the search index goes.
@@ -413,13 +421,6 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
     model can't be searched with another. Refused with `index_busy`
     while an ingest runs.
     """
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            "This deletes the whole search index. Re-indexing means "
-            "re-embedding every message, which takes a while. Ask the "
-            "user, then call again with confirm=true.",
-        )
     from services import index as index_service
 
     index_service.wipe()
@@ -705,10 +706,18 @@ def add_alias(character: str, name: str, primary_name: str) -> dict[str, Any]:
     return {"character": character, "primary": primary_name, "group": group}
 
 
-@tool(tags=TAG_LOGS, title="Unlink a partner name", destructive=True)
-def remove_alias(character: str, name: str) -> dict[str, Any]:
+@tool(
+    tags=TAG_LOGS,
+    title="Unlink a partner name",
+    destructive=True,
+    warning=(
+        "Unlinking splits the name's conversation off again; only "
+        "add_alias brings it back."
+    ),
+)
+def remove_alias(character: str, name: str, confirm: bool = False) -> dict[str, Any]:
     """Undo add_alias for one name, so it shows as its own conversation
-    again."""
+    again. Needs `confirm=true`."""
     import aliases as aliases_store
 
     conn = aliases_store.connect()

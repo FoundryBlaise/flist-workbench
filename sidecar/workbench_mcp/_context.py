@@ -61,11 +61,12 @@ def not_signed_in() -> ToolError:
     )
 
 
-def confirm_required(what: str) -> ToolError:
+def confirm_required(warning: str) -> ToolError:
+    """The refusal of a call that needs `confirm=true`. `warning` says
+    what the call would do to the user's work, in a sentence or two."""
     return ToolError(
         "confirm_required",
-        f"{what} is destructive and permanent. Ask the user, then call "
-        "again with confirm=true.",
+        f"{warning} Ask the user, then call again with confirm=true.",
     )
 
 

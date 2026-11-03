@@ -9,7 +9,9 @@ two things:
   on a 70-tool list, so the narrow endpoints exist;
 * a single place that enforces the house style from
   docs/MCP_DESIGN.md §7: every tool carries annotations, and every
-  destructive tool takes a `confirm` flag.
+  destructive tool takes a `confirm` flag. Registering one without it
+  fails at start-up, and a call without `confirm=true` is refused here,
+  before the tool's own code runs, so no tool can forget to check.
 
 FastMCP calls a plain `def` tool on the event loop, where a semantic
 search or a zip build would stall the window and every other client
@@ -32,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 from refusals import Refusal
 from services import events
 
-from ._context import ToolError
+from ._context import ToolError, confirm_required
 
 #: Tag applied to tools that belong on the character-editing endpoint.
 TAG_CHARACTER = "character"
@@ -56,6 +58,8 @@ class ToolSpec:
     tags: frozenset[str]
     annotations: ToolAnnotations
     structured_output: bool | None = None
+    #: For a tool that asks for `confirm` only sometimes: when, in words.
+    confirm_when: str | None = None
 
 
 _TOOLS: list[ToolSpec] = []
@@ -69,6 +73,8 @@ def tool(
     name: str | None = None,
     read_only: bool = False,
     destructive: bool = False,
+    warning: str | Callable[..., str] | None = None,
+    confirm_when: str | None = None,
     idempotent: bool | None = None,
     open_world: bool = False,
     structured_output: bool | None = None,
@@ -78,6 +84,16 @@ def tool(
     `read_only` and `destructive` become MCP tool annotations, which
     clients use to decide what to auto-approve. `open_world` marks the
     handful of tools that reach out to f-list.net.
+
+    A destructive tool is called only with `confirm=true`; without it
+    the call is refused with `confirm_required`, carrying `warning`:
+    what the call would do to the user's work, so a model can put it to
+    the user. `warning` may be a function of the call's arguments when
+    the numbers matter ("all 120 unlabeled messages").
+
+    A tool that is not destructive but can be, depending on its
+    arguments, checks `confirm` itself and says when in `confirm_when`;
+    any other tool taking `confirm` is refused at registration.
     """
     tag_set = frozenset((tags,) if isinstance(tags, str) else tags)
     if not tag_set:
@@ -86,7 +102,19 @@ def tool(
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
         tool_name = name or fn.__name__
         origin = f"{fn.__module__}.{fn.__qualname__}"
-        wrapped = _attributed(fn, tool_name)
+        takes_confirm = "confirm" in inspect.signature(fn).parameters
+        if destructive and not takes_confirm:
+            raise ValueError(
+                f"MCP tool {tool_name!r} is destructive, so it must take "
+                "a `confirm` parameter"
+            )
+        if takes_confirm and not (destructive or confirm_when):
+            raise ValueError(
+                f"MCP tool {tool_name!r} takes `confirm` but is not marked "
+                "destructive, nor says in `confirm_when` when it asks"
+            )
+        guard = _confirm_guard(fn, tool_name, warning) if destructive else None
+        wrapped = _attributed(fn, tool_name, guard)
         previous = _SEEN.get(tool_name)
         if previous is not None and previous != origin:
             raise ValueError(
@@ -112,6 +140,7 @@ def tool(
                     openWorldHint=open_world,
                 ),
                 structured_output=structured_output,
+                confirm_when=confirm_when,
             )
         )
         return fn
@@ -120,7 +149,48 @@ def tool(
 
 
 
-def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
+def _confirm_guard(
+    fn: Callable[..., Any],
+    tool_name: str,
+    warning: str | Callable[..., str] | None,
+) -> Callable[..., None]:
+    """A check that refuses a call without `confirm=true`, run before
+    the tool body whatever that body does."""
+    signature = inspect.signature(fn)
+
+    def require_confirm(*args: Any, **kwargs: Any) -> None:
+        bound = signature.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        if bound.arguments.get("confirm") is True:
+            return
+        raise confirm_required(_warning_text(tool_name, warning, bound.arguments))
+
+    return require_confirm
+
+
+def _warning_text(
+    tool_name: str,
+    warning: str | Callable[..., str] | None,
+    arguments: dict[str, Any],
+) -> str:
+    if isinstance(warning, str):
+        return warning
+    if warning is not None:
+        # A warning that counts what is at stake reads the user's data,
+        # and the arguments may name nothing that exists. The call is
+        # refused either way; only the detail is lost.
+        try:
+            return warning(**arguments)
+        except Exception:  # noqa: BLE001
+            pass
+    return f"{tool_name} can lose the user's work."
+
+
+def _attributed(
+    fn: Callable[..., Any],
+    tool_name: str,
+    require_confirm: Callable[..., None] | None = None,
+) -> Callable[..., Any]:
     """Tag everything a tool publishes on the event bus as coming from
     MCP, naming the tool, and report a `Refusal` from anywhere under the
     tool as a `ToolError` with its code and details.
@@ -130,6 +200,9 @@ def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     "the set you have open just changed" is far more useful to a user
     when it can name `set_description` as the cause. A refusal reads
     the same to a model as to the window (`refusals`).
+
+    `require_confirm`, when given, runs first and refuses the call
+    before the tool body can.
     """
 
     if inspect.iscoroutinefunction(fn):
@@ -138,6 +211,8 @@ def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             with events.origin(f"mcp:{tool_name}"):
                 try:
+                    if require_confirm is not None:
+                        await run_in_threadpool(require_confirm, *args, **kwargs)
                     return await fn(*args, **kwargs)
                 except Refusal as exc:
                     raise ToolError.from_refusal(exc) from exc
@@ -150,6 +225,8 @@ def _attributed(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     def call(*args: Any, **kwargs: Any) -> Any:
         with events.origin(f"mcp:{tool_name}"), events.coalesced():
             try:
+                if require_confirm is not None:
+                    require_confirm(*args, **kwargs)
                 return fn(*args, **kwargs)
             except Refusal as exc:
                 raise ToolError.from_refusal(exc) from exc

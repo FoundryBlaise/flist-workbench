@@ -311,10 +311,26 @@ def set_message_labels(
     return out
 
 
+def _label_all_warning(
+    character: str, partner: str, label: str, **_: Any
+) -> str:
+    """The refusal names the count: a model asking the user to approve
+    this should be able to say how much it covers."""
+    label = label_service.verdict(label)
+    conv = resolve_conversation(character, partner)
+    pending = label_service.conversation_stats(conv.character, conv.partner)["unlabeled"]
+    return (
+        f"This writes {label} to all {pending} unlabeled message(s) in "
+        f"{conv.partner} with {conv.character} without reading them. Only "
+        f"do it if the user said this conversation is entirely {label}."
+    )
+
+
 @tool(
     tags=(TAG_CLASSIFY, TAG_LOGS),
     title="Label every unlabeled message at once",
     destructive=True,
+    warning=_label_all_warning,
 )
 def label_all_unlabeled(
     character: str,
@@ -344,16 +360,6 @@ def label_all_unlabeled(
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
 
-    if not confirm:
-        pending = label_service.conversation_stats(character, partner)["unlabeled"]
-        raise ToolError(
-            "confirm_required",
-            f"This writes {label} to all {pending} unlabeled message(s) "
-            f"in {partner} with {character} without reading them. Only do "
-            "it if the user said this conversation is entirely "
-            f"{label}. Ask them, then call again with confirm=true.",
-        )
-
     result = label_service.fill_unlabeled(character, partner, label)
 
     audit(
@@ -381,6 +387,12 @@ def label_all_unlabeled(
     tags=TAG_LOGS,
     title="Clear stored Labels",
     destructive=True,
+    warning=(
+        "This deletes every stored Label of the conversation (of every "
+        "conversation of the character when no partner is given), "
+        "including the user's own manual overrides. A copy goes to the "
+        "Trash, where only the user can restore it."
+    ),
 )
 def clear_labels(
     character: str, partner: str | None = None, confirm: bool = False
@@ -401,16 +413,6 @@ def clear_labels(
         character, partner = conv.character, conv.partner
     else:
         character = resolve_log_character(character)
-
-    if not confirm:
-        scope = f"{partner} with {character}" if partner else f"every conversation of {character}"
-        raise ToolError(
-            "confirm_required",
-            f"This deletes every stored Label for {scope}, including "
-            "the user's own manual overrides. A copy goes to the Trash, "
-            "where only the user can restore it. Ask the user, then call "
-            "again with confirm=true.",
-        )
 
     cleared = label_service.clear(character, partner)
 

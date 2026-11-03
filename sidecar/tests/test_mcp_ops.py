@@ -494,6 +494,7 @@ async def test_aliases_link_and_unlink(workbench) -> None:
             "remove_alias",
             character="Lady Amber Blaise",
             name="Daelan Envale",
+            confirm=True,
         )
     assert removed["removed"] is True
 

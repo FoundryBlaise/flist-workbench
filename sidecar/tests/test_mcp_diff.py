@@ -183,6 +183,7 @@ async def test_custom_kink_changes_are_classified(workbench) -> None:
             "delete_custom_kink",
             character="Lady Amber Blaise",
             kink_id="7788",
+            confirm=True,
         )
         _, body = await call_tool(
             session, "diff_working_set", character="Lady Amber Blaise"
