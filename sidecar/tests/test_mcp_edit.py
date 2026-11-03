@@ -264,7 +264,11 @@ async def test_append_description_starts_a_new_line(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="first"
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="first",
+            confirm=True,  # shorter than half of Live's description
         )
         await call_tool(
             session, "append_description", character="Lady Amber Blaise", text="second"
@@ -281,7 +285,11 @@ async def test_every_edit_records_its_path_in_the_overlay(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="mine"
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="mine",
+            confirm=True,  # shorter than half of Live's description
         )
         await call_tool(
             session,
@@ -819,7 +827,11 @@ async def test_write_tools_say_workbench_does_not_publish(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         _, body = await call_tool(
-            session, "set_description", character="Lady Amber Blaise", text="x"
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="x",
+            confirm=True,  # shorter than half of Live's description
         )
     assert "never writes to f-list.net" in body["note"]
 

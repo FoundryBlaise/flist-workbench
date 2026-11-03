@@ -173,6 +173,7 @@ async def test_the_workbench_can_be_named_explicitly(workbench) -> None:  # noqa
             character="Lady Amber Blaise",
             working_set="workbench",
             text="mine",
+            confirm=True,  # shorter than half of Live's description
         )
         _, body = await call_tool(
             session,
