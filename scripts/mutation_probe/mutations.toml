@@ -456,14 +456,14 @@ find = '''
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
         return db_label["label"]
-    text = (msg.get("text") or "").strip()
+    text = _written_text(msg)
     if not text:
         return LABEL_OOC
     if len(text) < settings.threshold_chars:
         return LABEL_OOC
 '''
 replace = '''
-    text = (msg.get("text") or "").strip()
+    text = _written_text(msg)
     if not text:
         return LABEL_OOC
     if len(text) < settings.threshold_chars:
@@ -653,6 +653,34 @@ find = '''
 "logs": frozenset({TAG_CORE, TAG_LOGS}),'''
 replace = '''
 "logs": frozenset({TAG_CORE, TAG_LOGS, TAG_CHARACTER}),'''
+
+[[mutation]]
+id = "L18"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "System lines (ads, rolls, status events) count as Unlabeled and are offered to the model for a Label."
+tests = ["@logs", "@mcp"]
+spec = 5
+find = '''
+    if msg.get("kind") == "system":
+        return LABEL_OOC
+    if db_label is not None:'''
+replace = '''
+    if db_label is not None:'''
+
+[[mutation]]
+id = "L19"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "A `/me` action is measured with the speaker name in front, so a long name reaches the short-message threshold earlier."
+tests = ["@logs", "@mcp"]
+spec = 5
+find = '''
+    if msg.get("type_name") == "action":
+        prefix'''
+replace = '''
+    if False:
+        prefix'''
 
 [[mutation]]
 id = "R01"
