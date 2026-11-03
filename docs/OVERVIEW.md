@@ -161,6 +161,10 @@ profiles anywhere in the window.
 
 The payloads cache under `%APPDATA%\flist-workbench\foreign\<name>\`
 in the same shape `live.json` uses, with a 24-hour TTL and a manual ↻.
+When F-list answers that it will not show a profile (deleted, private,
+or the owner blocked the account; the answer does not say which), the
+cached folder goes at once, images and avatar included. Offline,
+timeouts and F-list server errors serve the cached copy marked stale.
 That root is deliberately not `characters/`: every path that can copy,
 back up, export or edit a character resolves through
 `archive_registry.character_dir()`, and nothing under `foreign/` is
