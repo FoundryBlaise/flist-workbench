@@ -1,11 +1,12 @@
-"""MCP sees one Workbench beside Live (spec #3, ticket #52; spec #6, #84).
+"""MCP sees one Workbench beside Live (spec #3, ticket #52; spec #6, #84, #85).
 
 A model connected over MCP sees what the window shows: each character
 has one Workbench and its Live. The tools that listed, named, picked,
 deleted, packed or unpacked several drafts, the addressing explainer
 and the tool listing pull history are gone. Editing tools take no
-copy to address at all: they change the Workbench. A read that takes
-`working_set` accepts only the Workbench (omitted) or Live.
+copy to address at all: they change the Workbench. A read that can
+look at either copy takes `source`, which accepts only `workbench` (the
+default) or `live`; no tool takes `working_set` any more.
 """
 
 from __future__ import annotations
@@ -33,19 +34,21 @@ REMOVED_TOOLS = (
     "list_snapshots",
     "export_working_set_bundle",
     "import_working_set_bundle",
+    "get_working_set",
+    "diff_working_set",
 )
 
-#: Every tool that takes `working_set`, with the least it needs besides.
+#: Every tool that takes `source`, with the least it needs besides.
 #: Listed rather than discovered so a new tool with the parameter has to
 #: be added here, and so is held to the same refusal. Only reads: an
 #: editing tool changes the Workbench and has nothing to address.
-TAKES_WORKING_SET: dict[str, dict[str, Any]] = {
-    "get_working_set": {},
+TAKES_SOURCE: dict[str, dict[str, Any]] = {
+    "get_workbench": {},
     "get_description": {},
     "list_profile_fields": {},
     "list_kinks": {},
     "list_images": {},
-    "diff_working_set": {},
+    "diff_workbench": {},
     "render_profile_image": {},
 }
 
@@ -101,15 +104,26 @@ async def test_a_removed_tool_is_not_listed_and_is_an_unknown_tool(
     assert "Unknown tool" in tool_error_text(result)
 
 
-async def test_the_tools_taking_working_set_are_the_ones_listed_here(
+async def test_the_reads_taking_source_are_the_ones_listed_here(
     workbench,  # noqa: F811
 ) -> None:
     async with mcp_client() as session:
         tools = (await session.list_tools()).tools
-    taking = {
+    taking = {t.name for t in tools if "source" in t.inputSchema.get("properties", {})}
+    # Its `source` is where to look for names (bookmarks, friends,
+    # Logs), not a copy of the profile.
+    taking.discard("search_foreign_characters")
+    assert taking == set(TAKES_SOURCE)
+
+
+@pytest.mark.parametrize("suffix", ENDPOINTS)
+async def test_no_tool_takes_working_set(workbench, suffix: str) -> None:  # noqa: F811
+    async with mcp_client(suffix) as session:
+        tools = (await session.list_tools()).tools
+    taking = [
         t.name for t in tools if "working_set" in t.inputSchema.get("properties", {})
-    }
-    assert taking == set(TAKES_WORKING_SET)
+    ]
+    assert taking == []
 
 
 @pytest.mark.parametrize("suffix", ENDPOINTS)
@@ -122,9 +136,9 @@ async def test_no_editing_tool_takes_a_copy_to_address(
         tools = (await session.list_tools()).tools
     for t in tools:
         if t.name in EDITING_TOOLS or not t.annotations.readOnlyHint:
-            if t.name in TAKES_WORKING_SET:
-                continue  # a read that writes a file elsewhere (#85)
-            assert "working_set" not in t.inputSchema.get("properties", {}), t.name
+            if t.name in TAKES_SOURCE:
+                continue  # a read that writes a file elsewhere
+            assert "source" not in t.inputSchema.get("properties", {}), t.name
 
 
 async def test_an_edit_never_reaches_live(workbench) -> None:  # noqa: F811
@@ -148,7 +162,7 @@ CALLS: dict[str, dict[str, Any]] = {
     "set_profile_settings": {"public": True},
     "set_kinks": {"items": [{"kink": "Rough Housing", "choice": "fave"}]},
     "add_custom_kink": {"name": "x"},
-    "get_working_set": {"include": ["summary"]},
+    "get_workbench": {"include": ["summary"]},
     "get_description": {},
     "list_profile_fields": {"only_set": True},
     "list_kinks": {},
@@ -186,11 +200,7 @@ async def test_no_tool_description_speaks_of_sets(
     async with mcp_client(suffix) as session:
         tools = (await session.list_tools()).tools
     for t in tools:
-        text = t.description or ""
-        if t.name in TAKES_WORKING_SET:
-            # The parameter's own name, until reads take `source` (#85).
-            text = text.replace("working_set", "")
-        found = SET_AS_A_THING.search(text)
+        found = SET_AS_A_THING.search(t.description or "")
         assert not found, (t.name, found)
 
 
@@ -207,7 +217,7 @@ async def test_the_raw_payload_tools_are_on_the_full_endpoint_only(
         assert not {"get_working_set_payload", "put_working_set_payload"} & names
 
 
-@pytest.mark.parametrize("tool_name", sorted(TAKES_WORKING_SET))
+@pytest.mark.parametrize("tool_name", sorted(TAKES_SOURCE))
 @pytest.mark.parametrize("ref", ["by name", "by id"])
 async def test_a_set_name_or_id_is_refused_naming_the_workbench_and_live(
     workbench, tool_name: str, ref: str  # noqa: F811
@@ -219,21 +229,45 @@ async def test_a_set_name_or_id_is_refused_naming_the_workbench_and_live(
             session,
             tool_name,
             character="Lady Amber Blaise",
-            working_set="Main" if ref == "by name" else other_id,
-            **TAKES_WORKING_SET[tool_name],
+            source="Main" if ref == "by name" else other_id,
+            **TAKES_SOURCE[tool_name],
         )
     text = tool_error_text(result)
-    _, found, message = text.partition("validation_failed: working_set: ")
+    _, found, message = text.partition("validation_failed: source: ")
     assert found, text
     assert "Workbench" in message and "'live'" in message, text
     assert payload_of(workbench) == before, "nothing may be written"
+
+
+@pytest.mark.parametrize("tool_name", sorted(TAKES_SOURCE))
+async def test_reading_live_of_a_character_never_pulled_is_refused(
+    workbench, tool_name: str  # noqa: F811
+) -> None:
+    """There is no Live until a pull, and the refusal says to pull. The
+    diff asks for both copies, and a character never pulled has no
+    Workbench either: that is the side it names."""
+    archive_registry.register_character("99", "Ghost")
+    expected, extra = ("no_live", {})
+    if tool_name == "diff_workbench":
+        expected, extra = ("no_workbench", {"against": "workbench"})
+    async with mcp_client() as session:
+        result, _ = await call_tool(
+            session,
+            tool_name,
+            character="Ghost",
+            source="live",
+            **{**TAKES_SOURCE[tool_name], **extra},
+        )
+    text = tool_error_text(result)
+    assert f": {expected}: " in text, text
+    assert "pull" in text.lower(), text
 
 
 async def test_diff_against_a_set_name_is_refused(workbench) -> None:  # noqa: F811
     _old_archive_with_a_second_draft(workbench)
     async with mcp_client() as session:
         result, _ = await call_tool(
-            session, "diff_working_set", character="Lady Amber Blaise", against="Main"
+            session, "diff_workbench", character="Lady Amber Blaise", against="Main"
         )
     text = tool_error_text(result)
     _, found, message = text.partition("validation_failed: against: ")
@@ -261,7 +295,7 @@ async def test_reading_and_editing_without_a_set_reference_use_the_workbench(
             session,
             "get_description",
             character="Lady Amber Blaise",
-            working_set="live",
+            source="live",
         )
     assert "set" not in wrote and "set" not in read
     assert read["read_only"] is False
@@ -272,8 +306,8 @@ async def test_reading_and_editing_without_a_set_reference_use_the_workbench(
 
 
 async def test_the_workbench_can_be_named_explicitly(workbench) -> None:  # noqa: F811
-    """`workbench` names the same thing as leaving the parameter out, so
-    a diff can put Live on the left and the Workbench on the right."""
+    """`workbench` names the same thing as leaving `source` out, so a
+    diff can put Live on the left and the Workbench on the right."""
     async with mcp_client("character") as session:
         await call_tool(
             session,
@@ -284,9 +318,9 @@ async def test_the_workbench_can_be_named_explicitly(workbench) -> None:  # noqa
         )
         _, body = await call_tool(
             session,
-            "diff_working_set",
+            "diff_workbench",
             character="Lady Amber Blaise",
-            working_set="live",
+            source="live",
             against="workbench",
         )
     assert body["from"] == "Workbench"

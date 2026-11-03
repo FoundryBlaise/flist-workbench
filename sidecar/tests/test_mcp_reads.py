@@ -182,10 +182,32 @@ async def test_a_character_never_pulled_has_nothing_to_open(workbench) -> None:
 async def test_live_is_addressable_but_flagged_read_only(workbench) -> None:
     async with mcp_client() as session:
         _, body = await call_tool(
-            session, "get_description", character="Lady Amber Blaise", working_set="live"
+            session, "get_description", character="Lady Amber Blaise", source="live"
         )
     assert body["read_only"] is True
     assert body["description"] == "[b]A published profile.[/b]"
+
+
+async def test_get_workbench_reads_the_workbench_or_live_by_source(workbench) -> None:
+    payload = workbench_payload("42")
+    payload["character"]["custom_title"] = "Landlady"
+    put_workbench("42", payload)
+
+    async with mcp_client("character") as session:
+        _, bench = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise"
+        )
+        _, named = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise", source="workbench"
+        )
+        _, live = await call_tool(
+            session, "get_workbench", character="Lady Amber Blaise", source="live"
+        )
+    assert bench == named
+    assert bench["read_only"] is False
+    assert bench["summary"]["custom_title"] == "Landlady"
+    assert live["read_only"] is True
+    assert live["summary"]["custom_title"] == "Innkeeper"
 
 
 # ---- description paging ------------------------------------------------

@@ -25,7 +25,14 @@ from mcp.server.fastmcp.utilities.types import Image
 
 from services import render as render_service
 
-from ._context import ToolError, audit, load_payload, resolve_character, resolve_workbench_or_live
+from ._context import (
+    WORKBENCH,
+    ToolError,
+    audit,
+    load_payload,
+    resolve_character,
+    resolve_workbench_or_live,
+)
 from ._registry import TAG_CHARACTER, tool
 
 THEMES = ("dark", "default", "light")
@@ -43,7 +50,7 @@ DEFAULT_WIDTH = 900
 )
 async def render_profile_image(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     theme: str = "dark",
     width: int = DEFAULT_WIDTH,
 ) -> Image:
@@ -57,8 +64,8 @@ async def render_profile_image(
     `theme` mimics F-list's own three (dark, default, light) — worth
     trying more than one when a description sets colours, because a
     shade that reads well on dark can vanish on light. Pass
-    working_set="live" to see what is published right now instead of
-    the Workbench.
+    source="live" to see what is published right now instead of the
+    Workbench.
 
     The app window has to be open: it holds the renderer that
     draws this.
@@ -71,7 +78,7 @@ async def render_profile_image(
     px = max(MIN_WIDTH, min(MAX_WIDTH, int(width)))
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     char = payload.get("character") if isinstance(payload.get("character"), dict) else {}
     bbcode = (char or {}).get("description") or ""
