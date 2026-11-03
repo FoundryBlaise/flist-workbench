@@ -181,16 +181,72 @@ async def test_search_logs_rejects_an_empty_query(corpus) -> None:
     assert "validation_failed" in tool_error_text(result)
 
 
-async def test_search_all_partners_reports_per_partner_hits(corpus) -> None:
+async def test_search_logs_without_a_partner_groups_hits_by_partner(
+    corpus,
+) -> None:
+    write_log(
+        corpus / "Lady Amber Blaise" / "logs" / "Aina Sato",
+        [
+            chat("Aina Sato", "Woodsmoke again, and rain.", at=1700000500),
+            chat("Aina Sato", "Nothing to see here.", at=1700000560),
+        ],
+    )
     async with mcp_client("logs") as session:
         _, body = await call_tool(
             session,
-            "search_all_partners",
+            "search_logs",
             character="Lady Amber Blaise",
             query="woodsmoke",
         )
-    hits = {p["partner"]: p["hit_count"] for p in body["partners"]}
-    assert hits.get("Daelan Envale") == 1
+    assert body["character"] == "Lady Amber Blaise"
+    grouped = {p["partner"]: p for p in body["partners"]}
+    assert set(grouped) == {"Daelan Envale", "Aina Sato"}
+    assert grouped["Aina Sato"]["hit_count"] == 1
+    assert grouped["Aina Sato"]["hits"][0]["text"] == "Woodsmoke again, and rain."
+    assert grouped["Daelan Envale"]["hits"][0]["speaker"] == "Daelan Envale"
+
+
+async def test_search_logs_without_a_partner_caps_the_hits_per_partner(
+    corpus,
+) -> None:
+    """One chatty conversation must not flood the answer: past the cap a
+    partner reports `truncated`, and the model narrows to that partner."""
+    write_log(
+        corpus / "Lady Amber Blaise" / "logs" / "Aina Sato",
+        [
+            chat("Aina Sato", f"Woodsmoke, line {n}.", at=1700000500 + n)
+            for n in range(30)
+        ],
+    )
+    async with mcp_client("logs") as session:
+        _, body = await call_tool(
+            session,
+            "search_logs",
+            character="Lady Amber Blaise",
+            query="woodsmoke",
+            limit=1000,
+        )
+    grouped = {p["partner"]: p for p in body["partners"]}
+    assert len(grouped["Aina Sato"]["hits"]) == 20
+    assert grouped["Aina Sato"]["truncated"] is True
+    assert grouped["Daelan Envale"]["truncated"] is False
+
+
+async def test_search_logs_without_a_partner_rejects_an_empty_query(
+    corpus,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, _ = await call_tool(
+            session, "search_logs", character="Lady Amber Blaise", query=" "
+        )
+    assert "validation_failed" in tool_error_text(result)
+
+
+async def test_searching_all_partners_is_not_a_tool_of_its_own() -> None:
+    for suffix in ("", "character", "logs", "classify"):
+        async with mcp_client(suffix) as session:
+            names = {t.name for t in (await session.list_tools()).tools}
+        assert "search_all_partners" not in names, suffix
 
 
 # ---- find_contacts -----------------------------------------------------
