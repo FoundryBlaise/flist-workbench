@@ -324,19 +324,27 @@ def _evict(index: dict[str, dict[str, float]], cap_bytes: int, keep: str | None)
     for slug in by_age:
         if total <= cap_bytes:
             break
-        folder = root() / slug
         before = int(index[slug]["bytes"])
-        try:
-            _remove_folder(folder)
-        except OSError:
-            left = _folder_bytes(folder) if folder.exists() else 0
-            index[slug]["bytes"] = left
-            total -= before - left
-            continue
-        del index[slug]
-        total -= before
-        evicted.append(slug)
+        if _remove_cached(index, slug):
+            total -= before
+            evicted.append(slug)
+        else:
+            total -= before - int(index[slug]["bytes"])
     return evicted
+
+
+def _remove_cached(index: dict[str, dict[str, float]], slug: str) -> bool:
+    """Remove one cached folder and its index entry. A folder that
+    cannot be removed in full (a file another program holds open) stays
+    in the index, re-measured, for the next pass; returns False."""
+    folder = root() / slug
+    try:
+        _remove_folder(folder)
+    except OSError:
+        index[slug]["bytes"] = _folder_bytes(folder) if folder.exists() else 0
+        return False
+    del index[slug]
+    return True
 
 
 def store_fetched(
@@ -425,7 +433,7 @@ def clear() -> dict[str, int]:
     file of stays until the next eviction or clear)."""
     with _LOCK:
         index = _load_index()
-        removed = len(_evict(index, -1, keep=None))
+        removed = sum(_remove_cached(index, slug) for slug in list(index))
         _save_index(index)
         return {
             "removed": removed,

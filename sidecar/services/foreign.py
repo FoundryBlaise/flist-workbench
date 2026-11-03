@@ -30,6 +30,7 @@ import foreign_cache
 import logs as log_store
 from logs import LogDirUnavailable
 from refusals import FlistRefused, ValidationFailed
+from services import settings as settings_service
 
 #: Where a list of candidate names can come from. `name` is the free
 #: text case — F-list has no character-search endpoint, so the typed
@@ -237,6 +238,15 @@ SERVER_ERROR_MESSAGE = (
     "character; try again in a while."
 )
 
+#: What a profile read says when F-list gave no word on the profile and
+#: nothing is cached: `{error type: (code, message)}`. Any other
+#: `FlistApiError` (an HTTP 4xx, a page that is not JSON) is
+#: `flist_error` in F-list's own words, and never `not_found`.
+_NO_WORD_ON_THE_PROFILE: dict[type[flist_api.FlistApiError], tuple[str, str]] = {
+    flist_api.FlistUnreachable: ("flist_unreachable", UNREACHABLE_MESSAGE),
+    flist_api.FlistServerError: ("flist_server_error", SERVER_ERROR_MESSAGE),
+}
+
 
 def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
     """The cached copy, served because F-list could not answer for it."""
@@ -282,10 +292,11 @@ async def get_profile(
 
     What F-list answered decides what happens to the cached copy. F-list
     refusing the profile (deleted, private, blocked; indistinguishable)
-    deletes it and says `not_found`. No answer, or a server error,
-    serves it marked `stale`, and without one says `flist_unreachable`
-    or `flist_server_error`. A spent budget says `rate_limited`, the
-    stale copy in `details.cached`.
+    deletes it and says `not_found`. A ticket it rejects says
+    `not_signed_in` and keeps it. No answer, a server error or any other
+    failure serves it marked `stale`, and without one says
+    `flist_unreachable`, `flist_server_error` or `flist_error`. A spent
+    budget says `rate_limited`, the stale copy in `details.cached`.
     """
     clean = (name or "").strip()
     if not clean:
@@ -323,23 +334,14 @@ async def get_profile(
         # say which). The owner's choice wins over the copy, at once.
         foreign_cache.delete_profile(clean)
         raise ForeignError("not_found", str(exc)) from exc
-    except flist_api.FlistUnreachable as exc:
-        # A network blip says nothing about the profile. A stale copy
-        # still answers "how was this written", so serve it.
-        if cached is not None:
-            return _stale(cached, clean, exc)
-        raise ForeignError("flist_unreachable", UNREACHABLE_MESSAGE) from exc
-    except flist_api.FlistServerError as exc:
-        # F-list's own outage, not an answer about this profile.
-        if cached is not None:
-            return _stale(cached, clean, exc)
-        raise ForeignError("flist_server_error", SERVER_ERROR_MESSAGE) from exc
     except flist_api.FlistApiError as exc:
-        # Some other answer that is not F-list's word on the profile
-        # (an HTTP 4xx, a page that is not JSON): never "not found".
+        # No answer, an outage, or some other answer that is not
+        # F-list's word on the profile. A stale copy still answers "how
+        # was this written", so serve it.
         if cached is not None:
             return _stale(cached, clean, exc)
-        raise ForeignError("flist_error", str(exc)) from exc
+        code, message = _NO_WORD_ON_THE_PROFILE.get(type(exc), ("flist_error", str(exc)))
+        raise ForeignError(code, message) from exc
 
     # Key the cache on the spelling F-list considers canonical, not on
     # whatever the caller typed, so a lookup from a lowercased log
@@ -351,7 +353,7 @@ async def get_profile(
         else clean
     )
     stored = foreign_cache.store_fetched(
-        key, payload, gallery_index(payload), cache_cap_bytes()
+        key, payload, gallery_index(payload), settings_service.foreign_cache_cap_bytes()
     )
     return {
         "name": key,
@@ -362,29 +364,22 @@ async def get_profile(
     }
 
 
-def cache_cap_bytes() -> int:
-    """The Foreign profile cache's cap, from Settings."""
-    from services import settings as settings_service
-
-    return settings_service.foreign_cache_cap_bytes()
-
-
 def file_landed(name: str) -> None:
     """A gallery image or avatar was just cached for `name`: count it,
     and evict other profiles if the cache no longer fits its cap."""
-    foreign_cache.file_landed(name, cache_cap_bytes())
+    foreign_cache.file_landed(name, settings_service.foreign_cache_cap_bytes())
 
 
 def cache_usage() -> dict[str, int]:
     """`{bytes, profiles, cap_bytes}`: what the cache holds, and what it
     may hold."""
-    return {**foreign_cache.usage(), "cap_bytes": cache_cap_bytes()}
+    return {**foreign_cache.usage(), "cap_bytes": settings_service.foreign_cache_cap_bytes()}
 
 
 def clear_cache() -> dict[str, int]:
     """Delete every cached Foreign profile. `{removed, bytes, profiles,
     cap_bytes}`: how many went, and what the cache holds after."""
-    return {**foreign_cache.clear(), "cap_bytes": cache_cap_bytes()}
+    return {**foreign_cache.clear(), "cap_bytes": settings_service.foreign_cache_cap_bytes()}
 
 
 def gallery_index(profile: dict[str, Any]) -> dict[str, str]:
