@@ -1,10 +1,11 @@
 # F-list Workbench — what it is
 
 A Windows desktop tool for F-list.net roleplayers: edit your character
-profiles offline, keep several drafts of each, and browse your own
-F-Chat logs. It is **not** an F-list client — Frolic and F-Chat 3.0
-fill that role. Workbench complements them with a better editor, better
-log search, and a way to let a language model work on your profiles.
+profiles offline, one Workbench per character beside the Live copy it
+came from, and browse your own F-Chat logs. It is **not** an F-list
+client — Frolic and F-Chat 3.0 fill that role. The app complements them
+with a better editor, better log search, and a way to let a language
+model work on your profiles.
 
 Replaces `PLAN.md`, which described the May 2026 shape of the project
 (RAG chat, an in-app classifier, an AI setup wizard) and had drifted
@@ -12,7 +13,7 @@ out of date.
 
 ## The two rules that shape everything
 
-1. **Workbench never writes to f-list.net.** Every edit stays in local
+1. **The app never writes to f-list.net.** Every edit stays in local
    files. When a profile is ready the user reviews it and uploads it
    themselves in the browser, via the `flistcharexporter` userscript or
    the paired browser extension. The last step is always a human one.
@@ -21,14 +22,14 @@ out of date.
    so its read-only Live copy matches the site again. That pull writes
    Live and images — never the Workbench. The Workbench
    may well have moved on while the upload happened, and overwriting
-   the user's draft with what they just published is not something
+   the user's edits with what they just published is not something
    "the upload finished" should ever mean.
-2. **Workbench runs no language model.** It has no chat, no classifier,
+2. **The app runs no language model.** It has no chat, no classifier,
    no model to configure. A model the user connects over MCP does that
    work; the app provides the data and the tools. It talks to no
    inference server at all: embedding runs in-process on the CPU
-   (fastembed / onnxruntime), and the only other model it loads is a
-   small ONNX reranker.
+   (fastembed / onnxruntime), and the only other model it loads is an
+   optional ONNX reranker.
 
 ## Shape
 
@@ -41,7 +42,7 @@ Electron main ──spawns──> sidecar.exe (Python, FastAPI, 127.0.0.1:27384)
      └─ BrowserWindow ──> React renderer
 ```
 
-The sidecar owns all state: the character archive, three SQLite
+The sidecar owns all state: the character archive, two SQLite
 databases, an embedded Qdrant index, and the F-list ticket (held in RAM
 only, never written to disk). That is why the MCP server lives inside
 it rather than beside it.
@@ -61,7 +62,7 @@ it rather than beside it.
 | `electron/renderProfile.ts` | offscreen capture of a profile, for `render_profile_image` |
 | `sidecar/archive_*.py` | on-disk character archive: `archive_registry` (folders, registry, roster), `archive_live`, `archive_workbench`, `archive_images`, `archive_backups`; each imports only the ones before it |
 | `sidecar/foreign_cache.py` | read-only cache of *other people's* profiles, under its own root |
-| `sidecar/labels.py` | IC/OOC verdicts + the read-time rule resolver |
+| `sidecar/labels.py` | IC/OOC Labels + the read-time rule resolver |
 | `sidecar/rag_*.py`, `chunker.py` | chunking, embedding, Qdrant, BM25, reranking |
 | `docs/MCP_DESIGN.md` | the design this architecture came from |
 
@@ -87,9 +88,9 @@ verbatim into one Backup (source `workbench`, occasion `migration`),
 verified before the originals are removed. `layout.json` is written
 last; a folder without it is redone from the start, and one whose
 Backup could not be written keeps its old files until the next start.
-A character with no drafts gets its Workbench from Live on first use.
+A character without a Workbench gets one from Live on first use.
 
-The working payload (schema v6) carries `_overlay` — the dotted paths
+The Workbench payload (schema v6) carries `_overlay` — the dotted paths
 the user has touched — so a later pull can refresh untouched fields
 without clobbering edits.
 
@@ -134,7 +135,7 @@ capped on concurrency rather than paced per second. That follows
 the prior art: F-Chat 3.0 renders a gallery as plain `<img>` tags
 with no pacing at all, and Horizon throttles only the JSON API —
 `throat(2)`, a concurrency cap on `character-data.php` — while
-leaving `static.f-list.net` untouched. Workbench needs a cap only
+leaving `static.f-list.net` untouched. The app needs a cap only
 because its images go through the sidecar to be cached on disk,
 which funnels what a browser would run as parallel connections
 into one queue.
@@ -175,12 +176,12 @@ otherwise empty it in three minutes.
 
 ## Logs and search
 
-Workbench reads F-Chat 3.0's binary log format in place; it never
+The app reads F-Chat 3.0's binary log format in place; it never
 writes to the F-Chat data directory.
 
 Every message resolves to IC, OOC or Unlabeled at read time. Three
 rules decide the easy cases (empty, shorter than the threshold,
-starting with `((` ⇒ OOC); everything else waits for a verdict from a
+starting with `((` ⇒ OOC); everything else waits for a Label from a
 connected model or from the user. **Only labelled messages are
 indexed** — an unjudged message could be roleplay or player chatter,
 and indexing the latter poisons search.
@@ -194,10 +195,12 @@ and indexing the latter poisons search.
 | Sidecar | Python 3.12 + FastAPI, frozen with PyInstaller |
 | MCP | the reference SDK's FastMCP, Streamable HTTP at `/mcp` |
 | Vector store | Qdrant, embedded file-backed mode |
-| Embeddings | any OpenAI-compatible `/embeddings` endpoint (LM Studio, Ollama) |
+| Embeddings | fastembed ONNX model, in-process on the CPU; downloaded on first use |
 | Reranker | fastembed ONNX cross-encoder, local, optional |
-| Packaging | electron-builder → portable .exe on GitHub Releases |
+| Packaging | electron-builder → NSIS installer (auto-updates via electron-updater) and portable .exe (no auto-update) on GitHub Releases |
 | Tests | vitest (renderer), pytest (sidecar), Playwright-for-Electron (e2e) |
 
-No bundled model weights, no code signing (see
-`docs/INSTALL_WINDOWS.md` for the SmartScreen click-through).
+No bundled model weights, no code signing. The installer is the main
+channel and the only one that updates itself (ADR 0005);
+`docs/INSTALL_WINDOWS.md` covers both builds and the SmartScreen
+click-through.

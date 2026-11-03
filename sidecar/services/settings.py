@@ -23,11 +23,15 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+import model_weights
 import rag as rag_settings
+import rag_embed_local
+import rag_rerank
 import settings as settings_store
 from refusals import ValidationFailed
 from services import events
 from services import image_import
+from services import index
 
 #: Text fields where an empty value clears the setting back to its default.
 _TEXT = {
@@ -90,12 +94,35 @@ def update(changes: Mapping[str, Any], conn: sqlite3.Connection | None = None) -
             writes[key] = stored
             changed[field] = reported
         settings_store.write_many(conn, writes)
+        _remove_unused_weights(conn, changes)
     finally:
         if own:
             conn.close()
 
     events.publish(events.SETTINGS_CHANGED, changed=changed)
     return changed
+
+
+def _remove_unused_weights(conn: sqlite3.Connection, changes: Mapping[str, Any]) -> None:
+    """After a model switch, delete the weights of the models the
+    settings no longer name (see `model_weights`).
+
+    Windows cannot delete files an ONNX session holds open, so the
+    cached encoder goes first; the next search loads the new model.
+    """
+    current = rag_settings.load_settings(conn)
+    reranker_on = not rag_rerank.is_disabled(current.rerank_model)
+    keep = [current.embed_model, *([current.rerank_model] if reranker_on else [])]
+    # An ingest embeds every batch with the model it started with, and
+    # would download it again if it went now. The next switch removes it.
+    if "rag.embed_model" in changes and index.busy_with() is None:
+        rag_embed_local.reset_cache()
+        model_weights.remove_unused(model_weights.EMBEDDING, keep)
+    # Turning the reranker off is not a switch to another model: its
+    # weights stay, so turning it back on needs no download.
+    if "rag.rerank_model" in changes and reranker_on:
+        rag_rerank.reset_cache()
+        model_weights.remove_unused(model_weights.RERANKER, keep)
 
 
 # --------------------------------------------------------------------
