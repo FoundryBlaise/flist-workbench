@@ -385,7 +385,9 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
   )
 }
 
-function InfotagSection({
+/** A collapsible group of infotag fields. The Foreign view's field
+ *  groups use it too. */
+export function InfotagSection({
   groupId,
   label,
   collapsed,

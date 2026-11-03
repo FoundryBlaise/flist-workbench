@@ -12,6 +12,7 @@ import { undo, redo } from '@codemirror/commands'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
 import { GalleryPreviewPane } from '../flist/GalleryPreviewPane'
+import { PreviewThemeSwitch } from './PreviewThemeSwitch'
 
 const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
 
@@ -61,7 +62,6 @@ export function PreviewPane() {
   // a red box on f-list.net after the app has been closed.
   const bbcodeWarnings = useMemo(() => validateBbcode(content), [content])
   const previewTheme = useStore((s) => s.previewTheme)
-  const setPreviewTheme = useStore((s) => s.setPreviewTheme)
   const editorActiveTab = useStore((s) => s.editorActiveTab)
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   // Per-tab right pane:
@@ -254,25 +254,7 @@ export function PreviewPane() {
           <span className="preview-edit-hint">· editable</span>
         )}
         {showAlternatePreview ? null : (
-          <div
-            className="preview-theme-switch"
-            role="group"
-            aria-label="F-list theme"
-            data-testid="preview-theme-switch"
-          >
-            {(['dark', 'default', 'light'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                className={`preview-theme-btn${previewTheme === t ? ' on' : ''}`}
-                aria-pressed={previewTheme === t}
-                title={`Preview as F-list ${t[0].toUpperCase() + t.slice(1)} theme`}
-                onClick={() => setPreviewTheme(t)}
-              >
-                {t[0].toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </div>
+          <PreviewThemeSwitch testId="preview-theme-switch" />
         )}
       </header>
       {bbcodeWarnings.length > 0 && !showAlternatePreview && (
