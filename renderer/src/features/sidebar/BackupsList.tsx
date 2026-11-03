@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import type { FlistZipBackupEntry } from '../../lib/api'
 import { formatBackupOrigin } from '../../lib/backupOrigin'
+import { formatBytes } from '../../lib/bytes'
 import { LoadIntoWorkbenchDialog } from './LoadIntoWorkbenchDialog'
 
 /** Per-character Backups list in the sidebar. Reads from
@@ -459,7 +460,7 @@ function BackupsFolder({
                     </span>
                   )}
                 </div>
-                <span className="sb-backup-size">{formatSize(b.size)}</span>
+                <span className="sb-backup-size">{formatBytes(b.size)}</span>
               </li>
             )
           })}
@@ -496,9 +497,4 @@ function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n)
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 

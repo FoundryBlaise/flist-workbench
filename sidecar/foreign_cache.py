@@ -127,6 +127,20 @@ def _profile_path(name: str) -> Path:
     return profile_dir(name) / PROFILE_FILENAME
 
 
+def avatar_is_current(name: str) -> bool:
+    """Whether the cached avatar was fetched after the cached profile.
+    A refresh rewrites the profile and leaves the avatar, so the avatar
+    route asks for a new one and keeps this one until it has it."""
+    try:
+        avatar = avatar_path(name).stat().st_mtime_ns
+    except OSError:
+        return False
+    try:
+        return avatar >= _profile_path(name).stat().st_mtime_ns
+    except OSError:
+        return True
+
+
 def read_profile(name: str) -> dict[str, Any] | None:
     """The cached payload at whatever age, or None on a miss.
 
@@ -310,19 +324,27 @@ def _evict(index: dict[str, dict[str, float]], cap_bytes: int, keep: str | None)
     for slug in by_age:
         if total <= cap_bytes:
             break
-        folder = root() / slug
         before = int(index[slug]["bytes"])
-        try:
-            _remove_folder(folder)
-        except OSError:
-            left = _folder_bytes(folder) if folder.exists() else 0
-            index[slug]["bytes"] = left
-            total -= before - left
-            continue
-        del index[slug]
-        total -= before
-        evicted.append(slug)
+        if _remove_cached(index, slug):
+            total -= before
+            evicted.append(slug)
+        else:
+            total -= before - int(index[slug]["bytes"])
     return evicted
+
+
+def _remove_cached(index: dict[str, dict[str, float]], slug: str) -> bool:
+    """Remove one cached folder and its index entry. A folder that
+    cannot be removed in full (a file another program holds open) stays
+    in the index, re-measured, for the next pass; returns False."""
+    folder = root() / slug
+    try:
+        _remove_folder(folder)
+    except OSError:
+        index[slug]["bytes"] = _folder_bytes(folder) if folder.exists() else 0
+        return False
+    del index[slug]
+    return True
 
 
 def store_fetched(
@@ -333,8 +355,8 @@ def store_fetched(
     older ones are evicted until the cache fits `cap_bytes`.
 
     When it replaces a cached copy (a refresh), gallery images whose id
-    is not in `gallery_ids` go, and so does the avatar, which the avatar
-    route then fetches anew."""
+    is not in `gallery_ids` go. The avatar stays until the avatar route
+    has fetched a new one (`avatar_is_current`)."""
     with _LOCK:
         replaced = _profile_path(name).exists()
         stamped = write_profile(name, payload)
@@ -345,7 +367,6 @@ def store_fetched(
                 for image in images.iterdir():
                     if image.is_file() and image.stem not in keep_ids:
                         image.unlink(missing_ok=True)
-            avatar_path(name).unlink(missing_ok=True)
         index = _load_index()
         slug = slug_for(name)
         index[slug] = {
@@ -412,7 +433,7 @@ def clear() -> dict[str, int]:
     file of stays until the next eviction or clear)."""
     with _LOCK:
         index = _load_index()
-        removed = len(_evict(index, -1, keep=None))
+        removed = sum(_remove_cached(index, slug) for slug in list(index))
         _save_index(index)
         return {
             "removed": removed,

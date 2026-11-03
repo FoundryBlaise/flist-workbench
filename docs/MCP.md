@@ -149,7 +149,8 @@ it or the user clears it (Settings → Foreign profiles); after 24 hours
 the next read fetches it again. Fetching spends a quarter-share of
 the hourly F-list budget so a model browsing profiles cannot leave
 the user unable to pull their own. The activity log records each
-profile a model read, by name. When F-list says a profile is gone
+profile a model read, by name, also when a spent budget hands back the
+cached copy, and keeps those names across a restart. When F-list says a profile is gone
 or not visible, its cached copy is deleted on the spot.
 
 **Looking at the result** — `render_profile_image` returns the profile
@@ -395,6 +396,7 @@ window gets for the same situation:
 | `rate_limited` | MCP's share of the hourly F-list budget is spent; details carry the stale cached copy under `cached` when there is one |
 | `flist_unreachable` | F-list could not be reached (offline, timed out) and nothing is cached; with a cached copy the tool answers with it marked `stale` instead |
 | `flist_server_error` | F-list's server failed (HTTP 5xx) and nothing is cached; says nothing about whether the character exists |
+| `flist_error` | F-list answered in a way no other code covers (an HTTP 4xx, a page that is not JSON, its own error text); the message carries F-list's words. For a Foreign profile with a cached copy the tool answers with it marked `stale` instead, and it never means the character does not exist |
 
 ## Tools by endpoint
 

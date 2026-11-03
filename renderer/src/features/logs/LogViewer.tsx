@@ -1108,14 +1108,20 @@ function MessageRow({
         {timeLabel(msg.ts)}
       </span>
       <span className="log-speaker">{msg.speaker}</span>
-      <LabelBadge
-        bucket={bucket}
-        label={msg.label}
-        source={msg.label_source}
-        reason={msg.label_reason}
-        priorLabel={msg.prior_label}
-        priorSource={msg.prior_source}
-      />
+      {bucket === 'system' ? (
+        // A system line never gets a Label: an empty cell keeps the
+        // row's columns in line.
+        <span className="log-label-none" title="F-Chat system message" />
+      ) : (
+        <LabelBadge
+          bucket={bucket}
+          label={msg.label ?? undefined}
+          source={msg.label_source}
+          reason={msg.label_reason}
+          priorLabel={msg.prior_label}
+          priorSource={msg.prior_source}
+        />
+      )}
       <span className="log-text" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   )
@@ -1423,7 +1429,7 @@ function LabelBadge({
   priorLabel,
   priorSource
 }: {
-  bucket: Bucket
+  bucket: Exclude<Bucket, 'system'>
   label?: Label
   source?: LabelSource
   reason?: string
@@ -1432,17 +1438,10 @@ function LabelBadge({
   priorLabel?: 'IC' | 'OOC'
   priorSource?: LabelSource
 }) {
-  // IC / OOC get a visible word; Unlabeled and System show an em-dash
-  // because the chip strip already names them and a tiny "UNL"/"SYS"
-  // badge was both jargon-y and a contrast hazard.
-  const text =
-    bucket === 'system'
-      ? '—'
-      : bucket === 'unlabeled'
-        ? '—'
-        : bucket === 'ic'
-          ? 'IC'
-          : 'OOC'
+  // IC / OOC get a visible word; Unlabeled shows an em-dash because the
+  // chip strip already names it and a tiny "UNL" badge was both
+  // jargon-y and a contrast hazard. System lines have no badge at all.
+  const text = bucket === 'unlabeled' ? '—' : bucket === 'ic' ? 'IC' : 'OOC'
   const klass = [
     'log-label',
     `log-label-${bucket}`,
@@ -1455,8 +1454,6 @@ function LabelBadge({
   const lines: string[] = []
   if (source) {
     lines.push(`${label} · ${SOURCE_LABELS[source] ?? source}`)
-  } else if (bucket === 'system') {
-    lines.push('F-Chat system message')
   } else if (bucket === 'unlabeled') {
     lines.push('No IC/OOC verdict yet — a connected model can decide, or right-click to set one')
   } else {

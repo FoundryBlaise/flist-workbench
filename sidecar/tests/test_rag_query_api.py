@@ -207,6 +207,26 @@ def test_a_hybrid_search_whose_keyword_backfill_fails_says_so(
     assert retrieval.search("hello", hybrid=False).hits
 
 
+def test_a_keyword_backfill_that_cannot_read_the_vector_half_says_so(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qdrant_client import QdrantClient
+
+    from services import retrieval
+
+    _seed_chunk(tmp_path)
+    _stub_embed(monkeypatch)
+
+    def unreadable(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202, ARG001
+        raise RuntimeError("storage folder is held by another program")
+
+    monkeypatch.setattr(QdrantClient, "scroll", unreadable)
+
+    with pytest.raises(retrieval.KeywordBackfillFailed) as exc:
+        retrieval.search("hello", hybrid=True)
+    assert "held by another program" in exc.value.message
+
+
 # ---- settings PUT + GET extended fields --------------------------------
 
 

@@ -6,7 +6,7 @@ Rules are recomputed at every read against the current settings, so
 changing the threshold is instant; no DB rebuild needed.
 
 Resolver precedence:
-    1. system line (ad, roll, warn, event)  -> OOC  (rule:system)
+    1. system line (ad, roll, warn, event)  -> no Label (None)
     2. DB label (model or manual)           -> stored row's label
     3. empty body                           -> OOC  (rule:empty)
     4. text_len < settings.threshold_chars  -> OOC  (rule:short)
@@ -17,7 +17,8 @@ Resolver precedence:
 the speaker name the parser puts in front.
 
 Case 6 is what `services.classification` hands to the connected model,
-and what `chunker` refuses to index.
+and what `chunker` refuses to index. Case 1 is in none of the counts,
+batches or chunks: a Label is a verdict on a message a person wrote.
 
 Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
 so users can wipe it without losing their drafts and the ingest job can
@@ -643,25 +644,30 @@ def _written_text(msg: dict) -> str:
     return text
 
 
+def is_system_line(msg: dict) -> bool:
+    """An ad, roll, warning or status event: F-Chat wrote it, not a
+    person, so it never gets a Label."""
+    return msg.get("kind") == "system"
+
+
 def resolve(
     msg: dict,
     db_label: sqlite3.Row | dict | None,
     settings: LabelsSettings,
-) -> str:
-    """Return the effective label for a message.
+) -> str | None:
+    """Return the effective label for a message, None for a system line.
 
     `db_label` is the explicit-labels row keyed by `msg_hash(msg)`, or
     None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
     matching what `parser.parse_log` yields.
 
-    Precedence: a system line (ad, roll, warning, status event) is OOC
-    before anything else, because a Label is a verdict on a message a
-    person wrote and system lines never get one; then an explicit DB
-    label wins; otherwise rules (empty / short / `((` prefix) decide;
-    otherwise "Unlabeled".
+    Precedence: a system line (ad, roll, warning, status event) has no
+    Label before anything else, because a Label is a verdict on a
+    message a person wrote; then an explicit DB label wins; otherwise
+    rules (empty / short / `((` prefix) decide; otherwise "Unlabeled".
     """
-    if msg.get("kind") == "system":
-        return LABEL_OOC
+    if is_system_line(msg):
+        return None
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
         return db_label["label"]
@@ -726,11 +732,10 @@ def upsert_label(
     so old rows round-trip).
 
     Note: the schema still carries a `confidence REAL NOT NULL` column
-    for backwards compatibility with on-disk DBs from earlier versions.
-    We always write 1.0 — the model never returned anything informative
-    below 0.95 and the field was dropped from the v4 prompt, so the
-    column is effectively dead weight. Leaving it in place avoids a
-    migration; no callers read it anymore.
+    from earlier versions. We always write 1.0 and nothing reads it.
+    The rebuild that dropped the owner columns kept it, because Label
+    rows in the Trash (`LABEL_COLUMNS`) carry it and restore as they
+    are.
     """
     upsert_verdicts(conn, [(hash, ts, speaker, label, reason)], source=source)
 
@@ -780,16 +785,10 @@ def upsert_verdicts(
             rows[h] = (ts, speaker, label, reason)
     if not rows:
         return 0
-    prior: dict[str, tuple[str | None, str | None]] = {}
-    ids = list(rows)
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        for r in conn.execute(
-            f"SELECT hash, label, source FROM labels WHERE hash IN ({placeholders})",
-            batch,
-        ):
-            prior[r["hash"]] = (r["label"], r["source"])
+    prior = {
+        r["hash"]: (r["label"], r["source"])
+        for r in _rows_for_hashes(conn, "hash, label, source", rows)
+    }
     now = time.time()
     conn.executemany(
         """
@@ -830,20 +829,11 @@ def manual_hashes(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[str]:
     """Which of `hashes` carry a Label the user set by hand. Only the
     window changes those; `upsert_verdicts` from any other source
     leaves them as they are."""
-    ids = list(dict.fromkeys(hashes))
-    found: set[str] = set()
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        found.update(
-            r["hash"]
-            for r in conn.execute(
-                "SELECT hash FROM labels WHERE source = 'manual' "
-                f"AND hash IN ({placeholders})",
-                batch,
-            )
-        )
-    return found
+    return {
+        r["hash"]
+        for r in _rows_for_hashes(conn, "hash, source", hashes)
+        if r["source"] == "manual"
+    }
 
 
 def count_by_source(conn: sqlite3.Connection, source: str) -> int:
@@ -895,17 +885,7 @@ def restore_labels(
     Label again has a newer verdict than the kept one, so it keeps it:
     its hash is returned as skipped. Returns (restored, skipped)."""
     wanted = {r["hash"]: r for r in rows if r.get("hash")}
-    present: set[str] = set()
-    ids = list(wanted)
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        present.update(
-            r["hash"]
-            for r in conn.execute(
-                f"SELECT hash FROM labels WHERE hash IN ({placeholders})", batch
-            )
-        )
+    present = {r["hash"] for r in _rows_for_hashes(conn, "hash", wanted)}
     todo = [r for h, r in wanted.items() if h not in present]
     defaults = {c: None for c in LABEL_COLUMNS} | {"confidence": 1.0, "updated_at": time.time()}
     cols = ", ".join(LABEL_COLUMNS)
@@ -959,6 +939,8 @@ def fill_unlabeled(
     decided_by_rules = 0
     total = 0
     for msg in messages:
+        if is_system_line(msg):
+            continue
         total += 1
         h = msg_hash(msg)
         if h in by_hash:
@@ -1016,8 +998,8 @@ def delete_labels_by_hash(
     if not ids:
         return 0
     removed = 0
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
+    for start in range(0, len(ids), _HASH_BATCH):
+        batch = ids[start : start + _HASH_BATCH]
         placeholders = ",".join("?" * len(batch))
         cur = conn.execute(
             f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
@@ -1051,7 +1033,8 @@ def stats(
     messages: Iterable[dict],
     settings: LabelsSettings,
 ) -> dict[str, int]:
-    """Count IC / OOC / Unlabeled across the supplied messages.
+    """Count IC / OOC / Unlabeled across the supplied messages. System
+    lines have no Label, so they are in none of the counts.
 
     Caller passes the already-parsed messages of a conversation (we
     don't re-walk the binary log, and its whole alias group is in
@@ -1064,7 +1047,8 @@ def stats(
     counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
         lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
-        counts[lab] = counts.get(lab, 0) + 1
+        if lab is not None:
+            counts[lab] = counts.get(lab, 0) + 1
     return counts
 
 

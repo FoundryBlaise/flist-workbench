@@ -520,6 +520,49 @@ async def test_the_activity_log_records_which_profiles_a_model_fetched(
     ]
 
 
+def test_only_foreign_profile_reads_keep_their_character_on_disk(
+    data_dir: Path,
+) -> None:
+    """Story 24 asks the log to name the Foreign profiles a model read.
+    What a model did to the user's own characters keeps its old shape on
+    disk: the tool, not the name."""
+    import flist_activity
+
+    flist_activity.reset()
+    flist_activity.enable_disk_writes()
+    flist_activity.record("mcp:edit_description", source="mcp", character="Azure Viper")
+    flist_activity.record("mcp:get_foreign_profile", source="mcp", character="Antiquill")
+
+    flist_activity.reset()
+    flist_activity.hydrate_from_disk()
+    kept = {e["kind"]: e.get("character") for e in flist_activity.snapshot()["events"]}
+    assert kept == {"mcp:edit_description": None, "mcp:get_foreign_profile": "Antiquill"}
+
+
+async def test_a_spent_budget_handing_back_the_cached_copy_is_in_the_activity_log(
+    flist,
+) -> None:
+    import flist_activity
+    import flist_api
+    from mcp_helpers import call_tool, mcp_client
+
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    async with mcp_client() as session:
+        await _model_opens(session, "Anexample Person")
+        _age_past_the_ttl("Anexample Person")
+        budget = flist_api.mcp_character_budget()
+        while budget.remaining():
+            budget.charge()
+        flist_activity.reset()
+        await call_tool(session, "get_foreign_profile", character="Anexample Person")
+
+    (event,) = [
+        e for e in flist_activity.snapshot()["events"]
+        if e["kind"] == "mcp:get_foreign_profile"
+    ]
+    assert (event["character"], event["status"]) == ("Anexample Person", "rate_limited")
+
+
 # ---- routes -----------------------------------------------------------
 
 
@@ -748,6 +791,66 @@ def test_a_profile_f_list_will_not_show_is_dropped_with_its_files(
     assert not folder.exists()
     again = client.get("/foreign/character/Anexample Person/image/900")
     assert again.json()["code"] == "profile_not_cached"
+
+
+def test_a_refresh_keeps_the_avatar_while_the_new_one_cannot_be_fetched(
+    client: TestClient, flist
+) -> None:
+    import httpx
+
+    import flist_api
+
+    _open_with_files(client, flist)
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get(
+        "/foreign/character/Anexample Person", params={"refresh": "true"}
+    ).status_code == 200
+    flist.add_exception(
+        httpx.ConnectError("offline"), url=flist_api.avatar_url("Anexample Person")
+    )
+
+    res = client.get("/foreign/character/Anexample Person/avatar")
+
+    assert res.status_code == 200, res.text
+    assert res.content == b"AVATAR"
+
+
+def test_a_refresh_replaces_the_avatar_once_the_new_one_arrives(
+    client: TestClient, flist
+) -> None:
+    import flist_api
+
+    _open_with_files(client, flist)
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get(
+        "/foreign/character/Anexample Person", params={"refresh": "true"}
+    ).status_code == 200
+    flist.add_response(url=flist_api.avatar_url("Anexample Person"), content=b"NEWER")
+
+    first = client.get("/foreign/character/Anexample Person/avatar")
+    again = client.get("/foreign/character/Anexample Person/avatar")
+
+    assert (first.content, again.content) == (b"NEWER", b"NEWER")
+
+
+@pytest.mark.parametrize(
+    "error", ["Invalid ticket.", "Ticket expired.", "Login required."]
+)
+def test_a_rejected_ticket_says_not_signed_in_and_keeps_the_cached_copy(
+    client: TestClient, flist, error: str
+) -> None:
+    folder = _open_with_files(client, flist)
+    _flist_answers(flist, json={"error": error})
+
+    res = client.get("/foreign/character/Anexample Person", params={"refresh": "true"})
+
+    assert res.status_code == 401, res.text
+    assert res.json()["code"] == "not_signed_in"
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == [
+        "900.png",
+        "avatar.png",
+        "profile.json",
+    ]
 
 
 async def test_a_model_asking_for_a_profile_f_list_will_not_show_drops_it_too(

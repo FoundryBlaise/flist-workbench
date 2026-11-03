@@ -8,6 +8,7 @@ import {
   type McpInfo,
   type RagSettings
 } from '../../lib/api'
+import { formatBytes } from '../../lib/bytes'
 import { useStore } from '../../state'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
@@ -2047,13 +2048,6 @@ function EmbeddingPane({
 
 const MB = 1024 * 1024
 
-/** `bytes` the way the Foreign pane shows it: KB below a megabyte, so a
- *  few small profiles do not read as "0.0 MB". */
-function formatCacheSize(bytes: number): string {
-  if (bytes < MB) return `${Math.ceil(bytes / 1024)} KB`
-  return `${(bytes / MB).toFixed(1)} MB`
-}
-
 /** Settings → Foreign profiles. The cache of other people's profiles
  *  you opened, here or through a model: how much disk it takes, its
  *  cap, and a way to empty it. The cap saves with its own button, like
@@ -2138,7 +2132,7 @@ function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
           In use:{' '}
           <strong data-testid="settings-foreign-cache-used">
             {usage
-              ? `${formatCacheSize(usage.bytes)} in ${usage.profiles.toLocaleString()} profile${
+              ? `${formatBytes(usage.bytes)} in ${usage.profiles.toLocaleString()} profile${
                   usage.profiles === 1 ? '' : 's'
                 }`
               : '…'}

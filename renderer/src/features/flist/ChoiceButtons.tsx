@@ -24,7 +24,12 @@ export const CHOICE_LABELS_COMPACT: Record<KinkChoice, string> = {
   undecided: 'Undecided'
 }
 
-export const CHOICE_ORDER: KinkChoice[] = ['fave', 'yes', 'maybe', 'no', 'undecided']
+/** The assigned choices, in the order their columns appear. Undecided
+ *  is not a column: the editor shows it as a separate pool, the Foreign
+ *  view not at all. */
+export const KINK_BUCKET_ORDER: readonly KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
+
+export const CHOICE_ORDER: readonly KinkChoice[] = [...KINK_BUCKET_ORDER, 'undecided']
 
 export function isKinkChoice(value: unknown): value is KinkChoice {
   return (

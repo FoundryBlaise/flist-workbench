@@ -59,17 +59,22 @@ async def foreign_character_avatar(name: str) -> FileResponse:
     as "characters this user has". Same placeholder detection as
     `/flist/avatar/{name}` so the renderer falls back to an initial
     circle instead of showing F-list's grey stand-in.
+
+    After a refresh of the profile the avatar is fetched again; the old
+    one is served until the new one has arrived.
     """
     try:
         dest = foreign_cache.avatar_path(name)
     except ValueError as exc:
         raise ValidationFailed("name", str(exc)) from exc
-    if not dest.exists():
+    if not foreign_cache.avatar_is_current(name):
         try:
             await flist_api.download_to(flist_api.avatar_url(name), dest)
         except flist_api.FlistApiError as exc:
-            raise NoAvatar(str(exc)) from exc
-        foreign_service.file_landed(name)
+            if not dest.exists():
+                raise NoAvatar(str(exc)) from exc
+        else:
+            foreign_service.file_landed(name)
     try:
         size = dest.stat().st_size
     except OSError:

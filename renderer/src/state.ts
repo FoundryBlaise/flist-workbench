@@ -4254,19 +4254,17 @@ export const useStore = create<State>((set, get) => ({
       // The sidecar answers these with a code so the window can say
       // something useful instead of echoing an HTTP status at someone
       // who mistyped a name.
+      // Any other code (flist_server_error, flist_unreachable, ...)
+      // already comes with the sidecar's own words.
       const code = err instanceof RefusalError ? err.code : undefined
-      const message =
-        code === 'not_found'
-          ? `F-list has no character called "${clean}".`
-          : code === 'flist_server_error'
-            ? 'F-list’s server reported an error. That says nothing about whether the character exists; try again in a while.'
-            : code === 'rate_limited'
-              ? 'F-list is rate-limiting us. Give it a minute and try again.'
-              : code === 'not_signed_in'
-                ? 'Your F-list session expired. Sign in again to look up profiles.'
-                : err instanceof Error
-                  ? err.message
-                  : String(err)
+      const worded: Record<string, string> = {
+        not_found:
+          `F-list will not show "${clean}": there is no character by that name, ` +
+          'or it was deleted, is private or blocks your account.',
+        rate_limited: 'F-list is rate-limiting us. Give it a minute and try again.',
+        not_signed_in: 'Your F-list session expired. Sign in again to look up profiles.'
+      }
+      const message = (code && worded[code]) || errorDetail(err)
       set({ foreignStatus: 'error', foreignError: message })
     }
   },

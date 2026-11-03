@@ -151,32 +151,35 @@ it('free text never calls the search endpoint', async () => {
   expect(api.foreignSearch).not.toHaveBeenCalled()
 })
 
-it('explains a name F-list does not know', async () => {
+it('says a profile F-list will not show may be missing, deleted, private or blocked', async () => {
   vi.mocked(api.foreignProfile).mockRejectedValue(
-    new RefusalError('not_found', 404, 'HTTP 404: no such character')
+    new RefusalError('not_found', 404, 'HTTP 404: This profile is not available.')
   )
   render(<ForeignWorkspace />)
   fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))
 
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('no character called')
+  expect(alert.textContent).toBe(
+    'F-list will not show "Anexample Person": there is no character by that name, ' +
+      'or it was deleted, is private or blocks your account.'
+  )
 })
 
-it('says an F-list server error is one, not that the character is missing', async () => {
+it('says an F-list server error in the sidecar’s words', async () => {
   vi.mocked(api.foreignProfile).mockRejectedValue(
     new RefusalError(
       'flist_server_error',
       502,
-      'HTTP 502: HTTP 503 from https://www.f-list.net/json/api/character-data.php'
+      'HTTP 502: F-list is down for maintenance; this says nothing about the character.'
     )
   )
   render(<ForeignWorkspace />)
   fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))
 
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('F-list’s server reported an error')
-  expect(alert.textContent).not.toContain('no character called')
-  expect(alert.textContent).not.toContain('HTTP')
+  expect(alert.textContent).toBe(
+    'F-list is down for maintenance; this says nothing about the character.'
+  )
 })
 
 // ---- loaded profile ---------------------------------------------------

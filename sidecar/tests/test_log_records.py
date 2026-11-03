@@ -263,6 +263,83 @@ def test_system_lines_never_count_as_unlabeled(window) -> None:
     assert res.json()["unlabeled"] == 0
 
 
+def test_system_lines_are_in_none_of_the_counts(window) -> None:
+    client, log = window
+    write_log(log, [
+        ad("Aina Sato", "A short ad.", at=1700000000),
+        roll(PARTNER, "rolls 1d20 for the lock: 17. " * 8, at=1700000060),
+        event(PARTNER, "is now away.", at=1700000090),
+        chat(ME, "Hm.", at=1700000200),
+    ])
+
+    stats =client.get("/labels/stats", params={"char": ME, "partner": PARTNER})
+    every = client.get("/labels/stats-all", params={"char": ME})
+
+    assert stats.status_code == 200, stats.text
+    counts = {k: stats.json()[k] for k in ("ic", "ooc", "unlabeled", "total")}
+    assert counts == {"ic": 0, "ooc": 1, "unlabeled": 0, "total": 1}
+    (row,) = every.json()["partners"]
+    assert (row["ooc"], row["total"]) == (1, 1)
+
+
+def test_system_lines_carry_no_label_in_the_window(window) -> None:
+    client, log = window
+    write_log(log, [
+        ad("Aina Sato", "A short ad.", at=1700000000),
+        roll(PARTNER, "rolls 1d20 for the lock: 17. " * 8, at=1700000060),
+        chat(ME, "Hm.", at=1700000120),
+    ])
+
+    got = [m["label"] for m in _messages(client)]
+
+    assert got == [None, None, "OOC"]
+
+
+async def test_a_model_reads_system_lines_without_a_label(window) -> None:
+    from mcp_helpers import allow_log_text, call_tool, mcp_client
+
+    _, log = window
+    write_log(log, [
+        ad("Aina Sato", "A short ad.", at=1700000000),
+        chat(ME, "Hm.", at=1700000120),
+    ])
+    allow_log_text()
+
+    async with mcp_client("logs") as session:
+        _, every = await call_tool(
+            session, "read_log_messages", character=ME, partner=PARTNER
+        )
+        _, ooc = await call_tool(
+            session, "read_log_messages", character=ME, partner=PARTNER, labels=["OOC"]
+        )
+
+    assert [m["label"] for m in every["messages"]] == [None, "OOC"]
+    assert [m["text"] for m in ooc["messages"]] == ["Hm."]
+
+
+def test_filling_a_conversation_leaves_system_lines_out_of_the_totals(window) -> None:
+    import labels
+
+    _, log = window
+    write_log(log, [
+        ad("Aina Sato", "Seeking a slow-burn mystery set aboard a sky ship. " * 5,
+           at=1700000000),
+        chat(ME, "Hm.", at=1700000120),
+    ])
+    messages = list(parser.parse_log(log))
+    conn = labels.connect()
+    try:
+        result = labels.fill_unlabeled(
+            conn, messages, label=labels.LABEL_IC,
+            settings=labels.LabelsSettings(threshold_chars=THRESHOLD),
+            source="manual", reason="test",
+        )
+    finally:
+        conn.close()
+
+    assert (result["total_messages"], result["decided_by_rules"]) == (1, 1)
+
+
 async def test_system_lines_are_never_offered_to_the_model(window) -> None:
     from mcp_helpers import allow_log_text, call_tool, mcp_client
 

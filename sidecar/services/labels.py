@@ -11,8 +11,7 @@ A Label belongs to the message (ADR 0004). A conversation's Labels are
 the Labels of the messages its Log holds, the partner's whole alias
 group included, found by message hash: a line in two of the user's own
 Logs shows one Label in both, and a rename or an unlinked alias orphans
-none. New Labels are still stamped with the primary name. The SQL itself stays
-in the Label store (`labels.py`), which announces every change on the
+none; a Label stores no owner. The SQL itself stays in the Label store (`labels.py`), which announces every change on the
 event bus once; clearing goes through the Trash (`label_trash`).
 
 The rule threshold is a setting; it is read here, never validated.
@@ -173,34 +172,35 @@ def rollup() -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class LabelledMessage:
-    """One message with the Label it resolves to. `stored` is its
-    stored Label row (`labels.LABEL_COLUMNS`), None when a rule decides
-    or nothing does."""
+    """One message with the Label it resolves to, None for a system
+    line. `stored` is its stored Label row (`labels.LABEL_COLUMNS`),
+    None when a rule decides or nothing does."""
 
     message: dict
     hash: str
-    label: str
+    label: str | None
     stored: dict | None
 
 
-def label_messages(
-    character: str, partner: str, messages: Iterable[dict]
-) -> list[LabelledMessage]:
+def label_messages(messages: Iterable[dict]) -> list[LabelledMessage]:
     """Resolve each of `messages` from one conversation to IC, OOC or
     Unlabeled, live: a stored Label first, then the rules at the current
-    threshold."""
+    threshold. A system line resolves to no Label."""
     messages = list(messages)
     with _store() as (conn, settings):
         by_hash = labels_store.labels_for_messages(conn, messages)
         out = []
         for msg in messages:
             h = labels_store.msg_hash(msg)
-            row = by_hash.get(h)
+            label = labels_store.resolve(msg, by_hash.get(h), settings)
+            # A row left on a system line from before they had no Label
+            # decides nothing, so it is not shown either.
+            row = by_hash.get(h) if label is not None else None
             out.append(
                 LabelledMessage(
                     message=msg,
                     hash=h,
-                    label=labels_store.resolve(msg, row, settings),
+                    label=label,
                     stored=dict(row) if row is not None else None,
                 )
             )
@@ -211,8 +211,6 @@ def label_messages(
 
 
 def override(
-    character: str,
-    partner: str,
     *,
     hash: str,
     ts: int,
@@ -257,14 +255,11 @@ def override(
 
 
 def override_many(
-    character: str,
-    partner: str,
-    items: Iterable[tuple[str, int, str]],
-    label: str | None,
+    items: Iterable[tuple[str, int, str]], label: str | None
 ) -> int:
-    """`override` for any set of `(hash, ts, speaker)` in one
-    conversation: one verdict for all, or with `label` None their
-    removal. Returns how many Labels changed."""
+    """`override` for any set of `(hash, ts, speaker)`: one verdict for
+    all, or with `label` None their removal. Returns how many Labels
+    changed."""
     if label is not None:
         label = verdict(label)
     items = list(items)
@@ -368,7 +363,7 @@ def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
         return labels_store.fill_unlabeled(conn, messages, settings, label)
 
 
-def delete(character: str, partner: str, hashes: Iterable[str]) -> int:
+def delete(hashes: Iterable[str]) -> int:
     """Remove the named Labels and nothing else: the undo of one
     `fill_unlabeled`. Returns how many were removed."""
     conn = labels_store.connect()

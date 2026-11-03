@@ -318,9 +318,9 @@ export type LogMessage = {
   // primary key. The renderer passes this back when overriding.
   hash: string
   // label is the semantic IC/OOC classification from the resolver. Always
-  // present for chat/action messages; absent label_source means rule-or-unlabeled
-  // (no explicit DB row).
-  label?: Label
+  // present for chat/action messages, null for a system line (it never gets
+  // a Label); absent label_source means rule-or-unlabeled (no explicit DB row).
+  label?: Label | null
   label_source?: LabelSource
   // Free-text reason the labeller gave for the verdict. Surfaced in
   // the badge tooltip so users can audit why a label was chosen.
