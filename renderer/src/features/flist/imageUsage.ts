@@ -35,7 +35,9 @@ export function usageNotes(
     )
   }
   if (workbench > 0) {
-    notes.push(`${howMany(workbench)} ${is(workbench)} still in the Workbench’s gallery.`)
+    // Deleting takes an image off the gallery too, in the same step.
+    const comes = one || workbench === 1 ? 'comes' : 'come'
+    notes.push(`${howMany(workbench)} ${comes} off the Workbench’s gallery too.`)
   }
   if (kept > 0) {
     notes.push(
