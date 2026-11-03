@@ -127,6 +127,20 @@ def _profile_path(name: str) -> Path:
     return profile_dir(name) / PROFILE_FILENAME
 
 
+def avatar_is_current(name: str) -> bool:
+    """Whether the cached avatar was fetched after the cached profile.
+    A refresh rewrites the profile and leaves the avatar, so the avatar
+    route asks for a new one and keeps this one until it has it."""
+    try:
+        avatar = avatar_path(name).stat().st_mtime_ns
+    except OSError:
+        return False
+    try:
+        return avatar >= _profile_path(name).stat().st_mtime_ns
+    except OSError:
+        return True
+
+
 def read_profile(name: str) -> dict[str, Any] | None:
     """The cached payload at whatever age, or None on a miss.
 
@@ -333,8 +347,8 @@ def store_fetched(
     older ones are evicted until the cache fits `cap_bytes`.
 
     When it replaces a cached copy (a refresh), gallery images whose id
-    is not in `gallery_ids` go, and so does the avatar, which the avatar
-    route then fetches anew."""
+    is not in `gallery_ids` go. The avatar stays until the avatar route
+    has fetched a new one (`avatar_is_current`)."""
     with _LOCK:
         replaced = _profile_path(name).exists()
         stamped = write_profile(name, payload)
@@ -345,7 +359,6 @@ def store_fetched(
                 for image in images.iterdir():
                     if image.is_file() and image.stem not in keep_ids:
                         image.unlink(missing_ok=True)
-            avatar_path(name).unlink(missing_ok=True)
         index = _load_index()
         slug = slug_for(name)
         index[slug] = {

@@ -750,6 +750,46 @@ def test_a_profile_f_list_will_not_show_is_dropped_with_its_files(
     assert again.json()["code"] == "profile_not_cached"
 
 
+def test_a_refresh_keeps_the_avatar_while_the_new_one_cannot_be_fetched(
+    client: TestClient, flist
+) -> None:
+    import httpx
+
+    import flist_api
+
+    _open_with_files(client, flist)
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get(
+        "/foreign/character/Anexample Person", params={"refresh": "true"}
+    ).status_code == 200
+    flist.add_exception(
+        httpx.ConnectError("offline"), url=flist_api.avatar_url("Anexample Person")
+    )
+
+    res = client.get("/foreign/character/Anexample Person/avatar")
+
+    assert res.status_code == 200, res.text
+    assert res.content == b"AVATAR"
+
+
+def test_a_refresh_replaces_the_avatar_once_the_new_one_arrives(
+    client: TestClient, flist
+) -> None:
+    import flist_api
+
+    _open_with_files(client, flist)
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get(
+        "/foreign/character/Anexample Person", params={"refresh": "true"}
+    ).status_code == 200
+    flist.add_response(url=flist_api.avatar_url("Anexample Person"), content=b"NEWER")
+
+    first = client.get("/foreign/character/Anexample Person/avatar")
+    again = client.get("/foreign/character/Anexample Person/avatar")
+
+    assert (first.content, again.content) == (b"NEWER", b"NEWER")
+
+
 @pytest.mark.parametrize(
     "error", ["Invalid ticket.", "Ticket expired.", "Login required."]
 )

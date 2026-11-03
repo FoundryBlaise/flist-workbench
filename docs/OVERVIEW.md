@@ -171,7 +171,10 @@ and clears the cache by hand. The cap counts each profile's JSON,
 gallery images and avatar; when a new profile or a refresh no longer
 fits, the least recently viewed profiles go first, files included, and
 the one being viewed always stays. Lowering the cap evicts at once. A
-refresh drops gallery images that left the profile. When F-list answers that it will not show a profile (deleted, private,
+refresh drops gallery images that left the profile and fetches the
+avatar again, keeping the old one until the new one has arrived. A
+ticket F-list rejects says "sign in again" and keeps the cached copy.
+When F-list answers that it will not show a profile (deleted, private,
 or the owner blocked the account; the answer does not say which), the
 cached folder goes at once, images and avatar included. Offline,
 timeouts and F-list server errors serve the cached copy marked stale.
