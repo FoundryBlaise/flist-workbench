@@ -55,17 +55,17 @@ def test_an_unversioned_label_database_migrates_with_its_data_intact(
 
     conn = aliases_store.connect(tmp_path)
     try:
-        rows = labels_store.labels_for_partner(conn, "Ayla", "Brin")
-        assert rows["h-manual"]["label"] == "IC"
-        assert rows["h-manual"]["source"] == "manual"
-        assert rows["h-manual"]["prior_label"] == "OOC"
+        kept = labels_store.label_row(conn, "h-manual")
+        assert kept["label"] == "IC"
+        assert kept["source"] == "manual"
+        assert kept["prior_label"] == "OOC"
         assert aliases_store.all_names_for(conn, "Ayla", "Brin Old") == ["Brin", "Brin Old"]
         # A connected model's verdict is accepted, whatever the old CHECK said.
         labels_store.upsert_label(
             conn, hash="h-new", character="Ayla", partner="Brin",
             ts=1700000200, speaker="Brin", label="OOC", source="mcp",
         )
-        assert labels_store.labels_for_partner(conn, "Ayla", "Brin")["h-new"]["source"] == "mcp"
+        assert labels_store.label_row(conn, "h-new")["source"] == "mcp"
         tables = {
             r["name"]
             for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -201,7 +201,7 @@ def test_a_label_write_while_an_ingest_reads_labels_goes_through(
 
     conn = labels_store.connect()
     try:
-        assert labels_store.labels_for_partner(conn, "Ayla", "Brin")["h-model"]["label"] == "OOC"
+        assert labels_store.label_row(conn, "h-model")["label"] == "OOC"
     finally:
         conn.close()
 

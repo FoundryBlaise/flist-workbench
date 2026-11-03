@@ -20,7 +20,7 @@ def _settings(threshold: int = 200) -> labels_store.LabelsSettings:
 
 
 def _stored(label: str, source: str = "llm") -> dict:
-    """Shape that labels_for_partner returns (sqlite Row-like dict)."""
+    """Shape that labels_for_messages returns (sqlite Row-like dict)."""
     return {
         "label": label,
         "source": source,

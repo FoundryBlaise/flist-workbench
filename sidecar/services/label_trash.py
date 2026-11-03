@@ -29,10 +29,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-import aliases as aliases_store
 import archive_registry
 import atomic_write
 import labels as labels_store
+import logs as log_store
 import paths
 from services import trash_ledger
 
@@ -120,17 +120,37 @@ def clear(character: str, partner: str | None = None) -> dict[str, Any]:
     `partner` is None, keeping them in the Trash as one entry. The one
     clear the window and MCP both call. Returns `{deleted, trash_id}`;
     `trash_id` is None when there was nothing to clear."""
+    messages = _log_messages(character, partner)
     conn = labels_store.connect()
     try:
-        alias_group = (
-            aliases_store.all_names_for(conn, character, partner) if partner else None
-        )
-        rows = labels_store.label_rows(
-            conn, character, partner, partner_aliases=alias_group
-        )
+        rows = labels_store.label_rows(conn, messages)
         return _clear_rows(conn, character, partner, rows)
     finally:
         conn.close()
+
+
+def _log_messages(character: str, partner: str | None) -> list[dict]:
+    """The messages whose Labels clearing takes away: those of one
+    conversation's Log, its whole alias group, or of every Log of
+    `character`. A Label belongs to the message (ADR 0004), so a Label
+    whose message is in none of these Logs is left alone. No Log means
+    nothing to clear."""
+    if partner is not None:
+        try:
+            return list(log_store.read_messages(character, partner))
+        except log_store.LogNotFound:
+            return []
+    try:
+        entries = log_store.list_partners(character)
+    except log_store.LogNotFound:
+        return []
+    messages: list[dict] = []
+    for entry in entries:
+        try:
+            messages.extend(log_store.read_messages(character, entry.name))
+        except log_store.LogDirError:
+            continue
+    return messages
 
 
 def clear_all() -> dict[str, Any]:

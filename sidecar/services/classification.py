@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-import aliases as aliases_store
 import labels as labels_store
 import logs as log_store
 
@@ -124,8 +123,6 @@ class PendingBatch:
 def collect_pending(
     messages: Iterable[dict],
     labels_conn,
-    character: str,
-    partner: str,
     settings: labels_store.LabelsSettings,
     *,
     limit: int = 40,
@@ -135,16 +132,14 @@ def collect_pending(
 ) -> PendingBatch:
     """Messages from `cursor` onward whose label is still `Unlabeled`.
 
-    A message is skipped when it already has a stored verdict, or when
+    A message is skipped when it already has a stored verdict, from
+    whichever of the user's Logs it was labelled in (ADR 0004), or when
     the rules resolve it without help. `cursor` is an index into the
     conversation, so a caller can walk a long log in batches without
     re-reading what it already judged.
     """
     msgs = list(messages)
-    alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-    by_hash = labels_store.labels_for_partner(
-        labels_conn, character, partner, partner_aliases=alias_group
-    )
+    by_hash = labels_store.labels_for_messages(labels_conn, msgs)
 
     already_labelled = 0
     decided_by_rules = 0
@@ -214,8 +209,6 @@ def pending(
         return collect_pending(
             messages,
             conn,
-            character,
-            partner,
             labels_store.load_settings(),
             limit=limit,
             cursor=cursor,

@@ -7,7 +7,7 @@ Pipeline:
     -> top-N from Qdrant via rag_store (filtered by scope)
     -> optional BM25 fusion via rag_lexical
     -> rerank via rag_rerank (local cross-encoder, optional)
-    -> ±M neighbor expansion via prev_chunk_id / next_chunk_id
+    -> ±M neighbours attached inside each hit via prev_chunk_id / next_chunk_id
     -> return the chunks
 
 No language model is involved. The chunks go out through the MCP tool
@@ -37,8 +37,10 @@ import rag_store
 class QueryResult:
     """Bundles the retrieval output for the SSE endpoint.
 
-    `hits` are the post-expansion ordered chunks, newest-relevance
-    first, each carrying its full text. The MCP `search_logs_semantic`
+    `hits` are the matches, most relevant first, each carrying its
+    full text, its ranks (`fused_rank`, `fused_score`, `dense_rank`,
+    `lexical_rank`, `rerank_score` when reranking ran) and its
+    neighbouring chunks under `context`. The MCP `search_logs_semantic`
     tool serialises them for the connected model to read and answer
     from — Workbench itself never calls a language model.
     """
@@ -56,50 +58,44 @@ class QueryResult:
 def expand_with_neighbors(
     store: rag_store.RagStore, hits: list[dict], *, hops: int
 ) -> list[dict]:
-    """Pull `hops` chunks before and after each hit via prev/next pointers.
+    """Attach up to `hops` chunks before and after each hit, inside it.
 
-    Returns hits + expanded chunks, ordered chronologically per
-    conversation. Expanded chunks have `expanded=True` set in their
-    payload for downstream awareness.
+    The hits keep their relevance order. Each gets a `context` of
+    `{"before": [...], "after": [...]}`, both in time order, followed
+    along the prev/next pointers. A neighbour is attached once, to the
+    best-ranked hit that reaches it, and the walk stops at a chunk that
+    is a hit of its own, so no text comes back twice.
 
-    `hops=0` skips expansion (the chat panel exposes /neighbors 0 for
-    users who want raw retrieval to debug recall).
+    `hops=0` attaches nothing.
     """
-    if hops <= 0 or not hits:
-        return hits
-    have: dict[str, dict] = {}
     for h in hits:
-        cid = (h.get("payload") or {}).get("chunk_id")
-        if cid:
-            have[cid] = h
-    frontier = set(have)
-    for _ in range(hops):
-        needed: set[str] = set()
-        for cid in frontier:
-            payload = (have[cid].get("payload") or {})
-            for nb_field in ("prev_chunk_id", "next_chunk_id"):
-                nb = payload.get(nb_field)
-                if nb and nb not in have:
-                    needed.add(nb)
+        h["context"] = {"before": [], "after": []}
+    taken = {(h.get("payload") or {}).get("chunk_id") for h in hits}
+    # (hit, side, pointer field, next chunk_id), in hit order so the
+    # better hit claims a shared neighbour first.
+    walks = [
+        (h, side, field, (h.get("payload") or {}).get(field))
+        for h in hits
+        for side, field in (("before", "prev_chunk_id"), ("after", "next_chunk_id"))
+    ]
+    for _ in range(max(0, hops)):
+        needed = {cid for *_rest, cid in walks if cid and cid not in taken}
         if not needed:
             break
         fetched = store.fetch_by_chunk_ids(needed)
-        for cid, point in fetched.items():
-            point["payload"]["expanded"] = True
-            # Score absent on neighbor hits — surface as 0 so callers
-            # don't crash on KeyError when sorting / rendering.
-            point.setdefault("score", 0.0)
-            have[cid] = point
-        frontier = set(fetched)
-    return sorted(
-        have.values(),
-        key=lambda h: (
-            (h.get("payload") or {}).get("char_owner", ""),
-            (h.get("payload") or {}).get("partner", ""),
-            (h.get("payload") or {}).get("ts_start", 0),
-            (h.get("payload") or {}).get("subchunk", 0),
-        ),
-    )
+        next_walks = []
+        for h, side, field, cid in walks:
+            point = fetched.get(cid) if cid not in taken else None
+            if point is None:
+                continue
+            taken.add(cid)
+            if side == "before":
+                h["context"]["before"].insert(0, point)
+            else:
+                h["context"]["after"].append(point)
+            next_walks.append((h, side, field, point["payload"].get(field)))
+        walks = next_walks
+    return hits
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -154,6 +150,16 @@ def _rrf_fuse(
     return sorted(scores.items(), key=lambda x: -x[1])
 
 
+def _best_ranks(ranked_lists: list[list[str]]) -> dict[str, int]:
+    """Each chunk_id's best 1-based rank across `ranked_lists`."""
+    ranks: dict[str, int] = {}
+    for ranked in ranked_lists:
+        for rank, cid in enumerate(ranked, start=1):
+            if cid and rank < ranks.get(cid, rank + 1):
+                ranks[cid] = rank
+    return ranks
+
+
 def _hydrate_lexical_only(
     store: rag_store.RagStore, hits: dict[str, dict], cids: list[str]
 ) -> None:
@@ -172,7 +178,8 @@ def _hydrate_lexical_only(
     for cid, point in fetched.items():
         hits[cid] = {
             "id": point["id"],
-            "score": 0.0,  # no vector similarity — RRF score is what matters
+            # No vector similarity: the fused score ranks it.
+            "score": 0.0,
             "payload": point["payload"],
         }
 
@@ -252,31 +259,24 @@ def run_query(
     # 3. Fuse — RRF over (each dense variant, lexical). Only the IDs
     #    actually present in hits_by_cid (post-hydrate) are eligible;
     #    rank lists referencing missing IDs are skipped harmlessly.
-    if hybrid_applied:
-        fused = _rrf_fuse(
-            [*dense_rank_lists, [h.chunk_id for h in lexical_hits]]
-        )
-    elif len(variants) > 1:
-        # Multi-query without hybrid: still fuse the variant lists so a
-        # chunk that ranked #20 for the original but #2 for a variant
-        # outranks a chunk that only the original found.
-        fused = _rrf_fuse(dense_rank_lists)
-    else:
-        # Single dense round → preserve vector order directly.
-        fused = [
-            (cid, float(h.get("score", 0.0)))
-            for cid, h in sorted(
-                hits_by_cid.items(),
-                key=lambda kv: -float(kv[1].get("score", 0.0)),
-            )
-        ]
+    #    A single dense list fuses too: the order is the vector order,
+    #    and every hit gets a score on the same scale, so a hit only the
+    #    keyword half found is never reported as scoring zero.
+    lexical_cids = [h.chunk_id for h in lexical_hits] if hybrid_applied else []
+    fused = _rrf_fuse([*dense_rank_lists, lexical_cids])
+    dense_ranks = _best_ranks(dense_rank_lists)
+    lexical_ranks = _best_ranks([lexical_cids])
 
     ordered_hits: list[dict] = []
-    for cid, _rrf in fused:
+    for cid, fused_score in fused:
         h = hits_by_cid.get(cid)
         if h is None:
             continue
         ordered_hits.append(h)
+        h["fused_rank"] = len(ordered_hits)
+        h["fused_score"] = fused_score
+        h["dense_rank"] = dense_ranks.get(cid)
+        h["lexical_rank"] = lexical_ranks.get(cid)
 
     # 4. Rerank + min-ratio filter (unchanged from the single-variant
     #    path). When rerank is disabled we still cap at top_k so the
@@ -293,7 +293,9 @@ def run_query(
             min_ratio=rerank_min_ratio,
             cache_dir=cache_dir,
         )
-        rerank_applied = True
+        # The reranker can decline (nothing to reorder) or fail; only a
+        # score on the hits says it ran.
+        rerank_applied = any("rerank_score" in h for h in hits)
     else:
         hits = ordered_hits[:ranked_n]
         rerank_applied = False
