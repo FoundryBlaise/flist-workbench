@@ -91,7 +91,6 @@ async def open_workbench(session) -> dict[str, Any]:
 async def test_the_workbench_starts_as_a_copy_of_live(workbench) -> None:
     async with mcp_client("character") as session:
         body = await open_workbench(session)
-    assert body["set"] == "Workbench"
     assert body["read_only"] is False
     payload = payload_of(workbench)
     assert payload["character"]["description"] == "[b]Published.[/b]"
@@ -117,35 +116,39 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
 
 
 async def test_live_is_never_writable(workbench) -> None:
+    """An editing tool has no argument that could name Live: whatever
+    it is called with, the edit lands in the Workbench."""
     async with mcp_client("character") as session:
-        await open_workbench(session)
-        result, _ = await call_tool(
+        tools = {t.name: t for t in (await session.list_tools()).tools}
+        await call_tool(
             session,
             "set_description",
             character="Lady Amber Blaise",
-            working_set="live",
-            text="should not land",
+            text="[b]Lands in the Workbench.[/b]",
         )
-    text = tool_error_text(result)
-    assert "live_is_read_only" in text
+    assert "working_set" not in tools["set_description"].inputSchema["properties"]
     assert archive_live.read_live("42")["character"]["description"] == "[b]Published.[/b]"
+    assert payload_of(workbench)["character"]["description"] == (
+        "[b]Lands in the Workbench.[/b]"
+    )
 
 
-async def test_editing_without_naming_a_set_lands_in_the_workbench(
+async def test_the_first_edit_makes_the_workbench(
     workbench,
 ) -> None:
-    """No set named means the Workbench, created on the spot if this is
-    the first edit. Refusing with "create one first" belonged to the
-    era of several named sets; there is one now, and the window makes
-    it without asking either."""
+    """An edit lands in the Workbench, made on the spot if this is the
+    first edit. Refusing with "create one first" belonged to the era of
+    several named copies; there is one now, and the window makes it
+    without asking either."""
+    assert archive_workbench.read_workbench("42") is None
     async with mcp_client("character") as session:
-        _, body = await call_tool(
+        result, _ = await call_tool(
             session,
             "set_description",
             character="Lady Amber Blaise",
             text="written straight into the bench",
         )
-        assert body["set"] == "Workbench"
+        assert not result.isError
         _, read = await call_tool(
             session, "get_description", character="Lady Amber Blaise"
         )
@@ -764,30 +767,30 @@ async def test_profile_settings_needs_at_least_one(workbench) -> None:
 
 
 async def test_raw_payload_write_needs_confirmation(workbench) -> None:
-    async with mcp_client("character") as session:
+    async with mcp_client() as session:
         await open_workbench(session)
         result, _ = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character="Lady Amber Blaise",
             payload={"_overlay": [], "character": {"description": "raw"}},
         )
     text = tool_error_text(result)
     assert "confirm_required" in text
-    assert "targeted editing tools" in text
+    assert "targeted tools" in text
 
 
 async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
-    async with mcp_client("character") as session:
+    async with mcp_client() as session:
         await open_workbench(session)
         _, read = await call_tool(
-            session, "get_working_set_payload", character="Lady Amber Blaise"
+            session, "get_workbench_payload", character="Lady Amber Blaise"
         )
         body = read["payload"]
         body["character"]["description"] = "written raw"
         _, written = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character="Lady Amber Blaise",
             payload=body,
             if_match=read["etag"],
@@ -798,7 +801,7 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
         # A second write with the stale etag must be refused.
         result, _ = await call_tool(
             session,
-            "put_working_set_payload",
+            "put_workbench_payload",
             character="Lady Amber Blaise",
             payload=body,
             if_match=read["etag"],
@@ -811,11 +814,11 @@ async def test_raw_payload_round_trips_with_its_etag(workbench) -> None:
 
 
 async def test_destructive_tools_are_annotated_as_such() -> None:
-    async with mcp_client("character") as session:
+    async with mcp_client() as session:
         tools = {t.name: t for t in (await session.list_tools()).tools}
     for name in (
         "delete_custom_kink",
-        "put_working_set_payload",
+        "put_workbench_payload",
         "load_backup_into_workbench",
     ):
         assert tools[name].annotations.destructiveHint is True, name

@@ -561,8 +561,9 @@ def save_zip_backup(
 
 # ---- replacing the whole Workbench ----------------------------------
 #
-# Reset to Live and loading a Backup overwrite all of the Workbench, so
-# they keep it as a Backup first (ADR 0003). They live here rather than
+# Reset to Live, loading a Backup and MCP's raw payload replacement
+# overwrite all of the Workbench, so they keep it as a Backup first
+# (ADR 0003). They live here rather than
 # in `archive_workbench` because taking that Backup is this module's
 # job, and `archive_workbench` must not import this one.
 
@@ -609,19 +610,33 @@ def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any]:
 
 
 @archive_registry.under_character_lock
-def _replace_workbench(
-    character_id: int | str, payload: dict[str, Any]
+def replace_workbench(
+    character_id: int | str,
+    payload: dict[str, Any],
+    *,
+    expected_etag: str | None = None,
 ) -> WorkbenchReplaced:
     """Keep the Workbench as a Backup, then overwrite it with `payload`.
 
-    A Workbench this call had to make from Live holds no edits, so it
-    is not kept. The write goes against the etag read before the Backup:
-    a save that lands in between is refused as `WorkbenchConflict`
-    rather than lost, since the Backup would not hold it.
+    `payload` is checked first (ValueError) and so is `expected_etag`,
+    when given (`WorkbenchConflict`), so a replacement that would be
+    refused keeps no Backup. A Workbench this call had to make from Live
+    holds no edits, so it is not kept. The write goes against the etag
+    read before the Backup: a save that lands in between is refused as
+    `WorkbenchConflict` rather than lost, since the Backup would not
+    hold it.
     """
+    payload = archive_workbench.checked_payload(payload)
     current = archive_workbench.read_workbench(character_id, create=True)
     if current is None:
         raise NoLive("no Live to make a Workbench from")
+    if expected_etag is not None and expected_etag != current.etag:
+        raise WorkbenchConflict(
+            "etag_mismatch",
+            "The Workbench changed since it was read, so it was not"
+            " replaced. Read it again and redo the change.",
+            current.etag,
+        )
     kept = None if current.created else _keep_workbench_before_replacing(character_id)
     try:
         etag = archive_workbench.write_workbench(character_id, payload, expected_etag=current.etag)
@@ -646,7 +661,7 @@ def reset_workbench_to_live(character_id: int | str) -> WorkbenchReplaced:
     live = archive_live.read_live(character_id)
     if live is None:
         raise NoLive("no Live to reset the Workbench to")
-    return _replace_workbench(character_id, archive_workbench._seed_payload_from_live(live))
+    return replace_workbench(character_id, archive_workbench._seed_payload_from_live(live))
 
 
 def load_zip_backup_into_workbench(
@@ -664,7 +679,7 @@ def load_zip_backup_into_workbench(
         read_backup_profile(character_id, backup_filename)
     )
     try:
-        return _replace_workbench(character_id, payload)
+        return replace_workbench(character_id, payload)
     except Refusal:
         raise
     except ValueError as exc:

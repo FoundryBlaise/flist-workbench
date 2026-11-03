@@ -113,7 +113,6 @@ async def render_profile_image(
     audit(
         "render_profile_image",
         character=target.name,
-        set=resolved.name,
         theme=theme,
         width=px,
         bytes=len(png),

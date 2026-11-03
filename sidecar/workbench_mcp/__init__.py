@@ -69,13 +69,15 @@ Two things to keep straight:
 
 1. The app NEVER writes to f-list.net. Every tool here changes local
    files only. When the user wants a profile on F-list they review it
-   in the app window and upload it themselves in the browser.
+   in the app window and Upload it themselves in the browser.
    Never tell the user a change is live on F-list.
-2. `live` is the last profile pulled down from F-list and is
-   read-only. Each character has one Workbench beside it: the local
-   copy every editing tool changes. Leave `working_set` out to work on
-   the Workbench; editing creates it from Live when it does not exist
-   yet. Pass `working_set="live"` only to read Live.
+2. Each character has its Live, the profile as last pulled from
+   F-list, which is read-only, and one Workbench beside it: the local
+   copy the editing tools change. Editing tools always work on the
+   Workbench; the first edit makes it from Live. Read tools read the
+   Workbench unless asked for Live. Replacing the whole Workbench saves
+   it as a Backup first, and a Restore (load_backup_into_workbench)
+   loads a Backup back into the Workbench.
 
 Characters are addressed by name; ids also work.
 """

@@ -1,13 +1,10 @@
 """Characters, their Workbench and Live, and descriptions (design §3.2–3.4).
 
 Addressing note that runs through all of these: `character` takes a
-name or an id. `working_set` is left out for the character's Workbench,
-or is the string `"live"` for the read-only profile last pulled from
-F-list; nothing else is accepted.
-
-The parameter is not called `set`: that shadows the Python builtin
-inside every tool body, and the first tool that reached for `set(...)`
-to de-duplicate a list called `None` instead.
+name or an id. A read that can look at either copy takes `working_set`:
+left out for the character's Workbench, or the string `"live"` for the
+read-only profile last pulled from F-list; nothing else is accepted.
+Results do not name the copy back; `read_only` is true for Live.
 """
 
 from __future__ import annotations
@@ -160,7 +157,6 @@ async def get_working_set(
 
     out: dict[str, Any] = {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
     }
 
@@ -260,7 +256,6 @@ def get_description(
     slice_ = text[start:end]
     return {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
         "total_length": len(text),
         "offset": start,
@@ -324,7 +319,6 @@ async def list_profile_fields(
 
     return {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
         "fields": rows,
         "unknown_fields": unknown,
@@ -392,7 +386,6 @@ async def list_kinks(
 
     return {
         "character": target.name,
-        "set": resolved.name,
         "read_only": resolved.is_live,
         "kinks": rows,
         "custom_kinks": custom,
@@ -628,7 +621,6 @@ def list_images(
 
     return {
         "character": target.name,
-        "set": resolved.name,
         "gallery": sorted(gallery, key=lambda r: r.get("sort_order") or 0),
         "not_on_profile": pool,
     }

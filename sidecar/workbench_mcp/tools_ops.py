@@ -420,8 +420,8 @@ def export_restore_zip(
 ) -> dict[str, Any]:
     """Save the ZIP the user uploads to F-list themselves.
 
-    This is the hand-off point. Workbench does not publish anything:
-    the user opens f-list.net in their browser and restores this file
+    This is the hand-off point. The app does not publish anything:
+    the user opens f-list.net in their browser and uploads this file
     with the FlistCharExporter userscript or the paired extension.
     Never tell them a profile is live because this file was written.
     """
@@ -451,13 +451,12 @@ def export_restore_zip(
     audit("export_restore_zip", character=target.name, path=str(written))
     return {
         "character": target.name,
-        "set": resolved.name,
         "path": str(written),
         "bytes": len(data),
         "next_step": (
             "The user uploads this in their browser — f-list.net with "
             "the FlistCharExporter userscript, or the paired Workbench "
-            "extension. Workbench cannot do it for them."
+            "extension. The app cannot do it for them."
         ),
     }
 

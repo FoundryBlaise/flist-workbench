@@ -40,6 +40,30 @@ async def mcp_client(suffix: str = ""):
         yield session
 
 
+async def server_instructions(suffix: str = "") -> str:
+    """The instructions an endpoint hands a client when it connects:
+    the first thing a model reads about the app.
+
+    `ClientSession` does not keep its `initialize` answer, so this
+    catches it on the way past.
+    """
+    answers: list[Any] = []
+    initialize = ClientSession.initialize
+
+    async def keeping_the_answer(self: ClientSession):  # noqa: ANN202
+        answer = await initialize(self)
+        answers.append(answer)
+        return answer
+
+    ClientSession.initialize = keeping_the_answer  # type: ignore[method-assign]
+    try:
+        async with mcp_client(suffix):
+            pass
+    finally:
+        ClientSession.initialize = initialize  # type: ignore[method-assign]
+    return answers[0].instructions or ""
+
+
 async def call_tool(session: ClientSession, tool: str, /, **arguments: Any):
     """Call a tool and return `(result, parsed_json_or_text)`.
 
