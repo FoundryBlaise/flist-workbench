@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 import archive_registry
-from fchat_logs import chat, utc, write_log
 from mcp_helpers import call_tool, mcp_client, tool_error_text
 from test_mcp_reads import MAPPING
 
@@ -213,6 +211,7 @@ async def test_backing_up_a_character_never_pulled(workbench) -> None:
 
 
 # ---- ingest ------------------------------------------------------------
+# A real ingest over fixture Logs, waiting and not: test_mcp_jobs.
 
 
 async def test_ingest_rejects_a_partner_without_a_character(
@@ -223,85 +222,6 @@ async def test_ingest_rejects_a_partner_without_a_character(
             session, "ingest_logs", partner="Daelan Envale"
         )
     assert "validation_failed" in tool_error_text(result)
-
-
-@pytest.fixture
-def amber_has_logs(workbench, tmp_path: Path) -> None:  # noqa: ARG001
-    """One Log for Lady Amber Blaise, so ingest has a character to
-    resolve."""
-    write_log(
-        tmp_path / "fchat" / "Lady Amber Blaise" / "logs" / "Daelan Envale",
-        [chat("Daelan Envale", "Evening.", at=utc(2024, 1, 5, 20))],
-    )
-
-
-async def test_ingest_can_run_in_the_background(
-    amber_has_logs, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from services import index as index_service
-
-    started: dict[str, Any] = {}
-
-    class _FakeJob:
-        id = "abc123"
-        state = "pending"
-
-    def fake_start(scope, *, include_ooc=False, force_rewipe=False):
-        started.update(
-            scope=scope, include_ooc=include_ooc, force_rewipe=force_rewipe
-        )
-        return _FakeJob()
-
-    monkeypatch.setattr(index_service, "start_ingest", fake_start)
-    async with mcp_client("logs") as session:
-        _, body = await call_tool(
-            session,
-            "ingest_logs",
-            character="Lady Amber Blaise",
-            wait=False,
-        )
-    assert body["job_id"] == "abc123"
-    assert started["scope"] == {"character": "Lady Amber Blaise"}
-    assert "get_job" in body["note"]
-
-
-async def test_ingest_reports_skipped_unlabeled_and_what_to_do(
-    amber_has_logs, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Silently indexing half a log and reporting success is the
-    failure mode this guards against."""
-    from services import index as index_service
-
-    snapshot = {
-        "id": "job1",
-        "state": "done",
-        "progress": {"last_error": None},
-        "result": {
-            "chunks_indexed": 4,
-            "chunks_already_present": 0,
-            "chunks_removed": 0,
-            "skipped_unlabeled": 120,
-            "failed": 0,
-        },
-        "error": None,
-    }
-
-    class _Job:
-        id = "job1"
-        state = "done"
-        finished = True
-
-        def to_dict(self):
-            return snapshot
-
-    monkeypatch.setattr(index_service, "start_ingest", lambda *a, **k: _Job())
-
-    async with mcp_client("logs") as session:
-        _, body = await call_tool(
-            session, "ingest_logs", character="Lady Amber Blaise"
-        )
-    assert body["skipped_unlabeled"] == 120
-    assert "get_messages_to_classify" in body["note"]
 
 
 async def test_get_job_on_an_unknown_id(workbench) -> None:

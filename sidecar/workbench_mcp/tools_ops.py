@@ -3,13 +3,15 @@
 Pulling from F-list, backing up, ingesting logs, writing the file the
 user uploads, and the settings the rest of it reads.
 
-Two things run long enough to need progress: a pull walks a
-character's whole image set, and the backup sweep pulls every
-character on the account. Both run as jobs (`services.jobs`): waiting,
-they report through `Context.report_progress` so a client can show
-something moving; with `wait=false` they answer a job id for `get_job`
-and `cancel_job`. Both are bounded by F-list's rate limit rather than by
-anything here.
+Three things run long enough to need progress: a pull walks a
+character's whole image set, the backup sweep pulls every character on
+the account, and an ingest embeds Logs. All three run as jobs
+(`services.jobs`): waiting, they report through
+`Context.report_progress` so a client can show something moving; with
+`wait=false` they answer a job id, the same answer for each, for
+`get_job` and `cancel_job`, which every endpoint carrying one of them
+carries too. A pull and the sweep are bounded by F-list's rate limit
+rather than by anything here.
 
 On file paths: the export tool writes wherever the user running the app
 can. That is the same reach the app already has through its own file
@@ -276,34 +278,25 @@ async def ingest_logs(
     rebuild: bool = False,
     wait: bool = True,
 ) -> dict[str, Any]:
-    """Chunk and embed logs so search_logs_semantic can find them.
+    """Chunk and embed Logs so search_logs_semantic can find them.
 
-    Only messages with an IC/OOC verdict are indexed — the count of
-    those skipped comes back as `skipped_unlabeled`, and a high number
-    means the classification flow should run first. OOC is excluded
-    unless `include_ooc=true`; it is usually noise in a search over
-    roleplay. Pass include_ooc=true on every ingest to keep OOC chunks;
-    one without it deletes them.
+    Only messages with an IC or OOC Label are indexed;
+    `skipped_unlabeled` counts the rest, and a high number means
+    get_messages_to_classify should run first. OOC is left out: pass
+    include_ooc=true on every ingest to keep OOC chunks.
+    Channel Logs are left out unless `include_channels=true`, as in
+    list_partners: group chat buries a character's roleplay.
 
-    Channel logs are excluded unless `include_channels=true`, matching
-    list_partners. They are group chat rather than this character's
-    roleplay, and they are large enough to bury everything else.
+    Re-running it brings new messages and Label changes to search: only
+    conversation days whose messages or Labels changed are embedded
+    again (`chunks_already_present` counts the rest), and chunks no
+    longer labelled for the Index are deleted (`chunks_removed`).
+    `rebuild=true` first deletes the scope's chunks (all of them when
+    unscoped; a character's channel chunks only with include_channels).
 
-    Re-running it is how new messages and Label changes reach search:
-    each conversation day is recomputed from the Logs and the current
-    Labels, only days whose messages or Labels changed are embedded
-    again (`chunks_already_present` counts the rest), and chunks for
-    messages that are no longer labelled for the Index are deleted
-    (`chunks_removed`).
-
-    `rebuild=true` first deletes only the scope's chunks (all of them
-    when unscoped; a character's channel chunks only with
-    include_channels).
-
-    Embedding runs in-process by default, so nothing needs to be
-    installed. `wait=false` returns a job id to poll with get_job
-    instead of blocking. One ingest at a time: another is refused with
-    `index_busy`.
+    Embedding runs in-process. `wait=false` returns a job id at once,
+    for get_job and cancel_job. One ingest at a time: another is
+    refused `index_busy`.
     """
     # Resolve to the on-disk spelling like every other conversation
     # tool: the Labels and alias links are keyed on it, so a different
@@ -322,11 +315,7 @@ async def ingest_logs(
         job=job.id,
     )
     if not wait:
-        return {
-            "job_id": job.id,
-            "state": job.state,
-            "note": "Running in the background — poll get_job for progress.",
-        }
+        return _started(job)
 
     started = time.monotonic()
     last_reported = -1
@@ -340,14 +329,7 @@ async def ingest_logs(
             )
             last_reported = progress.embedded
         if time.monotonic() - started > WAIT_BUDGET_SEC:
-            return {
-                "job_id": job.id,
-                "state": job.state,
-                "note": (
-                    "Still running after 10 minutes — left in the "
-                    "background. Poll get_job for progress."
-                ),
-            }
+            return _started(job)
         await asyncio.sleep(0.5)
     return _ingest_summary(job.to_dict())
 
@@ -392,12 +374,10 @@ def get_job(job_id: str) -> dict[str, Any]:
     return jobs.registry().get(job_id).to_dict()
 
 
-@tool(tags=(TAG_CORE, TAG_LOGS), title="Cancel a job")
+@tool(tags=(TAG_CORE, TAG_LOGS, TAG_CLASSIFY), title="Cancel a job")
 def cancel_job(job_id: str) -> dict[str, Any]:
-    """Ask a running job to stop, whatever its kind. It stops at its
-    next safe point (an ingest between batches; what it already wrote
-    stays) — poll get_job to see it end. A finished job is left as it
-    ended."""
+    """Stop a running job of any kind at its next safe point; what it
+    already wrote stays. get_job shows it end."""
     from services import jobs
 
     job = jobs.registry().cancel(job_id)

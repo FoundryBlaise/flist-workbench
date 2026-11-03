@@ -242,6 +242,7 @@ def test_the_classify_endpoint_is_the_smallest_surface() -> None:
         "label_all_unlabeled",
         "ingest_logs",
         "get_job",
+        "cancel_job",
     }
     assert len(classify) < len(logs)
     assert schema_bytes(workbench_mcp.ENDPOINTS["classify"]) < 0.5 * schema_bytes(
@@ -259,5 +260,5 @@ def test_the_classify_endpoint_is_reachable_and_described() -> None:
         e for e in described["endpoints"] if e["id"] == "classify"  # type: ignore[index]
     )
     assert row["path"] == "/mcp/classify"
-    assert row["tool_count"] == 9
+    assert row["tool_count"] == 10
     assert "labelling" in row["label"]
