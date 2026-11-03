@@ -255,6 +255,12 @@ def set_message_labels(
     call, and reporting it as a result invites a caller to treat the
     batch as finished.
 
+    A message whose Label the user set by hand keeps it: its hash comes
+    back under `skipped`, with the reason, and the rest of the call is
+    written. Only the user changes such a Label, in the window, so
+    there is nothing to retry. A call whose every hash was skipped this
+    way is answered, not raised.
+
     The response carries `unlabeled_remaining` for this conversation,
     counted after the write. That number, not the caller's memory of
     how many batches it has done, is what says whether the work is
@@ -270,6 +276,7 @@ def set_message_labels(
     character, partner = conv.character, conv.partner
     result = label_service.record_verdicts(character, partner, items)
     written, unknown, rejected = result.written, result.unknown, result.rejected
+    skipped = result.skipped
 
     audit(
         "set_message_labels",
@@ -278,9 +285,10 @@ def set_message_labels(
         written=len(written),
         unknown=len(unknown),
         rejected=len(rejected),
+        skipped=len(skipped),
     )
 
-    if not written:
+    if not written and not skipped:
         raise ToolError(
             "nothing_written",
             "None of the Labels could be stored, so this batch is "
@@ -308,6 +316,12 @@ def set_message_labels(
         )
     if rejected:
         out["rejected"] = rejected
+    if skipped:
+        out["skipped"] = skipped
+        notes.append(
+            f"{len(skipped)} message(s) already carry a Label the user set by "
+            "hand and were left as they are. Do not send them again."
+        )
     if remaining:
         notes.append(
             f"NOT FINISHED: {remaining} message(s) in this conversation "
