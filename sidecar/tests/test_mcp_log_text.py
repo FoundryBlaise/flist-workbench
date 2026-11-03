@@ -130,7 +130,7 @@ async def test_the_classify_endpoint_says_how_to_turn_the_switch_on(
     rulebook, its first call, says so instead of a workflow that fails
     on its second step."""
     async with mcp_client("classify") as session:
-        result, body = await call_tool(session, "get_classification_guidelines")
+        result, body = await call_tool(session, "get_labelling_guidelines")
     assert not result.isError, body
     assert "Settings → MCP" in body["log_text"]
 
@@ -140,7 +140,7 @@ async def test_turned_on_the_guidelines_carry_no_such_note(
 ) -> None:
     allow_log_text()
     async with mcp_client("classify") as session:
-        _, body = await call_tool(session, "get_classification_guidelines")
+        _, body = await call_tool(session, "get_labelling_guidelines")
     assert "log_text" not in body
 
 

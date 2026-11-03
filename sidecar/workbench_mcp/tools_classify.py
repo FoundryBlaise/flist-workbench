@@ -1,17 +1,17 @@
-"""Client-driven IC/OOC classification (design §3.9).
+"""Client-driven IC/OOC labelling (design §3.9).
 
-Workbench used to run a classifier itself. It doesn't any more: the
+F-list Workbench used to run a classifier itself. It doesn't any more: the
 rules still decide the easy cases, and everything they leave as
 `Unlabeled` is handed to the model on the other end of this connection,
-which sends its verdicts back.
+which sends its Labels back.
 
-The flow, which `get_classification_guidelines` also spells out for the
+The flow, which `get_labelling_guidelines` also spells out for the
 model:
 
     get_label_stats            how much is left
-    get_classification_guidelines   the rulebook, once
+    get_labelling_guidelines   the rulebook, once
     get_messages_to_classify   a batch, with context
-    set_message_labels         the verdicts
+    set_message_labels         the Labels
     ...repeat until remaining == 0
 
 Why it matters: only labelled messages are indexed for search. An
@@ -64,17 +64,17 @@ NEXT_INGEST = (
 
 @tool(
     tags=(TAG_LOGS, TAG_CLASSIFY),
-    title="Classification guidelines",
+    title="Labelling guidelines",
     read_only=True,
 )
-def get_classification_guidelines(language: str = "de") -> dict[str, Any]:
+def get_labelling_guidelines(language: str = "de") -> dict[str, Any]:
     """The rulebook for deciding whether a message is IC or OOC.
 
-    Read this once before classifying. `language` picks the wording:
+    Read this once before labelling. `language` picks the wording:
     `de` (German roleplay — the default), `en`, or `minimal` for a
     short language-agnostic version. These are the same guidelines
-    Workbench's own classifier used before this moved to MCP, so
-    verdicts stay consistent with anything labelled earlier.
+    the app's own classifier used before this moved to MCP, so
+    Labels stay consistent with anything labelled earlier.
     """
     try:
         result = classification.guidelines(language)
@@ -96,7 +96,7 @@ _WORKFLOW = [
     "get_label_stats(character, partner) — see how many are unjudged",
     "get_messages_to_classify(character, partner) — a batch with context",
     "decide IC or OOC for each, using the guidelines above",
-    "set_message_labels(character, partner, items) — send the verdicts",
+    "set_message_labels(character, partner, items) — send the Labels",
     "get_messages_to_classify takes 10 messages at a time — leave the "
     "limit alone; a bigger batch risks a truncated response and silently "
     "skipped messages",
@@ -111,20 +111,20 @@ _WORKFLOW = [
     description="Guidelines for labelling F-Chat log messages IC or OOC.",
 )
 def classify_ic_ooc_prompt(language: str = "de") -> str:
-    """Prompt twin of get_classification_guidelines, for clients that
+    """Prompt twin of get_labelling_guidelines, for clients that
     support prompts. LM Studio, the primary client, does not — so the
     tool is the load-bearing surface and this is a convenience."""
     result = classification.guidelines(language)
     return (
         f"{result['guidelines']}\n\n{result['rules_already_applied']}\n\n"
-        "Answer with a verdict of IC or OOC for each message you are "
+        "Answer with a Label of IC or OOC for each message you are "
         "given, keyed by its hash."
     )
 
 
 @tool(
     tags=(TAG_LOGS, TAG_CLASSIFY, TAG_LOG_TEXT),
-    title="Messages awaiting a verdict",
+    title="Messages awaiting a Label",
     read_only=True,
 )
 def get_messages_to_classify(
@@ -136,7 +136,7 @@ def get_messages_to_classify(
     context_after: int = 1,
     language: str = "de",
 ) -> dict[str, Any]:
-    """A batch of messages that still need an IC/OOC verdict, each with
+    """A batch of messages that still need an IC/OOC Label, each with
     its neighbours for context.
 
     Leave `limit` at its default of 10. Raising it does not make the run
@@ -209,7 +209,7 @@ def get_messages_to_classify(
     if not batch.items:
         out["note"] = (
             "Nothing left to judge in this conversation — every message "
-            "has a verdict or was settled by the rules."
+            "has a Label or was settled by the rules."
         )
     elif batch.remaining:
         batches_left = -(-batch.remaining // capped)  # ceil
@@ -233,24 +233,24 @@ def get_messages_to_classify(
 
 @tool(
     tags=(TAG_LOGS, TAG_CLASSIFY),
-    title="Record IC/OOC verdicts",
+    title="Record IC/OOC Labels",
     idempotent=True,
 )
 def set_message_labels(
     character: str, partner: str, items: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Store IC/OOC verdicts for messages.
+    """Store IC/OOC Labels for messages.
 
     Each item is `{"hash": ..., "label": "IC"|"OOC", "reason": ...}`.
     The reason is optional but worth writing — it shows in the log
-    viewer's tooltip and is how the user audits a verdict they
+    viewer's tooltip and is how the user audits a Label they
     disagree with.
 
     Only hashes from get_messages_to_classify (or read_log_messages)
     are accepted; an unknown hash is reported back rather than
     silently written, because a wrong hash would label some other
     message. If nothing at all could be written this raises instead of
-    returning — a write that stored none of its verdicts is a failed
+    returning — a write that stored none of its Labels is a failed
     call, and reporting it as a result invites a caller to treat the
     batch as finished.
 
@@ -282,7 +282,7 @@ def set_message_labels(
     if not written:
         raise ToolError(
             "nothing_written",
-            "None of the verdicts could be stored, so this batch is "
+            "None of the Labels could be stored, so this batch is "
             "unchanged. Hashes must be copied verbatim from "
             "get_messages_to_classify — fetch a fresh batch and try "
             "again with the hashes it returns.",
@@ -310,12 +310,12 @@ def set_message_labels(
     if remaining:
         notes.append(
             f"NOT FINISHED: {remaining} message(s) in this conversation "
-            "still have no verdict and stay out of the index. Call "
+            "still have no Label and stay out of the Index. Call "
             "get_messages_to_classify again (cursor=0) and keep going."
         )
     else:
         notes.append(
-            "Every message in this conversation now has a verdict. " + NEXT_INGEST
+            "Every message in this conversation now has a Label. " + NEXT_INGEST
         )
     out["note"] = " ".join(notes)
     return out
@@ -349,15 +349,15 @@ def label_all_unlabeled(
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Give every still-unlabeled message in one conversation the same
-    verdict, in one call.
+    Label, in one call.
 
     Only for a conversation the *user* has told you is entirely IC (or
     entirely OOC). It is not a shortcut for judging: never call it
-    because a batch looks uniform, or to finish a long classification
+    because a batch looks uniform, or to finish a long labelling
     run faster. If the user has not said so about this specific
     conversation, keep labelling in batches.
 
-    Messages that already have a verdict keep it, and messages the
+    Messages that already have a Label keep it, and messages the
     rules decide (empty, short, `((` prefix) keep resolving through the
     rules — so this adds labels and never overwrites. `labeled` in the
     reply counts what was written; the user can undo it in the app.

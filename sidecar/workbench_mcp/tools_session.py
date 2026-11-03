@@ -24,12 +24,12 @@ NO_PUSH_NOTE = (
 
 @tool(
     tags=(TAG_CORE, TAG_CHARACTER, TAG_LOGS),
-    title="Workbench status",
+    title="App status",
     read_only=True,
 )
 def get_workbench_status(include_label_rollup: bool = False) -> dict[str, Any]:
-    """Overall state of the local Workbench: version, data directory,
-    F-list session, archived characters, log corpus and vector index.
+    """Overall state of the app: version, data directory, F-list
+    session, archived characters, the Logs and the Index.
 
     Call this first in a session to find out what exists locally.
     `include_label_rollup=true` also counts IC/OOC labels across every

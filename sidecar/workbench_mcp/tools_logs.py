@@ -101,7 +101,7 @@ def read_log_messages(
     """Messages from one conversation, oldest first.
 
     Each message carries its `hash` (needed to set a label) and its
-    resolved IC/OOC verdict. `labels` filters to any of IC, OOC or
+    resolved IC/OOC Label. `labels` filters to any of IC, OOC or
     Unlabeled. Long conversations run to tens of thousands of messages
     — page with `offset`.
     """
@@ -296,7 +296,7 @@ def get_label_stats(
     character: str, partner: str | None = None
 ) -> dict[str, Any]:
     """How much of a conversation — or of everything — has an IC/OOC
-    verdict.
+    Label.
 
     Unlabeled messages are the ones a model can still decide, and the
     ones ingest skips. Omitting `partner` walks every conversation of
@@ -340,9 +340,9 @@ def get_label_stats(
 
 def _coverage_note(counts: dict[str, int]) -> str:
     if counts.get("unlabeled", 0) == 0:
-        return "Everything has a verdict; this conversation is ready to ingest."
+        return "Everything has a Label; this conversation is ready to ingest."
     return (
-        f"{counts['unlabeled']} message(s) have no IC/OOC verdict. They are "
+        f"{counts['unlabeled']} message(s) have no IC/OOC Label. They are "
         "skipped by ingest. Use get_messages_to_classify to judge them."
     )
 

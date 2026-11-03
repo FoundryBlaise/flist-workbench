@@ -43,7 +43,7 @@ MAX_IMAGES = 50
 def list_characters(
     include_log_only: bool = True, limit: int = MAX_CHARACTERS, offset: int = 0
 ) -> dict[str, Any]:
-    """Every character this Workbench knows about.
+    """Every character the app has locally.
 
     Characters with a local archive can be edited; ones that only
     appear in the F-Chat logs can be read about but have no profile
@@ -519,7 +519,7 @@ async def diff_workbench(
 ) -> dict[str, Any]:
     """What differs between the Workbench and Live.
 
-    Compares the Workbench against `live`, the published profile, which
+    Compares the Workbench against Live, what F-list shows, which
     answers "what would change if I uploaded this". Pass source="live"
     and against="workbench" to read the change the other way round.
 

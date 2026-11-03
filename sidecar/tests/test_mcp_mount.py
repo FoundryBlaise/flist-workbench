@@ -236,7 +236,7 @@ def test_the_classify_endpoint_is_the_smallest_surface() -> None:
         "list_log_characters",
         "list_partners",
         "get_label_stats",
-        "get_classification_guidelines",
+        "get_labelling_guidelines",
         "get_messages_to_classify",
         "set_message_labels",
         "label_all_unlabeled",

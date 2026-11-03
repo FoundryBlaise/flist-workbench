@@ -2,14 +2,18 @@
 
 Everything the Workbench UI can do is reachable here as a tool, so a
 local model (LM Studio) or Claude can edit profiles, read logs and
-drive classification without touching the UI. See docs/MCP_DESIGN.md.
+drive IC/OOC labelling without touching the UI. See docs/MCP_DESIGN.md.
 
-Three endpoints are served, all built from the same tool
+Four endpoints are served, all built from the same tool
 implementations and differing only in which tags they include:
 
     /mcp             everything
     /mcp/character   profile editing only
-    /mcp/logs        logs, labels, classification, retrieval
+    /mcp/logs        Logs, Labels, retrieval
+    /mcp/classify    the IC/OOC labelling loop only
+
+docs/MCP.md lists each endpoint's tools; tests/test_mcp_docs.py
+keeps that list true.
 
 The package is deliberately *not* called `mcp`: `sidecar/` is on
 `sys.path`, so that name would shadow the MCP SDK itself.

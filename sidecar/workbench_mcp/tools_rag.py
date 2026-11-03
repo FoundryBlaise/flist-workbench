@@ -37,7 +37,7 @@ def search_logs_semantic(
     `partner` when the question is about one relationship; leave both
     out to search everything. At most 20 matches (`top_k`) a page.
 
-    Only messages with an IC/OOC verdict are in the index. If results
+    Only messages with an IC/OOC Label are in the Index. If results
     look thin, check get_label_stats: unjudged messages are skipped at
     ingest time.
     """
@@ -136,7 +136,7 @@ def get_rag_status(check_embedding: bool = False) -> dict[str, Any]:
     elif not out["chunk_count"]:
         out["note"] = "Nothing indexed yet — run ingest_logs."
     else:
-        out["note"] = "Only messages with an IC/OOC verdict are indexed."
+        out["note"] = "Only messages with an IC/OOC Label are indexed."
     return out
 
 

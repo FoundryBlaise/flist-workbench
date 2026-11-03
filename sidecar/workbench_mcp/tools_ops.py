@@ -349,8 +349,8 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
     if out.get("skipped_unlabeled"):
         out["note"] = (
             f"{out['skipped_unlabeled']} message(s) were skipped for "
-            "having no IC/OOC verdict — they aren't searchable. Run the "
-            "classification flow (get_messages_to_classify) and ingest "
+            "having no IC/OOC Label — they aren't searchable. Label them "
+            "(get_messages_to_classify, set_message_labels) and ingest "
             "again to include them."
         )
     return out
@@ -498,7 +498,7 @@ _MAX_NAME_TRIES = 100
 
 @tool(tags=TAG_CORE, title="Extension pairing status", read_only=True)
 def get_extension_pairing_status() -> dict[str, Any]:
-    """Whether the browser extension is paired with this Workbench.
+    """Whether the browser extension is paired with the app.
 
     The extension is one of the two ways the user uploads a profile to
     F-list. Pairing is accepted by the user in the app window and
@@ -527,7 +527,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
 
 @tool(tags=TAG_CORE, title="Settings", read_only=True)
 def get_settings() -> dict[str, Any]:
-    """Workbench's settings: the F-Chat log directory, the IC/OOC rule
+    """The app's settings: the F-Chat log directory, the IC/OOC rule
     threshold, the embedding model and the retrieval tuning, and the
     folders `import_images` may read from (which only the user can
     change, in Settings → Security).
@@ -572,7 +572,7 @@ def update_settings(
     rerank_model: str | None = None,
     hybrid_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Change Workbench settings. Omitted values are left alone.
+    """Change the app's settings. Omitted values are left alone.
 
     Numbers out of range are clamped; `changed` reports what was
     stored. An empty model name resets it to the default. The window
