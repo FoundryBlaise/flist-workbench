@@ -66,7 +66,7 @@ class SettingsUpdate(BaseModel):
     fchat_data_dir: str | None = None
     labels: LabelsSettingsUpdate | None = None
     rag: RagSettingsUpdate | None = None
-    # Folders MCP's import_image may read from. Only this endpoint — the
+    # Folders MCP's import_images may read from. Only this endpoint — the
     # window — sets them; the MCP settings tool can read but not change.
     image_import_roots: list[str] | None = None
     mcp: McpSettingsUpdate | None = None

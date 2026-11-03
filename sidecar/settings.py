@@ -52,7 +52,7 @@ KEY_RAG_CHUNK_MAX_CHARS = "rag.chunk_max_chars"
 KEY_RAG_CHUNK_SOFT_SPLIT_CHARS = "rag.chunk_soft_split_chars"
 KEY_RAG_CHUNK_OVERLAP_MSGS = "rag.chunk_overlap_msgs"
 
-# Folders the MCP `import_image` tool may read from, as a JSON list of
+# Folders the MCP `import_images` tool may read from, as a JSON list of
 # absolute paths. Set only from Settings → Security: a tool call that
 # could widen its own reach would make the allow-list pointless.
 KEY_IMAGE_IMPORT_ROOTS = "images.import_roots"

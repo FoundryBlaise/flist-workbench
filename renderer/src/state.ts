@@ -531,16 +531,11 @@ type State = {
     characterId: string,
     file: File | Blob
   ) => Promise<FlistCharacterImage>
-  /** Move one image to the character's trash. Also drops the gallery
-   *  row if the image happened to still be on-profile, so callers don't
-   *  have to coordinate. */
-  flistDeleteImage: (
-    characterId: string,
-    imageId: string
-  ) => Promise<void>
-  /** Move several pool images to the trash in one request. Only the ids
-   *  the sidecar actually moved leave the pool listing; a failed request
-   *  throws instead of pretending. */
+  /** Delete images, on the profile or only in the pool, in one request:
+   *  the sidecar takes gallery images off the Workbench's gallery and
+   *  moves every file to the Trash, the same route a model's
+   *  `trash_images` takes. Only the ids the sidecar actually moved leave
+   *  the pool listing; a failed request throws instead of pretending. */
   flistTrashImages: (
     characterId: string,
     imageIds: string[]
@@ -552,7 +547,7 @@ type State = {
     imageId: string
   ) => void
   /** Drop `imageId` from working.json's gallery (move profile→pool).
-   *  The file stays in the pool — flistDeleteImage moves it to the trash. */
+   *  The file stays in the pool — flistTrashImages moves it to the Trash. */
   flistMoveImageToPool: (
     characterId: string,
     imageId: string
@@ -2497,35 +2492,57 @@ export const useStore = create<State>((set, get) => ({
 
   async flistTrashImages(characterId, imageIds) {
     if (imageIds.length === 0) return []
+    type GalleryRow = { image_id: string; description: string; sort_order: number }
+    const galleryOf = (slot: FlistWorkingSlot | undefined): GalleryRow[] =>
+      slot && Array.isArray((slot.payload as { images?: unknown }).images)
+        ? (slot.payload as { images: GalleryRow[] }).images
+        : []
+    // A gallery image comes off the Workbench's gallery on the sidecar,
+    // which writes the Workbench. What was typed is saved first (after
+    // any save in flight), or that save would be refused as stale.
+    if (galleryOf(get().flistWorking[characterId]).some((e) => imageIds.includes(e.image_id))) {
+      _cancelFlush(characterId)
+      await get().flistFlushWorking(characterId).catch(() => {})
+      if (get().flistWorking[characterId]?.unsavedDirty) {
+        throw new Error('the Workbench has edits that could not be saved')
+      }
+    }
     const res = await api.flistImagesTrash(characterId, imageIds)
     const moved = res.trashed.map((t) => t.image_id)
+    const offGallery = res.off_gallery ?? []
     set((s) => {
+      const patch: Partial<State> = {}
       const prev = s.flistCharacterImages[characterId]
-      if (!prev) return {}
-      const nextById = { ...prev.byId }
-      for (const id of moved) delete nextById[id]
-      return {
-        flistCharacterImages: {
+      if (prev) {
+        const nextById = { ...prev.byId }
+        for (const id of moved) delete nextById[id]
+        patch.flistCharacterImages = {
           ...s.flistCharacterImages,
           [characterId]: { byId: nextById, status: prev.status }
         }
       }
+      // Show what the sidecar wrote, and save the next edit over its
+      // etag. Anything typed meanwhile stays unsaved and goes with it.
+      const slot = s.flistWorking[characterId]
+      if (slot && res.etag && offGallery.length > 0) {
+        const images = galleryOf(slot)
+          .filter((e) => !offGallery.includes(e.image_id))
+          .map((e, i) => ({ ...e, sort_order: i }))
+        const overlay = slot.overlay.includes('images') ? slot.overlay : [...slot.overlay, 'images']
+        patch.flistWorking = {
+          ...s.flistWorking,
+          [characterId]: {
+            ...slot,
+            payload: { ...slot.payload, images, _overlay: [...overlay] },
+            overlay,
+            etag: res.etag,
+            materialised: true
+          }
+        }
+      }
+      return patch
     })
     return moved
-  },
-
-  async flistDeleteImage(characterId, imageId) {
-    await get().flistTrashImages(characterId, [imageId])
-    const slot = get().flistWorking[characterId]
-    if (!slot) return
-    const images = Array.isArray((slot.payload as { images?: unknown }).images)
-      ? ((slot.payload as { images: { image_id: string; description: string; sort_order: number }[] }).images)
-      : []
-    if (!images.some((e) => e.image_id === imageId)) return
-    get().flistSetGalleryImages(
-      characterId,
-      images.filter((e) => e.image_id !== imageId)
-    )
   },
 
   flistMoveImageToProfile(characterId, imageId) {

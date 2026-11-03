@@ -687,6 +687,15 @@ export function ImagesTab({
                     >
                       ×
                     </button>
+                    <button
+                      type="button"
+                      className="flist-images-gallery-item__btn flist-images-gallery-item__btn--danger"
+                      onClick={() => setConfirmTrash([entry.image_id])}
+                      title="Move to Trash (off the profile and out of the pool)"
+                      data-testid="flist-images-gallery-trash"
+                    >
+                      Trash
+                    </button>
                   </div>
                 )}
               </li>
@@ -768,14 +777,18 @@ export function ImagesTab({
       {confirmTrash && (
         <ImagesConfirmModal
           title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the Trash?`}
-          body="They leave the pool and can be restored from the Trash until you empty it."
+          body={
+            confirmTrash.some((id) => galleryImageIds.has(id))
+              ? 'It comes off the profile and leaves the pool. A restore from the Trash puts it back in the pool, until you empty the Trash.'
+              : 'They leave the pool and can be restored from the Trash until you empty it.'
+          }
           notes={usageNotes(confirmTrash, refs)}
-          thumbs={poolEntries
-            .filter((e) => confirmTrash.includes(e.image_id))
-            .map((e) => ({
-              key: e.image_id,
-              url: api.flistImageUrl(characterId, `${e.image_id}.${e.extension}`)
-            }))}
+          thumbs={confirmTrash.flatMap((id) => {
+            const meta = characterImages?.byId[id]
+            return meta
+              ? [{ key: id, url: api.flistImageUrl(characterId, `${id}.${meta.extension}`) }]
+              : []
+          })}
           confirmLabel="Move to Trash"
           onCancel={() => setConfirmTrash(null)}
           onConfirm={() => void handleTrash()}

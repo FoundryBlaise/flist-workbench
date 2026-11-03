@@ -190,16 +190,16 @@ async def test_pulling_a_known_character_leaves_the_roster_alone(client, flist) 
 def extension(client, flist):  # noqa: ANN001, ANN201
     """The paired extension, for a character it finds by name: pulled
     once, as it is before any Upload."""
-    import restore as restore_svc
+    from services import upload as upload_service
     import server
 
     pull(client)
-    hs = restore_svc.begin_handshake()
-    restore_svc.accept_handshake(hs["handshake_id"])
+    hs = upload_service.begin_handshake()
+    upload_service.accept_handshake(hs["handshake_id"])
     # Entered, so a task a request schedules outlives the request.
     with app_client(server.app, headers={"X-Workbench-Auth": hs["token"]}) as c:
         yield c
-    restore_svc.revoke_token()
+    upload_service.revoke_token()
 
 
 async def test_the_pull_after_an_upload_reaches_the_window(extension) -> None:

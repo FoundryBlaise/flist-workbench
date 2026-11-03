@@ -105,10 +105,9 @@ async def test_an_empty_kinks_list_from_flist_becomes_a_dict(
         await open_workbench(session)
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="fave",
+            items=[{"kink": "Rough Housing", "choice": "fave"}],
         )
     payload = payload_of(workbench)
     assert isinstance(payload["kinks"], dict)
@@ -263,22 +262,6 @@ async def test_edit_description_says_how_to_recover_from_a_miss(
     assert "get_description" in tool_error_text(result)
 
 
-async def test_append_description_starts_a_new_line(workbench) -> None:
-    async with mcp_client("character") as session:
-        await open_workbench(session)
-        await call_tool(
-            session,
-            "set_description",
-            character="Lady Amber Blaise",
-            text="first",
-            confirm=True,  # shorter than half of Live's description
-        )
-        await call_tool(
-            session, "append_description", character="Lady Amber Blaise", text="second"
-        )
-    assert payload_of(workbench)["character"]["description"] == "first\nsecond"
-
-
 # ---- overlay -----------------------------------------------------------
 
 
@@ -303,10 +286,9 @@ async def test_every_edit_records_its_path_in_the_overlay(workbench) -> None:
         )
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="yes",
+            items=[{"kink": "Rough Housing", "choice": "yes"}],
         )
     overlay = set(payload_of(workbench)["_overlay"])
     assert "character.description" in overlay
@@ -454,17 +436,15 @@ async def test_undecided_removes_the_kink_entry(workbench) -> None:
         await open_workbench(session)
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="fave",
+            items=[{"kink": "Rough Housing", "choice": "fave"}],
         )
         await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="undecided",
+            items=[{"kink": "Rough Housing", "choice": "undecided"}],
         )
     assert payload_of(workbench)["kinks"] == {}
 
@@ -474,10 +454,9 @@ async def test_an_invalid_choice_lists_the_valid_ones(workbench) -> None:
         await open_workbench(session)
         result, _ = await call_tool(
             session,
-            "set_kink",
+            "set_kinks",
             character="Lady Amber Blaise",
-            kink="Rough Housing",
-            choice="sure why not",
+            items=[{"kink": "Rough Housing", "choice": "sure why not"}],
         )
     text = tool_error_text(result)
     assert "fave" in text and "maybe" in text
@@ -692,7 +671,6 @@ async def test_removing_an_image_closes_the_gap_in_sort_order(
         _, body = await call_tool(
             session, "remove_image", character="Lady Amber Blaise", image_id="2"
         )
-        assert body["file_trashed"] is False
     rows = payload_of(workbench)["images"]
     assert [(r["image_id"], r["sort_order"]) for r in rows] == [("1", 0), ("3", 1)]
 
@@ -899,7 +877,7 @@ async def test_the_same_markup_with_the_colour_outside_goes_through(
     assert body["length"] == len("[color=cyan][big][b]Athali[/b][/big][/color]")
 
 
-async def test_appending_something_invalid_is_refused_too(workbench) -> None:
+async def test_editing_in_something_invalid_is_refused_too(workbench) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         await call_tool(
@@ -910,8 +888,9 @@ async def test_appending_something_invalid_is_refused_too(workbench) -> None:
         )
         result, _ = await call_tool(
             session,
-            "append_description",
+            "edit_description",
             character="Lady Amber Blaise",
-            text="[big][i][color=red]and this[/color][/i][/big]",
+            old_string="An opening paragraph.",
+            new_string="An opening paragraph.\n[big][i][color=red]and this[/color][/i][/big]",
         )
     assert "not allowed here" in tool_error_text(result)

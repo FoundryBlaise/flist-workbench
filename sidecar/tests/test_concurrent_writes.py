@@ -98,7 +98,7 @@ def _tokens(description: str) -> list[str]:
 def test_a_window_save_and_a_model_edit_never_overwrite_each_other_silently(
     sidecar,
 ) -> None:
-    """Both append their own line to the description. Every line a
+    """Both add their own line to the description. Every line a
     writer was told it saved is there once at the end, and no line whose
     save was refused is."""
     # Outside a `with` block every request runs on its own event loop
@@ -139,8 +139,14 @@ def test_a_window_save_and_a_model_edit_never_overwrite_each_other_silently(
             async with mcp_client() as session:
                 for j in range(ROUNDS):
                     line = f"model {j}"
+                    # An edit in place reads and writes under the lock,
+                    # as the model's whole change.
                     result, _ = await call_tool(
-                        session, "append_description", character=NAME, text=line
+                        session,
+                        "edit_description",
+                        character=NAME,
+                        old_string="start",
+                        new_string=f"start\n{line}",
                     )
                     (model_refused if result.isError else model_saved).append(line)
                     _, raw = await call_tool(

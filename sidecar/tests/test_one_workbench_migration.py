@@ -94,11 +94,11 @@ def old(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OldArchive:
     import archive_live
     import archive_registry
     import paths
-    import restore
+    from services import upload
 
     importlib.reload(paths)
     importlib.reload(archive_registry)
-    importlib.reload(restore)
+    importlib.reload(upload)
     archive_registry.register_character(CID, NAME)
     archive_live.write_live(CID, _live())
     return OldArchive(archive_registry.character_dir(CID))
@@ -392,7 +392,7 @@ def test_the_migration_backup_is_listed_to_the_extension_but_not_uploadable(
 ) -> None:
     """It holds old files, not a profile: uploading it would write
     nothing sensible into F-list's form."""
-    import restore
+    from services import upload
 
     old.draft("aaaaaaaaaaaa", "Main", "[b]Mine.[/b]", updated_at=500)
     old.draft("bbbbbbbbbbbb", "Spare", "[b]Spare.[/b]", updated_at=900)
@@ -401,8 +401,8 @@ def test_the_migration_backup_is_listed_to_the_extension_but_not_uploadable(
 
     import server
 
-    hs = restore.begin_handshake()
-    restore.accept_handshake(hs["handshake_id"])
+    hs = upload.begin_handshake()
+    upload.accept_handshake(hs["handshake_id"])
     try:
         extension = app_client(
             server.app,
@@ -413,7 +413,7 @@ def test_the_migration_backup_is_listed_to_the_extension_but_not_uploadable(
             f"/restore/snapshot/{backup['filename']}", params={"character": NAME}
         )
     finally:
-        restore.revoke_token()
+        upload.revoke_token()
 
     assert [s["id"] for s in sources if s["kind"] == "set"] == ["workbench"]
     [listed] = [s for s in sources if s["id"] == backup["filename"]]
@@ -511,14 +511,14 @@ def test_the_migration_backup_is_never_uploaded_even_holding_a_working_copy(
 ) -> None:
     """The extension hears the same refusal as the window and MCP, and
     the source list says the same thing before it asks."""
-    import restore
+    from services import upload
     import server
 
     seen = _with_a_leftover_working_copy(old)
     [backup] = seen["backups"]
 
-    hs = restore.begin_handshake()
-    restore.accept_handshake(hs["handshake_id"])
+    hs = upload.begin_handshake()
+    upload.accept_handshake(hs["handshake_id"])
     try:
         extension = app_client(
             server.app,
@@ -529,7 +529,7 @@ def test_the_migration_backup_is_never_uploaded_even_holding_a_working_copy(
             f"/restore/snapshot/{backup['filename']}", params={"character": NAME}
         )
     finally:
-        restore.revoke_token()
+        upload.revoke_token()
 
     assert fetched.status_code == 409
     assert fetched.json()["code"] == "backup_holds_no_profile"

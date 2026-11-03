@@ -1,14 +1,18 @@
-"""Pairing + snapshot service for the F-list Workbench browser extension.
+"""Upload: pairing with the browser extension and serving it what to upload.
 
 State:
   - Accepted pairing token: persisted to `restore-state.json` in the
-    Workbench user-data dir. Loaded on first call, then held in RAM.
+    user-data dir. Loaded on first call, then held in RAM. The file
+    keeps its old name: renaming it would unpair every user.
   - Pending handshakes: RAM only, lost on sidecar restart (a stale
     handshake just times out client-side).
-  - Pre-restore form-state snapshots ("back up first" option): written
-    into the character's existing `backups/` directory with a
-    distinguishing filename prefix so they show up alongside regular
-    ZIP backups but are clearly attributed.
+  - The Backup before an Upload ("back up first" option): a Backup like
+    any other in the character's `backups/` directory, recorded as
+    taken before an Upload.
+
+The extension's routes stay under `/restore/` (routers/upload.py): the
+released extension calls them, and only an extension release that
+knows new paths can move them.
 
 The pairing model is OBS-style: extension posts /restore/handshake,
 sidecar generates a fresh token + handshake_id, returns both, marks
@@ -264,7 +268,7 @@ def extension_seen() -> dict[str, Any]:
     return _EXTENSION_SEEN or {"version": None, "seen_at": None}
 
 
-# ---- snapshot listing + serving ---------------------------------------
+# ---- Upload sources --------------------------------------------------
 
 
 def list_archived_characters() -> list[dict[str, Any]]:
@@ -296,7 +300,7 @@ def list_archived_characters() -> list[dict[str, Any]]:
     return out
 
 
-def _character_id_for_name(name: str) -> str | None:
+def character_id_for_name(name: str) -> str | None:
     """Resolve F-list character name → local archive character_id by
     scanning live.json files. Returns None if no archive matches.
 
@@ -326,7 +330,7 @@ def _character_id_for_name(name: str) -> str | None:
     return None
 
 
-def list_snapshots(character_name: str) -> list[dict[str, Any]]:
+def list_upload_sources(character_name: str) -> list[dict[str, Any]]:
     """Everything the extension can push into the F-list form, its
     Upload sources:
 
@@ -342,7 +346,7 @@ def list_snapshots(character_name: str) -> list[dict[str, Any]]:
     whose edit page is open: one profile can serve as the template for
     another.
     """
-    character_id = _character_id_for_name(character_name)
+    character_id = character_id_for_name(character_name)
     if character_id is None:
         return []
 
@@ -432,15 +436,18 @@ def _iso_from_unix(ts: float | int | None) -> str | None:
     return _dt.datetime.fromtimestamp(float(ts), tz=_dt.timezone.utc).isoformat()
 
 
-def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
-    character_id = _character_id_for_name(character_name)
+def fetch_upload_source(character_name: str, source_id: str) -> bytes | None:
+    """The ZIP of one Upload source from `list_upload_sources`, or None
+    when the character or the source is unknown. A Backup that cannot
+    be uploaded is refused with the reason the list gives."""
+    character_id = character_id_for_name(character_name)
     if character_id is None:
         return None
 
     images_dir = archive_images.images_dir(character_id)
     avatar = _avatar_path_for_name(character_name)
 
-    if snapshot_id == WORKBENCH_SOURCE_ID:
+    if source_id == WORKBENCH_SOURCE_ID:
         bench = _workbench(character_id)
         if bench is None:
             return None
@@ -458,12 +465,12 @@ def fetch_snapshot_zip(character_name: str, snapshot_id: str) -> bytes | None:
         entry.get("filename")
         for entry in archive_backups.list_zip_backups(character_id)
     }
-    if snapshot_id not in listed:
+    if source_id not in listed:
         return None
-    candidate = archive_backups.backups_dir(character_id) / snapshot_id
+    candidate = archive_backups.backups_dir(character_id) / source_id
     if not candidate.is_file():
         return None
-    refused = _upload_refused(character_id, snapshot_id)
+    refused = _upload_refused(character_id, source_id)
     if refused is not None:
         raise refused
     return _with_form_state_translated(candidate.read_bytes())
@@ -502,7 +509,7 @@ def _avatar_path_for_name(character_name: str) -> Path | None:
 # ---- the Backup before an Upload --------------------------------------
 
 
-def write_pre_restore_snapshot(
+def write_pre_upload_backup(
     character_name: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -518,7 +525,7 @@ def write_pre_restore_snapshot(
     It is recorded as `source: live, occasion: before-upload`: what it
     holds is what F-list shows, not the Workbench about to be uploaded.
     """
-    character_id = _character_id_for_name(character_name)
+    character_id = character_id_for_name(character_name)
     if character_id is None:
         return {"ok": False, "error": "unknown_character"}
 
@@ -556,6 +563,7 @@ def write_pre_restore_snapshot(
 
     return {
         "ok": True,
+        # The extension's name for the Backup's id.
         "snapshot_id": target.name,
         "path": str(target),
         "bytes": len(zip_bytes),

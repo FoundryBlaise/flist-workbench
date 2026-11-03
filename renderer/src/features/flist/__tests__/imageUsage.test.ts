@@ -29,10 +29,13 @@ describe('usageNotes', () => {
     ])
   })
 
-  it('says when an image is still in the Workbench', () => {
+  it('says when an image comes off the Workbench’s gallery too', () => {
     expect(usageNotes(['a'], { a: ref({ workbench: true }) })).toEqual([
-      'It is still in the Workbench’s gallery.'
+      'It comes off the Workbench’s gallery too.'
     ])
+    expect(
+      usageNotes(['a', 'b'], { a: ref({ workbench: true }), b: ref({ workbench: true }) })
+    ).toEqual(['2 of these come off the Workbench’s gallery too.'])
   })
 
   it('says how many Backups keep a single image', () => {

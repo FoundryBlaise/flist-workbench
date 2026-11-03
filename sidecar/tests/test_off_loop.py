@@ -459,7 +459,7 @@ MCP_WORK = {
     "an export for Upload": (
         _zip,
         "character",
-        "export_restore_zip",
+        "export_upload_zip",
         {"character": NAME, "path": "{exports}"},
     ),
     "a Foreign search of the Logs": (

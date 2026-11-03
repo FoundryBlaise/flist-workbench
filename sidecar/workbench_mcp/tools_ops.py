@@ -38,12 +38,10 @@ from refusals import INTERNAL_ERROR
 from services import jobs
 
 from ._context import (
-    WORKBENCH,
     ToolError,
     audit,
     resolve_character,
     resolve_ingest_scope,
-    resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 
@@ -414,10 +412,8 @@ def wipe_search_index(confirm: bool = False) -> dict[str, Any]:
 
 
 @tool(tags=TAG_CHARACTER, title="Export for upload to F-list")
-def export_restore_zip(
-    character: str, path: str, source: str = WORKBENCH
-) -> dict[str, Any]:
-    """Save the ZIP the user uploads to F-list themselves.
+def export_upload_zip(character: str, path: str) -> dict[str, Any]:
+    """Save the Workbench as the ZIP the user uploads to F-list themselves.
 
     This is the hand-off point. The app does not publish anything:
     the user opens f-list.net in their browser and uploads this file
@@ -427,13 +423,12 @@ def export_restore_zip(
     import zip_serialise
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, source)
     # Payload and images in one step under the character's lock, as the
-    # window's export does.
+    # window's export does. Live is never an Upload source; it stands in
+    # only for a character that has no Workbench yet, which would hold
+    # the same profile.
     with archive_registry.character_lock(target.id):
-        payload = archive_workbench.export_payload(
-            target.id, from_live=resolved.is_live
-        )
+        payload = archive_workbench.export_payload(target.id)
         if payload is None:
             raise ToolError(
                 "no_live",
@@ -447,7 +442,7 @@ def export_restore_zip(
             avatar_path=archive_images.avatar_path_for(target.name),
         )
     written = _write_file(path, data, suffix=".zip")
-    audit("export_restore_zip", character=target.name, path=str(written))
+    audit("export_upload_zip", character=target.name, path=str(written))
     return {
         "character": target.name,
         "path": str(written),
@@ -509,14 +504,14 @@ def get_extension_pairing_status() -> dict[str, Any]:
     F-list. Pairing is accepted by the user in the app window and
     cannot be done from here.
     """
-    import restore as restore_svc
+    from services import upload as upload_service
 
-    paired = restore_svc.is_paired()
+    paired = upload_service.is_paired()
     return {
         "paired": paired,
         "note": (
-            "The extension can fetch backups from this Workbench and "
-            "restore them to F-list."
+            "The extension can fetch the Workbench or a Backup and "
+            "upload it to F-list."
             if paired
             else "Not paired. The user pairs it from the extension; "
             "Workbench then shows an accept prompt. That has to be a "
