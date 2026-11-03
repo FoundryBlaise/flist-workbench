@@ -265,7 +265,7 @@ async def test_moving_images_to_the_trash_and_back_is_announced(client) -> None:
         lambda: client.post(f"{IMAGES}/trash", json={"image_ids": [image_id]})
     )
     restored = await published(
-        lambda: client.post(f"{TRASH}/restore", json={"image_ids": [image_id]})
+        lambda: client.post(f"{TRASH}/put-back", json={"image_ids": [image_id]})
     )
 
     assert counts(trashed)["images-changed"] == 1, trashed
@@ -379,7 +379,7 @@ async def test_moving_a_backup_to_the_trash_and_back_is_announced(client) -> Non
     trashed = await published(lambda: client.delete(f"{BACKUPS}/{filename}"))
     [entry] = client.get(TRASH).json()["backups"]
     restored = await published(
-        lambda: client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]})
+        lambda: client.post(f"{TRASH}/backups/put-back", json={"ids": [entry["id"]]})
     )
 
     assert counts(trashed)["backups-changed"] == 1, trashed

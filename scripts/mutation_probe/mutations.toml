@@ -327,7 +327,7 @@ breaks = "Moving images to or from the Trash publishes no change event, so the i
 tests = ["@archive", "@mcp"]
 audit = "killed"
 spec = 4
-# audit: M14 trash/restore no longer announce images-changed
+# audit: M14 trash/put-back no longer announce images-changed
 # Killed since spec #4 (#67, test_writer_events.py); re-measured on spec/4-review-fixes.
 find = '''
     events.publish(events.IMAGES_CHANGED, character_id=str(character_id))'''
