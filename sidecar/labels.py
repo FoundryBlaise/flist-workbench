@@ -6,7 +6,7 @@ Rules are recomputed at every read against the current settings, so
 changing the threshold is instant; no DB rebuild needed.
 
 Resolver precedence:
-    1. system line (ad, roll, warn, event)  -> OOC  (rule:system)
+    1. system line (ad, roll, warn, event)  -> no Label (None)
     2. DB label (model or manual)           -> stored row's label
     3. empty body                           -> OOC  (rule:empty)
     4. text_len < settings.threshold_chars  -> OOC  (rule:short)
@@ -17,7 +17,8 @@ Resolver precedence:
 the speaker name the parser puts in front.
 
 Case 6 is what `services.classification` hands to the connected model,
-and what `chunker` refuses to index.
+and what `chunker` refuses to index. Case 1 is in none of the counts,
+batches or chunks: a Label is a verdict on a message a person wrote.
 
 Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
 so users can wipe it without losing their drafts and the ingest job can
@@ -643,25 +644,30 @@ def _written_text(msg: dict) -> str:
     return text
 
 
+def is_system_line(msg: dict) -> bool:
+    """An ad, roll, warning or status event: F-Chat wrote it, not a
+    person, so it never gets a Label."""
+    return msg.get("kind") == "system"
+
+
 def resolve(
     msg: dict,
     db_label: sqlite3.Row | dict | None,
     settings: LabelsSettings,
-) -> str:
-    """Return the effective label for a message.
+) -> str | None:
+    """Return the effective label for a message, None for a system line.
 
     `db_label` is the explicit-labels row keyed by `msg_hash(msg)`, or
     None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
     matching what `parser.parse_log` yields.
 
-    Precedence: a system line (ad, roll, warning, status event) is OOC
-    before anything else, because a Label is a verdict on a message a
-    person wrote and system lines never get one; then an explicit DB
-    label wins; otherwise rules (empty / short / `((` prefix) decide;
-    otherwise "Unlabeled".
+    Precedence: a system line (ad, roll, warning, status event) has no
+    Label before anything else, because a Label is a verdict on a
+    message a person wrote; then an explicit DB label wins; otherwise
+    rules (empty / short / `((` prefix) decide; otherwise "Unlabeled".
     """
-    if msg.get("kind") == "system":
-        return LABEL_OOC
+    if is_system_line(msg):
+        return None
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
         return db_label["label"]
@@ -959,6 +965,8 @@ def fill_unlabeled(
     decided_by_rules = 0
     total = 0
     for msg in messages:
+        if is_system_line(msg):
+            continue
         total += 1
         h = msg_hash(msg)
         if h in by_hash:
@@ -1051,7 +1059,8 @@ def stats(
     messages: Iterable[dict],
     settings: LabelsSettings,
 ) -> dict[str, int]:
-    """Count IC / OOC / Unlabeled across the supplied messages.
+    """Count IC / OOC / Unlabeled across the supplied messages. System
+    lines have no Label, so they are in none of the counts.
 
     Caller passes the already-parsed messages of a conversation (we
     don't re-walk the binary log, and its whole alias group is in
@@ -1064,7 +1073,8 @@ def stats(
     counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
         lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
-        counts[lab] = counts.get(lab, 0) + 1
+        if lab is not None:
+            counts[lab] = counts.get(lab, 0) + 1
     return counts
 
 

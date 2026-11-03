@@ -134,7 +134,8 @@ def collect_pending(
 
     A message is skipped when it already has a stored verdict, from
     whichever of the user's Logs it was labelled in (ADR 0004), or when
-    the rules resolve it without help. `cursor` is an index into the
+    the rules resolve it without help. A system line has no Label and is
+    in none of the counts. `cursor` is an index into the
     conversation, so a caller can walk a long log in batches without
     re-reading what it already judged.
     """
@@ -146,6 +147,8 @@ def collect_pending(
     pending_indices: list[tuple[int, str]] = []
 
     for idx, msg in enumerate(msgs):
+        if labels_store.is_system_line(msg):
+            continue
         h = labels_store.msg_hash(msg)
         if h in by_hash:
             already_labelled += 1

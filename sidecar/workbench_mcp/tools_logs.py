@@ -115,8 +115,9 @@ def read_log_messages(
     """Messages from one conversation, oldest first, at most 200 a page.
 
     Each message carries its `hash` (needed to set a label) and its
-    resolved IC/OOC Label. `labels` filters to any of IC, OOC or
-    Unlabeled. Long conversations run to tens of thousands of messages
+    resolved IC/OOC Label; a system line (ad, roll, warning, status
+    event) has `label: null` and is left out when `labels` is given.
+    `labels` filters to any of IC, OOC or Unlabeled. Long conversations run to tens of thousands of messages
     — page with `offset`.
     """
     conv = resolve_conversation(character, partner)
@@ -130,7 +131,7 @@ def read_log_messages(
 
     resolved = []
     for item in label_service.label_messages(character, partner, messages):
-        if wanted and item.label.lower() not in wanted:
+        if wanted and (item.label is None or item.label.lower() not in wanted):
             continue
         msg = item.message
         entry: dict[str, Any] = {

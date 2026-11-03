@@ -173,13 +173,13 @@ def rollup() -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class LabelledMessage:
-    """One message with the Label it resolves to. `stored` is its
-    stored Label row (`labels.LABEL_COLUMNS`), None when a rule decides
-    or nothing does."""
+    """One message with the Label it resolves to, None for a system
+    line. `stored` is its stored Label row (`labels.LABEL_COLUMNS`),
+    None when a rule decides or nothing does."""
 
     message: dict
     hash: str
-    label: str
+    label: str | None
     stored: dict | None
 
 
@@ -188,19 +188,22 @@ def label_messages(
 ) -> list[LabelledMessage]:
     """Resolve each of `messages` from one conversation to IC, OOC or
     Unlabeled, live: a stored Label first, then the rules at the current
-    threshold."""
+    threshold. A system line resolves to no Label."""
     messages = list(messages)
     with _store() as (conn, settings):
         by_hash = labels_store.labels_for_messages(conn, messages)
         out = []
         for msg in messages:
             h = labels_store.msg_hash(msg)
-            row = by_hash.get(h)
+            label = labels_store.resolve(msg, by_hash.get(h), settings)
+            # A row left on a system line from before they had no Label
+            # decides nothing, so it is not shown either.
+            row = by_hash.get(h) if label is not None else None
             out.append(
                 LabelledMessage(
                     message=msg,
                     hash=h,
-                    label=labels_store.resolve(msg, row, settings),
+                    label=label,
                     stored=dict(row) if row is not None else None,
                 )
             )
