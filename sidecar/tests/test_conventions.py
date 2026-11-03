@@ -78,10 +78,11 @@ def ui_sources() -> list[str]:
 
 
 def user_docs() -> list[str]:
-    """Docs a user reads to learn the app: the overview and the install
-    guide every release links to. Design records and plans are history
-    and keep the words of their day."""
-    return ["docs/OVERVIEW.md", "docs/INSTALL_WINDOWS.md"]
+    """Docs a user reads to learn the app: the overview, the install
+    guide every release links to, and the guide to connecting a model.
+    Design records and plans are history and keep the words of their
+    day."""
+    return ["docs/OVERVIEW.md", "docs/INSTALL_WINDOWS.md", "docs/MCP.md"]
 
 
 @cache
