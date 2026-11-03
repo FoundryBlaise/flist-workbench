@@ -78,10 +78,11 @@ def ui_sources() -> list[str]:
 
 
 def user_docs() -> list[str]:
-    """Docs a user reads to learn the app: the overview and the install
-    guide every release links to. Design records and plans are history
-    and keep the words of their day."""
-    return ["docs/OVERVIEW.md", "docs/INSTALL_WINDOWS.md"]
+    """Docs a user reads to learn the app: the overview, the install
+    guide every release links to, and the guide to connecting a model.
+    Design records and plans are history and keep the words of their
+    day."""
+    return ["docs/OVERVIEW.md", "docs/INSTALL_WINDOWS.md", "docs/MCP.md"]
 
 
 @cache
@@ -467,17 +468,11 @@ VERDICT_ALLOWED: dict[str, int] = {
     "renderer/src/features/logs/LogViewer.tsx": 5,
     "renderer/src/features/settings/SettingsModal.tsx": 1,
     "sidecar/labels.py": 3,
-    "sidecar/workbench_mcp/tools_classify.py": 15,
-    "sidecar/workbench_mcp/tools_logs.py": 4,
-    "sidecar/workbench_mcp/tools_ops.py": 1,
-    "sidecar/workbench_mcp/tools_rag.py": 2,
 }
 
 CLASSIFICATION_ALLOWED: dict[str, int] = {
     "sidecar/labels.py": 2,
     "sidecar/services/retrieval.py": 1,
-    "sidecar/workbench_mcp/tools_classify.py": 2,
-    "sidecar/workbench_mcp/tools_ops.py": 1,
 }
 
 TRANSCRIPT_ALLOWED: dict[str, int] = {}

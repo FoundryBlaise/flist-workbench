@@ -54,7 +54,7 @@ DEFAULT_THRESHOLD_CHARS = 200
 # Classifier prompt, lifted from Chat_RAG/classify.py (German RP).
 # Workbench no longer runs a classifier itself; this and the two
 # presets below are handed to the connected MCP client through
-# `get_classification_guidelines` so its verdicts stay comparable with
+# `get_labelling_guidelines` so its Labels stay comparable with
 # everything labelled before the migration.
 DEFAULT_SYSTEM_PROMPT = """Du bist ein Klassifikator für deutschsprachige Roleplay-Chat-Logs aus F-Chat.
 Klassifiziere die ZIELNACHRICHT zwingend als "IC" (in-character) oder "OOC" (out-of-character).

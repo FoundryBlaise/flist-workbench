@@ -333,7 +333,7 @@ def resolve_log_character(character: str, *, required: bool = True) -> str:
     Windows, so `lady amber blaise` opens the right directory. The
     `labels` and `partner_aliases` tables are keyed on the string the
     caller passed and match it exactly, so the same call finds no
-    verdicts and no alias group. The result is not an error but a
+    Labels and no alias group. The result is not an error but a
     plausible-looking count with `ic: 0` and every judged message back in
     `unlabeled`. Resolving once, here, keeps both halves in agreement.
 

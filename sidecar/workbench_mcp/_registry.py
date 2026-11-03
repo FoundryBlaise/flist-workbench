@@ -1,12 +1,13 @@
-"""Tool registry shared by the three MCP sub-servers.
+"""Tool registry shared by the MCP endpoints.
 
 The reference MCP SDK has no notion of tags, so tools declare theirs
 here and `build_mcp_servers()` filters on them. The indirection buys
 two things:
 
-* three endpoints (`/mcp`, `/mcp/character`, `/mcp/logs`) built from
-  exactly one implementation of every tool — small local models choke
-  on a 70-tool list, so the narrow endpoints exist;
+* four endpoints (`/mcp`, `/mcp/character`, `/mcp/logs`,
+  `/mcp/classify`) built from exactly one implementation of every
+  tool — small local models choke on a long tool list, so the
+  narrow endpoints exist;
 * a single place that enforces the house style from
   docs/MCP_DESIGN.md §7: every tool carries annotations, and every
   destructive tool takes a `confirm` flag. Registering one without it
@@ -45,10 +46,10 @@ TAG_LOGS = "logs"
 #: Tag for tools every endpoint should carry (status, help, settings).
 TAG_CORE = "core"
 #: The IC/OOC labelling loop and nothing else. Its own endpoint exists
-#: because tool schemas are not free: 29 tools on /mcp/logs cost ~5800
-#: tokens of context before a single message is judged, and a client
+#: because tool schemas are not free: /mcp/logs's tools fill much of a
+#: small context before a single message is judged, and a client
 #: running the loop at 12k context could not fit one batch alongside
-#: them. Eight tools cost a quarter of that.
+#: them. The loop's own few tools leave room for one.
 TAG_CLASSIFY = "classify"
 #: Served on `/mcp` only, which carries every tool whatever its tags:
 #: blunt tools a narrow endpoint's model should not be offered.

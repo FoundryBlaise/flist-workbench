@@ -59,7 +59,7 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 async def test_guidelines_come_with_the_workflow(conversation) -> None:
     async with mcp_client("logs") as session:
-        _, body = await call_tool(session, "get_classification_guidelines")
+        _, body = await call_tool(session, "get_labelling_guidelines")
     assert body["id"] == "de-default"
     assert "Klassifikator" in body["guidelines"]
     # The rules already applied must be stated, or the model will
@@ -70,9 +70,9 @@ async def test_guidelines_come_with_the_workflow(conversation) -> None:
 
 async def test_guidelines_available_in_english_and_minimal(conversation) -> None:
     async with mcp_client("logs") as session:
-        _, en = await call_tool(session, "get_classification_guidelines", language="en")
+        _, en = await call_tool(session, "get_labelling_guidelines", language="en")
         _, minimal = await call_tool(
-            session, "get_classification_guidelines", language="minimal"
+            session, "get_labelling_guidelines", language="minimal"
         )
     assert en["id"] == "en-default"
     assert minimal["id"] == "minimal"
@@ -81,7 +81,7 @@ async def test_guidelines_available_in_english_and_minimal(conversation) -> None
 async def test_an_unknown_language_lists_the_options(conversation) -> None:
     async with mcp_client("logs") as session:
         result, _ = await call_tool(
-            session, "get_classification_guidelines", language="klingon"
+            session, "get_labelling_guidelines", language="klingon"
         )
     text = tool_error_text(result)
     assert "validation_failed" in text
