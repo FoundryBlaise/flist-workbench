@@ -143,6 +143,11 @@ export function sortUnifiedKinks(
 
 export type Buckets = Record<KinkChoice, UnifiedKink[]>
 
+/** The assigned choices, in the order their columns appear. Undecided
+ *  is not a column: the editor shows it as a separate pool, the Foreign
+ *  view not at all. */
+export const KINK_BUCKET_ORDER: readonly KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
+
 export function bucketByChoice(list: UnifiedKink[]): Buckets {
   const buckets: Buckets = { fave: [], yes: [], maybe: [], no: [], undecided: [] }
   for (const entry of list) buckets[entry.choice].push(entry)

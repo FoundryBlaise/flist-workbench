@@ -5627,6 +5627,17 @@ body {
 .foreign-kinks-pane .kink-row-readonly {
   cursor: default;
 }
+/* The editor's read-only rows still take focus on a click. Nothing here
+   acts on a focused row, so it keeps the resting or hover look. */
+.foreign-kinks-pane .kink-row-readonly:focus {
+  background: var(--panel);
+  border-color: var(--border);
+  box-shadow: none;
+}
+.foreign-kinks-pane .kink-row-readonly:focus:hover {
+  background: var(--panel-2);
+  border-color: var(--text-dim);
+}
 
 /* ---- images ---- */
 
