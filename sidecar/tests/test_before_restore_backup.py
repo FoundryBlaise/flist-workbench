@@ -2,10 +2,11 @@
 
 Restore, reset to Live, the MCP tool that loads a Backup and the one
 that replaces the raw payload each throw away every edit in the
-Workbench at once. So each of them first saves
-the Workbench as a Backup (source `workbench`, occasion
-`before-restore`), always, and replaces nothing when that Backup cannot
-be written (ADR 0003). Undoing any of them is then a Restore away.
+Workbench at once. So each of them first saves the Workbench as a
+Backup (source `workbench`; occasion `before-restore`, or
+`before-replace` for the raw payload), always, and replaces nothing
+when that Backup cannot be written (ADR 0003). Undoing any of them is
+then a Restore away.
 
 Driven from outside: the window's routes and the MCP tools.
 """
@@ -94,12 +95,14 @@ async def _parked_backup(window) -> str:
     return res.json()["filename"]
 
 
-def _before_restore(window, previous: list[dict]) -> dict:
-    """The one Backup made since `previous`, checked to be a
-    before-restore Backup of the Workbench."""
+def _before_restore(
+    window, previous: list[dict], occasion: str = "before-restore"
+) -> dict:
+    """The one Backup made since `previous`, checked to be a Backup of
+    the Workbench kept on `occasion`."""
     known = {b["filename"] for b in previous}
     [made] = [b for b in _backups(window) if b["filename"] not in known]
-    assert (made["source"], made["occasion"]) == ("workbench", "before-restore")
+    assert (made["source"], made["occasion"]) == ("workbench", occasion)
     return made
 
 
@@ -200,7 +203,9 @@ async def test_replacing_the_payload_keeps_the_workbench_it_replaces(
     result, body = await _put_payload(PARKED)
     assert not result.isError, body
 
-    made = _before_restore(window, previous_backups)
+    # Its own occasion: the window names it, so the user can tell a
+    # model's raw replacement from a Restore of theirs.
+    made = _before_restore(window, previous_backups, "before-replace")
     assert body["kept_as"] == made["filename"]
     assert _held(window, made["filename"]) == previous_workbench
     assert _workbench(window)["character"]["description"] == PARKED

@@ -116,15 +116,42 @@ def test_turning_the_reranker_off_keeps_its_weights(models: Path) -> None:
     assert DEFAULT_RERANK in _folders(models)
 
 
-def test_the_embedding_weights_stay_while_a_job_holds_the_index(models: Path) -> None:
+def test_the_embedding_weights_wait_for_the_job_holding_the_index(models: Path) -> None:
     """An ingest embeds every batch with the model it started with;
-    removing it underneath would only download it again."""
+    removing it underneath would only download it again. Once the job
+    lets go of the Index, the weights go."""
     with jobs.registry().hold("ingest", index.INDEX, busy=IndexBusy):
         settings_service.update(
             {"rag.embed_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"}
         )
+        assert DEFAULT_EMBED in _folders(models)
 
+    assert DEFAULT_EMBED not in _folders(models)
+
+
+def test_a_removal_held_back_by_a_running_ingest_runs_when_it_ends(models: Path) -> None:
+    import threading
+
+    let_go = threading.Event()
+    job = jobs.registry().start(
+        "ingest", index.INDEX, lambda job: let_go.wait(10) and None, busy=IndexBusy
+    )
+    settings_service.update(
+        {"rag.embed_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"}
+    )
     assert DEFAULT_EMBED in _folders(models)
+
+    let_go.set()
+    _wait_until(lambda: job.finished and DEFAULT_EMBED not in _folders(models))
+
+
+def _wait_until(done) -> None:  # noqa: ANN001
+    import time
+
+    deadline = time.monotonic() + 10
+    while not done():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.02)
 
 
 def test_a_removal_that_did_not_finish_is_finished_on_the_next_switch(
@@ -146,3 +173,43 @@ def test_weights_another_model_shares_with_the_current_one_stay(models: Path) ->
     settings_service.update({"rag.embed_model": "nomic-ai/nomic-embed-text-v1.5-Q"})
 
     assert shared in _folders(models)
+
+
+# ---- at start ----------------------------------------------------------------
+
+
+def _start_the_sidecar() -> None:
+    import importlib
+
+    import server
+    from sidecar_client import app_client
+
+    importlib.reload(server)
+    with app_client(server.app):
+        pass
+
+
+def test_at_start_the_weights_the_settings_do_not_name_go(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Weights left by an earlier version, or by a switch whose removal
+    could not finish, go the next time the app starts."""
+    monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    _fake_weights(models, MPNET_EMBED)
+    _fake_weights(models, BGE_RERANK)
+    (models / "my-own-model").mkdir()
+
+    _start_the_sidecar()
+
+    assert _folders(models) == {DEFAULT_EMBED, DEFAULT_RERANK, "my-own-model"}
+
+
+def test_at_start_a_reranker_turned_off_keeps_its_weights(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FLIST_WORKBENCH_OFFLINE_STARTUP", "1")
+    settings_service.update({"rag.rerank_model": "disabled"})
+
+    _start_the_sidecar()
+
+    assert DEFAULT_RERANK in _folders(models)

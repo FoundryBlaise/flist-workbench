@@ -3,7 +3,7 @@
 `search_logs_semantic` is the tool that makes "what did I tell her
 about my sister" answerable. It returns chunks of the user's own logs;
 the connected model reads them and answers. No language model runs in
-Workbench — see the module docstring in `services/retrieval.py`.
+the app — see the module docstring in `services/retrieval.py`.
 """
 
 from __future__ import annotations
@@ -11,7 +11,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ._context import ToolError, resolve_conversation, resolve_log_character
+from ._context import (
+    ToolError,
+    clamp_limit,
+    page_info,
+    resolve_conversation,
+    resolve_log_character,
+)
 from ._registry import TAG_CORE, TAG_LOG_TEXT, TAG_LOGS, tool
 
 #: The most matches one search returns: each is a whole chunk of text,
@@ -68,7 +74,7 @@ def search_logs_semantic(
         import rag as rag_settings
 
         top_k = rag_settings.load_settings().top_k
-    size = max(1, min(MAX_SEMANTIC_HITS, int(top_k)))
+    size = clamp_limit(top_k, MAX_SEMANTIC_HITS)
     start = max(0, int(offset))
     try:
         result = retrieval.search(
@@ -85,19 +91,22 @@ def search_logs_semantic(
         raise ToolError(
             "embedding_failed",
             f"The embedding model could not be used: {exc}. It runs "
-            "inside Workbench and downloads itself on first use, so "
+            "inside the app and downloads itself on first use, so "
             "this is usually a download problem rather than a setting.",
         ) from exc
 
     payload = result.to_dict()
     payload["question"] = question
     matches = sum(1 for hit in result.hits if not hit.expanded)
-    payload["page"] = {
-        "offset": start,
-        "limit": size,
-        "returned": matches,
-        "next_offset": start + matches if result.has_more else None,
-    }
+    # Ranking stops one past the page, so the matches beyond it are not
+    # counted: `total` is unknown.
+    payload["page"] = page_info(
+        offset=start,
+        limit=size,
+        returned=matches,
+        total=None,
+        next_offset=start + matches if result.has_more else None,
+    )
     if not payload["hits"]:
         payload["note"] = (
             "Nothing matched. Either this hasn't been ingested yet "

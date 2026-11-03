@@ -50,6 +50,10 @@ from ._registry import TAG_CHARACTER, TAG_CLASSIFY, TAG_CORE, TAG_LOGS, tool
 #: pull; a full-corpus ingest can run far longer.
 WAIT_BUDGET_SEC = 600
 
+#: How many numbered names an export into a folder tries before giving
+#: up with an `exists` refusal.
+_MAX_NAME_TRIES = 100
+
 
 # --------------------------------------------------------------------
 # F-list
@@ -285,7 +289,7 @@ async def ingest_logs(
 
     Only messages with an IC or OOC Label are indexed;
     `skipped_unlabeled` counts the rest, and a high number means
-    get_messages_to_classify should run first. OOC is left out: pass
+    get_unlabeled_messages should run first. OOC is left out: pass
     include_ooc=true on every ingest to keep OOC chunks.
     Channel Logs are left out unless `include_channels=true`, as in
     list_partners: group chat buries a character's roleplay.
@@ -350,7 +354,7 @@ def _ingest_summary(job: dict[str, Any]) -> dict[str, Any]:
         out["note"] = (
             f"{out['skipped_unlabeled']} message(s) were skipped for "
             "having no IC/OOC Label — they aren't searchable. Label them "
-            "(get_messages_to_classify, set_message_labels) and ingest "
+            "(get_unlabeled_messages, set_message_labels) and ingest "
             "again to include them."
         )
     return out
@@ -449,8 +453,8 @@ def export_upload_zip(character: str, path: str) -> dict[str, Any]:
         "bytes": len(data),
         "next_step": (
             "The user uploads this in their browser — f-list.net with "
-            "the FlistCharExporter userscript, or the paired Workbench "
-            "extension. The app cannot do it for them."
+            "the FlistCharExporter userscript, or the paired extension. "
+            "The app cannot do it for them."
         ),
     }
 
@@ -491,11 +495,6 @@ def _write_file(path: str, data: bytes, *, suffix: str) -> Path:
         ) from exc
 
 
-#: How many numbered names an export into a folder tries before giving
-#: up with an `exists` refusal.
-_MAX_NAME_TRIES = 100
-
-
 @tool(tags=TAG_CORE, title="Extension pairing status", read_only=True)
 def get_extension_pairing_status() -> dict[str, Any]:
     """Whether the browser extension is paired with the app.
@@ -514,7 +513,7 @@ def get_extension_pairing_status() -> dict[str, Any]:
             "upload it to F-list."
             if paired
             else "Not paired. The user pairs it from the extension; "
-            "Workbench then shows an accept prompt. That has to be a "
+            "the app window then asks them to accept. That has to be a "
             "human action."
         ),
     }
@@ -578,6 +577,9 @@ def update_settings(
     stored. An empty model name resets it to the default. The window
     shows the change at once. Changing `embed_model` invalidates the
     search index: it was built with the old model's vectors.
+
+    Changing `embed_model` or `rerank_model` deletes the old model's
+    weights from disk; choosing it again downloads them again.
     """
     from services import settings as settings_service
 

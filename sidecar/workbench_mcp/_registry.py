@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,6 +39,8 @@ from refusals import Refusal
 from services import events
 
 from ._context import ToolError, confirm_required
+
+log = logging.getLogger(__name__)
 
 #: Tag applied to tools that belong on the character-editing endpoint.
 TAG_CHARACTER = "character"
@@ -60,14 +63,18 @@ TAG_FULL = "full"
 #: out of every endpoint until the user turns them on in Settings → MCP.
 TAG_LOG_TEXT = "log_text"
 
+#: How a change reaches F-list, said by both notes below: the single
+#: most important thing a connected model must not get wrong.
+_USER_UPLOADS = "The user uploads changes themselves, in the browser."
+
 #: Added to the result of every tool not marked read-only. A model that
 #: has just changed something tends to report it as done, and "done"
 #: must never mean "on F-list": the app does not publish.
 NOT_PUBLISHED = "not_published"
-NOT_PUBLISHED_NOTE = (
-    "Nothing was published to F-list. The user uploads changes "
-    "themselves, in the browser."
-)
+NOT_PUBLISHED_NOTE = f"Nothing was published to F-list. {_USER_UPLOADS}"
+
+#: Said by reads that show profile data, as their `note`.
+NO_PUSH_NOTE = f"The app never writes to f-list.net. {_USER_UPLOADS}"
 
 
 @dataclass(frozen=True)
@@ -78,8 +85,6 @@ class ToolSpec:
     tags: frozenset[str]
     annotations: ToolAnnotations
     structured_output: bool | None = None
-    #: For a tool that asks for `confirm` only sometimes: when, in words.
-    confirm_when: str | None = None
 
 
 _TOOLS: list[ToolSpec] = []
@@ -165,7 +170,6 @@ def tool(
                     openWorldHint=open_world,
                 ),
                 structured_output=structured_output,
-                confirm_when=confirm_when,
             )
         )
         return fn
@@ -216,7 +220,7 @@ def _warning_text(
         try:
             return warning(**arguments)
         except Exception:  # noqa: BLE001
-            pass
+            log.warning("%s: its warning could not be worded", tool_name, exc_info=True)
     return f"{tool_name} can lose the user's work."
 
 

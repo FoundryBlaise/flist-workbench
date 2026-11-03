@@ -1,5 +1,5 @@
 // A deleted Backup lands in the Trash beside the images. The Trash view
-// lists it under its user-set name and restores it, and the restored
+// lists it under its user-set name and puts it back, and the one put back
 // Backup is back in the Backup list.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -58,7 +58,7 @@ beforeEach(() => {
     .on(`GET ${CHAR}/trash`, () =>
       json({ character_id: CID, items: [], backups: trashedBackups })
     )
-    .on(`POST ${CHAR}/trash/backups/restore`, () => {
+    .on(`POST ${CHAR}/trash/backups/put-back`, () => {
       trashedBackups = []
       backups = [BACKUP_ROW]
       return json({ restored: [FILE], not_found: [], conflicts: [] })
@@ -73,7 +73,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('a trashed Backup is listed under its name and restored to the Backup list', async () => {
+it('a trashed Backup is listed under its name and put back in the Backup list', async () => {
   render(<ImagesTab characterId={CID} />)
   await waitFor(() =>
     expect(screen.getByTestId('flist-images-trash-toggle').textContent).toBe('Trash (1)')
@@ -82,10 +82,10 @@ it('a trashed Backup is listed under its name and restored to the Backup list', 
 
   const [row] = await screen.findAllByTestId('flist-trash-backup-item')
   expect(row.textContent).toContain('Before the big rewrite')
-  fireEvent.click(within(row).getByRole('button', { name: /restore/i }))
+  fireEvent.click(within(row).getByRole('button', { name: /put back/i }))
 
   await waitFor(() =>
-    expect(fake.requestsTo(`POST ${CHAR}/trash/backups/restore`)[0]?.body).toEqual({
+    expect(fake.requestsTo(`POST ${CHAR}/trash/backups/put-back`)[0]?.body).toEqual({
       ids: [FILE]
     })
   )

@@ -237,7 +237,7 @@ async def test_pull_character_creates_a_character_it_has_not_seen(
         result, body = await call_tool(session, "pull_character", character=NAME)
         assert not result.isError, body
         assert body["character_id"] == str(CID)
-        _, live = await call_tool(session, "get_live_profile", character=NAME)
+        _, live = await call_tool(session, "get_workbench", character=NAME, source="live")
     assert (archive_registry.root() / NAME).is_dir()
     assert live["character"] == NAME
 

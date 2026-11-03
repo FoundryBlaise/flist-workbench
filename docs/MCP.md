@@ -131,13 +131,13 @@ the switch on; only you can, in the window.
 The full list is under [Tools by endpoint](#tools-by-endpoint). The
 ones worth knowing about:
 
-**Finding your way around** — `get_workbench_status` first, then
+**Finding your way around** — `get_app_status` first, then
 `list_characters`.
 
 **Reading a profile** — `get_workbench` (the Workbench by section,
 or Live with `source="live"`), `get_description` (pages through a long
-one), `list_profile_fields`, `list_kinks`, `list_images`,
-`get_live_profile`.
+one), `list_profile_fields`, `list_kinks`, `list_images`. Each
+reads Live with `source="live"` too; Live has no read tool of its own.
 
 **Reading somebody else's profile** — `search_foreign_characters`
 finds a name in the user's bookmarks, friends list or chat logs;
@@ -165,9 +165,10 @@ as base64 and an oversized tool result is refused outright.
 `edit_description` (an exact string replacement, far safer than
 `set_description` on a 30 KB profile), `set_profile_field`,
 `set_kinks`, `add_custom_kink`, `reorder_images`. `diff_workbench`
-says what an Upload would change. `set_description` asks for
-`confirm=true` when the new text is less than half as long as the old,
-so a model cannot blank a description by accident.
+says what an Upload would change. `set_description` and
+`edit_description` ask for `confirm=true` when the description would
+end up less than half as long as it was, so a model cannot blank one
+by accident, with either.
 
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
@@ -224,10 +225,13 @@ of the Workbench first and needs `confirm=true`.
 
 ### How results read
 
-Lists and searches come a page at a time, with a capped `limit`. A
-result that holds back rows carries `page`, and when its
-`page.next_offset` is not null, passing that as `offset` fetches the
-next page.
+Lists and searches come a page at a time, with a capped `limit`: ask
+for more and you get the cap. Every page carries the same `page`:
+`offset`, `limit`, `returned`, `total` (null for the semantic search,
+which cannot count past the page) and `next_offset`. When
+`next_offset` is not null, passing it as `offset` fetches the next
+page. `search_logs` without a partner pages the partners, each with up
+to `hits_per_partner` hits.
 
 Every tool that deletes or replaces something the user would miss is
 marked destructive and refuses to run without `confirm=true`; the
@@ -250,7 +254,7 @@ switch on:
 ```
 get_label_stats(character, partner)          how much is left
 get_labelling_guidelines("de")               the rulebook, once
-get_messages_to_classify(character, partner) a batch, with context
+get_unlabeled_messages(character, partner)   a batch, with context
 set_message_labels(character, partner, [...]) the Labels
                                               repeat while remaining > 0
 ```
@@ -356,7 +360,7 @@ window gets for the same situation:
 | `bbcode_rejected` | the description has BBCode F-list would refuse; the error names the tags |
 | `image_not_found` | no image with that id where the tool looked (`list_trash` shows what the Trash holds) |
 | `etag_mismatch` | the Workbench changed since it was read (`put_workbench_payload` with an old `if_match`); details carry the `current_etag` |
-| `confirm_required` | a destructive tool, or `set_description` cutting the description below half its length; ask the user, then pass `confirm=true` |
+| `confirm_required` | a destructive tool, or `set_description` or `edit_description` cutting the description below half its length; ask the user, then pass `confirm=true` |
 | `workbench_not_kept` | replacing the Workbench (a Restore, or `put_workbench_payload`) needs a Backup of it first, and that Backup could not be written, so nothing was replaced |
 | `backup_too_old` | the Backup comes from before the app stored a loadable profile in it; it can only be downloaded |
 | `window_not_running` | `render_profile_image` needs the app window open |
@@ -381,18 +385,17 @@ switch is off, which is the default: tools marked *Log text, opt-in*
 appear only once you turn it on. A test compares these tables with the
 server, so they cannot drift from it.
 
-### `/mcp`: 67 tools (63 while Log text is off)
+### `/mcp`: 66 tools (62 while Log text is off)
 
 | Tool | What it does |
 |---|---|
-| `get_workbench_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
+| `get_app_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
-| `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
+| `update_settings` | Change settings; switching a model deletes the old one's weights. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
-| `get_workbench` | The Workbench by section; `source="live"` reads Live. |
-| `get_live_profile` | Live: the profile as last pulled from F-list. |
+| `get_workbench` | The Workbench by section; `source="live"` reads Live, the profile as last pulled. |
 | `get_description` | The description in BBCode, a page at a time for a long one. |
 | `list_profile_fields` | Profile fields with their type, allowed options and current value. |
 | `list_kinks` | Kink choices by name, custom kinks included. |
@@ -402,7 +405,7 @@ server, so they cannot drift from it.
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
 | `set_description` | Replace the whole description. Needs `confirm=true` when the new text is under half the old length. |
-| `edit_description` | Replace an exact piece of text in the description. |
+| `edit_description` | Replace an exact piece of text in the description. Needs `confirm=true` when it would leave under half the description. |
 | `set_custom_title` | Set the line under the character's name. |
 | `set_profile_field` | Set one profile field: species, height, orientation and so on. |
 | `clear_profile_field` | Remove a profile field so it does not show. |
@@ -411,7 +414,7 @@ server, so they cannot drift from it.
 | `add_custom_kink` | Add a kink in the user's own words. |
 | `update_custom_kink` | Change a custom kink's name, description or choice. |
 | `delete_custom_kink` | Remove a custom kink. Needs `confirm=true`. |
-| `restore_custom_kink` | Bring back a custom kink delete_custom_kink removed. |
+| `put_back_custom_kink` | Put back a custom kink delete_custom_kink removed. |
 | `reorder_custom_kinks` | Set the order of the custom kinks. |
 | `set_image_description` | Set the caption under a gallery image. |
 | `reorder_images` | Set the order of the gallery. |
@@ -420,7 +423,7 @@ server, so they cannot drift from it.
 | `import_images` | Copy image files from folders the user cleared into the pool, optionally onto the gallery. |
 | `trash_images` | Delete images: off the gallery, out of the pool, into the Trash. |
 | `list_trash` | What the character's Trash holds: images, Backups, cleared Labels. |
-| `restore_image` | Move images from the Trash back into the pool. |
+| `put_back_images` | Put images from the Trash back into the pool. |
 | `create_backup` | Keep a Backup of the Workbench. |
 | `list_backups` | The character's Backups, newest first. |
 | `load_backup_into_workbench` | Restore: load a Backup into the Workbench, keeping a Backup of what it held. Needs `confirm=true`. |
@@ -434,7 +437,7 @@ server, so they cannot drift from it.
 | `get_foreign_kinks` | The kink choices on somebody else's profile. |
 | `list_log_characters` | Which of the user's characters have Logs on this machine. |
 | `list_partners` | Everyone a character has Logs with. |
-| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first. |
+| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first, 200 a page. |
 | `search_logs` | *Log text, opt-in.* Find a word or name in a character's Logs, with one partner or all. |
 | `find_contacts` | Whether the user ever talked to someone, on any character. |
 | `list_aliases` | Partner names linked as the same person. |
@@ -442,7 +445,7 @@ server, so they cannot drift from it.
 | `remove_alias` | Unlink a partner name. Needs `confirm=true`. |
 | `get_label_stats` | How much of a conversation, or of all of them, has an IC/OOC Label. |
 | `get_labelling_guidelines` | The rulebook for labelling a message IC or OOC. |
-| `get_messages_to_classify` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
+| `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
 | `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
@@ -453,18 +456,17 @@ server, so they cannot drift from it.
 | `get_job` | Progress and result of a job started with `wait=false`. |
 | `cancel_job` | Stop a running job; what it already wrote stays. |
 
-### `/mcp/character`: 48 tools
+### `/mcp/character`: 47 tools
 
 | Tool | What it does |
 |---|---|
-| `get_workbench_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
+| `get_app_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
-| `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
+| `update_settings` | Change settings; switching a model deletes the old one's weights. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
-| `get_workbench` | The Workbench by section; `source="live"` reads Live. |
-| `get_live_profile` | Live: the profile as last pulled from F-list. |
+| `get_workbench` | The Workbench by section; `source="live"` reads Live, the profile as last pulled. |
 | `get_description` | The description in BBCode, a page at a time for a long one. |
 | `list_profile_fields` | Profile fields with their type, allowed options and current value. |
 | `list_kinks` | Kink choices by name, custom kinks included. |
@@ -474,7 +476,7 @@ server, so they cannot drift from it.
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
 | `set_description` | Replace the whole description. Needs `confirm=true` when the new text is under half the old length. |
-| `edit_description` | Replace an exact piece of text in the description. |
+| `edit_description` | Replace an exact piece of text in the description. Needs `confirm=true` when it would leave under half the description. |
 | `set_custom_title` | Set the line under the character's name. |
 | `set_profile_field` | Set one profile field: species, height, orientation and so on. |
 | `clear_profile_field` | Remove a profile field so it does not show. |
@@ -483,7 +485,7 @@ server, so they cannot drift from it.
 | `add_custom_kink` | Add a kink in the user's own words. |
 | `update_custom_kink` | Change a custom kink's name, description or choice. |
 | `delete_custom_kink` | Remove a custom kink. Needs `confirm=true`. |
-| `restore_custom_kink` | Bring back a custom kink delete_custom_kink removed. |
+| `put_back_custom_kink` | Put back a custom kink delete_custom_kink removed. |
 | `reorder_custom_kinks` | Set the order of the custom kinks. |
 | `set_image_description` | Set the caption under a gallery image. |
 | `reorder_images` | Set the order of the gallery. |
@@ -492,7 +494,7 @@ server, so they cannot drift from it.
 | `import_images` | Copy image files from folders the user cleared into the pool, optionally onto the gallery. |
 | `trash_images` | Delete images: off the gallery, out of the pool, into the Trash. |
 | `list_trash` | What the character's Trash holds: images, Backups, cleared Labels. |
-| `restore_image` | Move images from the Trash back into the pool. |
+| `put_back_images` | Put images from the Trash back into the pool. |
 | `create_backup` | Keep a Backup of the Workbench. |
 | `list_backups` | The character's Backups, newest first. |
 | `load_backup_into_workbench` | Restore: load a Backup into the Workbench, keeping a Backup of what it held. Needs `confirm=true`. |
@@ -510,17 +512,17 @@ server, so they cannot drift from it.
 
 | Tool | What it does |
 |---|---|
-| `get_workbench_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
+| `get_app_status` | The app's state: version, data folder, F-list session, characters, Logs and Index. Call it first. |
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
-| `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
+| `update_settings` | Change settings; switching a model deletes the old one's weights. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
 | `list_log_characters` | Which of the user's characters have Logs on this machine. |
 | `list_partners` | Everyone a character has Logs with. |
-| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first. |
+| `read_log_messages` | *Log text, opt-in.* Messages from one conversation, oldest first, 200 a page. |
 | `search_logs` | *Log text, opt-in.* Find a word or name in a character's Logs, with one partner or all. |
 | `find_contacts` | Whether the user ever talked to someone, on any character. |
 | `list_aliases` | Partner names linked as the same person. |
@@ -528,7 +530,7 @@ server, so they cannot drift from it.
 | `remove_alias` | Unlink a partner name. Needs `confirm=true`. |
 | `get_label_stats` | How much of a conversation, or of all of them, has an IC/OOC Label. |
 | `get_labelling_guidelines` | The rulebook for labelling a message IC or OOC. |
-| `get_messages_to_classify` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
+| `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
 | `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
@@ -547,7 +549,7 @@ server, so they cannot drift from it.
 | `list_partners` | Everyone a character has Logs with. |
 | `get_label_stats` | How much of a conversation, or of all of them, has an IC/OOC Label. |
 | `get_labelling_guidelines` | The rulebook for labelling a message IC or OOC. |
-| `get_messages_to_classify` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
+| `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |

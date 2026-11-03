@@ -1,6 +1,6 @@
 """The Model Context Protocol server(s) exposed by the sidecar.
 
-Everything the Workbench UI can do is reachable here as a tool, so a
+Everything the app window can do is reachable here as a tool, so a
 local model (LM Studio) or Claude can edit profiles, read logs and
 drive IC/OOC labelling without touching the UI. See docs/MCP_DESIGN.md.
 
@@ -251,7 +251,7 @@ class _TokenGate:
                 {
                     "type": "http.response.body",
                     "body": (
-                        b"This Workbench requires a token on /mcp. It is "
+                        b"F-list Workbench requires a token on /mcp. It is "
                         b"shown in Settings -> MCP; send it as "
                         b"'Authorization: Bearer <token>'."
                     ),

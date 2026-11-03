@@ -123,7 +123,7 @@ def trash_bytes(client: TestClient, item: dict) -> bytes:
 
 def restore(client: TestClient, *trash_ids: str) -> dict:
     return client.post(
-        f"/flist/character/{CID}/trash/restore", json={"image_ids": list(trash_ids)}
+        f"/flist/character/{CID}/trash/put-back", json={"image_ids": list(trash_ids)}
     ).json()
 
 

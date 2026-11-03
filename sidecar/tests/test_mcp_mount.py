@@ -164,7 +164,7 @@ async def test_status_tool_is_listed_on_every_endpoint() -> None:
     for suffix in ("", "character", "logs"):
         async with mcp_client(suffix) as session:
             names = {t.name for t in (await session.list_tools()).tools}
-            assert "get_workbench_status" in names
+            assert "get_app_status" in names
 
 
 async def test_status_tool_reports_the_data_dir(
@@ -189,7 +189,7 @@ async def test_status_tool_reports_the_data_dir(
     importlib.reload(server)
 
     async with mcp_client("") as session:
-        result, body = await call_tool(session, "get_workbench_status")
+        result, body = await call_tool(session, "get_app_status")
         assert not result.isError, body
         assert body["data_dir"] == str(tmp_path)
         assert body["session"]["signed_in"] is False

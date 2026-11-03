@@ -185,7 +185,7 @@ async def test_a_labelled_shared_line_is_not_offered_to_the_other_character(
 
     async with mcp_client("logs") as session:
         _, batch = await call_tool(
-            session, "get_messages_to_classify", character=AMBER, partner=AZURE
+            session, "get_unlabeled_messages", character=AMBER, partner=AZURE
         )
     assert batch["messages"] == []
 

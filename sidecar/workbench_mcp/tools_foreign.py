@@ -144,7 +144,7 @@ async def get_foreign_profile(
 
     This is for looking at how a profile is put together — how the
     BBCode is structured, which infotags are filled, how the kink
-    lists are arranged. Workbench offers no way to copy one of these
+    lists are arranged. The app offers no way to copy one of these
     into the user's own characters, and this tool is not a step
     towards one: there is no Workbench, Backup or export behind it.
 

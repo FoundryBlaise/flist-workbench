@@ -48,6 +48,11 @@ const BACKUPS: FlistZipBackupEntry[] = [
     source: 'workbench',
     occasion: 'before-restore'
   }),
+  backup('2026-10-27T110000Z.zip', {
+    kind: 'manual_single',
+    source: 'workbench',
+    occasion: 'before-replace'
+  }),
   backup(MIGRATION_BACKUP, {
     kind: 'unknown',
     source: 'workbench',
@@ -96,6 +101,7 @@ it('shows what each Backup holds and why it was made', () => {
   expect(originOf('2026-10-29T120000Z.zip')).toBe('Live · Back up all')
   expect(originOf('2026-10-28T120000Z.zip')).toBe('Live · before Upload')
   expect(originOf('2026-10-27T120000Z.zip')).toBe('Workbench · before Restore')
+  expect(originOf('2026-10-27T110000Z.zip')).toBe('Workbench · before replacement')
   expect(originOf('2026-10-26T120000Z.zip')).toBe('Workbench · migration')
 })
 

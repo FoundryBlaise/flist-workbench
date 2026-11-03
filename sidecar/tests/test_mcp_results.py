@@ -231,7 +231,7 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     )
 
 
-@writes("restore_custom_kink")
+@writes("put_back_custom_kink")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     # Only a kink F-list knows can come back; a local one is gone.
     await open_workbench(session)
@@ -242,7 +242,7 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     await _call(
         session, "delete_custom_kink", character=CHAR, kink_id=kink_id, confirm=True
     )
-    return await _call(session, "restore_custom_kink", character=CHAR, kink_id=kink_id)
+    return await _call(session, "put_back_custom_kink", character=CHAR, kink_id=kink_id)
 
 
 @writes("reorder_custom_kinks")
@@ -279,10 +279,10 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     return await _call(session, "trash_images", character=CHAR, image_ids=["7"])
 
 
-@writes("restore_image")
+@writes("put_back_images")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     await _call(session, "trash_images", character=CHAR, image_ids=["7"])
-    return await _call(session, "restore_image", character=CHAR, image_id="7")
+    return await _call(session, "put_back_images", character=CHAR, image_id="7")
 
 
 @writes("add_image")
@@ -590,6 +590,14 @@ def _many_hits(count: int, fchat: Path) -> None:
     )
 
 
+def _a_full_trash(count: int) -> None:
+    """`count` images in the character's Trash."""
+    from services import image_trash
+
+    _many_images(count)
+    image_trash.trash_images("42", [str(9000 + n) for n in range(count)])
+
+
 def _much_activity(count: int) -> None:
     import flist_activity
 
@@ -657,7 +665,53 @@ PAGED: dict[str, Paged] = {
         lambda body: body["events"],
         cap=100,
     ),
+    "list_log_characters": Paged(
+        lambda data_dir: _many_characters(120, data_dir / "fchat"),
+        {},
+        lambda body: body["characters"],
+        cap=100,
+    ),
+    "find_contacts": Paged(
+        lambda data_dir: _many_characters(120, data_dir / "fchat"),
+        {"name": PARTNER},
+        lambda body: body["conversations"],
+        cap=100,
+    ),
+    "list_trash": Paged(
+        lambda _: _a_full_trash(60),
+        {"character": CHAR},
+        lambda body: body["items"] + body["backups"] + body["labels"],
+        cap=50,
+    ),
+    "read_log_messages": Paged(
+        lambda data_dir: _many_hits(250, data_dir / "fchat"),
+        {"character": CHAR, "partner": "Chatterbox"},
+        lambda body: body["messages"],
+        cap=200,
+    ),
 }
+
+#: What every `page` holds, whichever tool answers it.
+PAGE_KEYS = {"offset", "limit", "returned", "total", "next_offset"}
+
+#: Tools that take `limit` or `offset` and page their own way, with
+#: their own tests: the description pages by characters of text, the
+#: labelling loop by its cursor (a judged message drops out of the
+#: list), the semantic search by `top_k` matches.
+OWN_PAGING = {"get_description", "get_unlabeled_messages", "search_logs_semantic"}
+
+
+async def test_every_tool_that_takes_a_limit_or_offset_is_paged_here(
+    scene: Path,
+) -> None:
+    async with mcp_client("") as session:
+        tools = (await session.list_tools()).tools
+    taking = {
+        t.name
+        for t in tools
+        if {"limit", "offset"} & set(t.inputSchema.get("properties", {}))
+    }
+    assert taking - OWN_PAGING == set(PAGED)
 
 
 @pytest.mark.parametrize("tool", sorted(PAGED))
@@ -671,6 +725,7 @@ async def test_a_list_asked_for_too_much_answers_the_cap_and_pages_the_rest(
         body = await _call(session, tool, **paged.arguments, limit=TOO_MANY)
         rows = paged.rows(body)
         assert len(rows) == paged.cap
+        assert set(body["page"]) == PAGE_KEYS
         assert body["page"]["limit"] == paged.cap
         assert body["page"]["next_offset"] == paged.cap
 
@@ -694,8 +749,8 @@ def _row_key(row: Any) -> str:
 
 
 async def test_a_search_of_every_partner_pages_by_partner(scene: Path) -> None:
-    """Without a partner, `limit` caps the hits per partner, and the
-    partners come a page at a time."""
+    """Without a partner, `limit` and `offset` page the partners, and
+    `hits_per_partner` caps the hits each one shows."""
     _many_partners(25, scene / "fchat")
     seen: list[str] = []
     offset = 0
@@ -707,10 +762,13 @@ async def test_a_search_of_every_partner_pages_by_partner(scene: Path) -> None:
                 character=CHAR,
                 query="lighthouse",
                 limit=TOO_MANY,
+                hits_per_partner=TOO_MANY,
                 offset=offset,
             )
             assert len(body["partners"]) <= 10
-            assert body["limit_per_partner"] == 20
+            assert set(body["page"]) == PAGE_KEYS
+            assert body["page"]["limit"] == 10
+            assert body["hits_per_partner"] == 20
             seen += [row["partner"] for row in body["partners"]]
             offset = body["page"]["next_offset"]
     # Antiquill mentions it too, in the shared Logs.
@@ -743,6 +801,7 @@ async def test_a_semantic_search_caps_its_hits_and_pages_the_rest(scene: Path) -
             offset=first["page"]["next_offset"],
         )
 
+    assert set(asked_too_much["page"]) == PAGE_KEYS
     assert asked_too_much["page"]["limit"] == 20
     assert len(asked_too_much["hits"]) == 2
     assert asked_too_much["page"]["next_offset"] is None

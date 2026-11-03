@@ -110,3 +110,53 @@ async def test_no_tool_speaks_a_retired_or_avoided_term(data_dir, suffix: str) -
                 if rx.search(text):
                     found.append(f"{t.name}: {term!r} in {text[:60]!r}")
     assert not found, "\n".join(found)
+
+
+#: The tools that address the Workbench, the editable copy. A bare
+#: "Workbench" never names the app (GLOSSARY.md), so no other tool may
+#: carry the word.
+WORKBENCH_TOOLS = {
+    "get_workbench",
+    "get_workbench_payload",
+    "put_workbench_payload",
+    "diff_workbench",
+    "load_backup_into_workbench",
+}
+
+
+@pytest.mark.parametrize("suffix", list(ENDPOINTS))
+async def test_only_a_tool_addressing_the_workbench_is_named_after_it(
+    data_dir, suffix: str
+) -> None:
+    allow_log_text()
+    async with mcp_client(suffix) as session:
+        names = {t.name for t in (await session.list_tools()).tools}
+    assert {n for n in names if "workbench" in n} <= WORKBENCH_TOOLS
+
+
+#: A Restore loads a Backup into the Workbench (GLOSSARY.md), and only
+#: a tool doing that may say so in its name.
+RESTORE_TOOLS = {"load_backup_into_workbench"}
+
+_RESTORE = re.compile(r"\brestor", re.IGNORECASE)
+_SENTENCE = re.compile(r"(?<=[.;:!?])\s+")
+
+
+@pytest.mark.parametrize("suffix", list(ENDPOINTS))
+async def test_taking_something_out_of_the_trash_is_putting_it_back(
+    data_dir, suffix: str
+) -> None:
+    """Taking something out of the Trash is putting it back, never a
+    Restore: no tool may call it one, in its name or its words."""
+    allow_log_text()
+    async with mcp_client(suffix) as session:
+        tools = (await session.list_tools()).tools
+    found = []
+    for t in tools:
+        if "restore" in t.name and t.name not in RESTORE_TOOLS:
+            found.append(f"{t.name}: names a Restore")
+        for text in (t.title or "", t.description or ""):
+            for sentence in _SENTENCE.split(text):
+                if "trash" in sentence.lower() and _RESTORE.search(sentence):
+                    found.append(f"{t.name}: {sentence.strip()[:80]!r}")
+    assert not found, "\n".join(found)

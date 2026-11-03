@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import archive_backups
 import archive_images
 import archive_workbench
+import backup_origin
 import bbcode_rules
 
 from ._context import (
@@ -28,11 +29,17 @@ from ._context import (
     audit,
     confirm_required,
     load_payload,
+    page,
     resolve_character,
     resolve_workbench,
     workbench_target,
 )
 from ._registry import TAG_CHARACTER, TAG_FULL, tool
+
+#: The most images one import_images call takes.
+MAX_IMPORT_ITEMS = 200
+#: The most Trash entries one list_trash call returns; `offset` pages on.
+MAX_TRASH_ENTRIES = 50
 
 
 def _writable(character: str) -> ResolvedCharacter:
@@ -41,6 +48,12 @@ def _writable(character: str) -> ResolvedCharacter:
     target = resolve_character(character)
     resolve_workbench(target)
     return target
+
+
+def _kept_as(replaced: archive_backups.WorkbenchReplaced) -> str | None:
+    """The file name of the Backup a whole-Workbench replacement kept,
+    or None when there was no Workbench to keep."""
+    return replaced.kept["filename"] if replaced.kept else None
 
 
 def _guard_bbcode(updated: str) -> None:
@@ -62,6 +75,22 @@ def _guard_bbcode(updated: str) -> None:
             "bbcode_rejected",
             bbcode_rules.explain(warnings),
             tags=[w.tag for w in warnings[:10]],
+        )
+
+
+#: When set_description and edit_description ask for `confirm`.
+SHRINK_CONFIRM_WHEN = "the description would end up less than half as long as it was"
+
+
+def _guard_shrink(previous: str, updated: str, confirm: bool, instead: str) -> None:
+    """Refuse a change that leaves less than half the description,
+    unless `confirm`. Measured against the text on disk, under the
+    lock: a much shorter text is a summary written over the original
+    as often as it is a deliberate cut. `instead` names the safer way."""
+    if len(updated) * 2 < len(previous) and not confirm:
+        raise confirm_required(
+            f"The description would go from {len(previous)} characters "
+            f"to {len(updated)}, so most of the text would go. {instead}"
         )
 
 
@@ -128,7 +157,7 @@ def load_backup_into_workbench(
     """
     target = resolve_character(character)
     replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
-    kept = replaced.kept["filename"] if replaced.kept else None
+    kept = _kept_as(replaced)
     audit(
         "load_backup_into_workbench",
         character=target.name,
@@ -150,7 +179,7 @@ def load_backup_into_workbench(
 @tool(
     tags=TAG_CHARACTER,
     title="Replace the description",
-    confirm_when="the new text is less than half as long as the old",
+    confirm_when=SHRINK_CONFIRM_WHEN,
 )
 def set_description(
     character: str,
@@ -175,15 +204,9 @@ def set_description(
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         previous = payload_ops.get_description(payload)
-        # Measured against the text on disk, under the lock: a shorter
-        # text is a summary written over the original as often as it is
-        # a deliberate cut.
-        if len(body) * 2 < len(previous) and not confirm:
-            raise confirm_required(
-                f"The new description is {len(body)} characters long and "
-                f"replaces one of {len(previous)}, so most of the text "
-                "would go. For a targeted change use edit_description."
-            )
+        _guard_shrink(
+            previous, body, confirm, "For a targeted change use edit_description."
+        )
         payload_ops.set_description(payload, body)
         return payload_ops.EditResult(
             etag="",
@@ -204,19 +227,25 @@ def set_description(
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Edit part of the description")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Edit part of the description",
+    confirm_when=SHRINK_CONFIRM_WHEN,
+)
 def edit_description(
     character: str,
     old_string: str,
     new_string: str,
     replace_all: bool = False,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Replace an exact piece of text inside the description.
 
     `old_string` must appear exactly once, or nothing is changed —
     which is the point: it makes a targeted edit safe on a description
     that is tens of kilobytes long. Pass replace_all=true to change
-    every occurrence instead.
+    every occurrence instead. An edit leaving less than half the
+    description needs `confirm=true`.
     """
     from services import payload_ops
 
@@ -245,6 +274,9 @@ def edit_description(
             current.replace(needle, replacement)
             if replace_all
             else current.replace(needle, replacement, 1)
+        )
+        _guard_shrink(
+            current, updated, confirm, "Name a smaller piece in old_string."
         )
         _guard_bbcode(updated)
         payload_ops.set_description(payload, updated)
@@ -595,9 +627,8 @@ def delete_custom_kink(
     """Remove a custom kink from the profile; needs `confirm=true`.
 
     One that already exists on F-list is kept as a tombstone so the
-    upload knows to remove it, and can be brought back with
-    restore_custom_kink. One added locally and never uploaded is
-    dropped for good.
+    upload knows to remove it, and put_back_custom_kink puts it back.
+    One added locally and never uploaded is dropped for good.
     """
     from services import payload_ops
 
@@ -616,12 +647,12 @@ def delete_custom_kink(
         "character": target.name,
         "id": kink_id,
         "outcome": how,
-        "restorable": how == "tombstoned",
+        "can_put_back": how == "tombstoned",
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Restore a deleted custom kink")
-def restore_custom_kink(
+@tool(tags=TAG_CHARACTER, title="Put back a deleted custom kink")
+def put_back_custom_kink(
     character: str,
     kink_id: str,
 ) -> dict[str, Any]:
@@ -631,11 +662,11 @@ def restore_custom_kink(
     target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        touched = payload_ops.restore_custom_kink(payload, kink_id)
+        touched = payload_ops.put_back_custom_kink(payload, kink_id)
         return payload_ops.EditResult(etag="", changed=touched)
 
     _apply(target, mutate)
-    audit("restore_custom_kink", character=target.name, id=kink_id)
+    audit("put_back_custom_kink", character=target.name, id=kink_id)
     return {"character": target.name, "id": kink_id}
 
 
@@ -778,7 +809,7 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     """Delete images: move their files to the character's Trash. An
     image in the Workbench's gallery is taken off it first
     (`off_gallery`); one only in the pool just leaves the pool.
-    `restore_image` brings each back into the pool, not onto the
+    `put_back_images` puts each back into the pool, not onto the
     profile; only the user can empty the Trash, in the window.
 
     To take an image off the profile and keep it, use remove_image. An
@@ -817,29 +848,43 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
 
 
 @tool(tags=TAG_CHARACTER, title="List the Trash", read_only=True)
-def list_trash(character: str) -> dict[str, Any]:
+def list_trash(
+    character: str, limit: int = MAX_TRASH_ENTRIES, offset: int = 0
+) -> dict[str, Any]:
     """What the character's Trash holds, newest first, with when and by
     whom (`ui` or `mcp`): `items` are deleted images, which
-    `restore_image` puts back into the pool by `trash_id` (the image id,
-    unless the Trash holds several files under one id because a Pull
-    replaced it); `backups` are deleted Backups and `labels` are cleared Labels
-    (one entry per clear, with its conversation, or `partner` null for
-    every conversation, and how many Labels it holds), both of which the
-    user restores in the window. Emptying the Trash is the user's job,
-    in the window."""
+    `put_back_images` puts back into the pool by `trash_id` (the image
+    id, unless the Trash holds several files under one id because a Pull
+    replaced it); `backups` are deleted Backups and `labels` are cleared
+    Labels (one entry per clear, with its conversation, or `partner` null
+    for every conversation, and how many Labels it holds), both of which
+    the user puts back in the window. Emptying the Trash is the user's
+    job, in the window. Pages run through the images first, then the
+    Backups, then the Labels."""
     from services import backup_trash, image_trash, label_trash
 
     target = resolve_character(character)
-    return {
-        "character": target.name,
+    kinds = {
         "items": image_trash.list_trash(target.id),
         "backups": backup_trash.list_backups(target.id),
         "labels": label_trash.list_labels(target.name),
     }
+    # One page over the three lists, each row still under its own key.
+    window, paged = page(
+        [(kind, row) for kind, rows in kinds.items() for row in rows],
+        offset=offset,
+        limit=limit,
+        cap=MAX_TRASH_ENTRIES,
+    )
+    out: dict[str, Any] = {"character": target.name}
+    for kind in kinds:
+        out[kind] = [row for row_kind, row in window if row_kind == kind]
+    out["page"] = paged
+    return out
 
 
-@tool(tags=TAG_CHARACTER, title="Restore images from the Trash")
-def restore_image(
+@tool(tags=TAG_CHARACTER, title="Put images back from the Trash")
+def put_back_images(
     character: str,
     image_id: str | None = None,
     image_ids: list[str] | None = None,
@@ -849,7 +894,7 @@ def restore_image(
     `image_ids`, as list_trash's `trash_id`. If the pool already holds
     the same bytes, the Trash entry is dropped and the existing id is
     reported instead. If it holds a different picture under that id,
-    the restored one comes back as `local-<sha8>`, so both are kept.
+    the one put back comes as `local-<sha8>`, so both are kept.
     """
     from services import image_trash
 
@@ -860,18 +905,24 @@ def restore_image(
     if not ids:
         raise ToolError("validation_failed", "Give image_id or image_ids.")
     result = image_trash.restore_images(target.id, ids)
-    if not result["restored"] and result["not_found"]:
+    put_back = result["restored"]
+    if not put_back and result["not_found"]:
         raise ToolError(
             "image_not_found",
             f"Not in {target.name}'s Trash: {result['not_found']}. "
             "list_trash shows what is there.",
         )
     audit(
-        "restore_image",
+        "put_back_images",
         character=target.name,
-        image_ids=[r["image_id"] for r in result["restored"]],
+        image_ids=[r["image_id"] for r in put_back],
     )
-    return {"character": target.name, **result}
+    return {
+        "character": target.name,
+        "put_back": put_back,
+        "not_found": result["not_found"],
+        "conflicts": result["conflicts"],
+    }
 
 
 @tool(tags=TAG_CHARACTER, title="Put an image on the profile")
@@ -934,8 +985,6 @@ def add_image(
 # now, with every source checked before anything is written.
 # --------------------------------------------------------------------
 
-MAX_IMPORT_ITEMS = 200
-
 
 class ImportItem(BaseModel):
     """One file for `import_images`."""
@@ -968,8 +1017,7 @@ def _import_batch(
     # Everything that can be refused is refused before the first file is
     # copied: a half-done batch leaves the model guessing what landed.
     if touches_gallery:
-        target = _writable(character)
-        resolved = workbench_target(target)
+        resolved = resolve_workbench(target)
         on_profile = {r["image_id"] for r in payload_ops.gallery(load_payload(resolved))}
         missing = [t for t in targets if t not in on_profile]
         if missing:
@@ -1206,7 +1254,7 @@ def put_workbench_payload(
     made in the meantime.
 
     The Workbench it replaces is saved as a Backup first (occasion
-    `before-restore`), named in `kept_as`; load_backup_into_workbench
+    `before-replace`), named in `kept_as`; load_backup_into_workbench
     with that Backup undoes this. If that Backup cannot be written,
     nothing is replaced.
     """
@@ -1215,12 +1263,15 @@ def put_workbench_payload(
         raise ToolError("validation_failed", "payload must be an object")
     try:
         replaced = archive_backups.replace_workbench(
-            target.id, payload, expected_etag=if_match
+            target.id,
+            payload,
+            expected_etag=if_match,
+            occasion=backup_origin.BEFORE_REPLACE,
         )
     except ValueError as exc:
         # Not a payload the Workbench takes; refused before any Backup.
         raise ToolError("validation_failed", str(exc)) from exc
-    kept = replaced.kept["filename"] if replaced.kept else None
+    kept = _kept_as(replaced)
     audit("put_workbench_payload", character=target.name, kept_as=kept)
     return {
         "character": target.name,

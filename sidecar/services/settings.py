@@ -25,13 +25,10 @@ from typing import Any, Callable, Mapping
 
 import model_weights
 import rag as rag_settings
-import rag_embed_local
-import rag_rerank
 import settings as settings_store
 from refusals import ValidationFailed
 from services import events
 from services import image_import
-from services import index
 
 #: Text fields where an empty value clears the setting back to its default.
 _TEXT = {
@@ -52,6 +49,12 @@ _INT_RANGES: dict[str, tuple[str, int, int | None]] = {
     "rag.hybrid_bm25_candidates": (settings_store.KEY_RAG_HYBRID_BM25_CANDIDATES, 1, 200),
     "rag.chunk_max_chars": (settings_store.KEY_RAG_CHUNK_MAX_CHARS, 500, 20000),
     "rag.chunk_overlap_msgs": (settings_store.KEY_RAG_CHUNK_OVERLAP_MSGS, 0, 5),
+}
+
+#: The fields naming a model, whose old weights go when they change.
+_MODEL_KINDS = {
+    "rag.embed_model": model_weights.Kind.EMBEDDING,
+    "rag.rerank_model": model_weights.Kind.RERANKER,
 }
 
 #: Every field `update` takes.
@@ -95,35 +98,15 @@ def update(changes: Mapping[str, Any], conn: sqlite3.Connection | None = None) -
             writes[key] = stored
             changed[field] = reported
         settings_store.write_many(conn, writes)
-        _remove_unused_weights(conn, changes)
+        switched = [kind for field, kind in _MODEL_KINDS.items() if field in changes]
+        if switched:
+            model_weights.remove_stale(switched)
     finally:
         if own:
             conn.close()
 
     events.publish(events.SETTINGS_CHANGED, changed=changed)
     return changed
-
-
-def _remove_unused_weights(conn: sqlite3.Connection, changes: Mapping[str, Any]) -> None:
-    """After a model switch, delete the weights of the models the
-    settings no longer name (see `model_weights`).
-
-    Windows cannot delete files an ONNX session holds open, so the
-    cached encoder goes first; the next search loads the new model.
-    """
-    current = rag_settings.load_settings(conn)
-    reranker_on = not rag_rerank.is_disabled(current.rerank_model)
-    keep = [current.embed_model, *([current.rerank_model] if reranker_on else [])]
-    # An ingest embeds every batch with the model it started with, and
-    # would download it again if it went now. The next switch removes it.
-    if "rag.embed_model" in changes and index.busy_with() is None:
-        rag_embed_local.reset_cache()
-        model_weights.remove_unused(model_weights.EMBEDDING, keep)
-    # Turning the reranker off is not a switch to another model: its
-    # weights stay, so turning it back on needs no download.
-    if "rag.rerank_model" in changes and reranker_on:
-        rag_rerank.reset_cache()
-        model_weights.remove_unused(model_weights.RERANKER, keep)
 
 
 # --------------------------------------------------------------------
@@ -216,23 +199,18 @@ def _rerank_min_ratio(conn: sqlite3.Connection, changes: Mapping[str, Any], valu
     return key, str(ratio), ratio
 
 
-def _hybrid_enabled(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
-    key = settings_store.KEY_RAG_HYBRID_ENABLED
-    if value is None:
-        return key, None, None
-    if not isinstance(value, bool):
-        raise ValidationFailed("rag.hybrid_enabled", "not true or false", allowed=[True, False])
-    # Stored as "1" / "0" so the table stays TEXT.
-    return key, "1" if value else "0", value
+def _bool(field: str, key: str, cleared: bool | None) -> Callable[..., _Result]:
+    """A true-or-false field; None clears it, reported as `cleared`."""
 
+    def validate(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
+        if value is None:
+            return key, None, cleared
+        if not isinstance(value, bool):
+            raise ValidationFailed(field, "not true or false", allowed=[True, False])
+        # Stored as "1" / "0" so the table stays TEXT.
+        return key, "1" if value else "0", value
 
-def _log_text(conn: sqlite3.Connection, changes: Mapping[str, Any], value: Any) -> _Result:
-    key = settings_store.KEY_MCP_LOG_TEXT
-    if value is None:
-        return key, None, False
-    if not isinstance(value, bool):
-        raise ValidationFailed("mcp.log_text", "not true or false", allowed=[True, False])
-    return key, "1" if value else "0", value
+    return validate
 
 
 def log_text_over_mcp(conn: sqlite3.Connection | None = None) -> bool:
@@ -275,9 +253,10 @@ _VALIDATORS: dict[str, Callable[..., _Result]] = {
     **{field: _clamped_int(field) for field in _INT_RANGES},
     "rag.chunk_soft_split_chars": _chunk_soft_split_chars,
     "rag.rerank_min_ratio": _rerank_min_ratio,
-    "rag.hybrid_enabled": _hybrid_enabled,
+    "rag.hybrid_enabled": _bool("rag.hybrid_enabled", settings_store.KEY_RAG_HYBRID_ENABLED, None),
     "image_import_roots": _image_import_roots,
-    "mcp.log_text": _log_text,
+    # Off unless the user turned it on: cleared reads as off.
+    "mcp.log_text": _bool("mcp.log_text", settings_store.KEY_MCP_LOG_TEXT, False),
 }
 
 

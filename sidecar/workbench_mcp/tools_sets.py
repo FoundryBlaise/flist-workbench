@@ -14,7 +14,6 @@ from typing import Any
 
 import archive_backups
 import archive_images
-import archive_live
 import archive_registry
 
 from ._context import (
@@ -26,8 +25,7 @@ from ._context import (
     resolve_character,
     resolve_workbench_or_live,
 )
-from ._registry import TAG_CHARACTER, TAG_CORE, tool
-from .tools_session import NO_PUSH_NOTE
+from ._registry import NO_PUSH_NOTE, TAG_CHARACTER, TAG_CORE, tool
 
 #: The most rows one call of a list tool returns; `offset` pages on.
 MAX_CHARACTERS = 100
@@ -94,42 +92,6 @@ def list_characters(
     return {"characters": rows, "page": paged}
 
 
-@tool(tags=TAG_CHARACTER, title="Live profile", read_only=True)
-def get_live_profile(
-    character: str, include_description: bool = False
-) -> dict[str, Any]:
-    """The profile as it stood at the last pull from F-list.
-
-    Read-only by definition — this is the record of what is published,
-    not the Workbench. Pass include_description=true to also get the BBCode,
-    which can be tens of kilobytes.
-    """
-    target = resolve_character(character)
-    live = archive_live.read_live(target.id)
-    if live is None:
-        raise ToolError(
-            "no_live",
-            f"No profile has been pulled for {target.name} yet. "
-            "Run pull_character first.",
-        )
-    char = live.get("character") if isinstance(live.get("character"), dict) else live
-    out: dict[str, Any] = {
-        "character": target.name,
-        "id": target.id,
-        "fetched_at": live.get("fetched_at"),
-        "custom_title": (char or {}).get("custom_title"),
-        "infotag_count": len(live.get("infotags") or {}),
-        "kink_count": len(live.get("kinks") or {}),
-        "custom_kink_count": len(live.get("custom_kinks") or {}),
-        "image_count": len(live.get("images") or []),
-    }
-    description = (char or {}).get("description") or ""
-    out["description_length"] = len(description)
-    if include_description:
-        out["description"] = description
-    return out
-
-
 #: What `get_workbench` can be asked for. Descriptions are excluded by
 #: default because a single one can run to 30 KB.
 SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "settings")
@@ -142,12 +104,12 @@ async def get_workbench(
     include: list[str] | None = None,
 ) -> dict[str, Any]:
     """The Workbench's contents, by section; source="live" reads Live
-    instead.
+    instead, the profile as last pulled from F-list.
 
     `include` picks from summary, infotags, kinks, custom_kinks, images
-    and settings; the default is summary only. The description is not
-    in here at any setting — use get_description, which can page
-    through it.
+    and settings; the default is summary only. Live's summary says when
+    it was pulled (`fetched_at`). The description is not in here at any
+    setting — use get_description, which can page through it.
     """
     target = resolve_character(character)
     resolved = resolve_workbench_or_live(target, source)
@@ -173,6 +135,7 @@ async def get_workbench(
 
     out: dict[str, Any] = {
         "character": target.name,
+        "id": target.id,
         "read_only": resolved.is_live,
     }
 
@@ -190,6 +153,8 @@ async def get_workbench(
             "images": len(images),
             "edited_paths": len(payload.get("_overlay") or []),
         }
+        if resolved.is_live:
+            out["summary"]["fetched_at"] = payload.get("fetched_at")
 
     if "infotags" in sections:
         out["profile_fields"] = [
@@ -470,7 +435,7 @@ def get_bbcode_reference() -> dict[str, Any]:
             "inside a size tag and answers 'The [color] tag is not "
             "allowed here' when the profile is saved. Put the colour "
             "outermost — [color=cyan][big][b]Name[/b][/big][/color], "
-            "not [big][b][color=cyan]Name[/color][/b][/big]. Workbench "
+            "not [big][b][color=cyan]Name[/color][/b][/big]. The app "
             "renders both, so a preview will not warn you; the site "
             "does, at upload time.",
         ],
@@ -563,8 +528,8 @@ def list_backups(
 
     Each entry says what it holds, `source`: `live` or `workbench`
     (`unknown` for older Backups), and why it was made, `occasion`:
-    `manual`, `before-upload`, `before-restore`, `migration` or
-    `backup-all` (null for older Backups).
+    `manual`, `before-upload`, `before-restore`, `before-replace`,
+    `migration` or `backup-all` (null for older Backups).
 
     Backups include images and the avatar. load_backup_into_workbench
     restores one into the Workbench.

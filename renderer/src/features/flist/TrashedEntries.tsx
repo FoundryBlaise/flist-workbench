@@ -8,7 +8,7 @@ import { formatBytes } from './imageUsage'
 type TrashedEntry = { id: string; deleted_at: number; deleted_by: string | null }
 
 /** One kind of Trash entry (Backups, cleared Labels) as a list with
- *  Restore and Delete for good. Deleting for good asks first and is the
+ *  Put back and Delete for good. Deleting for good asks first and is the
  *  window's alone. A message about the last action stays up even when
  *  that action emptied the list. */
 function TrashedEntries<T extends TrashedEntry>({
@@ -19,7 +19,7 @@ function TrashedEntries<T extends TrashedEntry>({
   readOnly,
   label,
   detail,
-  restore,
+  putBack,
   purge,
   purgeTitle,
   purgeBody,
@@ -34,8 +34,8 @@ function TrashedEntries<T extends TrashedEntry>({
   label: (item: T) => string
   /** What follows the deletion time, if anything. */
   detail?: (item: T) => string
-  /** Restore one entry; resolves to the message to show. */
-  restore: (item: T) => Promise<string>
+  /** Put one entry back; resolves to the message to show. */
+  putBack: (item: T) => Promise<string>
   /** Delete one entry for good; resolves to the message to show. */
   purge: (item: T) => Promise<string>
   purgeTitle: string
@@ -82,9 +82,9 @@ function TrashedEntries<T extends TrashedEntry>({
                 <button
                   type="button"
                   className="flist-images-toolbar__btn flist-images-toolbar__btn--add"
-                  onClick={() => void run(() => restore(item))}
+                  onClick={() => void run(() => putBack(item))}
                 >
-                  Restore
+                  Put back
                 </button>
                 <button
                   type="button"
@@ -118,7 +118,7 @@ function TrashedEntries<T extends TrashedEntry>({
 }
 
 /** The Backups in a character's Trash, shown in the Trash view beside
- *  the images. Restore puts one back in the Backup list under the name
+ *  the images. Put back returns one to the Backup list under the name
  *  it had. */
 export function TrashedBackups({
   characterId,
@@ -142,8 +142,8 @@ export function TrashedBackups({
       readOnly={readOnly}
       label={name}
       detail={(item) => formatBytes(item.size)}
-      restore={async (item) => {
-        const res = await api.flistTrashBackupsRestore(characterId, [item.id])
+      putBack={async (item) => {
+        const res = await api.flistTrashBackupsPutBack(characterId, [item.id])
         await loadArchive(characterId)
         if (res.conflicts.length) {
           return `${name(item)} stays in the Trash: it has no usable Backup file name.`
@@ -161,22 +161,22 @@ export function TrashedBackups({
   )
 }
 
-/** Labels cleared in one go. Restore puts them back; a message labelled
+/** Labels cleared in one go. Put back returns them; a message labelled
  *  again since keeps its newer Label. Shown in a character's Trash view
- *  and, for every character, in Settings → Labels: `restore` and
+ *  and, for every character, in Settings → Labels: `putBack` and
  *  `purge` say which of the two the list talks to. */
 export function TrashedLabels({
   heading = 'Labels',
   items,
   readOnly,
-  restore,
+  putBack,
   purge,
   onChanged
 }: {
   heading?: string
   items: FlistTrashedLabels[]
   readOnly: boolean
-  restore: (ids: string[]) => ReturnType<typeof api.labelsTrashRestore>
+  putBack: (ids: string[]) => ReturnType<typeof api.labelsTrashPutBack>
   purge: (ids: string[]) => ReturnType<typeof api.labelsTrashPurge>
   onChanged: () => Promise<void> | void
 }) {
@@ -188,8 +188,8 @@ export function TrashedLabels({
       items={items}
       readOnly={readOnly}
       label={(item) => `${plural(item.count, 'Label')} · ${scope(item)}`}
-      restore={async (item) => {
-        const res = await restore([item.id])
+      putBack={async (item) => {
+        const res = await putBack([item.id])
         const [done] = res.restored
         // The sidecar's labels-changed event refreshes an open Log.
         if (!done) return 'Those Labels are no longer in the Trash.'
@@ -208,7 +208,7 @@ export function TrashedLabels({
         return `${plural(item.count, 'Label')} deleted for good.`
       }}
       purgeTitle="Delete these Labels for good?"
-      purgeBody="The cleared Labels can’t be restored afterwards."
+      purgeBody="The cleared Labels can’t be put back afterwards."
       onChanged={onChanged}
     />
   )

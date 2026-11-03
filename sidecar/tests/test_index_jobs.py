@@ -312,7 +312,7 @@ async def test_an_index_that_cannot_be_read_is_an_error_not_zero_chunks(
     async with mcp_client("logs") as session:
         result, _ = await call_tool(session, "get_rag_status")
         assert "index_unreadable" in tool_error_text(result)
-        _, overall = await call_tool(session, "get_workbench_status")
+        _, overall = await call_tool(session, "get_app_status")
     assert overall["vector_index"]["error"]["code"] == "index_unreadable"
 
 

@@ -23,9 +23,12 @@ UNKNOWN_SOURCE = "unknown"
 MANUAL = "manual"
 BEFORE_UPLOAD = "before-upload"
 BEFORE_RESTORE = "before-restore"
+#: Kept before MCP's raw payload replacement: not a Restore, so the
+#: window can tell the user which of the two it undoes.
+BEFORE_REPLACE = "before-replace"
 MIGRATION = "migration"
 BACKUP_ALL = "backup-all"
-OCCASIONS = (MANUAL, BEFORE_UPLOAD, BEFORE_RESTORE, MIGRATION, BACKUP_ALL)
+OCCASIONS = (MANUAL, BEFORE_UPLOAD, BEFORE_RESTORE, BEFORE_REPLACE, MIGRATION, BACKUP_ALL)
 
 #: The `kind` each occasion writes for extension 0.1.1. None writes no
 #: kind; the Backup is then listed under kind "unknown", which that
@@ -35,6 +38,7 @@ _EXTENSION_KIND: dict[str, str | None] = {
     BACKUP_ALL: "manual_bulk",
     BEFORE_UPLOAD: "pre_upload",
     BEFORE_RESTORE: "manual_single",
+    BEFORE_REPLACE: "manual_single",
     MIGRATION: None,
 }
 
