@@ -13,7 +13,6 @@ model the user connected.
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
@@ -220,12 +219,14 @@ def _backfill_if_empty(store: rag_store.RagStore, lex: rag_lexical.LexicalStore)
     empty keyword half while the vector half holds thousands of chunks;
     copying the payloads takes seconds and avoids "I turned it on and
     got no hits". A copy that fails is reported, so a hybrid search
-    never quietly answers from one half."""
-    if lex.count() > 0 or store.count() == 0:
-        return
+    never quietly answers from one half: a keyword write the database
+    refuses, and a vector half that cannot be read (the embedded Qdrant
+    raises no one error type for that)."""
     try:
+        if lex.count() > 0 or store.count() == 0:
+            return
         rag_lexical.backfill_from_qdrant(store, lex)
-    except sqlite3.Error as exc:
+    except Exception as exc:  # noqa: BLE001 — reported, never swallowed
         raise KeywordBackfillFailed(
             "Hybrid search needs the keyword half of the Index, which is "
             f"empty and could not be filled from the vector half: {exc}. "
