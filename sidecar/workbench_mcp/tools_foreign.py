@@ -75,6 +75,31 @@ def _as_tool_error(
     return ToolError(exc.code, exc.message)
 
 
+def _audit_read(
+    tool_name: str, result: dict[str, Any], *, status: str | None = None
+) -> None:
+    """Record which Foreign profile a model read, from F-list or the
+    cache. `status` says when it came with a refusal (a spent budget
+    handing back the cached copy)."""
+    fields: dict[str, Any] = {"character": result["name"], "from_cache": result["from_cache"]}
+    if status is not None:
+        fields["status"] = status
+    audit(tool_name, **fields)
+
+
+def _foreign_error(
+    tool_name: str,
+    exc: foreign_service.ForeignError,
+    shape: Callable[[dict[str, Any]], dict[str, Any]],
+) -> ToolError:
+    """`_as_tool_error`, audited when the refusal still hands over the
+    cached copy: the model read that profile all the same."""
+    cached = exc.details.get("cached")
+    if isinstance(cached, dict):
+        _audit_read(tool_name, cached, status=exc.code)
+    return _as_tool_error(exc, shape)
+
+
 def _extra_fields(profile: dict[str, Any]) -> dict[str, Any]:
     """Everything in the payload this module does not name explicitly.
 
@@ -186,15 +211,11 @@ async def get_foreign_profile(
             budget=flist_api.mcp_character_budget(),
         )
     except foreign_service.ForeignError as exc:
-        raise _as_tool_error(exc, shape) from exc
+        raise _foreign_error("get_foreign_profile", exc, shape) from exc
 
     out = shape(result)
     out["budget_remaining"] = flist_api.mcp_character_budget().remaining()
-    audit(
-        "get_foreign_profile",
-        character=result["name"],
-        from_cache=result["from_cache"],
-    )
+    _audit_read("get_foreign_profile", result)
     return out
 
 
@@ -251,12 +272,8 @@ async def get_foreign_kinks(character: str) -> dict[str, Any]:
             character, budget=flist_api.mcp_character_budget()
         )
     except foreign_service.ForeignError as exc:
-        raise _as_tool_error(exc, _kinks_out) from exc
-    audit(
-        "get_foreign_kinks",
-        character=result["name"],
-        from_cache=result["from_cache"],
-    )
+        raise _foreign_error("get_foreign_kinks", exc, _kinks_out) from exc
+    _audit_read("get_foreign_kinks", result)
     return _kinks_out(result)
 
 

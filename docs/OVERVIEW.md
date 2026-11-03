@@ -160,7 +160,8 @@ no list of viewed profiles anywhere in the window, but the profiles
 themselves are kept on disk: every Foreign profile you open, in the
 window or through a model, stays in the cache until it is evicted or
 you clear it. The activity log (Help → F-list Activity Log) records
-which profiles a model fetched, by name.
+which profiles a model read, by name, and keeps those names across a
+restart.
 
 The payloads cache under `%APPDATA%\flist-workbench\foreign\<name>\`
 in the same shape `live.json` uses, with a 24-hour TTL and a manual ↻.
