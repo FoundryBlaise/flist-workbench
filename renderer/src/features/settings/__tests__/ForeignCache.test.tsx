@@ -113,6 +113,6 @@ it('clearing by hand empties the cache and the space drops to zero', async () =>
 
   fireEvent.click(screen.getByTestId('settings-foreign-cache-clear'))
 
-  await waitFor(() => expect(used()).toBe('0 KB in 0 profiles'))
+  await waitFor(() => expect(used()).toBe('0 B in 0 profiles'))
   expect(clear).toHaveBeenCalledTimes(1)
 })

@@ -1,14 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
+import { formatBytes } from '../../lib/bytes'
 import { displayPartner } from '../../lib/partnerName'
 import { api, type PartnerEntry } from '../../lib/api'
 import { AliasLinkDialog } from './AliasLinkDialog'
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n}B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}kb`
-  return `${(n / 1024 / 1024).toFixed(1)}mb`
-}
 
 const SEARCH_THRESHOLD = 20
 
