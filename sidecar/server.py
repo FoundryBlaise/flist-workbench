@@ -17,6 +17,7 @@ import archive_registry
 import eicons as eicons_catalog
 import flist_activity
 import flist_api
+import model_weights
 import workbench_mcp
 import workbench_migration
 from refusals import INTERNAL_ERROR, Refusal
@@ -74,6 +75,7 @@ async def sidecar_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _avatar_cleanup_on_startup()
     await _adopt_old_pre_upload_backups_on_startup()
     workbench_migration.migrate_all()
+    await _stale_model_weights_on_startup()
     await _password_idle_watchdog()
     async with workbench_mcp.session_manager_lifespan(_MCP_SERVERS):
         yield
@@ -114,6 +116,18 @@ async def _adopt_old_pre_upload_backups_on_startup() -> None:
             "version are now in the Backup list",
             flush=True,
         )
+
+
+async def _stale_model_weights_on_startup() -> None:
+    """Remove the weights of models the settings no longer name, which a
+    switch could not take while an encoder held them open. Off the event
+    loop: a reranker is over a gigabyte to delete."""
+    import asyncio
+
+    try:
+        await asyncio.to_thread(model_weights.remove_stale)
+    except Exception as exc:  # noqa: BLE001 - weights are a cache; start anyway
+        print(f"[models] stale weights stay for now: {exc}", flush=True)
 
 
 async def _password_idle_watchdog() -> None:

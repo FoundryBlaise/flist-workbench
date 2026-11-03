@@ -12,27 +12,72 @@ with a matching lock folder under `.locks/`) or, for the older
 downloads from its own storage, after the model (`fast-<name>`). The
 names come from fastembed's own catalogue, so a folder the app does
 not recognise, put there by hand or by another version, stays.
+
+`remove_stale` is the one entry point: the settings service calls it
+after a model switch, and the sidecar at start, so weights a removal
+could not take (an encoder still had them open, the app was closed
+first) go then.
 """
 
 from __future__ import annotations
 
 import logging
 import shutil
+from collections.abc import Iterable
+from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+import rag as rag_settings
+import rag_embed_local
+import rag_rerank
 from rag_rerank import models_dir
 
 log = logging.getLogger(__name__)
 
-EMBEDDING = "embedding"
-RERANKER = "reranker"
+
+class Kind(Enum):
+    """Which setting names a model: the embedding model or the reranker."""
+
+    EMBEDDING = "embedding"
+    RERANKER = "reranker"
 
 #: Suffix of a folder renamed for removal whose removal did not finish.
 _REMOVING = ".removing"
 
 
-def remove_unused(kind: str, keep: Iterable[str], models: Path | None = None) -> list[str]:
+def remove_stale(kinds: Iterable[Kind] = tuple(Kind)) -> None:
+    """Delete the weights of the models of `kinds` the settings no
+    longer name.
+
+    Embedding weights wait while a job holds the Index: an ingest
+    embeds every batch with the model it started with, and would
+    download it again if it went now. They go when that job ends.
+    """
+    from services import index, jobs
+
+    kinds = set(kinds)
+    if Kind.RERANKER in kinds:
+        _remove_stale_now(Kind.RERANKER)
+    if Kind.EMBEDDING in kinds:
+        jobs.registry().when_free(index.INDEX, lambda: _remove_stale_now(Kind.EMBEDDING))
+
+
+def _remove_stale_now(kind: Kind) -> list[str]:
+    current = rag_settings.load_settings()
+    reranker_on = not rag_rerank.is_disabled(current.rerank_model)
+    # Turning the reranker off is not a switch to another model: its
+    # weights stay, so turning it back on needs no download.
+    if kind is Kind.RERANKER and not reranker_on:
+        return []
+    keep = [current.embed_model, *([current.rerank_model] if reranker_on else [])]
+    # Windows cannot delete files an ONNX session holds open, so the
+    # cached encoder goes first; the next search loads it again.
+    (rag_embed_local if kind is Kind.EMBEDDING else rag_rerank).reset_cache()
+    return remove_unused(kind, keep)
+
+
+def remove_unused(kind: Kind, keep: Iterable[str], models: Path | None = None) -> list[str]:
     """Delete the weights of every `kind` model not in `keep`.
 
     `keep` is every model the settings name, embedding and reranker
@@ -42,6 +87,8 @@ def remove_unused(kind: str, keep: Iterable[str], models: Path | None = None) ->
     next switch tries again.
     """
     folder = models or models_dir()
+    if not folder.is_dir():
+        return []
     catalogue = _catalogue()
     keep = set(keep)
     kept = {
@@ -49,8 +96,8 @@ def remove_unused(kind: str, keep: Iterable[str], models: Path | None = None) ->
     }
     unused = {
         name
-        for kind_, m in catalogue
-        if kind_ == kind and m["model"] not in keep
+        for model_kind, m in catalogue
+        if model_kind is kind and m["model"] not in keep
         for name in _folder_names(m)
     } - kept
 
@@ -83,15 +130,15 @@ def _remove(path: Path) -> bool:
     return True
 
 
-def _catalogue() -> list[tuple[str, dict[str, Any]]]:
+def _catalogue() -> list[tuple[Kind, dict[str, Any]]]:
     """Every model fastembed offers, with its kind."""
     # Imported lazily: fastembed pulls in onnxruntime, which only a
     # model change needs here.
     from fastembed import TextEmbedding
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-    return [(EMBEDDING, m) for m in TextEmbedding.list_supported_models()] + [
-        (RERANKER, m) for m in TextCrossEncoder.list_supported_models()
+    return [(Kind.EMBEDDING, m) for m in TextEmbedding.list_supported_models()] + [
+        (Kind.RERANKER, m) for m in TextCrossEncoder.list_supported_models()
     ]
 
 

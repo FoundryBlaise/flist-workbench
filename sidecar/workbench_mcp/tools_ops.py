@@ -578,6 +578,9 @@ def update_settings(
     stored. An empty model name resets it to the default. The window
     shows the change at once. Changing `embed_model` invalidates the
     search index: it was built with the old model's vectors.
+
+    Changing `embed_model` or `rerank_model` deletes the old model's
+    weights from disk; choosing it again downloads them again.
     """
     from services import settings as settings_service
 

@@ -390,7 +390,7 @@ server, so they cannot drift from it.
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
-| `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
+| `update_settings` | Change settings; switching a model deletes the old one's weights. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
 | `get_workbench` | The Workbench by section; `source="live"` reads Live, the profile as last pulled. |
 | `get_description` | The description in BBCode, a page at a time for a long one. |
@@ -461,7 +461,7 @@ server, so they cannot drift from it.
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
-| `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
+| `update_settings` | Change settings; switching a model deletes the old one's weights. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
 | `get_workbench` | The Workbench by section; `source="live"` reads Live, the profile as last pulled. |
 | `get_description` | The description in BBCode, a page at a time for a long one. |
@@ -513,7 +513,7 @@ server, so they cannot drift from it.
 | `list_characters` | Every character the app has locally. |
 | `get_activity_log` | Recent activity, newest first, every change a tool made included. |
 | `get_settings` | The app's settings: Log folder, IC/OOC rule threshold, embedding model, retrieval tuning, image folders. |
-| `update_settings` | Change settings. Image folders and the Log-text switch stay the user's, in the window. |
+| `update_settings` | Change settings; switching a model deletes the old one's weights. Image folders and the Log-text switch stay the user's, in the window. |
 | `get_extension_pairing_status` | Whether the browser extension is paired, which an Upload needs. |
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
