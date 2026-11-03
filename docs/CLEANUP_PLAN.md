@@ -195,7 +195,7 @@ not the preload. ADR 0002 describes what shipped.
   profiles a model fetched. `INSTALL_WINDOWS.md`: installer is primary,
   portable unpacks ~350 MB per start and does not auto-update, releases
   are unsigned. `rag_rerank.py:18` names the wrong model folder.
-- Delete `build-win.ps1` (wrong branch and artifact name); CI is the
+- Delete the local build script (wrong branch and artifact name); CI is the
   build path. Move react/codemirror to devDependencies; exclude pytest
   from the sidecar bundle. Remove old model weights when the model
   changes.

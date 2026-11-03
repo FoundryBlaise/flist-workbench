@@ -42,7 +42,7 @@ runs:
         cache: npm
 
     # npm ci wipes node_modules and rebuilds native deps (keytar)
-    # against the Electron ABI. build-win.ps1 does the same.
+    # against the Electron ABI.
     - name: npm ci
       if: inputs.node == 'true'
       shell: pwsh
