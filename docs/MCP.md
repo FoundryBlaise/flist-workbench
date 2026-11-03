@@ -372,6 +372,7 @@ window gets for the same situation:
 | `index_busy` | an ingest (or a wipe) is changing the Index; details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `character_busy` | a Pull of that character, or Back up all, is running (one at a time); details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `index_unreadable` | the Index is there but could not be read; not the same as empty |
+| `keyword_backfill_failed` | a hybrid search found the keyword half of the Index empty and could not fill it from the vector half; search with `hybrid=false` meanwhile |
 | `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use); `get_rag_status` with `check_embedding=true` checks it |
 | `embedding_model_changed` | an ingest found an Index built with another embedding model; `wipe_search_index`, then ingest again |
