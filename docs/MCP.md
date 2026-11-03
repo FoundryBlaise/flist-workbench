@@ -165,9 +165,10 @@ as base64 and an oversized tool result is refused outright.
 `edit_description` (an exact string replacement, far safer than
 `set_description` on a 30 KB profile), `set_profile_field`,
 `set_kinks`, `add_custom_kink`, `reorder_images`. `diff_workbench`
-says what an Upload would change. `set_description` asks for
-`confirm=true` when the new text is less than half as long as the old,
-so a model cannot blank a description by accident.
+says what an Upload would change. `set_description` and
+`edit_description` ask for `confirm=true` when the description would
+end up less than half as long as it was, so a model cannot blank one
+by accident, with either.
 
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
@@ -356,7 +357,7 @@ window gets for the same situation:
 | `bbcode_rejected` | the description has BBCode F-list would refuse; the error names the tags |
 | `image_not_found` | no image with that id where the tool looked (`list_trash` shows what the Trash holds) |
 | `etag_mismatch` | the Workbench changed since it was read (`put_workbench_payload` with an old `if_match`); details carry the `current_etag` |
-| `confirm_required` | a destructive tool, or `set_description` cutting the description below half its length; ask the user, then pass `confirm=true` |
+| `confirm_required` | a destructive tool, or `set_description` or `edit_description` cutting the description below half its length; ask the user, then pass `confirm=true` |
 | `workbench_not_kept` | replacing the Workbench (a Restore, or `put_workbench_payload`) needs a Backup of it first, and that Backup could not be written, so nothing was replaced |
 | `backup_too_old` | the Backup comes from before the app stored a loadable profile in it; it can only be downloaded |
 | `window_not_running` | `render_profile_image` needs the app window open |
@@ -401,7 +402,7 @@ server, so they cannot drift from it.
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
 | `set_description` | Replace the whole description. Needs `confirm=true` when the new text is under half the old length. |
-| `edit_description` | Replace an exact piece of text in the description. |
+| `edit_description` | Replace an exact piece of text in the description. Needs `confirm=true` when it would leave under half the description. |
 | `set_custom_title` | Set the line under the character's name. |
 | `set_profile_field` | Set one profile field: species, height, orientation and so on. |
 | `clear_profile_field` | Remove a profile field so it does not show. |
@@ -472,7 +473,7 @@ server, so they cannot drift from it.
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
 | `get_bbcode_reference` | F-list's BBCode dialect, the markup a description uses. |
 | `set_description` | Replace the whole description. Needs `confirm=true` when the new text is under half the old length. |
-| `edit_description` | Replace an exact piece of text in the description. |
+| `edit_description` | Replace an exact piece of text in the description. Needs `confirm=true` when it would leave under half the description. |
 | `set_custom_title` | Set the line under the character's name. |
 | `set_profile_field` | Set one profile field: species, height, orientation and so on. |
 | `clear_profile_field` | Remove a profile field so it does not show. |

@@ -66,6 +66,22 @@ def _guard_bbcode(updated: str) -> None:
         )
 
 
+#: When set_description and edit_description ask for `confirm`.
+SHRINK_CONFIRM_WHEN = "the description would end up less than half as long as it was"
+
+
+def _guard_shrink(previous: str, updated: str, confirm: bool, instead: str) -> None:
+    """Refuse a change that leaves less than half the description,
+    unless `confirm`. Measured against the text on disk, under the
+    lock: a much shorter text is a summary written over the original
+    as often as it is a deliberate cut. `instead` names the safer way."""
+    if len(updated) * 2 < len(previous) and not confirm:
+        raise confirm_required(
+            f"The description would go from {len(previous)} characters "
+            f"to {len(updated)}, so most of the text would go. {instead}"
+        )
+
+
 def _apply(target, mutate) -> Any:  # noqa: ANN001, ANN202
     from services import payload_ops
 
@@ -151,7 +167,7 @@ def load_backup_into_workbench(
 @tool(
     tags=TAG_CHARACTER,
     title="Replace the description",
-    confirm_when="the new text is less than half as long as the old",
+    confirm_when=SHRINK_CONFIRM_WHEN,
 )
 def set_description(
     character: str,
@@ -176,15 +192,9 @@ def set_description(
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         previous = payload_ops.get_description(payload)
-        # Measured against the text on disk, under the lock: a shorter
-        # text is a summary written over the original as often as it is
-        # a deliberate cut.
-        if len(body) * 2 < len(previous) and not confirm:
-            raise confirm_required(
-                f"The new description is {len(body)} characters long and "
-                f"replaces one of {len(previous)}, so most of the text "
-                "would go. For a targeted change use edit_description."
-            )
+        _guard_shrink(
+            previous, body, confirm, "For a targeted change use edit_description."
+        )
         payload_ops.set_description(payload, body)
         return payload_ops.EditResult(
             etag="",
@@ -205,19 +215,25 @@ def set_description(
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Edit part of the description")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Edit part of the description",
+    confirm_when=SHRINK_CONFIRM_WHEN,
+)
 def edit_description(
     character: str,
     old_string: str,
     new_string: str,
     replace_all: bool = False,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Replace an exact piece of text inside the description.
 
     `old_string` must appear exactly once, or nothing is changed —
     which is the point: it makes a targeted edit safe on a description
     that is tens of kilobytes long. Pass replace_all=true to change
-    every occurrence instead.
+    every occurrence instead. An edit leaving less than half the
+    description needs `confirm=true`.
     """
     from services import payload_ops
 
@@ -246,6 +262,9 @@ def edit_description(
             current.replace(needle, replacement)
             if replace_all
             else current.replace(needle, replacement, 1)
+        )
+        _guard_shrink(
+            current, updated, confirm, "Name a smaller piece in old_string."
         )
         _guard_bbcode(updated)
         payload_ops.set_description(payload, updated)
