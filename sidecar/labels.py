@@ -785,16 +785,10 @@ def upsert_verdicts(
             rows[h] = (ts, speaker, label, reason)
     if not rows:
         return 0
-    prior: dict[str, tuple[str | None, str | None]] = {}
-    ids = list(rows)
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        for r in conn.execute(
-            f"SELECT hash, label, source FROM labels WHERE hash IN ({placeholders})",
-            batch,
-        ):
-            prior[r["hash"]] = (r["label"], r["source"])
+    prior = {
+        r["hash"]: (r["label"], r["source"])
+        for r in _rows_for_hashes(conn, "hash, label, source", rows)
+    }
     now = time.time()
     conn.executemany(
         """
@@ -835,20 +829,11 @@ def manual_hashes(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[str]:
     """Which of `hashes` carry a Label the user set by hand. Only the
     window changes those; `upsert_verdicts` from any other source
     leaves them as they are."""
-    ids = list(dict.fromkeys(hashes))
-    found: set[str] = set()
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        found.update(
-            r["hash"]
-            for r in conn.execute(
-                "SELECT hash FROM labels WHERE source = 'manual' "
-                f"AND hash IN ({placeholders})",
-                batch,
-            )
-        )
-    return found
+    return {
+        r["hash"]
+        for r in _rows_for_hashes(conn, "hash, source", hashes)
+        if r["source"] == "manual"
+    }
 
 
 def count_by_source(conn: sqlite3.Connection, source: str) -> int:
@@ -900,17 +885,7 @@ def restore_labels(
     Label again has a newer verdict than the kept one, so it keeps it:
     its hash is returned as skipped. Returns (restored, skipped)."""
     wanted = {r["hash"]: r for r in rows if r.get("hash")}
-    present: set[str] = set()
-    ids = list(wanted)
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        present.update(
-            r["hash"]
-            for r in conn.execute(
-                f"SELECT hash FROM labels WHERE hash IN ({placeholders})", batch
-            )
-        )
+    present = {r["hash"] for r in _rows_for_hashes(conn, "hash", wanted)}
     todo = [r for h, r in wanted.items() if h not in present]
     defaults = {c: None for c in LABEL_COLUMNS} | {"confidence": 1.0, "updated_at": time.time()}
     cols = ", ".join(LABEL_COLUMNS)
@@ -1023,8 +998,8 @@ def delete_labels_by_hash(
     if not ids:
         return 0
     removed = 0
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
+    for start in range(0, len(ids), _HASH_BATCH):
+        batch = ids[start : start + _HASH_BATCH]
         placeholders = ",".join("?" * len(batch))
         cur = conn.execute(
             f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
