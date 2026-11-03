@@ -25,6 +25,7 @@ import bbcode_rules
 from ._context import (
     ToolError,
     audit,
+    confirm_required,
     load_payload,
     resolve_character,
     resolve_workbench_or_live,
@@ -104,7 +105,15 @@ async def _catalogue():  # noqa: ANN202
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Load a backup into the workbench")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Load a backup into the workbench",
+    destructive=True,
+    warning=(
+        "Loading a backup replaces everything currently in the "
+        "Workbench; the Workbench is saved as a Backup first."
+    ),
+)
 def load_backup_into_workbench(
     character: str, backup: str, confirm: bool = False
 ) -> dict[str, Any]:
@@ -117,13 +126,6 @@ def load_backup_into_workbench(
     replaced. `backup` is a filename from `list_backups`.
     """
     target = resolve_character(character)
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            "Loading a backup replaces everything currently in the "
-            "Workbench; the Workbench is saved as a Backup first. Call "
-            "this again with confirm=true.",
-        )
     replaced = archive_backups.load_zip_backup_into_workbench(target.id, backup)
     kept = replaced.kept["filename"] if replaced.kept else None
     audit(
@@ -146,18 +148,25 @@ def load_backup_into_workbench(
 # --------------------------------------------------------------------
 
 
-@tool(tags=TAG_CHARACTER, title="Replace the description")
+@tool(
+    tags=TAG_CHARACTER,
+    title="Replace the description",
+    confirm_when="the new text is less than half as long as the old",
+)
 def set_description(
     character: str,
     text: str,
     working_set: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Replace a profile's whole description with `text`, in F-list
     BBCode.
 
     This overwrites everything — for a targeted change use
-    edit_description, which is far less likely to lose work. Call
-    get_bbcode_reference first if unsure which tags F-list supports.
+    edit_description, which is far less likely to lose work. A `text`
+    less than half as long as the description it replaces needs
+    `confirm=true`. Call get_bbcode_reference first if unsure which
+    tags F-list supports.
     """
     from services import payload_ops
 
@@ -168,6 +177,15 @@ def set_description(
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
         previous = payload_ops.get_description(payload)
+        # Measured against the text on disk, under the lock: a shorter
+        # text is a summary written over the original as often as it is
+        # a deliberate cut.
+        if len(body) * 2 < len(previous) and not confirm:
+            raise confirm_required(
+                f"The new description is {len(body)} characters long and "
+                f"replaces one of {len(previous)}, so most of the text "
+                "would go. For a targeted change use edit_description."
+            )
         payload_ops.set_description(payload, body)
         return payload_ops.EditResult(
             etag="",
@@ -652,13 +670,22 @@ async def update_custom_kink(
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Delete a custom kink", destructive=True)
+@tool(
+    tags=TAG_CHARACTER,
+    title="Delete a custom kink",
+    destructive=True,
+    warning=(
+        "Deleting a custom kink that was never uploaded drops it and "
+        "its description for good."
+    ),
+)
 def delete_custom_kink(
     character: str,
     kink_id: str,
     working_set: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
-    """Remove a custom kink from the profile.
+    """Remove a custom kink from the profile; needs `confirm=true`.
 
     One that already exists on F-list is kept as a tombstone so the
     upload knows to remove it, and can be brought back with
@@ -1326,7 +1353,16 @@ def get_working_set_payload(
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Write raw payload", destructive=True)
+@tool(
+    tags=TAG_CHARACTER,
+    title="Write raw payload",
+    destructive=True,
+    warning=(
+        "This replaces the whole payload without any of the validation "
+        "the targeted editing tools apply. Use those unless there is no "
+        "alternative."
+    ),
+)
 def put_working_set_payload(
     character: str,
     payload: dict[str, Any],
@@ -1344,14 +1380,6 @@ def put_working_set_payload(
     made in the meantime.
     """
     target, resolved = _writable(character, working_set)
-    if not confirm:
-        raise ToolError(
-            "confirm_required",
-            "This replaces the whole payload without any of the "
-            "validation the targeted editing tools apply. Use those "
-            "unless there is no alternative; if there isn't, call again "
-            "with confirm=true.",
-        )
     if not isinstance(payload, dict):
         raise ToolError("validation_failed", "payload must be an object")
 

@@ -584,18 +584,19 @@ replace = '''
 [[mutation]]
 id = "L14"
 suite = "sidecar"
-file = "sidecar/workbench_mcp/tools_classify.py"
+file = "sidecar/workbench_mcp/_registry.py"
 breaks = "Clearing every Label of a character over MCP no longer needs `confirm`."
 tests = ["@logs", "@mcp"]
 audit = "survived"
 spec = 6
 # audit: M14 clear_labels character-wide skips confirm
+# Re-anchored for #78: the tool registry asks for `confirm` now, not the
+# tool; a call with no partner (only clear_labels has the parameter
+# optional) slips through.
 find = '''
-    if not confirm:
-        scope = f"{partner} with'''
+        if bound.arguments.get("confirm") is True:'''
 replace = '''
-    if not confirm and partner:
-        scope = f"{partner} with'''
+        if bound.arguments.get("confirm") is True or bound.arguments.get("partner", "") is None:'''
 
 [[mutation]]
 id = "L15"
