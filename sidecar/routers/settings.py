@@ -1,11 +1,12 @@
 """Settings: the F-Chat folder, Label and Index tunables, import folders,
-and whether MCP clients may read Log text."""
+whether MCP clients may read Log text, and the Foreign profile cache's cap."""
 
 import os
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+import foreign_cache
 import labels as labels_store
 import rag as rag_settings
 import settings as settings_store
@@ -59,6 +60,12 @@ class McpSettingsUpdate(BaseModel):
     log_text: bool | None = None
 
 
+class ForeignSettingsUpdate(BaseModel):
+    # The Foreign profile cache's cap in whole megabytes. None leaves it
+    # untouched; services.settings clamps it to at least 1.
+    cache_cap_mb: int | None = None
+
+
 class SettingsUpdate(BaseModel):
     # Allow null to clear the override; absent fields are left
     # untouched. Empty string is treated as "unset" for symmetry with
@@ -70,6 +77,7 @@ class SettingsUpdate(BaseModel):
     # window — sets them; the MCP settings tool can read but not change.
     image_import_roots: list[str] | None = None
     mcp: McpSettingsUpdate | None = None
+    foreign: ForeignSettingsUpdate | None = None
 
 
 def _settings_dict(conn) -> dict:
@@ -127,6 +135,10 @@ def _settings_dict(conn) -> dict:
             str(p) for p in image_import_service.import_roots(conn)
         ],
         "mcp": {"log_text": settings_service.log_text_over_mcp(conn)},
+        "foreign": {
+            "cache_cap_mb": settings_service.foreign_cache_cap_mb(conn),
+            "defaults": {"cache_cap_mb": foreign_cache.DEFAULT_CAP_MB},
+        },
     }
 
 
@@ -177,7 +189,12 @@ def _changes(body: SettingsUpdate) -> dict:
     # missing key leaves it alone.
     if "fchat_data_dir" in body.model_fields_set:
         changes["fchat_data_dir"] = body.fchat_data_dir
-    parts = (("labels", body.labels), ("rag", body.rag), ("mcp", body.mcp))
+    parts = (
+        ("labels", body.labels),
+        ("rag", body.rag),
+        ("mcp", body.mcp),
+        ("foreign", body.foreign),
+    )
     for prefix, part in parts:
         if part is not None:
             for name, value in part.model_dump(exclude_none=True).items():

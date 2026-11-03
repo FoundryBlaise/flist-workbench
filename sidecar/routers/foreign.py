@@ -30,6 +30,20 @@ async def foreign_search(source: str, q: str = "") -> dict:
     return await foreign_service.search(q, source)
 
 
+@router.get("/foreign/cache")
+def foreign_cache_usage() -> dict:
+    """How much disk the Foreign profile cache takes: `{bytes,
+    profiles, cap_bytes}`."""
+    return foreign_service.cache_usage()
+
+
+@router.delete("/foreign/cache")
+def foreign_cache_clear() -> dict:
+    """Delete every cached Foreign profile, images and avatars included.
+    Not the Trash: these are copies of other people's profiles."""
+    return foreign_service.clear_cache()
+
+
 @router.get("/foreign/character/{name}")
 async def foreign_character(name: str, refresh: bool = False) -> dict:
     """One foreign profile. Served from cache while it is under the
@@ -55,6 +69,7 @@ async def foreign_character_avatar(name: str) -> FileResponse:
             await flist_api.download_to(flist_api.avatar_url(name), dest)
         except flist_api.FlistApiError as exc:
             raise NoAvatar(str(exc)) from exc
+        foreign_service.file_landed(name)
     try:
         size = dest.stat().st_size
     except OSError:
@@ -103,4 +118,5 @@ async def foreign_character_image(name: str, image_id: str) -> FileResponse:
             )
     except flist_api.FlistApiError as exc:
         raise flist_api.refusal(exc) from exc
+    foreign_service.file_landed(name)
     return FileResponse(dest)

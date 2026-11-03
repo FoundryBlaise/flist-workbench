@@ -100,6 +100,24 @@ def test_unsafe_names_hash_into_an_f_prefixed_folder(data_dir: Path) -> None:
     assert "/" not in slug
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["..", ".", "...", "..hidden", "trailing.", "CON", "nul", "Com1.txt", "LPT9", "../escape", "..\\escape"],
+)
+def test_dots_and_reserved_names_stay_inside_the_cache_folder(
+    data_dir: Path, name: str
+) -> None:
+    import foreign_cache
+
+    folder = foreign_cache.profile_dir(name)
+    foreign_cache.write_profile(name, _profile(name))
+
+    assert folder.resolve().parent == foreign_cache.root().resolve()
+    assert foreign_cache.read_profile(name) is not None
+    assert foreign_cache.delete_profile(name) is True
+    assert foreign_cache.root().is_dir()
+
+
 def test_read_profile_rejects_a_folder_holding_another_character(
     data_dir: Path,
 ) -> None:
@@ -858,6 +876,166 @@ async def test_a_spent_budget_with_nothing_cached_is_plainly_rate_limited(flist)
     text = tool_error_text(refused)
     assert "rate_limited:" in text
     assert "cached" not in text
+
+
+# ---- the size cap -----------------------------------------------------
+#
+# The cache is a copy of other people's profiles, so it is bounded: the
+# least recently viewed profile goes, with its images and avatar, when
+# a new one no longer fits under the cap set in Settings.
+
+MB = 1024 * 1024
+
+
+def _set_cap_mb(client: TestClient, mb: int) -> None:
+    res = client.put("/settings", json={"foreign": {"cache_cap_mb": mb}})
+    assert res.status_code == 200, res.text
+
+
+def _view_new(
+    client: TestClient,
+    httpx_mock,
+    name: str,
+    image_id: str,
+    image_bytes: int,
+    *,
+    refresh: bool = False,
+    avatar: bytes = b"AVATAR",
+) -> None:
+    """Open `name` in the window as F-list answers it: the profile, its
+    avatar and its one gallery image of `image_bytes` bytes."""
+    import flist_api
+
+    _flist_answers(
+        httpx_mock,
+        json={**_profile(name, images=[{"image_id": image_id, "extension": "png"}]), "error": ""},
+    )
+    httpx_mock.add_response(url=flist_api.avatar_url(name), content=avatar)
+    httpx_mock.add_response(
+        url=f"{flist_api.STATIC_BASE}/images/charimage/{image_id}.png",
+        content=b"x" * image_bytes,
+    )
+    params = {"refresh": "true"} if refresh else {}
+    assert client.get(f"/foreign/character/{name}", params=params).status_code == 200
+    assert client.get(f"/foreign/character/{name}/avatar").status_code == 200
+    assert client.get(f"/foreign/character/{name}/image/{image_id}").status_code == 200
+
+
+def _cached(name: str) -> bool:
+    import foreign_cache
+
+    return foreign_cache.profile_dir(name).exists()
+
+
+def test_with_a_small_cap_a_new_profile_evicts_the_least_recently_viewed_with_its_files(
+    client: TestClient, flist
+) -> None:
+    _set_cap_mb(client, 1)
+    _view_new(client, flist, "First Visit", "901", 400_000)
+    _view_new(client, flist, "Second Visit", "902", 400_000)
+
+    _view_new(client, flist, "Third Visit", "903", 400_000)
+
+    assert not _cached("First Visit")
+    assert _cached("Second Visit") and _cached("Third Visit")
+    gone = client.get("/foreign/character/First Visit/image/901")
+    assert gone.json()["code"] == "profile_not_cached"
+
+
+def test_viewing_a_cached_profile_again_keeps_it_through_the_next_eviction(
+    client: TestClient, flist
+) -> None:
+    _set_cap_mb(client, 1)
+    _view_new(client, flist, "First Visit", "901", 400_000)
+    _view_new(client, flist, "Second Visit", "902", 400_000)
+    again = client.get("/foreign/character/First Visit")
+    assert again.json()["from_cache"] is True
+
+    _view_new(client, flist, "Third Visit", "903", 400_000)
+
+    assert _cached("First Visit") and _cached("Third Visit")
+    assert not _cached("Second Visit")
+
+
+def test_a_refresh_drops_images_that_left_the_gallery_and_replaces_the_avatar(
+    client: TestClient, flist
+) -> None:
+    import foreign_cache
+
+    _view_new(client, flist, "Anexample Person", "901", 1000)
+
+    _view_new(client, flist, "Anexample Person", "902", 1000, refresh=True, avatar=b"NEW")
+
+    images = foreign_cache.profile_dir("Anexample Person") / "images"
+    assert sorted(p.name for p in images.iterdir()) == ["902.png"]
+    avatar = client.get("/foreign/character/Anexample Person/avatar")
+    assert avatar.content == b"NEW"
+
+
+def test_the_cap_is_a_gigabyte_until_settings_change_it(client: TestClient) -> None:
+    body = client.get("/settings").json()
+    assert body["foreign"] == {"cache_cap_mb": 1024, "defaults": {"cache_cap_mb": 1024}}
+    assert client.get("/foreign/cache").json()["cap_bytes"] == 1024 * MB
+
+    res = client.put("/settings", json={"foreign": {"cache_cap_mb": 0}})
+
+    assert res.json()["foreign"]["cache_cap_mb"] == 1
+    assert client.get("/foreign/cache").json()["cap_bytes"] == MB
+
+
+def test_the_cache_reports_what_it_holds_and_clears_on_request(
+    client: TestClient, flist
+) -> None:
+    import foreign_cache
+
+    _view_new(client, flist, "First Visit", "901", 300_000)
+    _view_new(client, flist, "Second Visit", "902", 300_000)
+    on_disk = sum(p.stat().st_size for p in foreign_cache.root().rglob("*") if p.is_file())
+
+    usage = client.get("/foreign/cache").json()
+    assert usage["profiles"] == 2
+    assert 600_000 < usage["bytes"] <= on_disk
+
+    cleared = client.delete("/foreign/cache").json()
+
+    assert (cleared["removed"], cleared["bytes"], cleared["profiles"]) == (2, 0, 0)
+    assert not _cached("First Visit") and not _cached("Second Visit")
+    assert client.get("/foreign/cache").json()["bytes"] == 0
+
+
+def test_a_cache_from_before_the_size_index_is_counted(client: TestClient) -> None:
+    import foreign_cache
+
+    foreign_cache.write_profile("Old Visit", _profile("Old Visit"))
+    foreign_cache.image_path("Old Visit", "900", "png").write_bytes(b"x" * 5000)
+
+    usage = client.get("/foreign/cache").json()
+
+    assert usage["profiles"] == 1
+    assert usage["bytes"] > 5000
+
+
+def test_lowering_the_cap_evicts_at_once_but_keeps_the_last_viewed_profile(
+    client: TestClient, flist
+) -> None:
+    _view_new(client, flist, "First Visit", "901", 400_000)
+    _view_new(client, flist, "Second Visit", "902", 400_000)
+    _view_new(client, flist, "Third Visit", "903", 400_000)
+
+    _set_cap_mb(client, 1)
+
+    assert not _cached("First Visit")
+    assert _cached("Second Visit") and _cached("Third Visit")
+
+
+def test_a_profile_larger_than_the_cap_still_opens(client: TestClient, flist) -> None:
+    _set_cap_mb(client, 1)
+    _view_new(client, flist, "First Visit", "901", 400_000)
+
+    _view_new(client, flist, "Huge Gallery", "902", 2 * MB)
+
+    assert _cached("Huge Gallery")
+    assert not _cached("First Visit")
 
 
 def test_signing_out_drops_the_memoised_social_lists(
