@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import archive_backups
 import archive_images
 import archive_workbench
+import backup_origin
 import bbcode_rules
 
 from ._context import (
@@ -1211,7 +1212,7 @@ def put_workbench_payload(
     made in the meantime.
 
     The Workbench it replaces is saved as a Backup first (occasion
-    `before-restore`), named in `kept_as`; load_backup_into_workbench
+    `before-replace`), named in `kept_as`; load_backup_into_workbench
     with that Backup undoes this. If that Backup cannot be written,
     nothing is replaced.
     """
@@ -1220,7 +1221,10 @@ def put_workbench_payload(
         raise ToolError("validation_failed", "payload must be an object")
     try:
         replaced = archive_backups.replace_workbench(
-            target.id, payload, expected_etag=if_match
+            target.id,
+            payload,
+            expected_etag=if_match,
+            occasion=backup_origin.BEFORE_REPLACE,
         )
     except ValueError as exc:
         # Not a payload the Workbench takes; refused before any Backup.

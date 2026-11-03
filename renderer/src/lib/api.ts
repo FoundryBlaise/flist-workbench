@@ -74,6 +74,7 @@ export type FlistBackupOccasion =
   | 'manual'
   | 'before-upload'
   | 'before-restore'
+  | 'before-replace'
   | 'migration'
   | 'backup-all'
 

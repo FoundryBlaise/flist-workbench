@@ -10,6 +10,7 @@ const OCCASION_LABEL: Record<NonNullable<FlistZipBackupEntry['occasion']>, strin
   'backup-all': 'Back up all',
   'before-upload': 'before Upload',
   'before-restore': 'before Restore',
+  'before-replace': 'before replacement',
   migration: 'migration'
 }
 

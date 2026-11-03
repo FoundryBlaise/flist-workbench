@@ -1,7 +1,8 @@
 """Backups: `backups/<YYYY-MM-DDTHHMMSSZ>.zip` and their user-set names.
 
-Also the whole-Workbench replacements (reset to Live, load a Backup),
-which keep the Workbench as a `before-restore` Backup first (ADR 0003).
+Also the whole-Workbench replacements (reset to Live, load a Backup,
+MCP's raw payload), which keep the Workbench as a Backup first (ADR
+0003): `before-restore`, or `before-replace` for the raw payload.
 """
 from __future__ import annotations
 
@@ -466,8 +467,8 @@ def save_zip_backup(
     `source` is what the Backup holds: `live` (what F-list showed at the
     last Pull) or `workbench` (the user's edits; a Workbench not created
     yet holds what Live seeds it with). `occasion` is why it was made:
-    `manual`, `before-upload`, `before-restore`, `migration` or
-    `backup-all` (see `backup_origin`). Both go into the ZIP's
+    `manual`, `before-upload`, `before-restore`, `before-replace`,
+    `migration` or `backup-all` (see `backup_origin`). Both go into the ZIP's
     `backup-meta.json`, together with the older `kind` the extension
     sorts by — the occasion's own unless `kind` is given.
 
@@ -571,8 +572,8 @@ def save_zip_backup(
 @dataclass(frozen=True)
 class WorkbenchReplaced:
     """What a whole-Workbench replacement did: the new payload and its
-    etag, and `kept`, the `before-restore` Backup holding the Workbench
-    that was replaced, as `{filename, created_at}`. `kept` is None when
+    etag, and `kept`, the Backup holding the Workbench that was
+    replaced, as `{filename, created_at}`. `kept` is None when
     the character had no Workbench yet, so there was nothing to keep.
     """
 
@@ -581,9 +582,11 @@ class WorkbenchReplaced:
     kept: dict[str, Any] | None
 
 
-def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any]:
-    """Save the Workbench as a Backup (source `workbench`, occasion
-    `before-restore`) before something replaces all of it (ADR 0003).
+def _keep_workbench_before_replacing(
+    character_id: int | str, occasion: str
+) -> dict[str, Any]:
+    """Save the Workbench as a Backup (source `workbench`, `occasion`)
+    before something replaces all of it (ADR 0003).
 
     Always taken, never deduplicated: the Backup is the undo of the
     replacement. Raises `WorkbenchNotKept` when the Backup cannot be
@@ -593,7 +596,7 @@ def _keep_workbench_before_replacing(character_id: int | str) -> dict[str, Any]:
         result = save_zip_backup(
             character_id,
             source=backup_origin.WORKBENCH,
-            occasion=backup_origin.BEFORE_RESTORE,
+            occasion=occasion,
             force=True,
         )
     except Exception as exc:  # noqa: BLE001 - any failure means "not kept"
@@ -615,8 +618,10 @@ def replace_workbench(
     payload: dict[str, Any],
     *,
     expected_etag: str | None = None,
+    occasion: str = backup_origin.BEFORE_RESTORE,
 ) -> WorkbenchReplaced:
-    """Keep the Workbench as a Backup, then overwrite it with `payload`.
+    """Keep the Workbench as a Backup of `occasion`, then overwrite it
+    with `payload`.
 
     `payload` is checked first (ValueError) and so is `expected_etag`,
     when given (`WorkbenchConflict`), so a replacement that would be
@@ -637,7 +642,9 @@ def replace_workbench(
             " replaced. Read it again and redo the change.",
             current.etag,
         )
-    kept = None if current.created else _keep_workbench_before_replacing(character_id)
+    kept = (
+        None if current.created else _keep_workbench_before_replacing(character_id, occasion)
+    )
     try:
         etag = archive_workbench.write_workbench(character_id, payload, expected_etag=current.etag)
     except archive_workbench.EtagMismatch as exc:

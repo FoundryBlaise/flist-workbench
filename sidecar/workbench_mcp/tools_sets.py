@@ -529,8 +529,8 @@ def list_backups(
 
     Each entry says what it holds, `source`: `live` or `workbench`
     (`unknown` for older Backups), and why it was made, `occasion`:
-    `manual`, `before-upload`, `before-restore`, `migration` or
-    `backup-all` (null for older Backups).
+    `manual`, `before-upload`, `before-restore`, `before-replace`,
+    `migration` or `backup-all` (null for older Backups).
 
     Backups include images and the avatar. load_backup_into_workbench
     restores one into the Workbench.
