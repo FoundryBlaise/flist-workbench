@@ -491,6 +491,35 @@ async def test_a_lookup_that_never_reached_f_list_costs_a_model_nothing(
     assert body["budget_remaining"] == flist_api.HARD_PER_HOUR // 4 - 1
 
 
+async def test_the_activity_log_records_which_profiles_a_model_fetched(
+    mcp_budget: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The docs promise it: whichever tool read the profile, the
+    activity log names it, and still does after the sidecar restarts."""
+    import flist_activity
+    from mcp_helpers import call_tool, mcp_client
+
+    _stub_any_profile(monkeypatch)
+    flist_activity.reset()
+    flist_activity.enable_disk_writes()
+
+    async with mcp_client() as session:
+        await _model_opens(session, "Anexample Person")
+        await call_tool(session, "get_foreign_kinks", character="Another Example")
+
+    flist_activity.reset()
+    flist_activity.hydrate_from_disk()
+    fetched = [
+        (e["kind"], e.get("character"))
+        for e in flist_activity.snapshot()["events"]
+        if e["kind"].startswith("mcp:get_foreign")
+    ]
+    assert fetched == [
+        ("mcp:get_foreign_profile", "Anexample Person"),
+        ("mcp:get_foreign_kinks", "Another Example"),
+    ]
+
+
 # ---- routes -----------------------------------------------------------
 
 

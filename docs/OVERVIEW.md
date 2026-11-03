@@ -154,14 +154,24 @@ on. The sidebar hides the per-character zones while it is selected,
 and a `read-only` badge sits in the panel's header, because the panel
 otherwise looks exactly like the editor.
 
-Nothing is remembered about who you looked at. The slot holds one
-profile in memory, picking a real character leaves it without clearing
-it, and closing the app forgets it. There is no list of viewed
-profiles anywhere in the window.
+The slot holds one profile in memory; picking a real character leaves
+it without clearing it, and closing the app empties the slot. There is
+no list of viewed profiles anywhere in the window, but the profiles
+themselves are kept on disk: every Foreign profile you open, in the
+window or through a model, stays in the cache until it is evicted or
+you clear it. The activity log (Help → F-list Activity Log) records
+which profiles a model fetched, by name.
 
 The payloads cache under `%APPDATA%\flist-workbench\foreign\<name>\`
 in the same shape `live.json` uses, with a 24-hour TTL and a manual ↻.
-When F-list answers that it will not show a profile (deleted, private,
+The TTL only decides when a profile is fetched again; nothing is
+deleted for its age. The cache is capped instead, 1 GB by default,
+set in Settings → Foreign profiles, which also shows the space in use
+and clears the cache by hand. The cap counts each profile's JSON,
+gallery images and avatar; when a new profile or a refresh no longer
+fits, the least recently viewed profiles go first, files included, and
+the one being viewed always stays. Lowering the cap evicts at once. A
+refresh drops gallery images that left the profile. When F-list answers that it will not show a profile (deleted, private,
 or the owner blocked the account; the answer does not say which), the
 cached folder goes at once, images and avatar included. Offline,
 timeouts and F-list server errors serve the cached copy marked stale.

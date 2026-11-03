@@ -468,6 +468,20 @@ export type McpSettings = {
   log_text: boolean
 }
 
+/** The Foreign profile cache's cap, in whole megabytes (at least 1).
+ *  Only the window sets it; a lower cap evicts at once. */
+export type ForeignSettings = {
+  cache_cap_mb: number
+  defaults: { cache_cap_mb: number }
+}
+
+/** What the Foreign profile cache holds on disk, and what it may hold. */
+export type ForeignCacheUsage = {
+  bytes: number
+  profiles: number
+  cap_bytes: number
+}
+
 export type McpInfo = {
   port: number
   endpoints: McpEndpoint[]
@@ -675,6 +689,12 @@ export const api = {
    *  scrolling a gallery twice costs one fetch per image, not two. */
   foreignImageUrl: (name: string, imageId: string) =>
     `${base()}/foreign/character/${encodeURIComponent(name)}/image/${encodeURIComponent(imageId)}`,
+  foreignCacheUsage: () => get<ForeignCacheUsage>('/foreign/cache'),
+  /** Delete every cached Foreign profile, images and avatars included. */
+  foreignCacheClear: () =>
+    request<ForeignCacheUsage & { removed: number }>('/foreign/cache', {
+      method: 'DELETE'
+    }),
   health: () => get<{ status: string; version: string }>('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
     get<{
@@ -738,6 +758,7 @@ export const api = {
       rag: RagSettings
       image_import_roots: string[]
       mcp: McpSettings
+      foreign: ForeignSettings
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
@@ -745,6 +766,7 @@ export const api = {
     rag?: Partial<Omit<RagSettings, 'defaults'>>
     image_import_roots?: string[]
     mcp?: Partial<McpSettings>
+    foreign?: Partial<Omit<ForeignSettings, 'defaults'>>
   }) =>
     request<{
       fchat_data_dir: string | null
@@ -754,6 +776,7 @@ export const api = {
       rag: RagSettings
       image_import_roots: string[]
       mcp: McpSettings
+      foreign: ForeignSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)

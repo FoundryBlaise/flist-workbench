@@ -159,8 +159,10 @@ async def get_foreign_profile(
     into the user's own characters, and this tool is not a step
     towards one: there is no Workbench, Backup or export behind it.
 
-    Served from a local cache for 24 hours; `refresh=true` fetches
-    again. Pass `include_description=true` for the BBCode itself,
+    Served from the local cache while the copy is under 24 hours old;
+    `refresh=true` fetches again. The cache keeps profiles until its
+    size cap evicts them, and the activity log records each one you
+    read. Pass `include_description=true` for the BBCode itself,
     which can run to tens of kilobytes.
 
     Fetching costs one call against a quarter-share of the hourly
@@ -250,6 +252,11 @@ async def get_foreign_kinks(character: str) -> dict[str, Any]:
         )
     except foreign_service.ForeignError as exc:
         raise _as_tool_error(exc, _kinks_out) from exc
+    audit(
+        "get_foreign_kinks",
+        character=result["name"],
+        from_cache=result["from_cache"],
+    )
     return _kinks_out(result)
 
 
