@@ -180,6 +180,33 @@ def test_search_top_k_override_is_clamped(
     assert len(retrieval.search("q", top_k=9999).hits) == 1
 
 
+def test_a_hybrid_search_whose_keyword_backfill_fails_says_so(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hybrid search fills an empty keyword half from the vector half
+    first. When that write fails the search reports it, instead of
+    answering from the vector half alone as if nothing happened."""
+    import sqlite3
+
+    import rag_lexical
+    from services import retrieval
+
+    _seed_chunk(tmp_path)
+    _stub_embed(monkeypatch)
+
+    def locked(self, chunks):  # noqa: ANN001, ANN202, ARG001
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(rag_lexical.LexicalStore, "upsert_chunks", locked)
+
+    with pytest.raises(retrieval.KeywordBackfillFailed) as exc:
+        retrieval.search("hello", hybrid=True)
+    assert exc.value.code == "keyword_backfill_failed"
+    assert "database is locked" in exc.value.message
+    # A search with hybrid off never touches the keyword half.
+    assert retrieval.search("hello", hybrid=False).hits
+
+
 # ---- settings PUT + GET extended fields --------------------------------
 
 

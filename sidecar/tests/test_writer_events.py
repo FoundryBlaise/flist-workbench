@@ -231,10 +231,14 @@ async def test_uploading_bytes_the_pool_already_holds_changes_nothing(client) ->
     assert counts(received)["images-changed"] == 0, received
 
 
-async def test_a_model_importing_several_images_is_one_change(workbench, tmp_path) -> None:  # noqa: F811
+async def test_a_model_importing_several_images_is_one_change(
+    workbench, tmp_path_factory: pytest.TempPathFactory  # noqa: F811
+) -> None:
     from services import settings as settings_service
 
-    folder = tmp_path / "Outputs"
+    # Beside the data folder (`tmp_path`), not in it: nothing under the
+    # data folder can be imported.
+    folder = tmp_path_factory.mktemp("elsewhere") / "Outputs"
     folder.mkdir()
     settings_service.update({"image_import_roots": [str(folder)]})
     sources = []

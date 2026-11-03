@@ -228,6 +228,14 @@ class IndexUnreadable(Refusal):
     code = "index_unreadable"
 
 
+class KeywordBackfillFailed(Refusal):
+    """A hybrid search found the keyword half of the Index empty and
+    could not fill it from the vector half."""
+
+    status = 500
+    code = "keyword_backfill_failed"
+
+
 class UnsupportedType(Refusal, ValueError):
     """Bytes of a kind the route does not take (an image that is not
     PNG, JPEG or GIF; a render that is not PNG or JPEG)."""

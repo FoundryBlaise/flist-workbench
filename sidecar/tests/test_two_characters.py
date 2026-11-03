@@ -211,10 +211,6 @@ async def test_resetting_a_conversation_leaves_the_labels_of_a_log_unlinked_from
     assert two_characters.message(AZURE, PARTNER, OLD_NAME_LINE)["label"] == "IC"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#5: an MCP write replaces a manual Label",
-)
 async def test_an_mcp_write_does_not_overwrite_a_manual_label(
     two_characters: TwoCharacters,
 ) -> None:
@@ -226,6 +222,50 @@ async def test_an_mcp_write_does_not_overwrite_a_manual_label(
 
     kept = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
     assert (kept["label"], kept["label_source"]) == ("OOC", "manual")
+
+
+async def test_the_labelling_tool_reports_a_manual_label_it_skipped(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
+    manual_hash = two_characters.hash_of(AZURE, PARTNER, PARTNER_LINE)
+
+    body = await _label_over_mcp(
+        two_characters, AZURE, PARTNER, {PARTNER_LINE: "IC", OLD_NAME_LINE: "IC"}
+    )
+
+    assert body["written"] == 1
+    assert [s["hash"] for s in body["skipped"]] == [manual_hash]
+    assert "by hand" in body["skipped"][0]["reason"]
+    assert "by hand" in body["note"]
+    written = two_characters.message(AZURE, PARTNER, OLD_NAME_LINE)
+    assert (written["label"], written["label_source"]) == ("IC", "mcp")
+
+
+async def test_a_call_whose_every_label_was_set_by_hand_is_not_an_error(
+    two_characters: TwoCharacters,
+) -> None:
+    # Nothing to retry: the user's Label stands, so the model is told
+    # so rather than sent to fetch a fresh batch.
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
+
+    body = await _label_over_mcp(two_characters, AZURE, PARTNER, {PARTNER_LINE: "IC"})
+
+    assert body["written"] == 0
+    assert len(body["skipped"]) == 1
+
+
+def test_the_window_still_changes_and_clears_a_manual_label(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "IC")
+
+    changed = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
+    assert (changed["label"], changed["label_source"]) == ("IC", "manual")
+
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, None)
+    assert two_characters.message(AZURE, PARTNER, PARTNER_LINE)["label"] == "Unlabeled"
 
 
 @pytest.mark.xfail(
