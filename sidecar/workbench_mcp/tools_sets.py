@@ -1,10 +1,11 @@
 """Characters, their Workbench and Live, and descriptions (design §3.2–3.4).
 
 Addressing note that runs through all of these: `character` takes a
-name or an id. A read that can look at either copy takes `working_set`:
-left out for the character's Workbench, or the string `"live"` for the
-read-only profile last pulled from F-list; nothing else is accepted.
-Results do not name the copy back; `read_only` is true for Live.
+name or an id. A read that can look at either copy takes `source`:
+`"workbench"` (the default) for the character's Workbench, or `"live"`
+for the read-only profile last pulled from F-list; nothing else is
+accepted. Results do not name the copy back; `read_only` is true for
+Live.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import archive_live
 import archive_registry
 
 from ._context import (
+    LIVE,
+    WORKBENCH,
     ToolError,
     load_payload,
     resolve_character,
@@ -114,19 +117,19 @@ def get_live_profile(
     return out
 
 
-#: What `get_working_set` can be asked for. Descriptions are excluded by
+#: What `get_workbench` can be asked for. Descriptions are excluded by
 #: default because a single one can run to 30 KB.
-SET_SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "settings")
+SECTIONS = ("summary", "infotags", "kinks", "custom_kinks", "images", "settings")
 
 
 @tool(tags=TAG_CHARACTER, title="Read the Workbench", read_only=True)
-async def get_working_set(
+async def get_workbench(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     include: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The Workbench's contents, by section; working_set="live" reads
-    Live instead.
+    """The Workbench's contents, by section; source="live" reads Live
+    instead.
 
     `include` picks from summary, infotags, kinks, custom_kinks, images
     and settings; the default is summary only. The description is not
@@ -134,15 +137,15 @@ async def get_working_set(
     through it.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     sections = [s.strip().lower() for s in (include or ["summary"])]
-    unknown = [s for s in sections if s not in SET_SECTIONS]
+    unknown = [s for s in sections if s not in SECTIONS]
     if unknown:
         raise ToolError(
             "validation_failed",
             f"unknown section(s): {', '.join(unknown)}",
-            allowed=list(SET_SECTIONS),
+            allowed=list(SECTIONS),
         )
 
     from services import mapping as mapping_service
@@ -235,18 +238,18 @@ def _describe_infotag(catalogue, key: str, value: Any) -> dict[str, Any]:  # noq
 @tool(tags=TAG_CHARACTER, title="Read the description", read_only=True)
 def get_description(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     offset: int = 0,
     length: int | None = None,
 ) -> dict[str, Any]:
     """The profile description, in F-list BBCode.
 
     Descriptions run long; `offset` and `length` page through one.
-    Reads the Workbench; pass working_set="live" to read what is
-    currently published.
+    Reads the Workbench; pass source="live" to read what is currently
+    published.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     char = payload.get("character") if isinstance(payload.get("character"), dict) else {}
     text = (char or {}).get("description") or ""
@@ -268,7 +271,7 @@ def get_description(
 @tool(tags=TAG_CHARACTER, title="Profile fields", read_only=True)
 async def list_profile_fields(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     group: str | None = None,
     only_set: bool = False,
     query: str | None = None,
@@ -281,7 +284,7 @@ async def list_profile_fields(
     value; `group` and `query` filter by category and by name.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     values = payload.get("infotags") or {}
 
@@ -329,7 +332,7 @@ async def list_profile_fields(
 @tool(tags=TAG_CHARACTER, title="Kinks", read_only=True)
 async def list_kinks(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
     choice: str | None = None,
     query: str | None = None,
     include_unset: bool = False,
@@ -342,7 +345,7 @@ async def list_kinks(
     separately — they are free text the user wrote.
     """
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
     chosen = payload.get("kinks") or {}
 
@@ -488,23 +491,22 @@ _BBCODE_TAGS: list[dict[str, str]] = [
 
 
 @tool(tags=TAG_CHARACTER, title="Compare the Workbench with Live", read_only=True)
-async def diff_working_set(
+async def diff_workbench(
     character: str,
-    working_set: str | None = None,
-    against: str = "live",
+    source: str = WORKBENCH,
+    against: str = LIVE,
 ) -> dict[str, Any]:
     """What differs between the Workbench and Live.
 
     Compares the Workbench against `live`, the published profile, which
-    answers "what would change if I uploaded this". Pass
-    working_set="live" and against="workbench" to read the change the
-    other way round.
+    answers "what would change if I uploaded this". Pass source="live"
+    and against="workbench" to read the change the other way round.
 
     The description is summarised rather than diffed line by line;
     read both with get_description if the text itself matters.
     """
     target = resolve_character(character)
-    left = resolve_workbench_or_live(target, working_set)
+    left = resolve_workbench_or_live(target, source)
     right = resolve_workbench_or_live(target, against, param="against")
     if left.is_live == right.is_live:
         raise ToolError(
@@ -554,7 +556,7 @@ def list_backups(character: str) -> dict[str, Any]:
 @tool(tags=TAG_CHARACTER, title="List images", read_only=True)
 def list_images(
     character: str,
-    working_set: str | None = None,
+    source: str = WORKBENCH,
 ) -> dict[str, Any]:
     """The character's gallery, plus any images on disk that are not
     currently on the profile.
@@ -570,7 +572,7 @@ def list_images(
     from services import image_import
 
     target = resolve_character(character)
-    resolved = resolve_workbench_or_live(target, working_set)
+    resolved = resolve_workbench_or_live(target, source)
     payload = load_payload(resolved)
 
     gallery = [
