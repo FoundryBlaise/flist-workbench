@@ -461,7 +461,7 @@ VERDICT_ALLOWED: dict[str, int] = {
     "sidecar/labels.py": 3,
     "sidecar/workbench_mcp/tools_classify.py": 15,
     "sidecar/workbench_mcp/tools_logs.py": 4,
-    "sidecar/workbench_mcp/tools_ops.py": 2,
+    "sidecar/workbench_mcp/tools_ops.py": 1,
     "sidecar/workbench_mcp/tools_rag.py": 2,
 }
 
@@ -469,7 +469,7 @@ CLASSIFICATION_ALLOWED: dict[str, int] = {
     "sidecar/labels.py": 2,
     "sidecar/services/retrieval.py": 1,
     "sidecar/workbench_mcp/tools_classify.py": 2,
-    "sidecar/workbench_mcp/tools_ops.py": 2,
+    "sidecar/workbench_mcp/tools_ops.py": 1,
 }
 
 TRANSCRIPT_ALLOWED: dict[str, int] = {}
