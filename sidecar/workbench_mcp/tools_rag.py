@@ -12,10 +12,10 @@ import time
 from typing import Any
 
 from ._context import ToolError, resolve_conversation, resolve_log_character
-from ._registry import TAG_CORE, TAG_LOGS, tool
+from ._registry import TAG_CORE, TAG_LOG_TEXT, TAG_LOGS, tool
 
 
-@tool(tags=TAG_LOGS, title="Search logs by meaning", read_only=True)
+@tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Search logs by meaning", read_only=True)
 def search_logs_semantic(
     question: str,
     character: str | None = None,

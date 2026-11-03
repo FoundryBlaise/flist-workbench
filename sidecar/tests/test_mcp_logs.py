@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from fchat_logs import chat, write_log
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 
 LONG = "A" * 260  # above the 200-char rule threshold, so: Unlabeled
 SHORT = "ok"  # below it, so: OOC by rule
@@ -51,6 +51,9 @@ def corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     importlib.reload(paths)
     importlib.reload(server)
+    # The tools under test return Log text, which MCP clients get only
+    # once the user turns it on.
+    allow_log_text()
     return root
 
 

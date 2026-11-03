@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_helpers import call_tool, mcp_client, tool_error_text
+from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 from fchat_logs import chat, write_log
 
 LONG_A = "She set the lantern down and listened to the rain. " * 6
@@ -48,6 +48,9 @@ def conversation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     importlib.reload(settings)
     importlib.reload(labels)
     importlib.reload(server)
+    # The tools under test return Log text, which MCP clients get only
+    # once the user turns it on.
+    allow_log_text()
     return root
 
 

@@ -57,10 +57,24 @@ KEY_RAG_CHUNK_OVERLAP_MSGS = "rag.chunk_overlap_msgs"
 # could widen its own reach would make the allow-list pointless.
 KEY_IMAGE_IMPORT_ROOTS = "images.import_roots"
 
+# Whether MCP clients get the tools that return Log text ("1" / "0",
+# off when absent). Set only from Settings → MCP: a model must not be
+# able to grant itself the user's partners' words.
+KEY_MCP_LOG_TEXT = "mcp.log_text"
+
+_DB_NAME = "settings.db"
+
+
 def db_path(root: Path | None = None) -> Path:
     base = root or paths.user_data_dir()
     base.mkdir(parents=True, exist_ok=True)
-    return base / "settings.db"
+    return base / _DB_NAME
+
+
+def db_exists(root: Path | None = None) -> bool:
+    """Whether settings.db is there yet, without creating it (or its
+    folder) the way `connect` does."""
+    return ((root or paths.user_data_dir()) / _DB_NAME).is_file()
 
 
 def connect(root: Path | None = None) -> sqlite3.Connection:

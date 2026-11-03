@@ -359,8 +359,8 @@ async def test_the_narrow_endpoints_carry_their_own_tools() -> None:
         log_tools = {t.name for t in (await session.list_tools()).tools}
 
     assert "list_profile_fields" in character_tools
-    assert "read_log_messages" not in character_tools
-    assert "read_log_messages" in log_tools
+    assert "list_partners" not in character_tools
+    assert "list_partners" in log_tools
     assert "list_profile_fields" not in log_tools
     # Core tools are on both, so a model on either endpoint can orient.
     assert "get_workbench_status" in character_tools & log_tools

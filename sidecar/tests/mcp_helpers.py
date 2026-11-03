@@ -84,6 +84,23 @@ async def call_tool(session: ClientSession, tool: str, /, **arguments: Any):
         return result, joined
 
 
+def allow_log_text(on: bool = True) -> None:
+    """Turn the Settings → MCP switch for Log-text tools on (or off),
+    through the settings service as the window does.
+
+    Only in a test's own data folder: the switch is stored in
+    settings.db, and a test must never change the user's.
+    """
+    import os
+
+    from services import settings as settings_service
+
+    assert os.environ.get("FLIST_WORKBENCH_DATA_DIR"), (
+        "point FLIST_WORKBENCH_DATA_DIR at a temp folder first"
+    )
+    settings_service.update({"mcp.log_text": on})
+
+
 def tool_error_text(result: Any) -> str:
     """The error message of a failed tool call, for asserting on the
     structured `code:` prefix from `_context.ToolError`."""
