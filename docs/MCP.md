@@ -309,7 +309,6 @@ window gets for the same situation:
 | `character_not_found` | no local archive for that name — the error lists the ones that exist |
 | `no_workbench` | the character was never pulled, so there is no Live to make a Workbench from |
 | `no_live` | the character was never pulled, so there is no Live to read, back up or export |
-| `live_is_read_only` | tried to edit Live |
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found`, `kink_not_found` | F-list has no such field or kink; the list tools show what exists |
 | `validation_failed` | a value F-list wouldn't accept, or a `working_set` other than the Workbench (left out) or `live` — the error carries the allowed ones |
@@ -323,6 +322,8 @@ window gets for the same situation:
 | `index_unreadable` | the Index is there but could not be read; not the same as empty |
 | `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use) |
+| `embedding_model_changed` | an ingest found an Index built with another embedding model; `wipe_search_index`, then ingest again |
+| `log_text_off` | a tool that returns Log text, while Settings → MCP keeps those off; the user turns them on |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |
 
 ## For reference

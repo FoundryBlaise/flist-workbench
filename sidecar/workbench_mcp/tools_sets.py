@@ -22,15 +22,27 @@ from ._context import (
     WORKBENCH,
     ToolError,
     load_payload,
+    page,
     resolve_character,
     resolve_workbench_or_live,
 )
 from ._registry import TAG_CHARACTER, TAG_CORE, tool
 from .tools_session import NO_PUSH_NOTE
 
+#: The most rows one call of a list tool returns; `offset` pages on.
+MAX_CHARACTERS = 100
+MAX_PROFILE_FIELDS = 100
+MAX_KINKS = 100
+MAX_BACKUPS = 50
+#: Lower than the rest: a pool image is read from disk for its hash and
+#: size, and each row says a lot.
+MAX_IMAGES = 50
+
 
 @tool(tags=(TAG_CORE, TAG_CHARACTER), title="List characters", read_only=True)
-def list_characters(include_log_only: bool = True) -> dict[str, Any]:
+def list_characters(
+    include_log_only: bool = True, limit: int = MAX_CHARACTERS, offset: int = 0
+) -> dict[str, Any]:
     """Every character this Workbench knows about.
 
     Characters with a local archive can be edited; ones that only
@@ -78,7 +90,8 @@ def list_characters(include_log_only: bool = True) -> dict[str, Any]:
             row["on_account"] = str(row["name"]).lower() in on_account
 
     rows.sort(key=lambda r: str(r.get("name") or "").lower())
-    return {"characters": rows}
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_CHARACTERS)
+    return {"characters": rows, "page": paged}
 
 
 @tool(tags=TAG_CHARACTER, title="Live profile", read_only=True)
@@ -275,6 +288,8 @@ async def list_profile_fields(
     group: str | None = None,
     only_set: bool = False,
     query: str | None = None,
+    limit: int = MAX_PROFILE_FIELDS,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """The structured profile fields — species, height, orientation and
     the rest — with each field's type, allowed options and current value.
@@ -320,10 +335,12 @@ async def list_profile_fields(
         if catalogue.field_by_id(str(k)) is None
     ]
 
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_PROFILE_FIELDS)
     return {
         "character": target.name,
         "read_only": resolved.is_live,
         "fields": rows,
+        "page": paged,
         "unknown_fields": unknown,
         "groups": sorted({f.group for f in catalogue.fields if f.group}),
     }
@@ -336,6 +353,8 @@ async def list_kinks(
     choice: str | None = None,
     query: str | None = None,
     include_unset: bool = False,
+    limit: int = MAX_KINKS,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """The character's kink choices, by name.
 
@@ -375,6 +394,7 @@ async def list_kinks(
             }
         )
     rows.sort(key=lambda r: (str(r["group"] or ""), str(r["kink"]).lower()))
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_KINKS)
 
     custom = [
         {
@@ -391,6 +411,7 @@ async def list_kinks(
         "character": target.name,
         "read_only": resolved.is_live,
         "kinks": rows,
+        "page": paged,
         "custom_kinks": custom,
         "counts": _choice_counts(chosen),
     }
@@ -535,7 +556,9 @@ async def diff_workbench(
 
 
 @tool(tags=TAG_CHARACTER, title="List backups", read_only=True)
-def list_backups(character: str) -> dict[str, Any]:
+def list_backups(
+    character: str, limit: int = MAX_BACKUPS, offset: int = 0
+) -> dict[str, Any]:
     """ZIP backups of a character, newest first.
 
     Each entry says what it holds, `source`: `live` or `workbench`
@@ -547,16 +570,21 @@ def list_backups(character: str) -> dict[str, Any]:
     restores one into the Workbench.
     """
     target = resolve_character(character)
-    return {
-        "character": target.name,
-        "backups": archive_backups.list_zip_backups(target.id),
-    }
+    backups, paged = page(
+        archive_backups.list_zip_backups(target.id),
+        offset=offset,
+        limit=limit,
+        cap=MAX_BACKUPS,
+    )
+    return {"character": target.name, "backups": backups, "page": paged}
 
 
 @tool(tags=TAG_CHARACTER, title="List images", read_only=True)
 def list_images(
     character: str,
     source: str = WORKBENCH,
+    limit: int = MAX_IMAGES,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """The character's gallery, plus any images on disk that are not
     currently on the profile.
@@ -568,6 +596,8 @@ def list_images(
     how many Backups hold it (each with its own copy of the file), and
     whether the older copies from before the upgrade name it
     (`migration_backup`; that Backup holds no image files).
+
+    Pages run through the gallery first, then the rest.
     """
     from services import image_import
 
@@ -585,16 +615,25 @@ def list_images(
         for row in (payload.get("images") or [])
         if isinstance(row, dict) and row.get("image_id")
     ]
+    gallery.sort(key=lambda r: r.get("sort_order") or 0)
     on_profile = {row["image_id"] for row in gallery}
+    rest = [
+        row
+        for row in archive_images.list_character_images(target.id)
+        if _image_id(row) and _image_id(row) not in on_profile
+    ]
+    # One page over both lists; only the pool rows on it are read from
+    # disk.
+    window, paged = page(gallery + rest, offset=offset, limit=limit, cap=MAX_IMAGES)
 
     meta = image_import.read_meta(target.id)
     refs = image_import.references(target.id)
     images_dir = archive_images.images_dir(target.id)
     pool = []
-    for row in archive_images.list_character_images(target.id):
-        image_id = str(row.get("image_id") or row.get("id") or "")
-        if not image_id or image_id in on_profile:
+    for row in window:
+        if row.get("on_profile"):
             continue
+        image_id = _image_id(row)
         path = images_dir / f"{image_id}.{row.get('extension')}"
         try:
             sha = archive_images.file_sha256(path)
@@ -623,6 +662,11 @@ def list_images(
 
     return {
         "character": target.name,
-        "gallery": sorted(gallery, key=lambda r: r.get("sort_order") or 0),
+        "gallery": [row for row in window if row.get("on_profile")],
         "not_on_profile": pool,
+        "page": paged,
     }
+
+
+def _image_id(row: dict[str, Any]) -> str:
+    return str(row.get("image_id") or row.get("id") or "")

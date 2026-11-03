@@ -14,6 +14,10 @@ from typing import Any
 from ._context import ToolError, resolve_conversation, resolve_log_character
 from ._registry import TAG_CORE, TAG_LOG_TEXT, TAG_LOGS, tool
 
+#: The most matches one search returns: each is a whole chunk of text,
+#: and its neighbours come with it.
+MAX_SEMANTIC_HITS = 20
+
 
 @tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Search logs by meaning", read_only=True)
 def search_logs_semantic(
@@ -23,6 +27,7 @@ def search_logs_semantic(
     top_k: int | None = None,
     neighbors: int | None = None,
     hybrid: bool | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Find passages in the user's roleplay logs that are *about*
     something, rather than containing a particular word.
@@ -30,7 +35,7 @@ def search_logs_semantic(
     Returns whole chunks with their text, date and speakers — read them
     and answer from what they say. Scope it with `character` and
     `partner` when the question is about one relationship; leave both
-    out to search everything.
+    out to search everything. At most 20 matches (`top_k`) a page.
 
     Only messages with an IC/OOC verdict are in the index. If results
     look thin, check get_label_stats: unjudged messages are skipped at
@@ -59,13 +64,20 @@ def search_logs_semantic(
             "character, their character) pair",
         )
 
+    if top_k is None:
+        import rag as rag_settings
+
+        top_k = rag_settings.load_settings().top_k
+    size = max(1, min(MAX_SEMANTIC_HITS, int(top_k)))
+    start = max(0, int(offset))
     try:
         result = retrieval.search(
             question,
             scope=scope,
-            top_k=top_k,
+            top_k=size,
             neighbors=neighbors,
             hybrid=hybrid,
+            offset=start,
         )
     except retrieval.NoIndexError as exc:
         raise ToolError("no_index", str(exc)) from exc
@@ -79,6 +91,13 @@ def search_logs_semantic(
 
     payload = result.to_dict()
     payload["question"] = question
+    matches = sum(1 for hit in result.hits if not hit.expanded)
+    payload["page"] = {
+        "offset": start,
+        "limit": size,
+        "returned": matches,
+        "next_offset": start + matches if result.has_more else None,
+    }
     if not payload["hits"]:
         payload["note"] = (
             "Nothing matched. Either this hasn't been ingested yet "

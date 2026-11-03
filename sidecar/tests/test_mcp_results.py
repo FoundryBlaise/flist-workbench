@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import server  # noqa: F401  (building the servers fills the registry)
+from fchat_logs import chat, utc, write_log
 from mcp_helpers import allow_log_text, call_tool, mcp_client, tool_error_text
 from test_mcp_edit import open_workbench, seed_gallery, workbench  # noqa: F401
 from test_rag_jobs import _stub_index_services
@@ -526,3 +528,291 @@ async def test_an_ingest_that_fails_is_an_error_not_a_result(
         text = _failed(*await call_tool(session, "ingest_logs", character=CHAR))
     assert "embedding_failed: " in text
     assert "check_embedding" in text
+
+
+# ---- capped and paged lists ------------------------------------------------
+#
+# Each list or search below gets more rows than its cap, then is asked
+# for far more than the cap: it answers the cap and the offset of the
+# next page, and following those offsets reads every row exactly once.
+
+#: More than any cap.
+TOO_MANY = 10_000
+
+
+def _crowd_the_catalogue(count: int) -> None:
+    """A field catalogue with `count` fields and `count` kinks."""
+    import json
+
+    import archive_registry
+    from services import mapping as mapping_service
+
+    mapping = {
+        "infotags": [
+            {"id": str(n), "name": f"Field {n:03}", "type": "text", "group_id": "1"}
+            for n in range(1, count + 1)
+        ],
+        "infotag_groups": [{"id": "1", "name": "General details"}],
+        "listitems": [],
+        "kinks": [
+            {"id": str(1000 + n), "name": f"Kink {n:03}", "group_id": "7"}
+            for n in range(count)
+        ],
+        "kink_groups": [{"id": "7", "name": "Miscellaneous"}],
+    }
+    cache = archive_registry.cache_root() / "mapping-list.json"
+    cache.write_text(json.dumps(mapping), encoding="utf-8")
+    mapping_service.invalidate()
+
+
+def _many_characters(count: int, fchat: Path) -> None:
+    """`count` characters of the user's, known from their Logs only."""
+    for n in range(count):
+        write_log(
+            fchat / f"Extra {n:03}" / "logs" / PARTNER,
+            [chat(PARTNER, "Hello.", at=utc(2024, 1, 1, 12, 0))],
+        )
+
+
+def _many_images(count: int) -> None:
+    import archive_images
+
+    for n in range(count):
+        archive_images.write_character_image("42", str(9000 + n), "png", _png(n))
+
+
+def _many_backups(count: int) -> None:
+    import archive_backups
+    import backup_origin
+
+    for _ in range(count):
+        archive_backups.save_zip_backup(
+            "42", source=backup_origin.LIVE, occasion=backup_origin.MANUAL, force=True
+        )
+
+
+def _many_partners(count: int, fchat: Path) -> None:
+    """`count` partners, each with one line about the lighthouse."""
+    for n in range(count):
+        name = f"Partner {n:03}"
+        write_log(
+            fchat / CHAR / "logs" / name,
+            [chat(name, "The lighthouse is dark.", at=utc(2024, 1, 1, 12, n % 60))],
+        )
+
+
+def _many_hits(count: int, fchat: Path) -> None:
+    """One conversation with `count` lines about the lighthouse."""
+    write_log(
+        fchat / CHAR / "logs" / "Chatterbox",
+        [
+            chat("Chatterbox", f"Lighthouse, again ({n}).", at=utc(2024, 2, 1, 10, 0) + n)
+            for n in range(count)
+        ],
+    )
+
+
+def _much_activity(count: int) -> None:
+    import flist_activity
+
+    for n in range(count):
+        flist_activity.record("test", n=n)
+
+
+@dataclass(frozen=True)
+class Paged:
+    """A list or search tool: how to crowd it, how to call it, which
+    rows its page holds, and its cap."""
+
+    crowd: Callable[[Path], None]
+    arguments: dict[str, Any]
+    rows: Callable[[dict[str, Any]], list[Any]]
+    cap: int
+
+
+PAGED: dict[str, Paged] = {
+    "list_characters": Paged(
+        lambda data_dir: _many_characters(120, data_dir / "fchat"),
+        {},
+        lambda body: body["characters"],
+        cap=100,
+    ),
+    "list_profile_fields": Paged(
+        lambda _: _crowd_the_catalogue(120),
+        {"character": CHAR},
+        lambda body: body["fields"],
+        cap=100,
+    ),
+    "list_kinks": Paged(
+        lambda _: _crowd_the_catalogue(120),
+        {"character": CHAR, "include_unset": True},
+        lambda body: body["kinks"],
+        cap=100,
+    ),
+    "list_images": Paged(
+        lambda _: _many_images(60),
+        {"character": CHAR},
+        lambda body: body["gallery"] + body["not_on_profile"],
+        cap=50,
+    ),
+    "list_backups": Paged(
+        lambda _: _many_backups(55),
+        {"character": CHAR},
+        lambda body: body["backups"],
+        cap=50,
+    ),
+    "list_partners": Paged(
+        lambda data_dir: _many_partners(120, data_dir / "fchat"),
+        {"character": CHAR},
+        lambda body: body["partners"],
+        cap=100,
+    ),
+    "search_logs": Paged(
+        lambda data_dir: _many_hits(120, data_dir / "fchat"),
+        {"character": CHAR, "partner": "Chatterbox", "query": "lighthouse"},
+        lambda body: body["hits"],
+        cap=100,
+    ),
+    "get_activity_log": Paged(
+        lambda _: _much_activity(120),
+        {},
+        lambda body: body["events"],
+        cap=100,
+    ),
+}
+
+
+@pytest.mark.parametrize("tool", sorted(PAGED))
+async def test_a_list_asked_for_too_much_answers_the_cap_and_pages_the_rest(
+    scene: Path, tool: str
+) -> None:
+    paged = PAGED[tool]
+    paged.crowd(scene)
+    async with mcp_client("") as session:
+        await open_workbench(session)
+        body = await _call(session, tool, **paged.arguments, limit=TOO_MANY)
+        rows = paged.rows(body)
+        assert len(rows) == paged.cap
+        assert body["page"]["limit"] == paged.cap
+        assert body["page"]["next_offset"] == paged.cap
+
+        while body["page"]["next_offset"] is not None:
+            body = await _call(
+                session,
+                tool,
+                **paged.arguments,
+                limit=TOO_MANY,
+                offset=body["page"]["next_offset"],
+            )
+            rows += paged.rows(body)
+    assert len(rows) == body["page"]["total"] > paged.cap
+    assert len({_row_key(row) for row in rows}) == len(rows), "a row came twice"
+
+
+def _row_key(row: Any) -> str:
+    import json
+
+    return json.dumps(row, sort_keys=True, default=str)
+
+
+async def test_a_search_of_every_partner_pages_by_partner(scene: Path) -> None:
+    """Without a partner, `limit` caps the hits per partner, and the
+    partners come a page at a time."""
+    _many_partners(25, scene / "fchat")
+    seen: list[str] = []
+    offset = 0
+    async with mcp_client("logs") as session:
+        while offset is not None:
+            body = await _call(
+                session,
+                "search_logs",
+                character=CHAR,
+                query="lighthouse",
+                limit=TOO_MANY,
+                offset=offset,
+            )
+            assert len(body["partners"]) <= 10
+            assert body["limit_per_partner"] == 20
+            seen += [row["partner"] for row in body["partners"]]
+            offset = body["page"]["next_offset"]
+    # Antiquill mentions it too, in the shared Logs.
+    assert len(seen) == len(set(seen)) == 26
+
+
+async def test_a_semantic_search_caps_its_hits_and_pages_the_rest(scene: Path) -> None:
+    async with mcp_client("logs") as session:
+        for partner in (PARTNER, "Azure Viper"):
+            await _call(
+                session,
+                "label_all_unlabeled",
+                character=CHAR,
+                partner=partner,
+                label="IC",
+                confirm=True,
+            )
+        await _call(session, "ingest_logs", character=CHAR)
+
+        search = {"question": "lighthouse", "character": CHAR, "neighbors": 0}
+        asked_too_much = await _call(
+            session, "search_logs_semantic", **search, top_k=TOO_MANY
+        )
+        first = await _call(session, "search_logs_semantic", **search, top_k=1)
+        second = await _call(
+            session,
+            "search_logs_semantic",
+            **search,
+            top_k=1,
+            offset=first["page"]["next_offset"],
+        )
+
+    assert asked_too_much["page"]["limit"] == 20
+    assert len(asked_too_much["hits"]) == 2
+    assert asked_too_much["page"]["next_offset"] is None
+    assert len(first["hits"]) == len(second["hits"]) == 1
+    assert first["page"]["next_offset"] == 1
+    assert second["page"]["next_offset"] is None
+    both = {first["hits"][0]["chunk_id"], second["hits"][0]["chunk_id"]}
+    assert both == {hit["chunk_id"] for hit in asked_too_much["hits"]}
+
+
+# ---- the error codes MCP.md lists ------------------------------------------
+
+SIDECAR = Path(__file__).resolve().parents[1]
+MCP_DOC = SIDECAR.parent / "docs" / "MCP.md"
+
+
+def _documented_codes() -> set[str]:
+    text = MCP_DOC.read_text(encoding="utf-8")
+    table = text.split("## When something goes wrong", 1)[1].split("\n## ", 1)[0]
+    codes: set[str] = set()
+    for line in table.splitlines():
+        if line.startswith("| `"):
+            first_cell = line.split("|")[1]
+            codes |= set(re.findall(r"`([a-z_]+)`", first_cell))
+    return codes
+
+
+def _codes_in_the_sidecar() -> set[str]:
+    """Every quoted snake_case word in the sidecar's own code: a code in
+    use is one of them."""
+    words: set[str] = set()
+    for path in SIDECAR.rglob("*.py"):
+        if ".venv" in path.parts or "tests" in path.parts:
+            continue
+        words |= set(re.findall(r"\"([a-z]+(?:_[a-z]+)+)\"", path.read_text(encoding="utf-8")))
+    return words
+
+
+def test_every_error_code_mcp_md_lists_is_still_in_use() -> None:
+    documented = _documented_codes()
+    assert documented, "MCP.md's error table was not found"
+    assert documented - _codes_in_the_sidecar() == set()
+
+
+def test_mcp_md_lists_the_codes_a_waiting_ingest_fails_with() -> None:
+    """A failed ingest is an error now, carrying the job's code."""
+    assert {
+        "embedding_failed",
+        "embedding_model_changed",
+        "log_dir_unavailable",
+    } <= _documented_codes()

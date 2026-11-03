@@ -96,6 +96,34 @@ def validation_failed(field: str, reason: str, allowed: Any = None) -> ToolError
 
 
 # --------------------------------------------------------------------
+# Pages
+# --------------------------------------------------------------------
+
+
+def page(
+    rows: list[Any], *, offset: int, limit: int, cap: int
+) -> tuple[list[Any], dict[str, Any]]:
+    """The rows from `offset` on, `limit` of them but never more than
+    `cap`, and the `page` a result carries beside them.
+
+    A limit over the cap is not refused: the caller gets the cap, and
+    `next_offset` (null on the last page) is the `offset` that fetches
+    the rest. One call can then never flood a small model's context.
+    """
+    start = max(0, int(offset))
+    size = max(1, min(cap, int(limit)))
+    window = rows[start : start + size]
+    end = start + len(window)
+    return window, {
+        "offset": start,
+        "limit": size,
+        "returned": len(window),
+        "total": len(rows),
+        "next_offset": end if end < len(rows) else None,
+    }
+
+
+# --------------------------------------------------------------------
 # Character addressing
 # --------------------------------------------------------------------
 

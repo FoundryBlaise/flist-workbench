@@ -79,7 +79,9 @@ Two things to keep straight:
    it as a Backup first, and a Restore (load_backup_into_workbench)
    loads a Backup back into the Workbench.
 
-Characters are addressed by name; ids also work.
+Characters are addressed by name; ids also work. Lists and searches
+come a page at a time: when a result's `page.next_offset` is not null,
+pass it as `offset` for the next page.
 """
 
 #: Said on every endpoint, /mcp/classify included: with the switch off

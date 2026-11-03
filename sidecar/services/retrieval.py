@@ -73,6 +73,8 @@ class SearchResult:
     rerank_applied: bool
     hybrid_applied: bool
     scope: dict[str, Any] | None
+    #: More matches rank below the last one returned.
+    has_more: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,11 +125,13 @@ def search(
     top_k: int | None = None,
     neighbors: int | None = None,
     hybrid: bool | None = None,
+    offset: int = 0,
 ) -> SearchResult:
     """Retrieve the log chunks most relevant to `question`.
 
     `top_k`, `neighbors` and `hybrid` override the saved settings for
-    this one call; None means "use what is configured". Raises
+    this one call; None means "use what is configured". `offset` skips
+    that many of the best matches, for the next page. Raises
     `NoIndexError` when nothing has been ingested, `IndexBusy` while an
     ingest holds the Index, and `rag_embed.EmbedError` when the
     embedding endpoint is unreachable.
@@ -181,6 +185,7 @@ def search(
                 rerank_min_ratio=rag_set.rerank_min_ratio,
                 lex=lex,
                 hybrid_bm25_candidates=rag_set.hybrid_bm25_candidates,
+                offset=offset,
             )
         finally:
             if lex is not None:
@@ -195,6 +200,7 @@ def search(
         rerank_applied=result.rerank_applied,
         hybrid_applied=result.hybrid_applied,
         scope=resolved_scope,
+        has_more=result.has_more,
     )
 
 

@@ -17,13 +17,15 @@ import aliases as aliases_store
 import logs as log_store
 from services import labels as label_service
 
-from ._context import ToolError, resolve_conversation, resolve_log_character
+from ._context import ToolError, page, resolve_conversation, resolve_log_character
 from ._registry import TAG_CLASSIFY, TAG_LOG_TEXT, TAG_LOGS, tool
 
 #: A single read can pull in a lot of text; keep the default modest and
 #: let the caller page with `offset`.
 DEFAULT_MESSAGE_LIMIT = 200
 MAX_MESSAGE_LIMIT = 1000
+#: The most partners one list_partners call returns; `offset` pages on.
+MAX_PARTNERS = 100
 
 
 # Note: every `except` below names the exception through `log_store`
@@ -55,7 +57,11 @@ def list_log_characters() -> dict[str, Any]:
 
 @tool(tags=(TAG_LOGS, TAG_CLASSIFY), title="Conversation partners", read_only=True)
 def list_partners(
-    character: str, include_channels: bool = False, query: str | None = None
+    character: str,
+    include_channels: bool = False,
+    query: str | None = None,
+    limit: int = MAX_PARTNERS,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Everyone a character has logs with.
 
@@ -80,7 +86,8 @@ def list_partners(
             row["also_known_as"] = list(entry.aliases)
         rows.append(row)
     rows.sort(key=lambda r: -int(r["bytes"]))
-    return {"character": character, "partners": rows}
+    rows, paged = page(rows, offset=offset, limit=limit, cap=MAX_PARTNERS)
+    return {"character": character, "partners": rows, "page": paged}
 
 
 @tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Read a conversation", read_only=True)
@@ -141,45 +148,55 @@ def read_log_messages(
 
 @tool(tags=(TAG_LOGS, TAG_LOG_TEXT), title="Search Logs for a phrase", read_only=True)
 def search_logs(
-    character: str, query: str, partner: str | None = None, limit: int = 50
+    character: str,
+    query: str,
+    partner: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Literal substring search in one character's Logs.
 
-    With `partner`, searches that conversation. Without it, searches
-    every partner of the character and groups the hits by partner, at
-    most 20 per partner (`truncated` says there were more: search that
-    partner on its own to see them). Case-insensitive, matched against
-    the message text with BBCode stripped. For "what did we say about X"
-    questions, search_logs_semantic is usually the better tool.
+    With `partner`, searches that conversation, at most 100 hits a page.
+    Without it, searches every partner of the character and groups the
+    hits by partner, 10 partners a page and at most 20 hits per partner
+    (`truncated` says there were more: search that partner on its own
+    to see them). Case-insensitive, matched against the message text
+    with BBCode stripped. For "what did we say about X" questions,
+    search_logs_semantic is usually the better tool.
     """
     if not (query or "").strip():
         raise ToolError("validation_failed", "query is empty")
     if not partner:
-        return _search_every_partner(character, query, limit)
+        return _search_every_partner(character, query, limit, offset)
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
     try:
         hits = log_store.search_messages(character, partner, query)
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
-    capped = max(1, int(limit))
+    window, paged = page(hits, offset=offset, limit=limit, cap=MAX_HITS)
     return {
         "character": character,
         "partner": partner,
         "query": query,
         "total_hits": len(hits),
-        "hits": [_hit(h) for h in hits[:capped]],
-        "truncated": len(hits) > capped,
+        "hits": [_hit(h) for h in window],
+        "page": paged,
     }
 
 
+#: The most hits one search of a conversation returns.
+MAX_HITS = 100
 #: Without a partner one search can touch hundreds of conversations; a
-#: per-partner cap keeps the answer readable and still shows where the
-#: phrase comes up.
+#: per-partner cap and a page of partners keep the answer readable and
+#: still show where the phrase comes up.
 MAX_HITS_PER_PARTNER = 20
+PARTNERS_PER_PAGE = 10
 
 
-def _search_every_partner(character: str, query: str, limit: int) -> dict[str, Any]:
+def _search_every_partner(
+    character: str, query: str, limit: int, offset: int
+) -> dict[str, Any]:
     character = resolve_log_character(character)
     per_partner = max(1, min(MAX_HITS_PER_PARTNER, int(limit)))
     try:
@@ -188,6 +205,12 @@ def _search_every_partner(character: str, query: str, limit: int) -> dict[str, A
         )
     except log_store.LogDirError as exc:
         raise _log_dir_error(exc) from exc
+    partners, paged = page(
+        result.get("partners") or [],
+        offset=offset,
+        limit=PARTNERS_PER_PAGE,
+        cap=PARTNERS_PER_PAGE,
+    )
     return {
         "character": character,
         "query": query,
@@ -199,8 +222,9 @@ def _search_every_partner(character: str, query: str, limit: int) -> dict[str, A
                 "truncated": row.get("truncated", False),
                 "hits": [_hit(h) for h in (row.get("hits") or [])],
             }
-            for row in (result.get("partners") or [])
+            for row in partners
         ],
+        "page": paged,
     }
 
 
