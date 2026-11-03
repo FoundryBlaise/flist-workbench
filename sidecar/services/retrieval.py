@@ -13,6 +13,7 @@ model the user connected.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +22,7 @@ import rag as rag_settings
 import rag_lexical
 import rag_query
 import rag_store
-from refusals import NoIndex
+from refusals import KeywordBackfillFailed, NoIndex
 from services import index as index_service
 
 
@@ -132,8 +133,9 @@ def search(
     this one call; None means "use what is configured". `offset` skips
     that many of the best matches, for the next page. Raises
     `NoIndexError` when nothing has been ingested, `IndexBusy` while an
-    ingest holds the Index, and `rag_embed.EmbedError` when the
-    embedding endpoint is unreachable.
+    ingest holds the Index, `rag_embed.EmbedError` when the
+    embedding endpoint is unreachable, and `KeywordBackfillFailed` when
+    a hybrid search cannot fill an empty keyword half of the Index.
     """
     rag_set = rag_settings.load_settings()
     resolved_scope = expand_scope(scope)
@@ -161,17 +163,9 @@ def search(
         lex: rag_lexical.LexicalStore | None = None
         if use_hybrid:
             lex = rag_lexical.LexicalStore()
-            # Backfill safety net: someone who enables hybrid after an
-            # existing ingest has an empty FTS5 table while Qdrant holds
-            # thousands of chunks. Rebuilding from payloads takes
-            # seconds and avoids the "I turned it on and got no hits"
-            # surprise.
-            try:
-                if lex.count() == 0 and store.count() > 0:
-                    rag_lexical.backfill_from_qdrant(store, lex)
-            except Exception:  # noqa: BLE001, S110 — backfill is best-effort
-                pass
         try:
+            if lex is not None:
+                _backfill_if_empty(store, lex)
             result = rag_query.run_query(
                 question,
                 scope=resolved_scope,
@@ -201,6 +195,27 @@ def search(
         scope=resolved_scope,
         has_more=result.has_more,
     )
+
+
+def _backfill_if_empty(store: rag_store.RagStore, lex: rag_lexical.LexicalStore) -> None:
+    """Fill an empty keyword half of the Index from the vector half.
+
+    Someone who turns hybrid search on after an earlier ingest has an
+    empty keyword half while the vector half holds thousands of chunks;
+    copying the payloads takes seconds and avoids "I turned it on and
+    got no hits". A copy that fails is reported, so a hybrid search
+    never quietly answers from one half."""
+    if lex.count() > 0 or store.count() == 0:
+        return
+    try:
+        rag_lexical.backfill_from_qdrant(store, lex)
+    except sqlite3.Error as exc:
+        raise KeywordBackfillFailed(
+            "Hybrid search needs the keyword half of the Index, which is "
+            f"empty and could not be filled from the vector half: {exc}. "
+            "Search with hybrid off, or rebuild the lexical index in "
+            "Settings once the cause is fixed."
+        ) from exc
 
 
 def _to_hit(raw: dict[str, Any]) -> SearchHit:
