@@ -401,7 +401,7 @@ def label_all_unlabeled(
         "This deletes every stored Label of the conversation (of every "
         "conversation of the character when no partner is given), "
         "including the user's own manual overrides. A copy goes to the "
-        "Trash, where only the user can restore it."
+        "Trash, where only the user can put it back."
     ),
 )
 def clear_labels(
@@ -413,7 +413,7 @@ def clear_labels(
     model decided. Rule-based hints keep firing. Ask the user before
     calling this with confirm=true. The cleared Labels go to the
     character's Trash as one entry (`trash_id`), which the user can
-    restore in the window.
+    put back in the window.
 
     Search keeps finding the cleared messages until the next
     ingest_logs of the conversation, which drops them from the Index.
@@ -440,7 +440,7 @@ def clear_labels(
         "trash_id": cleared["trash_id"],
         "note": (
             "Those messages are Unlabeled again. The cleared Labels are in "
-            "the character's Trash; the user can restore them in the "
+            "the character's Trash; the user can put them back in the "
             "window. Search still finds the messages until the next "
             "ingest_logs, which drops them from the Index."
         ),

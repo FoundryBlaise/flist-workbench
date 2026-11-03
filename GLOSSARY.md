@@ -31,8 +31,9 @@ _Avoid_: snapshot, bundle, archive, export
 Where deleted images and Backups, and cleared Labels, wait until a human
 empties it. Nothing empties it on its own. Images and Backups wait in
 their character's Trash; cleared Labels in one shared place, listed in
-Settings → Labels.
-_Avoid_: recycle bin, deleted items
+Settings → Labels. Taking something out of the Trash is putting it back,
+not a Restore.
+_Avoid_: recycle bin, deleted items, restore (for the Trash)
 
 ## Moving a profile
 

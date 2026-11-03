@@ -64,7 +64,7 @@ beforeEach(() => {
       }))
       return json({ trashed: trash, not_found: [], off_gallery: [], etag: null })
     })
-    .on(`POST ${TRASH}/restore`, (req) => {
+    .on(`POST ${TRASH}/put-back`, (req) => {
       const ids = (req.body as { image_ids: string[] }).image_ids
       trash = trash.filter((t) => !ids.includes(t.trash_id))
       return json({
@@ -165,7 +165,7 @@ it('filters narrow the pool and select-all takes only what they show', () => {
   expect(screen.getAllByTestId('flist-images-pool-item')).toHaveLength(11)
 })
 
-it('the Trash view restores what was trashed', async () => {
+it('the Trash view puts back what was trashed', async () => {
   trash = [
     {
       trash_id: 'gone1',
@@ -187,16 +187,16 @@ it('the Trash view restores what was trashed', async () => {
   const items = await screen.findAllByTestId('flist-images-trash-item')
   expect(items[0].textContent).toContain('by a connected model')
   fireEvent.click(checkbox(items[0]))
-  fireEvent.click(screen.getByTestId('flist-images-trash-restore'))
+  fireEvent.click(screen.getByTestId('flist-images-trash-put-back'))
 
-  await waitFor(() => expect(fake.requestsTo(`POST ${TRASH}/restore`).length > 0).toBe(true))
-  expect(fake.requestsTo(`POST ${TRASH}/restore`)[0].body).toEqual({
+  await waitFor(() => expect(fake.requestsTo(`POST ${TRASH}/put-back`).length > 0).toBe(true))
+  expect(fake.requestsTo(`POST ${TRASH}/put-back`)[0].body).toEqual({
     image_ids: ['gone1']
   })
   await waitFor(() => expect(screen.getByText('The Trash is empty.')).toBeTruthy())
 })
 
-it('two files trashed under one image id are listed and restored one by one', async () => {
+it('two files trashed under one image id are listed and put back one by one', async () => {
   const entry = (trash_id: string, deleted_at: number) => ({
     trash_id,
     image_id: '47000002',
@@ -218,10 +218,10 @@ it('two files trashed under one image id are listed and restored one by one', as
   expect(items).toHaveLength(2)
   fireEvent.click(checkbox(items[1]))
   expect(checkbox(items[0]).checked).toBe(false)
-  fireEvent.click(screen.getByTestId('flist-images-trash-restore'))
+  fireEvent.click(screen.getByTestId('flist-images-trash-put-back'))
 
-  await waitFor(() => expect(fake.requestsTo(`POST ${TRASH}/restore`).length > 0).toBe(true))
-  expect(fake.requestsTo(`POST ${TRASH}/restore`)[0].body).toEqual({
+  await waitFor(() => expect(fake.requestsTo(`POST ${TRASH}/put-back`).length > 0).toBe(true))
+  expect(fake.requestsTo(`POST ${TRASH}/put-back`)[0].body).toEqual({
     image_ids: ['47000002']
   })
   await waitFor(() => expect(screen.getAllByTestId('flist-images-trash-item')).toHaveLength(1))

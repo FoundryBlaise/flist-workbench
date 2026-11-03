@@ -431,7 +431,7 @@ export function ImagesTab({
                 className="flist-images-pane__add"
                 onClick={() => setView('trash')}
                 data-testid="flist-images-trash-toggle"
-                title="Images moved out of the pool. Restore them, or delete them for good."
+                title="Images moved out of the pool. Put them back, or delete them for good."
               >
                 Trash{trashCount ? ` (${trashCount})` : ''}
               </button>
@@ -779,8 +779,8 @@ export function ImagesTab({
           title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the Trash?`}
           body={
             confirmTrash.some((id) => galleryImageIds.has(id))
-              ? 'It comes off the profile and leaves the pool. A restore from the Trash puts it back in the pool, until you empty the Trash.'
-              : 'They leave the pool and can be restored from the Trash until you empty it.'
+              ? 'It comes off the profile and leaves the pool. Putting it back from the Trash returns it to the pool, until you empty the Trash.'
+              : 'They leave the pool and can be put back from the Trash until you empty it.'
           }
           notes={usageNotes(confirmTrash, refs)}
           thumbs={confirmTrash.flatMap((id) => {

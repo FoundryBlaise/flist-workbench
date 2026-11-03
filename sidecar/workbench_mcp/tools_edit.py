@@ -595,9 +595,8 @@ def delete_custom_kink(
     """Remove a custom kink from the profile; needs `confirm=true`.
 
     One that already exists on F-list is kept as a tombstone so the
-    upload knows to remove it, and can be brought back with
-    restore_custom_kink. One added locally and never uploaded is
-    dropped for good.
+    upload knows to remove it, and put_back_custom_kink puts it back.
+    One added locally and never uploaded is dropped for good.
     """
     from services import payload_ops
 
@@ -616,12 +615,12 @@ def delete_custom_kink(
         "character": target.name,
         "id": kink_id,
         "outcome": how,
-        "restorable": how == "tombstoned",
+        "can_put_back": how == "tombstoned",
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Restore a deleted custom kink")
-def restore_custom_kink(
+@tool(tags=TAG_CHARACTER, title="Put back a deleted custom kink")
+def put_back_custom_kink(
     character: str,
     kink_id: str,
 ) -> dict[str, Any]:
@@ -631,11 +630,11 @@ def restore_custom_kink(
     target = _writable(character)
 
     def mutate(payload: dict[str, Any]) -> payload_ops.EditResult:
-        touched = payload_ops.restore_custom_kink(payload, kink_id)
+        touched = payload_ops.put_back_custom_kink(payload, kink_id)
         return payload_ops.EditResult(etag="", changed=touched)
 
     _apply(target, mutate)
-    audit("restore_custom_kink", character=target.name, id=kink_id)
+    audit("put_back_custom_kink", character=target.name, id=kink_id)
     return {"character": target.name, "id": kink_id}
 
 
@@ -778,7 +777,7 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     """Delete images: move their files to the character's Trash. An
     image in the Workbench's gallery is taken off it first
     (`off_gallery`); one only in the pool just leaves the pool.
-    `restore_image` brings each back into the pool, not onto the
+    `put_back_images` puts each back into the pool, not onto the
     profile; only the user can empty the Trash, in the window.
 
     To take an image off the profile and keep it, use remove_image. An
@@ -820,13 +819,13 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
 def list_trash(character: str) -> dict[str, Any]:
     """What the character's Trash holds, newest first, with when and by
     whom (`ui` or `mcp`): `items` are deleted images, which
-    `restore_image` puts back into the pool by `trash_id` (the image id,
-    unless the Trash holds several files under one id because a Pull
-    replaced it); `backups` are deleted Backups and `labels` are cleared Labels
-    (one entry per clear, with its conversation, or `partner` null for
-    every conversation, and how many Labels it holds), both of which the
-    user restores in the window. Emptying the Trash is the user's job,
-    in the window."""
+    `put_back_images` puts back into the pool by `trash_id` (the image
+    id, unless the Trash holds several files under one id because a Pull
+    replaced it); `backups` are deleted Backups and `labels` are cleared
+    Labels (one entry per clear, with its conversation, or `partner` null
+    for every conversation, and how many Labels it holds), both of which
+    the user puts back in the window. Emptying the Trash is the user's
+    job, in the window."""
     from services import backup_trash, image_trash, label_trash
 
     target = resolve_character(character)
@@ -838,8 +837,8 @@ def list_trash(character: str) -> dict[str, Any]:
     }
 
 
-@tool(tags=TAG_CHARACTER, title="Restore images from the Trash")
-def restore_image(
+@tool(tags=TAG_CHARACTER, title="Put images back from the Trash")
+def put_back_images(
     character: str,
     image_id: str | None = None,
     image_ids: list[str] | None = None,
@@ -849,7 +848,7 @@ def restore_image(
     `image_ids`, as list_trash's `trash_id`. If the pool already holds
     the same bytes, the Trash entry is dropped and the existing id is
     reported instead. If it holds a different picture under that id,
-    the restored one comes back as `local-<sha8>`, so both are kept.
+    the one put back comes as `local-<sha8>`, so both are kept.
     """
     from services import image_trash
 
@@ -860,18 +859,24 @@ def restore_image(
     if not ids:
         raise ToolError("validation_failed", "Give image_id or image_ids.")
     result = image_trash.restore_images(target.id, ids)
-    if not result["restored"] and result["not_found"]:
+    put_back = result["restored"]
+    if not put_back and result["not_found"]:
         raise ToolError(
             "image_not_found",
             f"Not in {target.name}'s Trash: {result['not_found']}. "
             "list_trash shows what is there.",
         )
     audit(
-        "restore_image",
+        "put_back_images",
         character=target.name,
-        image_ids=[r["image_id"] for r in result["restored"]],
+        image_ids=[r["image_id"] for r in put_back],
     )
-    return {"character": target.name, **result}
+    return {
+        "character": target.name,
+        "put_back": put_back,
+        "not_found": result["not_found"],
+        "conflicts": result["conflicts"],
+    }
 
 
 @tool(tags=TAG_CHARACTER, title="Put an image on the profile")

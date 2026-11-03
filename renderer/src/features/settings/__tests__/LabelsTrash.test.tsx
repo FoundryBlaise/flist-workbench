@@ -1,6 +1,6 @@
 // Settings → Labels, where "Reset all labels" lives, lists every
 // cleared-Labels entry in the Trash: also those of a Log character with
-// no Workbench, whose character Trash view does not exist. Restore puts
+// no Workbench, whose character Trash view does not exist. Put back puts
 // them back; deleting for good asks first.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -61,10 +61,10 @@ function openLabels() {
   render(<SettingsModal onClose={() => {}} initialSection="labels" />)
 }
 
-it('lists a Log-only character’s cleared Labels and restores them', async () => {
+it('lists a Log-only character’s cleared Labels and puts them back', async () => {
   let entries = [ENTRY]
   vi.spyOn(api, 'labelsTrashList').mockImplementation(async () => ({ labels: entries }))
-  const restore = vi.spyOn(api, 'labelsTrashRestore').mockImplementation(async () => {
+  const putBack = vi.spyOn(api, 'labelsTrashPutBack').mockImplementation(async () => {
     entries = []
     return { restored: [{ id: ENTRY.id, restored: 4, skipped: [] }], not_found: [] }
   })
@@ -74,9 +74,9 @@ it('lists a Log-only character’s cleared Labels and restores them', async () =
   const [row] = await within(section).findAllByTestId('flist-trash-labels-item')
   expect(row.textContent).toContain('4 Labels')
   expect(row.textContent).toContain('Daelan Envale with Corin Vale')
-  fireEvent.click(within(row).getByRole('button', { name: /restore/i }))
+  fireEvent.click(within(row).getByRole('button', { name: /put back/i }))
 
-  await waitFor(() => expect(restore).toHaveBeenCalledWith([ENTRY.id]))
+  await waitFor(() => expect(putBack).toHaveBeenCalledWith([ENTRY.id]))
   // The last entry is gone, and the message saying so stays visible.
   expect(await within(section).findByText('4 Labels are back.')).toBeTruthy()
   expect(within(section).queryAllByTestId('flist-trash-labels-item')).toHaveLength(0)
@@ -97,7 +97,7 @@ it('deleting an entry for good asks first', async () => {
   await waitFor(() => expect(purge).toHaveBeenCalledWith([ENTRY.id]))
 })
 
-it('the reset confirm says where the copy can be restored', async () => {
+it('the reset confirm says where the copy can be put back', async () => {
   vi.spyOn(api, 'labelsTrashList').mockResolvedValue({ labels: [] })
   vi.spyOn(api, 'labelsRollup').mockResolvedValue({
     character_count: 1,

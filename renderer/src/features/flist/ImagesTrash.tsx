@@ -29,8 +29,8 @@ export function trashEntryCount(res: {
 }
 
 /** The character's Trash, shown in place of the pool: its images, and
- *  below them its Backups and cleared Labels. Restore puts files back
- *  into the pool, never onto the profile. Deleting for good lives here
+ *  below them its Backups and cleared Labels. Put back returns files
+ *  to the pool, never onto the profile. Deleting for good lives here
  *  and nowhere else — MCP has no tool for it. */
 export function ImagesTrash({
   characterId,
@@ -89,9 +89,9 @@ export function ImagesTrash({
     void loadCharacterImages(characterId)
   }
 
-  const restore = () =>
+  const putBack = () =>
     run(async () => {
-      const res = await api.flistTrashRestore(characterId, sel.ids)
+      const res = await api.flistTrashPutBack(characterId, sel.ids)
       const twins = res.restored.filter((r) => r.deduplicated).length
       const parts = [`${res.restored.length} back in the pool`]
       if (twins) parts.push(`${twins} already there, so not copied twice`)
@@ -157,10 +157,10 @@ export function ImagesTrash({
           <button
             type="button"
             className="flist-images-toolbar__btn flist-images-toolbar__btn--add"
-            onClick={() => void restore()}
-            data-testid="flist-images-trash-restore"
+            onClick={() => void putBack()}
+            data-testid="flist-images-trash-put-back"
           >
-            Restore to pool
+            Put back in pool
           </button>
           <button
             type="button"
@@ -227,7 +227,7 @@ export function ImagesTrash({
       <TrashedLabels
         items={labels}
         readOnly={readOnly}
-        restore={(ids) => api.flistTrashLabelsRestore(characterId, ids)}
+        putBack={(ids) => api.flistTrashLabelsPutBack(characterId, ids)}
         purge={(ids) => api.flistTrashLabelsPurge(characterId, ids)}
         onChanged={load}
       />

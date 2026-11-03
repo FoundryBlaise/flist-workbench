@@ -1,5 +1,5 @@
 // Clearing Labels keeps them in the Trash. The Trash view lists the
-// entry with its scope and how many Labels it holds, and Restore puts
+// entry with its scope and how many Labels it holds, and Put back puts
 // them back, saying which messages kept a newer Label.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -49,7 +49,7 @@ beforeEach(() => {
     .on(`GET ${CHAR}/trash`, () =>
       json({ character_id: CID, items: [], backups: [], labels: trashedLabels })
     )
-    .on(`POST ${CHAR}/trash/labels/restore`, () => {
+    .on(`POST ${CHAR}/trash/labels/put-back`, () => {
       trashedLabels = []
       return json({
         restored: [{ id: ENTRY, restored: 2, skipped: ['aaaabbbbccccdddd'] }],
@@ -66,7 +66,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('cleared Labels are listed with their scope and count, and restored', async () => {
+it('cleared Labels are listed with their scope and count, and put back', async () => {
   render(<ImagesTab characterId={CID} />)
   await waitFor(() =>
     expect(screen.getByTestId('flist-images-trash-toggle').textContent).toBe('Trash (1)')
@@ -77,10 +77,10 @@ it('cleared Labels are listed with their scope and count, and restored', async (
   expect(row.textContent).toContain('3 Labels')
   expect(row.textContent).toContain('Daelan Envale')
   expect(row.textContent).toContain('by a connected model')
-  fireEvent.click(within(row).getByRole('button', { name: /restore/i }))
+  fireEvent.click(within(row).getByRole('button', { name: /put back/i }))
 
   await waitFor(() =>
-    expect(fake.requestsTo(`POST ${CHAR}/trash/labels/restore`)[0]?.body).toEqual({
+    expect(fake.requestsTo(`POST ${CHAR}/trash/labels/put-back`)[0]?.body).toEqual({
       ids: [ENTRY]
     })
   )

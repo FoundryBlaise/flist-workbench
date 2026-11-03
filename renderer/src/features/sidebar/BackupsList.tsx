@@ -324,7 +324,7 @@ function DeleteBackupConfirm({
         </p>
         <p>
           It moves to this character's Trash (Images → Trash), where you
-          can restore it until you empty the Trash.
+          can put it back until you empty the Trash.
         </p>
         <div className="modal-actions">
           <button type="button" onClick={onCancel}>

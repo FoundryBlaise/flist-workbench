@@ -539,7 +539,7 @@ async def test_deleting_a_local_custom_kink_drops_it_outright(
             confirm=True,
         )
     assert deleted["outcome"] == "dropped"
-    assert deleted["restorable"] is False
+    assert deleted["can_put_back"] is False
     payload = payload_of(workbench)
     assert added["id"] not in payload["custom_kinks"]
     assert payload["_custom_kinks_order"] == []
@@ -569,7 +569,7 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
             confirm=True,
         )
         assert deleted["outcome"] == "tombstoned"
-        assert deleted["restorable"] is True
+        assert deleted["can_put_back"] is True
 
         _, listed = await call_tool(
             session, "list_kinks", character="Lady Amber Blaise"
@@ -578,7 +578,7 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
 
         await call_tool(
             session,
-            "restore_custom_kink",
+            "put_back_custom_kink",
             character="Lady Amber Blaise",
             kink_id="7788",
         )
@@ -588,14 +588,14 @@ async def test_deleting_an_flist_side_custom_kink_leaves_a_tombstone(
     assert [c["name"] for c in restored["custom_kinks"]] == ["From F-list"]
 
 
-async def test_restoring_a_dropped_local_kink_explains_it_is_gone(
+async def test_putting_back_a_dropped_local_kink_explains_it_is_gone(
     workbench,
 ) -> None:
     async with mcp_client("character") as session:
         await open_workbench(session)
         result, _ = await call_tool(
             session,
-            "restore_custom_kink",
+            "put_back_custom_kink",
             character="Lady Amber Blaise",
             kink_id="local:never-existed",
         )

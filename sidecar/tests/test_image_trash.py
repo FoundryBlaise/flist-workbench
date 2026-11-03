@@ -75,7 +75,7 @@ def test_ten_images_go_to_the_trash_and_come_back(client) -> None:
     assert pool_ids(client) == set()
     assert set(trash_ids(client)) == set(ids)
 
-    restored = client.post("/flist/character/42/trash/restore", json={"image_ids": ids}).json()
+    restored = client.post("/flist/character/42/trash/put-back", json={"image_ids": ids}).json()
     assert sorted(r["image_id"] for r in restored["restored"]) == sorted(ids)
     assert pool_ids(client) == set(ids)
     assert trash_ids(client) == []
@@ -87,7 +87,7 @@ def test_restoring_bytes_the_pool_already_has_makes_no_duplicate(client, workben
     # A pull fetches the same picture again under F-list's id.
     archive_images.write_character_image("42", "47000001", "png", png(3))
 
-    res = client.post("/flist/character/42/trash/restore", json={"image_ids": [iid]}).json()
+    res = client.post("/flist/character/42/trash/put-back", json={"image_ids": [iid]}).json()
 
     assert res["restored"] == [{"image_id": "47000001", "deduplicated": True, "from": iid}]
     assert pool_ids(client) == {"47000001"}
@@ -235,7 +235,7 @@ def test_only_the_window_deletes_for_good(client) -> None:
 async def test_mcp_has_no_way_to_delete_for_good(workbench) -> None:  # noqa: F811
     async with mcp_client() as session:
         names = {t.name for t in (await session.list_tools()).tools}
-    assert {"list_trash", "restore_image"} <= names
+    assert {"list_trash", "put_back_images"} <= names
     assert not any(
         ("purge" in n or "empty" in n) and ("trash" in n or "image" in n) for n in names
     ), names
@@ -259,7 +259,7 @@ async def test_remove_image_takes_it_off_the_gallery_and_keeps_the_file(
     assert trash_ids(client) == []
 
 
-async def test_a_model_trashes_gallery_and_pool_images_and_restores_every_one(
+async def test_a_model_trashes_gallery_and_pool_images_and_puts_every_one_back(
     workbench, client  # noqa: F811
 ) -> None:
     on_profile = upload(client, 20)
@@ -281,9 +281,9 @@ async def test_a_model_trashes_gallery_and_pool_images_and_restores_every_one(
         )
         _, listed = await call_tool(session, "list_trash", character=CHAR)
         gallery_after_trash = [r["image_id"] for r in payload_of(workbench)["images"]]
-        _, restored = await call_tool(
+        _, put_back = await call_tool(
             session,
-            "restore_image",
+            "put_back_images",
             character=CHAR,
             image_ids=[i["trash_id"] for i in listed["items"]],
         )
@@ -295,7 +295,7 @@ async def test_a_model_trashes_gallery_and_pool_images_and_restores_every_one(
     assert gallery_after_trash == [stays]
     assert {i["deleted_by"] for i in listed["items"]} == {"mcp"}
     # Every one comes back, into the pool and not onto the profile.
-    assert sorted(r["image_id"] for r in restored["restored"]) == sorted(
+    assert sorted(r["image_id"] for r in put_back["put_back"]) == sorted(
         [on_profile, loose, pulled]
     )
     assert pool_ids(client) == {on_profile, loose, pulled, stays}
@@ -376,7 +376,7 @@ def test_two_different_files_trashed_under_one_id_are_both_kept(
 
     # Both come back, and neither overwrites the other.
     res = client.post(
-        "/flist/character/42/trash/restore",
+        "/flist/character/42/trash/put-back",
         json={"image_ids": [i["trash_id"] for i in items]},
     ).json()
     assert len(res["restored"]) == 2
@@ -403,7 +403,7 @@ def test_restoring_onto_a_pool_file_with_other_bytes_keeps_both(
     archive_images.write_character_image("42", "47000004", "png", png(34))
 
     res = client.post(
-        "/flist/character/42/trash/restore", json={"image_ids": ["47000004"]}
+        "/flist/character/42/trash/put-back", json={"image_ids": ["47000004"]}
     ).json()
 
     local = f"local-{hashlib.sha256(png(33)).hexdigest()[:8]}"

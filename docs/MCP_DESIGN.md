@@ -21,6 +21,11 @@
 > destructive tool needs `confirm=true`, and Log-text tools are off
 > until the user turns them on. A fourth endpoint, `/mcp/classify`,
 > added after this record, carries the labelling loop alone.
+>
+> The review of spec #6 renamed more: `restore_image` is
+> `put_back_images` and `restore_custom_kink` is `put_back_custom_kink`,
+> since taking something out of the Trash is putting it back, not a
+> Restore.
 
 Status at the time: **v4, 2026-09-11 — implemented.** Phases 0–7 were
 built and shipped on `feat/mcp-server`. Where the build differed from

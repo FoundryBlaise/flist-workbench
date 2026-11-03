@@ -74,7 +74,7 @@ def test_a_deleted_backup_goes_to_the_trash_and_comes_back_under_its_name(
     trash = archive_registry.character_dir(CID) / "trash"
     assert sha(original) in files_under(trash)
 
-    restored = client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]})
+    restored = client.post(f"{TRASH}/backups/put-back", json={"ids": [entry["id"]]})
 
     assert restored.status_code == 200
     assert restored.json()["restored"] == [filename]
@@ -138,7 +138,7 @@ def test_a_restore_onto_a_different_backup_under_the_same_name_keeps_both(
     newer.write_bytes(b"another Backup that took the same file name")
     [entry] = trashed(client)
 
-    res = client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]}).json()
+    res = client.post(f"{TRASH}/backups/put-back", json={"ids": [entry["id"]]}).json()
 
     [restored_as] = res["restored"]
     assert restored_as != filename
@@ -162,7 +162,7 @@ def test_trashing_the_same_bytes_again_keeps_the_name_the_earlier_entry_had(
 
     [entry] = trashed(client)
     assert entry["name"] == "Before the big rewrite"
-    client.post(f"{TRASH}/backups/restore", json={"ids": [entry["id"]]})
+    client.post(f"{TRASH}/backups/put-back", json={"ids": [entry["id"]]})
     assert listed(client) == {filename: "Before the big rewrite"}
 
 

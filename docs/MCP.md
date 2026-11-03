@@ -411,7 +411,7 @@ server, so they cannot drift from it.
 | `add_custom_kink` | Add a kink in the user's own words. |
 | `update_custom_kink` | Change a custom kink's name, description or choice. |
 | `delete_custom_kink` | Remove a custom kink. Needs `confirm=true`. |
-| `restore_custom_kink` | Bring back a custom kink delete_custom_kink removed. |
+| `put_back_custom_kink` | Put back a custom kink delete_custom_kink removed. |
 | `reorder_custom_kinks` | Set the order of the custom kinks. |
 | `set_image_description` | Set the caption under a gallery image. |
 | `reorder_images` | Set the order of the gallery. |
@@ -420,7 +420,7 @@ server, so they cannot drift from it.
 | `import_images` | Copy image files from folders the user cleared into the pool, optionally onto the gallery. |
 | `trash_images` | Delete images: off the gallery, out of the pool, into the Trash. |
 | `list_trash` | What the character's Trash holds: images, Backups, cleared Labels. |
-| `restore_image` | Move images from the Trash back into the pool. |
+| `put_back_images` | Put images from the Trash back into the pool. |
 | `create_backup` | Keep a Backup of the Workbench. |
 | `list_backups` | The character's Backups, newest first. |
 | `load_backup_into_workbench` | Restore: load a Backup into the Workbench, keeping a Backup of what it held. Needs `confirm=true`. |
@@ -483,7 +483,7 @@ server, so they cannot drift from it.
 | `add_custom_kink` | Add a kink in the user's own words. |
 | `update_custom_kink` | Change a custom kink's name, description or choice. |
 | `delete_custom_kink` | Remove a custom kink. Needs `confirm=true`. |
-| `restore_custom_kink` | Bring back a custom kink delete_custom_kink removed. |
+| `put_back_custom_kink` | Put back a custom kink delete_custom_kink removed. |
 | `reorder_custom_kinks` | Set the order of the custom kinks. |
 | `set_image_description` | Set the caption under a gallery image. |
 | `reorder_images` | Set the order of the gallery. |
@@ -492,7 +492,7 @@ server, so they cannot drift from it.
 | `import_images` | Copy image files from folders the user cleared into the pool, optionally onto the gallery. |
 | `trash_images` | Delete images: off the gallery, out of the pool, into the Trash. |
 | `list_trash` | What the character's Trash holds: images, Backups, cleared Labels. |
-| `restore_image` | Move images from the Trash back into the pool. |
+| `put_back_images` | Put images from the Trash back into the pool. |
 | `create_backup` | Keep a Backup of the Workbench. |
 | `list_backups` | The character's Backups, newest first. |
 | `load_backup_into_workbench` | Restore: load a Backup into the Workbench, keeping a Backup of what it held. Needs `confirm=true`. |

@@ -107,7 +107,7 @@ export type FlistCharacterImage = {
 
 /** A file in a character's image trash (`<character>/trash/`). */
 export type FlistTrashItem = {
-  /** Names this entry for restore and purge. The image id, unless the
+  /** Names this entry for put-back and purge. The image id, unless the
    *  Trash holds several files under that id (a Pull replaced one). */
   trash_id: string
   image_id: string
@@ -122,11 +122,11 @@ export type FlistTrashItem = {
 
 /** A deleted Backup in a character's Trash (`<character>/trash/backups/`). */
 export type FlistTrashedBackup = {
-  /** Its file name in the Trash; what restore and purge take. */
+  /** Its file name in the Trash; what put-back and purge take. */
   id: string
-  /** The Backup's file name in the Backup list, where a restore puts it. */
+  /** The Backup's file name in the Backup list, where a put-back returns it. */
   filename: string
-  /** The user-set name it had, kept for the restore. */
+  /** The user-set name it had, kept for the put-back. */
   name: string | null
   size: number
   deleted_at: number
@@ -135,7 +135,7 @@ export type FlistTrashedBackup = {
 
 /** Labels cleared in one go, kept in the character's Trash. */
 export type FlistTrashedLabels = {
-  /** What restore and purge take. */
+  /** What put-back and purge take. */
   id: string
   /** The Log character they were cleared for. */
   character: string
@@ -796,11 +796,11 @@ export const api = {
   labelsTrashList: () => get<{ labels: FlistTrashedLabels[] }>('/labels/trash'),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
-  labelsTrashRestore: (ids: string[]) =>
+  labelsTrashPutBack: (ids: string[]) =>
     request<{
       restored: { id: string; restored: number; skipped: string[] }[]
       not_found: string[]
-    }>('/labels/trash/restore', { method: 'POST', body: JSON.stringify({ ids }) }),
+    }>('/labels/trash/put-back', { method: 'POST', body: JSON.stringify({ ids }) }),
   /** Delete cleared Labels for good. */
   labelsTrashPurge: (ids: string[]) =>
     request<{ purged: string[]; not_found: string[] }>('/labels/trash/purge', {
@@ -1254,12 +1254,12 @@ export const api = {
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
   /** Back into the pool, not onto the profile. Takes trash ids. */
-  flistTrashRestore: (characterId: string | number, trashIds: string[]) =>
+  flistTrashPutBack: (characterId: string | number, trashIds: string[]) =>
     request<{
       restored: { image_id: string; deduplicated: boolean; from: string }[]
       not_found: string[]
       conflicts: string[]
-    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/restore`, {
+    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/put-back`, {
       method: 'POST',
       body: JSON.stringify({ image_ids: trashIds })
     }),
@@ -1270,9 +1270,9 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
     ),
   /** Back into the Backup list, under the name they had. */
-  flistTrashBackupsRestore: (characterId: string | number, ids: string[]) =>
+  flistTrashBackupsPutBack: (characterId: string | number, ids: string[]) =>
     request<{ restored: string[]; not_found: string[]; conflicts: string[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/restore`,
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/put-back`,
       { method: 'POST', body: JSON.stringify({ ids }) }
     ),
   /** Delete trashed Backups for good. */
@@ -1283,11 +1283,11 @@ export const api = {
     ),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
-  flistTrashLabelsRestore: (characterId: string | number, ids: string[]) =>
+  flistTrashLabelsPutBack: (characterId: string | number, ids: string[]) =>
     request<{
       restored: { id: string; restored: number; skipped: string[] }[]
       not_found: string[]
-    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/restore`, {
+    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/put-back`, {
       method: 'POST',
       body: JSON.stringify({ ids })
     }),

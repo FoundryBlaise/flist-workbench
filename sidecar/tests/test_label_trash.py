@@ -128,7 +128,7 @@ async def test_the_window_clears_a_conversation_and_restore_brings_the_labels_ba
     assert entry["id"] == res.json()["trash_id"]
     assert (entry["partner"], entry["count"], entry["deleted_by"]) == (DAELAN, 3, "ui")
 
-    restored = client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]})
+    restored = client.post(f"{TRASH}/labels/put-back", json={"ids": [entry["id"]]})
 
     assert restored.status_code == 200
     assert restored.json() == {
@@ -159,7 +159,7 @@ async def test_a_message_labelled_again_since_the_clear_keeps_its_newer_label(
     )
     [entry] = trashed(client)
 
-    res = client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]}).json()
+    res = client.post(f"{TRASH}/labels/put-back", json={"ids": [entry["id"]]}).json()
 
     assert res["restored"] == [{"id": entry["id"], "restored": 2, "skipped": [relabelled]}]
     assert stored_labels() == {**verdicts, relabelled: "OOC"}
@@ -177,7 +177,7 @@ async def test_resetting_every_label_keeps_each_characters_labels_in_its_trash(
     [entry] = trashed(client)
     assert (entry["partner"], entry["count"]) == (None, 3)
 
-    client.post(f"{TRASH}/labels/restore", json={"ids": [entry["id"]]})
+    client.post(f"{TRASH}/labels/put-back", json={"ids": [entry["id"]]})
 
     assert stored_labels() == verdicts
 
@@ -257,7 +257,7 @@ async def test_cleared_labels_of_a_log_only_character_are_listed_and_restored(
     [entry] = listing.json()["labels"]
     assert (entry["id"], entry["character"], entry["count"]) == (cleared["trash_id"], CORIN, 2)
 
-    restored = client.post(f"{LABELS_TRASH}/restore", json={"ids": [entry["id"], "nope"]})
+    restored = client.post(f"{LABELS_TRASH}/put-back", json={"ids": [entry["id"], "nope"]})
 
     assert restored.json() == {
         "restored": [{"id": entry["id"], "restored": 2, "skipped": []}],

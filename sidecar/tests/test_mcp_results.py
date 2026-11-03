@@ -231,7 +231,7 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     )
 
 
-@writes("restore_custom_kink")
+@writes("put_back_custom_kink")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     # Only a kink F-list knows can come back; a local one is gone.
     await open_workbench(session)
@@ -242,7 +242,7 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     await _call(
         session, "delete_custom_kink", character=CHAR, kink_id=kink_id, confirm=True
     )
-    return await _call(session, "restore_custom_kink", character=CHAR, kink_id=kink_id)
+    return await _call(session, "put_back_custom_kink", character=CHAR, kink_id=kink_id)
 
 
 @writes("reorder_custom_kinks")
@@ -279,10 +279,10 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
     return await _call(session, "trash_images", character=CHAR, image_ids=["7"])
 
 
-@writes("restore_image")
+@writes("put_back_images")
 async def _(session, _dir):  # noqa: ANN001, ANN202
     await _call(session, "trash_images", character=CHAR, image_ids=["7"])
-    return await _call(session, "restore_image", character=CHAR, image_id="7")
+    return await _call(session, "put_back_images", character=CHAR, image_id="7")
 
 
 @writes("add_image")

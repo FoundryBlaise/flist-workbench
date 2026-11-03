@@ -65,7 +65,7 @@ EDITING_TOOLS = (
     "add_custom_kink",
     "update_custom_kink",
     "delete_custom_kink",
-    "restore_custom_kink",
+    "put_back_custom_kink",
     "reorder_custom_kinks",
     "set_image_description",
     "reorder_images",

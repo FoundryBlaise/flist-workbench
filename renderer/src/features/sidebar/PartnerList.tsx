@@ -168,7 +168,7 @@ export function PartnerList() {
         `Every LLM and manual label in that conversation reverts to Unlabeled. ` +
         `Rule-based hints (short messages, "((", etc.) keep firing as OOC. ` +
         `A copy goes to the Trash: Settings → Labels lists it under Cleared Labels, ` +
-        `where Restore puts the labels back.`
+        `where Put back returns the labels.`
     )
     if (!confirmed) return
     try {
