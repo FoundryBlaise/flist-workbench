@@ -1392,6 +1392,17 @@ async function _flushWorkingNow(
     set((s) => {
       const existing = s.flistWorking[characterId]
       if (!existing) return {}
+      const info = {
+        // The Workbench row's "last changed" follows the save.
+        flistWorkbenchInfo: {
+          ...s.flistWorkbenchInfo,
+          [characterId]: { updatedAt: Math.floor(Date.now() / 1000) }
+        }
+      }
+      // Another writer's version was taken in while this save was out
+      // (a merge or a reload): the slot sits on that newer version, which
+      // already holds this save, and must not go back to this etag.
+      if (existing.etag !== slot.etag) return info
       // If the user typed something newer while we were saving, the
       // newer slot's `payload` won't match `sentPayload` — keep
       // unsavedDirty=true so the next flush picks up the delta.
@@ -1406,14 +1417,7 @@ async function _flushWorkingNow(
         materialised: true,
         saved: sentPayload
       }
-      return {
-        flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
-        // The Workbench row's "last changed" follows the save.
-        flistWorkbenchInfo: {
-          ...s.flistWorkbenchInfo,
-          [characterId]: { updatedAt: Math.floor(Date.now() / 1000) }
-        }
-      }
+      return { ...info, flistWorking: { ...s.flistWorking, [characterId]: nextSlot } }
     })
     // If a newer payload is waiting, schedule a follow-up flush so
     // the user's most recent edits land without needing another

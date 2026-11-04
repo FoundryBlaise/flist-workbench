@@ -330,6 +330,39 @@ describe('timing', () => {
     expect(slotOf().saveError).toBeNull()
     expect(slotOf().etag).toBe('merged')
   })
+
+  it('my save answered after the model wrote over it leaves the slot on the model version, and undo of the model sticks', async () => {
+    seed()
+    fake.hold(SAVE)
+    store().flistSetWorkingField(CID, 'infotags.3', 'Half-elf')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [mine] = fake.pending(SAVE)
+
+    // My save reached the disk (E1); the model wrote over it (E2), and
+    // its event arrives before my save's answer.
+    fake.on(READ, theirs((p) => {
+      p.infotags!['3'] = 'Half-elf'
+      p.character!.custom_title = 'renamed by the model'
+      p._overlay = ['infotags.3', 'character.custom_title']
+    }))
+    await dispatch()
+    expect(slotOf()).toMatchObject({ etag: 'theirs', unsavedDirty: false })
+    mine.resolve(json({ etag: 'mine' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(slotOf().etag).toBe('theirs')
+    expect(bodyOf(slotOf().saved).character?.custom_title).toBe('renamed by the model')
+
+    expect(store().flistUndo(CID)).toBe('mcp:set_description')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [undo] = fake.pending(SAVE)
+    expect(undo.request.headers['If-Match']).toBe('theirs')
+    undo.resolve(json({ etag: 'undone' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(slotOf()).toMatchObject({ etag: 'undone', unsavedDirty: false })
+    expect(bodyOf(slotOf().payload).character?.custom_title).toBe('the wanderer')
+    expect(bodyOf(slotOf().payload).infotags?.['3']).toBe('Half-elf')
+  })
 })
 
 describe('the gallery: each image is a field, and so is the order', () => {
