@@ -187,6 +187,45 @@ def test_the_window_deletes_a_gallery_image_and_a_pool_image_in_one_request(
     }
 
 
+def test_an_undo_puts_a_gallery_image_back_and_the_workbench_reads_it(
+    client, workbench  # noqa: F811
+) -> None:
+    stays, gone = upload(client, 50), upload(client, 51)
+    _set_gallery(client, [gone, stays])
+    trashed = client.post(
+        "/flist/character/42/images/trash", json={"image_ids": [gone]}
+    ).json()
+    [item] = client.get("/flist/character/42/trash").json()["items"]
+
+    # The window's undo: the file comes out of the Trash first, then the
+    # gallery from before is saved over the etag the Trash write left.
+    res = client.post(
+        "/flist/character/42/trash/put-back", json={"image_ids": [item["trash_id"]]}
+    ).json()
+    payload = client.get("/flist/character/42/workbench/payload").json()["payload"]
+    payload["images"] = [
+        {"image_id": gone, "description": "", "sort_order": 0},
+        {"image_id": stays, "description": "", "sort_order": 1},
+    ]
+    saved = client.put(
+        "/flist/character/42/workbench/payload",
+        json=payload,
+        headers={"If-Match": trashed["etag"]},
+    )
+
+    assert res["restored"] == [
+        {"image_id": gone, "deduplicated": False, "from": item["trash_id"]}
+    ]
+    assert saved.status_code == 200, saved.text
+    assert pool_ids(client) == {gone, stays}
+    assert trash_ids(client) == []
+    read = client.get("/flist/character/42/workbench/payload").json()
+    assert read["etag"] == saved.json()["etag"]
+    assert [r["image_id"] for r in read["payload"]["images"]] == [gone, stays]
+    assert client.get(f"/flist/character/42/images/{gone}.png").content == png(51)
+    assert client.get("/flist/character/42/image-references").json()[gone]["workbench"] is True
+
+
 def test_deleting_only_pool_images_leaves_the_workbench_alone(
     client, workbench  # noqa: F811
 ) -> None:
