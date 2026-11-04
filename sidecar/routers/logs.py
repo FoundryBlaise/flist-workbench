@@ -14,7 +14,7 @@ from logs import (
     search_messages,
 )
 from services import labels as label_service
-from wire import LabelSource, Verdict, WireModel, omittable
+from wire import MISSING, LabelSource, Verdict, WireModel
 
 router = APIRouter()
 
@@ -70,10 +70,10 @@ class LabelledMessage(LogMessage):
 
     hash: str
     label: Literal["IC", "OOC", "Unlabeled"] | None
-    label_source: LabelSource | None = omittable()
-    label_reason: str | None = omittable()
-    prior_label: Verdict | None = omittable()
-    prior_source: LabelSource | None = omittable()
+    label_source: LabelSource | MISSING = MISSING
+    label_reason: str | MISSING = MISSING
+    prior_label: Verdict | MISSING = MISSING
+    prior_source: LabelSource | MISSING = MISSING
 
 
 class LogMessages(WireModel):

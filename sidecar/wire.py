@@ -8,6 +8,9 @@ Every route says what its ok answer is, so the schema (`openapi.json`,
   The class name is the schema's and the renderer's name for it, so it
   is unique across the app. A model lives in the router file that
   answers it; one that several routers answer lives here.
+- A key an answer sometimes leaves out is typed `X | MISSING`, default
+  `MISSING`: the model leaves it out too (rather than sending null),
+  and the schema makes it optional (`key?: X` in the renderer's types).
 - An event stream, bytes or no body has no model; the route declares
   `response_class=` and `responses=` from the helpers below (or
   `status_code=204, response_class=Response` for no body).
@@ -22,9 +25,23 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
+from pydantic.experimental.missing_sentinel import MISSING
 
 from refusals import RefusalCode
+
+__all__ = [
+    "MISSING",
+    "Job",
+    "JobError",
+    "JobFailureCode",
+    "LabelSource",
+    "Verdict",
+    "WireModel",
+    "binary",
+    "event_stream",
+    "image",
+]
 
 
 class WireModel(BaseModel):
@@ -40,24 +57,6 @@ class WireModel(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-
-
-def _drop_null(schema: dict[str, Any]) -> None:
-    """The schema of an `omittable()` field: its type without the null
-    and the default it only has for Python."""
-    schema.pop("default", None)
-    any_of = [s for s in schema.pop("anyOf", []) if s != {"type": "null"}]
-    if len(any_of) == 1:
-        schema.update(any_of[0])
-    elif any_of:
-        schema["anyOf"] = any_of
-
-
-def omittable() -> Any:
-    """A field the answer leaves out rather than sending null: declare
-    it `name: T | None = omittable()`. Absent in the dict, absent on the
-    wire; the schema makes it an optional key of type T (never null)."""
-    return Field(default=None, exclude_if=lambda v: v is None, json_schema_extra=_drop_null)
 
 
 # ---- Labels -----------------------------------------------------------------
@@ -132,5 +131,20 @@ def binary(media_type: str, description: str) -> dict[int | str, dict[str, Any]]
         200: {
             "description": description,
             "content": {media_type: {"schema": {"type": "string", "format": "binary"}}},
+        }
+    }
+
+
+#: The types an image route may answer: the file's own.
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif")
+
+
+def image(description: str) -> dict[int | str, dict[str, Any]]:
+    """The `responses=` of a route answering an image file, a PNG, JPEG
+    or GIF as the file is (with `response_class=FileResponse`)."""
+    return {
+        200: {
+            "description": description,
+            "content": {t: {"schema": {"type": "string", "format": "binary"}} for t in IMAGE_TYPES},
         }
     }

@@ -11,7 +11,7 @@ import rag as rag_settings
 import rag_embed
 from refusals import LogNameRefused
 from services import index as index_service
-from wire import Job, WireModel, omittable
+from wire import MISSING, Job, WireModel
 
 router = APIRouter()
 
@@ -31,8 +31,8 @@ class IngestScope(WireModel):
     """What an ingest covers: every Log (`{}`), every conversation of
     one character, or one conversation."""
 
-    character: str | None = omittable()
-    partner: str | None = omittable()
+    character: str | MISSING = MISSING
+    partner: str | MISSING = MISSING
 
 
 class IngestParams(WireModel):

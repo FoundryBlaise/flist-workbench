@@ -2227,6 +2227,17 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccountCharacter
+         * @description A character on the signed-in F-list account. `id` is F-list's
+         *     character id when it gave one.
+         */
+        AccountCharacter: {
+            /** Name */
+            name: string;
+            /** Id */
+            id: number | string | null;
+        };
         /** AliasAdd */
         AliasAdd: {
             /** Character */
@@ -2281,6 +2292,11 @@ export interface components {
             labels_deleted: number;
             /** Trash Ids */
             trash_ids: string[];
+        };
+        /** AvatarPrefetchScheduled */
+        AvatarPrefetchScheduled: {
+            /** Scheduled */
+            scheduled: number;
         };
         /**
          * Backup
@@ -2392,6 +2408,15 @@ export interface components {
              */
             occasion: "manual" | "before-upload" | "before-restore" | "before-replace" | "migration" | "backup-all";
         };
+        /** BackupsPutBack */
+        BackupsPutBack: {
+            /** Restored */
+            restored: string[];
+            /** Not Found */
+            not_found: string[];
+            /** Conflicts */
+            conflicts: string[];
+        };
         /**
          * CharacterAliases
          * @description A character's alias groups: each primary name with every member
@@ -2417,6 +2442,26 @@ export interface components {
          * @description No fields — kept so the route keeps its POST shape.
          */
         DiscoverModelsRequest: Record<string, never>;
+        /**
+         * Eicons
+         * @description Eicon names matching the search, from the cached catalogue.
+         *     `status` is 'loading' until the first fetch has answered.
+         */
+        Eicons: {
+            /** Eicons */
+            eicons: string[];
+            /** Total */
+            total: number;
+            /** As Of */
+            as_of: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "loading" | "ready" | "error";
+            /** Error */
+            error: string | null;
+        };
         /** EmbeddingModel */
         EmbeddingModel: {
             /** Model */
@@ -2470,6 +2515,54 @@ export interface components {
             /** Seen At */
             seen_at: number | null;
         };
+        /**
+         * FlistActivity
+         * @description The in-memory record of F-list operations this run, oldest first.
+         */
+        FlistActivity: {
+            /** Started At */
+            started_at: number;
+            /** Event Count */
+            event_count: number;
+            /** Max Events */
+            max_events: number;
+            /** Events */
+            events: components["schemas"]["FlistActivityEvent"][];
+        };
+        /**
+         * FlistActivityEvent
+         * @description One F-list operation: when (`t`), what (`kind`), and the fields
+         *     that kind records.
+         */
+        FlistActivityEvent: {
+            /** T */
+            t: number;
+            /** Kind */
+            kind: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FlistSession
+         * @description The F-list session the sidecar holds. Signed out, it is only
+         *     `active` (false), `api_hourly_count` and a null countdown.
+         */
+        FlistSession: {
+            /** Active */
+            active: boolean;
+            /** Account */
+            account?: string;
+            /** Expires In Sec */
+            expires_in_sec?: number;
+            /** Needs Refresh */
+            needs_refresh?: boolean;
+            /** Password Cached */
+            password_cached?: boolean;
+            /** Api Hourly Count */
+            api_hourly_count: number;
+            /** Password Idle Seconds Remaining */
+            password_idle_seconds_remaining: number | null;
+        };
         /** FlistSignInRequest */
         FlistSignInRequest: {
             /** Account */
@@ -2477,10 +2570,79 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * ForeignCacheCleared
+         * @description How many cached Foreign profiles went, and what the cache holds after.
+         */
+        ForeignCacheCleared: {
+            /** Removed */
+            removed: number;
+            /** Bytes */
+            bytes: number;
+            /** Profiles */
+            profiles: number;
+            /** Cap Bytes */
+            cap_bytes: number;
+        };
+        /**
+         * ForeignCacheUsage
+         * @description What the Foreign profile cache holds on disk, and what it may hold.
+         */
+        ForeignCacheUsage: {
+            /** Bytes */
+            bytes: number;
+            /** Profiles */
+            profiles: number;
+            /** Cap Bytes */
+            cap_bytes: number;
+        };
         /** ForeignDefaults */
         ForeignDefaults: {
             /** Cache Cap Mb */
             cache_cap_mb: number;
+        };
+        /**
+         * ForeignProfile
+         * @description A Foreign profile. `profile` is F-list's character-data payload
+         *     as cached, with the cache's `fetched_at` stamp.
+         */
+        ForeignProfile: {
+            /** Name */
+            name: string;
+            /** Profile */
+            profile: {
+                [key: string]: unknown;
+            };
+            /** From Cache */
+            from_cache: boolean;
+            /** Age Sec */
+            age_sec: number | null;
+            /** Fetched At */
+            fetched_at: number | null;
+            /** Stale */
+            stale?: boolean;
+            /** Refresh Error */
+            refresh_error?: string;
+        };
+        /**
+         * ForeignSearch
+         * @description Candidate names from one source. `exact`: the free-text source
+         *     answers what was typed, not a name known to exist.
+         */
+        ForeignSearch: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "bookmarks" | "friends" | "logs" | "name";
+            /** Query */
+            query: string;
+            /** Results */
+            results: string[];
+            /** Truncated */
+            truncated: boolean;
+            /** Exact */
+            exact: boolean;
         };
         /**
          * ForeignSettings
@@ -2495,6 +2657,24 @@ export interface components {
         ForeignSettingsUpdate: {
             /** Cache Cap Mb */
             cache_cap_mb?: number | null;
+        };
+        /**
+         * GalleryRepair
+         * @description What putting the gallery back together changed.
+         */
+        GalleryRepair: {
+            /** Relinked */
+            relinked: components["schemas"]["Relinked"][];
+            /** Duplicates Removed */
+            duplicates_removed: string[];
+            /** Stale Removed */
+            stale_removed: string[];
+            /** Unresolved */
+            unresolved: string[];
+            /** Workbench Rewritten */
+            workbench_rewritten: boolean;
+            /** Repaired */
+            repaired: boolean;
         };
         /** HandshakeAnswered */
         HandshakeAnswered: {
@@ -2539,6 +2719,69 @@ export interface components {
             character: string;
             /** Deferred */
             deferred: boolean;
+        };
+        /**
+         * ImageReference
+         * @description Where an image id is still used beyond the Pool: the Workbench's
+         *     gallery, Live, and how many Backups keep it (each with its own copy
+         *     of the bytes), with the newest of them. `migration_backup`: the
+         *     older copies from before the upgrade name it; that Backup holds
+         *     JSON only, no copy of the bytes, and is not counted in `backups`.
+         */
+        ImageReference: {
+            /** Workbench */
+            workbench: boolean;
+            /** Live */
+            live: boolean;
+            /** Backups */
+            backups: number;
+            /** Newest Backup */
+            newest_backup: string | null;
+            /** Migration Backup */
+            migration_backup: boolean;
+        };
+        /**
+         * ImageReferences
+         * @description Every image id mentioned anywhere, and where.
+         */
+        ImageReferences: {
+            [key: string]: components["schemas"]["ImageReference"];
+        };
+        /** ImageTrashed */
+        ImageTrashed: {
+            /**
+             * Trashed
+             * @constant
+             */
+            trashed: true;
+            /** Image Id */
+            image_id: string;
+        };
+        /**
+         * ImagesDeleted
+         * @description Images deleted: their files went to the Trash (`trashed`), and
+         *     those the Workbench's gallery showed came off it (`off_gallery`).
+         *     `etag` is the Workbench's new one; null when the gallery was left
+         *     alone.
+         */
+        ImagesDeleted: {
+            /** Trashed */
+            trashed: components["schemas"]["TrashedImage"][];
+            /** Not Found */
+            not_found: string[];
+            /** Off Gallery */
+            off_gallery: string[];
+            /** Etag */
+            etag: string | null;
+        };
+        /** ImagesPutBack */
+        ImagesPutBack: {
+            /** Restored */
+            restored: components["schemas"]["PutBackImage"][];
+            /** Not Found */
+            not_found: string[];
+            /** Conflicts */
+            conflicts: string[];
         };
         /**
          * IndexStatus
@@ -2965,6 +3208,13 @@ export interface components {
             /** Changed */
             changed: number;
         };
+        /** LabelsPutBack */
+        LabelsPutBack: {
+            /** Restored */
+            restored: components["schemas"]["PutBackLabels"][];
+            /** Not Found */
+            not_found: string[];
+        };
         /**
          * LabelsRollup
          * @description Counts across every conversation of every character, and how
@@ -2999,6 +3249,11 @@ export interface components {
         LabelsSettingsUpdate: {
             /** Threshold Chars */
             threshold_chars?: number | null;
+        };
+        /** LabelsTrash */
+        LabelsTrash: {
+            /** Labels */
+            labels: components["schemas"]["TrashedLabels"][];
         };
         /**
          * LexicalRebuilt
@@ -3165,6 +3420,21 @@ export interface components {
             truncated: boolean;
         };
         /**
+         * MappingList
+         * @description F-list's mapping list (kinks, infotags and their groups, list
+         *     items) as F-list sent it, then two keys of the sidecar's: the
+         *     cached file's sha256 (`_etag`) and when it was fetched
+         *     (`_fetched_at`, unix seconds).
+         */
+        MappingList: {
+            /** Etag */
+            _etag: string | null;
+            /** Fetched At */
+            _fetched_at: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * McpAuth
          * @description The optional bearer token for the MCP endpoints; off by default.
          */
@@ -3226,6 +3496,13 @@ export interface components {
         McpTokenRevoked: {
             /** Required */
             required: boolean;
+        };
+        /** MissingImage */
+        MissingImage: {
+            /** Image Id */
+            image_id: string;
+            /** Extension */
+            extension: string;
         };
         /**
          * PairingHandshake
@@ -3298,6 +3575,49 @@ export interface components {
             pending: components["schemas"]["PendingHandshake"][];
         };
         /**
+         * PendingRender
+         * @description Something a tool asked the app to draw: BBCode, the inline
+         *     images it names, the preview theme and the width in pixels.
+         *     `label` is for the app's log line only.
+         */
+        PendingRender: {
+            /** Id */
+            id: string;
+            /** Bbcode */
+            bbcode: string;
+            /** Inlines */
+            inlines: {
+                [key: string]: unknown;
+            };
+            /** Theme */
+            theme: string;
+            /** Width */
+            width: number;
+            /** Label */
+            label: string;
+        };
+        /** Pool */
+        Pool: {
+            /** Character Id */
+            character_id: string;
+            /** Images */
+            images: components["schemas"]["PoolImage"][];
+        };
+        /**
+         * PoolImage
+         * @description An image file in the character's Pool.
+         */
+        PoolImage: {
+            /** Image Id */
+            image_id: string;
+            /** Extension */
+            extension: string;
+            /** Size */
+            size: number;
+            /** Added At */
+            added_at: number;
+        };
+        /**
          * PreUploadBackupKept
          * @description The Backup taken before an Upload; `snapshot_id` is the
          *     extension's name for its file name.
@@ -3328,6 +3648,30 @@ export interface components {
              */
             error: "unknown_character";
         };
+        /**
+         * PublicProfile
+         * @description A character's public profile, for the editor's "Fetch profile".
+         *     `stats` are its infotags by label; `inlines` F-list's inline images
+         *     by id, as F-list sent them.
+         */
+        PublicProfile: {
+            /** Name */
+            name: string;
+            /** Avatar Url */
+            avatar_url: string;
+            /** Bbcode */
+            bbcode: string;
+            /** Stats */
+            stats: {
+                [key: string]: string;
+            };
+            /** Inlines */
+            inlines: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+        };
         /** PullScheduled */
         PullScheduled: {
             /** Scheduled */
@@ -3336,6 +3680,51 @@ export interface components {
             character: string;
             /** Delay Seconds */
             delay_seconds: number;
+        };
+        /**
+         * PullStatus
+         * @description Whether a character's last Pull got every image.
+         */
+        PullStatus: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "never_pulled" | "unknown" | "interrupted" | "partial" | "complete";
+            /** Missing Image Ids */
+            missing_image_ids: components["schemas"]["MissingImage"][];
+            /** Expected */
+            expected: number;
+            /** Present */
+            present: number;
+            /** Last Attempt Ts */
+            last_attempt_ts: number | null;
+        };
+        /**
+         * PutBackImage
+         * @description An image back in the Pool. `deduplicated`: the Pool already held
+         *     these bytes (under `image_id`), so the Trash's copy was dropped.
+         */
+        PutBackImage: {
+            /** Image Id */
+            image_id: string;
+            /** Deduplicated */
+            deduplicated: boolean;
+            /** From */
+            from: string;
+        };
+        /**
+         * PutBackLabels
+         * @description One cleared-Labels entry put back. A message labelled again
+         *     since keeps its newer Label; its hash is under `skipped`.
+         */
+        PutBackLabels: {
+            /** Id */
+            id: string;
+            /** Restored */
+            restored: number;
+            /** Skipped */
+            skipped: string[];
         };
         /** RagIngestRequest */
         RagIngestRequest: {
@@ -3466,6 +3855,34 @@ export interface components {
          * @enum {string}
          */
         RefusalCode: "unauthorized" | "forbidden_origin" | "forbidden_host" | "http_404" | "http_405" | "internal_error" | "invalid_request" | "refused" | "invalid_file_name" | "log_name_refused" | "log_character_not_found" | "partner_not_found" | "log_dir_unavailable" | "log_not_found" | "backup_not_uploadable" | "backup_too_old" | "backup_holds_no_profile" | "backup_not_found" | "backup_unreadable" | "backup_not_written" | "not_trashed" | "image_not_found" | "no_avatar" | "profile_not_cached" | "job_not_found" | "no_index" | "resource_busy" | "index_busy" | "character_busy" | "index_unreadable" | "keyword_backfill_failed" | "unsupported_type" | "too_large" | "not_paired" | "validation_failed" | "flist_error" | "not_signed_in" | "sign_in_failed" | "not_found" | "rate_limited" | "flist_unreachable" | "flist_server_error" | "not_stoppable" | "invalid_character_id" | "character_not_found" | "workbench_not_kept" | "no_live" | "no_workbench" | "etag_required" | "etag_mismatch" | "invalid_workbench_payload" | "source_path_missing" | "source_path_not_absolute" | "no_import_folders" | "source_not_found" | "source_not_allowed" | "source_in_app_data" | "source_unreadable" | "source_too_large" | "not_an_image" | "store_failed";
+        /** Relinked */
+        Relinked: {
+            /** From */
+            from: string;
+            /** To */
+            to: string;
+        };
+        /** RenderDelivered */
+        RenderDelivered: {
+            /** Delivered */
+            delivered: boolean;
+            /** Bytes */
+            bytes: number;
+            /**
+             * Mime
+             * @enum {string}
+             */
+            mime: "image/png" | "image/jpeg";
+        };
+        /** RenderFailReported */
+        RenderFailReported: {
+            /** Reported */
+            reported: boolean;
+        };
+        /** RenderPoll */
+        RenderPoll: {
+            request: components["schemas"]["PendingRender"] | null;
+        };
         /**
          * RestorePreflight
          * @description What the Restore confirm dialog says: whether the Workbench holds
@@ -3482,6 +3899,34 @@ export interface components {
             live_diverged: boolean;
             /** Workbench Has Edits */
             workbench_has_edits: boolean;
+        };
+        /** Roster */
+        Roster: {
+            /** Characters */
+            characters: components["schemas"]["RosterEntry"][];
+        };
+        /**
+         * RosterEntry
+         * @description A character the picker lists: on the account, kept in the app, or
+         *     with Logs, and which of those.
+         */
+        RosterEntry: {
+            /** Name */
+            name: string;
+            /** Id */
+            id: number | string | null;
+            /** On Account */
+            on_account: boolean;
+            /** Has Archive */
+            has_archive: boolean;
+            /** Has Logs */
+            has_logs: boolean;
+            /** Last Pulled At */
+            last_pulled_at: number | null;
+            /** Backup Count */
+            backup_count: number;
+            /** Pull Status */
+            pull_status?: components["schemas"]["PullStatus"];
         };
         /**
          * Settings
@@ -3516,6 +3961,132 @@ export interface components {
         ShutdownStarted: {
             /** Stopping */
             stopping: boolean;
+        };
+        /** SignedIn */
+        SignedIn: {
+            /** Characters */
+            characters: components["schemas"]["AccountCharacter"][];
+            /** Expires In Sec */
+            expires_in_sec: number;
+            /** Account */
+            account: string;
+        };
+        /** SignedOut */
+        SignedOut: {
+            /**
+             * Signed Out
+             * @constant
+             */
+            signed_out: true;
+        };
+        /**
+         * Trash
+         * @description A character's Trash: images, Backups and cleared Labels.
+         */
+        Trash: {
+            /** Character Id */
+            character_id: string;
+            /** Items */
+            items: components["schemas"]["TrashItem"][];
+            /** Backups */
+            backups: components["schemas"]["TrashedBackup"][];
+            /** Labels */
+            labels: components["schemas"]["TrashedLabels"][];
+        };
+        /** TrashEmptied */
+        TrashEmptied: {
+            /** Purged */
+            purged: number;
+        };
+        /**
+         * TrashItem
+         * @description An image file in a character's Trash.
+         */
+        TrashItem: {
+            /** Trash Id */
+            trash_id: string;
+            /** Image Id */
+            image_id: string;
+            /** Extension */
+            extension: string;
+            /** Filename */
+            filename: string;
+            /** Size */
+            size: number;
+            /** Deleted At */
+            deleted_at: number;
+            /** Deleted By */
+            deleted_by: string | null;
+            /** Source Name */
+            source_name: string | null;
+        };
+        /**
+         * TrashPurged
+         * @description What was deleted for good from the Trash, by the id it had there.
+         */
+        TrashPurged: {
+            /** Purged */
+            purged: string[];
+            /** Not Found */
+            not_found: string[];
+        };
+        /**
+         * TrashedBackup
+         * @description A deleted Backup in a character's Trash.
+         */
+        TrashedBackup: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Name */
+            name: string | null;
+            /** Size */
+            size: number;
+            /** Deleted At */
+            deleted_at: number;
+            /** Deleted By */
+            deleted_by: string | null;
+        };
+        /**
+         * TrashedImage
+         * @description An image just moved into the Trash.
+         */
+        TrashedImage: {
+            /** Trash Id */
+            trash_id: string;
+            /** Image Id */
+            image_id: string;
+            /** Extension */
+            extension: string;
+            /** Deleted At */
+            deleted_at: number;
+            /** Deleted By */
+            deleted_by: string | null;
+            /** Size */
+            size: number;
+            /** Sha256 */
+            sha256: string;
+            /** Source Name */
+            source_name: string | null;
+        };
+        /**
+         * TrashedLabels
+         * @description Labels cleared in one go, kept in the Trash.
+         */
+        TrashedLabels: {
+            /** Id */
+            id: string;
+            /** Character */
+            character: string | null;
+            /** Partner */
+            partner: string | null;
+            /** Count */
+            count: number;
+            /** Deleted At */
+            deleted_at: number;
+            /** Deleted By */
+            deleted_by: string | null;
         };
         /**
          * UnlabeledFilled
@@ -3610,6 +4181,23 @@ export interface components {
             image_count: number;
             /** Upload Refused */
             upload_refused: null;
+        };
+        /**
+         * UploadedImage
+         * @description The Pool image an upload landed as. `deduplicated`: the Pool
+         *     already held these bytes, and this is that file.
+         */
+        UploadedImage: {
+            /** Image Id */
+            image_id: string;
+            /** Extension */
+            extension: string;
+            /** Size */
+            size: number;
+            /** Added At */
+            added_at: number;
+            /** Deduplicated */
+            deduplicated: boolean;
         };
         /**
          * WorkbenchAbsent
@@ -3942,9 +4530,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Eicons"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3975,9 +4561,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PublicProfile"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4006,9 +4590,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["FlistSession"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4041,9 +4623,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["SignedIn"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4072,9 +4652,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["SignedOut"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4103,9 +4681,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AvatarPrefetchScheduled"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4134,9 +4710,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["FlistActivity"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4165,9 +4739,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Roster"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4198,9 +4770,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["MappingList"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4225,13 +4795,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The avatar F-list has for the character. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4768,13 +5338,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description An image file in the Pool. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/gif": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4805,9 +5377,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Pool"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4838,9 +5408,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["UploadedImage"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4866,13 +5434,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The Pool's image file of that id. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/gif": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4903,9 +5473,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["GalleryRepair"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4937,9 +5505,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ImageTrashed"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4974,9 +5540,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ImagesDeleted"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5007,9 +5571,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ImageReferences"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5040,9 +5602,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Trash"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5073,9 +5633,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TrashEmptied"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5101,13 +5659,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description An image file in the Trash. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/gif": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5142,9 +5702,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ImagesPutBack"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5179,9 +5737,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BackupsPutBack"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5216,9 +5772,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsPutBack"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5253,9 +5807,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TrashPurged"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5290,9 +5842,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TrashPurged"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5327,9 +5877,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TrashPurged"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5355,13 +5903,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description An inline image file of the profile. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/gif": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5390,9 +5940,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsTrash"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5425,9 +5973,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsPutBack"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5460,9 +6006,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TrashPurged"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6013,9 +6557,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ForeignSearch"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6044,9 +6586,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ForeignCacheUsage"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6075,9 +6615,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ForeignCacheCleared"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6110,9 +6648,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ForeignProfile"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6137,13 +6673,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The avatar of the Foreign profile. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6169,13 +6705,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description A gallery image of the Foreign profile. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/gif": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6397,9 +6935,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["RenderPoll"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6430,9 +6966,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["RenderDelivered"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6469,9 +7003,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["RenderFailReported"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */

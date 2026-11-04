@@ -1,17 +1,44 @@
 """Look-ups for the editor: the eicon catalogue and a public profile."""
 
+from typing import Any, Literal
+
 from fastapi import APIRouter
 
 import archive_registry
 import eicons as eicons_catalog
 import flist_api
 from refusals import FlistRefused
+from wire import WireModel
 
 router = APIRouter()
 
 
+class Eicons(WireModel):
+    """Eicon names matching the search, from the cached catalogue.
+    `status` is 'loading' until the first fetch has answered."""
+
+    eicons: list[str]
+    total: int
+    #: The catalogue's own "as of" stamp, unix seconds; 0 before it loaded.
+    as_of: int
+    status: Literal["loading", "ready", "error"]
+    error: str | None
+
+
+class PublicProfile(WireModel):
+    """A character's public profile, for the editor's "Fetch profile".
+    `stats` are its infotags by label; `inlines` F-list's inline images
+    by id, as F-list sent them."""
+
+    name: str
+    avatar_url: str
+    bbcode: str
+    stats: dict[str, str]
+    inlines: dict[str, dict[str, Any]]
+
+
 @router.get("/eicons/search")
-def eicons_search(q: str = "", limit: int = 200) -> dict:
+def eicons_search(q: str = "", limit: int = 200) -> Eicons:
     """Search the cached eicon catalog (sourced from xariah.net).
 
     The renderer uses this to populate the toolbar's eicon picker. The
@@ -19,11 +46,11 @@ def eicons_search(q: str = "", limit: int = 200) -> dict:
     every hour. While the first fetch is in flight `status` will be
     'loading'; the renderer should poll or show a spinner.
     """
-    return eicons_catalog.search(q, limit)
+    return Eicons.model_validate(eicons_catalog.search(q, limit))
 
 
 @router.get("/profile/{name}")
-async def profile(name: str) -> dict:
+async def profile(name: str) -> PublicProfile:
     """Public profile fetch routed through the F-list JSON API.
 
     Replaces the previous HTML scrape (`flist.fetch_profile`). The shape
@@ -75,13 +102,13 @@ async def profile(name: str) -> dict:
             # BBCode they came for.
             stats = {f"info_{k}": str(v) for k, v in infotags.items()}
 
-    return {
-        "name": resolved_name,
-        "avatar_url": flist_api.avatar_url(resolved_name),
-        "bbcode": description,
-        "stats": stats,
-        "inlines": inlines,
-    }
+    return PublicProfile(
+        name=resolved_name,
+        avatar_url=flist_api.avatar_url(resolved_name),
+        bbcode=description,
+        stats=stats,
+        inlines=inlines,
+    )
 
 
 def _resolve_infotag_stats(
