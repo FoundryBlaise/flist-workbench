@@ -2238,8 +2238,8 @@ export interface components {
             /** Id */
             id: number | string | null;
         };
-        /** AliasAdd */
-        AliasAdd: {
+        /** AliasAddRequest */
+        AliasAddRequest: {
             /** Character */
             character: string;
             /** Name */
@@ -2430,6 +2430,11 @@ export interface components {
             meta: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** BackupRenameRequest */
+        BackupRenameRequest: {
+            /** Name */
+            name: string;
         };
         /** BackupRestored */
         BackupRestored: {
@@ -2795,6 +2800,11 @@ export interface components {
             /** Repaired */
             repaired: boolean;
         };
+        /** HandshakeAnswerRequest */
+        HandshakeAnswerRequest: {
+            /** Handshake Id */
+            handshake_id: string;
+        };
         /** HandshakeAnswered */
         HandshakeAnswered: {
             /**
@@ -2838,6 +2848,11 @@ export interface components {
             character: string;
             /** Deferred */
             deferred: boolean;
+        };
+        /** ImageIdsRequest */
+        ImageIdsRequest: {
+            /** Image Ids */
+            image_ids: string[];
         };
         /**
          * ImageReference
@@ -3145,21 +3160,6 @@ export interface components {
             /** Created At */
             created_at: number;
         };
-        /** LabelOverride */
-        LabelOverride: {
-            /** Character */
-            character?: string | null;
-            /** Partner */
-            partner?: string | null;
-            /** Hash */
-            hash: string;
-            /** Ts */
-            ts: number;
-            /** Speaker */
-            speaker: string;
-            /** Label */
-            label?: string | null;
-        };
         /** LabelOverrideItem */
         LabelOverrideItem: {
             /** Hash */
@@ -3169,14 +3169,29 @@ export interface components {
             /** Speaker */
             speaker: string;
         };
-        /** LabelOverrideMany */
-        LabelOverrideMany: {
+        /** LabelOverrideManyRequest */
+        LabelOverrideManyRequest: {
             /** Character */
             character?: string | null;
             /** Partner */
             partner?: string | null;
             /** Items */
             items: components["schemas"]["LabelOverrideItem"][];
+            /** Label */
+            label?: string | null;
+        };
+        /** LabelOverrideRequest */
+        LabelOverrideRequest: {
+            /** Character */
+            character?: string | null;
+            /** Partner */
+            partner?: string | null;
+            /** Hash */
+            hash: string;
+            /** Ts */
+            ts: number;
+            /** Speaker */
+            speaker: string;
             /** Label */
             label?: string | null;
         };
@@ -3305,8 +3320,8 @@ export interface components {
             /** Threshold Chars */
             threshold_chars: number;
         };
-        /** LabelsDeleteHashes */
-        LabelsDeleteHashes: {
+        /** LabelsDeleteHashesRequest */
+        LabelsDeleteHashesRequest: {
             /** Character */
             character?: string | null;
             /** Partner */
@@ -3323,8 +3338,8 @@ export interface components {
             /** Deleted */
             deleted: number;
         };
-        /** LabelsFillUnlabeled */
-        LabelsFillUnlabeled: {
+        /** LabelsFillUnlabeledRequest */
+        LabelsFillUnlabeledRequest: {
             /** Character */
             character: string;
             /** Partner */
@@ -3787,6 +3802,15 @@ export interface components {
              */
             error: "unknown_character";
         };
+        /** PreUploadBackupRequest */
+        PreUploadBackupRequest: {
+            /** Character */
+            character: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PublicProfile
          * @description A character's public profile, for the editor's "Fetch profile".
@@ -4135,6 +4159,19 @@ export interface components {
             /** Workbench Has Edits */
             workbench_has_edits: boolean;
         };
+        /**
+         * RestoreRequest
+         * @description Restore a Backup into the Workbench.
+         *
+         *     `back_up_first` is still accepted from older windows and ignored:
+         *     the Workbench is always kept as a Backup first (ADR 0003).
+         */
+        RestoreRequest: {
+            /** Filename */
+            filename: string;
+            /** Back Up First */
+            back_up_first?: boolean | null;
+        };
         /** Roster */
         Roster: {
             /** Characters */
@@ -4257,6 +4294,11 @@ export interface components {
         TrashEmptied: {
             /** Purged */
             purged: number;
+        };
+        /** TrashIdsRequest */
+        TrashIdsRequest: {
+            /** Ids */
+            ids: string[];
         };
         /**
          * TrashItem
@@ -4388,6 +4430,30 @@ export interface components {
         UploadDone: {
             /** Ok */
             ok: boolean;
+        };
+        /** UploadDoneRequest */
+        UploadDoneRequest: {
+            /** Character */
+            character?: string | null;
+        };
+        /** UploadImageIdsRequest */
+        UploadImageIdsRequest: {
+            /** Character */
+            character: string;
+            /** Mapping */
+            mapping: {
+                [key: string]: string;
+            };
+        };
+        /** UploadSavedRequest */
+        UploadSavedRequest: {
+            /** Character */
+            character: string;
+            /**
+             * Delay Seconds
+             * @default 5
+             */
+            delay_seconds: number;
         };
         /**
          * UploadSourceBackup
@@ -4529,72 +4595,6 @@ export interface components {
         WorkbenchSaved: {
             /** Etag */
             etag: string;
-        };
-        /** _ImageIdsBody */
-        _ImageIdsBody: {
-            /** Image Ids */
-            image_ids: string[];
-        };
-        /**
-         * _LoadBackupBody
-         * @description Restore a Backup into the Workbench.
-         *
-         *     `back_up_first` is still accepted from older windows and ignored:
-         *     the Workbench is always kept as a Backup first (ADR 0003).
-         */
-        _LoadBackupBody: {
-            /** Filename */
-            filename: string;
-            /** Back Up First */
-            back_up_first?: boolean | null;
-        };
-        /** _PairAcceptBody */
-        _PairAcceptBody: {
-            /** Handshake Id */
-            handshake_id: string;
-        };
-        /** _PreUploadBackupBody */
-        _PreUploadBackupBody: {
-            /** Character */
-            character: string;
-            /** Payload */
-            payload: {
-                [key: string]: unknown;
-            };
-        };
-        /** _TrashIdsBody */
-        _TrashIdsBody: {
-            /** Ids */
-            ids: string[];
-        };
-        /** _UploadDoneBody */
-        _UploadDoneBody: {
-            /** Character */
-            character?: string | null;
-        };
-        /** _UploadImageIdsBody */
-        _UploadImageIdsBody: {
-            /** Character */
-            character: string;
-            /** Mapping */
-            mapping: {
-                [key: string]: string;
-            };
-        };
-        /** _UploadSavedBody */
-        _UploadSavedBody: {
-            /** Character */
-            character: string;
-            /**
-             * Delay Seconds
-             * @default 5
-             */
-            delay_seconds: number;
-        };
-        /** _ZipBackupRename */
-        _ZipBackupRename: {
-            /** Name */
-            name: string;
         };
     };
     responses: never;
@@ -5230,7 +5230,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ZipBackupRename"];
+                "application/json": components["schemas"]["BackupRenameRequest"];
             };
         };
         responses: {
@@ -5503,7 +5503,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_LoadBackupBody"];
+                "application/json": components["schemas"]["RestoreRequest"];
             };
         };
         responses: {
@@ -5795,7 +5795,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ImageIdsBody"];
+                "application/json": components["schemas"]["ImageIdsRequest"];
             };
         };
         responses: {
@@ -5957,7 +5957,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ImageIdsBody"];
+                "application/json": components["schemas"]["ImageIdsRequest"];
             };
         };
         responses: {
@@ -5992,7 +5992,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6027,7 +6027,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6062,7 +6062,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ImageIdsBody"];
+                "application/json": components["schemas"]["ImageIdsRequest"];
             };
         };
         responses: {
@@ -6097,7 +6097,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6132,7 +6132,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6228,7 +6228,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6261,7 +6261,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6414,7 +6414,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_PairAcceptBody"];
+                "application/json": components["schemas"]["HandshakeAnswerRequest"];
             };
         };
         responses: {
@@ -6447,7 +6447,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_PairAcceptBody"];
+                "application/json": components["schemas"]["HandshakeAnswerRequest"];
             };
         };
         responses: {
@@ -6672,7 +6672,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_PreUploadBackupBody"];
+                "application/json": components["schemas"]["PreUploadBackupRequest"];
             };
         };
         responses: {
@@ -6708,7 +6708,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_UploadImageIdsBody"];
+                "application/json": components["schemas"]["UploadImageIdsRequest"];
             };
         };
         responses: {
@@ -6744,7 +6744,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_UploadSavedBody"];
+                "application/json": components["schemas"]["UploadSavedRequest"];
             };
         };
         responses: {
@@ -6780,7 +6780,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_UploadDoneBody"];
+                "application/json": components["schemas"]["UploadDoneRequest"];
             };
         };
         responses: {
@@ -7443,7 +7443,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelsFillUnlabeled"];
+                "application/json": components["schemas"]["LabelsFillUnlabeledRequest"];
             };
         };
         responses: {
@@ -7476,7 +7476,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelsDeleteHashes"];
+                "application/json": components["schemas"]["LabelsDeleteHashesRequest"];
             };
         };
         responses: {
@@ -7509,7 +7509,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelOverride"];
+                "application/json": components["schemas"]["LabelOverrideRequest"];
             };
         };
         responses: {
@@ -7542,7 +7542,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelOverrideMany"];
+                "application/json": components["schemas"]["LabelOverrideManyRequest"];
             };
         };
         responses: {
@@ -7881,7 +7881,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AliasAdd"];
+                "application/json": components["schemas"]["AliasAddRequest"];
             };
         };
         responses: {

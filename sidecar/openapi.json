@@ -760,7 +760,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ZipBackupRename"
+                "$ref": "#/components/schemas/BackupRenameRequest"
               }
             }
           }
@@ -1174,7 +1174,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_LoadBackupBody"
+                "$ref": "#/components/schemas/RestoreRequest"
               }
             }
           }
@@ -1604,7 +1604,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImageIdsBody"
+                "$ref": "#/components/schemas/ImageIdsRequest"
               }
             }
           }
@@ -1833,7 +1833,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImageIdsBody"
+                "$ref": "#/components/schemas/ImageIdsRequest"
               }
             }
           }
@@ -1883,7 +1883,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -1933,7 +1933,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -1982,7 +1982,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImageIdsBody"
+                "$ref": "#/components/schemas/ImageIdsRequest"
               }
             }
           }
@@ -2031,7 +2031,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -2080,7 +2080,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -2208,7 +2208,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           },
@@ -2247,7 +2247,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           },
@@ -2421,7 +2421,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_PairAcceptBody"
+                "$ref": "#/components/schemas/HandshakeAnswerRequest"
               }
             }
           },
@@ -2467,7 +2467,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_PairAcceptBody"
+                "$ref": "#/components/schemas/HandshakeAnswerRequest"
               }
             }
           },
@@ -2864,7 +2864,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_PreUploadBackupBody"
+                "$ref": "#/components/schemas/PreUploadBackupRequest"
               }
             }
           }
@@ -2945,7 +2945,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_UploadImageIdsBody"
+                "$ref": "#/components/schemas/UploadImageIdsRequest"
               }
             }
           }
@@ -3018,7 +3018,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_UploadSavedBody"
+                "$ref": "#/components/schemas/UploadSavedRequest"
               }
             }
           }
@@ -3090,7 +3090,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_UploadDoneBody"
+                "$ref": "#/components/schemas/UploadDoneRequest"
               }
             }
           }
@@ -4013,7 +4013,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelsFillUnlabeled"
+                "$ref": "#/components/schemas/LabelsFillUnlabeledRequest"
               }
             }
           },
@@ -4052,7 +4052,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelsDeleteHashes"
+                "$ref": "#/components/schemas/LabelsDeleteHashesRequest"
               }
             }
           },
@@ -4090,7 +4090,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelOverride"
+                "$ref": "#/components/schemas/LabelOverrideRequest"
               }
             }
           },
@@ -4137,7 +4137,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelOverrideMany"
+                "$ref": "#/components/schemas/LabelOverrideManyRequest"
               }
             }
           },
@@ -4534,7 +4534,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AliasAdd"
+                "$ref": "#/components/schemas/AliasAddRequest"
               }
             }
           }
@@ -4795,7 +4795,7 @@
         "title": "AccountCharacter",
         "description": "A character on the signed-in F-list account. `id` is F-list's\ncharacter id when it gave one."
       },
-      "AliasAdd": {
+      "AliasAddRequest": {
         "properties": {
           "character": {
             "type": "string",
@@ -4822,7 +4822,7 @@
           "name",
           "primary_name"
         ],
-        "title": "AliasAdd"
+        "title": "AliasAddRequest"
       },
       "AliasGroupUnlinked": {
         "properties": {
@@ -5236,6 +5236,19 @@
         ],
         "title": "BackupPayload",
         "description": "A Backup's profile, for browsing it read-only. `meta` is its\n`backup-meta.json`, null for a Backup without one."
+      },
+      "BackupRenameRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "BackupRenameRequest"
       },
       "BackupRestored": {
         "properties": {
@@ -6142,6 +6155,19 @@
         "title": "GalleryRepair",
         "description": "What putting the gallery back together changed."
       },
+      "HandshakeAnswerRequest": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handshake_id"
+        ],
+        "title": "HandshakeAnswerRequest"
+      },
       "HandshakeAnswered": {
         "properties": {
           "ok": {
@@ -6218,6 +6244,22 @@
           "deferred"
         ],
         "title": "ImageIdsDeferred"
+      },
+      "ImageIdsRequest": {
+        "properties": {
+          "image_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_ids"
+        ],
+        "title": "ImageIdsRequest"
       },
       "ImageReference": {
         "properties": {
@@ -6971,62 +7013,6 @@
         "title": "KeptBackup",
         "description": "The Backup that keeps the Workbench a Restore or a reset to Live\nreplaced."
       },
-      "LabelOverride": {
-        "properties": {
-          "character": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Character"
-          },
-          "partner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Partner"
-          },
-          "hash": {
-            "type": "string",
-            "title": "Hash"
-          },
-          "ts": {
-            "type": "integer",
-            "title": "Ts"
-          },
-          "speaker": {
-            "type": "string",
-            "title": "Speaker"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          }
-        },
-        "type": "object",
-        "required": [
-          "hash",
-          "ts",
-          "speaker"
-        ],
-        "title": "LabelOverride"
-      },
       "LabelOverrideItem": {
         "properties": {
           "hash": {
@@ -7050,7 +7036,7 @@
         ],
         "title": "LabelOverrideItem"
       },
-      "LabelOverrideMany": {
+      "LabelOverrideManyRequest": {
         "properties": {
           "character": {
             "anyOf": [
@@ -7097,7 +7083,63 @@
         "required": [
           "items"
         ],
-        "title": "LabelOverrideMany"
+        "title": "LabelOverrideManyRequest"
+      },
+      "LabelOverrideRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "ts": {
+            "type": "integer",
+            "title": "Ts"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "ts",
+          "speaker"
+        ],
+        "title": "LabelOverrideRequest"
       },
       "LabelRemoved": {
         "properties": {
@@ -7429,7 +7471,7 @@
         ],
         "title": "LabelsDefaults"
       },
-      "LabelsDeleteHashes": {
+      "LabelsDeleteHashesRequest": {
         "properties": {
           "character": {
             "anyOf": [
@@ -7465,7 +7507,7 @@
         "required": [
           "hashes"
         ],
-        "title": "LabelsDeleteHashes"
+        "title": "LabelsDeleteHashesRequest"
       },
       "LabelsDeleted": {
         "properties": {
@@ -7505,7 +7547,7 @@
         ],
         "title": "LabelsDeleted"
       },
-      "LabelsFillUnlabeled": {
+      "LabelsFillUnlabeledRequest": {
         "properties": {
           "character": {
             "type": "string",
@@ -7526,7 +7568,7 @@
           "partner",
           "label"
         ],
-        "title": "LabelsFillUnlabeled"
+        "title": "LabelsFillUnlabeledRequest"
       },
       "LabelsOverridden": {
         "properties": {
@@ -8598,6 +8640,25 @@
         ],
         "title": "PreUploadBackupNotKept"
       },
+      "PreUploadBackupRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "payload"
+        ],
+        "title": "PreUploadBackupRequest"
+      },
       "PublicProfile": {
         "properties": {
           "name": {
@@ -9509,6 +9570,31 @@
         "title": "RestorePreflight",
         "description": "What the Restore confirm dialog says: whether the Workbench holds\nedits, and whether Live was pulled after the Backup was taken."
       },
+      "RestoreRequest": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "back_up_first": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Back Up First"
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename"
+        ],
+        "title": "RestoreRequest",
+        "description": "Restore a Backup into the Workbench.\n\n`back_up_first` is still accepted from older windows and ignored:\nthe Workbench is always kept as a Backup first (ADR 0003)."
+      },
       "Roster": {
         "properties": {
           "characters": {
@@ -9884,6 +9970,22 @@
         ],
         "title": "TrashEmptied"
       },
+      "TrashIdsRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "TrashIdsRequest"
+      },
       "TrashItem": {
         "properties": {
           "trash_id": {
@@ -10244,6 +10346,62 @@
         ],
         "title": "UploadDone"
       },
+      "UploadDoneRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          }
+        },
+        "type": "object",
+        "title": "UploadDoneRequest"
+      },
+      "UploadImageIdsRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "mapping"
+        ],
+        "title": "UploadImageIdsRequest"
+      },
+      "UploadSavedRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Delay Seconds",
+            "default": 5.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "character"
+        ],
+        "title": "UploadSavedRequest"
+      },
       "UploadSourceBackup": {
         "properties": {
           "id": {
@@ -10548,164 +10706,6 @@
           "etag"
         ],
         "title": "WorkbenchSaved"
-      },
-      "_ImageIdsBody": {
-        "properties": {
-          "image_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Image Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "image_ids"
-        ],
-        "title": "_ImageIdsBody"
-      },
-      "_LoadBackupBody": {
-        "properties": {
-          "filename": {
-            "type": "string",
-            "title": "Filename"
-          },
-          "back_up_first": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Back Up First"
-          }
-        },
-        "type": "object",
-        "required": [
-          "filename"
-        ],
-        "title": "_LoadBackupBody",
-        "description": "Restore a Backup into the Workbench.\n\n`back_up_first` is still accepted from older windows and ignored:\nthe Workbench is always kept as a Backup first (ADR 0003)."
-      },
-      "_PairAcceptBody": {
-        "properties": {
-          "handshake_id": {
-            "type": "string",
-            "title": "Handshake Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "handshake_id"
-        ],
-        "title": "_PairAcceptBody"
-      },
-      "_PreUploadBackupBody": {
-        "properties": {
-          "character": {
-            "type": "string",
-            "title": "Character"
-          },
-          "payload": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Payload"
-          }
-        },
-        "type": "object",
-        "required": [
-          "character",
-          "payload"
-        ],
-        "title": "_PreUploadBackupBody"
-      },
-      "_TrashIdsBody": {
-        "properties": {
-          "ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "ids"
-        ],
-        "title": "_TrashIdsBody"
-      },
-      "_UploadDoneBody": {
-        "properties": {
-          "character": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Character"
-          }
-        },
-        "type": "object",
-        "title": "_UploadDoneBody"
-      },
-      "_UploadImageIdsBody": {
-        "properties": {
-          "character": {
-            "type": "string",
-            "title": "Character"
-          },
-          "mapping": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Mapping"
-          }
-        },
-        "type": "object",
-        "required": [
-          "character",
-          "mapping"
-        ],
-        "title": "_UploadImageIdsBody"
-      },
-      "_UploadSavedBody": {
-        "properties": {
-          "character": {
-            "type": "string",
-            "title": "Character"
-          },
-          "delay_seconds": {
-            "type": "number",
-            "title": "Delay Seconds",
-            "default": 5.0
-          }
-        },
-        "type": "object",
-        "required": [
-          "character"
-        ],
-        "title": "_UploadSavedBody"
-      },
-      "_ZipBackupRename": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "title": "_ZipBackupRename"
       }
     }
   }

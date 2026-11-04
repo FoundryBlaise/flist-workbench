@@ -177,13 +177,13 @@ def flist_character_zip_backup_delete(
         raise NotTrashed(f"could not move backup to the Trash: {exc}") from exc
 
 
-class _ZipBackupRename(BaseModel):
+class BackupRenameRequest(BaseModel):
     name: str
 
 
 @router.patch("/flist/character/{character_id}/zip-backups/{filename}")
 def flist_character_zip_backup_rename(
-    character_id: str, filename: str, body: _ZipBackupRename
+    character_id: str, filename: str, body: BackupRenameRequest
 ) -> Backup:
     """Rename a single backup. The ZIP file itself isn't modified;
     the user-set name lives in a sidecar `_names.json` map next to

@@ -159,7 +159,7 @@ def labels_stats_all(char: str) -> CharacterLabelStats:
 # conversation the window shows; a Label belongs to the message (ADR
 # 0004), so they decide nothing, may be left out and are only echoed
 # back.
-class LabelOverride(BaseModel):
+class LabelOverrideRequest(BaseModel):
     character: str | None = None
     partner: str | None = None
     hash: str
@@ -175,7 +175,7 @@ class LabelOverrideItem(BaseModel):
     speaker: str
 
 
-class LabelOverrideMany(BaseModel):
+class LabelOverrideManyRequest(BaseModel):
     character: str | None = None
     partner: str | None = None
     items: list[LabelOverrideItem]
@@ -233,20 +233,20 @@ def labels_rollup() -> LabelsRollup:
     return LabelsRollup.model_validate(label_service.rollup())
 
 
-class LabelsFillUnlabeled(BaseModel):
+class LabelsFillUnlabeledRequest(BaseModel):
     character: str
     partner: str
     label: str
 
 
-class LabelsDeleteHashes(BaseModel):
+class LabelsDeleteHashesRequest(BaseModel):
     character: str | None = None
     partner: str | None = None
     hashes: list[str]
 
 
 @router.post("/labels/fill-unlabeled")
-def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> UnlabeledFilled:
+def labels_fill_unlabeled(body: LabelsFillUnlabeledRequest) -> UnlabeledFilled:
     """Give every still-Unlabeled message in one conversation the same
     verdict.
 
@@ -269,7 +269,7 @@ def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> UnlabeledFilled:
 
 
 @router.post("/labels/delete-hashes")
-def labels_delete_hashes(body: LabelsDeleteHashes) -> LabelsDeleted:
+def labels_delete_hashes(body: LabelsDeleteHashesRequest) -> LabelsDeleted:
     """Remove named labels and nothing else — the undo for
     `/labels/fill-unlabeled`. Distinct from `/labels/clear`, which
     drops every verdict in the conversation including a model's."""
@@ -281,7 +281,7 @@ def labels_delete_hashes(body: LabelsDeleteHashes) -> LabelsDeleted:
 
 
 @router.post("/labels/override")
-def labels_override(body: LabelOverride) -> LabelSet | LabelRemoved:
+def labels_override(body: LabelOverrideRequest) -> LabelSet | LabelRemoved:
     result = label_service.override(
         hash=body.hash,
         ts=body.ts,
@@ -294,7 +294,7 @@ def labels_override(body: LabelOverride) -> LabelSet | LabelRemoved:
 
 
 @router.post("/labels/override-many")
-def labels_override_many(body: LabelOverrideMany) -> LabelsOverridden:
+def labels_override_many(body: LabelOverrideManyRequest) -> LabelsOverridden:
     """`/labels/override` for the log view's multi-select: one verdict,
     or a reset, for any set of messages in one conversation."""
     changed = label_service.override_many(

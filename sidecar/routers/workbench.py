@@ -99,7 +99,7 @@ class WorkbenchSaveRequest(RootModel[dict[str, Any]]):
     Workbench keeps what it does not know."""
 
 
-class _LoadBackupBody(BaseModel):
+class RestoreRequest(BaseModel):
     """Restore a Backup into the Workbench.
 
     `back_up_first` is still accepted from older windows and ignored:
@@ -195,7 +195,7 @@ def _filename_required(where: str) -> InvalidRequest:
 
 @router.post("/flist/character/{character_id}/workbench/load-backup")
 def flist_character_workbench_load_backup(
-    character_id: str, body: _LoadBackupBody
+    character_id: str, body: RestoreRequest
 ) -> BackupRestored:
     """Restore: replace the Workbench contents with a Backup's.
 
