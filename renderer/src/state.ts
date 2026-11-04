@@ -34,7 +34,6 @@ import {
 import {
   commitSlot,
   externalLabel,
-  notifyCommit,
   type Commit,
   type CommitEvent,
   type CommitLabel
@@ -969,7 +968,6 @@ function _commit(
       void get().flistFlushWorking(characterId)
     })
   }
-  notifyCommit(event)
 }
 
 /** True while the window shows a character's Live or a Backup being
@@ -1253,22 +1251,9 @@ function _commitMerge(
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
 function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<State>): void {
-  const events: CommitEvent[] = []
-  set((s) => {
-    for (const [characterId, slot] of Object.entries(s.flistWorking)) {
-      events.push({
-        characterId,
-        kind: 'view',
-        label: null,
-        previous: slot.payload,
-        next: null
-      })
-    }
-    return { ...also(s), flistWorking: {} }
-  })
+  set((s) => ({ ...also(s), flistWorking: {} }))
   // Another account may sign in next: nothing of this one's to undo.
   resetUndoStacks()
-  for (const event of events) notifyCommit(event)
 }
 
 function _cancelFlush(characterId: string): void {
