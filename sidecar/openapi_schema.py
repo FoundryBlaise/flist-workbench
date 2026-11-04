@@ -19,6 +19,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import atomic_write
+
 SCHEMA_PATH = Path(__file__).resolve().parent / "openapi.json"
 
 #: The schema's `info.version`. The app reports the installed version
@@ -42,7 +44,7 @@ def render() -> str:
 
 
 def main() -> None:
-    SCHEMA_PATH.write_text(render(), encoding="utf-8", newline="\n")
+    atomic_write.write_text(SCHEMA_PATH, render())
     print(f"wrote {SCHEMA_PATH}")
 
 
