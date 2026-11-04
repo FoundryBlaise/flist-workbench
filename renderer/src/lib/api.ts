@@ -498,9 +498,9 @@ function base(): string {
 // Mid-session ticket recovery. The sidecar holds the F-list password
 // in RAM only and drops it after an idle window (P0-C safety), so a
 // long-running session eventually loses the ability to auto-refresh
-// its ticket and the next /flist/* call returns 401. If the user saved
-// their password to the OS keychain we can transparently re-sign in
-// and retry, so they don't see "invalid ticket" pop up.
+// its ticket and the next F-list call is refused `not_signed_in`. If
+// the user saved their password to the OS keychain we can transparently
+// re-sign in and retry, so they don't see "invalid ticket" pop up.
 let recoveryInFlight: Promise<boolean> | null = null
 async function tryFlistRecovery(): Promise<boolean> {
   if (recoveryInFlight) return recoveryInFlight
@@ -517,24 +517,22 @@ async function tryFlistRecovery(): Promise<boolean> {
       if (!meta.autoLogin || !meta.hasPassword || !meta.account) return false
       const password = await creds.getPassword()
       if (!password) return false
-      const res = await fetch(`${base()}/flist/session`, {
+      await send('/flist/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ account: meta.account, password })
       })
-      if (res.ok) {
-        // Let the renderer refresh its FlistSessionStatus so the sidebar
-        // chip stops showing "expired" after we just resurrected it.
-        window.dispatchEvent(new CustomEvent('flist-session-recovered'))
-        return true
-      }
+      // Let the renderer refresh its FlistSessionStatus so the sidebar
+      // chip stops showing "expired" after we just resurrected it.
+      window.dispatchEvent(new CustomEvent('flist-session-recovered'))
+      return true
+    } catch (e) {
       // Surface the failure so debugging "autologin not reliable" has
       // something to read in DevTools — the alternative is a silent
       // false that leaves the user wondering why the modal popped.
-      console.warn('[flist] auto-recovery POST /flist/session failed:', res.status)
-      return false
-    } catch (e) {
-      console.warn('[flist] auto-recovery threw:', e)
+      console.warn(
+        '[flist] auto-recovery POST /flist/session failed:',
+        e instanceof HttpError ? e.status : e
+      )
       return false
     } finally {
       // Cleared in microtask so concurrent callers that joined this
@@ -571,13 +569,31 @@ export type ErrorBody = {
 export type StreamError = ErrorBody & { stage: string }
 
 /**
+ * A sidecar answer that was not ok. `status` is its HTTP status and
+ * `detail` what it says, ready to show: the sidecar's or F-list's own
+ * words, without the status. The message (`HTTP <status>: <detail>`)
+ * is for logs; nothing reads it back.
+ */
+export class HttpError extends Error {
+  readonly status: number
+  readonly detail: string
+
+  constructor(status: number, detail: string) {
+    super(`HTTP ${status}: ${detail}`)
+    this.name = 'HttpError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
+/**
  * A request the sidecar turned down (`{code, message, details}`), so a
  * caller can tell "not signed in" from "no such character" without
- * matching on prose. Narrow with `instanceof`.
+ * matching on prose. Narrow with `instanceof`, or read the code with
+ * `refusalCode`. `message` is the sidecar's own words.
  */
-export class RefusalError extends Error {
+export class RefusalError extends HttpError {
   readonly code: string
-  readonly status: number
   readonly details: Record<string, unknown>
 
   constructor(
@@ -586,10 +602,9 @@ export class RefusalError extends Error {
     message: string,
     details: Record<string, unknown> = {}
   ) {
-    super(message)
+    super(status, message)
     this.name = 'RefusalError'
     this.code = code
-    this.status = status
     this.details = details
   }
 }
@@ -601,66 +616,135 @@ function isErrorBody(body: unknown): body is ErrorBody {
 }
 
 /** The error a failed response stands for: a `RefusalError` carrying
- *  the sidecar's code, message and details, or a plain `HTTP <status>`
- *  error when the body is not one (a proxy, a crash mid-stream). */
-async function failure(res: Response): Promise<Error> {
+ *  the sidecar's code, message and details, or a plain `HttpError`
+ *  when the body is not one (a proxy, a crash mid-stream). */
+async function failure(res: Response): Promise<HttpError> {
   const body: unknown = await res.json().catch(() => null)
   if (isErrorBody(body)) {
     const details =
       body.details && typeof body.details === 'object' ? body.details : {}
-    return new RefusalError(
-      body.code,
-      res.status,
-      `HTTP ${res.status}: ${body.message}`,
-      details
-    )
+    return new RefusalError(body.code, res.status, body.message, details)
   }
-  return new Error(`HTTP ${res.status}: ${res.statusText}`)
+  return new HttpError(res.status, res.statusText)
 }
 
-/** What a failed request says, without the `HTTP <status>: ` prefix
- *  `request` puts in front of it: the sidecar's or F-list's own words,
- *  ready to show. Any other error's message as it is. */
+/** What a failed request says, ready to show: the sidecar's or
+ *  F-list's own words for a failed answer, any other error's message
+ *  as it is. */
 export function errorDetail(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^HTTP \d+:\s*/, '')
+  if (err instanceof HttpError) return err.detail
+  return err instanceof Error ? err.message : String(err)
 }
 
-async function request<T>(
-  path: string,
-  init: RequestInit = {},
-  opts?: ApiOptions,
-  // Internal — set on the retry leg after a successful recovery so a
-  // second 401 surfaces normally instead of looping.
-  _retried = false
-): Promise<T> {
-  const res = await fetch(`${base()}${path}`, {
-    ...init,
-    signal: opts?.signal,
-    headers: {
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(init.headers ?? {})
-    }
-  })
-  if (
-    res.status === 401 &&
-    !_retried &&
-    (path.startsWith('/flist/') || path.startsWith('/foreign/')) &&
-    path !== '/flist/session'
-  ) {
+// ---- Refusal codes ----------------------------------------------------
+// The window tells refusals apart by the sidecar's code, never by its
+// words or an `HTTP <status>` string, and reads the codes here.
+
+/** The sidecar's code for a lost F-list session: no ticket, or one
+ *  F-list rejected. */
+const SESSION_LOST = 'not_signed_in'
+
+/** The codes of a Workbench write that has not seen what is on disk
+ *  now: it sent no etag, or a stale one. */
+const WORKBENCH_CONFLICT_CODES: readonly string[] = ['etag_mismatch', 'etag_required']
+
+/** The sidecar's code for a request it refused; null for any other
+ *  error (the network, an answer that is not a refusal). */
+export function refusalCode(err: unknown): string | null {
+  return err instanceof RefusalError ? err.code : null
+}
+
+/** A Workbench save refused because something else wrote the Workbench
+ *  since it was read, however the sidecar words it: the etag on disk
+ *  (null when the sidecar did not say). Null when `err` is not one. */
+export function workbenchConflict(err: unknown): { currentEtag: string | null } | null {
+  const code = refusalCode(err)
+  if (!code || !WORKBENCH_CONFLICT_CODES.includes(code)) return null
+  const etag = (err as RefusalError).details.current_etag
+  return { currentEtag: typeof etag === 'string' ? etag : null }
+}
+
+/** Whether `err`, answered for `path`, says the F-list session is
+ *  gone. Signing in itself is never one: its refusal is the answer. */
+function sessionLost(err: HttpError, path: string): boolean {
+  return err.status === 401 && refusalCode(err) === SESSION_LOST && path !== '/flist/session'
+}
+
+// ---- The request function ----------------------------------------------
+
+/** What a call sends: `RequestInit` with plain-object headers (such as
+ *  `If-Match`). A string body is JSON and goes as `application/json`;
+ *  a Blob or bytes go as they are, typed by the browser. */
+type SendInit = Omit<RequestInit, 'headers' | 'signal'> & {
+  headers?: Record<string, string>
+}
+
+/**
+ * The one place the window calls `fetch` for a sidecar route. Answers
+ * the response when it is ok; anything else throws a `RefusalError`
+ * (or an `HttpError` for an answer that is not a refusal).
+ *
+ * A route refused because the F-list session is gone (401
+ * `not_signed_in`) gets one recovery attempt and is sent again; when
+ * recovery cannot run or the second answer is refused the same way,
+ * the window hears `flist-session-expired` so it can open the sign-in
+ * modal. Without this, a 401-stuck /flist/mapping-list leaves the kink
+ * picker and diff silently empty.
+ *
+ * `request`, `requestBytes` and `requestStream` read the answer.
+ */
+async function send(path: string, init: SendInit = {}, opts?: ApiOptions): Promise<Response> {
+  const attempt = () =>
+    fetch(`${base()}${path}`, {
+      ...init,
+      signal: opts?.signal,
+      headers: {
+        ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers
+      }
+    })
+  const res = await attempt()
+  if (res.ok) return res
+  let err = await failure(res)
+  if (sessionLost(err, path)) {
     if (await tryFlistRecovery()) {
-      return request<T>(path, init, opts, true)
+      const retried = await attempt()
+      if (retried.ok) return retried
+      err = await failure(retried)
     }
-    // Recovery didn't fire (no autoLogin, no stored password) or it
-    // tried and failed. Either way the user needs to re-authenticate
-    // mid-session — surface this as an event so AppLayout can open the
-    // sign-in modal. Without this, /flist/mapping-list 401-stuck leaves
-    // the kink picker and diff silently empty.
-    window.dispatchEvent(new CustomEvent('flist-session-expired'))
+    if (sessionLost(err, path)) window.dispatchEvent(new CustomEvent('flist-session-expired'))
   }
-  if (!res.ok) throw await failure(res)
+  throw err
+}
+
+/** A call answered with JSON (or nothing, for a 204). */
+async function request<T>(path: string, init: SendInit = {}, opts?: ApiOptions): Promise<T> {
+  const res = await send(path, init, opts)
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
+}
+
+/** A call answered with bytes: a Backup's zip. */
+async function requestBytes(path: string, init: SendInit = {}, opts?: ApiOptions): Promise<Uint8Array> {
+  const res = await send(path, init, opts)
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+/** A call answered with a server-sent event stream: each block goes to
+ *  `onBlock` until the stream ends. A refused start (busy, not signed
+ *  in) throws its RefusalError. */
+async function requestStream(
+  path: string,
+  init: SendInit,
+  onBlock: (block: string) => void,
+  opts?: ApiOptions
+): Promise<void> {
+  const res = await send(
+    path,
+    { ...init, headers: { Accept: 'text/event-stream', ...init.headers } },
+    opts
+  )
+  await readEventStream(res, onBlock)
 }
 
 async function get<T>(path: string, opts?: ApiOptions): Promise<T> {
@@ -1027,49 +1111,40 @@ export const api = {
    *  `_names.json` map; the ZIP file is untouched). Empty name
    *  clears the rename. Returns the canonical updated entry so the
    *  renderer can patch its row without a full list re-fetch. */
-  flistZipBackupRename: async (
+  flistZipBackupRename: (
     characterId: string | number,
     filename: string,
     name: string
-  ) => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      }
-    )
-    if (!res.ok) throw await failure(res)
-    return (await res.json()) as FlistZipBackupEntry
-  },
+  ) =>
+    request<FlistZipBackupEntry>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
+      { method: 'PATCH', body: JSON.stringify({ name }) }
+    ),
   /** Move a single backup ZIP to the character's Trash. Idempotent
-   *  enough that the renderer refreshes the list either way; surfaces
-   *  error status to a toast.
+   *  enough that the renderer refreshes the list either way: a Backup
+   *  already gone (404) is not an error. Anything else surfaces to a
+   *  toast.
    */
   flistZipBackupDelete: async (
     characterId: string | number,
     filename: string
   ): Promise<void> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-      { method: 'DELETE' }
-    )
-    if (!res.ok && res.status !== 404) throw await failure(res)
+    try {
+      await request<unknown>(
+        `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
+        { method: 'DELETE' }
+      )
+    } catch (err) {
+      if (!(err instanceof HttpError) || err.status !== 404) throw err
+    }
   },
   /** Raw ZIP bytes for Sidebar → Backups → right-click → Download.
    *  The renderer pipes these through `window.workbench.writeFile`
    *  to whatever path the user picks in the OS save dialog. */
-  flistZipBackupDownload: async (
-    characterId: string | number,
-    filename: string
-  ): Promise<Uint8Array> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/download`
-    )
-    if (!res.ok) throw await failure(res)
-    return new Uint8Array(await res.arrayBuffer())
-  },
+  flistZipBackupDownload: (characterId: string | number, filename: string) =>
+    requestBytes(
+      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/download`
+    ),
   /** Read the embedded `working.json` (+ `backup-meta.json` if
    *  present) out of a ZIP backup for read-only Browse Backup mode.
    *  409 `backup_too_old` when the backup predates the working.json
@@ -1123,35 +1198,23 @@ export const api = {
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
         + (opts.create === false ? '?create=false' : '')
     ),
-  /** Save the whole Workbench over the etag it was read with. A 409
-   *  (no etag, or a stale one) throws `Error('etag_mismatch')` carrying
-   *  the etag on disk as `currentEtag`. */
-  flistWorkbenchPayloadPut: async (
+  /** Save the whole Workbench over the etag it was read with, sent as
+   *  `If-Match`. Saved without one, or over a stale one, it is refused
+   *  as a conflict: `workbenchConflict` reads the etag on disk from
+   *  the refusal. */
+  flistWorkbenchPayloadPut: (
     characterId: string | number,
     payload: Record<string, unknown>,
     etag: string | null
-  ): Promise<{ etag: string }> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
-    if (etag) headers['If-Match'] = etag
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
-      { method: 'PUT', headers, body: JSON.stringify(payload) }
-    )
-    if (!res.ok) {
-      const err = await failure(res)
-      if (res.status === 409) {
-        const etag =
-          err instanceof RefusalError ? err.details.current_etag : undefined
-        throw Object.assign(new Error('etag_mismatch'), {
-          currentEtag: typeof etag === 'string' ? etag : null
-        })
+  ) =>
+    request<{ etag: string }>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
+      {
+        method: 'PUT',
+        headers: etag ? { 'If-Match': etag } : {},
+        body: JSON.stringify(payload)
       }
-      throw err
-    }
-    return (await res.json()) as { etag: string }
-  },
+    ),
   /** Reset to Live: the sidecar saves the Workbench as a Backup
    *  (`backed_up_first`, null when there was no Workbench yet), then
    *  makes it a fresh copy of Live and answers with that payload and
@@ -1236,17 +1299,11 @@ export const api = {
   /** Upload a local image (PNG/JPG/GIF). Lands as `images/local-<sha8>.<ext>`
    *  and shows up in the renderer's Pool view; only a working.json
    *  gallery edit moves it on-profile. */
-  flistImageUpload: async (
-    characterId: string | number,
-    data: Blob
-  ): Promise<FlistCharacterImage> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images`,
+  flistImageUpload: (characterId: string | number, data: Blob) =>
+    request<FlistCharacterImage>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/images`,
       { method: 'POST', body: data }
-    )
-    if (!res.ok) throw await failure(res)
-    return (await res.json()) as FlistCharacterImage
-  },
+    ),
   /** Delete images, in the gallery or only in the pool: the route MCP's
    *  `trash_images` takes too. The sidecar takes gallery images off the
    *  Workbench's gallery (`off_gallery`) and answers the Workbench's new
@@ -1338,33 +1395,38 @@ export const api = {
    *  renders. It runs as a job: aborting `opts.signal` only stops
    *  following; `jobCancel` stops the sweep. */
   flistBackupAll: (handlers: FlistBackupAllHandlers, opts?: ApiOptions): Promise<void> =>
-    followStream(`${base()}/flist/backup-all`, { method: 'POST', signal: opts?.signal }, (block) =>
-      dispatchBackupAllStream(block, handlers)
+    requestStream(
+      '/flist/backup-all',
+      { method: 'POST' },
+      (block) => dispatchBackupAllStream(block, handlers),
+      opts
     ),
   /** Starts a Pull of `name` and follows its progress (SSE). A job, like
    *  Back up all: aborting `opts.signal` only stops following. */
   flistPull: (name: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
-    followStream(
-      `${base()}/flist/character/${encodeURIComponent(name)}/pull`,
-      { method: 'POST', signal: opts?.signal },
-      (block) => dispatchPullStream(block, handlers)
+    requestStream(
+      `/flist/character/${encodeURIComponent(name)}/pull`,
+      { method: 'POST' },
+      (block) => dispatchPullStream(block, handlers),
+      opts
     ),
   /** Every job the sidecar remembers: running ones, and finished ones
    *  for a few minutes. A reopened window finds its Pulls here. */
   jobsList: (opts?: ApiOptions) => get<{ jobs: Job[] }>('/jobs', opts),
   /** Follow a running Pull from the start of its events. */
   flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
-    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
-      dispatchPullStream(block, handlers)
-    ),
+    requestStream(jobEventsPath(jobId), {}, (block) => dispatchPullStream(block, handlers), opts),
   /** Follow a running Back up all from the start of its events. */
   flistBackupAllFollow: (
     jobId: string,
     handlers: FlistBackupAllHandlers,
     opts?: ApiOptions
   ): Promise<void> =>
-    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
-      dispatchBackupAllStream(block, handlers)
+    requestStream(
+      jobEventsPath(jobId),
+      {},
+      (block) => dispatchBackupAllStream(block, handlers),
+      opts
     ),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
@@ -1394,25 +1456,13 @@ export const api = {
     request<{ version: string | null; seen_at: number | null }>('/restore/extension')
 }
 
-function jobEventsUrl(jobId: string): string {
-  return `${base()}/jobs/${encodeURIComponent(jobId)}/events`
+function jobEventsPath(jobId: string): string {
+  return `/jobs/${encodeURIComponent(jobId)}/events`
 }
 
-/** Open an SSE route and hand each block to `onBlock` until the stream
- *  ends. A refused start (busy, not signed in) throws its RefusalError. */
-async function followStream(
-  url: string,
-  init: Pick<RequestInit, 'method' | 'signal'>,
-  onBlock: (block: string) => void
-): Promise<void> {
-  const res = await fetch(url, { ...init, headers: { Accept: 'text/event-stream' } })
-  await readEventStream(res, onBlock)
-}
-
-/** Read an SSE response block by block until it ends. */
+/** Read an ok SSE response block by block until it ends. */
 async function readEventStream(res: Response, onBlock: (block: string) => void): Promise<void> {
-  if (!res.ok) throw await failure(res)
-  if (!res.body) throw new Error(`HTTP ${res.status}: no body`)
+  if (!res.body) throw new HttpError(res.status, 'no body')
   const reader = res.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
