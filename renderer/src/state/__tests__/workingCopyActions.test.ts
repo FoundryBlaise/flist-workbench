@@ -143,7 +143,13 @@ describe('autosave debouncer', () => {
   it('an edit saves the Workbench with its unknown top-level keys intact (forward-compat)', async () => {
     // A newer version may have written keys this one does not know;
     // saving an edit must carry them back to disk, not drop them.
-    seedSlot('99', { character: { description: 'before' }, _future: { tier: 5 } })
+    // Unknown keys at the top level and inside the containers it knows.
+    seedSlot('99', {
+      character: { description: 'before', pronouns_v9: 'they' },
+      settings: { customs_first: true, future_toggle: false },
+      _future: { tier: 5 },
+      _later_list: ['a', 'b']
+    })
     fake.on(SAVE, json({ etag: 'saved' }))
 
     useStore.getState().flistSetWorkingField('99', 'character.description', 'after')
@@ -151,7 +157,12 @@ describe('autosave debouncer', () => {
 
     const puts = fake.requestsTo(SAVE)
     expect(puts.map((r) => descOf(r.body))).toEqual(['after'])
-    expect((puts[0].body as Record<string, unknown>)._future).toEqual({ tier: 5 })
+    expect(puts[0].body).toMatchObject({
+      character: { description: 'after', pronouns_v9: 'they' },
+      settings: { customs_first: true, future_toggle: false },
+      _future: { tier: 5 },
+      _later_list: ['a', 'b']
+    })
   })
 })
 

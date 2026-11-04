@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { selectWorkingSlot, useStore } from '../../state'
-import type { KinkChoice } from './ChoiceButtons'
+import type { KinkChoice } from './constants'
 import { KinkColumns } from './KinkColumns'
 import {
   bucketByChoice,
