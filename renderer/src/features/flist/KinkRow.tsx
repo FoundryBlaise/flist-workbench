@@ -3,10 +3,8 @@
 // keyboard hotkey map, click-to-select (with Shift/Ctrl modifiers), and
 // a ★ pip marking customs.
 
-import type { KinkChoice } from './ChoiceButtons'
+import { KINK_DRAG_MIME, type KinkChoice } from './constants'
 import type { UnifiedKink } from './kinksUnified'
-
-export const KINK_DRAG_MIME = 'application/x-kink-id'
 
 export const HOTKEY_TO_CHOICE: Record<string, KinkChoice> = {
   f: 'fave', F: 'fave',

@@ -3,7 +3,7 @@
 // the Kinks tab and the Undecided pool both consume. Pure module — no
 // React, no store imports — so it can be tested in isolation.
 
-import { isKinkChoice, type KinkChoice } from './ChoiceButtons'
+import { isKinkChoice, type KinkChoice } from './constants'
 
 export type UnifiedKinkType = 'standard' | 'custom'
 

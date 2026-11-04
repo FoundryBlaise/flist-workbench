@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useStore } from '../../../state'
 import { KinksPane } from '../KinksPane'
-import { KINK_DRAG_MIME } from '../KinkRow'
+import { KINK_DRAG_MIME } from '../constants'
 
 const CID = '42'
 
@@ -27,15 +27,15 @@ const PAYLOAD = {
   custom_kinks: { '7': { name: 'Invented', description: '', choice: 'no' } }
 }
 
-function seed(readOnly: boolean) {
+function seed(readOnly: boolean, payload: Record<string, unknown> = PAYLOAD) {
   useStore.setState({
     editorReadOnly: readOnly,
     flistMapping: { status: 'ready', payload: MAPPING, error: null },
     flistLoadMapping: vi.fn().mockResolvedValue(undefined),
     flistStandardKinkSet: vi.fn(),
     flistCustomKinksEdit: vi.fn(),
-    flistWorking: { [CID]: { payload: PAYLOAD } },
-    flistArchive: { [CID]: { live: PAYLOAD } }
+    flistWorking: { [CID]: { payload } },
+    flistArchive: { [CID]: { live: payload } }
   } as never)
 }
 
@@ -103,4 +103,26 @@ it('read-only views offer no drop and no keys', () => {
   expect(row.getAttribute('draggable')).toBe('false')
   fireEvent.keyDown(row, { key: 'n' })
   expect(useStore.getState().flistStandardKinkSet).not.toHaveBeenCalled()
+})
+
+/** The names in one column, top to bottom. */
+function columnNames(choice: string): string[] {
+  return Array.from(
+    screen.getByTestId(`kink-column-${choice}`).querySelectorAll('.kink-row-name')
+  ).map((n) => n.textContent ?? '')
+}
+
+it('with custom kinks first set, a column lists its custom kinks before the standard ones', () => {
+  // 'Zeta' sorts after 'Vore' by name; the setting still puts it on top.
+  const custom = { '7': { name: 'Zeta', description: '', choice: 'no' } }
+  seed(false, { ...PAYLOAD, custom_kinks: custom, settings: { customs_first: true } })
+  render(<KinksPane characterId={CID} />)
+  expect(columnNames('no')).toEqual(['Zeta', 'Vore'])
+})
+
+it('without the setting, a column lists custom and standard kinks by name alone', () => {
+  const custom = { '7': { name: 'Zeta', description: '', choice: 'no' } }
+  seed(false, { ...PAYLOAD, custom_kinks: custom })
+  render(<KinksPane characterId={CID} />)
+  expect(columnNames('no')).toEqual(['Vore', 'Zeta'])
 })
