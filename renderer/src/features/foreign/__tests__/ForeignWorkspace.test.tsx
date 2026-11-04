@@ -153,7 +153,7 @@ it('free text never calls the search endpoint', async () => {
 
 it('says a profile F-list will not show may be missing, deleted, private or blocked', async () => {
   vi.mocked(api.foreignProfile).mockRejectedValue(
-    new RefusalError('not_found', 404, 'HTTP 404: This profile is not available.')
+    new RefusalError('not_found', 404, 'This profile is not available.')
   )
   render(<ForeignWorkspace />)
   fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))
@@ -170,7 +170,7 @@ it('says an F-list server error in the sidecar’s words', async () => {
     new RefusalError(
       'flist_server_error',
       502,
-      'HTTP 502: F-list is down for maintenance; this says nothing about the character.'
+      'F-list is down for maintenance; this says nothing about the character.'
     )
   )
   render(<ForeignWorkspace />)

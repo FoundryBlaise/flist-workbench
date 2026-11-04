@@ -127,6 +127,7 @@ describe('signing in', () => {
     const s = useStore.getState()
     expect(s.flistSignInStatus).toBe('error')
     expect(s.flistSignInError).toBe('Invalid account name or password')
+    expect(s.flistSignInErrorCode).toBe('sign_in_failed')
     expect(s.flistSignInOpen).toBe(true)
     expect(s.flistSession.active).toBe(false)
     expect(fake.requestsTo(ROSTER)).toEqual([])

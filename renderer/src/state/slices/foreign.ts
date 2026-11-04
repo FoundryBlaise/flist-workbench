@@ -7,7 +7,7 @@
 // which is what keeps every copy/backup/export path from having
 // anything to act on.
 
-import { api, errorDetail, RefusalError, type ForeignProfilePayload } from '../../lib/api'
+import { api, errorDetail, refusalCode, type ForeignProfilePayload } from '../../lib/api'
 import type { SliceCreator } from './slice'
 
 export type ForeignState = {
@@ -116,7 +116,7 @@ export const createForeignSlice: SliceCreator<ForeignSlice> = (set, get) => ({
       // who mistyped a name.
       // Any other code (flist_server_error, flist_unreachable, ...)
       // already comes with the sidecar's own words.
-      const code = err instanceof RefusalError ? err.code : undefined
+      const code = refusalCode(err)
       const worded: Record<string, string> = {
         not_found:
           `F-list will not show "${clean}": there is no character by that name, ` +
