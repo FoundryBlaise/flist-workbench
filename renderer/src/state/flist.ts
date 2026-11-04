@@ -151,7 +151,7 @@ export function pathDelete(payload: WorkingPayload, path: string): void {
 // ---- seed-from-Live --------------------------------------------------
 
 /** F-list serves descriptions with literal CRLF / CR — duplicated from
- *  state.ts so this module is self-contained. */
+ *  the Workbench slice so this module is self-contained. */
 export function normaliseNewlines(s: string): string {
   return s.replace(/\r\n?/g, '\n')
 }
@@ -375,11 +375,11 @@ export function isInfotagPath(path: string): boolean {
   return path.startsWith('infotags.')
 }
 
-// ---- inline-image extractor (duplicated from state.ts) ---------------
+// ---- inline-image extractor (duplicated in the Workbench slice) -----
 
 /** Working-copy slots need the Live's inline manifest so `[img=<id>]`
  *  tags resolve — keep a copy here so the helper can run without
- *  pulling on state.ts. */
+ *  pulling on the store. */
 export function extractInlines(payload: unknown): Record<string, InlineImage> {
   if (!payload || typeof payload !== 'object') return {}
   const raw = (payload as { inlines?: unknown }).inlines

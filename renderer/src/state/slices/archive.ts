@@ -654,7 +654,6 @@ function formatBackupDateForBanner(filename: string): string {
  */
 function _restoreFromBrowse(
   getter: ArchiveGet,
-  setter: ArchiveSet,
   browse: NonNullable<State['flistBrowseBackup']>
 ): void {
   const { characterId, previousViewingLive } = browse
@@ -665,10 +664,7 @@ function _restoreFromBrowse(
   if (previousViewingLive) {
     void getter().flistShowLive(characterId)
   } else {
-    // Workbench-owned field: no Workbench action makes the editor
-    // editable on its own yet (#124).
-    setter({ editorReadOnly: false })
-    void getter().flistOpenWorking(characterId)
+    void getter().flistBackToWorkbench(characterId)
   }
 }
 
@@ -1051,7 +1047,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
     // the snapshot we stash below is "the user's real editor", not
     // "the previous backup we hijacked".
     if (current) {
-      _restoreFromBrowse(get, set, current)
+      _restoreFromBrowse(get, current)
     }
 
     // Snapshot the user's current editor state so close-browse can put
@@ -1147,7 +1143,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
   flistCloseBrowseBackup() {
     const browse = get().flistBrowseBackup
     if (!browse) return
-    _restoreFromBrowse(get, set, browse)
+    _restoreFromBrowse(get, browse)
   },
 
   flistEndBrowse() {

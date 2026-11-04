@@ -1,8 +1,8 @@
 // The one commit point for a character's Workbench slot.
 //
 // Every new payload the window puts into `flistWorking[characterId]`
-// goes through the store's `_commit` (state.ts), which builds the slot
-// here. A commit is one of four kinds:
+// goes through `_commit` in the Workbench slice (slices/workbench.ts),
+// which builds the slot here. A commit is one of four kinds:
 //
 //   edit     the window changed the payload: the slot turns unsaved and
 //            the autosave is scheduled.
