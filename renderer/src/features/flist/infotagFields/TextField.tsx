@@ -1,18 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { InfotagDescriptor } from '../infotagsResolver'
 
-/** The marks that put a field's committed edits on the Workbench undo
- *  stack (lib/undoRedo.ts): Ctrl+Z in it steps the Workbench, except
- *  while it holds typing it has not committed yet, which the field's
- *  own undo takes back first. */
-export function undoMarks(pending: boolean): {
-  'data-undo': 'workbench'
-  'data-undo-pending'?: 'true'
-} {
-  return pending
-    ? { 'data-undo': 'workbench', 'data-undo-pending': 'true' }
-    : { 'data-undo': 'workbench' }
-}
+/** How a field hands its value to the Workbench. A text field calls it
+ *  on every keystroke with `typing`, so what is typed is in the
+ *  Workbench at once: an autosave, a close or a model's change merged
+ *  in meanwhile all see it as mine. */
+export type FieldCommit = (next: string, opts?: { typing: true }) => void
 
 export function TextField({
   descriptor,
@@ -21,6 +14,7 @@ export function TextField({
   liveValue,
   readOnly,
   onCommit,
+  onEndTyping,
   onReset
 }: {
   descriptor: InfotagDescriptor
@@ -28,7 +22,8 @@ export function TextField({
   overlaid: boolean
   liveValue: string | null
   readOnly: boolean
-  onCommit: (next: string) => void
+  onCommit: FieldCommit
+  onEndTyping?: () => void
   onReset: () => void
 }) {
   const [local, setLocal] = useState(value)
@@ -50,11 +45,12 @@ export function TextField({
         maxLength={descriptor.uiHint.maxLength}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
-        {...undoMarks(local !== value)}
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={() => {
-          if (local !== value) onCommit(local)
+        data-undo="workbench"
+        onChange={(e) => {
+          setLocal(e.target.value)
+          onCommit(e.target.value, { typing: true })
         }}
+        onBlur={() => onEndTyping?.()}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             ;(e.currentTarget as HTMLInputElement).blur()
@@ -72,6 +68,7 @@ export function NumberField({
   liveValue,
   readOnly,
   onCommit,
+  onEndTyping,
   onReset
 }: {
   descriptor: InfotagDescriptor
@@ -79,7 +76,8 @@ export function NumberField({
   overlaid: boolean
   liveValue: string | null
   readOnly: boolean
-  onCommit: (next: string) => void
+  onCommit: FieldCommit
+  onEndTyping?: () => void
   onReset: () => void
 }) {
   const [local, setLocal] = useState(value)
@@ -123,11 +121,14 @@ export function NumberField({
         placeholder={descriptor.uiHint.placeholder ?? '—'}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
-        {...undoMarks(local !== value)}
-        onChange={(e) => setLocal(e.target.value)}
+        data-undo="workbench"
+        onChange={(e) => {
+          setLocal(e.target.value)
+          onCommit(e.target.value, { typing: true })
+        }}
         onBlur={() => {
           setShowInvalid(invalid || outOfRange)
-          if (local !== value) onCommit(local)
+          onEndTyping?.()
         }}
       />
       {descriptor.uiHint.unitSuffix && (

@@ -1,18 +1,16 @@
 // Typing in the Workbench's text fields on the Profile fields and
 // Images tabs and the undo keys (#111): a caption's typing is a burst
-// per pause or blur on the Workbench undo stack, and an infotag field
-// keeps Ctrl+Z to itself only while it holds typing it has not
-// committed yet. Rendered with the real store and the window's
+// per pause or blur on the Workbench undo stack, and so is an infotag
+// field's. Rendered with the real store and the window's
 // keydown handler, against the fake sidecar.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useStore } from '../../../state'
 import { resetUndoStacks } from '../../../state/undoStack'
 import { handleUndoKeydown } from '../../../lib/undoRedo'
 import { ImagesTab } from '../ImagesTab'
-import { TextField } from '../infotagFields/TextField'
-import type { InfotagDescriptor } from '../infotagsResolver'
+import { ProfileFieldsTab } from '../ProfileFieldsTab'
 import { installFakeApi, json, type FakeApi } from '../../../test/fakeApi'
 import { workbenchPayload, workingSlot } from '../../../test/payloads'
 
@@ -87,51 +85,38 @@ describe('a caption on the Images tab', () => {
 })
 
 describe('an infotag text field', () => {
-  const species: InfotagDescriptor = {
-    id: '9',
-    fieldName: 'info_9',
-    label: 'Species',
-    type: 'text',
-    groupId: 'general',
-    uiHint: {}
-  }
-
-  it('keeps Ctrl+Z to itself while it holds uncommitted typing, and steps the Workbench after', () => {
-    seed({ kinks: { '12': 'yes' } })
-    store().flistStandardKinkSet(CID, '12', 'fave')
-    const onCommit = vi.fn()
-    const { rerender } = render(
-      <TextField
-        descriptor={species}
-        value="Human"
-        overlaid={false}
-        liveValue={null}
-        readOnly={false}
-        onCommit={onCommit}
-        onReset={vi.fn()}
-      />
-    )
-    const input = screen.getByTestId('infotag-9-input')
+  it('typing is one undo entry up to blur, and Ctrl+Z in the field undoes it', () => {
+    seed({ infotags: { '9': 'Human' } })
+    useStore.setState({
+      flistArchive: {},
+      flistDriftBanners: {},
+      flistMapping: {
+        status: 'ready',
+        payload: { _etag: null, _fetched_at: null, infotags: [{ id: 9, name: 'Species', type: 'text' }], listitems: [], kinks: [] },
+        fetchedAt: null,
+        etag: null,
+        error: null
+      }
+    } as never)
+    render(<ProfileFieldsTab characterId={CID} />)
+    const input = screen.getByTestId('infotag-9-input') as HTMLInputElement
+    const species = () => (store().flistWorking[CID].payload.infotags as Record<string, string>)['9']
     input.focus()
-    fireEvent.change(input, { target: { value: 'Humane' } })
-    expect(ctrl('z', input).defaultPrevented).toBe(false)
-    expect(store().flistWorking[CID].payload.kinks).toEqual({ '12': 'fave' })
-
+    for (const text of ['Human,', 'Human, m', 'Human, mostly']) fireEvent.change(input, { target: { value: text } })
     fireEvent.blur(input)
-    expect(onCommit).toHaveBeenCalledWith('Humane')
-    rerender(
-      <TextField
-        descriptor={species}
-        value="Humane"
-        overlaid={false}
-        liveValue={null}
-        readOnly={false}
-        onCommit={onCommit}
-        onReset={vi.fn()}
-      />
-    )
     input.focus()
-    expect(ctrl('z', input).defaultPrevented).toBe(true)
-    expect(store().flistWorking[CID].payload.kinks).toEqual({ '12': 'yes' })
+    fireEvent.change(input, { target: { value: 'Human, mostly!' } })
+
+    let undo: KeyboardEvent | undefined
+    act(() => {
+      undo = ctrl('z', input)
+    })
+    expect(undo?.defaultPrevented).toBe(true)
+    expect(species()).toBe('Human, mostly')
+    expect(input.value).toBe('Human, mostly')
+    ctrl('z', input)
+    expect(species()).toBe('Human')
+    ctrl('y', input)
+    expect(species()).toBe('Human, mostly')
   })
 })

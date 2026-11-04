@@ -13,11 +13,9 @@ export type UndoAction = 'undo' | 'redo'
  *              fields, marked `data-undo="workbench"` (the description
  *              editor, its preview, captions, infotag fields). Their
  *              typing is on that stack already, a burst per pause or
- *              blur (#111), so its newest entry is the pending typing.
+ *              blur, so its newest entry is the pending typing.
  *   - native   a writable text input or textarea of the window (search,
- *              filters), or a Workbench field still holding typing it
- *              has not committed (`data-undo-pending`, an infotag field
- *              before blur): Chromium's own undo on that element.
+ *              filters): Chromium's own undo on that element.
  *   - editor   any other CodeMirror or contenteditable (a Foreign
  *              profile's source): that editor's own history.
  */
@@ -41,7 +39,7 @@ const TEXT_INPUT_TYPES = new Set([
 
 function routeOf(target: Element | null): Route {
   const active = target
-  if (active?.closest(WORKBENCH_FIELD) && !active.closest('[data-undo-pending]')) {
+  if (active?.closest(WORKBENCH_FIELD)) {
     return 'workbench'
   }
   if (
@@ -61,8 +59,7 @@ function routeOf(target: Element | null): Route {
 }
 
 /** True when `target` is a text control that keeps its own undo, so
- *  Ctrl+Z there is left to it. The Workbench's own text fields are not,
- *  unless they hold typing they have not committed yet. */
+ *  Ctrl+Z there is left to it. The Workbench's own text fields are not. */
 export function isTextControl(target: Element | null): boolean {
   return routeOf(target) !== 'workbench'
 }

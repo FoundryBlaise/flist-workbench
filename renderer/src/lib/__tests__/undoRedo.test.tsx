@@ -116,7 +116,7 @@ describe('the Workbench’s own text fields put their typing on its stack', () =
     ['the description editor', '<div data-undo="workbench"><div class="cm-editor"><div id="t" contenteditable="true"></div></div></div>'],
     ['the preview', '<div id="t" data-undo="workbench" contenteditable="true"></div>'],
     ['a caption', '<textarea id="t" data-undo="workbench"></textarea>'],
-    ['an infotag field with nothing typed since its last commit', '<input type="text" id="t" data-undo="workbench">']
+    ['an infotag field', '<input type="text" id="t" data-undo="workbench">']
   ])('Ctrl+Z and Ctrl+Y in %s step the Workbench', (_name, html) => {
     twoChanges()
     document.body.innerHTML = html
@@ -124,14 +124,6 @@ describe('the Workbench’s own text fields put their typing on its stack', () =
     expect(press('z', {}, t).defaultPrevented).toBe(true)
     expect(kinks()).toEqual({ '12': 'fave' })
     press('y', {}, t)
-    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
-  })
-
-  it('an infotag field with typing it has not committed yet keeps Ctrl+Z to itself', () => {
-    twoChanges()
-    document.body.innerHTML = '<input type="text" id="t" data-undo="workbench" data-undo-pending="true">'
-    const e = press('z', {}, document.getElementById('t')!)
-    expect(e.defaultPrevented).toBe(false)
     expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
   })
 
