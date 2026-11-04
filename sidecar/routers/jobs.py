@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from starlette.responses import StreamingResponse
 
 from services import jobs, sse
-from wire import Job, WireModel, event_stream
+from wire import BackupAllEvents, Job, PullEvents, WireModel, event_stream
 
 router = APIRouter()
 
@@ -43,7 +43,9 @@ def job_cancel(job_id: str) -> Job:
         "A Pull's or Back up all's events: first `job` (the job as "
         "`GET /jobs/{job_id}` answers it), then each event it sent and "
         "sends, ending with `done`, `error` (`{stage, code, message, "
-        "details}`) or `cancelled`."
+        "details}`) or `cancelled`.",
+        PullEvents,
+        BackupAllEvents,
     ),
 )
 async def job_events(job_id: str) -> StreamingResponse:

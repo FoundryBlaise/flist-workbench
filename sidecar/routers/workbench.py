@@ -3,7 +3,7 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 import archive_backups
 import archive_live
@@ -92,6 +92,13 @@ def _kept(kept: dict[str, Any] | None) -> KeptBackup | None:
     return KeptBackup.model_validate(kept) if kept is not None else None
 
 
+class WorkbenchSaveRequest(RootModel[dict[str, Any]]):
+    """The whole Workbench payload a save writes: F-list's
+    character-data shape plus the app's `_schema_version` and
+    `_overlay`. Free-form, because F-list may add fields and the
+    Workbench keeps what it does not know."""
+
+
 class _LoadBackupBody(BaseModel):
     """Restore a Backup into the Workbench.
 
@@ -100,7 +107,7 @@ class _LoadBackupBody(BaseModel):
     """
 
     filename: str
-    back_up_first: bool = True
+    back_up_first: bool | None = None
 
 
 @router.get("/flist/character/{character_id}/workbench")
@@ -149,7 +156,7 @@ def flist_character_workbench_payload_get(
 @router.put("/flist/character/{character_id}/workbench/payload")
 def flist_character_workbench_payload_put(
     character_id: str,
-    payload: dict[str, Any] = Body(...),
+    payload: WorkbenchSaveRequest = Body(...),
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> WorkbenchSaved:
     """Save the whole Workbench, against the etag the caller read.
@@ -162,7 +169,7 @@ def flist_character_workbench_payload_put(
     """
     try:
         etag = archive_workbench.write_workbench(
-            character_id, payload, expected_etag=if_match
+            character_id, payload.root, expected_etag=if_match
         )
     except archive_workbench.EtagRequired as exc:
         raise WorkbenchConflict(

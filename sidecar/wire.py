@@ -11,9 +11,12 @@ Every route says what its ok answer is, so the schema (`openapi.json`,
 - A key an answer sometimes leaves out is typed `X | MISSING`, default
   `MISSING`: the model leaves it out too (rather than sending null),
   and the schema makes it optional (`key?: X` in the renderer's types).
-- An event stream, bytes or no body has no model; the route declares
-  `response_class=` and `responses=` from the helpers below (or
-  `status_code=204, response_class=Response` for no body).
+- An event stream, bytes or no body has no response model; the route
+  declares `response_class=` and `responses=` from the helpers below
+  (or `status_code=204, response_class=Response` for no body). An
+  event stream names its events model there (`event_stream`).
+- A JSON request body is a model too (`...Request`, `...Update`), never
+  a `dict`.
 
 Non-2xx answers are `refusals.RefusalBody` on every route
 (`refusals.REFUSAL_RESPONSES`, added where server.py includes the
@@ -32,13 +35,18 @@ from refusals import RefusalCode
 
 __all__ = [
     "MISSING",
+    "BackupAllEvents",
     "Job",
     "JobError",
     "JobFailureCode",
     "LabelSource",
+    "PullEvents",
+    "PullStatusName",
+    "StreamError",
     "Verdict",
     "WireModel",
     "binary",
+    "declare_events",
     "event_stream",
     "image",
 ]
@@ -113,15 +121,188 @@ class Job(WireModel):
     finished_at: float | None
 
 
-def event_stream(description: str) -> dict[int | str, dict[str, Any]]:
+# ---- event streams ----------------------------------------------------------
+#
+# An event stream's events are declared as an events model: one field
+# per event name, typed with that event's JSON data. Nothing builds
+# these models (the streams send dicts, which MCP reads too);
+# `tests/stream_events.py` checks every sent event against them, and
+# the schema carries them so the renderer's types for the events are
+# generated (`Schema<'PullEvents'>['image']`).
+
+
+class StreamError(WireModel):
+    """A stream's `error` event, which ends it: the stage it stopped
+    at, then the one error shape `{code, message, details}`."""
+
+    stage: str
+    code: RefusalCode | JobFailureCode
+    message: str
+    details: dict[str, Any]
+
+
+class JobCancelled(WireModel):
+    """A stream's `cancelled` event: a cancel by job id stopped the
+    job. No data."""
+
+
+class PullTicket(WireModel):
+    """A Pull is getting (or refreshing) the F-list ticket. No data."""
+
+
+class PullFetching(WireModel):
+    """A Pull is asking F-list for the character."""
+
+    name: str
+
+
+class PullImages(WireModel):
+    """A Pull's images start: how many the profile lists."""
+
+    total: int
+    downloaded: int
+    failed: int
+
+
+class PullImage(WireModel):
+    """One image of a Pull: kept (`cached`: it was on disk already) or
+    not (`error` says why)."""
+
+    index: int
+    total: int
+    image_id: str
+    ok: bool
+    cached: bool | MISSING = MISSING
+    error: str | MISSING = MISSING
+
+
+#: How complete a character's last Pull is (`archive_images.compute_pull_status`).
+PullStatusName = Literal["never_pulled", "unknown", "interrupted", "partial", "complete"]
+
+
+class PullDone(WireModel):
+    """A Pull ended: `changed` whether F-list's profile differed from
+    Live, and the images by outcome."""
+
+    character_id: str
+    name: str
+    changed: bool
+    image_count: int
+    image_downloaded: int
+    image_cached: int
+    image_failed: int
+    pull_status: PullStatusName
+    pull_missing: int
+
+
+class PullEvents(WireModel):
+    """A Pull's events, in the order a Pull sends them: the job, then
+    its progress, ending with `done`, `error` or `cancelled`."""
+
+    job: Job
+    ticket: PullTicket
+    fetching: PullFetching
+    images: PullImages
+    image: PullImage
+    done: PullDone
+    error: StreamError
+    cancelled: JobCancelled
+
+
+class BackupAllStart(WireModel):
+    """Back up all starts: how many characters the account has."""
+
+    total: int
+
+
+class ImageStats(WireModel):
+    """A character's images after its Pull, by outcome."""
+
+    total: int
+    downloaded: int
+    cached: int
+    failed: int
+
+
+class BackupAllCharacter(WireModel):
+    """One character of Back up all: being pulled (`fetching`), then
+    `saved` as a Backup (`filename`), `unchanged` since its newest
+    Backup, or `error` (`message`; the sweep goes on)."""
+
+    name: str
+    character_id: str | MISSING = MISSING
+    status: Literal["fetching", "saved", "unchanged", "error"]
+    filename: str | MISSING = MISSING
+    size: int | MISSING = MISSING
+    message: str | MISSING = MISSING
+    image_stats: ImageStats | MISSING = MISSING
+
+
+class BackupAllDone(WireModel):
+    """Back up all ended: the characters by outcome, and each one's
+    last event."""
+
+    total: int
+    saved: int
+    unchanged: int
+    failed: int
+    characters: list[BackupAllCharacter]
+
+
+class BackupAllEvents(WireModel):
+    """Back up all's events: the job, `start`, a `character` event per
+    character as it is pulled and as it ends, then `done`, `error` or
+    `cancelled`."""
+
+    job: Job
+    start: BackupAllStart
+    character: BackupAllCharacter
+    done: BackupAllDone
+    error: StreamError
+    cancelled: JobCancelled
+
+
+#: The events models streams declare, for the schema (`declare_events`).
+_EVENTS_MODELS: list[type[BaseModel]] = []
+
+
+def event_stream(
+    description: str, *events: type[BaseModel]
+) -> dict[int | str, dict[str, Any]]:
     """The `responses=` of a route answering a server-sent event
-    stream (with `response_class=StreamingResponse`)."""
+    stream (with `response_class=StreamingResponse`). `events`: the
+    stream's events model, or the models of each stream it may be
+    (`x-events` in the schema)."""
+    refs = [{"$ref": f"#/components/schemas/{m.__name__}"} for m in events]
+    _EVENTS_MODELS.extend(m for m in events if m not in _EVENTS_MODELS)
     return {
         200: {
             "description": description,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {
+                    "schema": {"type": "string"},
+                    "x-events": refs[0] if len(refs) == 1 else {"anyOf": refs},
+                }
+            },
         }
     }
+
+
+def declare_events(document: dict[str, Any]) -> None:
+    """Add the events models `event_stream` was given, and the models
+    they use, to `document`'s schemas, which FastAPI fills only with
+    the models of JSON bodies. A model already there must be the same."""
+    from pydantic.json_schema import models_json_schema
+
+    _, top = models_json_schema(
+        [(m, "serialization") for m in _EVENTS_MODELS],
+        ref_template="#/components/schemas/{model}",
+    )
+    schemas = document.setdefault("components", {}).setdefault("schemas", {})
+    for name, schema in top.get("$defs", {}).items():
+        if schemas.setdefault(name, schema) != schema:
+            raise ValueError(f"two different schemas named {name}")
+    document["components"]["schemas"] = dict(sorted(schemas.items()))
 
 
 def binary(media_type: str, description: str) -> dict[int | str, dict[str, Any]]:

@@ -1,15 +1,16 @@
 """Health, shutdown, the event stream and the MCP endpoint description."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from pydantic import Field
 
 import workbench_mcp
 from refusals import NotStoppable
 from services import events as event_bus
 from services import lifecycle, sse
-from wire import WireModel, event_stream
+from wire import MISSING, WireModel, event_stream
 
 router = APIRouter()
 
@@ -58,6 +59,64 @@ class McpTokenRevoked(WireModel):
     required: bool
 
 
+#: The events the bus sends (`services/events.py`).
+ChangeName = Literal[
+    event_bus.SET_PAYLOAD_CHANGED,
+    event_bus.SETS_CHANGED,
+    event_bus.LIVE_CHANGED,
+    event_bus.LABELS_CHANGED,
+    event_bus.SETTINGS_CHANGED,
+    event_bus.INDEX_CHANGED,
+    event_bus.IMAGES_CHANGED,
+    event_bus.BACKUPS_CHANGED,
+    event_bus.CHARACTERS_CHANGED,
+]
+
+
+class ChangeHint(WireModel):
+    """A change to shared state, as a hint: the window re-reads
+    through the normal routes. `origin` is who made it: `ui` for the
+    window, `mcp:<tool>` for a connected model. The rest says what
+    changed: the character (`character_id`, the Workbench's new
+    `etag`), how many Labels (`hashes` written, `deleted`), the
+    settings (`changed`: each field as stored, keyed by the settings
+    service's names, null = back to default), or the Index's job
+    (`job_id`, `state`)."""
+
+    event: ChangeName
+    at: float
+    origin: str
+    character_id: str | MISSING = MISSING
+    etag: str | MISSING = MISSING
+    hashes: int | MISSING = MISSING
+    deleted: int | MISSING = MISSING
+    changed: dict[str, Any] | MISSING = MISSING
+    job_id: str | MISSING = MISSING
+    state: str | MISSING = MISSING
+
+
+class StreamReady(WireModel):
+    """The stream is live: its first event."""
+
+    subscribers: int
+
+
+class ChangeEvents(WireModel):
+    """The events of `/events`, by name: `ready` first, then a change
+    hint whenever shared state changes."""
+
+    ready: StreamReady
+    set_payload_changed: ChangeHint = Field(alias=event_bus.SET_PAYLOAD_CHANGED)
+    sets_changed: ChangeHint = Field(alias=event_bus.SETS_CHANGED)
+    live_changed: ChangeHint = Field(alias=event_bus.LIVE_CHANGED)
+    labels_changed: ChangeHint = Field(alias=event_bus.LABELS_CHANGED)
+    settings_changed: ChangeHint = Field(alias=event_bus.SETTINGS_CHANGED)
+    index_changed: ChangeHint = Field(alias=event_bus.INDEX_CHANGED)
+    images_changed: ChangeHint = Field(alias=event_bus.IMAGES_CHANGED)
+    backups_changed: ChangeHint = Field(alias=event_bus.BACKUPS_CHANGED)
+    characters_changed: ChangeHint = Field(alias=event_bus.CHARACTERS_CHANGED)
+
+
 @router.get("/health")
 def health(request: Request) -> Health:
     return Health(status="ok", version=request.app.version)
@@ -80,7 +139,7 @@ def shutdown() -> ShutdownStarted:
 @router.get(
     "/events",
     response_class=StreamingResponse,
-    responses=event_stream("Change hints, `{event, at, ...ids}` per event."),
+    responses=event_stream("Change hints, `{event, at, ...ids}` per event.", ChangeEvents),
 )
 async def events_stream(request: Request) -> StreamingResponse:
     """Server-sent stream of changes to shared state.

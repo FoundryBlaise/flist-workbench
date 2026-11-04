@@ -6,6 +6,7 @@ import pytest
 
 import model_weights
 from data_invariants import *  # noqa: F401,F403 - fixture, markers and hooks
+from stream_events import stream_events_declared  # noqa: F401 - autouse fixture
 from services.local_access import RENDERER_ORIGIN_ENV, SECRET_ENV
 from sidecar_client import TEST_LAUNCH_SECRET
 

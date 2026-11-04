@@ -20,7 +20,7 @@ from services import backup_trash as backup_trash_service
 from services import jobs
 from services import pull as pull_service
 from services import sse
-from wire import Job, WireModel, binary, event_stream
+from wire import BackupAllEvents, Job, PullEvents, WireModel, binary, event_stream
 
 router = APIRouter()
 
@@ -82,19 +82,20 @@ class BackupPayload(WireModel):
     meta: dict[str, Any] | None
 
 
-#: What a Pull or Back up all answers: the progress stream, or with
-#: `wait=false` the job.
-_JOB_ANSWERS: dict[int | str, dict[str, Any]] = {
-    **event_stream("The job, then its progress events until it ends."),
-    202: {"model": Job, "description": "The job, started (`wait=false`)."},
-}
+def _job_answers(events: type[BaseModel]) -> dict[int | str, dict[str, Any]]:
+    """What a Pull or Back up all answers: the progress stream (its
+    `events`), or with `wait=false` the job."""
+    return {
+        **event_stream("The job, then its progress events until it ends.", events),
+        202: {"model": Job, "description": "The job, started (`wait=false`)."},
+    }
 
 
 @router.post(
     "/flist/character/{name}/pull",
     response_model=None,
     response_class=StreamingResponse,
-    responses=_JOB_ANSWERS,
+    responses=_job_answers(PullEvents),
 )
 def flist_character_pull(name: str, wait: bool = True) -> Response:
     """Pull live character data + images for `name`, as a job.
@@ -257,7 +258,7 @@ def flist_character_zip_backup_payload(
     "/flist/backup-all",
     response_model=None,
     response_class=StreamingResponse,
-    responses=_JOB_ANSWERS,
+    responses=_job_answers(BackupAllEvents),
 )
 def flist_backup_all(wait: bool = True) -> Response:
     """Back up every character on the signed-in account, as a job.

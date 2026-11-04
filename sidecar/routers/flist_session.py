@@ -14,7 +14,7 @@ from logs import LogDirError, list_characters
 from refusals import FlistRefused, NoAvatar
 from services import avatars, password_idle
 from services import foreign as foreign_service
-from wire import MISSING, WireModel, binary
+from wire import MISSING, PullStatusName, WireModel, binary
 
 router = APIRouter()
 
@@ -90,7 +90,7 @@ class MissingImage(WireModel):
 class PullStatus(WireModel):
     """Whether a character's last Pull got every image."""
 
-    status: Literal["never_pulled", "unknown", "interrupted", "partial", "complete"]
+    status: PullStatusName
     missing_image_ids: list[MissingImage]
     expected: int
     present: int

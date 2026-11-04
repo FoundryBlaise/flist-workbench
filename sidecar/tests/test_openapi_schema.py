@@ -132,29 +132,6 @@ def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
     assert undeclared == []
 
 
-#: The router modules whose routes declare what they answer (spec #8:
-#: #127 health + settings; #128-#130 add theirs (#130: the F-list
-#: session, Foreign profiles, the Pool and the Trash, look-ups and
-#: rendering); #131 makes it every group and drops this list).
-TYPED_GROUPS = {
-    "health",
-    "settings",
-    "live",
-    "workbench",
-    "pull_backups",
-    "upload",
-    "logs",
-    "labels",
-    "aliases",
-    "index",
-    "jobs",
-    "flist_session",
-    "foreign",
-    "images_trash",
-    "lookups",
-    "render",
-}
-
 #: What a route that answers no JSON model declares instead: an event
 #: stream, bytes, or nothing.
 NOT_JSON = {
@@ -201,7 +178,10 @@ def _undeclared_answer(operation: dict) -> str | None:
     return None
 
 
-def test_typed_routes_declare_a_response_model() -> None:
+def test_every_route_declares_a_response_model() -> None:
+    # A handler annotated `-> dict` (or not at all) answers an object
+    # the schema cannot name, so the window's type for it would be
+    # written by hand.
     from sidecar_client import api_routes
 
     from server import app
@@ -209,11 +189,59 @@ def test_typed_routes_declare_a_response_model() -> None:
     paths = openapi_schema.schema()["paths"]
     problems = []
     for route in api_routes(app):
-        if route.group not in TYPED_GROUPS:
-            continue
         why = _undeclared_answer(paths[route.path][route.method.lower()])
         if why:
             problems.append(f"{route.method} {route.path}: {why}")
+    assert problems == []
+
+
+def test_every_event_stream_names_its_events() -> None:
+    # `x-events` names the stream's events model: one field per event
+    # name, typed with its data, so the window's types for the events
+    # are generated too.
+    schemas = openapi_schema.schema()["components"]["schemas"]
+
+    def names_an_events_model(events: dict) -> bool:
+        branches = events.get("anyOf", [events])
+        return all(
+            b.get("$ref", "").removeprefix("#/components/schemas/") in schemas for b in branches
+        )
+
+    problems = [
+        f"{method.upper()} {path}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        for status, response in operation["responses"].items()
+        if "text/event-stream" in response.get("content", {})
+        and not names_an_events_model(response["content"]["text/event-stream"].get("x-events", {}))
+    ]
+    assert problems == []
+
+
+def _undeclared_body(operation: dict) -> str | None:
+    """Why `operation`'s JSON request body names no model, or None when
+    it does (or takes no JSON body: bytes go as they are)."""
+    content = operation.get("requestBody", {}).get("content", {})
+    body = content.get("application/json")
+    if body is None:
+        return None
+    schema = body.get("schema", {})
+    # An optional body is a model or nothing.
+    branches = [b for b in schema.get("anyOf", [schema]) if b != {"type": "null"}]
+    if branches and all(_names_models(b) for b in branches):
+        return None
+    return f"body names no model: {schema}"
+
+
+def test_every_json_body_names_a_request_model() -> None:
+    # A body typed `dict` takes any object, and the window's type for
+    # what it sends would be written by hand.
+    problems = [
+        f"{method.upper()} {path}: {why}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        if (why := _undeclared_body(operation))
+    ]
     assert problems == []
 
 
@@ -222,3 +250,41 @@ def test_model_names_are_unique_across_routers() -> None:
     # (`routers__settings__Settings`), and the renderer's names with them.
     names = openapi_schema.schema()["components"]["schemas"]
     assert [name for name in names if "__" in name] == []
+
+
+def _bare_dict_returns() -> list[str]:
+    """Every `return {...}` or `return dict(...)` in a route handler of
+    a router module."""
+    import ast
+
+    routers = Path(openapi_schema.__file__).resolve().parent / "routers"
+    found = []
+    for path in sorted(routers.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and isinstance(d.func.value, ast.Name)
+                and d.func.value.id == "router"
+                for d in func.decorator_list
+            ):
+                continue
+            for node in ast.walk(func):
+                value = node.value if isinstance(node, ast.Return) else None
+                if isinstance(value, ast.Dict) or (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "dict"
+                ):
+                    found.append(f"routers/{path.name}:{node.lineno} {func.name}")
+    return found
+
+
+def test_no_route_handler_returns_a_bare_dict() -> None:
+    # The handler builds its response model (or hands a shared
+    # function's dict to it: `Model.model_validate(d)`), so what goes
+    # out is what the schema says, whatever FastAPI would coerce.
+    assert _bare_dict_returns() == []

@@ -26,7 +26,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function event(name: string, origin = 'mcp:create_backup'): WorkbenchEvent {
+function event(name: WorkbenchEvent['event'], origin = 'mcp:create_backup'): WorkbenchEvent {
   return { event: name, at: 1, origin, character_id: '77' }
 }
 
@@ -68,7 +68,7 @@ it('images another writer changed reload the pool', async () => {
 })
 
 it('the window’s own writes reload nothing', async () => {
-  for (const name of ['backups-changed', 'characters-changed', 'images-changed', 'live-changed']) {
+  for (const name of ['backups-changed', 'characters-changed', 'images-changed', 'live-changed'] as const) {
     applyWorkbenchEvent(event(name, 'ui'), useStore.getState())
   }
   await new Promise((r) => setTimeout(r, 0))
