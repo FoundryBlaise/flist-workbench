@@ -34,6 +34,14 @@ const SETTINGS = {
   foreign: { cache_cap_mb: 1024, defaults: { cache_cap_mb: 1024 } }
 }
 
+/** What an action that worked and answers nothing resolves to. */
+const WORKED = { ok: true, value: null }
+
+/** What a refused action resolves to: the sidecar's words and code. */
+function refused(message: string, code: string | null = null) {
+  return { ok: false, error: { message, code } }
+}
+
 let fake: FakeApi
 
 beforeEach(() => {
@@ -99,9 +107,9 @@ describe('the settings', () => {
     const saved = { ...SETTINGS, labels: { ...SETTINGS.labels, threshold_chars: 300 } }
     fake.on('PUT /settings', json(saved))
 
-    const error = await state().settingsSave({ labels: { threshold_chars: 300 } })
+    const result = await state().settingsSave({ labels: { threshold_chars: 300 } })
 
-    expect(error).toBeNull()
+    expect(result).toEqual({ ok: true, value: saved })
     expect(fake.requestsTo('PUT /settings').map((r) => r.body)).toEqual([
       { labels: { threshold_chars: 300 } }
     ])
@@ -111,11 +119,14 @@ describe('the settings', () => {
   it('a refused save says why and keeps the settings as they were', async () => {
     fake.once('GET /settings', json(SETTINGS))
     await state().settingsLoad()
-    fake.on('PUT /settings', json({ code: 'invalid', message: 'no such folder', details: {} }, 422))
+    fake.on(
+      'PUT /settings',
+      json({ code: 'validation_failed', message: 'no such folder', details: {} }, 422)
+    )
 
-    const error = await state().settingsSave({ fchat_data_dir: 'X:/nowhere' })
+    const result = await state().settingsSave({ fchat_data_dir: 'X:/nowhere' })
 
-    expect(error).toBe('no such folder')
+    expect(result).toEqual(refused('no such folder', 'validation_failed'))
     expect(state().settings).toEqual(SETTINGS)
   })
 
@@ -158,7 +169,7 @@ describe('MCP access', () => {
     fake.on('POST /mcp-info/token', json({ token: 't0k3n' }))
     fake.on('GET /mcp-info', json(required))
 
-    expect(await state().mcpCreateToken()).toBeNull()
+    expect(await state().mcpCreateToken()).toEqual(WORKED)
 
     expect(fake.requestsTo('POST /mcp-info/token')).toHaveLength(1)
     expect(state().mcpInfo).toEqual(required)
@@ -168,7 +179,7 @@ describe('MCP access', () => {
     fake.on('DELETE /mcp-info/token', json({ required: false }))
     fake.on('GET /mcp-info', json(MCP_INFO))
 
-    expect(await state().mcpRevokeToken()).toBeNull()
+    expect(await state().mcpRevokeToken()).toEqual(WORKED)
 
     expect(fake.requestsTo('DELETE /mcp-info/token')).toHaveLength(1)
     expect(state().mcpInfo).toEqual(MCP_INFO)
@@ -178,7 +189,7 @@ describe('MCP access', () => {
     fake.on('PUT /settings', json({ ...SETTINGS, mcp: { log_text: true } }))
     fake.on('GET /mcp-info', json(MCP_INFO))
 
-    expect(await state().mcpSetLogText(true)).toBeNull()
+    expect(await state().mcpSetLogText(true)).toEqual(WORKED)
 
     expect(fake.requestsTo('PUT /settings').map((r) => r.body)).toEqual([
       { mcp: { log_text: true } }
@@ -190,7 +201,7 @@ describe('MCP access', () => {
   it('a refused switch says why and reads nothing again', async () => {
     fake.on('PUT /settings', json({ code: 'invalid', message: 'not now', details: {} }, 422))
 
-    expect(await state().mcpSetLogText(true)).toBe('not now')
+    expect(await state().mcpSetLogText(true)).toEqual(refused('not now'))
     expect(fake.requestsTo('GET /mcp-info')).toHaveLength(0)
   })
 })
@@ -218,7 +229,7 @@ describe('the browser extension', () => {
     fake.on('DELETE /restore/token', json({ ok: true }))
     fake.on('GET /pairing', json({ paired: false }))
 
-    expect(await state().extensionRevokePairing()).toBeNull()
+    expect(await state().extensionRevokePairing()).toEqual(WORKED)
 
     expect(fake.requestsTo('DELETE /restore/token')).toHaveLength(1)
     expect(state().extensionPairing).toBe('unpaired')
@@ -269,7 +280,7 @@ describe('Labels', () => {
     fake.on('GET /labels/rollup', json({ ...ROLLUP, ic: 0, ooc: 0, manual: 0, unlabeled: 10 }))
     fake.on('GET /labels/trash', json({ labels: [TRASHED] }))
 
-    expect(await state().labelsClearAll()).toBeNull()
+    expect(await state().labelsClearAll()).toEqual(WORKED)
 
     expect(fake.requestsTo('POST /labels/clear-all')).toHaveLength(1)
     await expect.poll(() => state().labelsRollup?.unlabeled).toBe(10)
@@ -316,7 +327,7 @@ describe('the Index', () => {
     const result = { ok: true, elapsed_ms: 12, dimension: 768, model: 'org/m', error: null }
     fake.on('POST /rag/test-embedding', json(result))
 
-    expect(await state().indexTestEmbedding('org/m')).toEqual(result)
+    expect(await state().indexTestEmbedding('org/m')).toEqual({ ok: true, value: result })
     expect(fake.requestsTo('POST /rag/test-embedding')[0].body).toEqual({ embed_model: 'org/m' })
   })
 
@@ -326,31 +337,25 @@ describe('the Index', () => {
       json({ code: 'internal', message: 'model missing', details: {} }, 500)
     )
 
-    expect(await state().indexTestEmbedding('org/m')).toEqual({
-      ok: false,
-      elapsed_ms: 0,
-      dimension: null,
-      model: 'org/m',
-      error: 'model missing'
-    })
+    expect(await state().indexTestEmbedding('org/m')).toEqual(refused('model missing'))
   })
 
   it('wiping and rebuilding the keyword search go to the sidecar', async () => {
     fake.on('POST /rag/wipe', json({ wiped: true }))
     fake.on('POST /rag/lexical/rebuild', json({ indexed: 321 }))
 
-    expect(await state().indexWipe()).toBeNull()
-    expect(await state().indexRebuildLexical()).toEqual({ indexed: 321 })
+    expect(await state().indexWipe()).toEqual(WORKED)
+    expect(await state().indexRebuildLexical()).toEqual({ ok: true, value: 321 })
     expect(fake.requestsTo('POST /rag/wipe')).toHaveLength(1)
   })
 
   it('a refused rebuild says why', async () => {
     fake.on(
       'POST /rag/lexical/rebuild',
-      json({ code: 'busy', message: 'ingest running', details: {} }, 409)
+      json({ code: 'index_busy', message: 'ingest running', details: {} }, 409)
     )
 
-    expect(await state().indexRebuildLexical()).toEqual({ error: 'ingest running' })
+    expect(await state().indexRebuildLexical()).toEqual(refused('ingest running', 'index_busy'))
   })
 })
 
@@ -373,7 +378,7 @@ describe('the Foreign profile cache', () => {
     )
     fake.on('GET /foreign/cache', json({ bytes: 90 * MB, profiles: 2, cap_bytes: 100 * MB }))
 
-    expect(await state().foreignCacheSetCap(100)).toBeNull()
+    expect(await state().foreignCacheSetCap(100)).toEqual(WORKED)
 
     expect(fake.requestsTo('PUT /settings')[0].body).toEqual({ foreign: { cache_cap_mb: 100 } })
     expect(state().settings?.foreign.cache_cap_mb).toBe(100)
@@ -386,7 +391,7 @@ describe('the Foreign profile cache', () => {
       json({ removed: 4, bytes: 0, profiles: 0, cap_bytes: 1024 * MB })
     )
 
-    expect(await state().foreignCacheClear()).toBeNull()
+    expect(await state().foreignCacheClear()).toEqual(WORKED)
 
     expect(state().foreignCacheUsage).toMatchObject({ bytes: 0, profiles: 0 })
   })

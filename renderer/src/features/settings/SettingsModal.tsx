@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ForeignSettings, LabelsSettings, IndexSettings } from '../../lib/api'
 import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
+import { errorText, type ActionResult } from '../../state/actionResult'
 import type { EmbeddingTestResult, Settings, SettingsPatch } from '../../state/slices/settings'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
@@ -365,7 +366,7 @@ export function SettingsModal({
         )
       }
     }
-    const error = await settingsSave(payload)
+    const error = errorText(await settingsSave(payload))
     setSaving(false)
     if (error) {
       setSaveError(error)
@@ -840,9 +841,9 @@ function McpPane() {
     2
   )
 
-  const run = async (action: () => Promise<string | null>) => {
+  const run = async (action: () => Promise<ActionResult>) => {
     setBusy(true)
-    const failed = await action()
+    const failed = errorText(await action())
     if (failed) setActionError(failed)
     setBusy(false)
   }
@@ -1182,7 +1183,7 @@ function SecurityPane() {
   const rotate = async () => {
     setBusy(true)
     setMsg(null)
-    const failed = await revokePairing()
+    const failed = errorText(await revokePairing())
     setMsg(
       failed
         ? `Could not revoke: ${failed}`
@@ -1254,7 +1255,7 @@ function ImageImportFolders() {
 
   const save = async (next: string[]) => {
     setError(null)
-    setError(await settingsSave({ image_import_roots: next }))
+    setError(errorText(await settingsSave({ image_import_roots: next })))
   }
 
   const add = async () => {
@@ -1365,7 +1366,7 @@ function LabelsPane({
     if (!confirmed) return
     setResetStatus('resetting')
     setResetError(null)
-    const failed = await clearAll()
+    const failed = errorText(await clearAll())
     setResetStatus(failed ? 'error' : 'done')
     setResetError(failed)
   }
@@ -1704,7 +1705,11 @@ function EmbeddingPane({
   const runTest = async () => {
     setTestStatus('running')
     setTestResult(null)
-    const result = await testEmbedding(draft.embed_model)
+    const tested = await testEmbedding(draft.embed_model)
+    // A refused check reads like a model that could not embed.
+    const result: EmbeddingTestResult = tested.ok
+      ? tested.value
+      : { ok: false, elapsed_ms: 0, dimension: null, model: draft.embed_model, error: tested.error.message }
     setTestResult(result)
     setTestStatus(result.ok ? 'ok' : 'fail')
   }
@@ -1720,7 +1725,7 @@ function EmbeddingPane({
     if (!confirmed) return
     setWipeStatus('wiping')
     setWipeError(null)
-    const failed = await wipeIndex()
+    const failed = errorText(await wipeIndex())
     setWipeStatus(failed ? 'error' : 'wiped')
     setWipeError(failed)
   }
@@ -1728,10 +1733,7 @@ function EmbeddingPane({
   const [lexicalStatus, setLexicalStatus] = useState<
     'idle' | 'rebuilding' | 'done' | 'error'
   >('idle')
-  const [lexicalResult, setLexicalResult] = useState<{
-    indexed?: number
-    error?: string
-  } | null>(null)
+  const [lexicalResult, setLexicalResult] = useState<ActionResult<number> | null>(null)
 
   const triggerLexicalRebuild = async () => {
     if (lexicalStatus === 'rebuilding') return
@@ -1739,7 +1741,7 @@ function EmbeddingPane({
     setLexicalResult(null)
     const result = await rebuildLexical()
     setLexicalResult(result)
-    setLexicalStatus('error' in result ? 'error' : 'done')
+    setLexicalStatus(result.ok ? 'done' : 'error')
   }
 
   const triggerReingestAll = () => {
@@ -1889,14 +1891,14 @@ function EmbeddingPane({
               Wipe failed: {wipeError}
             </span>
           )}
-          {lexicalStatus === 'done' && lexicalResult?.indexed !== undefined && (
+          {lexicalStatus === 'done' && lexicalResult?.ok && (
             <span className="settings-meta">
-              Lexical index rebuilt — {lexicalResult.indexed.toLocaleString()} chunks.
+              Lexical index rebuilt — {lexicalResult.value.toLocaleString()} chunks.
             </span>
           )}
-          {lexicalStatus === 'error' && lexicalResult?.error && (
+          {lexicalStatus === 'error' && lexicalResult && !lexicalResult.ok && (
             <span className="settings-meta classify-last-error">
-              Rebuild failed: {lexicalResult.error}
+              Rebuild failed: {lexicalResult.error.message}
             </span>
           )}
         </div>
@@ -1938,7 +1940,7 @@ function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
     }
     setBusy(true)
     setActionError(null)
-    setActionError(await saveCap(n))
+    setActionError(errorText(await saveCap(n)))
     setBusy(false)
   }
 
@@ -1951,7 +1953,7 @@ function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
     if (!ok) return
     setBusy(true)
     setActionError(null)
-    setActionError(await clearCache())
+    setActionError(errorText(await clearCache()))
     setBusy(false)
   }
 

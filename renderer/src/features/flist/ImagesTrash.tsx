@@ -7,6 +7,7 @@ import {
   type FlistTrashedLabels
 } from '../../lib/api'
 import { useStore } from '../../state'
+import { attempt } from '../../state/actionResult'
 import {
   EMPTY_SELECTION,
   pruneSelection,
@@ -228,8 +229,8 @@ export function ImagesTrash({
       <TrashedLabels
         items={labels}
         readOnly={readOnly}
-        putBack={(ids) => api.flistTrashLabelsPutBack(characterId, ids)}
-        purge={(ids) => api.flistTrashLabelsPurge(characterId, ids)}
+        putBack={(ids) => attempt(() => api.flistTrashLabelsPutBack(characterId, ids))}
+        purge={(ids) => attempt(() => api.flistTrashLabelsPurge(characterId, ids))}
         onChanged={load}
       />
       {confirm === 'purge' && (

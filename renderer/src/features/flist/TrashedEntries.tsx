@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { api, errorDetail, type FlistTrashedBackup, type FlistTrashedLabels } from '../../lib/api'
 import { useStore } from '../../state'
+import type { ActionResult } from '../../state/actionResult'
+import type { LabelsPutBack } from '../../state/slices/settings'
 import { ImagesConfirmModal } from './ImagesConfirmModal'
 import { formatBytes } from './imageUsage'
 
@@ -164,7 +166,8 @@ export function TrashedBackups({
 /** Labels cleared in one go. Put back returns them; a message labelled
  *  again since keeps its newer Label. Shown in a character's Trash view
  *  and, for every character, in Settings → Labels: `putBack` and
- *  `purge` say which of the two the list talks to. */
+ *  `purge` say which of the two the list talks to, and resolve to what
+ *  the sidecar answered or why it did not work. */
 export function TrashedLabels({
   heading = 'Labels',
   items,
@@ -176,8 +179,8 @@ export function TrashedLabels({
   heading?: string
   items: FlistTrashedLabels[]
   readOnly: boolean
-  putBack: (ids: string[]) => ReturnType<typeof api.labelsTrashPutBack>
-  purge: (ids: string[]) => ReturnType<typeof api.labelsTrashPurge>
+  putBack: (ids: string[]) => Promise<ActionResult<LabelsPutBack>>
+  purge: (ids: string[]) => Promise<ActionResult<unknown>>
   onChanged: () => Promise<void> | void
 }) {
   return (
@@ -190,7 +193,8 @@ export function TrashedLabels({
       label={(item) => `${plural(item.count, 'Label')} · ${scope(item)}`}
       putBack={async (item) => {
         const res = await putBack([item.id])
-        const [done] = res.restored
+        if (!res.ok) return res.error.message
+        const [done] = res.value.restored
         // The sidecar's labels-changed event refreshes an open Log.
         if (!done) return 'Those Labels are no longer in the Trash.'
         const parts = [
@@ -204,7 +208,8 @@ export function TrashedLabels({
         return `${parts.join('; ')}.`
       }}
       purge={async (item) => {
-        await purge([item.id])
+        const res = await purge([item.id])
+        if (!res.ok) return res.error.message
         return `${plural(item.count, 'Label')} deleted for good.`
       }}
       purgeTitle="Delete these Labels for good?"
