@@ -29,7 +29,7 @@ import flist_api
 import foreign_cache
 import logs as log_store
 from logs import LogDirUnavailable
-from refusals import FlistRefused, ValidationFailed
+from refusals import FlistRefused, NoAvatar, ValidationFailed
 from services import settings as settings_service
 
 #: Where a list of candidate names can come from. `name` is the free
@@ -362,6 +362,29 @@ async def get_profile(
         "age_sec": 0.0,
         "fetched_at": stored.get("fetched_at"),
     }
+
+
+async def avatar(name: str) -> Path:
+    """Where `name`'s avatar is cached, inside its foreign folder.
+
+    Fetched when the cache holds none or the profile was refreshed
+    since; a failed download keeps serving the old file and only says
+    `NoAvatar` when there is none. A name the cache cannot hold is
+    `validation_failed`.
+    """
+    try:
+        dest = foreign_cache.avatar_path(name)
+    except ValueError as exc:
+        raise ValidationFailed("name", str(exc)) from exc
+    if not foreign_cache.avatar_is_current(name):
+        try:
+            await flist_api.download_to(flist_api.avatar_url(name), dest)
+        except flist_api.FlistApiError as exc:
+            if not dest.exists():
+                raise NoAvatar(str(exc)) from exc
+        else:
+            file_landed(name)
+    return dest
 
 
 def file_landed(name: str) -> None:

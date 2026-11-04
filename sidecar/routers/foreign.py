@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 import archive_images
 import flist_api
 import foreign_cache
-from refusals import ImageNotFound, NoAvatar, ProfileNotCached, UnsupportedType, ValidationFailed
+from refusals import ImageNotFound, NoAvatar, ProfileNotCached, UnsupportedType
 from services import avatars
 from services import foreign as foreign_service
 
@@ -63,18 +63,7 @@ async def foreign_character_avatar(name: str) -> FileResponse:
     After a refresh of the profile the avatar is fetched again; the old
     one is served until the new one has arrived.
     """
-    try:
-        dest = foreign_cache.avatar_path(name)
-    except ValueError as exc:
-        raise ValidationFailed("name", str(exc)) from exc
-    if not foreign_cache.avatar_is_current(name):
-        try:
-            await flist_api.download_to(flist_api.avatar_url(name), dest)
-        except flist_api.FlistApiError as exc:
-            if not dest.exists():
-                raise NoAvatar(str(exc)) from exc
-        else:
-            foreign_service.file_landed(name)
+    dest = await foreign_service.avatar(name)
     try:
         size = dest.stat().st_size
     except OSError:
