@@ -693,7 +693,7 @@
     "/flist/character/{character_id}/zip-backups/{filename}": {
       "delete": {
         "summary": "Flist Character Zip Backup Delete",
-        "description": "Move a single Backup to the character's Trash, user-set name and\nall; it can be restored from there until the Trash is emptied.\nFilename validated against the ISO-basic format so a crafted `../`\npath moves nothing. 404 if the Backup isn't there.",
+        "description": "Move a single Backup to the character's Trash, user-set name and\nall; it can be put back from there until the Trash is emptied.\nFilename validated against the ISO-basic format so a crafted `../`\npath moves nothing. 404 if the Backup isn't there.",
         "operationId": "flist_character_zip_backup_delete_flist_character__character_id__zip_backups__filename__delete",
         "parameters": [
           {
@@ -760,7 +760,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ZipBackupRename"
+                "$ref": "#/components/schemas/BackupRenameRequest"
               }
             }
           }
@@ -1174,7 +1174,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_LoadBackupBody"
+                "$ref": "#/components/schemas/RestoreRequest"
               }
             }
           }
@@ -1537,7 +1537,7 @@
     "/flist/character/{character_id}/images/{image_id}": {
       "delete": {
         "summary": "Flist Character Image Remove",
-        "description": "Delete one image: off the Workbench's gallery if it is there,\nand into the character's Trash, where it can be restored until the\nTrash is emptied. The same as the batch route below.",
+        "description": "Delete one image: off the Workbench's gallery if it is there,\nand into the character's Trash, where it can be put back until the\nTrash is emptied. The same as the batch route below.",
         "operationId": "flist_character_image_remove_flist_character__character_id__images__image_id__delete",
         "parameters": [
           {
@@ -1604,7 +1604,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImageIdsBody"
+                "$ref": "#/components/schemas/ImageIdsRequest"
               }
             }
           }
@@ -1833,7 +1833,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImageIdsBody"
+                "$ref": "#/components/schemas/ImageIdsRequest"
               }
             }
           }
@@ -1883,7 +1883,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -1933,7 +1933,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -1982,7 +1982,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImageIdsBody"
+                "$ref": "#/components/schemas/ImageIdsRequest"
               }
             }
           }
@@ -2031,7 +2031,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -2080,7 +2080,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           }
@@ -2208,7 +2208,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           },
@@ -2247,7 +2247,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_TrashIdsBody"
+                "$ref": "#/components/schemas/TrashIdsRequest"
               }
             }
           },
@@ -2421,7 +2421,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_PairAcceptBody"
+                "$ref": "#/components/schemas/HandshakeAnswerRequest"
               }
             }
           },
@@ -2467,7 +2467,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_PairAcceptBody"
+                "$ref": "#/components/schemas/HandshakeAnswerRequest"
               }
             }
           },
@@ -2864,7 +2864,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_PreUploadBackupBody"
+                "$ref": "#/components/schemas/PreUploadBackupRequest"
               }
             }
           }
@@ -2945,7 +2945,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_UploadImageIdsBody"
+                "$ref": "#/components/schemas/UploadImageIdsRequest"
               }
             }
           }
@@ -3018,7 +3018,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_UploadSavedBody"
+                "$ref": "#/components/schemas/UploadSavedRequest"
               }
             }
           }
@@ -3090,7 +3090,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_UploadDoneBody"
+                "$ref": "#/components/schemas/UploadDoneRequest"
               }
             }
           }
@@ -4013,7 +4013,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelsFillUnlabeled"
+                "$ref": "#/components/schemas/LabelsFillUnlabeledRequest"
               }
             }
           },
@@ -4052,7 +4052,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelsDeleteHashes"
+                "$ref": "#/components/schemas/LabelsDeleteHashesRequest"
               }
             }
           },
@@ -4090,7 +4090,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelOverride"
+                "$ref": "#/components/schemas/LabelOverrideRequest"
               }
             }
           },
@@ -4137,7 +4137,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LabelOverrideMany"
+                "$ref": "#/components/schemas/LabelOverrideManyRequest"
               }
             }
           },
@@ -4176,7 +4176,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RagTestEmbeddingRequest"
+                "$ref": "#/components/schemas/EmbeddingTestRequest"
               }
             }
           },
@@ -4214,7 +4214,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RagIngestRequest"
+                "$ref": "#/components/schemas/IngestRequest"
               }
             }
           },
@@ -4534,7 +4534,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AliasAdd"
+                "$ref": "#/components/schemas/AliasAddRequest"
               }
             }
           }
@@ -4795,7 +4795,7 @@
         "title": "AccountCharacter",
         "description": "A character on the signed-in F-list account. `id` is F-list's\ncharacter id when it gave one."
       },
-      "AliasAdd": {
+      "AliasAddRequest": {
         "properties": {
           "character": {
             "type": "string",
@@ -4822,7 +4822,7 @@
           "name",
           "primary_name"
         ],
-        "title": "AliasAdd"
+        "title": "AliasAddRequest"
       },
       "AliasGroupUnlinked": {
         "properties": {
@@ -5236,6 +5236,19 @@
         ],
         "title": "BackupPayload",
         "description": "A Backup's profile, for browsing it read-only. `meta` is its\n`backup-meta.json`, null for a Backup without one."
+      },
+      "BackupRenameRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "BackupRenameRequest"
       },
       "BackupRestored": {
         "properties": {
@@ -5723,6 +5736,23 @@
         "title": "EmbeddingTest",
         "description": "One canned embedding: `ok` with its dimension, or `ok: false`\nwith the error. Always a 200, like the Labels connection test."
       },
+      "EmbeddingTestRequest": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          }
+        },
+        "type": "object",
+        "title": "EmbeddingTestRequest"
+      },
       "ExtensionSeen": {
         "properties": {
           "version": {
@@ -5935,20 +5965,6 @@
         "title": "ForeignCacheUsage",
         "description": "What the Foreign profile cache holds on disk, and what it may hold."
       },
-      "ForeignDefaults": {
-        "properties": {
-          "cache_cap_mb": {
-            "type": "integer",
-            "title": "Cache Cap Mb"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "cache_cap_mb"
-        ],
-        "title": "ForeignDefaults"
-      },
       "ForeignProfile": {
         "properties": {
           "name": {
@@ -6061,7 +6077,7 @@
             "title": "Cache Cap Mb"
           },
           "defaults": {
-            "$ref": "#/components/schemas/ForeignDefaults"
+            "$ref": "#/components/schemas/ForeignValues"
           }
         },
         "additionalProperties": false,
@@ -6089,6 +6105,20 @@
         },
         "type": "object",
         "title": "ForeignSettingsUpdate"
+      },
+      "ForeignValues": {
+        "properties": {
+          "cache_cap_mb": {
+            "type": "integer",
+            "title": "Cache Cap Mb"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cache_cap_mb"
+        ],
+        "title": "ForeignValues"
       },
       "GalleryRepair": {
         "properties": {
@@ -6141,6 +6171,19 @@
         ],
         "title": "GalleryRepair",
         "description": "What putting the gallery back together changed."
+      },
+      "HandshakeAnswerRequest": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handshake_id"
+        ],
+        "title": "HandshakeAnswerRequest"
       },
       "HandshakeAnswered": {
         "properties": {
@@ -6218,6 +6261,22 @@
           "deferred"
         ],
         "title": "ImageIdsDeferred"
+      },
+      "ImageIdsRequest": {
+        "properties": {
+          "image_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_ids"
+        ],
+        "title": "ImageIdsRequest"
       },
       "ImageReference": {
         "properties": {
@@ -6398,6 +6457,201 @@
         ],
         "title": "ImagesPutBack"
       },
+      "IndexSettings": {
+        "properties": {
+          "embed_model": {
+            "type": "string",
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "type": "string",
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "type": "integer",
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K"
+          },
+          "neighbors": {
+            "type": "integer",
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "type": "number",
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "type": "integer",
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "type": "integer",
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "type": "integer",
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "type": "integer",
+            "title": "Chunk Overlap Msgs"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/IndexValues"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "rerank_model",
+          "rerank_candidates",
+          "top_k",
+          "neighbors",
+          "rerank_min_ratio",
+          "hybrid_enabled",
+          "hybrid_bm25_candidates",
+          "chunk_max_chars",
+          "chunk_soft_split_chars",
+          "chunk_overlap_msgs",
+          "defaults"
+        ],
+        "title": "IndexSettings"
+      },
+      "IndexSettingsUpdate": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          },
+          "neighbors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Overlap Msgs"
+          }
+        },
+        "type": "object",
+        "title": "IndexSettingsUpdate"
+      },
       "IndexStatus": {
         "properties": {
           "embed_model": {
@@ -6471,6 +6725,71 @@
         ],
         "title": "IndexStatus",
         "description": "What the Index holds: model, dimension, last ingest, chunk\ncount. While a job holds the Index, `busy` and that `job` instead,\nand `chunk_count` is null because the Index can't be counted."
+      },
+      "IndexValues": {
+        "properties": {
+          "embed_model": {
+            "type": "string",
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "type": "string",
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "type": "integer",
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K"
+          },
+          "neighbors": {
+            "type": "integer",
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "type": "number",
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "type": "integer",
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "type": "integer",
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "type": "integer",
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "type": "integer",
+            "title": "Chunk Overlap Msgs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "rerank_model",
+          "rerank_candidates",
+          "top_k",
+          "neighbors",
+          "rerank_min_ratio",
+          "hybrid_enabled",
+          "hybrid_bm25_candidates",
+          "chunk_max_chars",
+          "chunk_soft_split_chars",
+          "chunk_overlap_msgs"
+        ],
+        "title": "IndexValues",
+        "description": "The Index and retrieval tunables."
       },
       "IndexWiped": {
         "properties": {
@@ -6730,6 +7049,44 @@
         "title": "IngestProgress",
         "description": "What an ingest has done so far (`rag_jobs.IngestProgress`).\n`skipped_unlabeled`: messages left out for lack of an IC/OOC\nverdict; a high count means the classification flow should run\nfirst."
       },
+      "IngestRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "include_ooc": {
+            "type": "boolean",
+            "title": "Include Ooc",
+            "default": false
+          },
+          "force_rewipe": {
+            "type": "boolean",
+            "title": "Force Rewipe",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "IngestRequest"
+      },
       "IngestScope": {
         "properties": {
           "character": {
@@ -6971,62 +7328,6 @@
         "title": "KeptBackup",
         "description": "The Backup that keeps the Workbench a Restore or a reset to Live\nreplaced."
       },
-      "LabelOverride": {
-        "properties": {
-          "character": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Character"
-          },
-          "partner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Partner"
-          },
-          "hash": {
-            "type": "string",
-            "title": "Hash"
-          },
-          "ts": {
-            "type": "integer",
-            "title": "Ts"
-          },
-          "speaker": {
-            "type": "string",
-            "title": "Speaker"
-          },
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          }
-        },
-        "type": "object",
-        "required": [
-          "hash",
-          "ts",
-          "speaker"
-        ],
-        "title": "LabelOverride"
-      },
       "LabelOverrideItem": {
         "properties": {
           "hash": {
@@ -7050,7 +7351,7 @@
         ],
         "title": "LabelOverrideItem"
       },
-      "LabelOverrideMany": {
+      "LabelOverrideManyRequest": {
         "properties": {
           "character": {
             "anyOf": [
@@ -7097,7 +7398,63 @@
         "required": [
           "items"
         ],
-        "title": "LabelOverrideMany"
+        "title": "LabelOverrideManyRequest"
+      },
+      "LabelOverrideRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "ts": {
+            "type": "integer",
+            "title": "Ts"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "ts",
+          "speaker"
+        ],
+        "title": "LabelOverrideRequest"
       },
       "LabelRemoved": {
         "properties": {
@@ -7415,21 +7772,7 @@
         "title": "LabelsCleared",
         "description": "One conversation's Labels went to the Trash as `trash_id` (null\nwhen there were none)."
       },
-      "LabelsDefaults": {
-        "properties": {
-          "threshold_chars": {
-            "type": "integer",
-            "title": "Threshold Chars"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "threshold_chars"
-        ],
-        "title": "LabelsDefaults"
-      },
-      "LabelsDeleteHashes": {
+      "LabelsDeleteHashesRequest": {
         "properties": {
           "character": {
             "anyOf": [
@@ -7465,7 +7808,7 @@
         "required": [
           "hashes"
         ],
-        "title": "LabelsDeleteHashes"
+        "title": "LabelsDeleteHashesRequest"
       },
       "LabelsDeleted": {
         "properties": {
@@ -7505,7 +7848,7 @@
         ],
         "title": "LabelsDeleted"
       },
-      "LabelsFillUnlabeled": {
+      "LabelsFillUnlabeledRequest": {
         "properties": {
           "character": {
             "type": "string",
@@ -7526,7 +7869,7 @@
           "partner",
           "label"
         ],
-        "title": "LabelsFillUnlabeled"
+        "title": "LabelsFillUnlabeledRequest"
       },
       "LabelsOverridden": {
         "properties": {
@@ -7651,7 +7994,7 @@
             "title": "Threshold Chars"
           },
           "defaults": {
-            "$ref": "#/components/schemas/LabelsDefaults"
+            "$ref": "#/components/schemas/LabelsValues"
           }
         },
         "additionalProperties": false,
@@ -7661,7 +8004,7 @@
           "defaults"
         ],
         "title": "LabelsSettings",
-        "description": "Messages shorter than `threshold_chars` are OOC without asking\nanyone. The defaults let the window show \"(default)\" hints and offer\na reset without hardcoding them."
+        "description": "Messages shorter than `threshold_chars` are OOC without asking\nanyone."
       },
       "LabelsSettingsUpdate": {
         "properties": {
@@ -7696,6 +8039,20 @@
           "labels"
         ],
         "title": "LabelsTrash"
+      },
+      "LabelsValues": {
+        "properties": {
+          "threshold_chars": {
+            "type": "integer",
+            "title": "Threshold Chars"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "threshold_chars"
+        ],
+        "title": "LabelsValues"
       },
       "LexicalRebuilt": {
         "properties": {
@@ -8598,6 +8955,25 @@
         ],
         "title": "PreUploadBackupNotKept"
       },
+      "PreUploadBackupRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "payload"
+        ],
+        "title": "PreUploadBackupRequest"
+      },
       "PublicProfile": {
         "properties": {
           "name": {
@@ -8961,321 +9337,6 @@
         "title": "PutBackLabels",
         "description": "One cleared-Labels entry put back. A message labelled again\nsince keeps its newer Label; its hash is under `skipped`."
       },
-      "RagIngestRequest": {
-        "properties": {
-          "character": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Character"
-          },
-          "partner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Partner"
-          },
-          "include_ooc": {
-            "type": "boolean",
-            "title": "Include Ooc",
-            "default": false
-          },
-          "force_rewipe": {
-            "type": "boolean",
-            "title": "Force Rewipe",
-            "default": false
-          }
-        },
-        "type": "object",
-        "title": "RagIngestRequest"
-      },
-      "RagSettings": {
-        "properties": {
-          "embed_model": {
-            "type": "string",
-            "title": "Embed Model"
-          },
-          "rerank_model": {
-            "type": "string",
-            "title": "Rerank Model"
-          },
-          "rerank_candidates": {
-            "type": "integer",
-            "title": "Rerank Candidates"
-          },
-          "top_k": {
-            "type": "integer",
-            "title": "Top K"
-          },
-          "neighbors": {
-            "type": "integer",
-            "title": "Neighbors"
-          },
-          "rerank_min_ratio": {
-            "type": "number",
-            "title": "Rerank Min Ratio"
-          },
-          "hybrid_enabled": {
-            "type": "boolean",
-            "title": "Hybrid Enabled"
-          },
-          "hybrid_bm25_candidates": {
-            "type": "integer",
-            "title": "Hybrid Bm25 Candidates"
-          },
-          "chunk_max_chars": {
-            "type": "integer",
-            "title": "Chunk Max Chars"
-          },
-          "chunk_soft_split_chars": {
-            "type": "integer",
-            "title": "Chunk Soft Split Chars"
-          },
-          "chunk_overlap_msgs": {
-            "type": "integer",
-            "title": "Chunk Overlap Msgs"
-          },
-          "defaults": {
-            "$ref": "#/components/schemas/RagValues"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "embed_model",
-          "rerank_model",
-          "rerank_candidates",
-          "top_k",
-          "neighbors",
-          "rerank_min_ratio",
-          "hybrid_enabled",
-          "hybrid_bm25_candidates",
-          "chunk_max_chars",
-          "chunk_soft_split_chars",
-          "chunk_overlap_msgs",
-          "defaults"
-        ],
-        "title": "RagSettings"
-      },
-      "RagSettingsUpdate": {
-        "properties": {
-          "embed_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embed Model"
-          },
-          "rerank_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank Model"
-          },
-          "rerank_candidates": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank Candidates"
-          },
-          "top_k": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Top K"
-          },
-          "neighbors": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Neighbors"
-          },
-          "rerank_min_ratio": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank Min Ratio"
-          },
-          "hybrid_enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hybrid Enabled"
-          },
-          "hybrid_bm25_candidates": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hybrid Bm25 Candidates"
-          },
-          "chunk_max_chars": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Max Chars"
-          },
-          "chunk_soft_split_chars": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Soft Split Chars"
-          },
-          "chunk_overlap_msgs": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Overlap Msgs"
-          }
-        },
-        "type": "object",
-        "title": "RagSettingsUpdate"
-      },
-      "RagTestEmbeddingRequest": {
-        "properties": {
-          "embed_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embed Model"
-          }
-        },
-        "type": "object",
-        "title": "RagTestEmbeddingRequest"
-      },
-      "RagValues": {
-        "properties": {
-          "embed_model": {
-            "type": "string",
-            "title": "Embed Model"
-          },
-          "rerank_model": {
-            "type": "string",
-            "title": "Rerank Model"
-          },
-          "rerank_candidates": {
-            "type": "integer",
-            "title": "Rerank Candidates"
-          },
-          "top_k": {
-            "type": "integer",
-            "title": "Top K"
-          },
-          "neighbors": {
-            "type": "integer",
-            "title": "Neighbors"
-          },
-          "rerank_min_ratio": {
-            "type": "number",
-            "title": "Rerank Min Ratio"
-          },
-          "hybrid_enabled": {
-            "type": "boolean",
-            "title": "Hybrid Enabled"
-          },
-          "hybrid_bm25_candidates": {
-            "type": "integer",
-            "title": "Hybrid Bm25 Candidates"
-          },
-          "chunk_max_chars": {
-            "type": "integer",
-            "title": "Chunk Max Chars"
-          },
-          "chunk_soft_split_chars": {
-            "type": "integer",
-            "title": "Chunk Soft Split Chars"
-          },
-          "chunk_overlap_msgs": {
-            "type": "integer",
-            "title": "Chunk Overlap Msgs"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "embed_model",
-          "rerank_model",
-          "rerank_candidates",
-          "top_k",
-          "neighbors",
-          "rerank_min_ratio",
-          "hybrid_enabled",
-          "hybrid_bm25_candidates",
-          "chunk_max_chars",
-          "chunk_soft_split_chars",
-          "chunk_overlap_msgs"
-        ],
-        "title": "RagValues",
-        "description": "The Index and retrieval tunables, as set or as their defaults."
-      },
       "RefusalBody": {
         "properties": {
           "code": {
@@ -9509,6 +9570,31 @@
         "title": "RestorePreflight",
         "description": "What the Restore confirm dialog says: whether the Workbench holds\nedits, and whether Live was pulled after the Backup was taken."
       },
+      "RestoreRequest": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "back_up_first": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Back Up First"
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename"
+        ],
+        "title": "RestoreRequest",
+        "description": "Restore a Backup into the Workbench.\n\n`back_up_first` is still accepted from older windows and ignored:\nthe Workbench is always kept as a Backup first (ADR 0003)."
+      },
       "Roster": {
         "properties": {
           "characters": {
@@ -9620,7 +9706,7 @@
             "$ref": "#/components/schemas/LabelsSettings"
           },
           "rag": {
-            "$ref": "#/components/schemas/RagSettings"
+            "$ref": "#/components/schemas/IndexSettings"
           },
           "image_import_roots": {
             "items": {
@@ -9677,7 +9763,7 @@
           "rag": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/RagSettingsUpdate"
+                "$ref": "#/components/schemas/IndexSettingsUpdate"
               },
               {
                 "type": "null"
@@ -9780,12 +9866,8 @@
       },
       "StreamError": {
         "additionalProperties": false,
-        "description": "A stream's `error` event, which ends it: the stage it stopped\nat, then the one error shape `{code, message, details}`.",
+        "description": "A stream's `error` event, which ends it: a job's error, and the\nstage it stopped at.",
         "properties": {
-          "stage": {
-            "title": "Stage",
-            "type": "string"
-          },
           "code": {
             "anyOf": [
               {
@@ -9805,13 +9887,17 @@
             "additionalProperties": true,
             "title": "Details",
             "type": "object"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
           }
         },
         "required": [
-          "stage",
           "code",
           "message",
-          "details"
+          "details",
+          "stage"
         ],
         "title": "StreamError",
         "type": "object"
@@ -9883,6 +9969,22 @@
           "purged"
         ],
         "title": "TrashEmptied"
+      },
+      "TrashIdsRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "TrashIdsRequest"
       },
       "TrashItem": {
         "properties": {
@@ -10244,6 +10346,62 @@
         ],
         "title": "UploadDone"
       },
+      "UploadDoneRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          }
+        },
+        "type": "object",
+        "title": "UploadDoneRequest"
+      },
+      "UploadImageIdsRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "mapping"
+        ],
+        "title": "UploadImageIdsRequest"
+      },
+      "UploadSavedRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Delay Seconds",
+            "default": 5.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "character"
+        ],
+        "title": "UploadSavedRequest"
+      },
       "UploadSourceBackup": {
         "properties": {
           "id": {
@@ -10548,164 +10706,6 @@
           "etag"
         ],
         "title": "WorkbenchSaved"
-      },
-      "_ImageIdsBody": {
-        "properties": {
-          "image_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Image Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "image_ids"
-        ],
-        "title": "_ImageIdsBody"
-      },
-      "_LoadBackupBody": {
-        "properties": {
-          "filename": {
-            "type": "string",
-            "title": "Filename"
-          },
-          "back_up_first": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Back Up First"
-          }
-        },
-        "type": "object",
-        "required": [
-          "filename"
-        ],
-        "title": "_LoadBackupBody",
-        "description": "Restore a Backup into the Workbench.\n\n`back_up_first` is still accepted from older windows and ignored:\nthe Workbench is always kept as a Backup first (ADR 0003)."
-      },
-      "_PairAcceptBody": {
-        "properties": {
-          "handshake_id": {
-            "type": "string",
-            "title": "Handshake Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "handshake_id"
-        ],
-        "title": "_PairAcceptBody"
-      },
-      "_PreUploadBackupBody": {
-        "properties": {
-          "character": {
-            "type": "string",
-            "title": "Character"
-          },
-          "payload": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Payload"
-          }
-        },
-        "type": "object",
-        "required": [
-          "character",
-          "payload"
-        ],
-        "title": "_PreUploadBackupBody"
-      },
-      "_TrashIdsBody": {
-        "properties": {
-          "ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "ids"
-        ],
-        "title": "_TrashIdsBody"
-      },
-      "_UploadDoneBody": {
-        "properties": {
-          "character": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Character"
-          }
-        },
-        "type": "object",
-        "title": "_UploadDoneBody"
-      },
-      "_UploadImageIdsBody": {
-        "properties": {
-          "character": {
-            "type": "string",
-            "title": "Character"
-          },
-          "mapping": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Mapping"
-          }
-        },
-        "type": "object",
-        "required": [
-          "character",
-          "mapping"
-        ],
-        "title": "_UploadImageIdsBody"
-      },
-      "_UploadSavedBody": {
-        "properties": {
-          "character": {
-            "type": "string",
-            "title": "Character"
-          },
-          "delay_seconds": {
-            "type": "number",
-            "title": "Delay Seconds",
-            "default": 5.0
-          }
-        },
-        "type": "object",
-        "required": [
-          "character"
-        ],
-        "title": "_UploadSavedBody"
-      },
-      "_ZipBackupRename": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "title": "_ZipBackupRename"
       }
     }
   }

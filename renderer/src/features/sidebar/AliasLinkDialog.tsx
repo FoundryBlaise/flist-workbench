@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type PartnerEntry } from '../../lib/api'
+import { api, errorDetail, type PartnerEntry } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 
 export type AliasLinkDialogProps = {
@@ -72,7 +72,7 @@ export function AliasLinkDialog({
       onClose()
     } catch (err) {
       setStatus('error')
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorDetail(err))
     }
   }
 

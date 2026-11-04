@@ -14,6 +14,27 @@ const LAST_ACCOUNT_KEY = 'flist-workbench:last-account'
 const LAST_CHARACTER_KEY = 'flist-workbench:last-flist-char-id'
 const EDITOR_VIEW_MODE_KEY = 'flist-workbench:editor-view-mode'
 const PREVIEW_THEME_KEY = 'workbench.previewTheme'
+const AUTO_REFRESH_ENABLED_KEY = 'workbench.flistAutoRefreshEnabled'
+const AUTO_REFRESH_HOURS_KEY = 'workbench.flistAutoRefreshHours'
+
+/** The editor tab last used with a character (or with none). */
+function editorTabKey(characterId: string | null): string {
+  return characterId
+    ? `flist-workbench:active-editor-tab:${characterId}`
+    : 'flist-workbench:active-editor-tab'
+}
+
+/** The sign-in auto-refresh runs at most this often, to be kind to the
+ *  F-list API; anything faster is what the manual button is for. */
+export const FLIST_AUTO_REFRESH_MIN_HOURS = 24
+export const FLIST_AUTO_REFRESH_DEFAULT_HOURS = 24
+
+function autoRefreshHours(raw: string | null): number {
+  if (raw === null) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
+  return Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
+}
 
 // Storage can be missing (tests outside jsdom) or refuse (private mode,
 // storage full); a preference then just does not survive a restart.
@@ -66,12 +87,23 @@ export type UiState = {
   flistExportRestoreCharacterId: string | null
   /** Last time the user opened the log tab for each character (epoch seconds). */
   charLastSeen: Record<string, number>
+  /** Whether signing in pulls every character whose Live is older than
+   *  `flistAutoRefreshHours`. Off by default: pulling a whole roster at
+   *  every sign-in is rude when the user only wanted to edit one. */
+  flistAutoRefreshEnabled: boolean
+  /** How old a Live may be before the sign-in auto-refresh pulls it,
+   *  in hours; at least `FLIST_AUTO_REFRESH_MIN_HOURS`. */
+  flistAutoRefreshHours: number
 }
 
 export type UiSlice = UiState & {
   /** Leaving the Logs pane closes its cross search. */
   setMode: (mode: Mode) => void
+  /** Switch the editor tab; it is kept for the active character. */
   setEditorActiveTab: (tab: string) => void
+  /** Show the editor tab last used with `characterId` (Description when
+   *  none was kept), as the window does when it switches character. */
+  editorRestoreTab: (characterId: string | null) => void
   setEditorViewMode: (mode: EditorViewMode) => void
   setPreviewTheme: (next: PreviewTheme) => void
   flistOpenExportRestore: (characterId: string) => void
@@ -86,6 +118,9 @@ export type UiSlice = UiState & {
   flistLastCharacterId: () => string | null
   /** Remember the F-list character opened, to open it again next start. */
   flistRememberCharacter: (characterId: string) => void
+  setFlistAutoRefreshEnabled: (on: boolean) => void
+  /** Kept floored to whole hours, and to the minimum. */
+  setFlistAutoRefreshHours: (hours: number) => void
 }
 
 /** The UI state as the window starts: defaults, overlaid with the
@@ -101,7 +136,9 @@ export function uiInitialState(): UiState {
       viewMode === 'split' || viewMode === 'preview' || viewMode === 'code' ? viewMode : 'split',
     previewTheme: theme === 'dark' || theme === 'default' || theme === 'light' ? theme : 'default',
     flistExportRestoreCharacterId: null,
-    charLastSeen: readLastSeen()
+    charLastSeen: readLastSeen(),
+    flistAutoRefreshEnabled: readStored(AUTO_REFRESH_ENABLED_KEY) === 'true',
+    flistAutoRefreshHours: autoRefreshHours(readStored(AUTO_REFRESH_HOURS_KEY))
   }
 }
 
@@ -116,6 +153,13 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   setEditorActiveTab(tab) {
     if (get().editorActiveTab === tab) return
     set({ editorActiveTab: tab })
+    // Per character, so a Kinks-tab pin does not follow the user
+    // between profiles (UX P3-11).
+    writeStored(editorTabKey(get().flistActiveCharacterId), tab)
+  },
+
+  editorRestoreTab(characterId) {
+    set({ editorActiveTab: readStored(editorTabKey(characterId)) || 'description' })
   },
 
   setEditorViewMode(mode) {
@@ -162,5 +206,16 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
 
   flistRememberCharacter(characterId) {
     writeStored(LAST_CHARACTER_KEY, characterId)
+  },
+
+  setFlistAutoRefreshEnabled(on) {
+    set({ flistAutoRefreshEnabled: on })
+    writeStored(AUTO_REFRESH_ENABLED_KEY, on ? 'true' : 'false')
+  },
+
+  setFlistAutoRefreshHours(hours) {
+    const kept = autoRefreshHours(String(hours))
+    set({ flistAutoRefreshHours: kept })
+    writeStored(AUTO_REFRESH_HOURS_KEY, String(kept))
   }
 })

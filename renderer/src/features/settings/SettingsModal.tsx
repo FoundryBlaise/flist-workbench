@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ForeignSettings, LabelsSettings, RagSettings } from '../../lib/api'
+import type { ForeignSettings, LabelsSettings, IndexSettings } from '../../lib/api'
 import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
+import { errorText, type ActionResult } from '../../state/actionResult'
+import {
+  FLIST_AUTO_REFRESH_DEFAULT_HOURS,
+  FLIST_AUTO_REFRESH_MIN_HOURS
+} from '../../state/slices/ui'
 import type { EmbeddingTestResult, Settings, SettingsPatch } from '../../state/slices/settings'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
@@ -60,34 +65,6 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
  *  default means sign-in just loads roster metadata; characters get
  *  pulled lazily on selection (30-min cache) or via the picker's
  *  "↻ Refresh all" button. */
-export const FLIST_AUTO_REFRESH_ENABLED_KEY = 'workbench.flistAutoRefreshEnabled'
-
-/** Threshold for the sign-in sweep, in hours. Floored to 24 to be kind
- *  to the F-list API — anything faster is what the manual button is for. */
-export const FLIST_AUTO_REFRESH_HOURS_KEY = 'workbench.flistAutoRefreshHours'
-
-export const FLIST_AUTO_REFRESH_MIN_HOURS = 24
-export const FLIST_AUTO_REFRESH_DEFAULT_HOURS = 24
-
-export function readAutoRefreshEnabled(): boolean {
-  try {
-    return localStorage.getItem(FLIST_AUTO_REFRESH_ENABLED_KEY) === 'true'
-  } catch {
-    return false
-  }
-}
-
-export function readAutoRefreshHours(): number {
-  try {
-    const raw = localStorage.getItem(FLIST_AUTO_REFRESH_HOURS_KEY)
-    if (raw === null) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
-    const n = Number(raw)
-    if (!Number.isFinite(n)) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
-    return Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
-  } catch {
-    return FLIST_AUTO_REFRESH_DEFAULT_HOURS
-  }
-}
 
 // Local working copy of every editable field, kept alongside the
 // loaded snapshot so we can compute per-section dirty state in O(fields).
@@ -365,7 +342,7 @@ export function SettingsModal({
         )
       }
     }
-    const error = await settingsSave(payload)
+    const error = errorText(await settingsSave(payload))
     setSaving(false)
     if (error) {
       setSaveError(error)
@@ -622,35 +599,21 @@ function GeneralPane({
 }
 
 function FlistPane() {
-  // Stored in localStorage rather than the sidecar `/settings` blob
-  // because this preference only affects renderer-side timing — the
-  // sidecar is stateless about login-triggered work. Persisted-on-
-  // change, no Save button needed for this surface (matches the
-  // mirrorEndpoints toggle pattern).
-  const [enabled, setEnabled] = useState<boolean>(() => readAutoRefreshEnabled())
+  // Kept in browser storage by the UI slice rather than in the
+  // sidecar's settings: it only times what the window does after a
+  // sign-in. Saved on change, no Save button.
+  const enabled = useStore((s) => s.flistAutoRefreshEnabled)
+  const persistEnabled = useStore((s) => s.setFlistAutoRefreshEnabled)
+  const setAutoRefreshHours = useStore((s) => s.setFlistAutoRefreshHours)
   const [hoursRaw, setHoursRaw] = useState<string>(() =>
-    String(readAutoRefreshHours())
+    String(useStore.getState().flistAutoRefreshHours)
   )
-
-  const persistEnabled = (next: boolean) => {
-    setEnabled(next)
-    try {
-      localStorage.setItem(FLIST_AUTO_REFRESH_ENABLED_KEY, next ? 'true' : 'false')
-    } catch {
-      // localStorage unavailable — setting just won't survive a reload.
-    }
-  }
 
   const persistHours = (raw: string) => {
     setHoursRaw(raw)
     const n = Number(raw)
     if (!raw.trim() || !Number.isFinite(n)) return
-    const floored = Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
-    try {
-      localStorage.setItem(FLIST_AUTO_REFRESH_HOURS_KEY, String(floored))
-    } catch {
-      // localStorage unavailable — setting just won't survive a reload.
-    }
+    setAutoRefreshHours(n)
   }
 
   // Snap the displayed value up to the floor when the user leaves the
@@ -788,7 +751,7 @@ function McpPane() {
   const mcpRevokeToken = useStore((s) => s.mcpRevokeToken)
   const mcpSetLogText = useStore((s) => s.mcpSetLogText)
   // null until the sidecar has said whether the switch is on.
-  const logText = useStore((s) => (s.settings ? (s.settings.mcp?.log_text ?? false) : null))
+  const logText = useStore((s) => (s.settings ? s.settings.mcp.log_text : null))
   const [actionError, setActionError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -840,9 +803,9 @@ function McpPane() {
     2
   )
 
-  const run = async (action: () => Promise<string | null>) => {
+  const run = async (action: () => Promise<ActionResult>) => {
     setBusy(true)
-    const failed = await action()
+    const failed = errorText(await action())
     if (failed) setActionError(failed)
     setBusy(false)
   }
@@ -1182,7 +1145,7 @@ function SecurityPane() {
   const rotate = async () => {
     setBusy(true)
     setMsg(null)
-    const failed = await revokePairing()
+    const failed = errorText(await revokePairing())
     setMsg(
       failed
         ? `Could not revoke: ${failed}`
@@ -1254,7 +1217,7 @@ function ImageImportFolders() {
 
   const save = async (next: string[]) => {
     setError(null)
-    setError(await settingsSave({ image_import_roots: next }))
+    setError(errorText(await settingsSave({ image_import_roots: next })))
   }
 
   const add = async () => {
@@ -1365,7 +1328,7 @@ function LabelsPane({
     if (!confirmed) return
     setResetStatus('resetting')
     setResetError(null)
-    const failed = await clearAll()
+    const failed = errorText(await clearAll())
     setResetStatus(failed ? 'error' : 'done')
     setResetError(failed)
   }
@@ -1493,7 +1456,7 @@ function RetrievalPane({
   draft,
   onChange
 }: {
-  rag: RagSettings
+  rag: IndexSettings
   draft: Draft['rag']
   onChange: (patch: Partial<Draft['rag']>) => void
 }) {
@@ -1683,7 +1646,7 @@ function EmbeddingPane({
   draft,
   onChange
 }: {
-  rag: RagSettings
+  rag: IndexSettings
   draft: Draft['rag']
   onChange: (patch: Partial<Draft['rag']>) => void
 }) {
@@ -1704,7 +1667,11 @@ function EmbeddingPane({
   const runTest = async () => {
     setTestStatus('running')
     setTestResult(null)
-    const result = await testEmbedding(draft.embed_model)
+    const tested = await testEmbedding(draft.embed_model)
+    // A refused check reads like a model that could not embed.
+    const result: EmbeddingTestResult = tested.ok
+      ? tested.value
+      : { ok: false, elapsed_ms: 0, dimension: null, model: draft.embed_model, error: tested.error.message }
     setTestResult(result)
     setTestStatus(result.ok ? 'ok' : 'fail')
   }
@@ -1720,7 +1687,7 @@ function EmbeddingPane({
     if (!confirmed) return
     setWipeStatus('wiping')
     setWipeError(null)
-    const failed = await wipeIndex()
+    const failed = errorText(await wipeIndex())
     setWipeStatus(failed ? 'error' : 'wiped')
     setWipeError(failed)
   }
@@ -1728,10 +1695,7 @@ function EmbeddingPane({
   const [lexicalStatus, setLexicalStatus] = useState<
     'idle' | 'rebuilding' | 'done' | 'error'
   >('idle')
-  const [lexicalResult, setLexicalResult] = useState<{
-    indexed?: number
-    error?: string
-  } | null>(null)
+  const [lexicalResult, setLexicalResult] = useState<ActionResult<number> | null>(null)
 
   const triggerLexicalRebuild = async () => {
     if (lexicalStatus === 'rebuilding') return
@@ -1739,7 +1703,7 @@ function EmbeddingPane({
     setLexicalResult(null)
     const result = await rebuildLexical()
     setLexicalResult(result)
-    setLexicalStatus('error' in result ? 'error' : 'done')
+    setLexicalStatus(result.ok ? 'done' : 'error')
   }
 
   const triggerReingestAll = () => {
@@ -1889,14 +1853,14 @@ function EmbeddingPane({
               Wipe failed: {wipeError}
             </span>
           )}
-          {lexicalStatus === 'done' && lexicalResult?.indexed !== undefined && (
+          {lexicalStatus === 'done' && lexicalResult?.ok && (
             <span className="settings-meta">
-              Lexical index rebuilt — {lexicalResult.indexed.toLocaleString()} chunks.
+              Lexical index rebuilt — {lexicalResult.value.toLocaleString()} chunks.
             </span>
           )}
-          {lexicalStatus === 'error' && lexicalResult?.error && (
+          {lexicalStatus === 'error' && lexicalResult && !lexicalResult.ok && (
             <span className="settings-meta classify-last-error">
-              Rebuild failed: {lexicalResult.error}
+              Rebuild failed: {lexicalResult.error.message}
             </span>
           )}
         </div>
@@ -1938,7 +1902,7 @@ function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
     }
     setBusy(true)
     setActionError(null)
-    setActionError(await saveCap(n))
+    setActionError(errorText(await saveCap(n)))
     setBusy(false)
   }
 
@@ -1951,7 +1915,7 @@ function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
     if (!ok) return
     setBusy(true)
     setActionError(null)
-    setActionError(await clearCache())
+    setActionError(errorText(await clearCache()))
     setBusy(false)
   }
 

@@ -15,15 +15,27 @@ import {
   refusalCode,
   type FlistAccountCharacter,
   type FlistRosterEntry,
-  type FlistSessionStatus
+  type FlistSessionStatus,
+  type Schema
 } from '../../lib/api'
-import { readAutoRefreshEnabled, readAutoRefreshHours } from '../../features/settings/SettingsModal'
 import type { State } from '../../state'
+import type { ActionError } from '../actionResult'
 import type { SliceCreator } from './slice'
 
-type MappingList = {
+/** Where the sign-in dialog's attempt stands, and why it failed: the
+ *  words to show (F-list's own, per the Tier 1 decision) and the
+ *  sidecar's code (`sign_in_failed` when F-list turned the login down;
+ *  null for a network failure). */
+export type SignInAttempt =
+  | { status: 'idle' | 'submitting' }
+  | { status: 'error'; error: ActionError }
+
+/** The F-list mapping list as the window holds it: the sidecar's
+ *  answer (F-list's payload with the cache's `_etag`, `_fetched_at`)
+ *  and how reading it went. */
+type MappingListState = {
   status: 'idle' | 'loading' | 'ready' | 'error'
-  payload: (Record<string, unknown> & { _etag: string | null; _fetched_at: number | null }) | null
+  payload: Schema<'MappingList'> | null
   fetchedAt: number | null
   etag: string | null
   error: string | null
@@ -45,16 +57,11 @@ export type AccountState = {
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
-  flistMapping: MappingList
+  flistMapping: MappingListState
   /** Modal visibility for the sign-in dialog. */
   flistSignInOpen: boolean
-  /** Last error from a sign-in attempt; passed verbatim from F-list per
-   *  the Tier 1 decision. */
-  flistSignInError: string | null
-  /** The sidecar's code for that error (`sign_in_failed` when F-list
-   *  turned the login down); null for none or a network failure. */
-  flistSignInErrorCode: string | null
-  flistSignInStatus: 'idle' | 'submitting' | 'error'
+  /** The sign-in dialog's attempt: submitting, or why it failed. */
+  flistSignInAttempt: SignInAttempt
   /** Saved-credential metadata, read from the OS keychain via the
    *  Electron preload. `account` is the saved username (or null if
    *  nothing is saved). `autoLogin` indicates whether the next launch
@@ -109,7 +116,7 @@ export type AccountSlice = AccountState & {
   flistLoadMapping: (opts?: { force?: boolean }) => Promise<void>
 }
 
-function idleMapping(): MappingList {
+function idleMapping(): MappingListState {
   return { status: 'idle', payload: null, fetchedAt: null, etag: null, error: null }
 }
 
@@ -124,9 +131,7 @@ export function accountInitialState(): AccountState {
     flistAccountSweepStatus: 'idle',
     flistMapping: idleMapping(),
     flistSignInOpen: false,
-    flistSignInError: null,
-    flistSignInErrorCode: null,
-    flistSignInStatus: 'idle',
+    flistSignInAttempt: { status: 'idle' },
     flistSavedCreds: {
       account: null,
       autoLogin: false,
@@ -217,8 +222,8 @@ async function _flistAutoRefreshOnLogin(
   // User opt-in. Default off — see Settings → F-list. The 30-min
   // lazy-pull-on-select keeps the active character fresh without
   // hammering the API for every character on the account.
-  if (!readAutoRefreshEnabled()) return
-  const thresholdSec = readAutoRefreshHours() * 3600
+  if (!get().flistAutoRefreshEnabled) return
+  const thresholdSec = get().flistAutoRefreshHours * 3600
   await _flistAccountSweep(get, set, thresholdSec)
 }
 
@@ -226,7 +231,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
   ...accountInitialState(),
 
   flistOpenSignIn() {
-    set({ flistSignInOpen: true, flistSignInError: null, flistSignInErrorCode: null, flistSignInStatus: 'idle' })
+    set({ flistSignInOpen: true, flistSignInAttempt: { status: 'idle' } })
   },
 
   async flistLoadSavedCreds() {
@@ -253,7 +258,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       // We do NOT pass rememberPassword/autoLogin here — saved
       // creds already exist, and re-saving on every auto-login
       // would also force-rewrite the meta blob for no reason. A
-      // failed auto-login surfaces via flistSignInError; the
+      // failed auto-login surfaces via flistSignInAttempt; the
       // saved creds stay put so the user can correct from the
       // modal without losing the username they remembered.
       await get().flistSignIn(flistSavedCreds.account, password)
@@ -295,7 +300,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
   },
 
   async flistSignIn(account, password, opts) {
-    set({ flistSignInStatus: 'submitting', flistSignInError: null, flistSignInErrorCode: null })
+    set({ flistSignInAttempt: { status: 'submitting' } })
     try {
       const res = await api.flistSignIn({ account, password })
       get().flistRememberAccount(account)
@@ -351,16 +356,8 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
         // status that pre-dated sign-in would stay stuck forever
         // because the epoch-bumped in-flight call returns silently.
         const mappingNeedsReset = s.flistMapping.status !== 'ready'
-        // Wipe stale "not signed in" pullErrors left by auto-pull
-        // attempts that fired before the session was active — sign-in
-        // just made them obsolete. Other pullError causes (network,
-        // ticket-expired) will re-surface on the next pull attempt.
-        const archive: typeof s.flistArchive = {}
-        for (const [id, slot] of Object.entries(s.flistArchive)) {
-          archive[id] = slot.pullError ? { ...slot, pullError: null } : slot
-        }
         return {
-          flistSignInStatus: 'idle',
+          flistSignInAttempt: { status: 'idle' },
           flistSignInOpen: false,
           flistAccountCharacters: res.characters,
           flistSession: {
@@ -368,11 +365,12 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
             account: res.account,
             expires_in_sec: res.expires_in_sec
           },
-          // Archive-owned field: flistArchive.
-          flistArchive: archive,
           ...(mappingNeedsReset ? { flistMapping: idleMapping() } : {})
         }
       })
+      // Wipe stale "not signed in" Pull errors left by auto-pull
+      // attempts that fired before the session was active.
+      get().flistClearPullErrors()
       await get().flistLoadRoster()
       // Auto-refresh: walk the roster and queue a background pull
       // for every account character whose local copy is older than
@@ -384,7 +382,12 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
     } catch (err) {
       // The modal shows "Invalid account name or password", not
       // "HTTP 401: Invalid account name or password".
-      set({ flistSignInStatus: 'error', flistSignInError: errorDetail(err), flistSignInErrorCode: refusalCode(err) })
+      set({
+        flistSignInAttempt: {
+          status: 'error',
+          error: { message: errorDetail(err), code: refusalCode(err) }
+        }
+      })
     }
   },
 
@@ -402,10 +405,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       get().flistBackupAllStatus.jobId
     ].filter((id): id is string => Boolean(id))
     await Promise.all(jobIds.map((id) => api.jobCancel(id).catch(() => undefined)))
-    const ctrl = get().flistPullAbortController
-    if (ctrl) {
-      try { ctrl.abort() } catch { /* already aborted */ }
-    }
+    get().flistStopFollowingPull()
     try {
       await api.flistSignOut()
     } catch {
@@ -424,9 +424,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       flistSession: { active: false },
       flistAccountCharacters: [],
       // Purge the mapping cache too.
-      flistMapping: idleMapping(),
-      // Archive-owned field: flistPullAbortController.
-      flistPullAbortController: null
+      flistMapping: idleMapping()
     })
     await get().flistLoadRoster()
   },
@@ -450,30 +448,8 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
     set({ flistRosterStatus: 'loading' })
     try {
       const { characters } = await api.flistRoster()
-      set((s) => {
-        // Archive-owned field: flistArchive (each entry's integrity).
-        const archive = { ...s.flistArchive }
-        for (const entry of characters) {
-          if (entry.id === null || !entry.pull_status) continue
-          const key = String(entry.id)
-          const prev = archive[key] ?? {
-            live: null,
-            pullStatus: 'idle' as const,
-          }
-          archive[key] = {
-            ...prev,
-            integrity: {
-              status: entry.pull_status.status,
-              missing: entry.pull_status.missing_image_ids.length,
-            },
-          }
-        }
-        return {
-          flistRoster: characters,
-          flistRosterStatus: 'ready',
-          flistArchive: archive,
-        }
-      })
+      set({ flistRoster: characters, flistRosterStatus: 'ready' })
+      get().flistNotePullIntegrity(characters)
       // Restore the previously-selected character so signing back in
       // lands the user on their default rather than the picker's
       // empty state. Only fires when nothing is currently selected
@@ -531,7 +507,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
         })
       } catch (err) {
         if (epoch !== _flistSessionEpoch) return
-        const raw = err instanceof Error ? err.message : String(err)
+        const raw = errorDetail(err)
         set((s) => ({
           flistMapping: { ...s.flistMapping, status: 'error', error: raw }
         }))

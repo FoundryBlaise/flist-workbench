@@ -13,17 +13,23 @@
 
 import {
   api,
+  errorDetail,
   RefusalError,
   type FlistBackupAllHandlers,
   type FlistCharacterImage,
   type FlistPullHandlers,
+  type FlistRosterEntry,
   type FlistZipBackupEntry,
   type Job
 } from '../../lib/api'
 import type { State } from '../../state'
 import type { SliceCreator } from './slice'
 
-type ArchiveSet = Parameters<SliceCreator<ArchiveSlice>>[0]
+// A helper's set: it writes only Archive fields, and reaches the other
+// slices through their actions (as the Workbench's `WorkbenchSet`).
+type ArchiveSet = (
+  patch: Partial<ArchiveState> | ((s: State) => Partial<ArchiveState>)
+) => void
 type ArchiveGet = () => State
 
 export type ArchiveState = {
@@ -222,6 +228,15 @@ export type ArchiveSlice = ArchiveState & {
    *  shows next is the caller's to decide. For the Workbench, when a
    *  Restore or reset to Live replaces the browsed view. */
   flistEndBrowse: () => void
+  /** Drop every slot's Pull error: signing in makes the "not signed in"
+   *  ones obsolete, and any other cause shows again at the next Pull. */
+  flistClearPullErrors: () => void
+  /** Each rostered character's Pull integrity (complete, partial and
+   *  how many images it misses), from the roster just read. */
+  flistNotePullIntegrity: (roster: FlistRosterEntry[]) => void
+  /** Stop following the running Pull (sign-out): the job runs on, or is
+   *  cancelled by id; the window just no longer reads its events. */
+  flistStopFollowingPull: () => void
   /** Right-click → Download ZIP… on a Backups row. OS save dialog
    *  defaults the filename to the backup's on-disk name; we don't
    *  invent a friendlier one because the timestamp+UTC marker is
@@ -357,20 +372,20 @@ async function _followPull(
   set({ flistPullAbortController: ctrl })
   try {
     await open({
-      onJob: (job) => setStatus({ pullJobId: job.id }),
-      onCancelled: () =>
+      job: (job) => setStatus({ pullJobId: job.id }),
+      cancelled: () =>
         setStatus({ pullStatus: 'idle', pullStage: 'cancelled', pullError: null, pullJobId: null }),
-      onTicket: () =>
+      ticket: () =>
         setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
-      onFetching: () =>
+      fetching: () =>
         setStatus({ pullStatus: 'running', pullStage: 'fetching' }),
-      onImages: ({ total }) =>
+      images: ({ total }) =>
         setStatus({
           pullStatus: 'running',
           pullStage: 'images',
           pullProgress: { done: 0, total }
         }),
-      onImage: ({ index, total, ok, cached }) => {
+      image: ({ index, total, ok, cached }) => {
         setStatus({ pullProgress: { done: index, total } })
         // Refresh the per-character images map so the Images tab's
         // thumbnails update as files arrive. Only every 10th image to
@@ -382,7 +397,7 @@ async function _followPull(
           void get().flistLoadCharacterImages(targetId)
         }
       },
-      onDone: async (info) => {
+      done: async (info) => {
         // We know the character_id now even if we didn't before. Make
         // sure the per-id slot exists and gets reloaded.
         set((s) => ({
@@ -405,14 +420,14 @@ async function _followPull(
         // The Workbench open on this character follows the new Live.
         get().flistNoteNewLive(info.character_id)
       },
-      onError: ({ message }) => {
+      error: ({ message }) => {
         setStatus({ pullStatus: 'error', pullError: message, pullJobId: null })
       }
     }, ctrl.signal)
   } catch (err) {
     // AbortError = user-initiated (sign-out / explicit cancel).
     // Don't surface as a scary error to the user.
-    const raw = err instanceof Error ? err.message : String(err)
+    const raw = errorDetail(err)
     const busyWith = _characterBusyWith(err)
     if (err instanceof Error && err.name === 'AbortError') {
       setStatus({ pullStatus: 'idle', pullError: null })
@@ -445,10 +460,10 @@ async function _followBackupAll(
 ): Promise<void> {
   try {
     await open({
-      onJob: (job) => {
+      job: (job) => {
         set((s) => ({ flistBackupAllStatus: { ...s.flistBackupAllStatus, jobId: job.id } }))
       },
-      onCancelled: () => {
+      cancelled: () => {
         set((s) => ({
           flistBackupAllStatus: {
             ...s.flistBackupAllStatus,
@@ -459,12 +474,12 @@ async function _followBackupAll(
         }))
         _clearBackupAllStatusLater(get, set, 'cancelled')
       },
-      onStart: ({ total }) => {
+      start: ({ total }) => {
         set((s) => ({
           flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
         }))
       },
-      onCharacter: (info) => {
+      character: (info) => {
         set((s) => {
           const cur = s.flistBackupAllStatus
           if (info.status === 'fetching') {
@@ -502,7 +517,7 @@ async function _followBackupAll(
           void get().flistLoadArchive(info.character_id!)
         }
       },
-      onDone: () => {
+      done: () => {
         set((s) => ({
           flistBackupAllStatus: {
             ...s.flistBackupAllStatus,
@@ -530,7 +545,7 @@ async function _followBackupAll(
           }
         }, 6000)
       },
-      onError: ({ message }) => {
+      error: ({ message }) => {
         set((s) => ({
           flistBackupAllStatus: {
             ...s.flistBackupAllStatus,
@@ -548,7 +563,7 @@ async function _followBackupAll(
         ? 'A Pull is running. Start Back up all again once it has finished.'
         : busyWith === 'backup-all'
           ? 'Back up all is already running.'
-          : ((err as Error).message ?? 'backup-all failed')
+          : errorDetail(err)
     set((s) => ({
       flistBackupAllStatus: {
         ...s.flistBackupAllStatus,
@@ -710,7 +725,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
             ? { ok: true as const, backups: [] }
             : {
                 ok: false as const,
-                error: err instanceof Error ? err.message : String(err)
+                error: errorDetail(err)
               }
         )
     ])
@@ -959,7 +974,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
             done: 1,
             failed: 1,
             errorMessage:
-              err instanceof Error ? err.message : 'pull failed'
+              errorDetail(err)
           },
           false
         )
@@ -1026,7 +1041,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
           done: 1,
           failed: 1,
           errorMessage:
-            err instanceof Error ? err.message : 'ZIP write failed'
+            errorDetail(err)
         },
         false
       )
@@ -1102,7 +1117,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
           filename: backupFilename,
           status: 'error',
           payload: null,
-          error: err instanceof Error ? err.message : String(err),
+          error: errorDetail(err),
           previousLive,
           previousViewingLive
         }
@@ -1144,6 +1159,47 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
     const browse = get().flistBrowseBackup
     if (!browse) return
     _restoreFromBrowse(get, browse)
+  },
+
+  flistClearPullErrors() {
+    set((s) => {
+      const archive: typeof s.flistArchive = {}
+      for (const [id, slot] of Object.entries(s.flistArchive)) {
+        archive[id] = slot.pullError ? { ...slot, pullError: null } : slot
+      }
+      return { flistArchive: archive }
+    })
+  },
+
+  flistNotePullIntegrity(roster) {
+    set((s) => {
+      const archive = { ...s.flistArchive }
+      for (const entry of roster) {
+        if (entry.id === null || !entry.pull_status) continue
+        const key = String(entry.id)
+        const prev = archive[key] ?? { live: null, pullStatus: 'idle' as const }
+        archive[key] = {
+          ...prev,
+          integrity: {
+            status: entry.pull_status.status,
+            missing: entry.pull_status.missing_image_ids.length
+          }
+        }
+      }
+      return { flistArchive: archive }
+    })
+  },
+
+  flistStopFollowingPull() {
+    const ctrl = get().flistPullAbortController
+    if (ctrl) {
+      try {
+        ctrl.abort()
+      } catch {
+        // already aborted
+      }
+    }
+    set({ flistPullAbortController: null })
   },
 
   flistEndBrowse() {

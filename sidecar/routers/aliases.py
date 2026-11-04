@@ -41,7 +41,7 @@ class AliasGroupUnlinked(WireModel):
     deleted: int
 
 
-class AliasAdd(BaseModel):
+class AliasAddRequest(BaseModel):
     character: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=200)
     primary_name: str = Field(min_length=1, max_length=200)
@@ -64,7 +64,7 @@ def aliases_list(char: str) -> CharacterAliases:
 
 
 @router.post("/aliases", status_code=201)
-def aliases_add(body: AliasAdd) -> AliasLinked:
+def aliases_add(body: AliasAddRequest) -> AliasLinked:
     """Link `name` to `primary_name` for `character`. Idempotent;
     handles chain consolidation (linking A→B then A→C ends with both
     A and B pointing at C, never building a multi-hop chain)."""

@@ -90,6 +90,33 @@ describe('view choices', () => {
     expect(useStore.getState().editorActiveTab).toBe('description')
   })
 
+  it('keeps the editor tab per character, for when it is opened again', () => {
+    useStore.setState({ flistActiveCharacterId: '7' })
+    useStore.getState().setEditorActiveTab('kinks')
+
+    useStore.setState({ flistActiveCharacterId: '8' })
+    useStore.getState().editorRestoreTab('8')
+    expect(useStore.getState().editorActiveTab).toBe('description')
+
+    restart()
+    useStore.getState().editorRestoreTab('7')
+    expect(useStore.getState().editorActiveTab).toBe('kinks')
+  })
+
+  it('keeps the sign-in auto-refresh for the next start, at least every 24 hours', () => {
+    expect(useStore.getState().flistAutoRefreshEnabled).toBe(false)
+    expect(useStore.getState().flistAutoRefreshHours).toBe(24)
+
+    useStore.getState().setFlistAutoRefreshEnabled(true)
+    useStore.getState().setFlistAutoRefreshHours(6)
+    expect(useStore.getState().flistAutoRefreshHours).toBe(24)
+    useStore.getState().setFlistAutoRefreshHours(48.7)
+
+    restart()
+    expect(useStore.getState().flistAutoRefreshEnabled).toBe(true)
+    expect(useStore.getState().flistAutoRefreshHours).toBe(48)
+  })
+
   it('closes cross search when the window leaves the Logs pane, and only then', () => {
     useStore.getState().setMode('logs')
     useStore.getState().setCrossSearchOpen(true)
@@ -126,7 +153,7 @@ describe('remembered across starts', () => {
   it('pre-fills the sign-in with the last account signed in with', async () => {
     useStore.setState({
       flistSignInOpen: true,
-      flistSignInStatus: 'idle',
+      flistSignInAttempt: { status: 'idle' },
       flistSavedCreds: { account: null, autoLogin: false, encryptionAvailable: false, hasPassword: false }
     })
     fake

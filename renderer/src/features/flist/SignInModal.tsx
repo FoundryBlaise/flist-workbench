@@ -19,9 +19,10 @@ function friendlierAuthHint(code: string | null): string | null {
 export function SignInModal({ onClose }: { onClose: () => void }) {
   const signIn = useStore((s) => s.flistSignIn)
   const getLastAccount = useStore((s) => s.flistGetLastAccount)
-  const status = useStore((s) => s.flistSignInStatus)
-  const error = useStore((s) => s.flistSignInError)
-  const errorCode = useStore((s) => s.flistSignInErrorCode)
+  const attempt = useStore((s) => s.flistSignInAttempt)
+  const status = attempt.status
+  const error = attempt.status === 'error' ? attempt.error.message : null
+  const errorCode = attempt.status === 'error' ? attempt.error.code : null
   const savedCreds = useStore((s) => s.flistSavedCreds)
   // Lazy initializer reads the saved account BEFORE first paint so the
   // focus useEffect below sees the right `value` and routes initial
@@ -105,7 +106,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
       autoLogin
     })
     // The store closes the modal on success; on failure status flips to
-    // 'error' with the message in `flistSignInError`. Either way we
+    // 'error' with the message in `flistSignInAttempt`. Either way we
     // clear the password from local state — never echo a wrong password
     // back into the input.
     setPassword('')

@@ -45,6 +45,11 @@ const READERS: Record<string, string> = {
   JsonOf: "a response's or body's JSON",
   Answer: 'what an operation answers when ok',
   BodyOf: 'the JSON body an operation takes',
+  Route: 'the paths that serve a method',
+  AnswerAt: '`Answer` for a method the caller has already checked',
+  BodyAt: '`BodyOf` for a method the caller has already checked',
+  ParamsAt: "an operation's path and query parameters",
+  Fill: "what a call fills in of its route, from the route's operation",
   EventTable: "a handler per event of a stream, from its events model's names and data"
 }
 
@@ -118,7 +123,7 @@ function knownNames(file: ts.SourceFile): Set<string> {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const from = node.moduleSpecifier.text
       const bindings = node.importClause?.namedBindings
-      if (/(^|\/)api(\.gen)?$/.test(from) && bindings && ts.isNamedImports(bindings)) {
+      if (/(^|\/)(api|api\.gen|schema)$/.test(from) && bindings && ts.isNamedImports(bindings)) {
         for (const el of bindings.elements) names.add(el.name.text)
       }
     }
@@ -209,7 +214,7 @@ function untypedBodies(): string[] {
   const file = parse('renderer/src/lib/api.ts')
   const found: string[] = []
   const isBodyOf = (type: ts.TypeNode | undefined) =>
-    !!type && ts.isTypeReferenceNode(type) && type.typeName.getText() === 'BodyOf'
+    !!type && ts.isTypeReferenceNode(type) && ['BodyOf', 'BodyAt'].includes(type.typeName.getText())
   const paramType = (node: ts.Node, name: string): ts.TypeNode | undefined => {
     for (let at: ts.Node | undefined = node; at; at = at.parent) {
       if (ts.isArrowFunction(at) || ts.isFunctionDeclaration(at) || ts.isFunctionExpression(at)) {
@@ -245,7 +250,13 @@ it('checks every module that talks to the sidecar', () => {
     .map(rel)
     .sort()
 
-  expect(calling).toEqual([...WIRE_MODULES, ...Object.keys(READS_NO_ANSWER)].sort())
+  // eventStream.ts reads the change hints through api.ts: checked,
+  // though it calls nothing itself.
+  expect(calling).toEqual(
+    [...WIRE_MODULES, ...Object.keys(READS_NO_ANSWER)]
+      .filter((module) => module !== 'renderer/src/lib/eventStream.ts')
+      .sort()
+  )
 })
 
 it('types every request and answer from the sidecar schema', () => {
@@ -268,4 +279,79 @@ it('catches a wire type written by hand', () => {
 
   expect(handWritten(pulled.type, known)).toBe('string')
   expect(handWritten(kept.type, known)).toBeNull()
+})
+
+// ---- The store ----------------------------------------------------------
+// The slices and the store's modules (renderer/src/state/**) hold the
+// sidecar's answers and keep state of their own beside them. Their own
+// types are not checked; a shape written there for an answer is: an
+// object type whose fields are all fields of one schema model, at least
+// two of them in the sidecar's snake_case (the store names its own
+// fields in camelCase).
+
+/** Every model's JSON field names, from the committed schema. */
+function schemaFields(): Map<string, Set<string>> {
+  const schema = JSON.parse(readFileSync(join(ROOT, 'sidecar', 'openapi.json'), 'utf-8')) as {
+    components: { schemas: Record<string, { properties?: Record<string, unknown> }> }
+  }
+  return new Map(
+    Object.entries(schema.components.schemas).map(([name, model]) => [
+      name,
+      new Set(Object.keys(model.properties ?? {}))
+    ])
+  )
+}
+
+const WIRE_KEY = /^_?[a-z0-9]+(_[a-z0-9]+)+$|^_[a-z0-9]+$/
+
+/** Every object type in `module` shaped like a schema model, as
+ *  `<module>: <type text>: <model>`. */
+function storeWireShapes(module: string, models: Map<string, Set<string>>): string[] {
+  const file = parse(module)
+  const found: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeLiteralNode(node)) {
+      const names = node.members.flatMap((m) =>
+        m.name && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)) ? [m.name.text] : []
+      )
+      if (names.filter((n) => WIRE_KEY.test(n)).length >= 2) {
+        const model = [...models].find(([, fields]) => names.every((n) => fields.has(n)))
+        if (model) found.push(`${module}: ${node.getText().replace(/\s+/g, ' ').slice(0, 80)}: ${model[0]}`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return found
+}
+
+it('the store types no sidecar answer by hand', () => {
+  const models = schemaFields()
+  const store = sources(join(ROOT, 'renderer', 'src', 'state')).map(rel)
+  expect(store.flatMap((module) => storeWireShapes(module, models))).toEqual([])
+})
+
+it('catches a sidecar answer typed by hand in the store', () => {
+  const file = ts.createSourceFile(
+    'probe.ts',
+    "type Kept = { status: string; payload: { _etag: string | null; _fetched_at: number | null } | null; fetchedAt: number | null }",
+    ts.ScriptTarget.Latest,
+    true
+  )
+  const literals: ts.TypeLiteralNode[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeLiteralNode(node)) literals.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  const names = literals.map((l) =>
+    l.members.flatMap((m) => (m.name && ts.isIdentifier(m.name) ? [m.name.text] : []))
+  )
+  const models = schemaFields()
+  const shaped = names.filter(
+    (n) =>
+      n.filter((x) => WIRE_KEY.test(x)).length >= 2 &&
+      [...models.values()].some((fields) => n.every((x) => fields.has(x)))
+  )
+  expect(shaped).toEqual([['_etag', '_fetched_at']])
 })

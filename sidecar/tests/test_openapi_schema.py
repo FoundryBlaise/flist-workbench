@@ -5,6 +5,8 @@ each route says what it answers."""
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import openapi_schema
@@ -243,6 +245,28 @@ def test_every_json_body_names_a_request_model() -> None:
         if (why := _undeclared_body(operation))
     ]
     assert problems == []
+
+
+def _body_model_names(operation: dict) -> list[str]:
+    """The models `operation`'s JSON request body names."""
+    schema = operation.get("requestBody", {}).get("content", {}).get("application/json", {})
+    refs = json.dumps(schema.get("schema", {}))
+    return re.findall(r'"#/components/schemas/([^"]+)"', refs)
+
+
+def test_a_request_model_is_named_for_a_request() -> None:
+    # The class name is the schema's and the window's name for the
+    # body (wire.py): `...Request`, or `...Update` for a partial change.
+    misnamed = sorted(
+        {
+            f"{name} ({method.upper()} {path})"
+            for path, operations in openapi_schema.schema()["paths"].items()
+            for method, operation in operations.items()
+            for name in _body_model_names(operation)
+            if not name.endswith(("Request", "Update"))
+        }
+    )
+    assert misnamed == []
 
 
 def test_model_names_are_unique_across_routers() -> None:

@@ -231,16 +231,16 @@ def _upload_source(source: dict[str, Any]) -> UploadSourceWorkbench | UploadSour
     return UploadSourceBackup.model_validate(source)
 
 
-class _PairAcceptBody(BaseModel):
+class HandshakeAnswerRequest(BaseModel):
     handshake_id: str
 
 
-class _PreUploadBackupBody(BaseModel):
+class PreUploadBackupRequest(BaseModel):
     character: str
     payload: dict[str, Any]
 
 
-class _UploadDoneBody(BaseModel):
+class UploadDoneRequest(BaseModel):
     character: str | None = None
 
 
@@ -277,12 +277,12 @@ def handshake_pending() -> PendingHandshakes:
 
 
 @router.post("/restore/handshake/accept")
-def handshake_accept(body: _PairAcceptBody) -> HandshakeAnswered | HandshakeUnknown:
+def handshake_accept(body: HandshakeAnswerRequest) -> HandshakeAnswered | HandshakeUnknown:
     return _handshake_answer(upload_service.accept_handshake(body.handshake_id))
 
 
 @router.post("/restore/handshake/reject")
-def handshake_reject(body: _PairAcceptBody) -> HandshakeAnswered | HandshakeUnknown:
+def handshake_reject(body: HandshakeAnswerRequest) -> HandshakeAnswered | HandshakeUnknown:
     return _handshake_answer(upload_service.reject_handshake(body.handshake_id))
 
 
@@ -347,7 +347,7 @@ def upload_source(
 
 @router.post("/restore/snapshot/fresh")
 def pre_upload_backup(
-    body: _PreUploadBackupBody,
+    body: PreUploadBackupRequest,
     _auth: str = Depends(_require_pairing),
 ) -> PreUploadBackupKept | PreUploadBackupNotKept:
     # The extension's writes are not the window's: attributed to the
@@ -359,7 +359,7 @@ def pre_upload_backup(
     return PreUploadBackupNotKept.model_validate(kept)
 
 
-class _UploadSavedBody(BaseModel):
+class UploadSavedRequest(BaseModel):
     character: str
     #: Seconds to wait before pulling. The extension reports the click
     #: on F-list's save button, which is a moment before the POST has
@@ -372,7 +372,7 @@ def _character_required() -> InvalidRequest:
     return InvalidRequest(("body", "character"), "character is required")
 
 
-class _UploadImageIdsBody(BaseModel):
+class UploadImageIdsRequest(BaseModel):
     character: str
     #: `local-<sha8>` -> the id F-list minted for it on upload.
     mapping: dict[str, str]
@@ -380,7 +380,7 @@ class _UploadImageIdsBody(BaseModel):
 
 @router.post("/restore/image-ids")
 def upload_image_ids(
-    body: _UploadImageIdsBody,
+    body: UploadImageIdsRequest,
     _auth: str = Depends(_require_pairing),
 ) -> ImageIdsDeferred:
     """The extension reporting what F-list called our uploads — noted, not applied.
@@ -416,7 +416,7 @@ def upload_image_ids(
 
 @router.post("/restore/saved")
 async def upload_saved(
-    body: _UploadSavedBody,
+    body: UploadSavedRequest,
     _auth: str = Depends(_require_pairing),
 ) -> PullScheduled:
     """The user pressed Save on f-list.net — re-pull so Live matches
@@ -448,7 +448,7 @@ async def upload_saved(
 
 @router.post("/restore/done")
 def upload_done(
-    body: _UploadDoneBody,
+    body: UploadDoneRequest,
     _auth: str = Depends(_require_pairing),
 ) -> UploadDone:
     return UploadDone(ok=True)

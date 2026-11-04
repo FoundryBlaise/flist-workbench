@@ -422,7 +422,7 @@ export interface paths {
         /**
          * Flist Character Zip Backup Delete
          * @description Move a single Backup to the character's Trash, user-set name and
-         *     all; it can be restored from there until the Trash is emptied.
+         *     all; it can be put back from there until the Trash is emptied.
          *     Filename validated against the ISO-basic format so a crafted `../`
          *     path moves nothing. 404 if the Backup isn't there.
          */
@@ -804,7 +804,7 @@ export interface paths {
         /**
          * Flist Character Image Remove
          * @description Delete one image: off the Workbench's gallery if it is there,
-         *     and into the character's Trash, where it can be restored until the
+         *     and into the character's Trash, where it can be put back until the
          *     Trash is emptied. The same as the batch route below.
          */
         delete: operations["flist_character_image_remove_flist_character__character_id__images__image_id__delete"];
@@ -2238,8 +2238,8 @@ export interface components {
             /** Id */
             id: number | string | null;
         };
-        /** AliasAdd */
-        AliasAdd: {
+        /** AliasAddRequest */
+        AliasAddRequest: {
             /** Character */
             character: string;
             /** Name */
@@ -2430,6 +2430,11 @@ export interface components {
             meta: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** BackupRenameRequest */
+        BackupRenameRequest: {
+            /** Name */
+            name: string;
         };
         /** BackupRestored */
         BackupRestored: {
@@ -2623,6 +2628,11 @@ export interface components {
             /** Elapsed Ms */
             elapsed_ms: number;
         };
+        /** EmbeddingTestRequest */
+        EmbeddingTestRequest: {
+            /** Embed Model */
+            embed_model?: string | null;
+        };
         /**
          * ExtensionSeen
          * @description The extension version as of its last paired call; both null
@@ -2715,11 +2725,6 @@ export interface components {
             /** Cap Bytes */
             cap_bytes: number;
         };
-        /** ForeignDefaults */
-        ForeignDefaults: {
-            /** Cache Cap Mb */
-            cache_cap_mb: number;
-        };
         /**
          * ForeignProfile
          * @description A Foreign profile. `profile` is F-list's character-data payload
@@ -2770,12 +2775,17 @@ export interface components {
         ForeignSettings: {
             /** Cache Cap Mb */
             cache_cap_mb: number;
-            defaults: components["schemas"]["ForeignDefaults"];
+            defaults: components["schemas"]["ForeignValues"];
         };
         /** ForeignSettingsUpdate */
         ForeignSettingsUpdate: {
             /** Cache Cap Mb */
             cache_cap_mb?: number | null;
+        };
+        /** ForeignValues */
+        ForeignValues: {
+            /** Cache Cap Mb */
+            cache_cap_mb: number;
         };
         /**
          * GalleryRepair
@@ -2794,6 +2804,11 @@ export interface components {
             workbench_rewritten: boolean;
             /** Repaired */
             repaired: boolean;
+        };
+        /** HandshakeAnswerRequest */
+        HandshakeAnswerRequest: {
+            /** Handshake Id */
+            handshake_id: string;
         };
         /** HandshakeAnswered */
         HandshakeAnswered: {
@@ -2838,6 +2853,11 @@ export interface components {
             character: string;
             /** Deferred */
             deferred: boolean;
+        };
+        /** ImageIdsRequest */
+        ImageIdsRequest: {
+            /** Image Ids */
+            image_ids: string[];
         };
         /**
          * ImageReference
@@ -2916,6 +2936,57 @@ export interface components {
             /** Conflicts */
             conflicts: string[];
         };
+        /** IndexSettings */
+        IndexSettings: {
+            /** Embed Model */
+            embed_model: string;
+            /** Rerank Model */
+            rerank_model: string;
+            /** Rerank Candidates */
+            rerank_candidates: number;
+            /** Top K */
+            top_k: number;
+            /** Neighbors */
+            neighbors: number;
+            /** Rerank Min Ratio */
+            rerank_min_ratio: number;
+            /** Hybrid Enabled */
+            hybrid_enabled: boolean;
+            /** Hybrid Bm25 Candidates */
+            hybrid_bm25_candidates: number;
+            /** Chunk Max Chars */
+            chunk_max_chars: number;
+            /** Chunk Soft Split Chars */
+            chunk_soft_split_chars: number;
+            /** Chunk Overlap Msgs */
+            chunk_overlap_msgs: number;
+            defaults: components["schemas"]["IndexValues"];
+        };
+        /** IndexSettingsUpdate */
+        IndexSettingsUpdate: {
+            /** Embed Model */
+            embed_model?: string | null;
+            /** Rerank Model */
+            rerank_model?: string | null;
+            /** Rerank Candidates */
+            rerank_candidates?: number | null;
+            /** Top K */
+            top_k?: number | null;
+            /** Neighbors */
+            neighbors?: number | null;
+            /** Rerank Min Ratio */
+            rerank_min_ratio?: number | null;
+            /** Hybrid Enabled */
+            hybrid_enabled?: boolean | null;
+            /** Hybrid Bm25 Candidates */
+            hybrid_bm25_candidates?: number | null;
+            /** Chunk Max Chars */
+            chunk_max_chars?: number | null;
+            /** Chunk Soft Split Chars */
+            chunk_soft_split_chars?: number | null;
+            /** Chunk Overlap Msgs */
+            chunk_overlap_msgs?: number | null;
+        };
         /**
          * IndexStatus
          * @description What the Index holds: model, dimension, last ingest, chunk
@@ -2934,6 +3005,34 @@ export interface components {
             job: components["schemas"]["Job"] | null;
             /** Chunk Count */
             chunk_count: number | null;
+        };
+        /**
+         * IndexValues
+         * @description The Index and retrieval tunables.
+         */
+        IndexValues: {
+            /** Embed Model */
+            embed_model: string;
+            /** Rerank Model */
+            rerank_model: string;
+            /** Rerank Candidates */
+            rerank_candidates: number;
+            /** Top K */
+            top_k: number;
+            /** Neighbors */
+            neighbors: number;
+            /** Rerank Min Ratio */
+            rerank_min_ratio: number;
+            /** Hybrid Enabled */
+            hybrid_enabled: boolean;
+            /** Hybrid Bm25 Candidates */
+            hybrid_bm25_candidates: number;
+            /** Chunk Max Chars */
+            chunk_max_chars: number;
+            /** Chunk Soft Split Chars */
+            chunk_soft_split_chars: number;
+            /** Chunk Overlap Msgs */
+            chunk_overlap_msgs: number;
         };
         /** IndexWiped */
         IndexWiped: {
@@ -3025,6 +3124,23 @@ export interface components {
             embed_model: string | null;
             /** Embed Dimension */
             embed_dimension: number | null;
+        };
+        /** IngestRequest */
+        IngestRequest: {
+            /** Character */
+            character?: string | null;
+            /** Partner */
+            partner?: string | null;
+            /**
+             * Include Ooc
+             * @default false
+             */
+            include_ooc: boolean;
+            /**
+             * Force Rewipe
+             * @default false
+             */
+            force_rewipe: boolean;
         };
         /**
          * IngestScope
@@ -3145,21 +3261,6 @@ export interface components {
             /** Created At */
             created_at: number;
         };
-        /** LabelOverride */
-        LabelOverride: {
-            /** Character */
-            character?: string | null;
-            /** Partner */
-            partner?: string | null;
-            /** Hash */
-            hash: string;
-            /** Ts */
-            ts: number;
-            /** Speaker */
-            speaker: string;
-            /** Label */
-            label?: string | null;
-        };
         /** LabelOverrideItem */
         LabelOverrideItem: {
             /** Hash */
@@ -3169,14 +3270,29 @@ export interface components {
             /** Speaker */
             speaker: string;
         };
-        /** LabelOverrideMany */
-        LabelOverrideMany: {
+        /** LabelOverrideManyRequest */
+        LabelOverrideManyRequest: {
             /** Character */
             character?: string | null;
             /** Partner */
             partner?: string | null;
             /** Items */
             items: components["schemas"]["LabelOverrideItem"][];
+            /** Label */
+            label?: string | null;
+        };
+        /** LabelOverrideRequest */
+        LabelOverrideRequest: {
+            /** Character */
+            character?: string | null;
+            /** Partner */
+            partner?: string | null;
+            /** Hash */
+            hash: string;
+            /** Ts */
+            ts: number;
+            /** Speaker */
+            speaker: string;
             /** Label */
             label?: string | null;
         };
@@ -3300,13 +3416,8 @@ export interface components {
             /** Trash Id */
             trash_id: string | null;
         };
-        /** LabelsDefaults */
-        LabelsDefaults: {
-            /** Threshold Chars */
-            threshold_chars: number;
-        };
-        /** LabelsDeleteHashes */
-        LabelsDeleteHashes: {
+        /** LabelsDeleteHashesRequest */
+        LabelsDeleteHashesRequest: {
             /** Character */
             character?: string | null;
             /** Partner */
@@ -3323,8 +3434,8 @@ export interface components {
             /** Deleted */
             deleted: number;
         };
-        /** LabelsFillUnlabeled */
-        LabelsFillUnlabeled: {
+        /** LabelsFillUnlabeledRequest */
+        LabelsFillUnlabeledRequest: {
             /** Character */
             character: string;
             /** Partner */
@@ -3376,13 +3487,12 @@ export interface components {
         /**
          * LabelsSettings
          * @description Messages shorter than `threshold_chars` are OOC without asking
-         *     anyone. The defaults let the window show "(default)" hints and offer
-         *     a reset without hardcoding them.
+         *     anyone.
          */
         LabelsSettings: {
             /** Threshold Chars */
             threshold_chars: number;
-            defaults: components["schemas"]["LabelsDefaults"];
+            defaults: components["schemas"]["LabelsValues"];
         };
         /** LabelsSettingsUpdate */
         LabelsSettingsUpdate: {
@@ -3393,6 +3503,11 @@ export interface components {
         LabelsTrash: {
             /** Labels */
             labels: components["schemas"]["TrashedLabels"][];
+        };
+        /** LabelsValues */
+        LabelsValues: {
+            /** Threshold Chars */
+            threshold_chars: number;
         };
         /**
          * LexicalRebuilt
@@ -3787,6 +3902,15 @@ export interface components {
              */
             error: "unknown_character";
         };
+        /** PreUploadBackupRequest */
+        PreUploadBackupRequest: {
+            /** Character */
+            character: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PublicProfile
          * @description A character's public profile, for the editor's "Fetch profile".
@@ -3952,107 +4076,6 @@ export interface components {
             /** Skipped */
             skipped: string[];
         };
-        /** RagIngestRequest */
-        RagIngestRequest: {
-            /** Character */
-            character?: string | null;
-            /** Partner */
-            partner?: string | null;
-            /**
-             * Include Ooc
-             * @default false
-             */
-            include_ooc: boolean;
-            /**
-             * Force Rewipe
-             * @default false
-             */
-            force_rewipe: boolean;
-        };
-        /** RagSettings */
-        RagSettings: {
-            /** Embed Model */
-            embed_model: string;
-            /** Rerank Model */
-            rerank_model: string;
-            /** Rerank Candidates */
-            rerank_candidates: number;
-            /** Top K */
-            top_k: number;
-            /** Neighbors */
-            neighbors: number;
-            /** Rerank Min Ratio */
-            rerank_min_ratio: number;
-            /** Hybrid Enabled */
-            hybrid_enabled: boolean;
-            /** Hybrid Bm25 Candidates */
-            hybrid_bm25_candidates: number;
-            /** Chunk Max Chars */
-            chunk_max_chars: number;
-            /** Chunk Soft Split Chars */
-            chunk_soft_split_chars: number;
-            /** Chunk Overlap Msgs */
-            chunk_overlap_msgs: number;
-            defaults: components["schemas"]["RagValues"];
-        };
-        /** RagSettingsUpdate */
-        RagSettingsUpdate: {
-            /** Embed Model */
-            embed_model?: string | null;
-            /** Rerank Model */
-            rerank_model?: string | null;
-            /** Rerank Candidates */
-            rerank_candidates?: number | null;
-            /** Top K */
-            top_k?: number | null;
-            /** Neighbors */
-            neighbors?: number | null;
-            /** Rerank Min Ratio */
-            rerank_min_ratio?: number | null;
-            /** Hybrid Enabled */
-            hybrid_enabled?: boolean | null;
-            /** Hybrid Bm25 Candidates */
-            hybrid_bm25_candidates?: number | null;
-            /** Chunk Max Chars */
-            chunk_max_chars?: number | null;
-            /** Chunk Soft Split Chars */
-            chunk_soft_split_chars?: number | null;
-            /** Chunk Overlap Msgs */
-            chunk_overlap_msgs?: number | null;
-        };
-        /** RagTestEmbeddingRequest */
-        RagTestEmbeddingRequest: {
-            /** Embed Model */
-            embed_model?: string | null;
-        };
-        /**
-         * RagValues
-         * @description The Index and retrieval tunables, as set or as their defaults.
-         */
-        RagValues: {
-            /** Embed Model */
-            embed_model: string;
-            /** Rerank Model */
-            rerank_model: string;
-            /** Rerank Candidates */
-            rerank_candidates: number;
-            /** Top K */
-            top_k: number;
-            /** Neighbors */
-            neighbors: number;
-            /** Rerank Min Ratio */
-            rerank_min_ratio: number;
-            /** Hybrid Enabled */
-            hybrid_enabled: boolean;
-            /** Hybrid Bm25 Candidates */
-            hybrid_bm25_candidates: number;
-            /** Chunk Max Chars */
-            chunk_max_chars: number;
-            /** Chunk Soft Split Chars */
-            chunk_soft_split_chars: number;
-            /** Chunk Overlap Msgs */
-            chunk_overlap_msgs: number;
-        };
         /**
          * RefusalBody
          * @description What every route answers when it is not ok, as the schema
@@ -4135,6 +4158,19 @@ export interface components {
             /** Workbench Has Edits */
             workbench_has_edits: boolean;
         };
+        /**
+         * RestoreRequest
+         * @description Restore a Backup into the Workbench.
+         *
+         *     `back_up_first` is still accepted from older windows and ignored:
+         *     the Workbench is always kept as a Backup first (ADR 0003).
+         */
+        RestoreRequest: {
+            /** Filename */
+            filename: string;
+            /** Back Up First */
+            back_up_first?: boolean | null;
+        };
         /** Roster */
         Roster: {
             /** Characters */
@@ -4175,7 +4211,7 @@ export interface components {
             /** Fchat Data Dir Env Locked */
             fchat_data_dir_env_locked: boolean;
             labels: components["schemas"]["LabelsSettings"];
-            rag: components["schemas"]["RagSettings"];
+            rag: components["schemas"]["IndexSettings"];
             /** Image Import Roots */
             image_import_roots: string[];
             mcp: components["schemas"]["McpSettings"];
@@ -4186,7 +4222,7 @@ export interface components {
             /** Fchat Data Dir */
             fchat_data_dir?: string | null;
             labels?: components["schemas"]["LabelsSettingsUpdate"] | null;
-            rag?: components["schemas"]["RagSettingsUpdate"] | null;
+            rag?: components["schemas"]["IndexSettingsUpdate"] | null;
             /** Image Import Roots */
             image_import_roots?: string[] | null;
             mcp?: components["schemas"]["McpSettingsUpdate"] | null;
@@ -4216,12 +4252,10 @@ export interface components {
         };
         /**
          * StreamError
-         * @description A stream's `error` event, which ends it: the stage it stopped
-         *     at, then the one error shape `{code, message, details}`.
+         * @description A stream's `error` event, which ends it: a job's error, and the
+         *     stage it stopped at.
          */
         StreamError: {
-            /** Stage */
-            stage: string;
             /** Code */
             code: components["schemas"]["RefusalCode"] | components["schemas"]["JobFailureCode"];
             /** Message */
@@ -4230,6 +4264,8 @@ export interface components {
             details: {
                 [key: string]: unknown;
             };
+            /** Stage */
+            stage: string;
         };
         /**
          * StreamReady
@@ -4257,6 +4293,11 @@ export interface components {
         TrashEmptied: {
             /** Purged */
             purged: number;
+        };
+        /** TrashIdsRequest */
+        TrashIdsRequest: {
+            /** Ids */
+            ids: string[];
         };
         /**
          * TrashItem
@@ -4388,6 +4429,30 @@ export interface components {
         UploadDone: {
             /** Ok */
             ok: boolean;
+        };
+        /** UploadDoneRequest */
+        UploadDoneRequest: {
+            /** Character */
+            character?: string | null;
+        };
+        /** UploadImageIdsRequest */
+        UploadImageIdsRequest: {
+            /** Character */
+            character: string;
+            /** Mapping */
+            mapping: {
+                [key: string]: string;
+            };
+        };
+        /** UploadSavedRequest */
+        UploadSavedRequest: {
+            /** Character */
+            character: string;
+            /**
+             * Delay Seconds
+             * @default 5
+             */
+            delay_seconds: number;
         };
         /**
          * UploadSourceBackup
@@ -4529,72 +4594,6 @@ export interface components {
         WorkbenchSaved: {
             /** Etag */
             etag: string;
-        };
-        /** _ImageIdsBody */
-        _ImageIdsBody: {
-            /** Image Ids */
-            image_ids: string[];
-        };
-        /**
-         * _LoadBackupBody
-         * @description Restore a Backup into the Workbench.
-         *
-         *     `back_up_first` is still accepted from older windows and ignored:
-         *     the Workbench is always kept as a Backup first (ADR 0003).
-         */
-        _LoadBackupBody: {
-            /** Filename */
-            filename: string;
-            /** Back Up First */
-            back_up_first?: boolean | null;
-        };
-        /** _PairAcceptBody */
-        _PairAcceptBody: {
-            /** Handshake Id */
-            handshake_id: string;
-        };
-        /** _PreUploadBackupBody */
-        _PreUploadBackupBody: {
-            /** Character */
-            character: string;
-            /** Payload */
-            payload: {
-                [key: string]: unknown;
-            };
-        };
-        /** _TrashIdsBody */
-        _TrashIdsBody: {
-            /** Ids */
-            ids: string[];
-        };
-        /** _UploadDoneBody */
-        _UploadDoneBody: {
-            /** Character */
-            character?: string | null;
-        };
-        /** _UploadImageIdsBody */
-        _UploadImageIdsBody: {
-            /** Character */
-            character: string;
-            /** Mapping */
-            mapping: {
-                [key: string]: string;
-            };
-        };
-        /** _UploadSavedBody */
-        _UploadSavedBody: {
-            /** Character */
-            character: string;
-            /**
-             * Delay Seconds
-             * @default 5
-             */
-            delay_seconds: number;
-        };
-        /** _ZipBackupRename */
-        _ZipBackupRename: {
-            /** Name */
-            name: string;
         };
     };
     responses: never;
@@ -5230,7 +5229,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ZipBackupRename"];
+                "application/json": components["schemas"]["BackupRenameRequest"];
             };
         };
         responses: {
@@ -5503,7 +5502,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_LoadBackupBody"];
+                "application/json": components["schemas"]["RestoreRequest"];
             };
         };
         responses: {
@@ -5795,7 +5794,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ImageIdsBody"];
+                "application/json": components["schemas"]["ImageIdsRequest"];
             };
         };
         responses: {
@@ -5957,7 +5956,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ImageIdsBody"];
+                "application/json": components["schemas"]["ImageIdsRequest"];
             };
         };
         responses: {
@@ -5992,7 +5991,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6027,7 +6026,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6062,7 +6061,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_ImageIdsBody"];
+                "application/json": components["schemas"]["ImageIdsRequest"];
             };
         };
         responses: {
@@ -6097,7 +6096,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6132,7 +6131,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6228,7 +6227,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6261,7 +6260,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_TrashIdsBody"];
+                "application/json": components["schemas"]["TrashIdsRequest"];
             };
         };
         responses: {
@@ -6414,7 +6413,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_PairAcceptBody"];
+                "application/json": components["schemas"]["HandshakeAnswerRequest"];
             };
         };
         responses: {
@@ -6447,7 +6446,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_PairAcceptBody"];
+                "application/json": components["schemas"]["HandshakeAnswerRequest"];
             };
         };
         responses: {
@@ -6672,7 +6671,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_PreUploadBackupBody"];
+                "application/json": components["schemas"]["PreUploadBackupRequest"];
             };
         };
         responses: {
@@ -6708,7 +6707,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_UploadImageIdsBody"];
+                "application/json": components["schemas"]["UploadImageIdsRequest"];
             };
         };
         responses: {
@@ -6744,7 +6743,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_UploadSavedBody"];
+                "application/json": components["schemas"]["UploadSavedRequest"];
             };
         };
         responses: {
@@ -6780,7 +6779,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["_UploadDoneBody"];
+                "application/json": components["schemas"]["UploadDoneRequest"];
             };
         };
         responses: {
@@ -7443,7 +7442,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelsFillUnlabeled"];
+                "application/json": components["schemas"]["LabelsFillUnlabeledRequest"];
             };
         };
         responses: {
@@ -7476,7 +7475,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelsDeleteHashes"];
+                "application/json": components["schemas"]["LabelsDeleteHashesRequest"];
             };
         };
         responses: {
@@ -7509,7 +7508,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelOverride"];
+                "application/json": components["schemas"]["LabelOverrideRequest"];
             };
         };
         responses: {
@@ -7542,7 +7541,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LabelOverrideMany"];
+                "application/json": components["schemas"]["LabelOverrideManyRequest"];
             };
         };
         responses: {
@@ -7575,7 +7574,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RagTestEmbeddingRequest"];
+                "application/json": components["schemas"]["EmbeddingTestRequest"];
             };
         };
         responses: {
@@ -7608,7 +7607,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RagIngestRequest"];
+                "application/json": components["schemas"]["IngestRequest"];
             };
         };
         responses: {
@@ -7881,7 +7880,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AliasAdd"];
+                "application/json": components["schemas"]["AliasAddRequest"];
             };
         };
         responses: {
@@ -8065,3 +8064,42 @@ export interface operations {
         };
     };
 }
+type FlattenedDeepRequired<T> = {
+    [K in keyof T]-?: FlattenedDeepRequired<T[K] extends unknown[] | undefined | null ? Extract<T[K], unknown[]>[number] : T[K]>;
+};
+type ReadonlyArray<T> = [
+    Exclude<T, undefined>
+] extends [
+    unknown[]
+] ? Readonly<Exclude<T, undefined>> : Readonly<Exclude<T, undefined>[]>;
+export const backupSourceAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Backup"]["source"]> = ["live", "workbench"];
+export const backupOccasionAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Backup"]["occasion"]> = ["manual", "before-upload", "before-restore", "before-replace", "migration", "backup-all"];
+export const backupAllCharacterStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupAllCharacter"]["status"]> = ["fetching", "saved", "unchanged", "error"];
+export const backupNotSavedReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupNotSaved"]["reason"]> = ["unchanged", "no_live"];
+export const backupSavedSourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupSaved"]["source"]> = ["live", "workbench"];
+export const backupSavedOccasionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupSaved"]["occasion"]> = ["manual", "before-upload", "before-restore", "before-replace", "migration", "backup-all"];
+export const changeHintEventValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeHint"]["event"]> = ["set-payload-changed", "sets-changed", "live-changed", "labels-changed", "settings-changed", "index-changed", "images-changed", "backups-changed", "characters-changed"];
+export const eiconsStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Eicons"]["status"]> = ["loading", "ready", "error"];
+export const foreignSearchSourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ForeignSearch"]["source"]> = ["bookmarks", "friends", "logs", "name"];
+export const ingestJobStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["IngestJob"]["state"]> = ["pending", "running", "done", "cancelled", "failed"];
+export const jobStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Job"]["state"]> = ["pending", "running", "done", "cancelled", "failed"];
+export const jobFailureCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["JobFailureCode"]> = ["embedding_failed", "embedding_model_changed"];
+export const labelSetLabelAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["label"]> = ["IC", "OOC"];
+export const labelSetSourceAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["source"]> = ["mcp", "manual", "llm"];
+export const labelSetPrior_labelAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["prior_label"]> = ["IC", "OOC"];
+export const labelSetPrior_sourceAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["prior_source"]> = ["mcp", "manual", "llm"];
+export const labelledMessageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["kind"]> = ["ic", "ooc", "system"];
+export const labelledMessageLabelAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["label"]> = ["IC", "OOC", "Unlabeled"];
+export const labelledMessageLabel_sourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["label_source"]> = ["mcp", "manual", "llm"];
+export const labelledMessagePrior_labelValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["prior_label"]> = ["IC", "OOC"];
+export const labelledMessagePrior_sourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["prior_source"]> = ["mcp", "manual", "llm"];
+export const logSearchHitKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogSearchHit"]["kind"]> = ["ic", "ooc", "system"];
+export const mcpEndpointIdValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["McpEndpoint"]["id"]> = ["all", "character", "logs", "classify"];
+export const pairingHandshakeStatusStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PairingHandshakeStatus"]["status"]> = ["pending", "accepted", "rejected", "expired"];
+export const pullDonePull_statusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PullDone"]["pull_status"]> = ["never_pulled", "unknown", "interrupted", "partial", "complete"];
+export const pullStatusStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PullStatus"]["status"]> = ["never_pulled", "unknown", "interrupted", "partial", "complete"];
+export const refusalCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RefusalCode"]> = ["unauthorized", "forbidden_origin", "forbidden_host", "http_404", "http_405", "internal_error", "invalid_request", "refused", "invalid_file_name", "log_name_refused", "log_character_not_found", "partner_not_found", "log_dir_unavailable", "log_not_found", "backup_not_uploadable", "backup_too_old", "backup_holds_no_profile", "backup_not_found", "backup_unreadable", "backup_not_written", "not_trashed", "image_not_found", "no_avatar", "profile_not_cached", "job_not_found", "no_index", "resource_busy", "index_busy", "character_busy", "index_unreadable", "keyword_backfill_failed", "unsupported_type", "too_large", "not_paired", "validation_failed", "flist_error", "not_signed_in", "sign_in_failed", "not_found", "rate_limited", "flist_unreachable", "flist_server_error", "not_stoppable", "invalid_character_id", "character_not_found", "workbench_not_kept", "no_live", "no_workbench", "etag_required", "etag_mismatch", "invalid_workbench_payload", "source_path_missing", "source_path_not_absolute", "no_import_folders", "source_not_found", "source_not_allowed", "source_in_app_data", "source_unreadable", "source_too_large", "not_an_image", "store_failed"];
+export const renderDeliveredMimeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RenderDelivered"]["mime"]> = ["image/png", "image/jpeg"];
+export const unlabeledFilledLabelValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UnlabeledFilled"]["label"]> = ["IC", "OOC"];
+export const uploadSourceBackupKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UploadSourceBackup"]["kind"]> = ["backup", "pre-restore"];
+export const workbenchAbsentReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkbenchAbsent"]["reason"]> = ["no_live", "not_created_yet"];

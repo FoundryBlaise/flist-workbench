@@ -7,9 +7,10 @@
  *  model's work.
  *
  *  Deliberately thin. An event is a hint — the store re-reads through
- *  the normal endpoints when one arrives. */
+ *  the normal endpoints when one arrives. The stream is read through
+ *  the request function (`api.changeEvents`), like every other route. */
 
-import type { Schema } from './api'
+import { api, type ChangeEventHandlers, type Schema } from './api'
 
 /** A change hint, as the sidecar's schema declares it (`ChangeHint`):
  *  which `event`, when (`at`), who made it (`origin`: `ui` for this
@@ -21,9 +22,9 @@ export type WorkbenchEvent = Schema<'ChangeHint'>
 
 export type EventHandler = (event: WorkbenchEvent) => void
 
-/** Every event the sidecar publishes (`services/events.py`). It names
- *  each frame, so a generic `message` listener never fires: an event
- *  missing here never reaches the window. */
+/** Every event the sidecar publishes (`services/events.py`). The
+ *  sidecar names each frame, so an event missing here never reaches
+ *  the window. */
 export const WORKBENCH_EVENT_NAMES = [
   'set-payload-changed',
   'sets-changed',
@@ -36,37 +37,44 @@ export const WORKBENCH_EVENT_NAMES = [
   'characters-changed'
 ] as const satisfies readonly WorkbenchEvent['event'][]
 
+/** How long the window waits before it opens the stream again after it
+ *  ended or failed: three seconds, as the browser's own event-stream
+ *  client does. */
+export const RECONNECT_MS = 3000
+
 /** Open the stream. Returns a function that closes it.
  *
- *  `EventSource` reconnects on its own after a network blip, which is
- *  the behaviour we want — the sidecar restarting mid-session should
- *  not leave the window permanently blind. */
+ *  When the stream ends, or cannot be opened (the sidecar restarting
+ *  mid-session, a network blip), it is opened again after
+ *  `reconnectMs`, so the window is never left permanently blind. */
 export function subscribeToWorkbenchEvents(
-  baseUrl: string,
-  onEvent: EventHandler
+  onEvent: EventHandler,
+  { reconnectMs = RECONNECT_MS }: { reconnectMs?: number } = {}
 ): () => void {
-  if (typeof EventSource === 'undefined') {
-    // jsdom in unit tests, and any host without the API.
-    return () => {}
+  const controller = new AbortController()
+  let retry: ReturnType<typeof setTimeout> | undefined
+
+  const handle = (hint: WorkbenchEvent) => {
+    if (!hint || typeof hint.event !== 'string') return
+    onEvent(hint)
   }
+  const handlers: ChangeEventHandlers = Object.fromEntries(
+    WORKBENCH_EVENT_NAMES.map((name) => [name, handle])
+  )
 
-  const source = new EventSource(`${baseUrl}/events`)
-
-  const handle = (raw: MessageEvent) => {
-    let parsed: WorkbenchEvent
+  const open = async () => {
     try {
-      parsed = JSON.parse(raw.data) as WorkbenchEvent
+      await api.changeEvents(handlers, { signal: controller.signal })
     } catch {
-      return
+      // Unreachable or refused: tried again below, as when it ends.
     }
-    if (!parsed || typeof parsed.event !== 'string') return
-    onEvent(parsed)
+    if (controller.signal.aborted) return
+    retry = setTimeout(() => void open(), reconnectMs)
   }
-
-  for (const name of WORKBENCH_EVENT_NAMES) source.addEventListener(name, handle)
+  void open()
 
   return () => {
-    for (const name of WORKBENCH_EVENT_NAMES) source.removeEventListener(name, handle)
-    source.close()
+    controller.abort()
+    clearTimeout(retry)
   }
 }

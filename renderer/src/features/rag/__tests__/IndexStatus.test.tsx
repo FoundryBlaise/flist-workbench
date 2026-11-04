@@ -6,10 +6,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { useStore } from '../../../state'
-import { api, RefusalError, type RagStatus } from '../../../lib/api'
+import { api, RefusalError } from '../../../lib/api'
+import type { IndexStatus as Status } from '../../../state/slices/settings'
 import { IndexStatus } from '../IndexStatus'
 
-const IDLE: RagStatus = {
+const IDLE: Status = {
   embed_model: 'some-model',
   embed_dimension: 4,
   last_ingest_at: 1_700_000_000,
@@ -18,7 +19,7 @@ const IDLE: RagStatus = {
   chunk_count: 0
 }
 
-const INGESTING: RagStatus = {
+const INGESTING: Status = {
   ...IDLE,
   busy: true,
   chunk_count: null,
@@ -38,7 +39,7 @@ const INGESTING: RagStatus = {
 }
 
 beforeEach(() => {
-  useStore.setState({ indexRevision: 0 } as never)
+  useStore.setState({ indexRevision: 0, indexStatus: null, indexStatusError: null })
 })
 
 afterEach(() => {

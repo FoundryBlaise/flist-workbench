@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { api, type FlistImageReferences } from '../../lib/api'
+import { api, errorDetail, type FlistImageReferences } from '../../lib/api'
 import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { selectWorkingSlot, useStore } from '../../state'
 import {
@@ -264,7 +264,7 @@ export function ImagesTab({
       try {
         await uploadImage(characterId, file)
       } catch (err) {
-        const raw = err instanceof Error ? err.message : String(err)
+        const raw = errorDetail(err)
         setUploadError(`"${file.name}" wasn't accepted: ${raw}`)
         break
       }
@@ -311,7 +311,7 @@ export function ImagesTab({
       await trashImages(characterId, ids)
       setSel(EMPTY_SELECTION)
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err)
+      const raw = errorDetail(err)
       setUploadError(`Couldn’t move to the Trash: ${raw}`)
     }
   }

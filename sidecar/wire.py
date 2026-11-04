@@ -131,14 +131,11 @@ class Job(WireModel):
 # generated (`Schema<'PullEvents'>['image']`).
 
 
-class StreamError(WireModel):
-    """A stream's `error` event, which ends it: the stage it stopped
-    at, then the one error shape `{code, message, details}`."""
+class StreamError(JobError):
+    """A stream's `error` event, which ends it: a job's error, and the
+    stage it stopped at."""
 
     stage: str
-    code: RefusalCode | JobFailureCode
-    message: str
-    details: dict[str, Any]
 
 
 class JobCancelled(WireModel):

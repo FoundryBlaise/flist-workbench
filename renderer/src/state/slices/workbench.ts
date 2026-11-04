@@ -440,7 +440,7 @@ function _scheduleFlush(characterId: string, fn: () => void): void {
 // A helper's set: it writes only Workbench fields, and reaches the other
 // slices through their actions. The undo module gets the same set
 // through its host (UndoHost in state/undo.ts).
-export type SlotSet = (fn: (s: State) => Partial<WorkbenchState>) => void
+export type WorkbenchSet = (fn: (s: State) => Partial<WorkbenchState>) => void
 
 /** The one commit point: the only code that puts a new payload into a
  *  character's Workbench slot (see state/commit.ts for the kinds), and
@@ -452,14 +452,15 @@ export type SlotSet = (fn: (s: State) => Partial<WorkbenchState>) => void
  *  goes with it change together. */
 function _commit(
   get: () => State,
-  set: SlotSet,
+  set: WorkbenchSet,
   characterId: string,
   commit: Commit,
   also?: (s: State) => Partial<WorkbenchState>
 ): void {
-  // Filled in by the update below; a callback assignment TypeScript
-  // would not see through a plain `let`.
-  const done: { event: CommitEvent | null; before: State | null; after: State | null } = {
+  // What the undo module records of this commit: the event, and the
+  // state the update found and made. Filled in by the update below; a
+  // callback assignment TypeScript would not see through a plain `let`.
+  const undoRecord: { event: CommitEvent | null; before: State | null; after: State | null } = {
     event: null,
     before: null,
     after: null
@@ -471,7 +472,7 @@ function _commit(
     const flistWorking = { ...s.flistWorking }
     if (next) flistWorking[characterId] = next
     else delete flistWorking[characterId]
-    done.event = {
+    undoRecord.event = {
       characterId,
       kind: commit.kind,
       label: commit.kind === 'view' ? null : commit.label,
@@ -479,11 +480,11 @@ function _commit(
       next: next?.payload ?? null
     }
     const patch = { ...also?.(s), flistWorking }
-    done.before = s
-    done.after = { ...s, ...patch }
+    undoRecord.before = s
+    undoRecord.after = { ...s, ...patch }
     return patch
   })
-  const { event, before, after } = done
+  const { event, before, after } = undoRecord
   if (!event || !before || !after) return
   recordCommit(commit, event, before, after)
   if (commit.kind === 'edit' || commit.kind === 'merged') {
@@ -495,7 +496,7 @@ function _commit(
 
 /** What the undo module may do to the Workbench: write its fields, commit
  *  through the one commit point, and put work ahead of the next save. */
-function _undoHost(get: () => State, set: SlotSet): UndoHost {
+function _undoHost(get: () => State, set: WorkbenchSet): UndoHost {
   return {
     get,
     set,
@@ -529,7 +530,7 @@ type ExternalChange = NonNullable<State['flistExternalChange'][string]>
  *  save goes over the stale etag, is refused, and reads again. */
 async function _takeExternalChange(
   get: () => State,
-  set: SlotSet,
+  set: WorkbenchSet,
   characterId: string,
   change: ExternalChange
 ): Promise<void> {
@@ -603,7 +604,7 @@ async function _takeExternalChange(
  *  update of each outcome. */
 function _mergeExternal(
   get: () => State,
-  set: SlotSet,
+  set: WorkbenchSet,
   characterId: string,
   their: TheirVersion,
   merged: (s: State) => Partial<WorkbenchState>,
@@ -630,7 +631,7 @@ function _mergeExternal(
  *  else is unsaved and goes over their etag. */
 function _commitMerge(
   get: () => State,
-  set: SlotSet,
+  set: WorkbenchSet,
   characterId: string,
   payload: WorkingPayload,
   { label, theirs, etag }: TheirVersion,
@@ -643,7 +644,7 @@ function _commitMerge(
 }
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
-function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<WorkbenchState>): void {
+function _dropAllWorkbenches(set: WorkbenchSet, also: (s: State) => Partial<WorkbenchState>): void {
   set((s) => ({ ...also(s), flistWorking: {} }))
   // Another account may sign in next: nothing of this one's to undo.
   resetUndoStacks()
@@ -669,7 +670,7 @@ function _cancelAllPendingTimers(): void {
 async function _flushWorkingNow(
   characterId: string,
   get: () => State,
-  set: SlotSet
+  set: WorkbenchSet
 ): Promise<void> {
   const slot = get().flistWorking[characterId]
   if (!slot || !slot.unsavedDirty) {
@@ -704,9 +705,7 @@ async function _flushWorkingNow(
       readError =
         err instanceof RefusalError && err.code === 'no_workbench'
           ? 'No Workbench yet — pull this character first.'
-          : err instanceof Error
-            ? err.message
-            : String(err)
+          : errorDetail(err)
     }
     if (!bench) {
       // Keep the edits in memory and say so, rather than pretending
@@ -816,7 +815,7 @@ async function _flushWorkingNow(
  *  onto the newer version, and its next save goes over that one. */
 function _noteSaveConflict(
   get: () => State,
-  set: SlotSet,
+  set: WorkbenchSet,
   characterId: string,
   sentEtag: string | null,
   currentEtag: string | null
@@ -919,7 +918,7 @@ function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot
  *  the Live view or browsed Backup it was made from, which ends. */
 function _showWorkbench(
   get: () => State,
-  set: SlotSet,
+  set: WorkbenchSet,
   characterId: string,
   commit: Commit & { kind: 'written' }
 ): void {
@@ -1341,7 +1340,7 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
       } catch (err) {
         // Nothing was replaced, so nothing changes here either; the
         // reason shows where a failed save does.
-        const reason = err instanceof Error ? err.message : String(err)
+        const reason = errorDetail(err)
         set((s) => {
           const now = s.flistWorking[characterId]
           if (!now) return {}

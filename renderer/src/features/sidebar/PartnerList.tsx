@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../state'
 import { formatBytes } from '../../lib/bytes'
 import { displayPartner } from '../../lib/partnerName'
-import { api, type PartnerEntry } from '../../lib/api'
+import { api, errorDetail, type PartnerEntry } from '../../lib/api'
 import { AliasLinkDialog } from './AliasLinkDialog'
 
 const SEARCH_THRESHOLD = 20
@@ -150,7 +150,7 @@ export function PartnerList() {
       await refreshAfterAliasChange([entry.name, ...entry.aliases])
     } catch (err) {
       window.alert(
-        `Couldn't unlink: ${err instanceof Error ? err.message : String(err)}`
+        `Couldn't unlink: ${errorDetail(err)}`
       )
     }
   }
@@ -180,7 +180,7 @@ export function PartnerList() {
     } catch (err) {
       console.error('[labels] partner clear failed', err)
       window.alert(
-        `Couldn't reset labels: ${err instanceof Error ? err.message : String(err)}`
+        `Couldn't reset labels: ${errorDetail(err)}`
       )
     }
   }

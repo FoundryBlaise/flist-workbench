@@ -16,12 +16,12 @@
 // (`UndoHost`): a `set` that writes Workbench fields only, and the
 // slice's commit point.
 
-import { api, type FlistTrashItem } from '../lib/api'
+import { api, errorDetail, type FlistTrashItem } from '../lib/api'
 import type { UndoAction } from '../lib/undoRedo'
 import type { State } from '../state'
 import type { Commit, CommitEvent, CommitLabel } from './commit'
 import { isDeepEqual, type WorkingPayload } from './flist'
-import type { SlotSet, WorkbenchState } from './slices/workbench'
+import type { WorkbenchSet, WorkbenchState } from './slices/workbench'
 import {
   endTyping,
   hiddenWorkbench,
@@ -39,7 +39,7 @@ export { endTyping, resetUndoStacks } from './undoStack'
 export interface UndoHost {
   get: () => State
   /** Writes Workbench fields only: the undo notes. */
-  set: SlotSet
+  set: WorkbenchSet
   /** The Workbench's one commit point. */
   commit: (
     characterId: string,
@@ -222,7 +222,7 @@ async function putBackFromTrash(
     }
     note(putBackNote(action, { putBack, leftInTrash, missing: gone }))
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e)
+    const why = errorDetail(e)
     note(
       `${stepName(action)} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`
     )

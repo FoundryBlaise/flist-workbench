@@ -7,8 +7,10 @@
 // reaches an open dialog through the store.
 //
 // Reads keep their answer, or why there is none, in the slice. Actions
-// a person starts from the dialog resolve to the error to show, null
-// when they worked; the dialog keeps its own busy and message state.
+// a person starts from the dialog resolve to an `ActionResult`: what
+// they answered, or why they did not work (the words to show and the
+// sidecar's refusal code). The dialog keeps its own busy and message
+// state.
 
 import {
   api,
@@ -17,6 +19,7 @@ import {
   type ForeignCacheUsage,
   type McpInfo
 } from '../../lib/api'
+import { attempt, attemptDone, type ActionResult } from '../actionResult'
 import type { SliceCreator } from './slice'
 
 /** The settings as the sidecar answers them. */
@@ -26,6 +29,12 @@ export type SettingsPatch = Parameters<typeof api.settingsUpdate>[0]
 /** Label coverage across every character. */
 export type LabelsRollup = Awaited<ReturnType<typeof api.labelsRollup>>
 export type EmbeddingTestResult = Awaited<ReturnType<typeof api.ragTestEmbedding>>
+/** Cleared Labels put back from the Trash. */
+export type LabelsPutBack = Awaited<ReturnType<typeof api.labelsTrashPutBack>>
+/** What the Index holds; while a job (an ingest, a wipe) holds it,
+ *  `busy` and that `job`, and `chunk_count` is null because the Index
+ *  can't be counted. */
+export type IndexStatus = Awaited<ReturnType<typeof api.ragStatus>>
 /** Whether the sidecar holds an accepted pairing token. Only the
  *  extension has the token; the sidecar tells the window whether one is
  *  stored, never the token itself (ADR 0002). 'unavailable': the
@@ -59,6 +68,10 @@ export type SettingsState = {
   foreignCacheUsage: ForeignCacheUsage | null
   /** Why the Foreign profile cache could not be read. */
   foreignCacheError: string | null
+  /** What the Index holds; null until read. */
+  indexStatus: IndexStatus | null
+  /** Why the Index status could not be read. */
+  indexStatusError: string | null
 }
 
 export type SettingsSlice = SettingsState & {
@@ -66,7 +79,7 @@ export type SettingsSlice = SettingsState & {
   settingsLoad: () => Promise<void>
   /** Save `patch`; the settings become what the sidecar answers. A new
    *  F-Chat data directory reads the Log characters again. */
-  settingsSave: (patch: SettingsPatch) => Promise<string | null>
+  settingsSave: (patch: SettingsPatch) => Promise<ActionResult<Settings>>
   /** Something outside this window changed settings (the
    *  `settings-changed` event); `fields` names them, as the sidecar's
    *  settings service does (`labels.threshold_chars`, `rag.top_k`).
@@ -75,41 +88,46 @@ export type SettingsSlice = SettingsState & {
 
   mcpLoadInfo: () => Promise<void>
   /** Require a token for MCP clients: issue one, replacing any. */
-  mcpCreateToken: () => Promise<string | null>
+  mcpCreateToken: () => Promise<ActionResult>
   /** Turn the token requirement back off. */
-  mcpRevokeToken: () => Promise<string | null>
+  mcpRevokeToken: () => Promise<ActionResult>
   /** Let MCP clients read Log text, or not. Saved at once; the
    *  endpoints' tool counts change with it, so they are read again. */
-  mcpSetLogText: (on: boolean) => Promise<string | null>
+  mcpSetLogText: (on: boolean) => Promise<ActionResult>
 
   extensionLoadPairing: () => Promise<void>
   /** Revoke the pairing token; the extension has to pair again. */
-  extensionRevokePairing: () => Promise<string | null>
+  extensionRevokePairing: () => Promise<ActionResult>
   extensionLoadRunningVersion: () => Promise<void>
 
   labelsLoadRollup: () => Promise<void>
   labelsLoadTrash: () => Promise<void>
   /** Reset every Label of every character. A copy of each character's
    *  Labels goes to the Trash. */
-  labelsClearAll: () => Promise<string | null>
+  labelsClearAll: () => Promise<ActionResult>
   /** Put cleared Labels back from the Trash. */
-  labelsTrashPutBack: (ids: string[]) => ReturnType<typeof api.labelsTrashPutBack>
+  labelsTrashPutBack: (ids: string[]) => Promise<ActionResult<LabelsPutBack>>
   /** Delete cleared Labels in the Trash for good. */
-  labelsTrashPurge: (ids: string[]) => ReturnType<typeof api.labelsTrashPurge>
+  labelsTrashPurge: (ids: string[]) => Promise<ActionResult>
 
-  /** Embed a test sentence with `model`; a failure is a result too. */
-  indexTestEmbedding: (model: string) => Promise<EmbeddingTestResult>
+  /** Read what the Index holds. Read again when the Index changes
+   *  (`indexRevision`), whoever changed it. */
+  indexLoadStatus: () => Promise<void>
+  /** Embed a test sentence with `model`. A model that could not embed
+   *  is the sidecar's answer too (`ok: false` in the value). */
+  indexTestEmbedding: (model: string) => Promise<ActionResult<EmbeddingTestResult>>
   /** Delete every embedded chunk of the Index. Labels and Logs stay. */
-  indexWipe: () => Promise<string | null>
-  /** Rebuild the Index's keyword search from the chunks it holds. */
-  indexRebuildLexical: () => Promise<{ indexed: number } | { error: string }>
+  indexWipe: () => Promise<ActionResult>
+  /** Rebuild the Index's keyword search from the chunks it holds;
+   *  answers how many chunks it indexed. */
+  indexRebuildLexical: () => Promise<ActionResult<number>>
 
   foreignCacheLoad: () => Promise<void>
   /** Save the cache's cap; a lower one evicts at once, so the cache is
    *  read again. */
-  foreignCacheSetCap: (megabytes: number) => Promise<string | null>
+  foreignCacheSetCap: (megabytes: number) => Promise<ActionResult>
   /** Delete every cached Foreign profile, images included. */
-  foreignCacheClear: () => Promise<string | null>
+  foreignCacheClear: () => Promise<ActionResult>
 }
 
 /** The Settings state as the window starts. Tests reset the slice with
@@ -129,23 +147,15 @@ export function settingsInitialState(): SettingsState {
     labelsTrash: [],
     labelsTrashError: null,
     foreignCacheUsage: null,
-    foreignCacheError: null
+    foreignCacheError: null,
+    indexStatus: null,
+    indexStatusError: null
   }
 }
 
 // Bumped by every read and save of the settings: a read answered after
 // a newer read or save started would put older settings back.
 let settingsGeneration = 0
-
-// Run a sidecar call a person started; resolve to the error to show.
-async function attempt(call: () => Promise<unknown>): Promise<string | null> {
-  try {
-    await call()
-    return null
-  } catch (err) {
-    return errorDetail(err)
-  }
-}
 
 export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   ...settingsInitialState(),
@@ -165,15 +175,12 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
 
   async settingsSave(patch) {
     ++settingsGeneration
-    try {
-      const settings = await api.settingsUpdate(patch)
-      set({ settings, settingsStatus: 'ready', settingsError: null })
-    } catch (err) {
-      return errorDetail(err)
-    }
+    const saved = await attempt(() => api.settingsUpdate(patch))
+    if (!saved.ok) return saved
+    set({ settings: saved.value, settingsStatus: 'ready', settingsError: null })
     // Refresh the sidebar so the new directory's characters appear.
     if ('fchat_data_dir' in patch) await get().loadCharacters()
-    return null
+    return saved
   },
 
   noteSettingsChanged(fields) {
@@ -197,21 +204,22 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   },
 
   async mcpCreateToken() {
-    const error = await attempt(() => api.mcpCreateToken())
-    if (!error) await get().mcpLoadInfo()
-    return error
+    const result = await attemptDone(() => api.mcpCreateToken())
+    if (result.ok) await get().mcpLoadInfo()
+    return result
   },
 
   async mcpRevokeToken() {
-    const error = await attempt(() => api.mcpRevokeToken())
-    if (!error) await get().mcpLoadInfo()
-    return error
+    const result = await attemptDone(() => api.mcpRevokeToken())
+    if (result.ok) await get().mcpLoadInfo()
+    return result
   },
 
   async mcpSetLogText(on) {
-    const error = await get().settingsSave({ mcp: { log_text: on } })
-    if (!error) await get().mcpLoadInfo()
-    return error
+    const saved = await get().settingsSave({ mcp: { log_text: on } })
+    if (!saved.ok) return saved
+    await get().mcpLoadInfo()
+    return { ok: true, value: null }
   },
 
   async extensionLoadPairing() {
@@ -225,9 +233,9 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   },
 
   async extensionRevokePairing() {
-    const error = await attempt(() => api.restoreRevokeToken())
-    if (!error) await get().extensionLoadPairing()
-    return error
+    const result = await attemptDone(() => api.restoreRevokeToken())
+    if (result.ok) await get().extensionLoadPairing()
+    return result
   },
 
   async extensionLoadRunningVersion() {
@@ -256,41 +264,40 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   },
 
   async labelsClearAll() {
-    const error = await attempt(() => api.labelsClearAll())
-    if (!error) {
+    const result = await attemptDone(() => api.labelsClearAll())
+    if (result.ok) {
       void get().labelsLoadRollup()
       void get().labelsLoadTrash()
     }
-    return error
+    return result
   },
 
   labelsTrashPutBack(ids) {
-    return api.labelsTrashPutBack(ids)
+    return attempt(() => api.labelsTrashPutBack(ids))
   },
 
   labelsTrashPurge(ids) {
-    return api.labelsTrashPurge(ids)
+    return attemptDone(() => api.labelsTrashPurge(ids))
   },
 
-  async indexTestEmbedding(model) {
+  async indexLoadStatus() {
     try {
-      return await api.ragTestEmbedding({ embed_model: model })
+      set({ indexStatus: await api.ragStatus(), indexStatusError: null })
     } catch (err) {
-      return { ok: false, elapsed_ms: 0, dimension: null, model, error: errorDetail(err) }
+      set({ indexStatusError: errorDetail(err) })
     }
+  },
+
+  indexTestEmbedding(model) {
+    return attempt(() => api.ragTestEmbedding({ embed_model: model }))
   },
 
   indexWipe() {
-    return attempt(() => api.ragWipe())
+    return attemptDone(() => api.ragWipe())
   },
 
-  async indexRebuildLexical() {
-    try {
-      const { indexed } = await api.ragLexicalRebuild()
-      return { indexed }
-    } catch (err) {
-      return { error: errorDetail(err) }
-    }
+  indexRebuildLexical() {
+    return attempt(async () => (await api.ragLexicalRebuild()).indexed)
   },
 
   async foreignCacheLoad() {
@@ -302,19 +309,18 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   },
 
   async foreignCacheSetCap(megabytes) {
-    const error = await get().settingsSave({ foreign: { cache_cap_mb: megabytes } })
+    const saved = await get().settingsSave({ foreign: { cache_cap_mb: megabytes } })
+    if (!saved.ok) return saved
     // A lower cap has evicted profiles already: read what is left.
-    if (!error) await get().foreignCacheLoad()
-    return error
+    await get().foreignCacheLoad()
+    return { ok: true, value: null }
   },
 
   async foreignCacheClear() {
-    try {
-      const { bytes, profiles, cap_bytes } = await api.foreignCacheClear()
-      set({ foreignCacheUsage: { bytes, profiles, cap_bytes }, foreignCacheError: null })
-      return null
-    } catch (err) {
-      return errorDetail(err)
-    }
+    const cleared = await attempt(() => api.foreignCacheClear())
+    if (!cleared.ok) return cleared
+    const { bytes, profiles, cap_bytes } = cleared.value
+    set({ foreignCacheUsage: { bytes, profiles, cap_bytes }, foreignCacheError: null })
+    return { ok: true, value: null }
   }
 })

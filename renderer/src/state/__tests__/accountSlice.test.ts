@@ -112,7 +112,7 @@ describe('signing in', () => {
     expect(s.flistRoster.map((r) => r.name)).toEqual(['Quill'])
     expect(s.flistRosterStatus).toBe('ready')
     expect(s.flistSignInOpen).toBe(false)
-    expect(s.flistSignInStatus).toBe('idle')
+    expect(s.flistSignInAttempt).toEqual({ status: 'idle' })
   })
 
   it('a refused sign-in keeps the dialog open with the sidecar’s words', async () => {
@@ -125,9 +125,10 @@ describe('signing in', () => {
     await useStore.getState().flistSignIn('Quill Account', 'wrong')
 
     const s = useStore.getState()
-    expect(s.flistSignInStatus).toBe('error')
-    expect(s.flistSignInError).toBe('Invalid account name or password')
-    expect(s.flistSignInErrorCode).toBe('sign_in_failed')
+    expect(s.flistSignInAttempt).toEqual({
+      status: 'error',
+      error: { message: 'Invalid account name or password', code: 'sign_in_failed' }
+    })
     expect(s.flistSignInOpen).toBe(true)
     expect(s.flistSession.active).toBe(false)
     expect(fake.requestsTo(ROSTER)).toEqual([])

@@ -178,8 +178,13 @@ class PutBackImage(WireModel):
     from_: str = Field(alias="from")
 
 
+# Taking something out of the Trash is putting it back (GLOSSARY: not a
+# Restore). The answers' `restored` key is the wire and stays as the
+# window reads it; the models' own field names say put back.
+
+
 class ImagesPutBack(WireModel):
-    restored: list[PutBackImage]
+    put_back: list[PutBackImage] = Field(alias="restored")
     not_found: list[str]
     #: Trash ids left in the Trash: the Pool holds other bytes under
     #: every name they could come back as.
@@ -188,7 +193,7 @@ class ImagesPutBack(WireModel):
 
 class BackupsPutBack(WireModel):
     #: The Backups' file names in the Backup list.
-    restored: list[str]
+    put_back: list[str] = Field(alias="restored")
     not_found: list[str]
     conflicts: list[str]
 
@@ -198,12 +203,13 @@ class PutBackLabels(WireModel):
     since keeps its newer Label; its hash is under `skipped`."""
 
     id: str
-    restored: int
+    #: How many Labels came back.
+    put_back: int = Field(alias="restored")
     skipped: list[str]
 
 
 class LabelsPutBack(WireModel):
-    restored: list[PutBackLabels]
+    put_back: list[PutBackLabels] = Field(alias="restored")
     not_found: list[str]
 
 
@@ -322,7 +328,7 @@ def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> ImageTrashed:
     """Delete one image: off the Workbench's gallery if it is there,
-    and into the character's Trash, where it can be restored until the
+    and into the character's Trash, where it can be put back until the
     Trash is emptied. The same as the batch route below."""
     result = image_trash_service.delete_images(character_id, [image_id])
     if not result["trashed"]:
@@ -330,12 +336,12 @@ def flist_character_image_remove(
     return ImageTrashed(trashed=True, image_id=image_id)
 
 
-class _ImageIdsBody(BaseModel):
+class ImageIdsRequest(BaseModel):
     image_ids: list[str]
 
 
 @router.post("/flist/character/{character_id}/images/trash")
-def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> ImagesDeleted:
+def flist_character_images_trash(character_id: str, body: ImageIdsRequest) -> ImagesDeleted:
     """Delete images, whether in the gallery or only in the Pool: the
     window's delete, and the same function MCP's `trash_images` calls.
     A gallery image is taken off the Workbench's gallery first; the
@@ -382,18 +388,18 @@ def flist_character_trash_file(character_id: str, filename: str) -> FileResponse
 
 
 @router.post("/flist/character/{character_id}/trash/put-back")
-def flist_character_trash_put_back(character_id: str, body: _ImageIdsBody) -> ImagesPutBack:
+def flist_character_trash_put_back(character_id: str, body: ImageIdsRequest) -> ImagesPutBack:
     """Put trashed files back into the Pool (not onto the profile)."""
     return ImagesPutBack.model_validate(image_trash_service.restore_images(character_id, body.image_ids))
 
 
-class _TrashIdsBody(BaseModel):
+class TrashIdsRequest(BaseModel):
     ids: list[str]
 
 
 @router.post("/flist/character/{character_id}/trash/backups/put-back")
 def flist_character_trash_backups_put_back(
-    character_id: str, body: _TrashIdsBody
+    character_id: str, body: TrashIdsRequest
 ) -> BackupsPutBack:
     """Put trashed Backups back in the Backup list, under their names."""
     return BackupsPutBack.model_validate(backup_trash_service.restore_backups(character_id, body.ids))
@@ -412,7 +418,7 @@ def _trash_owner(character_id: str) -> str:
 
 @router.post("/flist/character/{character_id}/trash/labels/put-back")
 def flist_character_trash_labels_put_back(
-    character_id: str, body: _TrashIdsBody
+    character_id: str, body: TrashIdsRequest
 ) -> LabelsPutBack:
     """Put cleared Labels back. A message labelled again since keeps
     its newer Label and is reported under `skipped`."""
@@ -423,20 +429,20 @@ def flist_character_trash_labels_put_back(
 # it, so a model can never make a picture, a Backup or cleared Labels
 # unrecoverable.
 @router.post("/flist/character/{character_id}/trash/purge")
-def flist_character_trash_purge(character_id: str, body: _ImageIdsBody) -> TrashPurged:
+def flist_character_trash_purge(character_id: str, body: ImageIdsRequest) -> TrashPurged:
     return TrashPurged.model_validate(image_trash_service.purge_images(character_id, body.image_ids))
 
 
 @router.post("/flist/character/{character_id}/trash/backups/purge")
 def flist_character_trash_backups_purge(
-    character_id: str, body: _TrashIdsBody
+    character_id: str, body: TrashIdsRequest
 ) -> TrashPurged:
     return TrashPurged.model_validate(backup_trash_service.purge_backups(character_id, body.ids))
 
 
 @router.post("/flist/character/{character_id}/trash/labels/purge")
 def flist_character_trash_labels_purge(
-    character_id: str, body: _TrashIdsBody
+    character_id: str, body: TrashIdsRequest
 ) -> TrashPurged:
     return TrashPurged.model_validate(label_trash_service.purge(_trash_owner(character_id), body.ids))
 
@@ -475,7 +481,7 @@ def labels_trash_list() -> LabelsTrash:
 
 
 @router.post("/labels/trash/put-back")
-def labels_trash_put_back(body: _TrashIdsBody) -> LabelsPutBack:
+def labels_trash_put_back(body: TrashIdsRequest) -> LabelsPutBack:
     """Put cleared Labels back, whichever character they were cleared
     for. A message labelled again since keeps its newer Label and is
     reported under `skipped`."""
@@ -483,7 +489,7 @@ def labels_trash_put_back(body: _TrashIdsBody) -> LabelsPutBack:
 
 
 @router.post("/labels/trash/purge")
-def labels_trash_purge(body: _TrashIdsBody) -> TrashPurged:
+def labels_trash_purge(body: TrashIdsRequest) -> TrashPurged:
     """Delete cleared Labels for good. The window's call only: MCP has
     no tool for it."""
     return TrashPurged.model_validate(label_trash_service.purge(None, body.ids))
