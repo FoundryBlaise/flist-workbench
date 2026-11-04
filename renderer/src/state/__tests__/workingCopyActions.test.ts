@@ -8,7 +8,7 @@
 // below are staged: a save stays open until the test releases it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, selectEditorTitle, useStore } from '../../state'
 import { installFakeApi, json, networkError, type FakeApi } from '../../test/fakeApi'
 import {
   archiveEntry,
@@ -31,10 +31,7 @@ beforeEach(() => {
     flistArchive: {},
     flistCustomKinksUI: {},
     flistActiveCharacterId: null,
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false,
-    editorTitle: ''
+    editorReadOnly: false
   })
 })
 
@@ -577,7 +574,7 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
     expect(slot.unsavedDirty).toBe(false)
     expect(slot.materialised).toBe(true)
     expect(slot.overlay).toEqual([])
-    expect(useStore.getState().editorContent).toBe('live')
+    expect(selectEditorDescription(useStore.getState())).toBe('live')
   })
 
   it('drains a save still in flight before asking for the reset', async () => {
@@ -600,7 +597,7 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
     expect(fake.requestsTo(RESET)).toHaveLength(1)
     expect(fake.requestsTo(SAVE)).toHaveLength(1)
     expect(useStore.getState().flistWorking['99'].etag).toBe('after-reset')
-    expect(useStore.getState().editorContent).toBe('live')
+    expect(selectEditorDescription(useStore.getState())).toBe('live')
   })
 
   it('typed text that cannot be saved stops the reset: no Backup would hold it', async () => {
@@ -652,7 +649,6 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
       character: { description: 'edited' },
       _overlay: ['character.description']
     })
-    useStore.setState({ editorContent: 'edited' })
     fake.on(
       RESET,
       json(
@@ -672,7 +668,7 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
     expect(descOf(slot.payload)).toBe('edited')
     expect(slot.etag).toBe('seed-etag')
     expect(slot.saveError).toContain('not replaced')
-    expect(useStore.getState().editorContent).toBe('edited')
+    expect(selectEditorDescription(useStore.getState())).toBe('edited')
     expect(fake.requestsTo(SAVE)).toHaveLength(0)
   })
 
@@ -814,7 +810,7 @@ describe('reopening a character must not discard what was typed', () => {
     const puts = fake.requestsTo(SAVE)
     expect(puts.length).toBe(1)
     expect(descOf(puts[0].body)).toBe('typed just now')
-    expect(useStore.getState().editorContent).toBe('typed just now')
+    expect(selectEditorDescription(useStore.getState())).toBe('typed just now')
   })
 })
 
@@ -850,7 +846,7 @@ describe('coming back to a character shows the Workbench, not Live', () => {
 
     await useStore.getState().flistOpenWorking('99')
 
-    expect(useStore.getState().editorContent).toBe('what I typed earlier')
+    expect(selectEditorDescription(useStore.getState())).toBe('what I typed earlier')
     const slot = useStore.getState().flistWorking['99']
     expect(descOf(slot.payload)).toBe('what I typed earlier')
   })
@@ -979,7 +975,7 @@ describe('opening a character never applies a stale read', () => {
 
     const s = useStore.getState()
     expect(s.flistActiveCharacterId).toBe(AMBER)
-    expect(s.editorContent).toBe(AMBER_TEXT)
+    expect(selectEditorDescription(s)).toBe(AMBER_TEXT)
     expect(descOf(s.flistWorking[AMBER].payload)).toBe(AMBER_TEXT)
     expect(descOf(s.flistWorking[BIRCH].payload)).toBe(BIRCH_TEXT)
     // The older of Amber's two reads is stale; the slot keeps the etag
@@ -1002,8 +998,7 @@ describe('opening a character never applies a stale read', () => {
     // Workbench. The user keeps typing while that read is slow.
     useStore.setState({
       flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
-      flistActiveCharacterId: AMBER,
-      editorContent: AMBER_TEXT
+      flistActiveCharacterId: AMBER
     })
     fake.hold(AMBER_READ)
 
@@ -1015,7 +1010,7 @@ describe('opening a character never applies a stale read', () => {
     fake.pending(AMBER_READ)[0].resolve(json(payloadRead(amberBench(), 'amber-1')))
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(selectEditorDescription(useStore.getState())).toBe(`${AMBER_TEXT} And wasps.`)
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
     expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
       `${AMBER_TEXT} And wasps.`
@@ -1027,8 +1022,7 @@ describe('opening a character never applies a stale read', () => {
     // read then brings back what was on disk before that save.
     useStore.setState({
       flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
-      flistActiveCharacterId: AMBER,
-      editorContent: AMBER_TEXT
+      flistActiveCharacterId: AMBER
     })
     fake.hold(AMBER_READ)
 
@@ -1043,7 +1037,7 @@ describe('opening a character never applies a stale read', () => {
     const slot = useStore.getState().flistWorking[AMBER]
     expect(descOf(slot.payload)).toBe(`${AMBER_TEXT} And wasps.`)
     expect(slot.etag).toBe('amber-saved')
-    expect(useStore.getState().editorContent).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(selectEditorDescription(useStore.getState())).toBe(`${AMBER_TEXT} And wasps.`)
   })
 
   it('a read landing after the user switched away leaves the active editor untouched', async () => {
@@ -1054,15 +1048,15 @@ describe('opening a character never applies a stale read', () => {
     await vi.advanceTimersByTimeAsync(0)
     useStore.getState().selectCharacter('Amber')
     await vi.advanceTimersByTimeAsync(0)
-    expect(useStore.getState().editorContent).toBe(AMBER_TEXT)
+    expect(selectEditorDescription(useStore.getState())).toBe(AMBER_TEXT)
     useStore.getState().setEditorContent(`${AMBER_TEXT} And wasps.`)
 
     fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
     await vi.advanceTimersByTimeAsync(0)
 
     const s = useStore.getState()
-    expect(s.editorContent).toBe(`${AMBER_TEXT} And wasps.`)
-    expect(s.editorTitle).toBe('Amber — Workbench')
+    expect(selectEditorDescription(s)).toBe(`${AMBER_TEXT} And wasps.`)
+    expect(selectEditorTitle(s)).toBe('Amber — Workbench')
     expect(descOf(s.flistWorking[BIRCH].payload)).toBe(BIRCH_TEXT)
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
     expect(fake.requestsTo(AMBER_SAVE).map((r) => descOf(r.body))).toEqual([
@@ -1081,19 +1075,18 @@ describe('opening a character never applies a stale read', () => {
         [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }),
         [BIRCH]: workingSlot(birchBench(), { etag: 'birch-1' })
       },
-      flistActiveCharacterId: AMBER,
-      editorContent: AMBER_TEXT
+      flistActiveCharacterId: AMBER
     })
     fake.hold(BIRCH_READ)
 
     useStore.getState().selectCharacter('Birch')
     await vi.advanceTimersByTimeAsync(0)
-    expect(useStore.getState().editorContent).toBe(BIRCH_TEXT)
+    expect(selectEditorDescription(useStore.getState())).toBe(BIRCH_TEXT)
     useStore.getState().setEditorContent(`${BIRCH_TEXT} Twice.`)
     fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
 
-    expect(useStore.getState().editorContent).toBe(`${BIRCH_TEXT} Twice.`)
+    expect(selectEditorDescription(useStore.getState())).toBe(`${BIRCH_TEXT} Twice.`)
     expect(fake.requestsTo(BIRCH_SAVE).map((r) => descOf(r.body))).toEqual([
       `${BIRCH_TEXT} Twice.`
     ])
@@ -1106,9 +1099,7 @@ describe('opening a character never applies a stale read', () => {
     // Birch's name nor accept keystrokes the read would then overwrite.
     useStore.setState({
       flistWorking: { [AMBER]: workingSlot(amberBench(), { etag: 'amber-1' }) },
-      flistActiveCharacterId: AMBER,
-      editorContent: AMBER_TEXT,
-      editorTitle: 'Amber — Workbench'
+      flistActiveCharacterId: AMBER
     })
     fake.hold(BIRCH_READ)
 
@@ -1116,17 +1107,17 @@ describe('opening a character never applies a stale read', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     let s = useStore.getState()
-    expect(s.editorContent).toBe('')
+    expect(selectEditorDescription(s)).toBe('')
     expect(s.editorReadOnly).toBe(true)
-    expect(s.editorTitle).toBe('Birch — Workbench (loading)')
+    expect(selectEditorTitle(s)).toBe('Birch — Workbench (loading)')
 
     fake.pending(BIRCH_READ)[0].resolve(json(payloadRead(birchBench(), 'birch-1')))
     await vi.advanceTimersByTimeAsync(0)
 
     s = useStore.getState()
     expect(s.editorReadOnly).toBe(false)
-    expect(s.editorContent).toBe(BIRCH_TEXT)
-    expect(s.editorTitle).toBe('Birch — Workbench')
+    expect(selectEditorDescription(s)).toBe(BIRCH_TEXT)
+    expect(selectEditorTitle(s)).toBe('Birch — Workbench')
 
     useStore.getState().setEditorContent(`${BIRCH_TEXT} Twice.`)
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)

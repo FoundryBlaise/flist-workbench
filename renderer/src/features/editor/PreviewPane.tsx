@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStore } from '../../state'
+import { selectEditorDescription, selectEditorInlines, useStore } from '../../state'
 import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
 import { validateBbcode } from '../../lib/bbcode/validate'
 import { writeKeepingScroll } from './previewScroll'
@@ -25,12 +25,15 @@ const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
  *
  * 1. We manage innerHTML imperatively via a ref instead of
  *    dangerouslySetInnerHTML. Otherwise React would overwrite the DOM
- *    on every editorContent change and erase the user's caret.
+ *    on every description change and erase the user's caret.
  *
- * 2. When the preview owns focus we skip re-rendering it from
- *    editorContent — the user IS the source of truth at that moment.
- *    A blur or external content swap (e.g. Fetch profile) triggers a
+ * 2. When the preview owns focus we skip re-rendering it from the
+ *    description — the user IS the source of truth at that moment.
+ *    A blur or a change from outside (an undo, a reload) triggers a
  *    fresh render so the spans get their source offsets back.
+ *
+ * The description and its inline images are the active character's
+ * Workbench payload's (state/editorView.ts); typing here edits it.
  */
 // Capture which <details class="bb-collapse"> are currently open before
 // we throw away the DOM, and re-apply that state to the next render's
@@ -51,8 +54,8 @@ function applyOpenCollapses(root: HTMLElement, openStates: boolean[]): void {
 }
 
 export function PreviewPane() {
-  const content = useStore((s) => s.editorContent)
-  const inlines = useStore((s) => s.editorInlines)
+  const content = useStore(selectEditorDescription)
+  const inlines = useStore(selectEditorInlines)
   const setContent = useStore((s) => s.setEditorContent)
   const readOnly = useStore((s) => s.editorReadOnly)
   const endTyping = useStore((s) => s.flistEndTyping)
@@ -134,13 +137,13 @@ export function PreviewPane() {
     runUndoRedo(action, e.currentTarget)
     const el = ref.current
     if (!el) return
-    const next = useStore.getState().editorContent
+    const next = selectEditorDescription(useStore.getState())
     if (next === renderedFromRef.current) return
     const opens = captureOpenCollapses(el)
     writeKeepingScroll(el, () => {
       el.innerHTML = bbcodeToHtml(next, {
         withSourceMap: true,
-        inlines: useStore.getState().editorInlines
+        inlines: selectEditorInlines(useStore.getState())
       })
       applyOpenCollapses(el, opens)
     })
@@ -342,17 +345,18 @@ export function PreviewPane() {
             // source moved.
             if (!ref.current) return
             const s = useStore.getState()
-            if (renderedFromRef.current === s.editorContent) return
+            const description = selectEditorDescription(s)
+            if (renderedFromRef.current === description) return
             const opens = captureOpenCollapses(ref.current)
             const el = ref.current
             writeKeepingScroll(el, () => {
-              el.innerHTML = bbcodeToHtml(s.editorContent, {
+              el.innerHTML = bbcodeToHtml(description, {
                 withSourceMap: true,
-                inlines: s.editorInlines
+                inlines: selectEditorInlines(s)
               })
               applyOpenCollapses(el, opens)
             })
-            renderedFromRef.current = s.editorContent
+            renderedFromRef.current = description
           }}
         />
       )}

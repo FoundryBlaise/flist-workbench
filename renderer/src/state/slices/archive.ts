@@ -658,9 +658,9 @@ function _restoreFromBrowse(
 ): void {
   const { characterId, previousViewingLive } = browse
   getter().flistEndBrowse()
-  // Back to the row the user was on. Both overwrite editorReadOnly,
-  // editorContent, editorInlines and the working slot, so there is
-  // nothing to undo here.
+  // Back to the row the user was on. Both overwrite editorReadOnly and
+  // the working slot (which the editor shows), so there is nothing to
+  // undo here.
   if (previousViewingLive) {
     void getter().flistShowLive(characterId)
   } else {

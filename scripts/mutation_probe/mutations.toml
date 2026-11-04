@@ -789,12 +789,18 @@ audit = "survived"
 spec = 7
 # audit: M06 reload-after-external-change leaves editor showing stale text
 # Since #109 the reload is a written commit, and the editor reads the
-# reloaded description back from the payload in _editorFollows.
+# reloaded description back from the payload (_editorFollows until #126).
 # Re-anchored for spec #8 (#124): moved into the Workbench slice.
+# Re-anchored for spec #8 (#126): the editor keeps no copy of the
+# description and reads it from the slot (state/editorView.ts), so the
+# stale editor is now a reload that adopts their etag but keeps the old
+# payload.
 find = '''
-return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }'''
+    { kind: 'written', label, payload, etag: res.etag, lastSavedAt: Date.now() },
+    settled'''
 replace = '''
-return commit.keepPending ? { editorContent } : { editorDirty: false }'''
+    { kind: 'written', label, payload: slot.payload, etag: res.etag, lastSavedAt: Date.now() },
+    settled'''
 
 [[mutation]]
 id = "R07"
