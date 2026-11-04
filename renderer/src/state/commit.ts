@@ -18,7 +18,8 @@
 //
 // The undo stack (state/undoStack.ts) hangs off this point: every edit
 // and written commit records the payload it replaced, with its label;
-// a view never does, nor does an undo or redo step itself.
+// a view never does, nor does an undo or redo step itself. Keystrokes
+// (an edit with `typing`) record only the first of a burst.
 
 import { emptyWorkingSlot, type FlistWorkingSlot, type WorkingPayload } from './flist'
 
@@ -59,6 +60,10 @@ export type Commit =
       /** An undo or redo step: the undo stack has already moved, so
        *  this commit is not recorded as a new change. */
       undoStep?: boolean
+      /** A keystroke, naming the text field typed in (its payload
+       *  path): keystrokes in one field without a pause between them
+       *  are one undo entry. */
+      typing?: string
     }
   | {
       kind: 'written'

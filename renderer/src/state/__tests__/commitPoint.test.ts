@@ -41,7 +41,6 @@ beforeEach(() => {
     flistArchive: {},
     flistViewingLive: {},
     flistCustomKinksUI: {},
-    flistResetUndo: null,
     flistBrowseBackup: null,
     flistActiveCharacterId: null,
     editorReadOnly: false,
@@ -139,15 +138,16 @@ describe('what the sidecar wrote is one commit with its label, clean and over it
 
   it("a reload after a model's change, named after the tool", async () => {
     seed({ character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange(CID, {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
     fake.on(
       `GET ${BENCH_URL}`,
       json(payloadRead(workbenchPayload({ character: { description: 'theirs' } }), 'theirs'))
     )
-    await useStore.getState().flistReloadAfterExternalChange(CID)
+    // Nothing unsaved: the store takes the model's change in by itself.
+    useStore.getState().flistNoteExternalChange(CID, {
+      etag: 'theirs',
+      origin: 'mcp:set_description'
+    })
+    await vi.advanceTimersByTimeAsync(0)
     expect(commits.map((c) => [c.kind, c.label])).toEqual([['written', 'mcp:set_description']])
     expect(useStore.getState().flistWorking[CID].etag).toBe('theirs')
     expect(useStore.getState().editorContent).toBe('theirs')

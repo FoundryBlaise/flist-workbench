@@ -28,8 +28,7 @@ beforeEach(() => {
   fake = installFakeApi()
   useStore.setState({
     flistWorking: {},
-    flistCustomKinksUI: {},
-    flistResetUndo: null
+    flistCustomKinksUI: {}
   })
 })
 

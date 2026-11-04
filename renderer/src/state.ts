@@ -39,6 +39,7 @@ import {
   type CommitLabel
 } from './state/commit'
 import {
+  endTyping,
   hiddenWorkbench,
   hideWorkbench,
   recordChange,
@@ -368,23 +369,6 @@ type State = {
    *  working copy is showing on a path the user has NOT edited. Keyed
    *  by character id so per-character switches keep their own banner. */
   flistDriftBanners: Record<string, { paths: string[]; dismissedAt: number | null }>
-  /** 5-second undo banner shown after "Reset to Live" or per-row reset.
-   *  Stores the pre-delete snapshot for the Undo affordance. */
-  flistResetUndo: {
-    characterId: string
-    snapshot: FlistWorkingSlot
-    expiresAt: number
-    /** The etag the reset leaves on the Workbench: the one its write
-     *  goes over until that write lands, the one it returned after.
-     *  Undo writes over this etag and no other, so a change anything
-     *  else made since the reset is never silently reverted. */
-    etag: string | null
-    /** True until the reset's own write has landed. */
-    awaitingWrite: boolean
-    /** The Workbench changed since the reset; undo waits for the user
-     *  to choose between reverting that change and keeping it. */
-    conflict: boolean
-  } | null
   /** Tier 4 — per-character right-hand source for the Diff tab.
    *  Ephemeral (no disk persistence — default = Live each session). */
   flistDiffRightSource: Record<
@@ -582,9 +566,12 @@ type State = {
     characterId: string,
     imageId: string
   ) => void
+  /** `typing` names the caption typed in (`images.<id>.description`):
+   *  keystrokes in it without a pause are one undo entry. */
   flistSetGalleryImages: (
     characterId: string,
-    images: { image_id: string; description: string; sort_order: number }[]
+    images: { image_id: string; description: string; sort_order: number }[],
+    opts?: { typing?: string }
   ) => void
   flistOpenLive: (characterId: string) => Promise<void>
   /** Load the editor with this character's working copy.
@@ -651,7 +638,17 @@ type State = {
   ) => Promise<void>
 
   // ---- Tier 2 working-copy actions ----
-  flistSetWorkingField: (characterId: string, path: string, value: unknown) => void
+  /** `typing`: the value is a keystroke in that field's text, and
+   *  keystrokes in one field without a pause are one undo entry. */
+  flistSetWorkingField: (
+    characterId: string,
+    path: string,
+    value: unknown,
+    opts?: { typing?: boolean }
+  ) => void
+  /** The text field being typed in lost focus: the next keystroke
+   *  starts a new undo entry, however soon it comes. */
+  flistEndTyping: (characterId: string) => void
   flistResetWorkingField: (characterId: string, path: string) => void
   /** Restore a single image row in working.json's gallery to match Live —
    *  add/remove/update the entry for `imageId` so working aligns with
@@ -671,12 +668,6 @@ type State = {
    *  autosave's debounce and any save already on its way. */
   flistFlushAllWorking: () => Promise<void>
   flistResetWorkingToLive: (characterId: string) => Promise<void>
-  /** Puts back the Workbench the reset replaced. If the Workbench
-   *  changed since the reset, nothing is written and the undo is marked
-   *  `conflict` so the user can choose; `overwrite` is that choice. */
-  flistUndoResetWorking: (opts?: { overwrite?: boolean }) => Promise<void>
-  /** Drops the pending undo and keeps the Workbench as it is now. */
-  flistDismissResetUndo: () => void
   flistDismissDriftBanner: (characterId: string) => void
   // ---- mapping list ----
   flistLoadMapping: (opts?: { force?: boolean }) => Promise<void>
@@ -782,12 +773,6 @@ type State = {
 function partnerKey(char: string, partner: string): string {
   return `${char}::${partner}`
 }
-
-// Reset-undo banner lives 5 seconds. Stored in module scope so the
-// timer can be cleared on user dismiss or character switch without
-// growing the store with timer ids.
-const _resetUndoTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const RESET_UNDO_MS = 5_000
 
 // Per-character autosave debouncers (Tier 2 §1.5 — 500 ms quiet time).
 // Keyed by character id so per-character switches don't race.
@@ -944,11 +929,19 @@ function _commit(
   })
   const event = done.event
   if (!event) return
-  // Under a view the slot holds Live or a Backup, not the Workbench: a
-  // change made from there replaced the Workbench the view hides.
-  const replaced = done.covered ? hiddenWorkbench(characterId) : event.previous
-  if (commit.kind !== 'view' && replaced && !(commit.kind === 'edit' && commit.undoStep)) {
-    recordChange(characterId, commit.label, replaced)
+  if (commit.kind === 'view') endTyping(characterId)
+  else {
+    // Under a view the slot holds Live or a Backup, not the Workbench: a
+    // change made from there replaced the Workbench the view hides.
+    const replaced = done.covered ? hiddenWorkbench(characterId) : event.previous
+    if (replaced && !(commit.kind === 'edit' && commit.undoStep)) {
+      recordChange(
+        characterId,
+        commit.label,
+        replaced,
+        commit.kind === 'edit' ? commit.typing : undefined
+      )
+    }
   }
   if (!done.coveredAfter) unhideWorkbench(characterId)
   else if (!done.covered && event.previous) hideWorkbench(characterId, event.previous)
@@ -1190,8 +1183,6 @@ function _cancelFlush(characterId: string): void {
 function _cancelAllPendingTimers(): void {
   for (const [, t] of _autosaveTimers) clearTimeout(t)
   _autosaveTimers.clear()
-  for (const [, t] of _resetUndoTimers) clearTimeout(t)
-  _resetUndoTimers.clear()
 }
 
 // Tracks whether an account-wide sweep is in flight. Shared between
@@ -1331,18 +1322,7 @@ async function _flushWorkingNow(
         lastSavedAt: Date.now(),
         materialised: true
       }
-      // The first save over the etag a pending reset-undo holds is the
-      // reset's own write; undo goes over the etag it returned. Later
-      // saves are changes made after the reset, which undo must not
-      // revert unasked.
-      const undo = s.flistResetUndo
-      const resetWrite =
-        undo &&
-        undo.characterId === characterId &&
-        undo.awaitingWrite &&
-        undo.etag === slot.etag
       return {
-        ...(resetWrite ? { flistResetUndo: { ...undo, etag, awaitingWrite: false } } : {}),
         flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
         // The Workbench row's "last changed" follows the save.
         flistWorkbenchInfo: {
@@ -2195,7 +2175,6 @@ export const useStore = create<State>((set, get) => ({
     errorMessage: null
   },
   flistDriftBanners: {},
-  flistResetUndo: null,
   flistDiffRightSource: {},
   flistDiffBackupCache: {},
   flistDiffBackupStatus: {},
@@ -2488,7 +2467,6 @@ export const useStore = create<State>((set, get) => ({
       flistWorkbenchNote: null,
       flistUndoNotes: {},
       flistDriftBanners: {},
-      flistResetUndo: null,
       flistDiffRightSource: {},
       flistDiffBackupCache: {},
       flistDiffBackupStatus: {},
@@ -2864,7 +2842,7 @@ export const useStore = create<State>((set, get) => ({
     )
   },
 
-  flistSetGalleryImages(characterId, images) {
+  flistSetGalleryImages(characterId, images, opts) {
     // Every other mutation schedules the autosave; this one did not,
     // and it is the one behind "Add to profile", "Move to pool",
     // reordering and their undo. Moving three images onto a profile
@@ -2880,7 +2858,8 @@ export const useStore = create<State>((set, get) => ({
     _commit(get, set, characterId, {
       kind: 'edit',
       label: 'edit',
-      payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) }
+      payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) },
+      typing: opts?.typing
     })
   },
 
@@ -3000,11 +2979,20 @@ export const useStore = create<State>((set, get) => ({
     set(_workbenchInEditor(get(), characterId))
   },
 
-  flistSetWorkingField(characterId, path, value) {
+  flistSetWorkingField(characterId, path, value, opts) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
     const next = flistApplyEdit(slot, path, value)
-    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload: next.payload })
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: next.payload,
+      typing: opts?.typing ? path : undefined
+    })
+  },
+
+  flistEndTyping(characterId) {
+    endTyping(characterId)
   },
 
   flistResetImageRow(characterId, imageId) {
@@ -3141,9 +3129,7 @@ export const useStore = create<State>((set, get) => ({
     if (!(await _saveTypedEdits(get, characterId))) return
     const current = get().flistWorking[characterId] ?? slot
 
-    const expiresAt = Date.now() + RESET_UNDO_MS
     let fresh: Commit & { kind: 'written' }
-    let resetEtag: string | null = null
     let kept = false
     if (current.materialised) {
       try {
@@ -3155,7 +3141,6 @@ export const useStore = create<State>((set, get) => ({
           etag: res.etag,
           lastSavedAt: Date.now()
         }
-        resetEtag = res.etag
         kept = res.backed_up_first !== null
       } catch (err) {
         // Nothing was replaced, so nothing changes here either; the
@@ -3186,27 +3171,9 @@ export const useStore = create<State>((set, get) => ({
         materialised: false
       }
     }
-    // The commit puts the fresh description into the editor.
-    _commit(get, set, characterId, fresh, () => ({
-      flistResetUndo: {
-        characterId,
-        snapshot: current,
-        expiresAt,
-        etag: resetEtag,
-        awaitingWrite: false,
-        conflict: false
-      }
-    }))
-    const prev = _resetUndoTimers.get(characterId)
-    if (prev) clearTimeout(prev)
-    const t = setTimeout(() => {
-      _resetUndoTimers.delete(characterId)
-      const undo = get().flistResetUndo
-      if (undo && undo.characterId === characterId && undo.expiresAt <= Date.now()) {
-        set({ flistResetUndo: null })
-      }
-    }, RESET_UNDO_MS + 50)
-    _resetUndoTimers.set(characterId, t)
+    // The commit puts the fresh description into the editor; the
+    // replaced Workbench becomes the undo entry.
+    _commit(get, set, characterId, fresh)
     // The Backup the sidecar just kept belongs in the list.
     if (kept) void _refreshBackupList(characterId, set)
   },
@@ -3795,97 +3762,6 @@ export const useStore = create<State>((set, get) => ({
     })
     void get().flistLoadArchive(characterId)
     return true
-  },
-
-  async flistUndoResetWorking(opts) {
-    const pending = get().flistResetUndo
-    if (!pending) return
-    const { characterId, snapshot } = pending
-    const timer = _resetUndoTimers.get(characterId)
-    if (timer) {
-      clearTimeout(timer)
-      _resetUndoTimers.delete(characterId)
-    }
-    // Put the snapshot back into the bench the reset wrote, against the
-    // etag that write left. Wait for the reset's own save first, or the
-    // two PUTs would race.
-    _cancelFlush(characterId)
-    const inflight = _flushInflight.get(characterId)
-    if (inflight) await inflight.catch(() => {})
-    // Read the undo again after the drain: the reset's write may just
-    // have landed and recorded its etag, and a second click that
-    // finished first has already taken it.
-    const undo = get().flistResetUndo
-    if (!undo || undo.characterId !== characterId) return
-    const current = get().flistWorking[characterId]
-    if (current?.materialised) {
-      // Anything that moved the etag since the reset (a model, the
-      // window reloading a model's edit, an autosave of text typed
-      // after the reset) or edits still waiting to be saved are a
-      // change the undo would revert. Ask instead of writing.
-      const changed =
-        current.etag !== undo.etag || (current.unsavedDirty && !undo.awaitingWrite)
-      if (changed && !opts?.overwrite) {
-        set({ flistResetUndo: { ...undo, conflict: true } })
-        if (current.unsavedDirty) {
-          _scheduleFlush(characterId, () => {
-            void get().flistFlushWorking(characterId)
-          })
-        }
-        return
-      }
-      // An edit over the etag the slot holds: without a change since
-      // the reset this is undo.etag; after the user chose to overwrite,
-      // it is the etag the window holds now. A 409 means yet another
-      // write landed, and the flush raises the conflict banner instead
-      // of overwriting.
-      _commit(
-        get,
-        set,
-        characterId,
-        { kind: 'edit', label: 'edit', payload: snapshot.payload, clearSaveError: true },
-        () => ({ flistResetUndo: null })
-      )
-      await get().flistFlushWorking(characterId)
-    } else {
-      // The reset wrote nothing, so there is nothing on disk to undo:
-      // the slot goes back to what it was, nothing written for it.
-      _commit(
-        get,
-        set,
-        characterId,
-        {
-          kind: 'written',
-          label: 'edit',
-          payload: snapshot.payload,
-          etag: snapshot.etag,
-          materialised: snapshot.materialised,
-          lastSavedAt: snapshot.lastSavedAt
-        },
-        () => ({ flistResetUndo: null })
-      )
-    }
-    // The commit put the restored description into the editor; the
-    // save may have finished since.
-    const slot = get().flistWorking[characterId]
-    if (
-      slot &&
-      get().flistActiveCharacterId === characterId &&
-      !get().editorReadOnly
-    ) {
-      set({ editorDirty: slot.unsavedDirty })
-    }
-  },
-
-  flistDismissResetUndo() {
-    const undo = get().flistResetUndo
-    if (!undo) return
-    const timer = _resetUndoTimers.get(undo.characterId)
-    if (timer) {
-      clearTimeout(timer)
-      _resetUndoTimers.delete(undo.characterId)
-    }
-    set({ flistResetUndo: null })
   },
 
   flistDismissDriftBanner(characterId) {
@@ -4505,7 +4381,7 @@ export const useStore = create<State>((set, get) => ({
     const characterId = s.flistActiveCharacterId
     const isWorkingCopyMode = characterId !== null && !s.editorReadOnly
     if (isWorkingCopyMode && value !== before && s.flistWorking[characterId]) {
-      get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value)
+      get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value, { typing: true })
       return
     }
     set((st) => ({

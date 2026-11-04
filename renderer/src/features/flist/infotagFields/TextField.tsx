@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react'
 import type { InfotagDescriptor } from '../infotagsResolver'
 
+/** The marks that put a field's committed edits on the Workbench undo
+ *  stack (lib/undoRedo.ts): Ctrl+Z in it steps the Workbench, except
+ *  while it holds typing it has not committed yet, which the field's
+ *  own undo takes back first. */
+export function undoMarks(pending: boolean): {
+  'data-undo': 'workbench'
+  'data-undo-pending'?: 'true'
+} {
+  return pending
+    ? { 'data-undo': 'workbench', 'data-undo-pending': 'true' }
+    : { 'data-undo': 'workbench' }
+}
+
 export function TextField({
   descriptor,
   value,
@@ -37,6 +50,7 @@ export function TextField({
         maxLength={descriptor.uiHint.maxLength}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
+        {...undoMarks(local !== value)}
         onChange={(e) => setLocal(e.target.value)}
         onBlur={() => {
           if (local !== value) onCommit(local)
@@ -109,6 +123,7 @@ export function NumberField({
         placeholder={descriptor.uiHint.placeholder ?? '—'}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
+        {...undoMarks(local !== value)}
         onChange={(e) => setLocal(e.target.value)}
         onBlur={() => {
           setShowInvalid(invalid || outOfRange)

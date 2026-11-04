@@ -63,7 +63,6 @@ beforeEach(() => {
     flistArchive: {},
     flistViewingLive: {},
     flistBrowseBackup: null,
-    flistResetUndo: null,
     flistWorkbenchNote: null,
     flistActiveCharacterId: CID,
     editorReadOnly: false,
