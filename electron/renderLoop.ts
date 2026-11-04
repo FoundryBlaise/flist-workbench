@@ -1,6 +1,12 @@
 import { sidecarFetch } from './sidecar'
 import { renderProfileToPng, type RenderTheme } from './renderProfile'
 import type { InlinesManifest } from '../renderer/src/lib/bbcode'
+import type { components } from '../renderer/src/lib/api.gen'
+
+/** The long-poll's answer: something to draw, or null. */
+type RenderPoll = components['schemas']['RenderPoll']
+/** Why the window could not draw one. */
+type RenderFailedRequest = components['schemas']['RenderFailedRequest']
 
 /** Answers the sidecar's render requests for as long as the app runs.
  *
@@ -15,15 +21,6 @@ import type { InlinesManifest } from '../renderer/src/lib/bbcode'
  *  a picture deserves a reason rather than silence.
  */
 
-type RenderRequest = {
-  id: string
-  bbcode: string
-  inlines?: InlinesManifest
-  theme?: RenderTheme
-  width?: number
-  label?: string
-}
-
 let running = false
 let stopped = false
 
@@ -36,15 +33,19 @@ async function pollOnce(): Promise<void> {
     method: 'GET'
   })
   if (!res.ok) throw new Error(`poll failed: HTTP ${res.status}`)
-  const body = (await res.json()) as { request: RenderRequest | null }
+  const body = (await res.json()) as RenderPoll
   const req = body.request
   if (!req) return
 
   try {
     const shot = await renderProfileToPng({
       bbcode: req.bbcode,
-      inlines: req.inlines,
-      theme: req.theme,
+      // F-list's inline images, passed through by the sidecar as they
+      // are (the schema says only "an object").
+      inlines: req.inlines as InlinesManifest,
+      // Whatever theme name the MCP tool was given; the preview knows
+      // its three and the sidecar does not check.
+      theme: req.theme as RenderTheme,
       width: req.width
     })
     await sidecarFetch(`/render/result/${encodeURIComponent(req.id)}`, {
@@ -63,7 +64,7 @@ async function pollOnce(): Promise<void> {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
+        body: JSON.stringify({ message } satisfies RenderFailedRequest)
       }
     ).catch(() => {
       // The sidecar is gone; the request will expire on its own.

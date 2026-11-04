@@ -18,7 +18,7 @@ afterEach(() => {
 
 const BASE = 'http://127.0.0.1:27384'
 
-function frame(event: string, extra: Partial<WorkbenchEvent> = {}): WorkbenchEvent {
+function frame(event: WorkbenchEvent['event'], extra: Partial<WorkbenchEvent> = {}): WorkbenchEvent {
   return { event, at: 1, origin: 'mcp:set_description', character_id: '99', ...extra }
 }
 

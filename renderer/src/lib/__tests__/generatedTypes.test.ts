@@ -12,11 +12,12 @@ import {
   RefusalError,
   type Answer,
   type BodyOf,
+  type FlistPullHandlers,
   type Job,
   type McpInfo,
   type RefusalCode
 } from '../api'
-import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
+import { installFakeApi, json, sse, type FakeApi } from '../../test/fakeApi'
 
 let fake: FakeApi
 
@@ -101,4 +102,21 @@ it('reads why a job failed by a code a refusal or a job carries', async () => {
   // @ts-expect-error a job's state is one of the five the sidecar names
   const odd: Job['state'] = 'paused'
   void odd
+})
+
+it("reads a Pull's events with the data the sidecar's events model declares", async () => {
+  fake.on(
+    'POST /flist/character/Quill/pull',
+    sse(['image', { index: 1, total: 1, image_id: '123', ok: true, cached: true }])
+  )
+  const seen: Parameters<NonNullable<FlistPullHandlers['onImage']>>[0][] = []
+
+  await api.flistPull('Quill', { onImage: (info) => seen.push(info) })
+
+  expect(seen.map((info) => info.image_id)).toEqual(['123'])
+  // @ts-expect-error PullImage has no `url`
+  expect(seen[0].url).toBeUndefined()
+  // @ts-expect-error a Pull sends no `progress` event
+  const unknown: FlistPullHandlers = { onProgress: () => {} }
+  void unknown
 })

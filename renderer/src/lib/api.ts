@@ -6,8 +6,9 @@ type ApiOptions = { signal?: AbortSignal }
 // api.gen.ts is generated from the sidecar's OpenAPI schema
 // (sidecar/openapi.json; `npm run gen:api` writes both), so a field
 // renamed in Python fails the type-check where the window reads it.
-// Route groups move from the hand-written types below to these one at
-// a time (spec #8: #127-#130).
+// Every request and answer type here is built from them; an event
+// stream's events too (`PullEvents`, `BackupAllEvents`).
+// `lib/__tests__/wireTypes.test.ts` fails on one written by hand.
 
 /** A model the sidecar's schema names, by its Python class name. */
 export type Schema<Name extends keyof components['schemas']> = components['schemas'][Name]
@@ -37,7 +38,7 @@ export type BodyOf<P extends keyof paths, M extends MethodOf<P>> =
 export type RefusalCode = Schema<'RefusalCode'>
 
 /** An inline image as F-list's profile payload lists it. */
-export type InlineImage = { hash: string; extension: string; nsfw: boolean }
+export type { InlineImage } from './bbcode'
 
 /** One of the user's characters with Logs; `mtime` is the newest
  *  change in its Logs folder. */
@@ -116,6 +117,12 @@ export type ForeignProfileResult = Omit<Schema<'ForeignProfile'>, 'profile'> & {
 }
 
 
+/** A Pull's events by name, each with its data, as the sidecar's
+ *  schema declares them. */
+type PullEvents = Schema<'PullEvents'>
+/** Back up all's events by name, each with its data. */
+type BackupAllEvents = Schema<'BackupAllEvents'>
+
 /** A Pull or Back up all runs as a job: the stream's first event is the
  *  job (its id is what Cancel and a reopened view use), and a cancel by
  *  id ends the events with `cancelled`. */
@@ -127,52 +134,20 @@ type JobStreamHandlers = {
 export type FlistPullHandlers = JobStreamHandlers & {
   onTicket?: () => void
   onFetching?: () => void
-  onImages?: (info: { total: number }) => void
-  onImage?: (info: {
-    index: number
-    total: number
-    image_id: string
-    ok: boolean
-    cached?: boolean
-    error?: string
-  }) => void
-  onDone?: (info: {
-    character_id: string
-    name: string
-    image_count: number
-    image_downloaded?: number
-    image_cached?: number
-    image_failed: number
-    pull_status?: FlistPullStatus['status']
-    pull_missing?: number
-  }) => void
+  onImages?: (info: PullEvents['images']) => void
+  onImage?: (info: PullEvents['image']) => void
+  onDone?: (info: PullEvents['done']) => void
   onError?: (info: StreamError) => void
 }
 
-export type FlistBackupAllCharacterEvent = {
-  name: string
-  character_id?: string
-  status: 'fetching' | 'saved' | 'unchanged' | 'error'
-  filename?: string
-  message?: string
-}
+/** One character of Back up all, as it is pulled and as it ends. */
+export type FlistBackupAllCharacterEvent = BackupAllEvents['character']
 
 export type FlistBackupAllHandlers = JobStreamHandlers & {
-  onStart?: (info: { total: number }) => void
+  onStart?: (info: BackupAllEvents['start']) => void
   onCharacter?: (info: FlistBackupAllCharacterEvent) => void
-  onDone?: (info: {
-    total: number
-    saved: number
-    unchanged: number
-    failed: number
-  }) => void
+  onDone?: (info: BackupAllEvents['done']) => void
   onError?: (info: StreamError) => void
-}
-
-/** A public profile for the editor's "Fetch profile", its F-list
- *  inlines read as `InlineImage`. */
-export type Profile = Omit<Schema<'PublicProfile'>, 'inlines'> & {
-  inlines: Record<string, InlineImage>
 }
 
 /** One conversation of a character: the partner, or the primary name
@@ -274,7 +249,10 @@ async function tryFlistRecovery(): Promise<boolean> {
       if (!password) return false
       await send('/flist/session', {
         method: 'POST',
-        body: JSON.stringify({ account: meta.account, password })
+        body: JSON.stringify({
+          account: meta.account,
+          password
+        } satisfies BodyOf<'/flist/session', 'post'>)
       })
       // Let the renderer refresh its FlistSessionStatus so the sidebar
       // chip stops showing "expired" after we just resurrected it.
@@ -317,7 +295,7 @@ export type ErrorBody = Schema<'RefusalBody'>
 
 /** A Pull's or Back up all's `error` event: where it stopped, then
  *  the same three fields a job's error carries. */
-export type StreamError = JobError & { stage: string }
+export type StreamError = Schema<'StreamError'>
 
 /**
  * A sidecar answer that was not ok. `status` is its HTTP status and
@@ -602,12 +580,15 @@ export const api = {
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
   labelsTrashPutBack: (ids: string[]) =>
-    request<Answer<'/labels/trash/put-back', 'post'>>('/labels/trash/put-back', { method: 'POST', body: JSON.stringify({ ids }) }),
+    request<Answer<'/labels/trash/put-back', 'post'>>('/labels/trash/put-back', {
+      method: 'POST',
+      body: JSON.stringify({ ids } satisfies BodyOf<'/labels/trash/put-back', 'post'>)
+    }),
   /** Delete cleared Labels for good. */
   labelsTrashPurge: (ids: string[]) =>
     request<Answer<'/labels/trash/purge', 'post'>>('/labels/trash/purge', {
       method: 'POST',
-      body: JSON.stringify({ ids })
+      body: JSON.stringify({ ids } satisfies BodyOf<'/labels/trash/purge', 'post'>)
     }),
   /** Give every still-Unlabeled message in one conversation the same
    *  verdict. Adds labels only: an existing verdict is kept, and the
@@ -654,7 +635,7 @@ export const api = {
   discoverModels: () =>
     request<Answer<'/settings/discover-models', 'post'>>('/settings/discover-models', {
       method: 'POST',
-      body: JSON.stringify({})
+      body: JSON.stringify({} satisfies BodyOf<'/settings/discover-models', 'post'>)
     }),
   ragIngestStart: (
     scope: IngestJobScope,
@@ -666,7 +647,7 @@ export const api = {
         ...scope,
         include_ooc: opts.include_ooc ?? false,
         force_rewipe: opts.force_rewipe ?? false
-      })
+      } satisfies BodyOf<'/rag/ingest', 'post'>)
     }),
   /** Any job by id, whatever its kind. */
   jobGet: <J extends Job = Job>(id: string, opts?: ApiOptions) =>
@@ -689,7 +670,6 @@ export const api = {
   // Cheaper than a full re-ingest — no LLM calls, no embeddings.
   ragLexicalRebuild: () =>
     request<Answer<'/rag/lexical/rebuild', 'post'>>('/rag/lexical/rebuild', { method: 'POST' }),
-  profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // ---- F-list character archive ----
   flistSignIn: (body: BodyOf<'/flist/session', 'post'>) =>
@@ -729,7 +709,10 @@ export const api = {
   ) =>
     request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'patch'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-      { method: 'PATCH', body: JSON.stringify({ name }) }
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ name } satisfies BodyOf<'/flist/character/{character_id}/zip-backups/{filename}', 'patch'>)
+      }
     ),
   /** Move a single backup ZIP to the character's Trash. Idempotent
    *  enough that the renderer refreshes the list either way: a Backup
@@ -846,7 +829,7 @@ export const api = {
         + `/workbench/load-backup`,
       {
         method: 'POST',
-        body: JSON.stringify({ filename })
+        body: JSON.stringify({ filename } satisfies BodyOf<'/flist/character/{character_id}/workbench/load-backup', 'post'>)
       }
     ),
   flistAvatarUrl: (name: string) =>
@@ -888,7 +871,10 @@ export const api = {
   flistImagesTrash: (characterId: string | number, imageIds: string[]) =>
     request<Answer<'/flist/character/{character_id}/images/trash', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
-      { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ image_ids: imageIds } satisfies BodyOf<'/flist/character/{character_id}/images/trash', 'post'>)
+      }
     ),
   /** Where each image id is still used: the Workbench, Live, Backups. */
   flistImageReferences: (characterId: string | number) =>
@@ -905,38 +891,56 @@ export const api = {
   flistTrashPutBack: (characterId: string | number, trashIds: string[]) =>
     request<Answer<'/flist/character/{character_id}/trash/put-back', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/put-back`,
-      { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ image_ids: trashIds } satisfies BodyOf<'/flist/character/{character_id}/trash/put-back', 'post'>)
+      }
     ),
   /** Delete trashed files for good. Takes trash ids. */
   flistTrashPurge: (characterId: string | number, trashIds: string[]) =>
     request<Answer<'/flist/character/{character_id}/trash/purge', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
-      { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ image_ids: trashIds } satisfies BodyOf<'/flist/character/{character_id}/trash/purge', 'post'>)
+      }
     ),
   /** Back into the Backup list, under the name they had. */
   flistTrashBackupsPutBack: (characterId: string | number, ids: string[]) =>
     request<Answer<'/flist/character/{character_id}/trash/backups/put-back', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/put-back`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/backups/put-back', 'post'>)
+      }
     ),
   /** Delete trashed Backups for good. */
   flistTrashBackupsPurge: (characterId: string | number, ids: string[]) =>
     request<Answer<'/flist/character/{character_id}/trash/backups/purge', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/purge`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/backups/purge', 'post'>)
+      }
     ),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
   flistTrashLabelsPutBack: (characterId: string | number, ids: string[]) =>
     request<Answer<'/flist/character/{character_id}/trash/labels/put-back', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/put-back`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/labels/put-back', 'post'>)
+      }
     ),
   /** Delete cleared Labels for good. */
   flistTrashLabelsPurge: (characterId: string | number, ids: string[]) =>
     request<Answer<'/flist/character/{character_id}/trash/labels/purge', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/purge`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/labels/purge', 'post'>)
+      }
     ),
   /** Empty the whole Trash: images, Backups and cleared Labels. */
   flistTrashEmpty: (characterId: string | number) =>
@@ -994,12 +998,16 @@ export const api = {
   restoreAcceptHandshake: (handshakeId: string) =>
     request<Answer<'/restore/handshake/accept', 'post'>>('/restore/handshake/accept', {
       method: 'POST',
-      body: JSON.stringify({ handshake_id: handshakeId })
+      body: JSON.stringify({
+        handshake_id: handshakeId
+      } satisfies BodyOf<'/restore/handshake/accept', 'post'>)
     }),
   restoreRejectHandshake: (handshakeId: string) =>
     request<Answer<'/restore/handshake/reject', 'post'>>('/restore/handshake/reject', {
       method: 'POST',
-      body: JSON.stringify({ handshake_id: handshakeId })
+      body: JSON.stringify({
+        handshake_id: handshakeId
+      } satisfies BodyOf<'/restore/handshake/reject', 'post'>)
     }),
   restoreRevokeToken: () =>
     request<Answer<'/restore/token', 'delete'>>('/restore/token', { method: 'DELETE' }),
@@ -1063,65 +1071,39 @@ function parseBlock(block: string): { event: string | null; data: unknown } {
   return { event, data }
 }
 
-/** The events every job stream carries. True when `event` was one. */
-function dispatchJobEvent(event: string, data: unknown, handlers: JobStreamHandlers): boolean {
-  if (event === 'job') {
-    handlers.onJob?.(data as Job)
-    return true
-  }
-  if (event === 'cancelled') {
-    handlers.onCancelled?.()
-    return true
-  }
-  return false
+/** What to do with each event of a stream, by its name: the names
+ *  and data are the stream's events model's, so an event the sidecar
+ *  renames or reshapes fails the type-check here. */
+type EventTable<Events> = { [Name in keyof Events]?: (data: Events[Name]) => void }
+
+function dispatch<Events>(block: string, table: EventTable<Events>): void {
+  const { event, data } = parseBlock(block)
+  if (!event || !Object.hasOwn(table, event)) return
+  const handle = table[event as keyof Events]
+  handle?.(data as Events[keyof Events])
 }
 
 function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
-  const { event, data: parsed } = parseBlock(block)
-  if (!event || dispatchJobEvent(event, parsed, handlers)) return
-  switch (event) {
-    case 'ticket':
-      handlers.onTicket?.()
-      break
-    case 'fetching':
-      handlers.onFetching?.()
-      break
-    case 'images':
-      handlers.onImages?.(parsed as { total: number })
-      break
-    case 'image':
-      handlers.onImage?.(parsed as Parameters<NonNullable<FlistPullHandlers['onImage']>>[0])
-      break
-    case 'done':
-      handlers.onDone?.(parsed as Parameters<NonNullable<FlistPullHandlers['onDone']>>[0])
-      break
-    case 'error':
-      handlers.onError?.(parsed as StreamError)
-      break
-  }
+  dispatch<PullEvents>(block, {
+    job: (job) => handlers.onJob?.(job),
+    cancelled: () => handlers.onCancelled?.(),
+    ticket: () => handlers.onTicket?.(),
+    fetching: () => handlers.onFetching?.(),
+    images: (info) => handlers.onImages?.(info),
+    image: (info) => handlers.onImage?.(info),
+    done: (info) => handlers.onDone?.(info),
+    error: (info) => handlers.onError?.(info)
+  })
 }
 
-function dispatchBackupAllStream(
-  block: string,
-  handlers: FlistBackupAllHandlers
-): void {
-  const { event, data: parsed } = parseBlock(block)
-  if (!event || dispatchJobEvent(event, parsed, handlers)) return
-  switch (event) {
-    case 'start':
-      handlers.onStart?.(parsed as { total: number })
-      break
-    case 'character':
-      handlers.onCharacter?.(parsed as FlistBackupAllCharacterEvent)
-      break
-    case 'done':
-      handlers.onDone?.(
-        parsed as Parameters<NonNullable<FlistBackupAllHandlers['onDone']>>[0]
-      )
-      break
-    case 'error':
-      handlers.onError?.(parsed as StreamError)
-      break
-  }
+function dispatchBackupAllStream(block: string, handlers: FlistBackupAllHandlers): void {
+  dispatch<BackupAllEvents>(block, {
+    job: (job) => handlers.onJob?.(job),
+    cancelled: () => handlers.onCancelled?.(),
+    start: (info) => handlers.onStart?.(info),
+    character: (info) => handlers.onCharacter?.(info),
+    done: (info) => handlers.onDone?.(info),
+    error: (info) => handlers.onError?.(info)
+  })
 }
 

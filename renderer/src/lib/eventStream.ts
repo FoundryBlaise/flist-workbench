@@ -9,20 +9,15 @@
  *  Deliberately thin. An event is a hint — the store re-reads through
  *  the normal endpoints when one arrives. */
 
-export type WorkbenchEvent = {
-  event: string
-  at: number
-  /** Who made the change: `ui` for this window, `mcp:<tool>` for a
-   *  connected model. */
-  origin: string
-  character_id?: string
-  etag?: string | null
-  character?: string
-  partner?: string
-  /** `settings-changed`: each changed field as stored, keyed by the
-   *  settings service's names (`rag.top_k`); null = back to default. */
-  changed?: Record<string, unknown>
-}
+import type { Schema } from './api'
+
+/** A change hint, as the sidecar's schema declares it (`ChangeHint`):
+ *  which `event`, when (`at`), who made it (`origin`: `ui` for this
+ *  window, `mcp:<tool>` for a connected model) and what it is about
+ *  (`character_id` and the Workbench's new `etag`; for
+ *  `settings-changed`, `changed`: each field as stored, keyed by the
+ *  settings service's names, null = back to default). */
+export type WorkbenchEvent = Schema<'ChangeHint'>
 
 export type EventHandler = (event: WorkbenchEvent) => void
 
@@ -39,7 +34,7 @@ export const WORKBENCH_EVENT_NAMES = [
   'images-changed',
   'backups-changed',
   'characters-changed'
-] as const
+] as const satisfies readonly WorkbenchEvent['event'][]
 
 /** Open the stream. Returns a function that closes it.
  *
