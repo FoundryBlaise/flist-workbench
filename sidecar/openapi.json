@@ -1,0 +1,6075 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "F-list Workbench sidecar",
+    "version": "0.0.0-dev"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shutdown": {
+      "post": {
+        "summary": "Shutdown",
+        "description": "The app asks its sidecar to stop (at quit, or to replace it).\n\nNeeds the launch secret like every other route (ADR 0002): a web\npage that can reach the port must not be able to stop it. The\nanswer goes out first; open requests then get\n`lifecycle.GRACEFUL_SHUTDOWN_S` and the process exits.",
+        "operationId": "shutdown_shutdown_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShutdownStarted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "summary": "Events Stream",
+        "description": "Server-sent stream of changes to shared state.\n\nThe renderer holds one of these open for the life of the window.\nIt exists because the window is no longer the only writer: a model\nconnected over MCP edits the same Workbench, and without this\nthe window would keep showing a stale draft and then autosave it\nback over the model's work.\n\nEvents are hints — `{event, at, ...ids}`. The renderer re-reads\nthrough the normal endpoints when one arrives.",
+        "operationId": "events_stream_events_get",
+        "responses": {
+          "200": {
+            "description": "Change hints, `{event, at, ...ids}` per event.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp-info": {
+      "get": {
+        "summary": "Mcp Info",
+        "description": "What the MCP endpoints are and how many tools each carries.\n\nPowers Settings → MCP. Deliberately *not* under /mcp — that prefix\nbelongs to the protocol itself, and this is a plain REST read for\nthe renderer.",
+        "operationId": "mcp_info_mcp_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp-info/token": {
+      "post": {
+        "summary": "Mcp Token Create",
+        "description": "Issue a bearer token for the MCP endpoints, replacing any\nexisting one. Clients using the old token stop working.\n\nOff by default — see `services/mcp_auth.py` for why. The token is\nreturned once here and again from `/mcp-info`, because the user has\nto be able to copy it into a client config at any point.",
+        "operationId": "mcp_token_create_mcp_info_token_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Mcp Token Revoke",
+        "description": "Turn the MCP bearer requirement back off.",
+        "operationId": "mcp_token_revoke_mcp_info_token_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpTokenRevoked"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/eicons/search": {
+      "get": {
+        "summary": "Eicons Search",
+        "description": "Search the cached eicon catalog (sourced from xariah.net).\n\nThe renderer uses this to populate the toolbar's eicon picker. The\ncatalog is loaded into memory at sidecar startup with delta refreshes\nevery hour. While the first fetch is in flight `status` will be\n'loading'; the renderer should poll or show a spinner.",
+        "operationId": "eicons_search_eicons_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Eicons Search Eicons Search Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profile/{name}": {
+      "get": {
+        "summary": "Profile",
+        "description": "Public profile fetch routed through the F-list JSON API.\n\nReplaces the previous HTML scrape (`flist.fetch_profile`). The shape\nreturned here matches the old `Profile.to_dict()` so existing\nrenderer code in EditorPane's \"Fetch profile\" button still works\nagainst it. Requires an active sign-in — 401 surfaces a \"Sign in to\nF-list first\" CTA in the renderer.",
+        "operationId": "profile_profile__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Profile Profile  Name  Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/session": {
+      "get": {
+        "summary": "Flist Session Get",
+        "description": "Footer chip polls this every 60s for session age + hourly count.\nStateless — never refreshes the ticket on its own; refresh happens\non the next ticket-requiring action.\n\nAlso reports `password_idle_seconds_remaining` so the renderer can\nsurface a \"session will be cleared in Nm\" warning before the\nwatchdog drops the cached password (UX gap from the 2026-05-30 QA\nverification of P0-C).",
+        "operationId": "flist_session_get_flist_session_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Flist Session Get Flist Session Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Flist Session Create",
+        "description": "Trade (account, password) for an F-list session ticket.\n\nThe ticket is held in sidecar RAM only (`flist_api.TicketStore`).\nThe password is held too — see flist_api docstring for why — but\nneither value crosses this endpoint boundary. Renderer gets back\nthe character list and an expiry hint.\n\nSchedules a fire-and-forget avatar warm-up for every account\ncharacter so the picker has avatars ready by the time the user\nopens it (instead of waiting for 30+ lazy fetches to serialise\nthrough the CDN rate limiter).",
+        "operationId": "flist_session_create_flist_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlistSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Flist Session Create Flist Session Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Flist Session Delete",
+        "operationId": "flist_session_delete_flist_session_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Flist Session Delete Flist Session Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/avatars/prefetch": {
+      "post": {
+        "summary": "Flist Avatars Prefetch",
+        "description": "Explicit re-trigger of the avatar warm-up.\n\nUseful if a sign-in race left some avatars un-cached, or if F-list\navatars changed on the user's side and we want to refresh the whole\nset. Fires immediately, returns the scheduled count, downloads\nhappen in the background.",
+        "operationId": "flist_avatars_prefetch_flist_avatars_prefetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Flist Avatars Prefetch Flist Avatars Prefetch Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/activity": {
+      "get": {
+        "summary": "Flist Activity Snapshot",
+        "description": "In-memory append-only audit log of F-list operations (sign-in,\nticket refresh, per-character pull stages, idle password clear,\nsign-out). Closes the trust-question gap surfaced by the\n2026-05-30 UX subagent review — see UX F4 in\nREVIEW_2026-05-30_post_tier1_polish.md.",
+        "operationId": "flist_activity_snapshot_flist_activity_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Flist Activity Snapshot Flist Activity Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/characters": {
+      "get": {
+        "summary": "Flist Characters",
+        "description": "Roster union: account roster (if signed in) + archived characters\n+ characters with local F-Chat logs. Each entry carries flags so the\npicker can render status badges.",
+        "operationId": "flist_characters_flist_characters_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Flist Characters Flist Characters Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/mapping-list": {
+      "get": {
+        "summary": "Flist Mapping List",
+        "operationId": "flist_mapping_list_flist_mapping_list_get",
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Mapping List Flist Mapping List Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/avatar/{name}": {
+      "get": {
+        "summary": "Flist Avatar",
+        "description": "Serve a cached avatar from `<userdata>/avatars/`. Fetches on\nmiss; avatars are public so this works signed-out too.\n\nF-list returns a 5827-byte placeholder PNG (HTTP 200) for any name\nwithout an uploaded avatar — there's no 404 path. We detect that\nby size and surface a real 404 so the renderer's `onError` fires\nand the initial-circle fallback renders instead of an alien\nplaceholder graphic.",
+        "operationId": "flist_avatar_flist_avatar__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{name}/pull": {
+      "post": {
+        "summary": "Flist Character Pull",
+        "description": "Pull live character data + images for `name`, as a job.\n\nAnswers with the job's progress as an SSE stream (`sse.follow`),\nor with `wait=false` the job itself (202), to follow later through\n`/jobs/{id}/events`. Closing the stream leaves the Pull running;\n`DELETE /jobs/{id}` cancels it. 409 `character_busy` while another\njob holds the character. The work lives in `services/pull.py`, so\nthe MCP `pull_character` tool runs exactly the same job; event\nnames and payloads are documented there.",
+        "operationId": "flist_character_pull_flist_character__name__pull_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Wait"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/zip-backup": {
+      "post": {
+        "summary": "Flist Character Zip Backup",
+        "description": "A manual Backup: pack the character's Workbench into a\nuserscript-restoreable ZIP at `backups/<ISO>.zip`, recorded as\n`source: workbench, occasion: manual`, so the user can park their\nwork. Live needs no manual Backup: Back up all and every Upload keep\nit.\n\n`force=True` is the default because the explicit right-click asked\nfor an artefact in hand and dedup would be surprising. A `kind`\nquery parameter, which older windows sent, is ignored.",
+        "operationId": "flist_character_zip_backup_flist_character__character_id__zip_backup_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Force"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Zip Backup Flist Character  Character Id  Zip Backup Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/zip-backups": {
+      "get": {
+        "summary": "Flist Character Zip Backups",
+        "operationId": "flist_character_zip_backups_flist_character__character_id__zip_backups_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Zip Backups Flist Character  Character Id  Zip Backups Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/zip-backups/{filename}": {
+      "delete": {
+        "summary": "Flist Character Zip Backup Delete",
+        "description": "Move a single Backup to the character's Trash, user-set name and\nall; it can be restored from there until the Trash is emptied.\nFilename validated against the ISO-basic format so a crafted `../`\npath moves nothing. 404 if the Backup isn't there.",
+        "operationId": "flist_character_zip_backup_delete_flist_character__character_id__zip_backups__filename__delete",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Flist Character Zip Backup Rename",
+        "description": "Rename a single backup. The ZIP file itself isn't modified;\nthe user-set name lives in a sidecar `_names.json` map next to\nthe ZIPs. Empty-string name clears the entry (so the UI falls\nback to the timestamp-derived default). Returns the canonical\nentry for the renamed backup so the renderer can update its\nin-memory list without a separate /zip-backups re-fetch.",
+        "operationId": "flist_character_zip_backup_rename_flist_character__character_id__zip_backups__filename__patch",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ZipBackupRename"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Zip Backup Rename Flist Character  Character Id  Zip Backups  Filename  Patch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/zip-backups/{filename}/download": {
+      "get": {
+        "summary": "Flist Character Zip Backup Download",
+        "description": "Stream the raw ZIP bytes for a saved backup. Used by Sidebar\n→ Backups → right-click → Download ZIP… so the user can lift a\nbackup off the machine without digging into %APPDATA%. Filename\nparsing must match the ISO-basic backup filename format; we\nreject anything else so this endpoint can't be turned into an\narbitrary-file-read by crafting a `../` path.",
+        "operationId": "flist_character_zip_backup_download_flist_character__character_id__zip_backups__filename__download_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/zip-backups/{filename}/payload": {
+      "get": {
+        "summary": "Flist Character Zip Backup Payload",
+        "description": "Read the embedded working.json out of a ZIP backup for the\nread-only Browse Backup mode.\n\nBackups created since 2026-06-17 (the day this endpoint shipped)\nbundle a `working.json` file alongside the userscript-targeted\n`character.json`. We read the former so the renderer's editor\ntabs can render the rich internal shape (descriptions, kink\noverlay, custom-kink dict, etc.) without inverting the export\nreshape passes.\n\nOlder backups predate the `working.json` write and answer 409\n`backup_too_old`, as Restore does. We deliberately don't try to invert\ncharacter.json on the fly; it's a multi-stage lossy reshape and\nnot worth the complexity for the v1 ship.",
+        "operationId": "flist_character_zip_backup_payload_flist_character__character_id__zip_backups__filename__payload_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Zip Backup Payload Flist Character  Character Id  Zip Backups  Filename  Payload Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/backup-all": {
+      "post": {
+        "summary": "Flist Backup All",
+        "description": "Back up every character on the signed-in account, as a job.\n\nAnswers like a Pull (`flist_character_pull`): the progress stream,\nor with `wait=false` the job. One Back up all at a time, and none\nwhile a Pull runs (409 `character_busy`). The sweep lives in\n`services/backup_all.py` so the MCP `backup_all_characters` tool\nruns the same one; event names and payloads are documented there.",
+        "operationId": "flist_backup_all_flist_backup_all_post",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Wait"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/live": {
+      "get": {
+        "summary": "Flist Character Live",
+        "operationId": "flist_character_live_flist_character__character_id__live_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Live Flist Character  Character Id  Live Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/workbench": {
+      "get": {
+        "summary": "Flist Character Workbench",
+        "description": "The character's one editable copy, created from Live if needed:\n`{workbench: {name, created_at, updated_at}}`.\n\n`create=false` answers \"is there one yet\" without making it so,\nwhich is what a read-only render wants.",
+        "operationId": "flist_character_workbench_flist_character__character_id__workbench_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "create",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Create"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Workbench Flist Character  Character Id  Workbench Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/workbench/payload": {
+      "get": {
+        "summary": "Flist Character Workbench Payload Get",
+        "description": "The Workbench payload and the etag a save must send back.\n\nMade from Live when the character has none yet, and then `created`\nsays so: that copy holds nobody's edits. `create=false` reads\nwithout making one (404 `no_workbench`).",
+        "operationId": "flist_character_workbench_payload_get_flist_character__character_id__workbench_payload_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "create",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Create"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Workbench Payload Get Flist Character  Character Id  Workbench Payload Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Flist Character Workbench Payload Put",
+        "description": "Save the whole Workbench, against the etag the caller read.\n\nNo `If-Match` is a write by something that never read what it is\nreplacing: refused with 409 `etag_required`, like a stale etag\n(409 `etag_mismatch`). A window that had seeded its editor from\nLive once flattened a long draft down to the published text this\nway, one keystroke at a time. Both carry the current etag.",
+        "operationId": "flist_character_workbench_payload_put_flist_character__character_id__workbench_payload_put",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Workbench Payload Put Flist Character  Character Id  Workbench Payload Put"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/workbench/load-backup": {
+      "post": {
+        "summary": "Flist Character Workbench Load Backup",
+        "description": "Restore: replace the Workbench contents with a Backup's.\n\nThe Workbench it replaces is saved as a `before-restore` Backup\nfirst, always; `backed_up_first` names it (null when there was no\nWorkbench yet). When that Backup cannot be written, nothing is\nreplaced and the caller hears 500 `workbench_not_kept`.\n\n`live_diverged` is reported back rather than enforced. A backup can\nbe older than the profile now on F-list, and loading it anyway is a\nlegitimate thing to want — the window says so and lets the user\ndecide.",
+        "operationId": "flist_character_workbench_load_backup_flist_character__character_id__workbench_load_backup_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_LoadBackupBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Workbench Load Backup Flist Character  Character Id  Workbench Load Backup Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/workbench/reset-to-live": {
+      "post": {
+        "summary": "Flist Character Workbench Reset To Live",
+        "description": "Reset to Live: the Workbench becomes a fresh copy of Live.\n\nDone here rather than in the window so the Workbench it replaces is\nsaved as a `before-restore` Backup first, whoever asks; that Backup\nis `backed_up_first` (null when there was no Workbench yet). When it\ncannot be written nothing is replaced: 500 `workbench_not_kept`. A\ncharacter never pulled has no Live: 404 `no_live`.\n\nAnswers with the new payload and its etag, which the window adopts\nas the Workbench it saves over next.",
+        "operationId": "flist_character_workbench_reset_to_live_flist_character__character_id__workbench_reset_to_live_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Workbench Reset To Live Flist Character  Character Id  Workbench Reset To Live Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/workbench/load-backup/preflight": {
+      "get": {
+        "summary": "Flist Character Workbench Load Preflight",
+        "description": "What the confirm dialog needs to say before overwriting the bench.\n\nAnswers two questions the user cannot see for themselves: whether\nthe bench currently holds anything that is not already in Live, and\nwhether F-list has moved on since the backup was taken.",
+        "operationId": "flist_character_workbench_load_preflight_flist_character__character_id__workbench_load_backup_preflight_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Workbench Load Preflight Flist Character  Character Id  Workbench Load Backup Preflight Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/images/{filename}": {
+      "get": {
+        "summary": "Flist Character Image",
+        "description": "Serve `images/<image_id>.<ext>`. The filename shape is validated\nagainst the safe-name regex so a hostile renderer call can't path-\ntraverse out of the images directory.",
+        "operationId": "flist_character_image_flist_character__character_id__images__filename__get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/images": {
+      "get": {
+        "summary": "Flist Character Images List",
+        "description": "List the files in `images/`. Each row: `{image_id, extension,\nsize, added_at}`. Renderer pairs these with description/sort_order\nfrom the Workbench to decide which are on the profile vs. in the\nPool view.",
+        "operationId": "flist_character_images_list_flist_character__character_id__images_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Images List Flist Character  Character Id  Images Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Flist Character Image Upload",
+        "description": "Upload an image into `images/` under a `local-<sha8>` synthetic\nid. The body is the raw image bytes; the server sniffs magic bytes\nto decide the extension (Content-Type is never trusted). The\nuploaded image lands in the renderer's Pool view by default — it\nonly appears on-profile after the user moves it via a Workbench\ngallery edit.\n\nIdempotent — identical bytes always produce the same `local-<sha8>`\nid and skip re-writing the file.",
+        "operationId": "flist_character_image_upload_flist_character__character_id__images_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Image Upload Flist Character  Character Id  Images Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/image/{image_id}": {
+      "get": {
+        "summary": "Flist Character Image By Id",
+        "description": "Serve `images/<image_id>.<ext>` without the renderer having to\nknow the extension. Tries the supported set in order; 404 when none\nexists. Lets the gallery render thumbnails reliably without a\nseparate round-trip to look up extensions.",
+        "operationId": "flist_character_image_by_id_flist_character__character_id__image__image_id__get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/images/repair": {
+      "post": {
+        "summary": "Flist Character Images Repair",
+        "description": "Put the gallery back together when entries have lost their bytes.\n\nCalled when the Images tab opens. A slot pointing at a file that is\ngone renders as a black placeholder, and — worse — drops out of the\nrestore ZIP, which the extension reads as \"delete this from the\nprofile\". Users lost images on f-list.net that way, so this runs on\nits own rather than waiting to be found in a menu.\n\nCheap: it hashes the character's own image files and nothing else.",
+        "operationId": "flist_character_images_repair_flist_character__character_id__images_repair_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Images Repair Flist Character  Character Id  Images Repair Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/images/{image_id}": {
+      "delete": {
+        "summary": "Flist Character Image Remove",
+        "description": "Delete one image: off the Workbench's gallery if it is there,\nand into the character's Trash, where it can be restored until the\nTrash is emptied. The same as the batch route below.",
+        "operationId": "flist_character_image_remove_flist_character__character_id__images__image_id__delete",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Image Remove Flist Character  Character Id  Images  Image Id  Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/images/trash": {
+      "post": {
+        "summary": "Flist Character Images Trash",
+        "description": "Delete images, whether in the gallery or only in the Pool: the\nwindow's delete, and the same function MCP's `trash_images` calls.\nA gallery image is taken off the Workbench's gallery first; the\nanswer's `etag` is the Workbench's new one (None when the gallery\nwas left alone), which the window saves its next edit over.",
+        "operationId": "flist_character_images_trash_flist_character__character_id__images_trash_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ImageIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Images Trash Flist Character  Character Id  Images Trash Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/image-references": {
+      "get": {
+        "summary": "Flist Character Image References",
+        "description": "Where each image id is still used — the Workbench, Live and\nBackups — so the window can warn before trashing one.",
+        "operationId": "flist_character_image_references_flist_character__character_id__image_references_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Image References Flist Character  Character Id  Image References Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash": {
+      "get": {
+        "summary": "Flist Character Trash List",
+        "operationId": "flist_character_trash_list_flist_character__character_id__trash_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash List Flist Character  Character Id  Trash Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Flist Character Trash Empty",
+        "description": "Empty the whole Trash: images, Backups and cleared Labels.",
+        "operationId": "flist_character_trash_empty_flist_character__character_id__trash_delete",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Empty Flist Character  Character Id  Trash Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/{filename}": {
+      "get": {
+        "summary": "Flist Character Trash File",
+        "description": "Serve a trashed file, for the trash view's thumbnails.",
+        "operationId": "flist_character_trash_file_flist_character__character_id__trash__filename__get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/put-back": {
+      "post": {
+        "summary": "Flist Character Trash Put Back",
+        "description": "Put trashed files back into the Pool (not onto the profile).",
+        "operationId": "flist_character_trash_put_back_flist_character__character_id__trash_put_back_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ImageIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Put Back Flist Character  Character Id  Trash Put Back Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/backups/put-back": {
+      "post": {
+        "summary": "Flist Character Trash Backups Put Back",
+        "description": "Put trashed Backups back in the Backup list, under their names.",
+        "operationId": "flist_character_trash_backups_put_back_flist_character__character_id__trash_backups_put_back_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_TrashIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Backups Put Back Flist Character  Character Id  Trash Backups Put Back Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/labels/put-back": {
+      "post": {
+        "summary": "Flist Character Trash Labels Put Back",
+        "description": "Put cleared Labels back. A message labelled again since keeps\nits newer Label and is reported under `skipped`.",
+        "operationId": "flist_character_trash_labels_put_back_flist_character__character_id__trash_labels_put_back_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_TrashIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Labels Put Back Flist Character  Character Id  Trash Labels Put Back Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/purge": {
+      "post": {
+        "summary": "Flist Character Trash Purge",
+        "operationId": "flist_character_trash_purge_flist_character__character_id__trash_purge_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ImageIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Purge Flist Character  Character Id  Trash Purge Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/backups/purge": {
+      "post": {
+        "summary": "Flist Character Trash Backups Purge",
+        "operationId": "flist_character_trash_backups_purge_flist_character__character_id__trash_backups_purge_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_TrashIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Backups Purge Flist Character  Character Id  Trash Backups Purge Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/trash/labels/purge": {
+      "post": {
+        "summary": "Flist Character Trash Labels Purge",
+        "operationId": "flist_character_trash_labels_purge_flist_character__character_id__trash_labels_purge_post",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_TrashIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Flist Character Trash Labels Purge Flist Character  Character Id  Trash Labels Purge Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/inlines/{filename}": {
+      "get": {
+        "summary": "Flist Character Inline",
+        "operationId": "flist_character_inline_flist_character__character_id__inlines__filename__get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/trash": {
+      "get": {
+        "summary": "Labels Trash List",
+        "description": "Every cleared-Labels entry in the Trash, newest first, for\nSettings → Labels. Unlike a character's Trash view this includes a\nLog character with no Workbench, and one whose Log name matches no\ncharacter in the list.",
+        "operationId": "labels_trash_list_labels_trash_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Trash List Labels Trash Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/trash/put-back": {
+      "post": {
+        "summary": "Labels Trash Put Back",
+        "description": "Put cleared Labels back, whichever character they were cleared\nfor. A message labelled again since keeps its newer Label and is\nreported under `skipped`.",
+        "operationId": "labels_trash_put_back_labels_trash_put_back_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_TrashIdsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Trash Put Back Labels Trash Put Back Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/trash/purge": {
+      "post": {
+        "summary": "Labels Trash Purge",
+        "description": "Delete cleared Labels for good. The window's call only: MCP has\nno tool for it.",
+        "operationId": "labels_trash_purge_labels_trash_purge_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_TrashIdsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Trash Purge Labels Trash Purge Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/flist/character/{character_id}/export.zip": {
+      "get": {
+        "summary": "Flist Character Export Zip",
+        "description": "Build the userscript-compatible Upload ZIP (Tier 6).\n\nBundles `character.json` + every image referenced by the\nWorkbench's gallery + the avatar. The renderer triggers a\ndownload by navigating to this URL, so the response stamps a\n`Content-Disposition: attachment` with a filename derived from\nthe character name.\n\nThe export modal shows the Workbench's counts, so this is the\nWorkbench too: what the user reviewed is what they upload. Live is\nthe fallback only for a character that has no Workbench yet.",
+        "operationId": "flist_character_export_zip_flist_character__character_id__export_zip_get",
+        "parameters": [
+          {
+            "name": "character_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/handshake": {
+      "post": {
+        "summary": "Handshake Begin",
+        "operationId": "handshake_begin_restore_handshake_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Handshake Begin Restore Handshake Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/handshake-status": {
+      "get": {
+        "summary": "Handshake Status",
+        "operationId": "handshake_status_restore_handshake_status_get",
+        "parameters": [
+          {
+            "name": "handshake_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Handshake Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Handshake Status Restore Handshake Status Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/handshake/pending": {
+      "get": {
+        "summary": "Handshake Pending",
+        "operationId": "handshake_pending_restore_handshake_pending_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Handshake Pending Restore Handshake Pending Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/handshake/accept": {
+      "post": {
+        "summary": "Handshake Accept",
+        "operationId": "handshake_accept_restore_handshake_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_PairAcceptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Handshake Accept Restore Handshake Accept Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/handshake/reject": {
+      "post": {
+        "summary": "Handshake Reject",
+        "operationId": "handshake_reject_restore_handshake_reject_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_PairAcceptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Handshake Reject Restore Handshake Reject Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/token": {
+      "delete": {
+        "summary": "Pairing Token Revoke",
+        "operationId": "pairing_token_revoke_restore_token_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object",
+                  "title": "Response Pairing Token Revoke Restore Token Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairing": {
+      "get": {
+        "summary": "Pairing Status",
+        "description": "Whether the browser extension is paired, for Settings → Security.\n\nOutside `/restore/` on purpose: it answers the app window only\n(launch secret), never the extension, and never returns the token.",
+        "operationId": "pairing_status_pairing_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object",
+                  "title": "Response Pairing Status Pairing Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/extension": {
+      "get": {
+        "summary": "Extension Seen",
+        "description": "Which extension version the browser is running, as of its last\nauthenticated call. `version` is null until it has made one.",
+        "operationId": "extension_seen_restore_extension_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Extension Seen Restore Extension Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/characters": {
+      "get": {
+        "summary": "Upload Characters",
+        "operationId": "upload_characters_restore_characters_get",
+        "parameters": [
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Upload Characters Restore Characters Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/snapshots": {
+      "get": {
+        "summary": "Upload Sources",
+        "operationId": "upload_sources_restore_snapshots_get",
+        "parameters": [
+          {
+            "name": "character",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character"
+            }
+          },
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Upload Sources Restore Snapshots Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/snapshot/{snapshot_id}": {
+      "get": {
+        "summary": "Upload Source",
+        "description": "One Upload source as a ZIP; `snapshot_id` is the id the source\nlist gave it.",
+        "operationId": "upload_source_restore_snapshot__snapshot_id__get",
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Snapshot Id"
+            }
+          },
+          {
+            "name": "character",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Character"
+            }
+          },
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/snapshot/fresh": {
+      "post": {
+        "summary": "Pre Upload Backup",
+        "operationId": "pre_upload_backup_restore_snapshot_fresh_post",
+        "parameters": [
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_PreUploadBackupBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Pre Upload Backup Restore Snapshot Fresh Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/image-ids": {
+      "post": {
+        "summary": "Upload Image Ids",
+        "description": "The extension reporting what F-list called our uploads — noted, not applied.\n\nAn image uploaded in the app is keyed by a hash of its bytes, because\nit has no F-list id until someone uploads it. The extension learns\nthe real id at that moment and used to hand it over here, with the\narchive renaming files and rewriting set payloads on the spot.\n\nIt no longer acts on that report. The upload happens during Import —\nbefore the user has pressed Save, before F-list's profile actually\ncontains the picture. Renaming local files for an id the profile may\nnever get turned uploads into dangling gallery rows and vanished\nimages: the rename had already destroyed the only copy of the bytes,\nand a subsequent pull (which reflects the real profile) had nothing\nleft to fold back in.\n\nThe same folding still happens — at the moment it is true. A saved\nprofile re-pulls; `dedupe_local_after_pull` matches each pulled\nimage's bytes against the local upload and moves the gallery over to\nthe real id then, and `collapse_local_duplicates` catches any pair\nthat ended up side by side on disk when the Images tab lists them.\nSame cure, applied when the diagnosis holds.",
+        "operationId": "upload_image_ids_restore_image_ids_post",
+        "parameters": [
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_UploadImageIdsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Upload Image Ids Restore Image Ids Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/saved": {
+      "post": {
+        "summary": "Upload Saved",
+        "description": "The user pressed Save on f-list.net — re-pull so Live matches\nwhat is published again.\n\nLive is the only thing this touches. The pull writes live.json and\nthe images; the Workbench must come through untouched: the user\nmay well have gone on editing it while the upload happened, and\nquietly replacing their draft with what they just published would\nbe the rudest possible interpretation of \"the Upload finished\".\n\nReturns immediately. A pull takes seconds and the extension has a\npage to get on with; it is fire-and-forget by design, and the\nrenderer hears about the result over the event stream like any\nother pull. The Pull is a job like any other once it starts\n(`services.pull.start_when_free`): after `delay_seconds`, and\nafter any Pull or Back up all that holds the character then has\nfinished. It holds nothing while it waits, so a Pull the user\nstarts in the window meanwhile is not refused.",
+        "operationId": "upload_saved_restore_saved_post",
+        "parameters": [
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_UploadSavedBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Upload Saved Restore Saved Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/restore/done": {
+      "post": {
+        "summary": "Upload Done",
+        "operationId": "upload_done_restore_done_post",
+        "parameters": [
+          {
+            "name": "x-workbench-auth",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Auth"
+            }
+          },
+          {
+            "name": "x-workbench-extension-version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workbench-Extension-Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_UploadDoneBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Upload Done Restore Done Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/foreign/search": {
+      "get": {
+        "summary": "Foreign Search",
+        "description": "Candidate names from one of the viewer's three sources.\n\n`bookmarks` and `friends` come off the F-list account (one API\ncall, memoised); `logs` walks the local F-Chat log directories and\ncosts nothing; `name` echoes the typed string back because F-list\nhas no character search to call.",
+        "operationId": "foreign_search_foreign_search_get",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Foreign Search Foreign Search Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/foreign/cache": {
+      "get": {
+        "summary": "Foreign Cache Usage",
+        "description": "How much disk the Foreign profile cache takes: `{bytes,\nprofiles, cap_bytes}`.",
+        "operationId": "foreign_cache_usage_foreign_cache_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Foreign Cache Usage Foreign Cache Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Foreign Cache Clear",
+        "description": "Delete every cached Foreign profile, images and avatars included.\nNot the Trash: these are copies of other people's profiles.",
+        "operationId": "foreign_cache_clear_foreign_cache_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Foreign Cache Clear Foreign Cache Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/foreign/character/{name}": {
+      "get": {
+        "summary": "Foreign Character",
+        "description": "One foreign profile. Served from cache while it is under the\n24-hour TTL; `refresh=true` is the viewer's reload button.",
+        "operationId": "foreign_character_foreign_character__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Foreign Character Foreign Character  Name  Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/foreign/character/{name}/avatar": {
+      "get": {
+        "summary": "Foreign Character Avatar",
+        "description": "The profile's avatar, cached inside its own foreign folder.\n\nKept out of `<userdata>/avatars/`, which the account picker treats\nas \"characters this user has\". Same placeholder detection as\n`/flist/avatar/{name}` so the renderer falls back to an initial\ncircle instead of showing F-list's grey stand-in.\n\nAfter a refresh of the profile the avatar is fetched again; the old\none is served until the new one has arrived.",
+        "operationId": "foreign_character_avatar_foreign_character__name__avatar_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/foreign/character/{name}/image/{image_id}": {
+      "get": {
+        "summary": "Foreign Character Image",
+        "description": "A gallery image, downloaded on first request and cached after.\n\nLazy on purpose: a profile can list fifty images and fetching the\nset up front would turn opening a profile into a half-minute\nwait. The id must appear in the cached profile's own gallery —\nthat is what stops this route being a general-purpose proxy for\nanything on the CDN.",
+        "operationId": "foreign_character_image_foreign_character__name__image__image_id__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs/characters": {
+      "get": {
+        "summary": "Logs Characters",
+        "operationId": "logs_characters_logs_characters_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Logs Characters Logs Characters Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs/partners": {
+      "get": {
+        "summary": "Logs Partners",
+        "operationId": "logs_partners_logs_partners_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Logs Partners Logs Partners Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs/messages": {
+      "get": {
+        "summary": "Logs Messages",
+        "operationId": "logs_messages_logs_messages_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          },
+          {
+            "name": "partner",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Partner"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Logs Messages Logs Messages Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs/search": {
+      "get": {
+        "summary": "Logs Search",
+        "operationId": "logs_search_logs_search_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          },
+          {
+            "name": "partner",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Partner"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Logs Search Logs Search Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs/search_all": {
+      "get": {
+        "summary": "Logs Search All",
+        "operationId": "logs_search_all_logs_search_all_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit_per_partner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit Per Partner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Logs Search All Logs Search All Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logs/contacts": {
+      "get": {
+        "summary": "Logs Contacts",
+        "operationId": "logs_contacts_logs_contacts_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Logs Contacts Logs Contacts Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/render/requests": {
+      "get": {
+        "summary": "Render Next Request",
+        "description": "The app's long-poll for something to draw.\n\nAnswering this is also how the app says \"I am here\": a tool asking\nfor a picture checks that before it waits, so a model gets told the\nwindow is closed instead of sitting through a timeout.",
+        "operationId": "render_next_request_render_requests_get",
+        "parameters": [
+          {
+            "name": "timeout",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 25.0,
+              "title": "Timeout"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Render Next Request Render Requests Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/render/result/{request_id}": {
+      "post": {
+        "summary": "Render Deliver",
+        "description": "The finished PNG, straight from the app's offscreen capture.",
+        "operationId": "render_deliver_render_result__request_id__post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Render Deliver Render Result  Request Id  Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/render/failed/{request_id}": {
+      "post": {
+        "summary": "Render Fail",
+        "description": "The app could not draw this one — say why rather than let the\ncaller sit out the timeout.",
+        "operationId": "render_fail_render_failed__request_id__post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Render Fail Render Failed  Request Id  Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/stats": {
+      "get": {
+        "summary": "Labels Stats",
+        "operationId": "labels_stats_labels_stats_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          },
+          {
+            "name": "partner",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Partner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Labels Stats Labels Stats Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/stats-all": {
+      "get": {
+        "summary": "Labels Stats All",
+        "description": "Batch labels stats for every partner of a character.\n\nThe sidebar uses this to render per-partner coverage pips without\nfiring one request per row. Reuses the same counts as\n/labels/stats so a partner's per-row counts always match the\ndetailed view. Linked aliases are folded into their primary partner.\n\nEach row also returns `log_mtime` (latest of all alias-group log\nfiles) and `last_label_at` (newest labels.updated_at across the\nsame alias group). A stale partner is one where log_mtime >\nlast_label_at — log activity arrived after the last classify run\nfor that conversation.",
+        "operationId": "labels_stats_all_labels_stats_all_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Labels Stats All Labels Stats All Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/clear": {
+      "post": {
+        "summary": "Labels Clear",
+        "description": "Delete every label (LLM + manual) for one conversation.\n\nUsed by the renderer's \"Reset all labels\" context-menu action.\nAfter this returns, the resolver falls back to rule-on-read for\nevery message in that conversation. The cleared Labels go to the\ncharacter's Trash first (`trash_id`), where Restore puts them back.",
+        "operationId": "labels_clear_labels_clear_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelsClearRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Clear Labels Clear Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/clear-all": {
+      "post": {
+        "summary": "Labels Clear All",
+        "description": "Wipe every stored IC/OOC verdict across all characters.\n\nThe Settings → Labels \"Reset all labels…\" button calls this. After\nit returns, every message in every conversation falls back to\nrule-on-read — manual overrides are gone too. The cleared Labels go\nto the Trash first, one entry per character whose Logs hold the\nmessages and one, with no character, for messages in none of the\nLogs; the renderer still confirms before invoking this.",
+        "operationId": "labels_clear_all_labels_clear_all_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Clear All Labels Clear All Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/rollup": {
+      "get": {
+        "summary": "Labels Rollup",
+        "description": "Aggregate IC/OOC/Unlabeled counts across every character.\n\nWalks every (character × partner) log under the configured data\ndirectory; for large corpora this is a few seconds the first time\nSettings opens. Used by the Labels rollup pane to show one-glance\nstate (\"3,402 IC · 18,720 OOC · …\").",
+        "operationId": "labels_rollup_labels_rollup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Rollup Labels Rollup Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/fill-unlabeled": {
+      "post": {
+        "summary": "Labels Fill Unlabeled",
+        "description": "Give every still-Unlabeled message in one conversation the same\nverdict.\n\nFor a conversation the user knows is pure IC (or pure OOC) end to\nend. Walking it batch by batch through a connected model buys\nnothing when they already know the answer.\n\nDeliberately narrow: messages that already carry a verdict keep it,\nand messages the rules decide keep resolving through the rules. So\nthis can add labels but never overwrite a model's or the user's\nown. The response carries every hash written, which is what makes\nthe undo exact.",
+        "operationId": "labels_fill_unlabeled_labels_fill_unlabeled_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelsFillUnlabeled"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Fill Unlabeled Labels Fill Unlabeled Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/delete-hashes": {
+      "post": {
+        "summary": "Labels Delete Hashes",
+        "description": "Remove named labels and nothing else — the undo for\n`/labels/fill-unlabeled`. Distinct from `/labels/clear`, which\ndrops every verdict in the conversation including a model's.",
+        "operationId": "labels_delete_hashes_labels_delete_hashes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelsDeleteHashes"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Delete Hashes Labels Delete Hashes Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/override": {
+      "post": {
+        "summary": "Labels Override",
+        "operationId": "labels_override_labels_override_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelOverride"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Override Labels Override Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/labels/override-many": {
+      "post": {
+        "summary": "Labels Override Many",
+        "description": "`/labels/override` for the log view's multi-select: one verdict,\nor a reset, for any set of messages in one conversation.",
+        "operationId": "labels_override_many_labels_override_many_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelOverrideMany"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Labels Override Many Labels Override Many Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rag/test-embedding": {
+      "post": {
+        "summary": "Rag Test Embedding",
+        "description": "One canned embedding — validates that the model loads and says\nwhat dimension it produces.\n\nReturns latency + dimension on success; ok=false + structured\nerror string on failure. Same 200-always shape as\n/labels/test-connection so the UI can render either with one path.",
+        "operationId": "rag_test_embedding_rag_test_embedding_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RagTestEmbeddingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rag Test Embedding Rag Test Embedding Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rag/ingest": {
+      "post": {
+        "summary": "Rag Ingest Start",
+        "operationId": "rag_ingest_start_rag_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RagIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rag Ingest Start Rag Ingest Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rag/wipe": {
+      "post": {
+        "summary": "Rag Wipe",
+        "description": "Drop the local Qdrant collection and clear the manifest.\n\nPure delete — no re-ingest, no probe. Use this when you want to\nforget everything and rebuild on your own schedule (e.g. after\nchanging chunking settings without immediately re-embedding 80k\nmessages). The next /rag/ingest starts cold. Refused with\n`index_busy` while an ingest runs.",
+        "operationId": "rag_wipe_rag_wipe_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rag Wipe Rag Wipe Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rag/lexical/rebuild": {
+      "post": {
+        "summary": "Rag Lexical Rebuild",
+        "description": "Rebuild the BM25 lexical index from the existing Qdrant chunks.\n\nAvoids a full re-ingest when the dense store is up-to-date but the\nlexical mirror is stale (e.g. after a chunking-config change that\nonly required re-embedding once, or after upgrading from a pre-\nhybrid install). Returns the number of chunks indexed.",
+        "operationId": "rag_lexical_rebuild_rag_lexical_rebuild_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rag Lexical Rebuild Rag Lexical Rebuild Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rag/status": {
+      "get": {
+        "summary": "Rag Status",
+        "description": "Snapshot of the local vector store + manifest.\n\nUsed by the renderer's Settings → RAG panel to show \"indexed: N\nchunks for model X (dim 768)\". Cheap — one Qdrant count + one SQLite\nread. While an ingest runs it says `busy` and names the job instead\nof counting.",
+        "operationId": "rag_status_rag_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rag Status Rag Status Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "get": {
+        "summary": "Jobs List",
+        "operationId": "jobs_list_jobs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Jobs List Jobs Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "summary": "Job Get",
+        "operationId": "job_get_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Job Get Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Job Cancel",
+        "description": "Ask a job to stop; it stops where it next checks. Answers the\njob as it stands, with `cancel_requested` set unless it had already\nfinished.",
+        "operationId": "job_cancel_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Job Cancel Jobs  Job Id  Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}/events": {
+      "get": {
+        "summary": "Job Events",
+        "description": "Follow a Pull or Back up all as server-sent events: the `job`,\nevery event it has sent so far, then each new one until it ends.\nHow a reopened progress view picks up a running job; closing the\nstream leaves the job running.",
+        "operationId": "job_events_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/aliases": {
+      "get": {
+        "summary": "Aliases List",
+        "description": "Return {primary_name: [member names…]} for one character.\n\nEmpty dict when the character has no linked partners. Renderer\nuses this to decide whether to render alias hints on each partner\nrow.",
+        "operationId": "aliases_list_aliases_get",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Aliases List Aliases Get"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Aliases Add",
+        "description": "Link `name` to `primary_name` for `character`. Idempotent;\nhandles chain consolidation (linking A→B then A→C ends with both\nA and B pointing at C, never building a multi-hop chain).",
+        "operationId": "aliases_add_aliases_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasAdd"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Aliases Add Aliases Post"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Aliases Remove",
+        "description": "Drop one name from its alias group.",
+        "operationId": "aliases_remove_aliases_delete",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Aliases Remove Aliases Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/aliases/group": {
+      "delete": {
+        "summary": "Aliases Unlink Group",
+        "description": "Drop every member of an alias group at once.",
+        "operationId": "aliases_unlink_group_aliases_group_delete",
+        "parameters": [
+          {
+            "name": "char",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Char"
+            }
+          },
+          {
+            "name": "primary",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Primary"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Aliases Unlink Group Aliases Group Delete"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings/discover-models": {
+      "post": {
+        "summary": "Settings Discover Models",
+        "description": "The embedding models that can be selected.\n\nThis used to enumerate whatever an inference server had loaded.\nEmbedding runs in-process now, so the honest answer is fastembed's\nown catalogue — with the dimension, download size and licence, since\nthose are what the choice actually turns on. Licence matters:\nthe catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0.",
+        "operationId": "settings_discover_models_settings_discover_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverModelsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingModels"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "summary": "Settings Get",
+        "operationId": "settings_get_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Settings Update",
+        "operationId": "settings_update_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Refused: `{code, message, details}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AliasAdd": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Character"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "primary_name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Primary Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "name",
+          "primary_name"
+        ],
+        "title": "AliasAdd"
+      },
+      "DiscoverModelsRequest": {
+        "properties": {},
+        "type": "object",
+        "title": "DiscoverModelsRequest",
+        "description": "No fields — kept so the route keeps its POST shape."
+      },
+      "EmbeddingModel": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "dimension": {
+            "type": "integer",
+            "title": "Dimension"
+          },
+          "size_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Gb"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License"
+          },
+          "max_chars": {
+            "type": "integer",
+            "title": "Max Chars"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "model",
+          "dimension",
+          "size_gb",
+          "license",
+          "max_chars"
+        ],
+        "title": "EmbeddingModel"
+      },
+      "EmbeddingModels": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingModel"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "source": {
+            "type": "string",
+            "const": "local",
+            "title": "Source"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "models",
+          "source",
+          "error"
+        ],
+        "title": "EmbeddingModels"
+      },
+      "FlistSignInRequest": {
+        "properties": {
+          "account": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Account"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account",
+          "password"
+        ],
+        "title": "FlistSignInRequest"
+      },
+      "ForeignDefaults": {
+        "properties": {
+          "cache_cap_mb": {
+            "type": "integer",
+            "title": "Cache Cap Mb"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cache_cap_mb"
+        ],
+        "title": "ForeignDefaults"
+      },
+      "ForeignSettings": {
+        "properties": {
+          "cache_cap_mb": {
+            "type": "integer",
+            "title": "Cache Cap Mb"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/ForeignDefaults"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cache_cap_mb",
+          "defaults"
+        ],
+        "title": "ForeignSettings",
+        "description": "The Foreign profile cache's cap, in whole megabytes (at least 1)."
+      },
+      "ForeignSettingsUpdate": {
+        "properties": {
+          "cache_cap_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Cap Mb"
+          }
+        },
+        "type": "object",
+        "title": "ForeignSettingsUpdate"
+      },
+      "Health": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "title": "Health",
+        "description": "The sidecar answers, and which app version started it."
+      },
+      "LabelOverride": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "ts": {
+            "type": "integer",
+            "title": "Ts"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "ts",
+          "speaker"
+        ],
+        "title": "LabelOverride"
+      },
+      "LabelOverrideItem": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "ts": {
+            "type": "integer",
+            "title": "Ts"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "ts",
+          "speaker"
+        ],
+        "title": "LabelOverrideItem"
+      },
+      "LabelOverrideMany": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LabelOverrideItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "LabelOverrideMany"
+      },
+      "LabelsClearRequest": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "partner"
+        ],
+        "title": "LabelsClearRequest"
+      },
+      "LabelsDefaults": {
+        "properties": {
+          "threshold_chars": {
+            "type": "integer",
+            "title": "Threshold Chars"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "threshold_chars"
+        ],
+        "title": "LabelsDefaults"
+      },
+      "LabelsDeleteHashes": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "hashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hashes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hashes"
+        ],
+        "title": "LabelsDeleteHashes"
+      },
+      "LabelsFillUnlabeled": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "label"
+        ],
+        "title": "LabelsFillUnlabeled"
+      },
+      "LabelsSettings": {
+        "properties": {
+          "threshold_chars": {
+            "type": "integer",
+            "title": "Threshold Chars"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/LabelsDefaults"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "threshold_chars",
+          "defaults"
+        ],
+        "title": "LabelsSettings",
+        "description": "Messages shorter than `threshold_chars` are OOC without asking\nanyone. The defaults let the window show \"(default)\" hints and offer\na reset without hardcoding them."
+      },
+      "LabelsSettingsUpdate": {
+        "properties": {
+          "threshold_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Chars"
+          }
+        },
+        "type": "object",
+        "title": "LabelsSettingsUpdate"
+      },
+      "McpAuth": {
+        "properties": {
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "required",
+          "token"
+        ],
+        "title": "McpAuth",
+        "description": "The optional bearer token for the MCP endpoints; off by default."
+      },
+      "McpEndpoint": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "all",
+              "character",
+              "logs",
+              "classify"
+            ],
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "tool_count": {
+            "type": "integer",
+            "title": "Tool Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "path",
+          "url",
+          "tool_count"
+        ],
+        "title": "McpEndpoint",
+        "description": "One MCP endpoint the sidecar serves. `all` carries every tool;\nthe narrow ones exist because small local models choke on long\ntool lists."
+      },
+      "McpInfo": {
+        "properties": {
+          "port": {
+            "type": "integer",
+            "title": "Port"
+          },
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/McpEndpoint"
+            },
+            "type": "array",
+            "title": "Endpoints"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/McpAuth"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "port",
+          "endpoints",
+          "auth"
+        ],
+        "title": "McpInfo"
+      },
+      "McpSettings": {
+        "properties": {
+          "log_text": {
+            "type": "boolean",
+            "title": "Log Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "log_text"
+        ],
+        "title": "McpSettings",
+        "description": "MCP settings only the window may change. `log_text`: whether MCP\nclients get the tools that return Log text; off by default."
+      },
+      "McpSettingsUpdate": {
+        "properties": {
+          "log_text": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Text"
+          }
+        },
+        "type": "object",
+        "title": "McpSettingsUpdate"
+      },
+      "McpToken": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "McpToken"
+      },
+      "McpTokenRevoked": {
+        "properties": {
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "required"
+        ],
+        "title": "McpTokenRevoked"
+      },
+      "RagIngestRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "include_ooc": {
+            "type": "boolean",
+            "title": "Include Ooc",
+            "default": false
+          },
+          "force_rewipe": {
+            "type": "boolean",
+            "title": "Force Rewipe",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "RagIngestRequest"
+      },
+      "RagSettings": {
+        "properties": {
+          "embed_model": {
+            "type": "string",
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "type": "string",
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "type": "integer",
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K"
+          },
+          "neighbors": {
+            "type": "integer",
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "type": "number",
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "type": "integer",
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "type": "integer",
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "type": "integer",
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "type": "integer",
+            "title": "Chunk Overlap Msgs"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/RagValues"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "rerank_model",
+          "rerank_candidates",
+          "top_k",
+          "neighbors",
+          "rerank_min_ratio",
+          "hybrid_enabled",
+          "hybrid_bm25_candidates",
+          "chunk_max_chars",
+          "chunk_soft_split_chars",
+          "chunk_overlap_msgs",
+          "defaults"
+        ],
+        "title": "RagSettings"
+      },
+      "RagSettingsUpdate": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          },
+          "neighbors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Overlap Msgs"
+          }
+        },
+        "type": "object",
+        "title": "RagSettingsUpdate"
+      },
+      "RagTestEmbeddingRequest": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          }
+        },
+        "type": "object",
+        "title": "RagTestEmbeddingRequest"
+      },
+      "RagValues": {
+        "properties": {
+          "embed_model": {
+            "type": "string",
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "type": "string",
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "type": "integer",
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K"
+          },
+          "neighbors": {
+            "type": "integer",
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "type": "number",
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "type": "integer",
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "type": "integer",
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "type": "integer",
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "type": "integer",
+            "title": "Chunk Overlap Msgs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "rerank_model",
+          "rerank_candidates",
+          "top_k",
+          "neighbors",
+          "rerank_min_ratio",
+          "hybrid_enabled",
+          "hybrid_bm25_candidates",
+          "chunk_max_chars",
+          "chunk_soft_split_chars",
+          "chunk_overlap_msgs"
+        ],
+        "title": "RagValues",
+        "description": "The Index and retrieval tunables, as set or as their defaults."
+      },
+      "RefusalBody": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/RefusalCode"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "RefusalBody",
+        "description": "What every route answers when it is not ok, as the schema\ndeclares it (`REFUSAL_RESPONSES`). `Refusal.body()` and server.py's\nhandlers build the dict; this only describes it."
+      },
+      "RefusalCode": {
+        "type": "string",
+        "enum": [
+          "unauthorized",
+          "forbidden_origin",
+          "forbidden_host",
+          "http_404",
+          "http_405",
+          "internal_error",
+          "invalid_request",
+          "refused",
+          "invalid_file_name",
+          "log_name_refused",
+          "log_character_not_found",
+          "partner_not_found",
+          "log_dir_unavailable",
+          "log_not_found",
+          "backup_not_uploadable",
+          "backup_too_old",
+          "backup_holds_no_profile",
+          "backup_not_found",
+          "backup_unreadable",
+          "backup_not_written",
+          "not_trashed",
+          "image_not_found",
+          "no_avatar",
+          "profile_not_cached",
+          "job_not_found",
+          "no_index",
+          "resource_busy",
+          "index_busy",
+          "character_busy",
+          "index_unreadable",
+          "keyword_backfill_failed",
+          "unsupported_type",
+          "too_large",
+          "not_paired",
+          "validation_failed",
+          "flist_error",
+          "not_signed_in",
+          "sign_in_failed",
+          "not_found",
+          "rate_limited",
+          "flist_unreachable",
+          "flist_server_error",
+          "not_stoppable",
+          "invalid_character_id",
+          "character_not_found",
+          "workbench_not_kept",
+          "no_live",
+          "no_workbench",
+          "etag_required",
+          "etag_mismatch",
+          "invalid_workbench_payload",
+          "source_path_missing",
+          "source_path_not_absolute",
+          "no_import_folders",
+          "source_not_found",
+          "source_not_allowed",
+          "source_in_app_data",
+          "source_unreadable",
+          "source_too_large",
+          "not_an_image",
+          "store_failed"
+        ],
+        "title": "RefusalCode",
+        "description": "Every `code` a REST refusal can carry. The OpenAPI schema lists\nthem, so the window's `RefusalCode` is a generated union and a\nswitch on a code the sidecar never answers fails the type-check.\n\nA class below names its code where it is defined; this list repeats\nit for the schema. `tests/test_openapi_schema.py` fails when a\n`Refusal` subclass carries a code missing here (its `code`, or the\nkeys of `STATUS_BY_CODE` / `CODES` for classes coded per instance)."
+      },
+      "Settings": {
+        "properties": {
+          "fchat_data_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fchat Data Dir"
+          },
+          "fchat_data_dir_effective": {
+            "type": "string",
+            "title": "Fchat Data Dir Effective"
+          },
+          "fchat_data_dir_env_locked": {
+            "type": "boolean",
+            "title": "Fchat Data Dir Env Locked"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/LabelsSettings"
+          },
+          "rag": {
+            "$ref": "#/components/schemas/RagSettings"
+          },
+          "image_import_roots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Import Roots"
+          },
+          "mcp": {
+            "$ref": "#/components/schemas/McpSettings"
+          },
+          "foreign": {
+            "$ref": "#/components/schemas/ForeignSettings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fchat_data_dir",
+          "fchat_data_dir_effective",
+          "fchat_data_dir_env_locked",
+          "labels",
+          "rag",
+          "image_import_roots",
+          "mcp",
+          "foreign"
+        ],
+        "title": "Settings",
+        "description": "The settings the sidecar keeps, as Settings shows them."
+      },
+      "SettingsUpdate": {
+        "properties": {
+          "fchat_data_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fchat Data Dir"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LabelsSettingsUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RagSettingsUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image_import_roots": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Import Roots"
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpSettingsUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "foreign": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForeignSettingsUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "SettingsUpdate"
+      },
+      "ShutdownStarted": {
+        "properties": {
+          "stopping": {
+            "type": "boolean",
+            "title": "Stopping"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stopping"
+        ],
+        "title": "ShutdownStarted"
+      },
+      "_ImageIdsBody": {
+        "properties": {
+          "image_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_ids"
+        ],
+        "title": "_ImageIdsBody"
+      },
+      "_LoadBackupBody": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "back_up_first": {
+            "type": "boolean",
+            "title": "Back Up First",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename"
+        ],
+        "title": "_LoadBackupBody",
+        "description": "Restore a Backup into the Workbench.\n\n`back_up_first` is still accepted from older windows and ignored:\nthe Workbench is always kept as a Backup first (ADR 0003)."
+      },
+      "_PairAcceptBody": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handshake_id"
+        ],
+        "title": "_PairAcceptBody"
+      },
+      "_PreUploadBackupBody": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "payload"
+        ],
+        "title": "_PreUploadBackupBody"
+      },
+      "_TrashIdsBody": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "_TrashIdsBody"
+      },
+      "_UploadDoneBody": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          }
+        },
+        "type": "object",
+        "title": "_UploadDoneBody"
+      },
+      "_UploadImageIdsBody": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "character",
+          "mapping"
+        ],
+        "title": "_UploadImageIdsBody"
+      },
+      "_UploadSavedBody": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Delay Seconds",
+            "default": 5.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "character"
+        ],
+        "title": "_UploadSavedBody"
+      },
+      "_ZipBackupRename": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "_ZipBackupRename"
+      }
+    }
+  }
+}

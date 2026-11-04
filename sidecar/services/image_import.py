@@ -65,6 +65,19 @@ class ImportRefused(Refusal):
     is not (500)."""
 
     STATUS_BY_CODE = {"store_failed": 500}
+    #: The codes it is raised with (`refusals.RefusalCode` lists them).
+    CODES = (
+        "source_path_missing",
+        "source_path_not_absolute",
+        "no_import_folders",
+        "source_not_found",
+        "source_not_allowed",
+        "source_in_app_data",
+        "source_unreadable",
+        "source_too_large",
+        "not_an_image",
+        "store_failed",
+    )
 
     def __init__(self, code: str, message: str, **details: Any) -> None:
         super().__init__(message, details=details)

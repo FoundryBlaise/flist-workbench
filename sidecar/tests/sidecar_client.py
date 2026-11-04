@@ -109,9 +109,11 @@ ERROR_KEYS = {"code", "message", "details"}
 
 
 def is_refusal_shaped(res: Response) -> bool:
-    """True when the body is exactly `{code, message, details}`: a string
-    code, a string message and a `details` object, with no error object
-    nested inside it."""
+    """True when the body is exactly `{code, message, details}`: a code
+    the schema lists (`refusals.RefusalCode`), a string message and a
+    `details` object, with no error object nested inside it."""
+    from refusals import RefusalCode
+
     try:
         body = res.json()
     except ValueError:
@@ -119,7 +121,7 @@ def is_refusal_shaped(res: Response) -> bool:
     return (
         isinstance(body, dict)
         and set(body) == ERROR_KEYS
-        and isinstance(body["code"], str)
+        and body["code"] in set(RefusalCode)
         and isinstance(body["message"], str)
         and isinstance(body["details"], dict)
         and not any(_is_error_object(v) for v in body["details"].values())
