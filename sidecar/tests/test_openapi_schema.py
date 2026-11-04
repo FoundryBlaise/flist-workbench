@@ -227,3 +227,41 @@ def test_model_names_are_unique_across_routers() -> None:
     # (`routers__settings__Settings`), and the renderer's names with them.
     names = openapi_schema.schema()["components"]["schemas"]
     assert [name for name in names if "__" in name] == []
+
+
+def _bare_dict_returns() -> list[str]:
+    """Every `return {...}` or `return dict(...)` in a route handler of
+    a router module."""
+    import ast
+
+    routers = Path(openapi_schema.__file__).resolve().parent / "routers"
+    found = []
+    for path in sorted(routers.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and isinstance(d.func.value, ast.Name)
+                and d.func.value.id == "router"
+                for d in func.decorator_list
+            ):
+                continue
+            for node in ast.walk(func):
+                value = node.value if isinstance(node, ast.Return) else None
+                if isinstance(value, ast.Dict) or (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "dict"
+                ):
+                    found.append(f"routers/{path.name}:{node.lineno} {func.name}")
+    return found
+
+
+def test_no_route_handler_returns_a_bare_dict() -> None:
+    # The handler builds its response model (or hands a shared
+    # function's dict to it: `Model.model_validate(d)`), so what goes
+    # out is what the schema says, whatever FastAPI would coerce.
+    assert _bare_dict_returns() == []
