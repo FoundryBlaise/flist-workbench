@@ -43,10 +43,11 @@ def labels_stats_all(char: str) -> dict:
 
 # `character` and `partner` in the override and delete bodies name the
 # conversation the window shows; a Label belongs to the message (ADR
-# 0004), so they decide nothing and are only echoed back.
+# 0004), so they decide nothing, may be left out and are only echoed
+# back.
 class LabelOverride(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     hash: str
     ts: int
     speaker: str
@@ -61,8 +62,8 @@ class LabelOverrideItem(BaseModel):
 
 
 class LabelOverrideMany(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     items: list[LabelOverrideItem]
     # label=None deletes the rows (revert to rule / Unlabeled).
     label: str | None = None
@@ -125,8 +126,8 @@ class LabelsFillUnlabeled(BaseModel):
 
 
 class LabelsDeleteHashes(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     hashes: list[str]
 
 

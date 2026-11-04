@@ -276,3 +276,19 @@ async def test_a_non_verdict_is_refused_alike_on_both_surfaces(
     assert res.json()["details"]["allowed"] == ["IC", "OOC"]
     assert result.isError and "validation_failed" in str(body)
     assert _rest_stats(two_characters, AZURE, PARTNER)["unlabeled"] == 2
+
+
+def test_changing_labels_by_hash_needs_no_conversation_named(
+    two_characters: TwoCharacters,
+) -> None:
+    # A Label belongs to the message (ADR 0004): the hash is enough.
+    post = two_characters.client.post
+    one = _ref(two_characters, PARTNER_LINE)
+
+    overridden = post("/labels/override", json={**one, "label": "IC"})
+    many = post("/labels/override-many", json={"items": [one], "label": "OOC"})
+    deleted = post("/labels/delete-hashes", json={"hashes": [one["hash"]]})
+
+    assert [r.status_code for r in (overridden, many, deleted)] == [200, 200, 200]
+    assert (many.json()["changed"], deleted.json()["deleted"]) == (1, 1)
+    assert two_characters.message(AZURE, PARTNER, PARTNER_LINE)["label"] == "Unlabeled"
