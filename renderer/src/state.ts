@@ -119,10 +119,6 @@ type Unsliced = {
   foreignStatus: 'idle' | 'loading' | 'ready' | 'error'
   foreignError: string | null
 
-  /** Counts settings changes made outside this window. An open
-   *  Settings re-reads them when it moves. */
-  settingsRevision: number
-
   editorContent: string
   editorTitle: string
   editorInlines: Record<string, InlineImage>
@@ -405,10 +401,6 @@ type Unsliced = {
   foreignLoad: (name: string, refresh?: boolean) => Promise<void>
   /** Drop the loaded profile, back to the lookup form. */
   foreignUnload: () => void
-  /** Something outside this window changed settings (the
-   *  `settings-changed` event); `fields` names them, as the sidecar's
-   *  settings service does (`labels.threshold_chars`, `rag.top_k`). */
-  noteSettingsChanged: (fields: string[]) => void
   setEditorContent: (value: string) => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
@@ -2126,8 +2118,6 @@ export const useStore = create<State>((set, get, store) => ({
   foreignRefreshError: null,
   foreignStatus: 'idle',
   foreignError: null,
-
-  settingsRevision: 0,
 
   editorContent: '',
   editorTitle: '',
@@ -4145,17 +4135,6 @@ export const useStore = create<State>((set, get, store) => ({
       }
       const message = (code && worded[code]) || errorDetail(err)
       set({ foreignStatus: 'error', foreignError: message })
-    }
-  },
-
-  noteSettingsChanged(fields) {
-    set((s) => ({ settingsRevision: s.settingsRevision + 1 }))
-    // The OOC threshold is applied when a Log is read, so the open
-    // Log's Labels are only current after a re-read.
-    const { activeCharacter: char, activePartner: partner } = get()
-    if (fields.includes('labels.threshold_chars') && char && partner) {
-      get().invalidateMessages(char, partner)
-      void get().loadMessages(char, partner, { force: true })
     }
   },
 
