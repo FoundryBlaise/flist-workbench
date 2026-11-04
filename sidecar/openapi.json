@@ -5965,20 +5965,6 @@
         "title": "ForeignCacheUsage",
         "description": "What the Foreign profile cache holds on disk, and what it may hold."
       },
-      "ForeignDefaults": {
-        "properties": {
-          "cache_cap_mb": {
-            "type": "integer",
-            "title": "Cache Cap Mb"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "cache_cap_mb"
-        ],
-        "title": "ForeignDefaults"
-      },
       "ForeignProfile": {
         "properties": {
           "name": {
@@ -6091,7 +6077,7 @@
             "title": "Cache Cap Mb"
           },
           "defaults": {
-            "$ref": "#/components/schemas/ForeignDefaults"
+            "$ref": "#/components/schemas/ForeignValues"
           }
         },
         "additionalProperties": false,
@@ -6119,6 +6105,20 @@
         },
         "type": "object",
         "title": "ForeignSettingsUpdate"
+      },
+      "ForeignValues": {
+        "properties": {
+          "cache_cap_mb": {
+            "type": "integer",
+            "title": "Cache Cap Mb"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cache_cap_mb"
+        ],
+        "title": "ForeignValues"
       },
       "GalleryRepair": {
         "properties": {
@@ -6789,7 +6789,7 @@
           "chunk_overlap_msgs"
         ],
         "title": "IndexValues",
-        "description": "The Index and retrieval tunables, as set or as their defaults."
+        "description": "The Index and retrieval tunables."
       },
       "IndexWiped": {
         "properties": {
@@ -7772,20 +7772,6 @@
         "title": "LabelsCleared",
         "description": "One conversation's Labels went to the Trash as `trash_id` (null\nwhen there were none)."
       },
-      "LabelsDefaults": {
-        "properties": {
-          "threshold_chars": {
-            "type": "integer",
-            "title": "Threshold Chars"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "threshold_chars"
-        ],
-        "title": "LabelsDefaults"
-      },
       "LabelsDeleteHashesRequest": {
         "properties": {
           "character": {
@@ -8008,7 +7994,7 @@
             "title": "Threshold Chars"
           },
           "defaults": {
-            "$ref": "#/components/schemas/LabelsDefaults"
+            "$ref": "#/components/schemas/LabelsValues"
           }
         },
         "additionalProperties": false,
@@ -8018,7 +8004,7 @@
           "defaults"
         ],
         "title": "LabelsSettings",
-        "description": "Messages shorter than `threshold_chars` are OOC without asking\nanyone. The defaults let the window show \"(default)\" hints and offer\na reset without hardcoding them."
+        "description": "Messages shorter than `threshold_chars` are OOC without asking\nanyone."
       },
       "LabelsSettingsUpdate": {
         "properties": {
@@ -8053,6 +8039,20 @@
           "labels"
         ],
         "title": "LabelsTrash"
+      },
+      "LabelsValues": {
+        "properties": {
+          "threshold_chars": {
+            "type": "integer",
+            "title": "Threshold Chars"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "threshold_chars"
+        ],
+        "title": "LabelsValues"
       },
       "LexicalRebuilt": {
         "properties": {
@@ -9866,12 +9866,8 @@
       },
       "StreamError": {
         "additionalProperties": false,
-        "description": "A stream's `error` event, which ends it: the stage it stopped\nat, then the one error shape `{code, message, details}`.",
+        "description": "A stream's `error` event, which ends it: a job's error, and the\nstage it stopped at.",
         "properties": {
-          "stage": {
-            "title": "Stage",
-            "type": "string"
-          },
           "code": {
             "anyOf": [
               {
@@ -9891,13 +9887,17 @@
             "additionalProperties": true,
             "title": "Details",
             "type": "object"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
           }
         },
         "required": [
-          "stage",
           "code",
           "message",
-          "details"
+          "details",
+          "stage"
         ],
         "title": "StreamError",
         "type": "object"

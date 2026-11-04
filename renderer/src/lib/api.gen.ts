@@ -2725,11 +2725,6 @@ export interface components {
             /** Cap Bytes */
             cap_bytes: number;
         };
-        /** ForeignDefaults */
-        ForeignDefaults: {
-            /** Cache Cap Mb */
-            cache_cap_mb: number;
-        };
         /**
          * ForeignProfile
          * @description A Foreign profile. `profile` is F-list's character-data payload
@@ -2780,12 +2775,17 @@ export interface components {
         ForeignSettings: {
             /** Cache Cap Mb */
             cache_cap_mb: number;
-            defaults: components["schemas"]["ForeignDefaults"];
+            defaults: components["schemas"]["ForeignValues"];
         };
         /** ForeignSettingsUpdate */
         ForeignSettingsUpdate: {
             /** Cache Cap Mb */
             cache_cap_mb?: number | null;
+        };
+        /** ForeignValues */
+        ForeignValues: {
+            /** Cache Cap Mb */
+            cache_cap_mb: number;
         };
         /**
          * GalleryRepair
@@ -3008,7 +3008,7 @@ export interface components {
         };
         /**
          * IndexValues
-         * @description The Index and retrieval tunables, as set or as their defaults.
+         * @description The Index and retrieval tunables.
          */
         IndexValues: {
             /** Embed Model */
@@ -3416,11 +3416,6 @@ export interface components {
             /** Trash Id */
             trash_id: string | null;
         };
-        /** LabelsDefaults */
-        LabelsDefaults: {
-            /** Threshold Chars */
-            threshold_chars: number;
-        };
         /** LabelsDeleteHashesRequest */
         LabelsDeleteHashesRequest: {
             /** Character */
@@ -3492,13 +3487,12 @@ export interface components {
         /**
          * LabelsSettings
          * @description Messages shorter than `threshold_chars` are OOC without asking
-         *     anyone. The defaults let the window show "(default)" hints and offer
-         *     a reset without hardcoding them.
+         *     anyone.
          */
         LabelsSettings: {
             /** Threshold Chars */
             threshold_chars: number;
-            defaults: components["schemas"]["LabelsDefaults"];
+            defaults: components["schemas"]["LabelsValues"];
         };
         /** LabelsSettingsUpdate */
         LabelsSettingsUpdate: {
@@ -3509,6 +3503,11 @@ export interface components {
         LabelsTrash: {
             /** Labels */
             labels: components["schemas"]["TrashedLabels"][];
+        };
+        /** LabelsValues */
+        LabelsValues: {
+            /** Threshold Chars */
+            threshold_chars: number;
         };
         /**
          * LexicalRebuilt
@@ -4253,12 +4252,10 @@ export interface components {
         };
         /**
          * StreamError
-         * @description A stream's `error` event, which ends it: the stage it stopped
-         *     at, then the one error shape `{code, message, details}`.
+         * @description A stream's `error` event, which ends it: a job's error, and the
+         *     stage it stopped at.
          */
         StreamError: {
-            /** Stage */
-            stage: string;
             /** Code */
             code: components["schemas"]["RefusalCode"] | components["schemas"]["JobFailureCode"];
             /** Message */
@@ -4267,6 +4264,8 @@ export interface components {
             details: {
                 [key: string]: unknown;
             };
+            /** Stage */
+            stage: string;
         };
         /**
          * StreamReady
