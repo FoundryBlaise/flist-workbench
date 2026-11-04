@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
 import { AppContextMenu } from '../../components/AppContextMenu'
 import { useStore } from '../../state'
 import { resetUndoStacks } from '../../state/undoStack'
@@ -177,6 +178,57 @@ describe('the menus go through the same routing', () => {
     fireEvent.contextMenu(pane)
     fireEvent.click(screen.getByRole('menuitem', { name: 'Redo' }))
     expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+    cleanup()
+  })
+})
+
+describe('the right-click menu on a Workbench text field offers what the Workbench can undo', () => {
+  const menuItem = (name: string) => screen.getByRole('menuitem', { name })
+
+  it('in the description editor', () => {
+    render(<AppContextMenu />)
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('data-undo', 'workbench')
+    document.body.appendChild(wrapper)
+    const view = new EditorView({ parent: wrapper, doc: 'text' })
+    useStore.setState({
+      flistWorking: { [CID]: workingSlot(workbenchPayload({ kinks: { '12': 'yes' } })) },
+      flistActiveCharacterId: CID
+    })
+
+    fireEvent.contextMenu(view.contentDOM)
+    expect(menuItem('Undo')).toHaveProperty('disabled', true)
+    expect(menuItem('Redo')).toHaveProperty('disabled', true)
+
+    useStore.getState().flistStandardKinkSet(CID, '12', 'fave')
+    fireEvent.contextMenu(view.contentDOM)
+    expect(menuItem('Undo')).toHaveProperty('disabled', false)
+    expect(menuItem('Redo')).toHaveProperty('disabled', true)
+    fireEvent.click(menuItem('Undo'))
+    expect(kinks()).toEqual({ '12': 'yes' })
+    fireEvent.contextMenu(view.contentDOM)
+    expect(menuItem('Undo')).toHaveProperty('disabled', true)
+    expect(menuItem('Redo')).toHaveProperty('disabled', false)
+    view.destroy()
+    cleanup()
+  })
+
+  it('in a caption', () => {
+    render(<AppContextMenu />)
+    const caption = document.createElement('textarea')
+    caption.setAttribute('data-undo', 'workbench')
+    document.body.appendChild(caption)
+    useStore.setState({
+      flistWorking: { [CID]: workingSlot(workbenchPayload({ kinks: { '12': 'yes' } })) },
+      flistActiveCharacterId: CID
+    })
+
+    fireEvent.contextMenu(caption)
+    expect(menuItem('Undo')).toHaveProperty('disabled', true)
+    useStore.getState().flistStandardKinkSet(CID, '12', 'fave')
+    fireEvent.contextMenu(caption)
+    expect(menuItem('Undo')).toHaveProperty('disabled', false)
+    expect(menuItem('Redo')).toHaveProperty('disabled', true)
     cleanup()
   })
 })

@@ -1,5 +1,5 @@
 import { EditorView } from '@codemirror/view'
-import { undo, redo } from '@codemirror/commands'
+import { undo, redo, undoDepth, redoDepth } from '@codemirror/commands'
 import { useStore } from '../state'
 import { canRedo, canUndo } from '../state/undoStack'
 
@@ -82,12 +82,15 @@ function workbenchTarget(): string | null {
   return s.flistActiveCharacterId
 }
 
-function editorUndo(action: UndoAction, target: Element | null): void {
+function editorViewFor(target: Element | null): EditorView | null {
   const cmEl =
     (target?.closest('.cm-editor') as HTMLElement | null) ??
     (document.querySelector('.cm-editor') as HTMLElement | null)
-  if (!cmEl) return
-  const view = EditorView.findFromDOM(cmEl)
+  return cmEl ? EditorView.findFromDOM(cmEl) : null
+}
+
+function editorUndo(action: UndoAction, target: Element | null): void {
+  const view = editorViewFor(target)
   if (!view) return
   if (action === 'undo') undo(view)
   else redo(view)
@@ -136,6 +139,27 @@ export function workbenchUndoState(): { undo: boolean; redo: boolean } | null {
   const characterId = workbenchTarget()
   if (!characterId) return null
   return { undo: canUndo(characterId), redo: canRedo(characterId) }
+}
+
+/** Whether an undo or redo aimed at `target` has anything to do, for
+ *  the right-click menu: the Workbench's stack for a Workbench field,
+ *  the editor's history for another editor. A plain text input cannot
+ *  say, so it offers both while it is writable. */
+export function undoStateAt(target: Element | null): { undo: boolean; redo: boolean } {
+  switch (routeOf(target)) {
+    case 'workbench':
+      return workbenchUndoState() ?? { undo: false, redo: false }
+    case 'editor': {
+      const view = editorViewFor(target)
+      if (!view || !view.state.facet(EditorView.editable)) return { undo: false, redo: false }
+      return { undo: undoDepth(view.state) > 0, redo: redoDepth(view.state) > 0 }
+    }
+    case 'native': {
+      const input = target as HTMLInputElement | HTMLTextAreaElement
+      const writable = !input.readOnly && !input.disabled
+      return { undo: writable, redo: writable }
+    }
+  }
 }
 
 /** The undo key a keydown carries: Ctrl+Z undoes, Ctrl+Y and
