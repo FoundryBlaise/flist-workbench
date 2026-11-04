@@ -40,6 +40,14 @@ export interface MergeResult {
 export const GALLERY_ORDER = 'images#order'
 export const CUSTOM_KINK_ORDER = 'custom_kinks#order'
 
+/** A field key's parts: the payload key it sits under, and the member's
+ *  id for a field inside a keyed container or the gallery
+ *  (`infotags.9` is `infotags` and `9`; `settings` has no id). */
+export function splitField(key: string): { top: string; id: string | null } {
+  const dot = key.indexOf('.')
+  return dot < 0 ? { top: key, id: null } : { top: key.slice(0, dot), id: key.slice(dot + 1) }
+}
+
 /** Containers whose entries are fields of their own. */
 const KEYED = new Set(['character', 'infotags', 'kinks', 'custom_kinks'])
 /** Marks a keyed container (or the gallery) as present on a side. */
@@ -172,13 +180,12 @@ export function mergeWorkbench(
   const payload: WorkingPayload = {}
   for (const [key, value] of merged) {
     if (value === undefined || key === GALLERY_ORDER || key === CUSTOM_KINK_ORDER) continue
-    const dot = key.indexOf('.')
-    const top = dot < 0 ? key : key.slice(0, dot)
+    const { top, id } = splitField(key)
     if (top === 'images') {
-      if (dot < 0) payload.images = []
+      if (id === null) payload.images = []
       continue
     }
-    if (dot < 0) {
+    if (id === null) {
       if (value === PRESENT) {
         if (!isPlainObject(payload[key])) payload[key] = {}
       } else {
@@ -187,16 +194,16 @@ export function mergeWorkbench(
       continue
     }
     if (!isPlainObject(payload[top])) payload[top] = {}
-    ;(payload[top] as Record<string, unknown>)[key.slice(dot + 1)] = value
+    ;(payload[top] as Record<string, unknown>)[id] = value
   }
 
   // The gallery: its members are the images whose field kept them.
   if (Array.isArray(payload.images)) {
-    const members = new Set(
-      [...merged.keys()]
-        .filter((k) => k.startsWith('images.') && merged.get(k) !== undefined)
-        .map((k) => k.slice('images.'.length))
-    )
+    const members = new Set<string>()
+    for (const [k, v] of merged) {
+      const { top, id } = splitField(k)
+      if (top === 'images' && id !== null && v !== undefined) members.add(id)
+    }
     const ids = arrange(merged.get(GALLERY_ORDER) as string[], members, [
       galleryIds[2],
       galleryIds[1]
