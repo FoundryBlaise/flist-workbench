@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
-import { undo, redo } from '@codemirror/commands'
+import { runUndoRedo, undoStateAt, workbenchUndoState } from '../lib/undoRedo'
 import { findEnclosingTag } from '../lib/bbcode/findEnclosingTag'
 import { applyAction, TOOLBAR_ACTIONS, type ToolbarAction } from '../features/editor/Toolbar'
 
@@ -15,7 +15,10 @@ import { applyAction, TOOLBAR_ACTIONS, type ToolbarAction } from '../features/ed
  *   - Inside an input/textarea/contenteditable: standard clipboard
  *     items.
  *   - On a regular text selection: Copy.
+ *   - Anywhere else while a Workbench is open: Undo / Redo of the
+ *     Workbench.
  *
+ * Undo and Redo go through runUndoRedo, the same routing as the keys.
  * Outside those targets it stays silent (no menu, no item to show).
  */
 type Item = {
@@ -226,12 +229,28 @@ function buildItems(e: MouseEvent): Item[] {
   ) as HTMLElement | null
   if (input) return buildInputItems(input)
 
+  const items: Item[] = []
   const sel = window.getSelection()
   if (sel && !sel.isCollapsed && sel.toString().length > 0) {
-    return [{ label: 'Copy', onClick: () => document.execCommand('copy') }]
+    items.push({ label: 'Copy', onClick: () => document.execCommand('copy') })
   }
-
-  return []
+  const workbench = workbenchUndoState()
+  if (workbench) {
+    if (items.length) items.push({ label: '', separator: true })
+    items.push(
+      {
+        label: 'Undo',
+        enabled: workbench.undo,
+        onClick: () => runUndoRedo('undo', target)
+      },
+      {
+        label: 'Redo',
+        enabled: workbench.redo,
+        onClick: () => runUndoRedo('redo', target)
+      }
+    )
+  }
+  return items
 }
 
 function buildImageItems(img: HTMLImageElement): Item[] {
@@ -334,20 +353,21 @@ function buildEditorItems(
   if (!view) return []
   const isEditable = view.state.facet(EditorView.editable)
   const hasSelection = !view.state.selection.main.empty
+  const undoable = undoStateAt(editorEl)
   const items: Item[] = [
     {
       label: 'Undo',
-      enabled: isEditable,
+      enabled: undoable.undo,
       onClick: () => {
-        undo(view)
+        runUndoRedo('undo', editorEl)
         view.focus()
       }
     },
     {
       label: 'Redo',
-      enabled: isEditable,
+      enabled: undoable.redo,
       onClick: () => {
-        redo(view)
+        runUndoRedo('redo', editorEl)
         view.focus()
       }
     },
@@ -473,21 +493,22 @@ function buildInputItems(input: HTMLElement): Item[] {
   const focusFirst = () => {
     if (document.activeElement !== input) input.focus()
   }
+  const undoable = undoStateAt(input)
   return [
     {
       label: 'Undo',
-      enabled: !readonly,
+      enabled: !readonly && undoable.undo,
       onClick: () => {
         focusFirst()
-        document.execCommand('undo')
+        runUndoRedo('undo', input)
       }
     },
     {
       label: 'Redo',
-      enabled: !readonly,
+      enabled: !readonly && undoable.redo,
       onClick: () => {
         focusFirst()
-        document.execCommand('redo')
+        runUndoRedo('redo', input)
       }
     },
     { label: '', separator: true },

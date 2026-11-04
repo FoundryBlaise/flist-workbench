@@ -72,8 +72,10 @@ not the preload. ADR 0002 describes what shipped.
   (`tools_ops.py:547-563`).
 - `clear_labels` requires `confirm` and moves the cleared Labels to the
   Trash first.
-- `flistUndoResetWorking` writes against the current etag and can revert
-  a model's edit made in the meantime (`state.ts:4232`).
+- The reset-to-Live undo (then `flistUndoResetWorking`) wrote against the
+  current etag and could revert a model's edit made in the meantime.
+  Spec #7 replaced it: a reset to Live is an entry on the Workbench undo
+  stack, and a later change is its own entry, undone first.
 - The portable build runs the updater (`main.ts:509-605`), downloads the
   setup, installs it silently elsewhere and stays old (ADR 0005). Gate
   the updater on `PORTABLE_EXECUTABLE_DIR`; portable only links to the

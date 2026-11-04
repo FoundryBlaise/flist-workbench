@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
+import { WORKBENCH_UNDO_MARK } from '../../../lib/undoRedo'
 import type { InfotagDescriptor } from '../infotagsResolver'
+
+/** How a field hands its value to the Workbench. A text field calls it
+ *  on every keystroke with `typing`, so what is typed is in the
+ *  Workbench at once: an autosave, a close or a model's change merged
+ *  in meanwhile all see it as mine. */
+export type FieldCommit = (next: string, opts?: { typing: true }) => void
 
 export function TextField({
   descriptor,
@@ -8,6 +15,7 @@ export function TextField({
   liveValue,
   readOnly,
   onCommit,
+  onEndTyping,
   onReset
 }: {
   descriptor: InfotagDescriptor
@@ -15,7 +23,8 @@ export function TextField({
   overlaid: boolean
   liveValue: string | null
   readOnly: boolean
-  onCommit: (next: string) => void
+  onCommit: FieldCommit
+  onEndTyping?: () => void
   onReset: () => void
 }) {
   const [local, setLocal] = useState(value)
@@ -37,10 +46,12 @@ export function TextField({
         maxLength={descriptor.uiHint.maxLength}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={() => {
-          if (local !== value) onCommit(local)
+        {...WORKBENCH_UNDO_MARK}
+        onChange={(e) => {
+          setLocal(e.target.value)
+          onCommit(e.target.value, { typing: true })
         }}
+        onBlur={() => onEndTyping?.()}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             ;(e.currentTarget as HTMLInputElement).blur()
@@ -58,6 +69,7 @@ export function NumberField({
   liveValue,
   readOnly,
   onCommit,
+  onEndTyping,
   onReset
 }: {
   descriptor: InfotagDescriptor
@@ -65,7 +77,8 @@ export function NumberField({
   overlaid: boolean
   liveValue: string | null
   readOnly: boolean
-  onCommit: (next: string) => void
+  onCommit: FieldCommit
+  onEndTyping?: () => void
   onReset: () => void
 }) {
   const [local, setLocal] = useState(value)
@@ -109,10 +122,14 @@ export function NumberField({
         placeholder={descriptor.uiHint.placeholder ?? '—'}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
-        onChange={(e) => setLocal(e.target.value)}
+        {...WORKBENCH_UNDO_MARK}
+        onChange={(e) => {
+          setLocal(e.target.value)
+          onCommit(e.target.value, { typing: true })
+        }}
         onBlur={() => {
           setShowInvalid(invalid || outOfRange)
-          if (local !== value) onCommit(local)
+          onEndTyping?.()
         }}
       />
       {descriptor.uiHint.unitSuffix && (

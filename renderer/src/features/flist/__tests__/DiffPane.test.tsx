@@ -30,7 +30,8 @@ function seed(state: {
     saveStatus: 'idle' as const,
     saveError: null,
     lastSavedAt: null,
-    materialised: true
+    materialised: true,
+    saved: null
   }
   useStore.setState({
     flistWorking: { '99': slot },

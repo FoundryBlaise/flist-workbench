@@ -1,22 +1,21 @@
-import { useEffect, useMemo, useRef } from 'react'
-import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { useLayoutEffect, useMemo, useRef } from 'react'
+import CodeMirror, { ExternalChange, type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { historyField } from '@codemirror/commands'
 import { selectWorkingSlot, useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
-
-// Per-character / per-set CodeMirror history pool. The map key
-// matches the `cmKey` we pass to <CodeMirror>; on unmount we stash
-// the EditorState JSON (doc + selection + history field), and on
-// re-mount we hydrate via @uiw's initialState. Stays in process
-// memory — cleared whenever the renderer reloads.
-const historyStash = new Map<string, ReturnType<EditorState['toJSON']>>()
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { KinksPane } from '../flist/KinksPane'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane } from '../flist/DiffPane'
 import { ImagesTab } from '../flist/ImagesTab'
+
+/** Where the cursor was in each editor (by its key below) when it was
+ *  last left, so coming back to the Description tab, which mounts a new
+ *  editor, puts it there again. Only the selection: the editor keeps no
+ *  history of its own. */
+const lastSelection = new Map<string, { anchor: number; head: number }>()
 
 function formatKindLabel(kind: string): string {
   switch (kind) {
@@ -230,46 +229,34 @@ function EditorActiveTabBody(props: {
   flistActiveId: string | null
 }) {
   const activeTab = useStore((s) => s.editorActiveTab)
+  const endTyping = useStore((s) => s.flistEndTyping)
   const flistActiveId = props.flistActiveId
-  // Pin CodeMirror's identity to (character, working-set, Live ↔ working-set)
-  // so its undo history can't cross those boundaries — otherwise
-  // spamming Ctrl+Z rewinds into the previous character's content
-  // while the sidebar still shows the new one as active.
-  //
-  // Per-character history pool: when the user navigates away we stash
-  // the EditorState JSON keyed by cmKey, and when they come back we
-  // hydrate via @uiw's `initialState`. Storage lives in module memory
-  // for the Workbench session — clears on restart, no disk
-  // persistence. If the doc has drifted since the stash (e.g. an
-  // external F-list pull rewrote the working slot), @uiw's
-  // value-prop reconcile fires after mount and pushes the latest
-  // content over the stashed doc; the history sticks.
+  // A fresh editor per character and per view (Workbench, Live,
+  // read-only), so a selection never carries over from another text.
+  // The editor keeps no undo history of its own: typing in it is a
+  // burst per pause or blur on the character's Workbench undo stack,
+  // and Ctrl+Z here goes to that stack (lib/undoRedo.ts). Leaving the
+  // tab and coming back therefore loses nothing, and a change from
+  // outside the editor (a reload, an undo, another field's reset) is
+  // never an entry Ctrl+Z here could replay over the whole text.
   const rowForKey = useStore((s) =>
     flistActiveId && s.flistViewingLive[flistActiveId] ? 'live' : 'workbench'
   )
   const cmKey = `${flistActiveId ?? 'doc'}|${rowForKey}|${
     props.readOnly ? 'ro' : 'rw'
   }`
-  const initialCmState = (() => {
-    const stash = historyStash.get(cmKey)
-    if (!stash) return undefined
-    return { json: stash, fields: { history: historyField } }
-  })()
-  const viewRef = props.viewRef
-  useEffect(() => {
-    return () => {
-      const v = viewRef.current
-      if (!v) return
-      try {
-        const json = v.state.toJSON({ history: historyField })
-        historyStash.set(cmKey, json)
-      } catch {
-        // Bad serialise → drop the stash for this key so we don't
-        // crash on the next hydrate.
-        historyStash.delete(cmKey)
-      }
-    }
-  }, [cmKey, viewRef])
+  // Show a text that changed outside the editor (an undo, a reload) as
+  // the smallest edit between the two, so the cursor stays where it
+  // was. Layout effect: it runs before CodeMirror's own reconcile,
+  // which would replace the whole text and wait while the user types.
+  const cmRef = props.cmRef
+  useLayoutEffect(() => {
+    const view = cmRef.current?.view
+    if (!view) return
+    const change = smallestChange(view.state.doc.toString(), props.content)
+    if (!change) return
+    view.dispatch({ changes: change, annotations: [ExternalChange.of(true)] })
+  }, [cmRef, props.content])
 
   if (flistActiveId) {
     if (activeTab === 'profile-fields') {
@@ -323,16 +310,22 @@ function EditorActiveTabBody(props: {
         <div className="editor-error">Couldn't save: {props.saveError}</div>
       )}
       <div className="editor-cm-row">
-        <div className="editor-cm" data-testid="editor-cm">
+        <div
+          className="editor-cm"
+          data-testid="editor-cm"
+          {...WORKBENCH_UNDO_MARK}
+          onBlur={() => endTyping(flistActiveId)}
+        >
           <CodeMirror
             key={cmKey}
-            initialState={initialCmState}
             ref={props.cmRef}
             value={props.content}
             theme="dark"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             extensions={props.extensions as any}
             basicSetup={{
+              history: false,
+              historyKeymap: false,
               lineNumbers: false,
               foldGutter: false,
               highlightActiveLine: false,
@@ -340,12 +333,46 @@ function EditorActiveTabBody(props: {
               indentOnInput: false
             }}
             onChange={(value) => props.setContent(value)}
+            onUpdate={(update) => {
+              if (update.selectionSet) {
+                const { anchor, head } = update.state.selection.main
+                lastSelection.set(cmKey, { anchor, head })
+              }
+            }}
             onCreateEditor={(view) => {
               props.viewRef.current = view
+              const at = lastSelection.get(cmKey)
+              if (at) {
+                const end = view.state.doc.length
+                view.dispatch({
+                  selection: { anchor: Math.min(at.anchor, end), head: Math.min(at.head, end) },
+                  scrollIntoView: true
+                })
+              }
             }}
           />
         </div>
       </div>
     </div>
   )
+}
+
+/** The one change that turns `from` into `to`, keeping what they share
+ *  at both ends; null when they are equal. */
+function smallestChange(
+  from: string,
+  to: string
+): { from: number; to: number; insert: string } | null {
+  if (from === to) return null
+  let start = 0
+  const max = Math.min(from.length, to.length)
+  while (start < max && from[start] === to[start]) start++
+  let end = 0
+  while (
+    end < max - start &&
+    from[from.length - 1 - end] === to[to.length - 1 - end]
+  ) {
+    end++
+  }
+  return { from: start, to: from.length - end, insert: to.slice(start, to.length - end) }
 }

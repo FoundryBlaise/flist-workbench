@@ -760,15 +760,19 @@ replace = '''
 id = "R05"
 suite = "renderer"
 file = "renderer/src/state.ts"
-breaks = "The app's own save, echoed back as a change event, raises the external-change banner."
+breaks = "A change event for a write the window already holds is taken in again: the banner, or a second reload and undo entry."
 tests = ["@renderer"]
 audit = "killed"
 spec = 7
 # audit: M05 own echo (same etag) raises external-change banner
+# Re-anchored for spec #7 (#113): the guard left the set() callback; an
+# echo the guard misses now sets off a reload and a second undo entry.
 find = '''
-if (slot && change.etag && slot.etag === change.etag) return {}'''
+if (slot && change.etag && slot.etag === change.etag) return
+'''
 replace = '''
-if (slot && change.etag && slot.etag === change.etag && false) return {}'''
+if (slot && change.etag && slot.etag === change.etag && false) return
+'''
 
 [[mutation]]
 id = "R06"
@@ -779,30 +783,27 @@ tests = ["@renderer"]
 audit = "survived"
 spec = 7
 # audit: M06 reload-after-external-change leaves editor showing stale text
+# Since #109 the reload is a written commit, and the editor reads the
+# reloaded description back from the payload in _editorFollows.
 find = '''
-flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-        }
-        if (s.flistActiveCharacterId === characterId) {
-          patch.editorContent = descriptionOf(payload)'''
+return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }'''
 replace = '''
-flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-        }
-        if (s.flistActiveCharacterId === characterId) {
-          void descriptionOf'''
+return commit.keepPending ? { editorContent } : { editorDirty: false }'''
 
 [[mutation]]
 id = "R07"
 suite = "renderer"
 file = "renderer/src/state.ts"
-breaks = "Keeping my version after an external change saves against my stale etag."
+breaks = "Merging my unsaved edits with another writer's change saves the merge over my stale etag instead of theirs."
 tests = ["@renderer"]
 audit = "killed"
 spec = 7
-# audit: M07 keep-mine writes against own stale etag
+# audit: M07 keep-mine writes against own stale etag; #114 replaced
+# keep-mine with the field merge, which takes the other writer's etag.
 find = '''
-api.flistWorkbenchPayloadPut(characterId, slot.payload, change.etag)'''
+_mergeExternal(get, set, characterId, { label, theirs: payload, etag: res.etag }, settled, cleared)'''
 replace = '''
-api.flistWorkbenchPayloadPut(characterId, slot.payload, slot.etag)'''
+_mergeExternal(get, set, characterId, { label, theirs: payload, etag: slot.etag as string }, settled, cleared)'''
 
 [[mutation]]
 id = "R08"
@@ -840,7 +841,7 @@ const current = slot'''
 id = "R10"
 suite = "renderer"
 file = "renderer/src/state/workbenchEvents.ts"
-breaks = "A Workbench change event reaches the window without its etag, so keeping my version after the external change saves without an etag and is refused."
+breaks = "A Workbench change event reaches the window without its etag, so the window cannot tell its own save from another writer's and reads the Workbench again after every save."
 tests = ["@renderer"]
 audit = "survived"
 spec = 7
@@ -972,15 +973,16 @@ for (const entry of list) if (entry.choice !== 'undecided') buckets[entry.choice
 id = "R19"
 suite = "renderer"
 file = "renderer/src/lib/undoRedo.ts"
-breaks = "Undo and redo are swapped in the description editor."
+breaks = "Ctrl+Z redoes and Ctrl+Y undoes the Workbench."
 tests = ["@renderer"]
 audit = "survived"
 spec = 7
-# audit: M19 undo/redo swapped for CodeMirror
+# audit: M19 undo/redo swapped for CodeMirror; re-anchored in #110 on
+# the Workbench routing, which every key and menu goes through
 find = '''
-if (action === 'undo') undo(view)'''
+if (action === 'undo') store.flistUndo(characterId)'''
 replace = '''
-if (action !== 'undo') undo(view)'''
+if (action !== 'undo') store.flistUndo(characterId)'''
 
 [[mutation]]
 id = "R20"
@@ -992,7 +994,7 @@ audit = "survived"
 spec = 7
 # audit: M20 undo in text inputs falls through to CodeMirror
 find = '''
-    active instanceof HTMLInputElement ||
+    target instanceof HTMLInputElement ||
 '''
 replace = '''
     false ||

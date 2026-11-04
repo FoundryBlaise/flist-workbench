@@ -5,9 +5,15 @@ import {
   resolveInfotagDescriptors,
   type InfotagDescriptor
 } from './infotagsResolver'
-import { ListField, NumberField, TextField, UnknownField } from './infotagFields/TextField'
+import {
+  ListField,
+  NumberField,
+  TextField,
+  UnknownField,
+  type FieldCommit
+} from './infotagFields/TextField'
 import { MappingListStaleness } from './MappingListStaleness'
-import { ResetUndoBanner } from './ResetUndoBanner'
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 
 const COLLAPSE_KEY_PREFIX = 'flist-workbench:profile-fields-group-collapsed:'
 
@@ -38,6 +44,7 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
   const driftBanner = useStore((s) => s.flistDriftBanners[characterId])
   const setField = useStore((s) => s.flistSetWorkingField)
   const resetField = useStore((s) => s.flistResetWorkingField)
+  const endTyping = useStore((s) => s.flistEndTyping)
   const resetToLive = useStore((s) => s.flistResetWorkingToLive)
   const loadMapping = useStore((s) => s.flistLoadMapping)
   const dismissDrift = useStore((s) => s.flistDismissDriftBanner)
@@ -244,8 +251,6 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
         </div>
       )}
 
-      <ResetUndoBanner characterId={characterId} />
-
       {/* Custom title row, top of the tab per §4.5 */}
       <InfotagSection
         groupId="character"
@@ -272,7 +277,8 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
                 : null
               : null
           }
-          onCommit={(next) => setField(characterId, 'character.custom_title', next)}
+          onCommit={(next, opts) => setField(characterId, 'character.custom_title', next, opts)}
+          onEndTyping={() => endTyping(characterId)}
           onReset={() => resetField(characterId, 'character.custom_title')}
         />
       </InfotagSection>
@@ -297,9 +303,10 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
               overlaid={overlay.has(`infotags.${descriptor.id}`)}
               liveValue={readInfotagLive(live, descriptor.id)}
               readOnly={false}
-              onCommit={(next) =>
-                setField(characterId, `infotags.${descriptor.id}`, next)
+              onCommit={(next, opts) =>
+                setField(characterId, `infotags.${descriptor.id}`, next, opts)
               }
+              onEndTyping={() => endTyping(characterId)}
               onReset={() => resetField(characterId, `infotags.${descriptor.id}`)}
               onForceRefreshMapping={() => void loadMapping({ force: true })}
             />
@@ -421,12 +428,13 @@ function InfotagFieldFor(props: {
   overlaid: boolean
   liveValue: string | null
   readOnly: boolean
-  onCommit: (next: string) => void
+  onCommit: FieldCommit
+  onEndTyping: () => void
   onReset: () => void
   onForceRefreshMapping: () => void
 }) {
   const { descriptor } = props
-  if (descriptor.type === 'list') return <ListField {...props} />
+  if (descriptor.type === 'list') return <ListField {...props} onCommit={(next) => props.onCommit(next)} />
   if (descriptor.type === 'number') return <NumberField {...props} />
   if (descriptor.type === 'text') return <TextField {...props} />
   return (
@@ -445,13 +453,15 @@ function CustomTitleField({
   overlaid,
   liveValue,
   onCommit,
+  onEndTyping,
   onReset
 }: {
   characterId: string
   value: string
   overlaid: boolean
   liveValue: string | null
-  onCommit: (next: string) => void
+  onCommit: FieldCommit
+  onEndTyping: () => void
   onReset: () => void
 }) {
   const [local, setLocal] = useState(value)
@@ -482,10 +492,12 @@ function CustomTitleField({
           type="text"
           className="infotag-field-input"
           value={local}
-          onChange={(e) => setLocal(e.target.value)}
-          onBlur={() => {
-            if (local !== value) onCommit(local)
+          {...WORKBENCH_UNDO_MARK}
+          onChange={(e) => {
+            setLocal(e.target.value)
+            onCommit(e.target.value, { typing: true })
           }}
+          onBlur={onEndTyping}
           placeholder="—"
         />
       </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { api, type FlistImageReferences } from '../../lib/api'
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { selectWorkingSlot, useStore } from '../../state'
 import {
   EMPTY_SELECTION,
@@ -97,7 +98,9 @@ export function ImagesTab({
   const trashImages = useStore((s) => s.flistTrashImages)
   const moveToProfile = useStore((s) => s.flistMoveImageToProfile)
   const moveToPool = useStore((s) => s.flistMoveImageToPool)
+  const addToProfile = useStore((s) => s.flistAddImagesToProfile)
   const setGallery = useStore((s) => s.flistSetGalleryImages)
+  const endTyping = useStore((s) => s.flistEndTyping)
   const openExportRestore = useStore((s) => s.flistOpenExportRestore)
 
   useEffect(() => {
@@ -274,41 +277,9 @@ export function ImagesTab({
     }
   }
 
-  // ---- gallery <-> pool moves (5s undo toast) -------------------------
-  const [moveUndo, setMoveUndo] = useState<
-    | {
-        previous: GalleryEntry[]
-        message: string
-      }
-    | null
-  >(null)
-  useEffect(() => {
-    if (!moveUndo) return
-    const id = window.setTimeout(() => setMoveUndo(null), TOAST_MS)
-    return () => window.clearTimeout(id)
-  }, [moveUndo])
-
-  const handleMoveToPool = (imageId: string) => {
-    setMoveUndo({
-      previous: gallery,
-      message: 'Moved to pool. Bytes stay on disk.'
-    })
-    moveToPool(characterId, imageId)
-  }
-
-  const handleMoveToProfile = (imageId: string) => {
-    setMoveUndo({
-      previous: gallery,
-      message: 'Added to profile.'
-    })
-    moveToProfile(characterId, imageId)
-  }
-
-  const undoMove = () => {
-    if (!moveUndo) return
-    setGallery(characterId, moveUndo.previous)
-    setMoveUndo(null)
-  }
+  // ---- gallery <-> pool moves (Ctrl+Z undoes them) ---------------------
+  const handleMoveToPool = (imageId: string) => moveToPool(characterId, imageId)
+  const handleMoveToProfile = (imageId: string) => moveToProfile(characterId, imageId)
 
   const moveGalleryEntry = (imageId: string, dir: -1 | 1) => {
     const idx = gallery.findIndex((e) => e.image_id === imageId)
@@ -325,10 +296,13 @@ export function ImagesTab({
     )
   }
 
+  // A caption's keystrokes coalesce into one undo entry per pause or
+  // blur, like the description's.
   const setCaption = (imageId: string, description: string) => {
     setGallery(
       characterId,
-      gallery.map((e) => (e.image_id === imageId ? { ...e, description } : e))
+      gallery.map((e) => (e.image_id === imageId ? { ...e, description } : e)),
+      { typing: `images.${imageId}.description` }
     )
   }
 
@@ -348,15 +322,11 @@ export function ImagesTab({
     }
   }
 
-  // Appends in the order the images were picked, under one undo.
+  // Appends in the order the images were picked, as one undo step.
   const addSelectedToGallery = () => {
     const ids = sel.ids
     if (!ids.length) return
-    setMoveUndo({
-      previous: gallery,
-      message: `${ids.length} added to the profile.`
-    })
-    for (const id of ids) moveToProfile(characterId, id)
+    addToProfile(characterId, ids)
     setSel(EMPTY_SELECTION)
   }
 
@@ -431,7 +401,7 @@ export function ImagesTab({
                 className="flist-images-pane__add"
                 onClick={() => setView('trash')}
                 data-testid="flist-images-trash-toggle"
-                title="Images moved out of the pool. Put them back, or delete them for good."
+                title="Images moved out of the Pool. Put them back, or delete them for good."
               >
                 Trash{trashCount ? ` (${trashCount})` : ''}
               </button>
@@ -655,7 +625,9 @@ export function ImagesTab({
                     value={entry.description}
                     placeholder="(no description)"
                     disabled={readOnly}
+                    {...WORKBENCH_UNDO_MARK}
                     onChange={(e) => setCaption(entry.image_id, e.target.value)}
+                    onBlur={() => endTyping(characterId)}
                     rows={2}
                   />
                 </div>
@@ -683,7 +655,7 @@ export function ImagesTab({
                       type="button"
                       className="flist-images-gallery-item__btn"
                       onClick={() => handleMoveToPool(entry.image_id)}
-                      title="Move to pool (image stays on disk)"
+                      title="Move to Pool (image stays on disk)"
                     >
                       ×
                     </button>
@@ -691,7 +663,7 @@ export function ImagesTab({
                       type="button"
                       className="flist-images-gallery-item__btn flist-images-gallery-item__btn--danger"
                       onClick={() => setConfirmTrash([entry.image_id])}
-                      title="Move to Trash (off the profile and out of the pool)"
+                      title="Move to Trash (off the profile and out of the Pool)"
                       data-testid="flist-images-gallery-trash"
                     >
                       Trash
@@ -705,7 +677,7 @@ export function ImagesTab({
                 Empty gallery.{' '}
                 {readOnly
                   ? ''
-                  : 'Drag from the pool, or use → on a pool row to add.'}
+                  : 'Drag from the Pool, or use → on a Pool row to add.'}
               </li>
             )}
           </ol>
@@ -756,22 +728,6 @@ export function ImagesTab({
           </button>
         </div>
       )}
-      {moveUndo && (
-        <div
-          className="flist-images-toast flist-images-toast--undo"
-          role="status"
-        >
-          <span>{moveUndo.message}</span>
-          <button
-            type="button"
-            className="flist-images-toast__action"
-            onClick={undoMove}
-            data-testid="flist-images-move-undo"
-          >
-            Undo
-          </button>
-        </div>
-      )}
 
       {/* ---- Trash confirmation: what goes, and where it's still used ---- */}
       {confirmTrash && (
@@ -779,8 +735,8 @@ export function ImagesTab({
           title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the Trash?`}
           body={
             confirmTrash.some((id) => galleryImageIds.has(id))
-              ? 'It comes off the profile and leaves the pool. Putting it back from the Trash returns it to the pool, until you empty the Trash.'
-              : 'They leave the pool and can be put back from the Trash until you empty it.'
+              ? 'It comes off the profile and leaves the Pool. Putting it back from the Trash returns it to the Pool, until you empty the Trash.'
+              : 'They leave the Pool and can be put back from the Trash until you empty it.'
           }
           notes={usageNotes(confirmTrash, refs)}
           thumbs={confirmTrash.flatMap((id) => {

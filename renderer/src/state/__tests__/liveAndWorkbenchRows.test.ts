@@ -34,13 +34,13 @@ beforeEach(() => {
     flistViewingLive: {},
     flistWorkbenchInfo: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {
       [CID]: archiveEntry(livePayload({ character: { description: 'published' } }))
     },
     flistRoster: [{ id: CID, name: 'Wren Ashdown' }] as never,
     flistActiveCharacterId: CID,
     flistBrowseBackup: null,
-    flistResetUndo: null,
     flistRestoreRefusal: {},
     editorReadOnly: false,
     editorContent: 'my draft',

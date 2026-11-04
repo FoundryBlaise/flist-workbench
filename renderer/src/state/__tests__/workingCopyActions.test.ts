@@ -1,7 +1,7 @@
 // Tier 2 §10 "Missing tests" — covers the action surface QA flagged
 // as the most load-bearing untested paths: autosave debounce
 // interleaving, 409 etag-mismatch handling, openWorking + archive race,
-// reset-to-Live → undo round-trip, and signOut drains pending edits.
+// reset to Live, and signOut drains pending edits.
 //
 // All tests talk to the shared fake sidecar, so the real one isn't
 // touched. Held requests (`fake.hold`) are how the in-flight races
@@ -27,10 +27,9 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {},
     flistCustomKinksUI: {},
-    flistResetUndo: null,
-    flistTombstoneUndo: null,
     flistActiveCharacterId: null,
     editorReadOnly: false,
     editorContent: '',
@@ -328,22 +327,26 @@ describe('flistFlushWorking 409 etag-mismatch path', () => {
     await vi.advanceTimersByTimeAsync(500)
     const slot = useStore.getState().flistWorking['99']
     expect(slot.unsavedDirty).toBe(true)
-    expect(slot.saveError).toMatch(/whose version to keep/i)
+    expect(slot.saveError).toMatch(/merging their version/i)
     expect(slot.etag).toBe('seed-etag')
   })
 
-  it('raises the conflict banner carrying the server etag', async () => {
+  it('reads the version on disk to merge the edits with', async () => {
+    // The merge itself is in fieldMerge.test.ts.
     seedSlot('99', { character: { description: 'mine' } })
     fake.on(SAVE, conflict)
+    fake.hold(`GET ${BENCH_URL}`)
     useStore.getState().flistSetWorkingField('99', 'character.description', 'mine-updated')
     await vi.advanceTimersByTimeAsync(500)
-    const change = useStore.getState().flistExternalChange['99']
-    expect(change).toBeTruthy()
-    expect(change?.etag).toBe('server-etag')
+    expect(fake.pending(`GET ${BENCH_URL}`)).toHaveLength(1)
+    expect(useStore.getState().flistExternalChange['99']?.etag).toBe('server-etag')
   })
 })
 
-describe('external-change resolution', () => {
+describe('external changes', () => {
+  // With nothing unsaved the store takes a change in by itself
+  // (modelChange.test.ts); with unsaved edits it merges
+  // (fieldMerge.test.ts).
   it('ignores a change carrying the etag we already hold', () => {
     // Our own write comes back over the event stream too.
     seedSlot('99', { character: { description: 'mine' } })
@@ -352,92 +355,7 @@ describe('external-change resolution', () => {
       origin: 'mcp:set_description'
     })
     expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
-  })
-
-  it('raises a banner for a change made by something else', () => {
-    seedSlot('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    const change = useStore.getState().flistExternalChange['99']
-    expect(change?.origin).toBe('mcp:set_description')
-  })
-
-  it('reload takes their version and clears the banner', async () => {
-    seedSlot('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(
-      `GET ${BENCH_URL}`,
-      json(payloadRead(workbenchPayload({ character: { description: 'theirs' } }), 'theirs'))
-    )
-    await useStore.getState().flistReloadAfterExternalChange('99')
-    const slot = useStore.getState().flistWorking['99']
-    const char = slot.payload.character as { description?: string } | undefined
-    expect(char?.description).toBe('theirs')
-    expect(slot.unsavedDirty).toBe(false)
-    expect(slot.etag).toBe('theirs')
-    expect(useStore.getState().flistExternalChange['99']).toBeNull()
-  })
-
-  it('after the reload the editor shows the reloaded description', async () => {
-    // The slot taking their version is half of it; the open editor has
-    // to show it too, or the next keystroke saves the old text over it.
-    seedSlot('99', { character: { description: 'Lady Amber Blaise, as I left her' } })
-    useStore.setState({ editorContent: 'Lady Amber Blaise, as I left her' })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(
-      `GET ${BENCH_URL}`,
-      json(
-        payloadRead(
-          workbenchPayload({
-            _overlay: ['character.description'],
-            character: { description: 'Lady Amber Blaise, as the model wrote her' }
-          }),
-          'theirs'
-        )
-      )
-    )
-
-    await useStore.getState().flistReloadAfterExternalChange('99')
-
-    expect(useStore.getState().editorContent).toBe(
-      'Lady Amber Blaise, as the model wrote her'
-    )
-    expect(useStore.getState().editorDirty).toBe(false)
-  })
-
-  it('keep-mine writes against their etag, which is what makes it win', async () => {
-    seedSlot('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(SAVE, json({ etag: 'mine-now' }))
-    await useStore.getState().flistOverwriteAfterExternalChange('99')
-    const [put] = fake.requestsTo(SAVE)
-    expect(put?.headers['If-Match']).toBe('theirs')
-    const slot = useStore.getState().flistWorking['99']
-    expect(slot.etag).toBe('mine-now')
-    expect(slot.unsavedDirty).toBe(false)
-    expect(useStore.getState().flistExternalChange['99']).toBeNull()
-  })
-
-  it('a failed keep-mine leaves the banner up', async () => {
-    seedSlot('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(SAVE, conflict)
-    await useStore.getState().flistOverwriteAfterExternalChange('99')
-    expect(useStore.getState().flistExternalChange['99']).toBeTruthy()
+    expect(fake.requests).toHaveLength(0)
   })
 })
 
@@ -575,7 +493,11 @@ describe('the first edit of a character with no Workbench', () => {
     const slot = useStore.getState().flistWorking['99']
     expect(slot.unsavedDirty).toBe(true)
     expect(descOf(slot.payload)).toBe('typed')
-    expect(useStore.getState().flistExternalChange['99']?.etag).toBe('theirs')
+    // Both wrote the description, over the same Live: the user decides.
+    expect(useStore.getState().flistMergeQuestion['99']).toMatchObject({
+      etag: 'theirs',
+      fields: ['character.description']
+    })
   })
 
   it('a character never pulled keeps the edit in memory and says so', async () => {
@@ -645,10 +567,6 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
     expect(slot.materialised).toBe(true)
     expect(slot.overlay).toEqual([])
     expect(useStore.getState().editorContent).toBe('live')
-    const undo = useStore.getState().flistResetUndo
-    expect(undo?.etag).toBe('after-reset')
-    expect(undo?.awaitingWrite).toBe(false)
-    expect(descOf(undo?.snapshot.payload)).toBe('edited, not saved yet')
   })
 
   it('drains a save still in flight before asking for the reset', async () => {
@@ -687,7 +605,6 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
     const slot = useStore.getState().flistWorking['99']
     expect(descOf(slot.payload)).toBe('typed, and the save is refused')
     expect(slot.unsavedDirty).toBe(true)
-    expect(useStore.getState().flistResetUndo).toBeNull()
   })
 
   it('shows the new Backup in the list when the sidecar kept one', async () => {
@@ -745,7 +662,6 @@ describe('reset to Live asks the sidecar, which keeps the Workbench as a Backup 
     expect(slot.etag).toBe('seed-etag')
     expect(slot.saveError).toContain('not replaced')
     expect(useStore.getState().editorContent).toBe('edited')
-    expect(useStore.getState().flistResetUndo).toBeNull()
     expect(fake.requestsTo(SAVE)).toHaveLength(0)
   })
 
@@ -815,160 +731,6 @@ describe('Restore from the window', () => {
     expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe(
       'typed, and the save is refused'
     )
-  })
-})
-
-describe('flistResetWorkingToLive + undo round-trip', () => {
-  it('undo writes the snapshot back into the bench over the reset etag', async () => {
-    seedLive({ character: { description: 'live' } })
-    seedSlot('99', {
-      character: { description: 'edited' },
-      _overlay: ['character.description']
-    })
-    fake.on(RESET, resetAnswer('live', 'after-reset'))
-    fake.once(SAVE, json({ etag: 'after-undo' }))
-
-    await useStore.getState().flistResetWorkingToLive('99')
-    expect(useStore.getState().flistResetUndo).not.toBeNull()
-    await useStore.getState().flistUndoResetWorking()
-
-    expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([RESET, SAVE])
-    const undoPut = fake.requests[1]
-    expect(undoPut.headers['If-Match']).toBe('after-reset')
-    expect(descOf(undoPut.body)).toBe('edited')
-
-    const restored = useStore.getState().flistWorking['99']
-    expect(descOf(restored.payload)).toBe('edited')
-    expect(restored.overlay).toEqual(['character.description'])
-    expect(restored.etag).toBe('after-undo')
-    expect(restored.unsavedDirty).toBe(false)
-    expect(useStore.getState().flistResetUndo).toBeNull()
-  })
-})
-
-describe('undo of reset to Live never reverts a change made after the reset', () => {
-  // The Workbench on disk, answering like the sidecar: a save lands
-  // only over the etag the disk holds, and each landed save hands out
-  // a new etag. Anything else writing the bench goes through write().
-  function benchOnDisk(description: string) {
-    const disk = { etag: 'seed-etag', payload: workbenchPayload({ character: { description } }) }
-    let version = 0
-    fake.on(SAVE, (req) => {
-      if (req.headers['If-Match'] !== disk.etag) {
-        return refusal('etag_mismatch', disk.etag)
-      }
-      disk.etag = `disk-${++version}`
-      disk.payload = req.body as typeof disk.payload
-      return json({ etag: disk.etag })
-    })
-    fake.on(`GET ${BENCH_URL}`, () => json(payloadRead(disk.payload, disk.etag)))
-    // Reset to Live, done by the sidecar: Live replaces what is on disk.
-    fake.on(RESET, () => {
-      disk.etag = `disk-${++version}`
-      disk.payload = workbenchPayload({ character: { description: 'Amber on F-list' } })
-      return json({ payload: disk.payload, etag: disk.etag, backed_up_first: null })
-    })
-    return {
-      disk,
-      write(text: string) {
-        disk.etag = `disk-${++version}`
-        disk.payload = workbenchPayload({ character: { description: text } })
-        return disk.etag
-      }
-    }
-  }
-
-  beforeEach(() => {
-    seedLive({ character: { description: 'Amber on F-list' } })
-    seedSlot('99', {
-      character: { description: 'Amber keeps bees.' },
-      _overlay: ['character.description']
-    })
-  })
-
-  it('a model edit the window reloaded is not overwritten: the user is asked, and keeping it leaves it on disk', async () => {
-    const bench = benchOnDisk('Amber keeps bees.')
-    await useStore.getState().flistResetWorkingToLive('99')
-    expect(descOf(bench.disk.payload)).toBe('Amber on F-list')
-
-    // A connected model rewrites the description; the event stream
-    // tells the window, which reloads it (no unsaved edits here).
-    const modelEtag = bench.write('Amber keeps wasps now.')
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: modelEtag,
-      origin: 'mcp:set_description'
-    })
-    await useStore.getState().flistReloadAfterExternalChange('99')
-    const putsBeforeUndo = fake.requestsTo(SAVE).length
-
-    await useStore.getState().flistUndoResetWorking()
-    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
-
-    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
-    const undo = useStore.getState().flistResetUndo
-    expect(undo?.characterId).toBe('99')
-    expect(undo?.conflict).toBe(true)
-    expect(descOf(useStore.getState().flistWorking['99'].payload)).toBe('Amber keeps wasps now.')
-
-    useStore.getState().flistDismissResetUndo()
-    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
-
-    expect(useStore.getState().flistResetUndo).toBeNull()
-    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
-    expect(descOf(bench.disk.payload)).toBe('Amber keeps wasps now.')
-    expect(bench.disk.etag).toBe(modelEtag)
-  })
-
-  it('text typed in the window after the reset and saved is not overwritten either', async () => {
-    const bench = benchOnDisk('Amber keeps bees.')
-    await useStore.getState().flistResetWorkingToLive('99')
-    useStore.getState().setEditorContent('Amber on F-list, and a new line.')
-    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS + 100)
-    expect(descOf(bench.disk.payload)).toBe('Amber on F-list, and a new line.')
-    const typedEtag = bench.disk.etag
-    const putsBeforeUndo = fake.requestsTo(SAVE).length
-
-    await useStore.getState().flistUndoResetWorking()
-    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2)
-
-    expect(fake.requestsTo(SAVE)).toHaveLength(putsBeforeUndo)
-    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
-    expect(useStore.getState().editorContent).toBe('Amber on F-list, and a new line.')
-    expect(bench.disk.etag).toBe(typedEtag)
-  })
-
-  it('choosing to undo anyway puts the previous Workbench back over the model edit', async () => {
-    const bench = benchOnDisk('Amber keeps bees.')
-    await useStore.getState().flistResetWorkingToLive('99')
-    const modelEtag = bench.write('Amber keeps wasps now.')
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: modelEtag,
-      origin: 'mcp:set_description'
-    })
-    await useStore.getState().flistReloadAfterExternalChange('99')
-    await useStore.getState().flistUndoResetWorking()
-    expect(useStore.getState().flistResetUndo?.conflict).toBe(true)
-
-    await useStore.getState().flistUndoResetWorking({ overwrite: true })
-
-    const [undoWrite] = fake.requestsTo(SAVE).slice(-1)
-    expect(undoWrite.headers['If-Match']).toBe(modelEtag)
-    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
-    expect(useStore.getState().flistResetUndo).toBeNull()
-    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
-  })
-
-  it('without a change since the reset, undo puts the previous Workbench back on disk', async () => {
-    const bench = benchOnDisk('Amber keeps bees.')
-    await useStore.getState().flistResetWorkingToLive('99')
-    expect(descOf(bench.disk.payload)).toBe('Amber on F-list')
-
-    await useStore.getState().flistUndoResetWorking()
-
-    expect(descOf(bench.disk.payload)).toBe('Amber keeps bees.')
-    expect(useStore.getState().flistResetUndo).toBeNull()
-    expect(useStore.getState().flistWorking['99'].etag).toBe(bench.disk.etag)
-    expect(useStore.getState().editorContent).toBe('Amber keeps bees.')
   })
 })
 

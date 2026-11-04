@@ -34,7 +34,8 @@ export function livePayload(overrides: Record<string, unknown> = {}): Record<str
 }
 
 /** The store's slot holding a Workbench: saved, on disk, nothing
- *  pending. Its overlay mirrors the payload's `_overlay`. */
+ *  pending (so the payload is also what was last saved). Its overlay
+ *  mirrors the payload's `_overlay`. */
 export function workingSlot(
   payload: WorkingPayload = workbenchPayload(),
   overrides: Partial<FlistWorkingSlot> = {}
@@ -48,6 +49,7 @@ export function workingSlot(
     saveError: null,
     lastSavedAt: null,
     materialised: true,
+    saved: payload,
     ...overrides
   }
 }

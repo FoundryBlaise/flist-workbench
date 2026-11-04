@@ -7,8 +7,7 @@ import {
   EDITOR_SELECTION_EVENT,
   type EditorSelectionDetail
 } from '../../lib/bbcode/codemirror'
-import { EditorView } from '@codemirror/view'
-import { undo, redo } from '@codemirror/commands'
+import { WORKBENCH_UNDO_MARK, runUndoRedo, undoKeyOf } from '../../lib/undoRedo'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
 import { GalleryPreviewPane } from '../flist/GalleryPreviewPane'
@@ -56,6 +55,7 @@ export function PreviewPane() {
   const inlines = useStore((s) => s.editorInlines)
   const setContent = useStore((s) => s.setEditorContent)
   const readOnly = useStore((s) => s.editorReadOnly)
+  const endTyping = useStore((s) => s.flistEndTyping)
   // What F-list's parser would say about this text. It is the same
   // check the site runs when the profile is uploaded, so the answer
   // arrives here — where the text can still be fixed — instead of in
@@ -122,32 +122,20 @@ export function PreviewPane() {
 
   // Browser contentEditable owns its own undo stack, but blurring +
   // refocusing the preview (or any innerHTML rewrite, which our blur
-  // handler does) silently clears it. Cmd/Ctrl+Z then becomes a no-op
-  // until the user clicks back into the code editor — confusing, and
-  // inconsistent with CodeMirror's own undo behaviour.
-  //
-  // Route the shortcut to CodeMirror's history extension instead: it
-  // tracks every change going through the editor view, including the
-  // ones our preview→source writeback sends via setContent. We sync
-  // the preview DOM manually after the dispatch because focusedRef
-  // would otherwise suppress the auto-render effect.
+  // handler does) silently clears it. The preview's writeback is
+  // typing in the description like the editor's, on the Workbench undo
+  // stack, so Ctrl+Z / Ctrl+Y here step that stack, the same as in the
+  // editor beside it. We sync the preview DOM by hand afterwards
+  // because focusedRef suppresses the auto-render effect.
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const mod = e.ctrlKey || e.metaKey
-    if (!mod) return
-    const isUndo = !e.shiftKey && e.key.toLowerCase() === 'z'
-    const isRedo =
-      e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')
-    if (!isUndo && !isRedo) return
-    const cmEl = document.querySelector('.cm-editor') as HTMLElement | null
-    if (!cmEl) return
-    const view = EditorView.findFromDOM(cmEl)
-    if (!view) return
+    const action = undoKeyOf(e.nativeEvent)
+    if (!action) return
     e.preventDefault()
-    if (isUndo) undo(view)
-    else redo(view)
+    runUndoRedo(action, e.currentTarget)
     const el = ref.current
     if (!el) return
-    const next = view.state.doc.toString()
+    const next = useStore.getState().editorContent
+    if (next === renderedFromRef.current) return
     const opens = captureOpenCollapses(el)
     writeKeepingScroll(el, () => {
       el.innerHTML = bbcodeToHtml(next, {
@@ -333,6 +321,7 @@ export function PreviewPane() {
           className={`pane-body preview-body${readOnly ? ' preview-readonly' : ''}`}
           data-testid="preview-body"
           contentEditable={!readOnly}
+          {...WORKBENCH_UNDO_MARK}
           suppressContentEditableWarning
           spellCheck={false}
           onInput={handleInput}
@@ -343,6 +332,9 @@ export function PreviewPane() {
           }}
           onBlur={() => {
             focusedRef.current = false
+            // Typing here ends with the focus: the next keystroke is a
+            // new undo entry.
+            if (flistActiveId) endTyping(flistActiveId)
             // Re-render only if source actually changed during this edit
             // session — otherwise we'd needlessly reset open collapses,
             // scroll position, and anything else outside React's

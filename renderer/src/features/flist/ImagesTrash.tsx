@@ -93,10 +93,10 @@ export function ImagesTrash({
     run(async () => {
       const res = await api.flistTrashPutBack(characterId, sel.ids)
       const twins = res.restored.filter((r) => r.deduplicated).length
-      const parts = [`${res.restored.length} back in the pool`]
+      const parts = [`${res.restored.length} back in the Pool`]
       if (twins) parts.push(`${twins} already there, so not copied twice`)
       if (res.conflicts.length) {
-        parts.push(`${res.conflicts.length} left here: the pool has a different file under that name`)
+        parts.push(`${res.conflicts.length} left here: the Pool has a different file under that name`)
       }
       return `${parts.join('; ')}.`
     })
@@ -160,7 +160,7 @@ export function ImagesTrash({
             onClick={() => void putBack()}
             data-testid="flist-images-trash-put-back"
           >
-            Put back in pool
+            Put back in Pool
           </button>
           <button
             type="button"

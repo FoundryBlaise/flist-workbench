@@ -177,11 +177,11 @@ end up less than half as long as it was, so a model cannot blank one
 by accident, with either.
 
 **Images from elsewhere** — `import_images` copies files from folders
-you cleared under Settings → Security into a character's pool, and can
+you cleared under Settings → Security into a character's Pool, and can
 swap each one into the place of an existing gallery image
 (`replace_image_id`) in the same call. Nothing under the app's own
 data folder is imported, even when a cleared folder holds it, so cached
-Foreign profile images never reach the pool. Files over F-list's limits come
+Foreign profile images never reach the Pool. Files over F-list's limits come
 with a warning; `convert_to_jpeg` re-encodes them where that helps.
 `trash_images` deletes into the character's Trash, taking an image off
 the gallery first; only you empty the Trash, in the window.
@@ -425,7 +425,7 @@ server, so they cannot drift from it.
 | `get_description` | The description in BBCode, a page at a time for a long one. |
 | `list_profile_fields` | Profile fields with their type, allowed options and current value. |
 | `list_kinks` | Kink choices by name, custom kinks included. |
-| `list_images` | The gallery, plus images in the pool that are not on the profile. |
+| `list_images` | The gallery, plus images in the Pool that are not on the profile. |
 | `diff_workbench` | What an Upload would change: the Workbench against Live. |
 | `render_profile_image` | The profile drawn as a picture by the app's own preview; the window has to be open. |
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
@@ -444,12 +444,12 @@ server, so they cannot drift from it.
 | `reorder_custom_kinks` | Set the order of the custom kinks. |
 | `set_image_description` | Set the caption under a gallery image. |
 | `reorder_images` | Set the order of the gallery. |
-| `add_image` | Put an image from the pool onto the gallery. |
-| `remove_image` | Take an image off the gallery; the file stays in the pool. |
-| `import_images` | Copy image files from folders the user cleared into the pool, optionally onto the gallery. |
-| `trash_images` | Delete images: off the gallery, out of the pool, into the Trash. |
+| `add_image` | Put an image from the Pool onto the gallery. |
+| `remove_image` | Take an image off the gallery; the file stays in the Pool. |
+| `import_images` | Copy image files from folders the user cleared into the Pool, optionally onto the gallery. |
+| `trash_images` | Delete images: off the gallery, out of the Pool, into the Trash. |
 | `list_trash` | What the character's Trash holds: images, Backups, cleared Labels. |
-| `put_back_images` | Put images from the Trash back into the pool. |
+| `put_back_images` | Put images from the Trash back into the Pool. |
 | `create_backup` | Keep a Backup of the Workbench. |
 | `list_backups` | The character's Backups, newest first. |
 | `load_backup_into_workbench` | Restore: load a Backup into the Workbench, keeping a Backup of what it held. Needs `confirm=true`. |
@@ -496,7 +496,7 @@ server, so they cannot drift from it.
 | `get_description` | The description in BBCode, a page at a time for a long one. |
 | `list_profile_fields` | Profile fields with their type, allowed options and current value. |
 | `list_kinks` | Kink choices by name, custom kinks included. |
-| `list_images` | The gallery, plus images in the pool that are not on the profile. |
+| `list_images` | The gallery, plus images in the Pool that are not on the profile. |
 | `diff_workbench` | What an Upload would change: the Workbench against Live. |
 | `render_profile_image` | The profile drawn as a picture by the app's own preview; the window has to be open. |
 | `get_mapping_list` | F-list's catalogue of what a profile can hold: fields, options, kinks. |
@@ -515,12 +515,12 @@ server, so they cannot drift from it.
 | `reorder_custom_kinks` | Set the order of the custom kinks. |
 | `set_image_description` | Set the caption under a gallery image. |
 | `reorder_images` | Set the order of the gallery. |
-| `add_image` | Put an image from the pool onto the gallery. |
-| `remove_image` | Take an image off the gallery; the file stays in the pool. |
-| `import_images` | Copy image files from folders the user cleared into the pool, optionally onto the gallery. |
-| `trash_images` | Delete images: off the gallery, out of the pool, into the Trash. |
+| `add_image` | Put an image from the Pool onto the gallery. |
+| `remove_image` | Take an image off the gallery; the file stays in the Pool. |
+| `import_images` | Copy image files from folders the user cleared into the Pool, optionally onto the gallery. |
+| `trash_images` | Delete images: off the gallery, out of the Pool, into the Trash. |
 | `list_trash` | What the character's Trash holds: images, Backups, cleared Labels. |
-| `put_back_images` | Put images from the Trash back into the pool. |
+| `put_back_images` | Put images from the Trash back into the Pool. |
 | `create_backup` | Keep a Backup of the Workbench. |
 | `list_backups` | The character's Backups, newest first. |
 | `load_backup_into_workbench` | Restore: load a Backup into the Workbench, keeping a Backup of what it held. Needs `confirm=true`. |

@@ -114,7 +114,7 @@ export function GalleryPreviewPane() {
   if (!gallery.length) {
     return (
       <div className="flist-gallery-preview flist-gallery-preview--empty">
-        No images in this gallery yet. Add some from the pool on the left
+        No images in this gallery yet. Add some from the Pool on the left
         to see how the profile would render.
       </div>
     )

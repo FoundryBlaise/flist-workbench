@@ -16,18 +16,19 @@ import { ActivityLogModal } from '../features/flist/ActivityLogModal'
 import { ExtensionPairWatcher } from '../features/flist/ExtensionPairModal'
 import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
-import { ExternalChangeBanner } from './ExternalChangeBanner'
+import { MergeDialog } from './MergeDialog'
+import { WorkbenchNote } from './WorkbenchNote'
+import { UndoNote } from './UndoNote'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal, type SectionId } from '../features/settings/SettingsModal'
 import { ForeignWorkspace } from '../features/foreign/ForeignWorkspace'
 import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
 import { AppContextMenu } from './AppContextMenu'
-import { runUndoRedo } from '../lib/undoRedo'
+import { handleUndoKeydown, runUndoRedo } from '../lib/undoRedo'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { useStore } from '../state'
 import { api } from '../lib/api'
-import { subscribeToWorkbenchEvents } from '../lib/eventStream'
-import { applyWorkbenchEvent } from '../state/workbenchEvents'
+import { useWorkbenchEvents } from './useWorkbenchEvents'
 import { displayPartner, displayCharacter as displayName } from '../lib/partnerName'
 import type { MenuAction } from '../App'
 
@@ -201,12 +202,7 @@ export function AppLayout() {
 
   // Watch the sidecar for changes this window didn't make and re-read
   // what they touched (see state/workbenchEvents).
-  useEffect(() => {
-    const base = window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
-    return subscribeToWorkbenchEvents(base, (event) =>
-      applyWorkbenchEvent(event, useStore.getState())
-    )
-  }, [])
+  useWorkbenchEvents()
 
   // First-run detection: a non-blocking toast pointing at Settings →
   // MCP. Workbench has no model of its own to configure any more, so
@@ -277,6 +273,14 @@ export function AppLayout() {
       flistSessionActive: !!flistSession.active
     })
   }, [activeChar, activePartner, flistSession.active])
+
+  // Ctrl+Z / Ctrl+Y outside a text control: the menu leaves the keys to
+  // the focused element (registerAccelerator: false), so the window
+  // routes them to the Workbench undo itself.
+  useEffect(() => {
+    document.addEventListener('keydown', handleUndoKeydown)
+    return () => document.removeEventListener('keydown', handleUndoKeydown)
+  }, [])
 
   // Native menu (electron/menu.ts) dispatches actions over IPC. Route
   // them to the existing local/store handlers so the menu items are
@@ -483,7 +487,9 @@ export function AppLayout() {
           </button>
         </div>
       )}
-      <ExternalChangeBanner />
+      <MergeDialog />
+      <WorkbenchNote />
+      <UndoNote />
       <BackupAllBanner />
       <ExtensionPairWatcher />
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
