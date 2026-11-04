@@ -4,6 +4,7 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { selectWorkingSlot, useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { KinksPane } from '../flist/KinksPane'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
@@ -312,7 +313,7 @@ function EditorActiveTabBody(props: {
         <div
           className="editor-cm"
           data-testid="editor-cm"
-          data-undo="workbench"
+          {...WORKBENCH_UNDO_MARK}
           onBlur={() => endTyping(flistActiveId)}
         >
           <CodeMirror

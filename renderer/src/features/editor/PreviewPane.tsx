@@ -7,7 +7,7 @@ import {
   EDITOR_SELECTION_EVENT,
   type EditorSelectionDetail
 } from '../../lib/bbcode/codemirror'
-import { runUndoRedo, undoKeyOf } from '../../lib/undoRedo'
+import { WORKBENCH_UNDO_MARK, runUndoRedo, undoKeyOf } from '../../lib/undoRedo'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
 import { GalleryPreviewPane } from '../flist/GalleryPreviewPane'
@@ -321,7 +321,7 @@ export function PreviewPane() {
           className={`pane-body preview-body${readOnly ? ' preview-readonly' : ''}`}
           data-testid="preview-body"
           contentEditable={!readOnly}
-          data-undo="workbench"
+          {...WORKBENCH_UNDO_MARK}
           suppressContentEditableWarning
           spellCheck={false}
           onInput={handleInput}

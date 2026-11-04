@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { WORKBENCH_UNDO_MARK } from '../../../lib/undoRedo'
 import type { InfotagDescriptor } from '../infotagsResolver'
 
 /** How a field hands its value to the Workbench. A text field calls it
@@ -45,7 +46,7 @@ export function TextField({
         maxLength={descriptor.uiHint.maxLength}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
-        data-undo="workbench"
+        {...WORKBENCH_UNDO_MARK}
         onChange={(e) => {
           setLocal(e.target.value)
           onCommit(e.target.value, { typing: true })
@@ -121,7 +122,7 @@ export function NumberField({
         placeholder={descriptor.uiHint.placeholder ?? '—'}
         disabled={readOnly}
         data-testid={`infotag-${descriptor.id}-input`}
-        data-undo="workbench"
+        {...WORKBENCH_UNDO_MARK}
         onChange={(e) => {
           setLocal(e.target.value)
           onCommit(e.target.value, { typing: true })

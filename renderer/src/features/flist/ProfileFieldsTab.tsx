@@ -13,6 +13,7 @@ import {
   type FieldCommit
 } from './infotagFields/TextField'
 import { MappingListStaleness } from './MappingListStaleness'
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 
 const COLLAPSE_KEY_PREFIX = 'flist-workbench:profile-fields-group-collapsed:'
 
@@ -491,7 +492,7 @@ function CustomTitleField({
           type="text"
           className="infotag-field-input"
           value={local}
-          data-undo="workbench"
+          {...WORKBENCH_UNDO_MARK}
           onChange={(e) => {
             setLocal(e.target.value)
             onCommit(e.target.value, { typing: true })

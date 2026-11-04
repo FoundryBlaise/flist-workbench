@@ -22,8 +22,10 @@ export type UndoAction = 'undo' | 'redo'
 type Route = 'native' | 'editor' | 'workbench'
 
 /** The mark of a Workbench text field, whose typing goes on the
- *  Workbench undo stack. */
-const WORKBENCH_FIELD = '[data-undo="workbench"]'
+ *  Workbench undo stack: spread it onto the field or its wrapper. */
+export const WORKBENCH_UNDO_MARK = { 'data-undo': 'workbench' } as const
+
+const WORKBENCH_FIELD = `[data-undo="${WORKBENCH_UNDO_MARK['data-undo']}"]`
 
 /** Input types that hold typed text, and so their own undo. A focused
  *  checkbox or radio is not one: Ctrl+Z there undoes the Workbench. */
