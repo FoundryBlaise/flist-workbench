@@ -39,6 +39,7 @@ import {
   type CommitLabel
 } from './state/commit'
 import {
+  endTyping,
   hiddenWorkbench,
   hideWorkbench,
   recordChange,
@@ -554,9 +555,12 @@ type State = {
     characterId: string,
     imageId: string
   ) => void
+  /** `typing` names the caption typed in (`images.<id>.description`):
+   *  keystrokes in it without a pause are one undo entry. */
   flistSetGalleryImages: (
     characterId: string,
-    images: { image_id: string; description: string; sort_order: number }[]
+    images: { image_id: string; description: string; sort_order: number }[],
+    opts?: { typing?: string }
   ) => void
   flistOpenLive: (characterId: string) => Promise<void>
   /** Load the editor with this character's working copy.
@@ -623,7 +627,17 @@ type State = {
   ) => Promise<void>
 
   // ---- Tier 2 working-copy actions ----
-  flistSetWorkingField: (characterId: string, path: string, value: unknown) => void
+  /** `typing`: the value is a keystroke in that field's text, and
+   *  keystrokes in one field without a pause are one undo entry. */
+  flistSetWorkingField: (
+    characterId: string,
+    path: string,
+    value: unknown,
+    opts?: { typing?: boolean }
+  ) => void
+  /** The text field being typed in lost focus: the next keystroke
+   *  starts a new undo entry, however soon it comes. */
+  flistEndTyping: (characterId: string) => void
   flistResetWorkingField: (characterId: string, path: string) => void
   /** Restore a single image row in working.json's gallery to match Live —
    *  add/remove/update the entry for `imageId` so working aligns with
@@ -904,11 +918,19 @@ function _commit(
   })
   const event = done.event
   if (!event) return
-  // Under a view the slot holds Live or a Backup, not the Workbench: a
-  // change made from there replaced the Workbench the view hides.
-  const replaced = done.covered ? hiddenWorkbench(characterId) : event.previous
-  if (commit.kind !== 'view' && replaced && !(commit.kind === 'edit' && commit.undoStep)) {
-    recordChange(characterId, commit.label, replaced)
+  if (commit.kind === 'view') endTyping(characterId)
+  else {
+    // Under a view the slot holds Live or a Backup, not the Workbench: a
+    // change made from there replaced the Workbench the view hides.
+    const replaced = done.covered ? hiddenWorkbench(characterId) : event.previous
+    if (replaced && !(commit.kind === 'edit' && commit.undoStep)) {
+      recordChange(
+        characterId,
+        commit.label,
+        replaced,
+        commit.kind === 'edit' ? commit.typing : undefined
+      )
+    }
   }
   if (!done.coveredAfter) unhideWorkbench(characterId)
   else if (!done.covered && event.previous) hideWorkbench(characterId, event.previous)
@@ -2741,7 +2763,7 @@ export const useStore = create<State>((set, get) => ({
     )
   },
 
-  flistSetGalleryImages(characterId, images) {
+  flistSetGalleryImages(characterId, images, opts) {
     // Every other mutation schedules the autosave; this one did not,
     // and it is the one behind "Add to profile", "Move to pool",
     // reordering and their undo. Moving three images onto a profile
@@ -2757,7 +2779,8 @@ export const useStore = create<State>((set, get) => ({
     _commit(get, set, characterId, {
       kind: 'edit',
       label: 'edit',
-      payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) }
+      payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) },
+      typing: opts?.typing
     })
   },
 
@@ -2877,11 +2900,20 @@ export const useStore = create<State>((set, get) => ({
     set(_workbenchInEditor(get(), characterId))
   },
 
-  flistSetWorkingField(characterId, path, value) {
+  flistSetWorkingField(characterId, path, value, opts) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
     const next = flistApplyEdit(slot, path, value)
-    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload: next.payload })
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: next.payload,
+      typing: opts?.typing ? path : undefined
+    })
+  },
+
+  flistEndTyping(characterId) {
+    endTyping(characterId)
   },
 
   flistResetImageRow(characterId, imageId) {
@@ -4290,7 +4322,7 @@ export const useStore = create<State>((set, get) => ({
     const characterId = s.flistActiveCharacterId
     const isWorkingCopyMode = characterId !== null && !s.editorReadOnly
     if (isWorkingCopyMode && value !== before && s.flistWorking[characterId]) {
-      get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value)
+      get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value, { typing: true })
       return
     }
     set((st) => ({
