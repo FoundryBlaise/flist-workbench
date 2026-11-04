@@ -779,16 +779,12 @@ tests = ["@renderer"]
 audit = "survived"
 spec = 7
 # audit: M06 reload-after-external-change leaves editor showing stale text
+# Since #109 the reload is a written commit, and the editor reads the
+# reloaded description back from the payload in _editorFollows.
 find = '''
-flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-        }
-        if (s.flistActiveCharacterId === characterId) {
-          patch.editorContent = descriptionOf(payload)'''
+return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }'''
 replace = '''
-flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-        }
-        if (s.flistActiveCharacterId === characterId) {
-          void descriptionOf'''
+return commit.keepPending ? { editorContent } : { editorDirty: false }'''
 
 [[mutation]]
 id = "R07"

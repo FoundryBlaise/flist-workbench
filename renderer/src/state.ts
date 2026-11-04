@@ -29,6 +29,13 @@ import {
   type FlistWorkingSlot,
   type WorkingPayload
 } from './state/flist'
+import {
+  commitSlot,
+  externalLabel,
+  notifyCommit,
+  type Commit,
+  type CommitEvent
+} from './state/commit'
 
 export type {
   FlistSaveStatus,
@@ -843,6 +850,92 @@ function _scheduleFlush(characterId: string, fn: () => void): void {
   _autosaveTimers.set(characterId, t)
 }
 
+type SlotSet = (fn: (s: State) => Partial<State>) => void
+
+/** The editor follows the active character's slot: whatever a commit
+ *  leaves in the payload is the description the editor shows. Edits and
+ *  written commits reach it only while it shows the Workbench (not a
+ *  read-only view); a view sets what it shows itself. */
+function _editorFollows(
+  s: State,
+  characterId: string,
+  next: FlistWorkingSlot | null,
+  commit: Commit
+): Partial<State> {
+  if (!next || s.flistActiveCharacterId !== characterId) return {}
+  const editorContent = descriptionOf(next.payload)
+  if (commit.kind === 'view') return { editorContent, editorDirty: false }
+  if (s.editorReadOnly) return {}
+  if (commit.kind === 'edit') {
+    return { editorContent, editorDirty: s.editorDirty || editorContent !== s.editorContent }
+  }
+  return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }
+}
+
+/** The one commit point: the only code that puts a new payload into a
+ *  character's Workbench slot (see state/commit.ts for the kinds). An
+ *  edit marks the slot unsaved and schedules the autosave; a written
+ *  commit adopts the sidecar's etag; a view replaces or drops the slot
+ *  without being a change. `also` adds to the same store update, so the
+ *  slot and whatever goes with it change together. */
+function _commit(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  commit: Commit,
+  also?: (s: State) => Partial<State>
+): void {
+  // Filled in by the update below; a callback assignment TypeScript
+  // would not see through a plain `let`.
+  const done: { event: CommitEvent | null } = { event: null }
+  set((s) => {
+    const current = s.flistWorking[characterId]
+    const next = commitSlot(current, commit)
+    if (next === undefined) return {}
+    const flistWorking = { ...s.flistWorking }
+    if (next) flistWorking[characterId] = next
+    else delete flistWorking[characterId]
+    done.event = {
+      characterId,
+      kind: commit.kind,
+      label: commit.kind === 'view' ? null : commit.label,
+      previous: current?.payload ?? null,
+      next: next?.payload ?? null
+    }
+    return {
+      ...also?.(s),
+      flistWorking,
+      ..._editorFollows(s, characterId, next, commit)
+    }
+  })
+  const event = done.event
+  if (!event) return
+  if (commit.kind === 'edit') {
+    _scheduleFlush(characterId, () => {
+      void get().flistFlushWorking(characterId)
+    })
+  }
+  notifyCommit(event)
+}
+
+/** Sign-out's commit: every slot dropped at once, as a view. */
+function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<State>): void {
+  const events: CommitEvent[] = []
+  set((s) => {
+    for (const [characterId, slot] of Object.entries(s.flistWorking)) {
+      events.push({
+        characterId,
+        kind: 'view',
+        label: null,
+        previous: slot.payload,
+        next: null
+      })
+    }
+    return { ...also(s), flistWorking: {} }
+  })
+  for (const event of events) notifyCommit(event)
+}
+
 function _cancelFlush(characterId: string): void {
   const prev = _autosaveTimers.get(characterId)
   if (prev) {
@@ -1118,6 +1211,11 @@ function galleryOf(slot: FlistWorkingSlot | undefined): GalleryRow[] {
     : []
 }
 
+/** The slot's overlay with `paths` added, each once, in order. */
+function _withOverlay(slot: FlistWorkingSlot, paths: string[]): string[] {
+  return Array.from(new Set([...slot.overlay, ...paths]))
+}
+
 function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot {
   return {
     ...emptyWorkingSlot(),
@@ -1137,9 +1235,7 @@ function _showWorkbench(
   payload: WorkingPayload,
   etag: string
 ): void {
-  const slot = _workbenchSlot(payload, etag)
-  set((s) => ({
-    flistWorking: { ...s.flistWorking, [characterId]: slot },
+  _commit(get, set, characterId, { kind: 'written', label: 'restore', payload, etag }, (s) => ({
     flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
   }))
   if (get().flistActiveCharacterId === characterId) {
@@ -1275,11 +1371,7 @@ async function _followPull(
           if (working) {
             // Drop the seeded slot so flistOpenWorking re-seeds from
             // the new Live on the next open.
-            set((s) => {
-              const next = { ...s.flistWorking }
-              delete next[info.character_id]
-              return { flistWorking: next }
-            })
+            _commit(get, set, info.character_id, { kind: 'view', slot: null })
           }
           void get().flistOpenWorking(info.character_id)
         } else if (isActive && working?.materialised) {
@@ -1588,60 +1680,36 @@ let _mappingInflight: Promise<void> | null = null
 // discarded so a prior account's data can't be reinstated.
 let _flistSessionEpoch = 0
 
-/** Apply N tombstones in a single reducer pass — keeps the bulk action
- *  cheap even for large selections and ensures one slot mutation lands
- *  per click rather than N (QA P1-2 / P2-6). */
-function _applyTombstones(
-  characterId: string,
-  kinkIds: string[],
-  setFn: (
-    update:
-      | Partial<State>
-      | ((s: State) => Partial<State> | State)
-  ) => void
-): void {
-  setFn((s) => {
-    const slot = s.flistWorking[characterId]
-    if (!slot) return {}
-    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
-    const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
-    let overlay = [...slot.overlay]
-    const overlaySet = new Set(overlay)
-    let order = Array.isArray(payload._custom_kinks_order)
-      ? [...(payload._custom_kinks_order as string[])]
-      : Object.keys(ck)
-    for (const kinkId of kinkIds) {
-      const isLocal = kinkId.startsWith('local:')
-      if (isLocal) {
-        delete ck[kinkId]
-        order = order.filter((x) => x !== kinkId)
-        overlay = overlay.filter((p) => !p.startsWith(`custom_kinks.${kinkId}.`))
-      } else {
-        if (!ck[kinkId]) ck[kinkId] = {}
-        ck[kinkId]._deleted = true
-        if (!overlaySet.has(`custom_kinks.${kinkId}._deleted`)) {
-          overlay.push(`custom_kinks.${kinkId}._deleted`)
-          overlaySet.add(`custom_kinks.${kinkId}._deleted`)
-        }
+/** The payload with N tombstones applied in a single pass — keeps the
+ *  bulk action cheap even for large selections and ensures one commit
+ *  lands per click rather than N (QA P1-2 / P2-6). */
+function _tombstonedPayload(slot: FlistWorkingSlot, kinkIds: string[]): WorkingPayload {
+  const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+  const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+  let overlay = [...slot.overlay]
+  const overlaySet = new Set(overlay)
+  let order = Array.isArray(payload._custom_kinks_order)
+    ? [...(payload._custom_kinks_order as string[])]
+    : Object.keys(ck)
+  for (const kinkId of kinkIds) {
+    const isLocal = kinkId.startsWith('local:')
+    if (isLocal) {
+      delete ck[kinkId]
+      order = order.filter((x) => x !== kinkId)
+      overlay = overlay.filter((p) => !p.startsWith(`custom_kinks.${kinkId}.`))
+    } else {
+      if (!ck[kinkId]) ck[kinkId] = {}
+      ck[kinkId]._deleted = true
+      if (!overlaySet.has(`custom_kinks.${kinkId}._deleted`)) {
+        overlay.push(`custom_kinks.${kinkId}._deleted`)
+        overlaySet.add(`custom_kinks.${kinkId}._deleted`)
       }
     }
-    payload.custom_kinks = ck
-    payload._custom_kinks_order = order
-    payload._overlay = overlay
-    return {
-      flistWorking: {
-        ...s.flistWorking,
-        [characterId]: {
-          ...slot,
-          payload,
-          overlay,
-          unsavedDirty: true,
-          saveStatus: 'idle',
-          saveError: slot.saveError
-        }
-      }
-    }
-  })
+  }
+  payload.custom_kinks = ck
+  payload._custom_kinks_order = order
+  payload._overlay = overlay
+  return payload
 }
 
 /** Arm the 5-second tombstone undo banner. Captures `prevSlot` so undo
@@ -2192,7 +2260,7 @@ export const useStore = create<State>((set, get) => ({
     // rather than reinstating the signed-out account's data (QA P2-4).
     _flistSessionEpoch++
     _mappingInflight = null
-    set({
+    _dropAllWorkbenches(set, () => ({
       flistSession: { active: false },
       flistAccountCharacters: [],
       flistActiveCharacterId: null,
@@ -2207,7 +2275,6 @@ export const useStore = create<State>((set, get) => ({
         etag: null,
         error: null
       },
-      flistWorking: {},
       flistWorkingLoadStatus: {},
       flistWorkbenchInfo: {},
       flistRestoreRefusal: {},
@@ -2219,7 +2286,7 @@ export const useStore = create<State>((set, get) => ({
       flistDiffBackupCache: {},
       flistDiffBackupStatus: {},
       flistCustomKinksUI: {}
-    })
+    }))
     await get().flistLoadRoster()
   },
 
@@ -2521,38 +2588,41 @@ export const useStore = create<State>((set, get) => ({
     const res = await api.flistImagesTrash(characterId, imageIds)
     const moved = res.trashed.map((t) => t.image_id)
     const offGallery = res.off_gallery ?? []
-    set((s) => {
-      const patch: Partial<State> = {}
+    const poolWithoutMoved = (s: State): Partial<State> => {
       const prev = s.flistCharacterImages[characterId]
-      if (prev) {
-        const nextById = { ...prev.byId }
-        for (const id of moved) delete nextById[id]
-        patch.flistCharacterImages = {
+      if (!prev) return {}
+      const nextById = { ...prev.byId }
+      for (const id of moved) delete nextById[id]
+      return {
+        flistCharacterImages: {
           ...s.flistCharacterImages,
           [characterId]: { byId: nextById, status: prev.status }
         }
       }
-      // Show what the sidecar wrote, and save the next edit over its
-      // etag. Anything typed meanwhile stays unsaved and goes with it.
-      const slot = s.flistWorking[characterId]
-      if (slot && res.etag && offGallery.length > 0) {
-        const images = galleryOf(slot)
-          .filter((e) => !offGallery.includes(e.image_id))
-          .map((e, i) => ({ ...e, sort_order: i }))
-        const overlay = slot.overlay.includes('images') ? slot.overlay : [...slot.overlay, 'images']
-        patch.flistWorking = {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload: { ...slot.payload, images, _overlay: [...overlay] },
-            overlay,
-            etag: res.etag,
-            materialised: true
-          }
-        }
-      }
-      return patch
-    })
+    }
+    // Show what the sidecar wrote, and save the next edit over its
+    // etag. Anything typed meanwhile stays unsaved and goes with it.
+    const slot = get().flistWorking[characterId]
+    if (slot && res.etag && offGallery.length > 0) {
+      const images = galleryOf(slot)
+        .filter((e) => !offGallery.includes(e.image_id))
+        .map((e, i) => ({ ...e, sort_order: i }))
+      _commit(
+        get,
+        set,
+        characterId,
+        {
+          kind: 'written',
+          label: 'edit',
+          payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) },
+          etag: res.etag,
+          keepPending: true
+        },
+        poolWithoutMoved
+      )
+    } else {
+      set(poolWithoutMoved)
+    }
     return moved
   },
 
@@ -2593,30 +2663,12 @@ export const useStore = create<State>((set, get) => ({
     //
     // Debounced like the rest rather than written on the spot, so
     // clicking the reorder arrows four times sends one PUT, not four.
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const payload = { ...slot.payload, images }
-      const overlay = slot.overlay.includes('images')
-        ? slot.overlay
-        : [...slot.overlay, 'images']
-      payload._overlay = [...overlay]
-      return {
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload,
-            overlay,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: slot.saveError
-          }
-        }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) }
     })
   },
 
@@ -2715,9 +2767,7 @@ export const useStore = create<State>((set, get) => ({
     const current = get().flistWorking[characterId]
     const untouched = current === before && !current?.unsavedDirty
     if (read && untouched) {
-      const slot = read
-      set((s) => ({
-        flistWorking: { ...s.flistWorking, [characterId]: slot },
+      _commit(get, set, characterId, { kind: 'view', slot: read }, (s) => ({
         flistWorkingLoadStatus: {
           ...s.flistWorkingLoadStatus,
           [characterId]: 'ready'
@@ -2739,114 +2789,78 @@ export const useStore = create<State>((set, get) => ({
   },
 
   flistSetWorkingField(characterId, path, value) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const next = flistApplyEdit(slot, path, value)
-      return {
-        flistWorking: { ...s.flistWorking, [characterId]: next }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const next = flistApplyEdit(slot, path, value)
+    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload: next.payload })
   },
 
   flistResetImageRow(characterId, imageId) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const live = s.flistArchive[characterId]?.live ?? null
-      type GalleryRow = { image_id: string; description: string; sort_order: number }
-      const readGallery = (payload: unknown): GalleryRow[] => {
-        if (!payload || typeof payload !== 'object') return []
-        const raw = (payload as { images?: unknown }).images
-        if (!Array.isArray(raw)) return []
-        const out: GalleryRow[] = []
-        for (const e of raw) {
-          if (!e || typeof e !== 'object') continue
-          const r = e as { image_id?: unknown; description?: unknown; sort_order?: unknown }
-          if (typeof r.image_id !== 'string') continue
-          const so =
-            typeof r.sort_order === 'number'
-              ? r.sort_order
-              : Number(r.sort_order ?? out.length) || out.length
-          out.push({
-            image_id: r.image_id,
-            description: typeof r.description === 'string' ? r.description : '',
-            sort_order: so
-          })
-        }
-        out.sort((a, b) => a.sort_order - b.sort_order)
-        return out
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const live = get().flistArchive[characterId]?.live ?? null
+    type GalleryRow = { image_id: string; description: string; sort_order: number }
+    const readGallery = (payload: unknown): GalleryRow[] => {
+      if (!payload || typeof payload !== 'object') return []
+      const raw = (payload as { images?: unknown }).images
+      if (!Array.isArray(raw)) return []
+      const out: GalleryRow[] = []
+      for (const e of raw) {
+        if (!e || typeof e !== 'object') continue
+        const r = e as { image_id?: unknown; description?: unknown; sort_order?: unknown }
+        if (typeof r.image_id !== 'string') continue
+        const so =
+          typeof r.sort_order === 'number'
+            ? r.sort_order
+            : Number(r.sort_order ?? out.length) || out.length
+        out.push({
+          image_id: r.image_id,
+          description: typeof r.description === 'string' ? r.description : '',
+          sort_order: so
+        })
       }
-      const liveGallery = readGallery(live)
-      const workingGallery = readGallery(slot.payload)
-      const target = liveGallery.find((e) => e.image_id === imageId)
-      let next: GalleryRow[]
-      if (!target) {
-        // Live doesn't have this image — reset = drop from working.
-        next = workingGallery.filter((e) => e.image_id !== imageId)
-      } else {
-        const without = workingGallery.filter((e) => e.image_id !== imageId)
-        // Live's position is authoritative for where the reset row lands.
-        // Clamp against the post-removal length so an out-of-range index
-        // still inserts at the tail rather than throwing.
-        const insertAt = Math.max(0, Math.min(target.sort_order, without.length))
-        next = [
-          ...without.slice(0, insertAt),
-          { ...target },
-          ...without.slice(insertAt)
-        ]
-      }
-      const renumbered = next.map((e, i) => ({ ...e, sort_order: i }))
-      const payload = { ...slot.payload, images: renumbered }
-      const overlay = slot.overlay.includes('images')
-        ? slot.overlay
-        : [...slot.overlay, 'images']
-      payload._overlay = [...overlay]
-      return {
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload,
-            overlay,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: slot.saveError
-          }
-        }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
+      out.sort((a, b) => a.sort_order - b.sort_order)
+      return out
+    }
+    const liveGallery = readGallery(live)
+    const workingGallery = readGallery(slot.payload)
+    const target = liveGallery.find((e) => e.image_id === imageId)
+    let next: GalleryRow[]
+    if (!target) {
+      // Live doesn't have this image — reset = drop from working.
+      next = workingGallery.filter((e) => e.image_id !== imageId)
+    } else {
+      const without = workingGallery.filter((e) => e.image_id !== imageId)
+      // Live's position is authoritative for where the reset row lands.
+      // Clamp against the post-removal length so an out-of-range index
+      // still inserts at the tail rather than throwing.
+      const insertAt = Math.max(0, Math.min(target.sort_order, without.length))
+      next = [
+        ...without.slice(0, insertAt),
+        { ...target },
+        ...without.slice(insertAt)
+      ]
+    }
+    const renumbered = next.map((e, i) => ({ ...e, sort_order: i }))
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: { ...slot.payload, images: renumbered, _overlay: _withOverlay(slot, ['images']) }
     })
   },
 
   flistResetWorkingField(characterId, path) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const live = s.flistArchive[characterId]?.live ?? null
-      const next = flistApplyReset(slot, live, path)
-      // If the reset path is the description, mirror back into the
-      // editor surface so the open BBCode editor reflects the revert
-      // without a re-render hop.
-      const patch: Partial<State> = {
-        flistWorking: { ...s.flistWorking, [characterId]: next }
-      }
-      const workingCopyMode =
-        s.flistActiveCharacterId === characterId &&
-        !s.editorReadOnly
-      if (path === DESCRIPTION_PATH && workingCopyMode) {
-        patch.editorContent = descriptionOf(next.payload)
-        patch.editorDirty = next.unsavedDirty
-      }
-      return patch
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const live = get().flistArchive[characterId]?.live ?? null
+    // A reset of the description reaches the open editor through the
+    // commit, which reads the editor text back from the payload.
+    const next = flistApplyReset(slot, live, path)
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: next.payload,
+      clearSaveError: true
     })
   },
 
@@ -2899,14 +2913,17 @@ export const useStore = create<State>((set, get) => ({
     const current = get().flistWorking[characterId] ?? slot
 
     const expiresAt = Date.now() + RESET_UNDO_MS
-    let fresh: FlistWorkingSlot
+    let fresh: Commit & { kind: 'written' }
     let resetEtag: string | null = null
     let kept = false
     if (current.materialised) {
       try {
         const res = await api.flistWorkbenchResetToLive(characterId)
         fresh = {
-          ..._workbenchSlot(res.payload as WorkingPayload, res.etag),
+          kind: 'written',
+          label: 'reset-to-live',
+          payload: res.payload as WorkingPayload,
+          etag: res.etag,
           lastSavedAt: Date.now()
         }
         resetEtag = res.etag
@@ -2932,10 +2949,16 @@ export const useStore = create<State>((set, get) => ({
       // so the fresh copy of Live stays in memory until the first edit.
       const live = get().flistArchive[characterId]?.live ?? null
       const seeded = live ? seedWorkingFromLive(live) : emptyWorkingSlot().payload
-      fresh = { ...emptyWorkingSlot(), payload: seeded, materialised: false }
+      fresh = {
+        kind: 'written',
+        label: 'reset-to-live',
+        payload: seeded,
+        etag: null,
+        materialised: false
+      }
     }
-    set((s) => ({
-      flistWorking: { ...s.flistWorking, [characterId]: fresh },
+    // The commit puts the fresh description into the editor.
+    _commit(get, set, characterId, fresh, () => ({
       flistResetUndo: {
         characterId,
         snapshot: current,
@@ -2945,11 +2968,6 @@ export const useStore = create<State>((set, get) => ({
         conflict: false
       }
     }))
-    // Mirror the fresh description into the editor so the panel
-    // immediately reflects the reset.
-    if (get().flistActiveCharacterId === characterId && !get().editorReadOnly) {
-      set({ editorContent: descriptionOf(fresh.payload), editorDirty: false })
-    }
     const prev = _resetUndoTimers.get(characterId)
     if (prev) clearTimeout(prev)
     const t = setTimeout(() => {
@@ -3037,22 +3055,21 @@ export const useStore = create<State>((set, get) => ({
     _cancelFlush(characterId)
     try {
       const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
-      const payload = res.payload as WorkingPayload
-      const slot: FlistWorkingSlot = {
-        ..._workbenchSlot(payload, res.etag),
-        lastSavedAt: Date.now()
-      }
-      set((s) => {
-        const patch: Partial<State> = {
-          flistWorking: { ...s.flistWorking, [characterId]: slot },
-          flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-        }
-        if (s.flistActiveCharacterId === characterId) {
-          patch.editorContent = descriptionOf(payload)
-          patch.editorDirty = false
-        }
-        return patch
-      })
+      // Their version, over their etag; the commit shows its
+      // description in the editor.
+      _commit(
+        get,
+        set,
+        characterId,
+        {
+          kind: 'written',
+          label: externalLabel(change.origin),
+          payload: res.payload as WorkingPayload,
+          etag: res.etag,
+          lastSavedAt: Date.now()
+        },
+        (s) => ({ flistExternalChange: { ...s.flistExternalChange, [characterId]: null } })
+      )
     } catch {
       // Leave the banner up — the user can retry or keep theirs.
     }
@@ -3116,18 +3133,10 @@ export const useStore = create<State>((set, get) => ({
       lastSavedAt: null,
       materialised: true
     }
-    set((s) => {
-      const patch: Partial<State> = {
-        flistViewingLive: { ...s.flistViewingLive, [characterId]: true },
-        editorReadOnly: true,
-        flistWorking: { ...s.flistWorking, [characterId]: slot }
-      }
-      if (s.flistActiveCharacterId === characterId) {
-        patch.editorContent = descriptionOf(payload)
-        patch.editorDirty = false
-      }
-      return patch
-    })
+    _commit(get, set, characterId, { kind: 'view', slot }, (s) => ({
+      flistViewingLive: { ...s.flistViewingLive, [characterId]: true },
+      editorReadOnly: true
+    }))
   },
 
   async flistBackupAll() {
@@ -3427,7 +3436,7 @@ export const useStore = create<State>((set, get) => ({
       materialised: true
     }
 
-    set((s) => {
+    _commit(get, set, characterId, { kind: 'view', slot }, (s) => {
       const patch: Partial<State> = {
         flistArchive: {
           ...s.flistArchive,
@@ -3440,7 +3449,6 @@ export const useStore = create<State>((set, get) => ({
         },
         flistViewingLive: { ...s.flistViewingLive, [characterId]: true },
         editorReadOnly: true,
-        flistWorking: { ...s.flistWorking, [characterId]: slot },
         flistBrowseBackup: {
           characterId,
           filename: backupFilename,
@@ -3453,10 +3461,9 @@ export const useStore = create<State>((set, get) => ({
           previousViewingLive
         }
       }
+      // The commit puts the Backup's description into the editor.
       if (s.flistActiveCharacterId === characterId) {
-        patch.editorContent = descriptionOf(slot.payload)
         patch.editorInlines = extractInlines(payload)
-        patch.editorDirty = false
         patch.saveStatus = 'idle'
         patch.saveError = null
       }
@@ -3618,43 +3625,46 @@ export const useStore = create<State>((set, get) => ({
         }
         return
       }
-      set((s) => ({
-        flistResetUndo: null,
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...snapshot,
-            // Without a change since the reset this is undo.etag; after
-            // the user chose to overwrite, it is the etag the window
-            // holds now. A 409 means yet another write landed, and the
-            // flush raises the conflict banner instead of overwriting.
-            etag: current.etag,
-            materialised: true,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: null
-          }
-        }
-      }))
+      // An edit over the etag the slot holds: without a change since
+      // the reset this is undo.etag; after the user chose to overwrite,
+      // it is the etag the window holds now. A 409 means yet another
+      // write landed, and the flush raises the conflict banner instead
+      // of overwriting.
+      _commit(
+        get,
+        set,
+        characterId,
+        { kind: 'edit', label: 'edit', payload: snapshot.payload, clearSaveError: true },
+        () => ({ flistResetUndo: null })
+      )
       await get().flistFlushWorking(characterId)
     } else {
-      // The reset wrote nothing, so there is nothing on disk to undo.
-      set((s) => ({
-        flistResetUndo: null,
-        flistWorking: { ...s.flistWorking, [characterId]: snapshot }
-      }))
+      // The reset wrote nothing, so there is nothing on disk to undo:
+      // the slot goes back to what it was, nothing written for it.
+      _commit(
+        get,
+        set,
+        characterId,
+        {
+          kind: 'written',
+          label: 'edit',
+          payload: snapshot.payload,
+          etag: snapshot.etag,
+          materialised: snapshot.materialised,
+          lastSavedAt: snapshot.lastSavedAt
+        },
+        () => ({ flistResetUndo: null })
+      )
     }
-    // Refresh the editor surface against the restored slot.
+    // The commit put the restored description into the editor; the
+    // save may have finished since.
     const slot = get().flistWorking[characterId]
     if (
       slot &&
       get().flistActiveCharacterId === characterId &&
       !get().editorReadOnly
     ) {
-      set({
-        editorContent: descriptionOf(slot.payload),
-        editorDirty: slot.unsavedDirty
-      })
+      set({ editorDirty: slot.unsavedDirty })
     }
   },
 
@@ -3796,12 +3806,13 @@ export const useStore = create<State>((set, get) => ({
     if (kinkIds.length === 0) return
     const prevSlot = get().flistWorking[characterId]
     if (!prevSlot) return
-    _applyTombstones(characterId, kinkIds, set)
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: _tombstonedPayload(prevSlot, kinkIds)
+    })
     _armTombstoneUndo(characterId, prevSlot, kinkIds, set, get)
     get().flistCustomKinksClearMulti(characterId)
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
   },
 
   flistUndoTombstone() {
@@ -3811,52 +3822,31 @@ export const useStore = create<State>((set, get) => ({
       clearTimeout(_tombstoneUndoTimer)
       _tombstoneUndoTimer = null
     }
-    set((s) => ({
-      flistWorking: {
-        ...s.flistWorking,
-        [undo.characterId]: undo.snapshot
-      },
-      flistTombstoneUndo: null
-    }))
-    _scheduleFlush(undo.characterId, () => {
-      void get().flistFlushWorking(undo.characterId)
-    })
+    // The payload from before the tombstone, as an edit saved over the
+    // etag the slot holds now.
+    _commit(
+      get,
+      set,
+      undo.characterId,
+      { kind: 'edit', label: 'edit', payload: undo.snapshot.payload },
+      () => ({ flistTombstoneUndo: null })
+    )
   },
 
   flistStandardKinksBulkSetChoice(characterId, kinkIds, choice) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
-      const existing =
-        (payload.kinks && typeof payload.kinks === 'object' && !Array.isArray(payload.kinks)
-          ? (payload.kinks as Record<string, unknown>)
-          : {}) as Record<string, unknown>
-      for (const id of kinkIds) {
-        existing[id] = choice
-      }
-      payload.kinks = existing
-      const overlay = Array.from(
-        new Set([...slot.overlay, ...kinkIds.map((id) => `kinks.${id}`)])
-      )
-      payload._overlay = overlay
-      return {
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload,
-            overlay,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: slot.saveError
-          }
-        }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+    const existing =
+      (payload.kinks && typeof payload.kinks === 'object' && !Array.isArray(payload.kinks)
+        ? (payload.kinks as Record<string, unknown>)
+        : {}) as Record<string, unknown>
+    for (const id of kinkIds) {
+      existing[id] = choice
+    }
+    payload.kinks = existing
+    payload._overlay = _withOverlay(slot, kinkIds.map((id) => `kinks.${id}`))
+    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload })
   },
 
   flistCustomKinksAdd(characterId) {
@@ -3865,58 +3855,43 @@ export const useStore = create<State>((set, get) => ({
         ? crypto.randomUUID()
         : Math.random().toString(36).slice(2) + Date.now().toString(36)
     }`
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
-      const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
-      ck[localId] = {
-        name: '',
-        description: '',
-        choice: 'undecided',
-        children: []
-      }
-      payload.custom_kinks = ck
-      const order = Array.isArray(payload._custom_kinks_order)
-        ? [...(payload._custom_kinks_order as string[])]
-        : Object.keys(ck)
-      if (!order.includes(localId)) order.push(localId)
-      payload._custom_kinks_order = order
-      // Only `_order` is overlaid at Add time — `.name`/`.description`/
-      // `.choice` join the overlay when the user actually edits them
-      // (QA P2-1). Otherwise a brand-new `local:` row's first reset
-      // would clobber the empty name with itself.
-      const overlayAdds = ['custom_kinks._order']
-      const overlay = Array.from(new Set([...slot.overlay, ...overlayAdds]))
-      payload._overlay = overlay
-      const next: FlistWorkingSlot = {
-        ...slot,
-        payload,
-        overlay,
-        unsavedDirty: true,
-        saveStatus: 'idle',
-        saveError: null
-      }
-      return {
-        flistWorking: { ...s.flistWorking, [characterId]: next },
-        flistCustomKinksUI: {
-          ...s.flistCustomKinksUI,
-          [characterId]: {
-            ...(s.flistCustomKinksUI[characterId] ?? {
-              selectedKinkId: null,
-              selectedKinkIds: [],
-              showDeleted: false,
-              sort: 'insertion',
-              filter: ''
-            }),
-            selectedKinkId: localId
-          }
+    const slot = get().flistWorking[characterId]
+    if (!slot) return localId
+    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+    const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+    ck[localId] = {
+      name: '',
+      description: '',
+      choice: 'undecided',
+      children: []
+    }
+    payload.custom_kinks = ck
+    const order = Array.isArray(payload._custom_kinks_order)
+      ? [...(payload._custom_kinks_order as string[])]
+      : Object.keys(ck)
+    if (!order.includes(localId)) order.push(localId)
+    payload._custom_kinks_order = order
+    // Only `_order` is overlaid at Add time — `.name`/`.description`/
+    // `.choice` join the overlay when the user actually edits them
+    // (QA P2-1). Otherwise a brand-new `local:` row's first reset
+    // would clobber the empty name with itself.
+    payload._overlay = _withOverlay(slot, ['custom_kinks._order'])
+    const commit: Commit = { kind: 'edit', label: 'edit', payload, clearSaveError: true }
+    _commit(get, set, characterId, commit, (s) => ({
+      flistCustomKinksUI: {
+        ...s.flistCustomKinksUI,
+        [characterId]: {
+          ...(s.flistCustomKinksUI[characterId] ?? {
+            selectedKinkId: null,
+            selectedKinkIds: [],
+            showDeleted: false,
+            sort: 'insertion',
+            filter: ''
+          }),
+          selectedKinkId: localId
         }
       }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
+    }))
     return localId
   },
 
@@ -3928,71 +3903,36 @@ export const useStore = create<State>((set, get) => ({
   flistCustomKinksTombstone(characterId, kinkId) {
     const prevSlot = get().flistWorking[characterId]
     if (!prevSlot) return
-    _applyTombstones(characterId, [kinkId], set)
-    _armTombstoneUndo(characterId, prevSlot, [kinkId], set, get)
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
+    _commit(get, set, characterId, {
+      kind: 'edit',
+      label: 'edit',
+      payload: _tombstonedPayload(prevSlot, [kinkId])
     })
+    _armTombstoneUndo(characterId, prevSlot, [kinkId], set, get)
   },
 
   flistCustomKinksUndelete(characterId, kinkId) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
-      const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
-      if (ck[kinkId]) {
-        delete ck[kinkId]._deleted
-        payload.custom_kinks = ck
-      }
-      const overlay = slot.overlay.filter(
-        (p) => p !== `custom_kinks.${kinkId}._deleted`
-      )
-      payload._overlay = overlay
-      return {
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload,
-            overlay,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: null
-          }
-        }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+    const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+    if (ck[kinkId]) {
+      delete ck[kinkId]._deleted
+      payload.custom_kinks = ck
+    }
+    payload._overlay = slot.overlay.filter(
+      (p) => p !== `custom_kinks.${kinkId}._deleted`
+    )
+    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload, clearSaveError: true })
   },
 
   flistCustomKinksReorder(characterId, nextOrder) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
-      payload._custom_kinks_order = [...nextOrder]
-      const overlay = Array.from(new Set([...slot.overlay, 'custom_kinks._order']))
-      payload._overlay = overlay
-      return {
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload,
-            overlay,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: null
-          }
-        }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+    payload._custom_kinks_order = [...nextOrder]
+    payload._overlay = _withOverlay(slot, ['custom_kinks._order'])
+    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload, clearSaveError: true })
   },
 
   flistCustomKinksResetField(characterId, kinkId, field) {
@@ -4001,41 +3941,23 @@ export const useStore = create<State>((set, get) => ({
   },
 
   flistCustomKinksBulkSetChoice(characterId, kinkIds, choice) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      if (!slot) return {}
-      const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
-      const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
-      // Validate ids against the dict before mutating — a stale selection
-      // surviving a tombstone-purge of a `local:` id would otherwise
-      // resurrect that id as an empty stub (QA P3-4).
-      const additions: string[] = []
-      for (const kinkId of kinkIds) {
-        if (!ck[kinkId]) continue
-        ck[kinkId].choice = choice
-        additions.push(`custom_kinks.${kinkId}.choice`)
-      }
-      if (additions.length === 0) return {}
-      payload.custom_kinks = ck
-      const overlay = Array.from(new Set([...slot.overlay, ...additions]))
-      payload._overlay = overlay
-      return {
-        flistWorking: {
-          ...s.flistWorking,
-          [characterId]: {
-            ...slot,
-            payload,
-            overlay,
-            unsavedDirty: true,
-            saveStatus: 'idle',
-            saveError: slot.saveError
-          }
-        }
-      }
-    })
-    _scheduleFlush(characterId, () => {
-      void get().flistFlushWorking(characterId)
-    })
+    const slot = get().flistWorking[characterId]
+    if (!slot) return
+    const payload = JSON.parse(JSON.stringify(slot.payload)) as WorkingPayload
+    const ck = (payload.custom_kinks ?? {}) as Record<string, Record<string, unknown>>
+    // Validate ids against the dict before mutating — a stale selection
+    // surviving a tombstone-purge of a `local:` id would otherwise
+    // resurrect that id as an empty stub (QA P3-4).
+    const additions: string[] = []
+    for (const kinkId of kinkIds) {
+      if (!ck[kinkId]) continue
+      ck[kinkId].choice = choice
+      additions.push(`custom_kinks.${kinkId}.choice`)
+    }
+    if (additions.length === 0) return
+    payload.custom_kinks = ck
+    payload._overlay = _withOverlay(slot, additions)
+    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload })
   },
 
   flistCustomKinksSetUI(characterId, patch) {
@@ -4060,23 +3982,14 @@ export const useStore = create<State>((set, get) => ({
     // Defensive: if `payload.kinks` is still the F-list empty-array
     // shape `[]`, pathSet would set a non-numeric property on an Array
     // and JSON.stringify would drop it (QA P1-4). Coerce to dict before
-    // routing through the regular field setter.
+    // the regular field edit, as part of the same commit.
     const slot = get().flistWorking[characterId]
-    if (slot && Array.isArray(slot.payload.kinks)) {
-      set((s) => {
-        const existing = s.flistWorking[characterId]
-        if (!existing) return {}
-        const payload = { ...existing.payload, kinks: {} }
-        return {
-          flistWorking: {
-            ...s.flistWorking,
-            [characterId]: { ...existing, payload }
-          }
-        }
-      })
-    }
-    const path = `kinks.${kinkId}`
-    get().flistSetWorkingField(characterId, path, choice)
+    if (!slot) return
+    const base = Array.isArray(slot.payload.kinks)
+      ? { ...slot, payload: { ...slot.payload, kinks: {} } }
+      : slot
+    const next = flistApplyEdit(base, `kinks.${kinkId}`, choice)
+    _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload: next.payload })
   },
 
   async loadCharacters() {
@@ -4390,25 +4303,26 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setEditorContent(value) {
-    const before = get().editorContent
-    set((s) => ({
-      editorContent: value,
-      editorDirty: s.editorDirty || value !== before,
-      // Mark draft stale as soon as the user types — the autosave
-      // effect will pick this up and flush after the idle window.
-      draftStatus: 'idle'
-    }))
+    const s = get()
+    const before = s.editorContent
+    // Mark draft stale as soon as the user types — the autosave
+    // effect will pick this up and flush after the idle window.
+    set({ draftStatus: 'idle' })
     // Working-copy mode: editor is showing an F-list character's
     // editable copy (no local doc active, not in read-only Live /
-    // Backup view). Route description edits through the persisted
-    // working-copy slice so the 500 ms debounce + If-Match flush apply
-    // uniformly with the other infotag / kink edits.
-    const s = get()
-    const isWorkingCopyMode =
-      s.flistActiveCharacterId !== null && !s.editorReadOnly
-    if (isWorkingCopyMode && value !== before) {
-      get().flistSetWorkingField(s.flistActiveCharacterId!, DESCRIPTION_PATH, value)
+    // Backup view). The description is an edit to the Workbench like
+    // any other: it goes into the payload, and the editor text is read
+    // back from there by the commit, so the two cannot drift.
+    const characterId = s.flistActiveCharacterId
+    const isWorkingCopyMode = characterId !== null && !s.editorReadOnly
+    if (isWorkingCopyMode && value !== before && s.flistWorking[characterId]) {
+      get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value)
+      return
     }
+    set((st) => ({
+      editorContent: value,
+      editorDirty: st.editorDirty || value !== before
+    }))
   },
 
   resetEditorDirty() {
