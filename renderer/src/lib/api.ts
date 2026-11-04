@@ -1,4 +1,40 @@
+import type { components, paths } from './api.gen'
+
 type ApiOptions = { signal?: AbortSignal }
+
+// ---- Generated wire types -----------------------------------------------
+// api.gen.ts is generated from the sidecar's OpenAPI schema
+// (sidecar/openapi.json; `npm run gen:api` writes both), so a field
+// renamed in Python fails the type-check where the window reads it.
+// Route groups move from the hand-written types below to these one at
+// a time (spec #8: #127-#130).
+
+/** A model the sidecar's schema names, by its Python class name. */
+export type Schema<Name extends keyof components['schemas']> = components['schemas'][Name]
+
+type Method = 'get' | 'put' | 'post' | 'delete' | 'patch'
+/** The methods `P` serves. */
+type MethodOf<P extends keyof paths> = {
+  [M in Method]: paths[P][M] extends undefined ? never : M
+}[Method]
+type Operation<P extends keyof paths, M extends MethodOf<P>> = NonNullable<paths[P][M]>
+type JsonOf<X> = X extends { content: { 'application/json': infer B } } ? B : never
+
+/** What `M P` answers when it is ok, as its response model says: the
+ *  JSON of its 200, 201 or 202, or undefined for a 204. */
+export type Answer<P extends keyof paths, M extends MethodOf<P>> =
+  Operation<P, M> extends { responses: infer R }
+    ? 204 extends keyof R
+      ? undefined
+      : JsonOf<R[Extract<keyof R, 200 | 201 | 202>]>
+    : never
+
+/** The JSON body `M P` takes. */
+export type BodyOf<P extends keyof paths, M extends MethodOf<P>> =
+  Operation<P, M> extends { requestBody?: infer B } ? JsonOf<NonNullable<B>> : never
+
+/** Every code a sidecar refusal can carry (`refusals.RefusalCode`). */
+export type RefusalCode = Schema<'RefusalCode'>
 
 export type InlineImage = { hash: string; extension: string; nsfw: boolean }
 
@@ -338,42 +374,10 @@ export type LogMessage = {
   label_error?: string
 }
 
-export type LabelsSettings = {
-  /** Messages shorter than this are OOC without asking anyone. The
-   *  only labels setting left — everything the rules cannot settle now
-   *  goes to the model the user connected over MCP. */
-  threshold_chars: number
-  defaults: {
-    threshold_chars: number
-  }
-}
-
-export type RagSettings = {
-  embed_model: string
-  rerank_model: string
-  rerank_candidates: number
-  top_k: number
-  neighbors: number
-  rerank_min_ratio: number
-  hybrid_enabled: boolean
-  hybrid_bm25_candidates: number
-  chunk_max_chars: number
-  chunk_soft_split_chars: number
-  chunk_overlap_msgs: number
-  defaults: {
-      embed_model: string
-          rerank_model: string
-    rerank_candidates: number
-    top_k: number
-    neighbors: number
-    rerank_min_ratio: number
-    hybrid_enabled: boolean
-    hybrid_bm25_candidates: number
-      chunk_max_chars: number
-    chunk_soft_split_chars: number
-    chunk_overlap_msgs: number
-  }
-}
+/** Messages shorter than `threshold_chars` are OOC without asking
+ *  anyone; `defaults` for the "(default)" hints. */
+export type LabelsSettings = Schema<'LabelsSettings'>
+export type RagSettings = Schema<'RagSettings'>
 
 export type LabelsStats = {
   character: string
@@ -454,26 +458,15 @@ export type RagStatus = {
 /** One MCP endpoint the sidecar serves. `all` carries every tool; the
  *  narrow ones exist because small local models choke on long tool
  *  lists. */
-export type McpEndpoint = {
-  id: 'all' | 'character' | 'logs' | 'classify'
-  label: string
-  path: string
-  url: string
-  tool_count: number
-}
+export type McpEndpoint = Schema<'McpEndpoint'>
 
 /** MCP settings only the window may change. `log_text`: whether MCP
  *  clients get the tools that return Log text; off by default. */
-export type McpSettings = {
-  log_text: boolean
-}
+export type McpSettings = Schema<'McpSettings'>
 
 /** The Foreign profile cache's cap, in whole megabytes (at least 1).
  *  Only the window sets it; a lower cap evicts at once. */
-export type ForeignSettings = {
-  cache_cap_mb: number
-  defaults: { cache_cap_mb: number }
-}
+export type ForeignSettings = Schema<'ForeignSettings'>
 
 /** What the Foreign profile cache holds on disk, and what it may hold. */
 export type ForeignCacheUsage = {
@@ -482,14 +475,10 @@ export type ForeignCacheUsage = {
   cap_bytes: number
 }
 
-export type McpInfo = {
-  port: number
-  endpoints: McpEndpoint[]
-  /** The optional bearer token. Off by default — the endpoints are
-   *  loopback-only, so requiring one buys nothing against an attacker
-   *  already running code as this user. */
-  auth: { required: boolean; token: string | null }
-}
+/** The MCP endpoints and the optional bearer token. The token is off
+ *  by default: the endpoints are loopback-only, so requiring one buys
+ *  nothing against an attacker already running code as this user. */
+export type McpInfo = Schema<'McpInfo'>
 
 function base(): string {
   return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
@@ -593,11 +582,11 @@ export class HttpError extends Error {
  * `refusalCode`. `message` is the sidecar's own words.
  */
 export class RefusalError extends HttpError {
-  readonly code: string
+  readonly code: RefusalCode
   readonly details: Record<string, unknown>
 
   constructor(
-    code: string,
+    code: RefusalCode,
     status: number,
     message: string,
     details: Record<string, unknown> = {}
@@ -623,7 +612,8 @@ async function failure(res: Response): Promise<HttpError> {
   if (isErrorBody(body)) {
     const details =
       body.details && typeof body.details === 'object' ? body.details : {}
-    return new RefusalError(body.code, res.status, body.message, details)
+    // The sidecar answers only codes its schema lists (RefusalCode).
+    return new RefusalError(body.code as RefusalCode, res.status, body.message, details)
   }
   return new HttpError(res.status, res.statusText)
 }
@@ -642,15 +632,15 @@ export function errorDetail(err: unknown): string {
 
 /** The sidecar's code for a lost F-list session: no ticket, or one
  *  F-list rejected. */
-const SESSION_LOST = 'not_signed_in'
+const SESSION_LOST: RefusalCode = 'not_signed_in'
 
 /** The codes of a Workbench write that has not seen what is on disk
  *  now: it sent no etag, or a stale one. */
-const WORKBENCH_CONFLICT_CODES: readonly string[] = ['etag_mismatch', 'etag_required']
+const WORKBENCH_CONFLICT_CODES: readonly RefusalCode[] = ['etag_mismatch', 'etag_required']
 
 /** The sidecar's code for a request it refused; null for any other
  *  error (the network, an answer that is not a refusal). */
-export function refusalCode(err: unknown): string | null {
+export function refusalCode(err: unknown): RefusalCode | null {
   return err instanceof RefusalError ? err.code : null
 }
 
@@ -779,7 +769,7 @@ export const api = {
     request<ForeignCacheUsage & { removed: number }>('/foreign/cache', {
       method: 'DELETE'
     }),
-  health: () => get<{ status: string; version: string }>('/health'),
+  health: () => get<Answer<'/health', 'get'>>('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
     get<{
       eicons: string[]
@@ -833,35 +823,10 @@ export const api = {
       dm: { character: string; partner: string; bytes: number; mtime: number }[]
     }>(`/logs/contacts?name=${encodeURIComponent(name)}`),
 
-  settingsGet: () =>
-    get<{
-      fchat_data_dir: string | null
-      fchat_data_dir_effective: string
-      fchat_data_dir_env_locked: boolean
-      labels: LabelsSettings
-      rag: RagSettings
-      image_import_roots: string[]
-      mcp: McpSettings
-      foreign: ForeignSettings
-    }>('/settings'),
-  settingsUpdate: (body: {
-    fchat_data_dir?: string | null
-    labels?: Partial<Omit<LabelsSettings, 'defaults'>>
-    rag?: Partial<Omit<RagSettings, 'defaults'>>
-    image_import_roots?: string[]
-    mcp?: Partial<McpSettings>
-    foreign?: Partial<Omit<ForeignSettings, 'defaults'>>
-  }) =>
-    request<{
-      fchat_data_dir: string | null
-      fchat_data_dir_effective: string
-      fchat_data_dir_env_locked: boolean
-      labels: LabelsSettings
-      rag: RagSettings
-      image_import_roots: string[]
-      mcp: McpSettings
-      foreign: ForeignSettings
-    }>('/settings', {
+  settingsGet: () => get<Answer<'/settings', 'get'>>('/settings'),
+  /** Fields left out (or null, for the numbers) stay as they are. */
+  settingsUpdate: (body: BodyOf<'/settings', 'put'>) =>
+    request<Answer<'/settings', 'put'>>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)
     }),
@@ -1015,16 +980,7 @@ export const api = {
    *  with the numbers the choice actually turns on. Licence is in there
    *  because the catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0. */
   discoverModels: () =>
-    request<{
-      models: Array<{
-        model: string
-        dimension: number
-        size_gb: number | null
-        license: string | null
-      }>
-      source: 'local'
-      error: string | null
-    }>('/settings/discover-models', {
+    request<Answer<'/settings/discover-models', 'post'>>('/settings/discover-models', {
       method: 'POST',
       body: JSON.stringify({})
     }),
@@ -1049,13 +1005,13 @@ export const api = {
   ragStatus: () => get<RagStatus>('/rag/status'),
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */
-  mcpInfo: () => get<McpInfo>('/mcp-info'),
+  mcpInfo: () => get<Answer<'/mcp-info', 'get'>>('/mcp-info'),
   /** Issue a bearer token for /mcp, replacing any existing one. */
   mcpCreateToken: () =>
-    request<{ token: string }>('/mcp-info/token', { method: 'POST' }),
+    request<Answer<'/mcp-info/token', 'post'>>('/mcp-info/token', { method: 'POST' }),
   /** Turn the bearer requirement back off. */
   mcpRevokeToken: () =>
-    request<{ required: boolean }>('/mcp-info/token', { method: 'DELETE' }),
+    request<Answer<'/mcp-info/token', 'delete'>>('/mcp-info/token', { method: 'DELETE' }),
   ragWipe: () =>
     request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.
