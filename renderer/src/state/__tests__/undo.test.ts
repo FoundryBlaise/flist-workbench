@@ -39,7 +39,6 @@ beforeEach(() => {
     flistArchive: {},
     flistViewingLive: {},
     flistCustomKinksUI: {},
-    flistResetUndo: null,
     flistBrowseBackup: null,
     flistActiveCharacterId: null,
     editorActiveTab: 'description',
@@ -322,6 +321,190 @@ describe('switching tabs or characters keeps each character its history', () => 
 
     store().flistUndo(OTHER)
     expect(kinksOf(OTHER)).toEqual({ '7': 'no' })
+  })
+})
+
+describe('a Restore and a reset to Live are undo entries', () => {
+  const LOAD = `POST /flist/character/${CID}/workbench/load-backup`
+  const RESET = `POST /flist/character/${CID}/workbench/reset-to-live`
+  const BACKUPS = `GET /flist/character/${CID}/zip-backups`
+  const PARKED = '2026-10-30T120000Z.zip'
+  // The Backup the sidecar keeps of the Workbench it replaces.
+  const KEPT = { filename: '2026-11-04T120000Z.zip', created_at: 1793793600 }
+
+  const descOf = (payload: unknown) =>
+    ((payload as { character?: { description?: string } }).character ?? {}).description
+
+  function sidecarKeepsBackups() {
+    fake.on(
+      BACKUPS,
+      json({
+        backups: [
+          {
+            ...KEPT,
+            size: 10,
+            kind: 'manual_single',
+            source: 'workbench',
+            occasion: 'before-restore',
+            name: null
+          }
+        ]
+      })
+    )
+    fake.on(`GET /flist/character/${CID}/live`, json({ character: { description: 'live' } }))
+  }
+
+  function sidecarRestores(description: string, etag: string) {
+    fake.on(
+      LOAD,
+      json({
+        workbench: { name: 'Workbench', created_at: 100, updated_at: 300 },
+        payload: workbenchPayload({ character: { description } }),
+        etag,
+        loaded: PARKED,
+        backed_up_first: KEPT
+      })
+    )
+  }
+
+  function sidecarResets(description: string, etag: string) {
+    fake.on(
+      RESET,
+      json({
+        payload: workbenchPayload({ character: { description } }),
+        etag,
+        backed_up_first: KEPT
+      })
+    )
+  }
+
+  /** Requests made from `from` on, as "METHOD /path". */
+  const requestsSince = (from: number) =>
+    fake.requests.slice(from).map((r) => `${r.method} ${r.path}`)
+
+  const listedBackups = () =>
+    (useStore.getState().flistArchive[CID]?.zipBackups ?? []).map((b) => b.filename)
+
+  it('after a Restore, undo brings the Workbench back and saves it over the Restore’s etag; redo applies the Restore again', async () => {
+    seed(CID, {
+      character: { description: 'mine' },
+      _overlay: ['character.description']
+    })
+    sidecarKeepsBackups()
+    sidecarRestores('parked', 'after-restore')
+    expect(await useStore.getState().flistLoadBackupIntoWorkbench(CID, PARKED)).toBe(true)
+    expect(descOf(slotOf().payload)).toBe('parked')
+    await vi.advanceTimersByTimeAsync(0)
+    const afterRestore = fake.requests.length
+
+    fake.on(SAVE, json({ etag: 'after-undo' }))
+    expect(useStore.getState().flistUndo(CID)).toBe('restore')
+    expect(descOf(slotOf().payload)).toBe('mine')
+    expect(slotOf().overlay).toEqual(['character.description'])
+    expect(useStore.getState().editorContent).toBe('mine')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+
+    // The undo is one ordinary save; the Backup kept is still there.
+    expect(requestsSince(afterRestore)).toEqual([SAVE])
+    const [undoSave] = fake.requestsTo(SAVE)
+    expect(undoSave.headers['If-Match']).toBe('after-restore')
+    expect(descOf(undoSave.body)).toBe('mine')
+    expect(slotOf().etag).toBe('after-undo')
+    expect(slotOf().unsavedDirty).toBe(false)
+    expect(listedBackups()).toEqual([KEPT.filename])
+
+    fake.on(SAVE, json({ etag: 'after-redo' }))
+    expect(useStore.getState().flistRedo(CID)).toBe('restore')
+    expect(descOf(slotOf().payload)).toBe('parked')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [, redoSave] = fake.requestsTo(SAVE)
+    expect(redoSave.headers['If-Match']).toBe('after-undo')
+    expect(descOf(redoSave.body)).toBe('parked')
+    expect(slotOf().etag).toBe('after-redo')
+  })
+
+  it('after a reset to Live, undo brings the Workbench back and saves it over the reset’s etag; redo resets again', async () => {
+    seed(CID, {
+      character: { description: 'mine' },
+      kinks: { '12': 'fave' },
+      _overlay: ['character.description', 'kinks.12']
+    })
+    useStore.setState({
+      flistArchive: { [CID]: { live: { character: { description: 'live' } }, pullStatus: 'idle' } }
+    })
+    sidecarKeepsBackups()
+    sidecarResets('live', 'after-reset')
+    await useStore.getState().flistResetWorkingToLive(CID)
+    expect(descOf(slotOf().payload)).toBe('live')
+    await vi.advanceTimersByTimeAsync(0)
+    const afterReset = fake.requests.length
+
+    fake.on(SAVE, json({ etag: 'after-undo' }))
+    expect(useStore.getState().flistUndo(CID)).toBe('reset-to-live')
+    expect(descOf(slotOf().payload)).toBe('mine')
+    expect(kinksOf()).toEqual({ '12': 'fave' })
+    expect(slotOf().overlay).toEqual(['character.description', 'kinks.12'])
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+
+    expect(requestsSince(afterReset)).toEqual([SAVE])
+    const [undoSave] = fake.requestsTo(SAVE)
+    expect(undoSave.headers['If-Match']).toBe('after-reset')
+    expect(descOf(undoSave.body)).toBe('mine')
+    expect(slotOf().etag).toBe('after-undo')
+    expect(listedBackups()).toEqual([KEPT.filename])
+
+    fake.on(SAVE, json({ etag: 'after-redo' }))
+    expect(useStore.getState().flistRedo(CID)).toBe('reset-to-live')
+    expect(descOf(slotOf().payload)).toBe('live')
+    expect(slotOf().overlay).toEqual([])
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    expect(fake.requestsTo(SAVE)[1].headers['If-Match']).toBe('after-undo')
+  })
+
+  it('an edit saved after a reset is undone first, then the reset, each over the etag the window holds', async () => {
+    seed(CID, { character: { description: 'mine' }, kinks: { '12': 'fave' } })
+    useStore.setState({
+      flistArchive: { [CID]: { live: { character: { description: 'live' } }, pullStatus: 'idle' } }
+    })
+    sidecarKeepsBackups()
+    sidecarResets('live', 'after-reset')
+    await useStore.getState().flistResetWorkingToLive(CID)
+    fake.on(SAVE, json({ etag: 'after-edit' }))
+    useStore.getState().flistStandardKinkSet(CID, '13', 'no')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+
+    fake.on(SAVE, json({ etag: 'after-first-undo' }))
+    expect(useStore.getState().flistUndo(CID)).toBe('edit')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    expect(useStore.getState().flistUndo(CID)).toBe('reset-to-live')
+    expect(descOf(slotOf().payload)).toBe('mine')
+    expect(kinksOf()).toEqual({ '12': 'fave' })
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+
+    const etags = fake.requestsTo(SAVE).map((r) => r.headers['If-Match'])
+    expect(etags).toEqual(['after-reset', 'after-edit', 'after-first-undo'])
+    expect(descOf(fake.requestsTo(SAVE)[2].body)).toBe('mine')
+  })
+
+  it('a Restore made while Live is shown is undone to the Workbench, not to Live', async () => {
+    seed(CID, { character: { description: 'mine' }, _overlay: ['character.description'] })
+    useStore.setState({
+      flistArchive: { [CID]: { live: { character: { description: 'live' } }, pullStatus: 'idle' } }
+    })
+    sidecarKeepsBackups()
+    sidecarRestores('parked', 'after-restore')
+    await useStore.getState().flistShowLive(CID)
+    expect(descOf(slotOf().payload)).toBe('live')
+    await useStore.getState().flistLoadBackupIntoWorkbench(CID, PARKED)
+    expect(useStore.getState().flistViewingLive[CID]).toBe(false)
+
+    fake.on(SAVE, json({ etag: 'after-undo' }))
+    expect(useStore.getState().flistUndo(CID)).toBe('restore')
+    expect(descOf(slotOf().payload)).toBe('mine')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [undoSave] = fake.requestsTo(SAVE)
+    expect(descOf(undoSave.body)).toBe('mine')
+    expect(undoSave.headers['If-Match']).toBe('after-restore')
   })
 })
 

@@ -40,7 +40,6 @@ beforeEach(() => {
     flistRoster: [{ id: CID, name: 'Wren Ashdown' }] as never,
     flistActiveCharacterId: CID,
     flistBrowseBackup: null,
-    flistResetUndo: null,
     flistRestoreRefusal: {},
     editorReadOnly: false,
     editorContent: 'my draft',

@@ -91,4 +91,28 @@ export function canRedo(characterId: string): boolean {
 /** Forget every character's stack: sign-out, and tests between runs. */
 export function resetUndoStacks(): void {
   stacks.clear()
+  hidden.clear()
+}
+
+// A read-only view (Live, a Backup being browsed) borrows the slot and
+// hides the Workbench. A Restore or reset to Live made from there
+// replaces the Workbench, not the view, so its undo entry has to be the
+// Workbench the view hid. Kept here so sign-out and the tests' reset
+// forget it with the stacks.
+const hidden = new Map<string, WorkingPayload>()
+
+/** A view now covers the Workbench whose payload is `workbench`, or a
+ *  change made under a view left the Workbench at `workbench`. */
+export function hideWorkbench(characterId: string, workbench: WorkingPayload): void {
+  hidden.set(characterId, workbench)
+}
+
+/** The Workbench a view covers, or null when no view covers one. */
+export function hiddenWorkbench(characterId: string): WorkingPayload | null {
+  return hidden.get(characterId) ?? null
+}
+
+/** The Workbench is in the slot again. */
+export function unhideWorkbench(characterId: string): void {
+  hidden.delete(characterId)
 }

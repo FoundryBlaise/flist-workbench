@@ -7,7 +7,6 @@ import {
 } from './infotagsResolver'
 import { ListField, NumberField, TextField, UnknownField } from './infotagFields/TextField'
 import { MappingListStaleness } from './MappingListStaleness'
-import { ResetUndoBanner } from './ResetUndoBanner'
 
 const COLLAPSE_KEY_PREFIX = 'flist-workbench:profile-fields-group-collapsed:'
 
@@ -243,8 +242,6 @@ export function ProfileFieldsTab({ characterId }: { characterId: string }) {
           </button>
         </div>
       )}
-
-      <ResetUndoBanner characterId={characterId} />
 
       {/* Custom title row, top of the tab per §4.5 */}
       <InfotagSection

@@ -82,7 +82,6 @@ beforeEach(() => {
     flistDiffRightSource: {},
     flistDiffBackupCache: {},
     flistDiffBackupStatus: {},
-    flistResetUndo: null,
     flistActiveCharacterId: null,
     editorReadOnly: false
   })
