@@ -686,13 +686,19 @@ def resolve(
 _HASH_BATCH = 500
 
 
-def _rows_for_hashes(
-    conn: sqlite3.Connection, columns: str, hashes: Iterable[str]
-) -> Iterator[sqlite3.Row]:
+def _hash_batches(hashes: Iterable[str]) -> Iterator[tuple[list[str], str]]:
+    """`hashes`, without blanks and repeats, in batches of at most
+    `_HASH_BATCH`, each with its `?,?,...` placeholders."""
     ids = list(dict.fromkeys(h for h in hashes if h))
     for start in range(0, len(ids), _HASH_BATCH):
         batch = ids[start : start + _HASH_BATCH]
-        placeholders = ",".join("?" * len(batch))
+        yield batch, ",".join("?" * len(batch))
+
+
+def _rows_for_hashes(
+    conn: sqlite3.Connection, columns: str, hashes: Iterable[str]
+) -> Iterator[sqlite3.Row]:
+    for batch, placeholders in _hash_batches(hashes):
         yield from conn.execute(
             f"SELECT {columns} FROM labels WHERE hash IN ({placeholders})", batch
         )
@@ -994,13 +1000,8 @@ def delete_labels_by_hash(
     """Remove specific labels, reverting those messages to
     rule-or-Unlabeled. Undoes one `fill_unlabeled` without touching
     anything else in the conversation."""
-    ids = [h for h in hashes if h]
-    if not ids:
-        return 0
     removed = 0
-    for start in range(0, len(ids), _HASH_BATCH):
-        batch = ids[start : start + _HASH_BATCH]
-        placeholders = ",".join("?" * len(batch))
+    for batch, placeholders in _hash_batches(hashes):
         cur = conn.execute(
             f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
         )
