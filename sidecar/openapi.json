@@ -1115,9 +1115,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
+                "$ref": "#/components/schemas/WorkbenchSaveRequest"
               }
             }
           }
@@ -3777,8 +3775,7 @@
               "schema": {
                 "anyOf": [
                   {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/RenderFailedRequest"
                   },
                   {
                     "type": "null"
@@ -8939,6 +8936,24 @@
         ],
         "title": "RenderFailReported"
       },
+      "RenderFailedRequest": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "title": "RenderFailedRequest",
+        "description": "Why the app could not draw a picture; without one the caller\nhears a general reason."
+      },
       "RenderPoll": {
         "properties": {
           "request": {
@@ -9967,6 +9982,12 @@
           "backed_up_first"
         ],
         "title": "WorkbenchResetToLive"
+      },
+      "WorkbenchSaveRequest": {
+        "additionalProperties": true,
+        "type": "object",
+        "title": "WorkbenchSaveRequest",
+        "description": "The whole Workbench payload a save writes: F-list's\ncharacter-data shape plus the app's `_schema_version` and\n`_overlay`. Free-form, because F-list may add fields and the\nWorkbench keeps what it does not know."
       },
       "WorkbenchSaved": {
         "properties": {

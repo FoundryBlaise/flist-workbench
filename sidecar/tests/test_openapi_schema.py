@@ -132,29 +132,6 @@ def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
     assert undeclared == []
 
 
-#: The router modules whose routes declare what they answer (spec #8:
-#: #127 health + settings; #128-#130 add theirs (#130: the F-list
-#: session, Foreign profiles, the Pool and the Trash, look-ups and
-#: rendering); #131 makes it every group and drops this list).
-TYPED_GROUPS = {
-    "health",
-    "settings",
-    "live",
-    "workbench",
-    "pull_backups",
-    "upload",
-    "logs",
-    "labels",
-    "aliases",
-    "index",
-    "jobs",
-    "flist_session",
-    "foreign",
-    "images_trash",
-    "lookups",
-    "render",
-}
-
 #: What a route that answers no JSON model declares instead: an event
 #: stream, bytes, or nothing.
 NOT_JSON = {
@@ -201,7 +178,10 @@ def _undeclared_answer(operation: dict) -> str | None:
     return None
 
 
-def test_typed_routes_declare_a_response_model() -> None:
+def test_every_route_declares_a_response_model() -> None:
+    # A handler annotated `-> dict` (or not at all) answers an object
+    # the schema cannot name, so the window's type for it would be
+    # written by hand.
     from sidecar_client import api_routes
 
     from server import app
@@ -209,11 +189,36 @@ def test_typed_routes_declare_a_response_model() -> None:
     paths = openapi_schema.schema()["paths"]
     problems = []
     for route in api_routes(app):
-        if route.group not in TYPED_GROUPS:
-            continue
         why = _undeclared_answer(paths[route.path][route.method.lower()])
         if why:
             problems.append(f"{route.method} {route.path}: {why}")
+    assert problems == []
+
+
+def _undeclared_body(operation: dict) -> str | None:
+    """Why `operation`'s JSON request body names no model, or None when
+    it does (or takes no JSON body: bytes go as they are)."""
+    content = operation.get("requestBody", {}).get("content", {})
+    body = content.get("application/json")
+    if body is None:
+        return None
+    schema = body.get("schema", {})
+    # An optional body is a model or nothing.
+    branches = [b for b in schema.get("anyOf", [schema]) if b != {"type": "null"}]
+    if branches and all(_names_models(b) for b in branches):
+        return None
+    return f"body names no model: {schema}"
+
+
+def test_every_json_body_names_a_request_model() -> None:
+    # A body typed `dict` takes any object, and the window's type for
+    # what it sends would be written by hand.
+    problems = [
+        f"{method.upper()} {path}: {why}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        if (why := _undeclared_body(operation))
+    ]
     assert problems == []
 
 

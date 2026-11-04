@@ -115,3 +115,17 @@ def test_the_long_poll_returns_empty_handed(api: TestClient) -> None:
     res = api.get("/render/requests?timeout=1")
     assert res.status_code == 200
     assert res.json()["request"] is None
+
+
+def test_the_window_says_why_it_could_not_draw(api: TestClient) -> None:
+    # The app's render loop sends the reason; one nobody waits for any
+    # more is reported as such, like a late picture.
+    res = api.post("/render/failed/unknown-id", json={"message": "offscreen window died"})
+    assert res.status_code == 200
+    assert res.json() == {"reported": False}
+
+
+def test_a_failure_without_a_reason_is_still_reported(api: TestClient) -> None:
+    res = api.post("/render/failed/unknown-id")
+    assert res.status_code == 200
+    assert res.json() == {"reported": False}

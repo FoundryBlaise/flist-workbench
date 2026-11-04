@@ -3879,6 +3879,15 @@ export interface components {
             /** Reported */
             reported: boolean;
         };
+        /**
+         * RenderFailedRequest
+         * @description Why the app could not draw a picture; without one the caller
+         *     hears a general reason.
+         */
+        RenderFailedRequest: {
+            /** Message */
+            message?: string | null;
+        };
         /** RenderPoll */
         RenderPoll: {
             request: components["schemas"]["PendingRender"] | null;
@@ -4254,6 +4263,16 @@ export interface components {
             /** Etag */
             etag: string;
             backed_up_first: components["schemas"]["KeptBackup"] | null;
+        };
+        /**
+         * WorkbenchSaveRequest
+         * @description The whole Workbench payload a save writes: F-list's
+         *     character-data shape plus the app's `_schema_version` and
+         *     `_overlay`. Free-form, because F-list may add fields and the
+         *     Workbench keeps what it does not know.
+         */
+        WorkbenchSaveRequest: {
+            [key: string]: unknown;
         };
         /** WorkbenchSaved */
         WorkbenchSaved: {
@@ -5201,9 +5220,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["WorkbenchSaveRequest"];
             };
         };
         responses: {
@@ -6991,9 +7008,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                } | null;
+                "application/json": components["schemas"]["RenderFailedRequest"] | null;
             };
         };
         responses: {

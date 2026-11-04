@@ -3,6 +3,7 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request
+from pydantic import BaseModel
 
 from refusals import InvalidRequest, UnsupportedType
 from services import render as render_service
@@ -34,6 +35,13 @@ class RenderDelivered(WireModel):
     delivered: bool
     bytes: int
     mime: Literal["image/png", "image/jpeg"]
+
+
+class RenderFailedRequest(BaseModel):
+    """Why the app could not draw a picture; without one the caller
+    hears a general reason."""
+
+    message: str | None = None
 
 
 class RenderFailReported(WireModel):
@@ -69,8 +77,10 @@ async def render_deliver(request_id: str, request: Request) -> RenderDelivered:
 
 
 @router.post("/render/failed/{request_id}")
-async def render_fail(request_id: str, body: dict | None = None) -> RenderFailReported:
+async def render_fail(
+    request_id: str, body: RenderFailedRequest | None = None
+) -> RenderFailReported:
     """The app could not draw this one — say why rather than let the
     caller sit out the timeout."""
-    message = (body or {}).get("message") or "the window could not render it"
-    return RenderFailReported(reported=render_service.fail(request_id, str(message)))
+    message = (body.message if body else None) or "the window could not render it"
+    return RenderFailReported(reported=render_service.fail(request_id, message))
