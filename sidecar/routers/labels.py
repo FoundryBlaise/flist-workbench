@@ -86,7 +86,8 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     return {
         "character": body.character,
         "partner": body.partner,
-        **cleared,
+        "deleted": cleared["deleted"],
+        "trash_id": cleared["trash_id"],
     }
 
 

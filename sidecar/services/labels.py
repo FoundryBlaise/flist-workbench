@@ -373,11 +373,21 @@ def delete(hashes: Iterable[str]) -> int:
         conn.close()
 
 
-def clear(character: str, partner: str | None = None) -> dict[str, Any]:
+def clear(
+    character: str, partner: str | None = None, *, keep_manual: bool = False
+) -> dict[str, Any]:
     """Clear every Label of one conversation, or of every conversation
     of `character` when `partner` is None, a copy going to the Trash
-    first. Returns `{deleted, trash_id}`."""
-    return label_trash.clear(character, partner)
+    first. The window clears them all; MCP passes `keep_manual`, since
+    only the window changes or clears a Label the user set by hand.
+    Returns `{deleted, trash_id, skipped}`, `skipped` naming each
+    manual Label left alone as `{hash, reason}`."""
+    cleared = label_trash.clear(character, partner, keep_manual=keep_manual)
+    return {
+        "deleted": cleared["deleted"],
+        "trash_id": cleared["trash_id"],
+        "skipped": [{"hash": h, "reason": MANUAL_SKIP_REASON} for h in cleared["kept"]],
+    }
 
 
 def clear_all() -> dict[str, Any]:

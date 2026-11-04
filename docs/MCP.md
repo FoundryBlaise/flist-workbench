@@ -272,7 +272,9 @@ set_message_labels(character, partner, [...]) the Labels
 A Label the user set by hand in the app is never replaced by a model.
 `set_message_labels` leaves it as it is, writes the rest of the call
 and lists the hashes it left alone under `skipped`, each with the
-reason. Only the user changes or clears such a Label, in the window.
+reason. `clear_labels` takes only what a model wrote: it keeps every
+Label set by hand and lists those under `skipped` the same way. Only
+the user changes or clears such a Label, in the window.
 
 Some conversations do not need judging at all. A user who knows a
 chat is in-character from the first line to the last can say so once —
@@ -469,7 +471,7 @@ server, so they cannot drift from it.
 | `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
-| `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
+| `clear_labels` | Clear the Labels a model wrote into the Trash; Labels set by hand stay. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |
 | `search_logs_semantic` | *Log text, opt-in.* Find passages that are about something, not ones holding a word. |
 | `get_rag_status` | What the Index holds, and whether the embedding model loads. |
@@ -554,7 +556,7 @@ server, so they cannot drift from it.
 | `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
-| `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
+| `clear_labels` | Clear the Labels a model wrote into the Trash; Labels set by hand stay. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |
 | `search_logs_semantic` | *Log text, opt-in.* Find passages that are about something, not ones holding a word. |
 | `get_rag_status` | What the Index holds, and whether the embedding model loads. |

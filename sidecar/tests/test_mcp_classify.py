@@ -432,7 +432,7 @@ async def test_clearing_requires_confirmation(conversation) -> None:
         )
     text = tool_error_text(result)
     assert "confirm_required" in text
-    assert "manual overrides" in text
+    assert "set by hand stay" in text
 
 
 async def test_clearing_reverts_to_unlabeled(conversation) -> None:

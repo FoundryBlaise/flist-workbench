@@ -116,17 +116,25 @@ def _clear_rows(
     return {"deleted": deleted, "trash_id": entry["id"]}
 
 
-def clear(character: str, partner: str | None = None) -> dict[str, Any]:
+def clear(
+    character: str, partner: str | None = None, *, keep_manual: bool = False
+) -> dict[str, Any]:
     """Clear the Labels of one conversation, under every name of the
     partner's alias group, or of every conversation of `character` when
     `partner` is None, keeping them in the Trash as one entry. The one
-    clear the window and MCP both call. Returns `{deleted, trash_id}`;
-    `trash_id` is None when there was nothing to clear."""
+    clear the window and MCP both call; with `keep_manual` the Labels
+    the user set by hand stay as they are and out of the Trash (MCP
+    never takes those). Returns `{deleted, trash_id, kept}`, `kept`
+    being the hashes of the manual Labels left alone; `trash_id` is
+    None when there was nothing to clear."""
     messages = _log_messages(character, partner)
     conn = labels_store.connect()
     try:
         rows = labels_store.label_rows(conn, messages)
-        return _clear_rows(conn, character, partner, rows)
+        kept = [r["hash"] for r in rows if r["source"] == "manual"] if keep_manual else []
+        if kept:
+            rows = [r for r in rows if r["source"] != "manual"]
+        return _clear_rows(conn, character, partner, rows) | {"kept": kept}
     finally:
         conn.close()
 
