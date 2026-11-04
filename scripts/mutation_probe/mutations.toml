@@ -947,9 +947,10 @@ suite = "renderer"
 file = "renderer/src/features/flist/kinksUnified.ts"
 breaks = "Custom kinks sort last instead of first."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 8
 # audit: M17 customs-first kink sort puts customs last
+# Killed since spec #8 (#117, KinksPane.test.tsx).
 find = '''
 if (a.type !== b.type) return a.type === 'custom' ? -1 : 1'''
 replace = '''
@@ -961,9 +962,10 @@ suite = "renderer"
 file = "renderer/src/features/flist/kinksUnified.ts"
 breaks = "Kinks marked undecided drop out of the choice buckets."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 8
 # audit: M18 bucketByChoice drops undecided
+# Killed since spec #8 (#117, kinksUnified.test.ts).
 find = '''
 for (const entry of list) buckets[entry.choice].push(entry)'''
 replace = '''
