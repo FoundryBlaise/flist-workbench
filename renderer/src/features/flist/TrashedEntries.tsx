@@ -219,6 +219,7 @@ function plural(n: number, word: string): string {
 }
 
 function scope(item: FlistTrashedLabels): string {
+  if (!item.character) return 'messages in none of the Logs'
   return item.partner
     ? `${item.partner} with ${item.character}`
     : `every conversation of ${item.character}`

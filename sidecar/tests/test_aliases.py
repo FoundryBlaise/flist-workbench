@@ -148,8 +148,6 @@ def test_aliases_and_labels_coexist_in_one_db(conn, tmp_path: Path) -> None:
     labels_store.upsert_label(
         conn,
         hash="aaaaaaaaaaaaaaaa",
-        character="C",
-        partner="P",
         ts=1,
         speaker="X",
         label="IC",
@@ -159,63 +157,3 @@ def test_aliases_and_labels_coexist_in_one_db(conn, tmp_path: Path) -> None:
     lab = conn.execute("SELECT COUNT(*) AS n FROM labels").fetchone()["n"]
     assert rows >= 2  # alias row + auto-created primary row
     assert lab == 1
-
-
-# ---- alias-aware label queries ----------------------------------------
-
-
-def test_labels_for_partner_with_aliases_returns_union(conn) -> None:
-    """labels_for_partner pools rows across every name in the alias
-    group when the caller supplies partner_aliases."""
-    # Two labels under the old name, one under the new — both rows
-    # belong to the same logical conversation post-rename.
-    labels_store.upsert_label(
-        conn, hash="h_old_1", character="C", partner="Daelan Envale",
-        ts=1, speaker="X", label="IC", source="llm",
-    )
-    labels_store.upsert_label(
-        conn, hash="h_old_2", character="C", partner="Daelan Envale",
-        ts=2, speaker="X", label="OOC", source="llm",
-    )
-    labels_store.upsert_label(
-        conn, hash="h_new_1", character="C", partner="Asmira",
-        ts=3, speaker="X", label="IC", source="manual",
-    )
-
-    aliases.add_alias(conn, "C", "Daelan Envale", "Asmira")
-    group = aliases.all_names_for(conn, "C", "Asmira")
-
-    # Without aliases: only Asmira's row (single-partner behaviour).
-    flat = labels_store.labels_for_partner(conn, "C", "Asmira")
-    assert set(flat) == {"h_new_1"}
-
-    # With aliases: union across both names.
-    merged = labels_store.labels_for_partner(
-        conn, "C", "Asmira", partner_aliases=group
-    )
-    assert set(merged) == {"h_old_1", "h_old_2", "h_new_1"}
-
-
-def test_delete_labels_for_partner_with_aliases_clears_group(conn) -> None:
-    labels_store.upsert_label(
-        conn, hash="h1", character="C", partner="Daelan Envale",
-        ts=1, speaker="X", label="IC", source="llm",
-    )
-    labels_store.upsert_label(
-        conn, hash="h2", character="C", partner="Asmira",
-        ts=2, speaker="X", label="OOC", source="llm",
-    )
-    # Unrelated conversation that must survive.
-    labels_store.upsert_label(
-        conn, hash="h3", character="C", partner="Other",
-        ts=3, speaker="X", label="IC", source="llm",
-    )
-
-    aliases.add_alias(conn, "C", "Daelan Envale", "Asmira")
-    group = aliases.all_names_for(conn, "C", "Asmira")
-    deleted = labels_store.delete_labels_for_partner(
-        conn, "C", "Asmira", partner_aliases=group
-    )
-    assert deleted == 2
-    surviving = conn.execute("SELECT hash FROM labels").fetchall()
-    assert {r["hash"] for r in surviving} == {"h3"}

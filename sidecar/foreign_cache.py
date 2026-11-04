@@ -20,17 +20,30 @@ reachable that way. Copying one of these into a Workbench is still
 is a button that does it.
 
 Nothing here is user data in the durable sense — it is a cache so a
-second look at a profile does not re-download a 40-image gallery. It
-is never cleared automatically: a stale profile still answers "how was
-this written", which is what the viewer is for.
+second look at a profile does not re-download a 40-image gallery. Age
+alone never clears an entry: a stale profile still answers "how was
+this written", which is what the viewer is for. What does clear one is
+F-list saying the profile is gone or not for us (deleted, private,
+blocked): `delete_profile` drops it with its images and avatar.
+
+The cache is bounded by size, not age. `.index.json` in the root
+tracks each profile folder's total size (profile, gallery images,
+avatar) and when it was last viewed. Whenever a file lands, the least
+recently viewed profiles go, whole, until the total fits the cap
+again; the profile the file belongs to is never the one evicted, so a
+single profile larger than the cap still opens. The index is checked
+against the folders on every use, so a folder deleted by hand, or one
+cached before the index existed, is accounted for.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import atomic_write
 import paths
@@ -39,6 +52,17 @@ FOREIGN_DIRNAME = "foreign"
 PROFILE_FILENAME = "profile.json"
 IMAGES_DIRNAME = "images"
 AVATAR_FILENAME = "avatar.png"
+#: Starts with a dot, which no slug does (`slug_for` hashes such names).
+INDEX_FILENAME = ".index.json"
+
+MB = 1024 * 1024
+#: The cap when Settings has none: 1 GB.
+DEFAULT_CAP_MB = 1024
+
+#: Re-entrant: `store_fetched` holds it across a write and the eviction
+#: that follows, and both take it again. Settings changes arrive on a
+#: worker thread while the event loop serves the viewer.
+_LOCK = threading.RLock()
 
 #: How long a cached profile is served without asking F-list again.
 #: The viewer's ↻ button and `refresh=True` bypass it.
@@ -103,6 +127,20 @@ def _profile_path(name: str) -> Path:
     return profile_dir(name) / PROFILE_FILENAME
 
 
+def avatar_is_current(name: str) -> bool:
+    """Whether the cached avatar was fetched after the cached profile.
+    A refresh rewrites the profile and leaves the avatar, so the avatar
+    route asks for a new one and keeps this one until it has it."""
+    try:
+        avatar = avatar_path(name).stat().st_mtime_ns
+    except OSError:
+        return False
+    try:
+        return avatar >= _profile_path(name).stat().st_mtime_ns
+    except OSError:
+        return True
+
+
 def read_profile(name: str) -> dict[str, Any] | None:
     """The cached payload at whatever age, or None on a miss.
 
@@ -140,6 +178,31 @@ def write_profile(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     return stamped
 
 
+def delete_profile(name: str) -> bool:
+    """Delete the cached Foreign profile for `name`: its `profile.json`,
+    its gallery images and its avatar, the whole folder. Returns whether
+    there was anything to delete.
+
+    `profile.json` goes first, so a folder that cannot be removed in
+    full (a file another program holds open) is no longer served as a
+    cached copy. Any failure is raised: a profile its owner withdrew
+    must not quietly stay on disk.
+
+    Not the Trash: the recoverability rule protects the user's own data,
+    and this is a copy of somebody else's.
+    """
+    folder = profile_dir(name)
+    if not folder.exists():
+        return False
+    _remove_folder(folder)
+    return True
+
+
+def _remove_folder(folder: Path) -> None:
+    (folder / PROFILE_FILENAME).unlink(missing_ok=True)
+    shutil.rmtree(folder)
+
+
 def age_sec(payload: dict[str, Any] | None) -> float | None:
     """Seconds since `fetched_at`, or None if the stamp is missing or
     unreadable. A payload we cannot date is treated as stale by
@@ -174,3 +237,206 @@ def find_image(name: str, image_id: str) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+# ---- size and eviction ------------------------------------------------
+
+
+def _index_path() -> Path:
+    return root() / INDEX_FILENAME
+
+
+def _folder_bytes(folder: Path) -> int:
+    total = 0
+    for p in folder.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _first_seen(folder: Path) -> float:
+    """When a folder the index does not know was last viewed, as near as
+    the disk can say: its profile's write time, else the folder's."""
+    for p in (folder / PROFILE_FILENAME, folder):
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            continue
+    return 0.0
+
+
+def _load_index() -> dict[str, dict[str, float]]:
+    """`{slug: {bytes, viewed_at}}` for every profile folder on disk.
+
+    A folder the stored index does not list is measured; an entry whose
+    folder is gone is dropped."""
+    try:
+        stored = json.loads(_index_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        stored = {}
+    if not isinstance(stored, dict):
+        stored = {}
+    index: dict[str, dict[str, float]] = {}
+    for folder in root().iterdir():
+        if not folder.is_dir():
+            continue
+        known = stored.get(folder.name)
+        if (
+            isinstance(known, dict)
+            and isinstance(known.get("bytes"), int)
+            and isinstance(known.get("viewed_at"), (int, float))
+        ):
+            index[folder.name] = {
+                "bytes": known["bytes"],
+                "viewed_at": float(known["viewed_at"]),
+            }
+        else:
+            index[folder.name] = {
+                "bytes": _folder_bytes(folder),
+                "viewed_at": _first_seen(folder),
+            }
+    return index
+
+
+def _save_index(index: dict[str, dict[str, float]]) -> None:
+    atomic_write.write_json(_index_path(), index, indent=1, sort_keys=True)
+
+
+def _view_stamp(index: dict[str, dict[str, float]]) -> float:
+    """Now, but always later than every stamp already given out, so two
+    views within the clock's resolution still have an order."""
+    latest = max((e["viewed_at"] for e in index.values()), default=0.0)
+    return max(time.time(), latest + 0.001)
+
+
+def _evict(index: dict[str, dict[str, float]], cap_bytes: int, keep: str | None) -> list[str]:
+    """Remove the least recently viewed folders, never `keep`, until the
+    total fits `cap_bytes`. Returns the slugs removed. A folder that
+    cannot be removed in full (a file another program holds open) is
+    re-measured and left for the next pass; its profile no longer
+    serves, as with `delete_profile`."""
+    total = sum(int(e["bytes"]) for e in index.values())
+    evicted: list[str] = []
+    by_age = sorted((s for s in index if s != keep), key=lambda s: index[s]["viewed_at"])
+    for slug in by_age:
+        if total <= cap_bytes:
+            break
+        before = int(index[slug]["bytes"])
+        if _remove_cached(index, slug):
+            total -= before
+            evicted.append(slug)
+        else:
+            total -= before - int(index[slug]["bytes"])
+    return evicted
+
+
+def _remove_cached(index: dict[str, dict[str, float]], slug: str) -> bool:
+    """Remove one cached folder and its index entry. A folder that
+    cannot be removed in full (a file another program holds open) stays
+    in the index, re-measured, for the next pass; returns False."""
+    folder = root() / slug
+    try:
+        _remove_folder(folder)
+    except OSError:
+        index[slug]["bytes"] = _folder_bytes(folder) if folder.exists() else 0
+        return False
+    del index[slug]
+    return True
+
+
+def store_fetched(
+    name: str, payload: dict[str, Any], gallery_ids: Iterable[str], cap_bytes: int
+) -> dict[str, Any]:
+    """Store a profile F-list just sent, as `write_profile` does, and
+    account for it: it becomes the most recently viewed profile, and
+    older ones are evicted until the cache fits `cap_bytes`.
+
+    When it replaces a cached copy (a refresh), gallery images whose id
+    is not in `gallery_ids` go. The avatar stays until the avatar route
+    has fetched a new one (`avatar_is_current`)."""
+    with _LOCK:
+        replaced = _profile_path(name).exists()
+        stamped = write_profile(name, payload)
+        if replaced:
+            keep_ids = {str(i) for i in gallery_ids}
+            images = profile_dir(name) / IMAGES_DIRNAME
+            if images.is_dir():
+                for image in images.iterdir():
+                    if image.is_file() and image.stem not in keep_ids:
+                        image.unlink(missing_ok=True)
+        index = _load_index()
+        slug = slug_for(name)
+        index[slug] = {
+            "bytes": _folder_bytes(profile_dir(name)),
+            "viewed_at": _view_stamp(index),
+        }
+        _evict(index, cap_bytes, keep=slug)
+        _save_index(index)
+    return stamped
+
+
+def mark_viewed(name: str) -> None:
+    """Make `name` the most recently viewed profile, so it is the last
+    one an eviction takes. Nothing happens when it is not cached."""
+    with _LOCK:
+        index = _load_index()
+        slug = slug_for(name)
+        if slug not in index:
+            return
+        index[slug]["viewed_at"] = _view_stamp(index)
+        _save_index(index)
+
+
+def file_landed(name: str, cap_bytes: int) -> list[str]:
+    """Account for a file just written into `name`'s folder (a gallery
+    image, the avatar) and evict other profiles until the cache fits
+    `cap_bytes`. Returns the slugs evicted."""
+    with _LOCK:
+        index = _load_index()
+        slug = slug_for(name)
+        folder = root() / slug
+        if slug in index:
+            index[slug]["bytes"] = _folder_bytes(folder)
+        evicted = _evict(index, cap_bytes, keep=slug)
+        _save_index(index)
+        return evicted
+
+
+def enforce_cap(cap_bytes: int) -> list[str]:
+    """Evict until the cache fits `cap_bytes`, keeping the most recently
+    viewed profile whatever its size. For a cap that was just lowered."""
+    with _LOCK:
+        index = _load_index()
+        newest = max(index, key=lambda s: index[s]["viewed_at"], default=None)
+        evicted = _evict(index, cap_bytes, keep=newest)
+        _save_index(index)
+        return evicted
+
+
+def usage() -> dict[str, int]:
+    """`{bytes, profiles}`: what the cache holds now."""
+    with _LOCK:
+        index = _load_index()
+        _save_index(index)
+        return {
+            "bytes": sum(int(e["bytes"]) for e in index.values()),
+            "profiles": len(index),
+        }
+
+
+def clear() -> dict[str, int]:
+    """Delete every cached profile. Returns `{removed, bytes, profiles}`:
+    how many went, and what is left (a folder another program holds a
+    file of stays until the next eviction or clear)."""
+    with _LOCK:
+        index = _load_index()
+        removed = sum(_remove_cached(index, slug) for slug in list(index))
+        _save_index(index)
+        return {
+            "removed": removed,
+            "bytes": sum(int(e["bytes"]) for e in index.values()),
+            "profiles": len(index),
+        }

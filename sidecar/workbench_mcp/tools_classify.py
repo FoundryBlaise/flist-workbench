@@ -255,6 +255,12 @@ def set_message_labels(
     call, and reporting it as a result invites a caller to treat the
     batch as finished.
 
+    A message whose Label the user set by hand keeps it: its hash comes
+    back under `skipped`, with the reason, and the rest of the call is
+    written. Only the user changes such a Label, in the window, so
+    there is nothing to retry. A call whose every hash was skipped this
+    way is answered, not raised.
+
     The response carries `unlabeled_remaining` for this conversation,
     counted after the write. That number, not the caller's memory of
     how many batches it has done, is what says whether the work is
@@ -270,6 +276,7 @@ def set_message_labels(
     character, partner = conv.character, conv.partner
     result = label_service.record_verdicts(character, partner, items)
     written, unknown, rejected = result.written, result.unknown, result.rejected
+    skipped = result.skipped
 
     audit(
         "set_message_labels",
@@ -278,9 +285,10 @@ def set_message_labels(
         written=len(written),
         unknown=len(unknown),
         rejected=len(rejected),
+        skipped=len(skipped),
     )
 
-    if not written:
+    if not written and not skipped:
         raise ToolError(
             "nothing_written",
             "None of the Labels could be stored, so this batch is "
@@ -308,6 +316,12 @@ def set_message_labels(
         )
     if rejected:
         out["rejected"] = rejected
+    if skipped:
+        out["skipped"] = skipped
+        notes.append(
+            f"{len(skipped)} message(s) already carry a Label the user set by "
+            "hand and were left as they are. Do not send them again."
+        )
     if remaining:
         notes.append(
             f"NOT FINISHED: {remaining} message(s) in this conversation "
@@ -361,7 +375,9 @@ def label_all_unlabeled(
     Messages that already have a Label keep it, and messages the
     rules decide (empty, short, `((` prefix) keep resolving through the
     rules — so this adds labels and never overwrites. `labeled` in the
-    reply counts what was written; the user can undo it in the app.
+    reply counts what was written. They are stored as a model's Labels,
+    not as ones the user set by hand, so clear_labels takes them again
+    and the user can change any of them in the app.
 
     Unlabeled messages are skipped by ingest, so a conversation filled
     this way is found by search only after the next ingest_logs.
@@ -371,7 +387,7 @@ def label_all_unlabeled(
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
 
-    result = label_service.fill_unlabeled(character, partner, label)
+    result = label_service.fill_unlabeled(character, partner, label, source="mcp")
 
     audit(
         "label_all_unlabeled",
@@ -399,9 +415,9 @@ def label_all_unlabeled(
     title="Clear stored Labels",
     destructive=True,
     warning=(
-        "This deletes every stored Label of the conversation (of every "
-        "conversation of the character when no partner is given), "
-        "including the user's own manual overrides. A copy goes to the "
+        "This deletes the stored Labels a model wrote in the conversation "
+        "(in every conversation of the character when no partner is "
+        "given). Labels the user set by hand stay. A copy goes to the "
         "Trash, where only the user can put it back."
     ),
 )
@@ -410,11 +426,12 @@ def clear_labels(
 ) -> dict[str, Any]:
     """Delete stored IC/OOC Labels, reverting messages to Unlabeled.
 
-    It removes the user's own manual overrides as well as anything a
-    model decided. Rule-based hints keep firing. Ask the user before
-    calling this with confirm=true. The cleared Labels go to the
-    character's Trash as one entry (`trash_id`), which the user can
-    put back in the window.
+    It removes what a model decided and keeps every Label the user set
+    by hand: those come back under `skipped`, with the reason, and only
+    the user clears them, in the window. Rule-based hints keep firing.
+    Ask the user before calling this with confirm=true. The cleared
+    Labels go to the character's Trash as one entry (`trash_id`), which
+    the user can put back in the window.
 
     Search keeps finding the cleared messages until the next
     ingest_logs of the conversation, which drops them from the Index.
@@ -425,24 +442,34 @@ def clear_labels(
     else:
         character = resolve_log_character(character)
 
-    cleared = label_service.clear(character, partner)
+    cleared = label_service.clear(character, partner, keep_manual=True)
+    skipped = cleared["skipped"]
 
     audit(
         "clear_labels",
         character=character,
         partner=partner,
         deleted=cleared["deleted"],
+        skipped=len(skipped),
         trash_id=cleared["trash_id"],
     )
-    return {
+    notes = [
+        "Those messages are Unlabeled again. The cleared Labels are in "
+        "the character's Trash; the user can put them back in the "
+        "window. Search still finds the messages until the next "
+        "ingest_logs, which drops them from the Index."
+    ]
+    out: dict[str, Any] = {
         "character": character,
         "partner": partner,
         "deleted": cleared["deleted"],
         "trash_id": cleared["trash_id"],
-        "note": (
-            "Those messages are Unlabeled again. The cleared Labels are in "
-            "the character's Trash; the user can put them back in the "
-            "window. Search still finds the messages until the next "
-            "ingest_logs, which drops them from the Index."
-        ),
     }
+    if skipped:
+        out["skipped"] = skipped
+        notes.append(
+            f"{len(skipped)} message(s) carry a Label the user set by hand "
+            "and kept it; only the user clears those, in the window."
+        )
+    out["note"] = " ".join(notes)
+    return out

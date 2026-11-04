@@ -6,14 +6,19 @@ Rules are recomputed at every read against the current settings, so
 changing the threshold is instant; no DB rebuild needed.
 
 Resolver precedence:
-    1. DB label (model or manual)           -> stored row's label
-    2. empty body                           -> OOC  (rule:empty)
-    3. text_len < settings.threshold_chars  -> OOC  (rule:short)
-    4. body starts with "((" (LRP convention) -> OOC (rule:parens)
-    5. otherwise                            -> Unlabeled
+    1. system line (ad, roll, warn, event)  -> no Label (None)
+    2. DB label (model or manual)           -> stored row's label
+    3. empty body                           -> OOC  (rule:empty)
+    4. text_len < settings.threshold_chars  -> OOC  (rule:short)
+    5. body starts with "((" (LRP convention) -> OOC (rule:parens)
+    6. otherwise                            -> Unlabeled
 
-Case 5 is what `services.classification` hands to the connected model,
-and what `chunker` refuses to index.
+`text_len` is what the user wrote: a `/me` action is measured without
+the speaker name the parser puts in front.
+
+Case 6 is what `services.classification` hands to the connected model,
+and what `chunker` refuses to index. Case 1 is in none of the counts,
+batches or chunks: a Label is a verdict on a message a person wrote.
 
 Storage path: <user_data_dir>/labels.db — its own SQLite file, separate
 so users can wipe it without losing their drafts and the ingest job can
@@ -26,10 +31,9 @@ import hashlib
 import re
 import sqlite3
 import time
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import paths
 import settings as settings_store
@@ -511,10 +515,55 @@ def _widen_source_check(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _drop_label_owner(conn: sqlite3.Connection) -> None:
+    """A Label belongs to the message (ADR 0004), so the character and
+    partner each row stored, and their index, go.
+
+    Should a database ever hold more than one verdict for a message,
+    one is kept: a manual Label over a model's, and within the same
+    kind the newer one. Every kept row keeps its verdict, source and
+    prior Label.
+    """
+    for statement in (
+        """
+        CREATE TABLE labels_migrated (
+            hash         TEXT PRIMARY KEY,
+            ts           INTEGER NOT NULL,
+            speaker      TEXT NOT NULL,
+            label        TEXT NOT NULL CHECK (label IN ('IC','OOC')),
+            confidence   REAL NOT NULL,
+            reason       TEXT,
+            source       TEXT NOT NULL CHECK (source IN ('mcp','manual','llm')),
+            prior_label  TEXT,
+            prior_source TEXT,
+            updated_at   REAL NOT NULL
+        )
+        """,
+        """
+        INSERT INTO labels_migrated
+        SELECT hash, ts, speaker, label, confidence, reason, source,
+               prior_label, prior_source, updated_at
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY hash
+                ORDER BY source = 'manual' DESC, updated_at DESC
+            ) AS pick
+            FROM labels
+        )
+        WHERE pick = 1
+        """,
+        "DROP TABLE labels",
+        "ALTER TABLE labels_migrated RENAME TO labels",
+        "CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts)",
+    ):
+        conn.execute(statement)
+
+
 MIGRATIONS: tuple[sqlite_db.Migration, ...] = (
     _create_tables,
     _drop_retired_tables,
     _widen_source_check,
+    _drop_label_owner,
 )
 
 #: The `user_version` of a labels.db that has every migration.
@@ -580,24 +629,49 @@ def load_settings(conn: sqlite3.Connection | None = None) -> LabelsSettings:
 _PARENS_PREFIX = re.compile(r"^\s*\(\(")
 
 
+def _written_text(msg: dict) -> str:
+    """What the user wrote, as the short-message rule measures it.
+
+    The parser puts the speaker's name in front of a `/me` action so it
+    reads naturally; that name is not part of what the user typed, so a
+    long name must not reach the threshold earlier (decided on #5).
+    """
+    text = (msg.get("text") or "").strip()
+    if msg.get("type_name") == "action":
+        prefix = f"{msg.get('speaker') or ''} "
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    return text
+
+
+def is_system_line(msg: dict) -> bool:
+    """An ad, roll, warning or status event: F-Chat wrote it, not a
+    person, so it never gets a Label."""
+    return msg.get("kind") == "system"
+
+
 def resolve(
     msg: dict,
     db_label: sqlite3.Row | dict | None,
     settings: LabelsSettings,
-) -> str:
-    """Return the effective label for a message.
+) -> str | None:
+    """Return the effective label for a message, None for a system line.
 
     `db_label` is the explicit-labels row keyed by `msg_hash(msg)`, or
     None. `msg` must have `text` (BBCode-stripped) and `raw` keys —
     matching what `parser.parse_log` yields.
 
-    Precedence: explicit DB label wins; otherwise rules (empty / short /
-    `((` prefix) decide; otherwise "Unlabeled".
+    Precedence: a system line (ad, roll, warning, status event) has no
+    Label before anything else, because a Label is a verdict on a
+    message a person wrote; then an explicit DB label wins; otherwise
+    rules (empty / short / `((` prefix) decide; otherwise "Unlabeled".
     """
+    if is_system_line(msg):
+        return None
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
         return db_label["label"]
-    text = (msg.get("text") or "").strip()
+    text = _written_text(msg)
     if not text:
         return LABEL_OOC
     if len(text) < settings.threshold_chars:
@@ -608,50 +682,48 @@ def resolve(
     return LABEL_UNLABELED
 
 
-def labels_for_partner(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
+#: Hashes per `IN (...)` query, under SQLite's bound-parameter limit.
+_HASH_BATCH = 500
+
+
+def _hash_batches(hashes: Iterable[str]) -> Iterator[tuple[list[str], str]]:
+    """`hashes`, without blanks and repeats, in batches of at most
+    `_HASH_BATCH`, each with its `?,?,...` placeholders."""
+    ids = list(dict.fromkeys(h for h in hashes if h))
+    for start in range(0, len(ids), _HASH_BATCH):
+        batch = ids[start : start + _HASH_BATCH]
+        yield batch, ",".join("?" * len(batch))
+
+
+def _rows_for_hashes(
+    conn: sqlite3.Connection, columns: str, hashes: Iterable[str]
+) -> Iterator[sqlite3.Row]:
+    for batch, placeholders in _hash_batches(hashes):
+        yield from conn.execute(
+            f"SELECT {columns} FROM labels WHERE hash IN ({placeholders})", batch
+        )
+
+
+def labels_for_messages(
+    conn: sqlite3.Connection, messages: Iterable[dict]
 ) -> dict[str, sqlite3.Row]:
-    """All stored labels for one conversation, keyed by message hash.
+    """The stored Labels of `messages`, keyed by message hash.
 
-    `partner_aliases` lets the caller fold in labels written under any
-    alternate names a partner has been linked to via the aliases
-    module. When omitted, only rows with `partner = ?` are returned —
-    same behaviour as before aliases existed.
-
-    Loaded in one query so per-message resolution is a dict lookup —
-    a long conversation might have tens of thousands of messages but
-    only a few thousand explicit labels.
+    A Label belongs to the message (ADR 0004), so a conversation's
+    Labels are the Labels of the messages its Log holds, whichever
+    character or partner wrote them: pass the conversation's messages
+    (its whole alias group, as `logs.read_messages` reads it).
     """
-    names = _partner_query_set(partner, partner_aliases)
-    placeholders = ",".join("?" * len(names))
-    rows = conn.execute(
-        f"SELECT * FROM labels WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    ).fetchall()
-    return {row["hash"]: row for row in rows}
-
-
-def _partner_query_set(partner: str, alias_names: list[str] | None) -> list[str]:
-    """Dedupe the (partner, aliases) tuple → ordered list of names.
-
-    Order doesn't matter for the SQL IN clause but a stable list keeps
-    test assertions / cache keys predictable.
-    """
-    if not alias_names:
-        return [partner]
-    return sorted({partner, *alias_names})
+    return {
+        row["hash"]: row
+        for row in _rows_for_hashes(conn, "*", (msg_hash(m) for m in messages))
+    }
 
 
 def upsert_label(
     conn: sqlite3.Connection,
     *,
     hash: str,
-    character: str,
-    partner: str,
     ts: int,
     speaker: str,
     label: str,
@@ -666,27 +738,18 @@ def upsert_label(
     so old rows round-trip).
 
     Note: the schema still carries a `confidence REAL NOT NULL` column
-    for backwards compatibility with on-disk DBs from earlier versions.
-    We always write 1.0 — the model never returned anything informative
-    below 0.95 and the field was dropped from the v4 prompt, so the
-    column is effectively dead weight. Leaving it in place avoids a
-    migration; no callers read it anymore.
+    from earlier versions. We always write 1.0 and nothing reads it.
+    The rebuild that dropped the owner columns kept it, because Label
+    rows in the Trash (`LABEL_COLUMNS`) carry it and restore as they
+    are.
     """
-    upsert_verdicts(
-        conn,
-        [(hash, ts, speaker, label, reason)],
-        character=character,
-        partner=partner,
-        source=source,
-    )
+    upsert_verdicts(conn, [(hash, ts, speaker, label, reason)], source=source)
 
 
 def upsert_labels_many(
     conn: sqlite3.Connection,
     items: Iterable[tuple[str, int, str]],
     *,
-    character: str,
-    partner: str,
     label: str,
     source: str = "manual",
     reason: str | None = "manual override",
@@ -699,8 +762,6 @@ def upsert_labels_many(
     return upsert_verdicts(
         conn,
         [(h, ts, speaker, label, reason) for h, ts, speaker in items],
-        character=character,
-        partner=partner,
         source=source,
     )
 
@@ -709,13 +770,14 @@ def upsert_verdicts(
     conn: sqlite3.Connection,
     items: Iterable[tuple[str, int, str, str, str | None]],
     *,
-    character: str,
-    partner: str,
     source: str,
 ) -> int:
     """Store `(hash, ts, speaker, label, reason)` verdicts, each with its
     own label and reason, in one transaction and one `labels-changed`
     event. Every row snapshots the label it replaces as its prior one.
+    A manual Label is only ever replaced by another manual one: a
+    write from any other source leaves it untouched (callers that
+    report skips find them first with `manual_hashes`).
     Returns how many messages were written."""
     if source not in ("mcp", "manual", "llm"):
         raise ValueError(f"invalid source: {source!r}")
@@ -729,23 +791,17 @@ def upsert_verdicts(
             rows[h] = (ts, speaker, label, reason)
     if not rows:
         return 0
-    prior: dict[str, tuple[str | None, str | None]] = {}
-    ids = list(rows)
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        for r in conn.execute(
-            f"SELECT hash, label, source FROM labels WHERE hash IN ({placeholders})",
-            batch,
-        ):
-            prior[r["hash"]] = (r["label"], r["source"])
+    prior = {
+        r["hash"]: (r["label"], r["source"])
+        for r in _rows_for_hashes(conn, "hash, label, source", rows)
+    }
     now = time.time()
     conn.executemany(
         """
         INSERT INTO labels (
-            hash, character, partner, ts, speaker, label,
+            hash, ts, speaker, label,
             confidence, reason, source, prior_label, prior_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET
             label = excluded.label,
             confidence = excluded.confidence,
@@ -754,19 +810,15 @@ def upsert_verdicts(
             prior_label = excluded.prior_label,
             prior_source = excluded.prior_source,
             updated_at = excluded.updated_at
+        WHERE labels.source != 'manual' OR excluded.source = 'manual'
         """,
         [
-            (
-                h, character, partner, ts, speaker, label,
-                1.0, reason, source, *prior.get(h, (None, None)), now,
-            )
+            (h, ts, speaker, label, 1.0, reason, source, *prior.get(h, (None, None)), now)
             for h, (ts, speaker, label, reason) in rows.items()
         ],
     )
     conn.commit()
-    events.publish(
-        events.LABELS_CHANGED, character=character, partner=partner, hashes=len(rows)
-    )
+    events.publish(events.LABELS_CHANGED, hashes=len(rows))
     return len(rows)
 
 
@@ -777,6 +829,17 @@ def label_row(conn: sqlite3.Connection, hash: str) -> dict | None:
         f"SELECT {', '.join(LABEL_COLUMNS)} FROM labels WHERE hash = ?", (hash,)
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def manual_hashes(conn: sqlite3.Connection, hashes: Iterable[str]) -> set[str]:
+    """Which of `hashes` carry a Label the user set by hand. Only the
+    window changes those; `upsert_verdicts` from any other source
+    leaves them as they are."""
+    return {
+        r["hash"]
+        for r in _rows_for_hashes(conn, "hash, source", hashes)
+        if r["source"] == "manual"
+    }
 
 
 def count_by_source(conn: sqlite3.Connection, source: str) -> int:
@@ -796,67 +859,29 @@ def delete_label(conn: sqlite3.Connection, hash: str) -> bool:
     return cur.rowcount > 0
 
 
-def delete_labels_for_partner(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
-) -> int:
-    """Drop every explicit label for one (character, partner) pair,
-    reverting each message to rule-or-Unlabeled. Returns the number of
-    rows removed."""
-    names = _partner_query_set(partner, partner_aliases)
-    placeholders = ",".join("?" * len(names))
-    cur = conn.execute(
-        f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),
-    )
-    conn.commit()
-    events.publish(
-        events.LABELS_CHANGED,
-        character=character,
-        partner=partner,
-        deleted=cur.rowcount,
-    )
-    return cur.rowcount
-
-
 #: Every column of a stored Label, in the order the Trash keeps them.
+#: Trash entries from before the owner columns were dropped also carry
+#: `character` and `partner`; putting them back ignores both.
 LABEL_COLUMNS = (
-    "hash", "character", "partner", "ts", "speaker", "label",
+    "hash", "ts", "speaker", "label",
     "confidence", "reason", "source", "prior_label", "prior_source",
     "updated_at",
 )
 
 
 def label_rows(
-    conn: sqlite3.Connection,
-    character: str | None = None,
-    partner: str | None = None,
-    *,
-    partner_aliases: list[str] | None = None,
+    conn: sqlite3.Connection, messages: Iterable[dict] | None = None
 ) -> list[dict]:
-    """The stored Labels of one conversation (`partner` given), of every
-    conversation of one character (`character` only), or all of them,
-    as plain dicts of `LABEL_COLUMNS`. What clearing them would take
-    away, so it can go to the Trash first."""
+    """The stored Labels of `messages` (one conversation's Log, or
+    every Log of a character), or every stored Label when `messages` is
+    None, as plain dicts of `LABEL_COLUMNS` in time order. What clearing
+    them would take away, so it can go to the Trash first."""
     cols = ", ".join(LABEL_COLUMNS)
-    if character is None:
-        cur = conn.execute(f"SELECT {cols} FROM labels ORDER BY character, ts")
-    elif partner is None:
-        cur = conn.execute(
-            f"SELECT {cols} FROM labels WHERE character = ? ORDER BY ts", (character,)
-        )
-    else:
-        names = _partner_query_set(partner, partner_aliases)
-        placeholders = ",".join("?" * len(names))
-        cur = conn.execute(
-            f"SELECT {cols} FROM labels WHERE character = ? "
-            f"AND partner IN ({placeholders}) ORDER BY ts",
-            (character, *names),
-        )
-    return [dict(r) for r in cur]
+    if messages is None:
+        return [dict(r) for r in conn.execute(f"SELECT {cols} FROM labels ORDER BY ts")]
+    rows = [dict(r) for r in _rows_for_hashes(conn, cols, (msg_hash(m) for m in messages))]
+    rows.sort(key=lambda r: (r["ts"], r["hash"]))
+    return rows
 
 
 def restore_labels(
@@ -866,17 +891,7 @@ def restore_labels(
     Label again has a newer verdict than the kept one, so it keeps it:
     its hash is returned as skipped. Returns (restored, skipped)."""
     wanted = {r["hash"]: r for r in rows if r.get("hash")}
-    present: set[str] = set()
-    ids = list(wanted)
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
-        present.update(
-            r["hash"]
-            for r in conn.execute(
-                f"SELECT hash FROM labels WHERE hash IN ({placeholders})", batch
-            )
-        )
+    present = {r["hash"] for r in _rows_for_hashes(conn, "hash", wanted)}
     todo = [r for h, r in wanted.items() if h not in present]
     defaults = {c: None for c in LABEL_COLUMNS} | {"confidence": 1.0, "updated_at": time.time()}
     cols = ", ".join(LABEL_COLUMNS)
@@ -886,21 +901,56 @@ def restore_labels(
         [tuple((defaults | r)[c] for c in LABEL_COLUMNS) for r in todo],
     )
     conn.commit()
-    per_conversation = Counter((r["character"], r["partner"]) for r in todo)
-    for (character, partner), n in sorted(per_conversation.items()):
-        events.publish(events.LABELS_CHANGED, character=character, partner=partner, hashes=n)
+    if todo:
+        events.publish(events.LABELS_CHANGED, hashes=len(todo))
     return len(todo), [h for h in wanted if h in present]
+
+
+@dataclass(slots=True, frozen=True)
+class Triage:
+    """A conversation's written messages, sorted by what decides their
+    Label. System lines have none and are in no part of it."""
+
+    #: `(index into the messages, hash)` of each Unlabeled one, in Log
+    #: order: what is left to judge.
+    pending: list[tuple[int, str]]
+    #: How many carry a stored Label.
+    already_labelled: int
+    #: How many the rules decide (empty, short, `((` prefix).
+    decided_by_rules: int
+    #: How many written messages there are.
+    total: int
+
+
+def triage(
+    conn: sqlite3.Connection, messages: list[dict], settings: LabelsSettings
+) -> Triage:
+    """Sort `messages`, one conversation's Log, into those with a
+    stored Label (looked up by hash, ADR 0004), those the rules decide
+    and the Unlabeled rest."""
+    by_hash = labels_for_messages(conn, messages)
+    pending: list[tuple[int, str]] = []
+    already_labelled = decided_by_rules = total = 0
+    for idx, msg in enumerate(messages):
+        if is_system_line(msg):
+            continue
+        total += 1
+        h = msg_hash(msg)
+        if h in by_hash:
+            already_labelled += 1
+        elif resolve(msg, None, settings) != LABEL_UNLABELED:
+            decided_by_rules += 1
+        else:
+            pending.append((idx, h))
+    return Triage(pending, already_labelled, decided_by_rules, total)
 
 
 def fill_unlabeled(
     conn: sqlite3.Connection,
-    character: str,
-    partner: str,
     messages: Iterable[dict],
     settings: LabelsSettings,
     label: str,
     *,
-    partner_aliases: list[str] | None = None,
     source: str = "manual",
     reason: str = "bulk: all unlabeled",
 ) -> dict:
@@ -919,43 +969,30 @@ def fill_unlabeled(
     that is what the rules are for, and the user can still override a
     single row by hand.
 
+    `messages` is the conversation's Log; the Labels it already holds
+    are found through their hashes (ADR 0004).
+
     Returns the counts plus every hash written, so the caller can offer
     to undo exactly this write and nothing else.
     """
     if label not in (LABEL_IC, LABEL_OOC):
         raise ValueError(f"invalid label: {label!r}")
-    by_hash = labels_for_partner(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
-    targets: list[tuple[str, dict]] = []
-    already_labelled = 0
-    decided_by_rules = 0
-    total = 0
-    for msg in messages:
-        total += 1
-        h = msg_hash(msg)
-        if h in by_hash:
-            already_labelled += 1
-            continue
-        if resolve(msg, None, settings) != LABEL_UNLABELED:
-            decided_by_rules += 1
-            continue
-        targets.append((h, msg))
+    messages = list(messages)
+    sorted_out = triage(conn, messages, settings)
+    targets = [(h, messages[idx]) for idx, h in sorted_out.pending]
 
     now = time.time()
     conn.executemany(
         """
         INSERT INTO labels (
-            hash, character, partner, ts, speaker, label,
+            hash, ts, speaker, label,
             confidence, reason, source, prior_label, prior_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
         ON CONFLICT(hash) DO NOTHING
         """,
         [
             (
                 h,
-                character,
-                partner,
                 int(msg.get("ts") or 0),
                 msg.get("speaker") or "",
                 label,
@@ -969,107 +1006,74 @@ def fill_unlabeled(
     )
     conn.commit()
     if targets:
-        events.publish(
-            events.LABELS_CHANGED,
-            character=character,
-            partner=partner,
-            hashes=len(targets),
-        )
+        events.publish(events.LABELS_CHANGED, hashes=len(targets))
     return {
         "label": label,
         "labeled": len(targets),
         "hashes": [h for h, _ in targets],
-        "already_labeled": already_labelled,
-        "decided_by_rules": decided_by_rules,
-        "total_messages": total,
+        "already_labeled": sorted_out.already_labelled,
+        "decided_by_rules": sorted_out.decided_by_rules,
+        "total_messages": sorted_out.total,
     }
 
 
 def delete_labels_by_hash(
     conn: sqlite3.Connection,
     hashes: Iterable[str],
-    *,
-    character: str | None = None,
-    partner: str | None = None,
 ) -> int:
     """Remove specific labels, reverting those messages to
     rule-or-Unlabeled. Undoes one `fill_unlabeled` without touching
     anything else in the conversation."""
-    ids = [h for h in hashes if h]
-    if not ids:
-        return 0
     removed = 0
-    for start in range(0, len(ids), 500):
-        batch = ids[start : start + 500]
-        placeholders = ",".join("?" * len(batch))
+    for batch, placeholders in _hash_batches(hashes):
         cur = conn.execute(
             f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
         )
         removed += cur.rowcount
     conn.commit()
     if removed:
-        events.publish(
-            events.LABELS_CHANGED,
-            character=character,
-            partner=partner,
-            deleted=removed,
-        )
+        events.publish(events.LABELS_CHANGED, deleted=removed)
     return removed
 
 
 def max_label_time(
-    conn: sqlite3.Connection,
-    character: str,
-    partner: str,
-    *,
-    partner_aliases: list[str] | None = None,
+    conn: sqlite3.Connection, messages: Iterable[dict]
 ) -> float | None:
-    """Return the most recent labels.updated_at for a partner (or the
-    folded alias group), or None when no label rows exist.
+    """The newest `updated_at` among the stored Labels of `messages`
+    (one conversation's Log), or None when none of them has a Label.
 
     Used to flag stale-label rows in the partner list — compare against
     the log file's mtime to spot conversations that grew since their
     last classify run.
     """
-    names = list(partner_aliases) if partner_aliases else [partner]
-    if partner not in names:
-        names.append(partner)
-    placeholders = ",".join("?" * len(names))
-    row = conn.execute(
-        f"""
-        SELECT MAX(updated_at) FROM labels
-         WHERE character = ? AND partner IN ({placeholders})
-        """,
-        (character, *names),
-    ).fetchone()
-    val = row[0] if row else None
-    return float(val) if val is not None else None
+    newest = None
+    for row in _rows_for_hashes(conn, "updated_at", (msg_hash(m) for m in messages)):
+        if newest is None or row["updated_at"] > newest:
+            newest = row["updated_at"]
+    return float(newest) if newest is not None else None
 
 
 def stats(
     conn: sqlite3.Connection,
-    character: str,
-    partner: str,
     messages: Iterable[dict],
     settings: LabelsSettings,
-    *,
-    partner_aliases: list[str] | None = None,
 ) -> dict[str, int]:
-    """Count IC / OOC / Unlabeled across the supplied messages.
+    """Count IC / OOC / Unlabeled across the supplied messages. System
+    lines have no Label, so they are in none of the counts.
 
-    Caller passes the already-parsed messages (we don't re-walk the
-    binary log) plus this conversation's stored labels. Pass
-    `partner_aliases` to fold in label rows written under any linked
-    alternate names. Cheap because the labels lookup is a single
-    query and resolution is a dict hit per message.
+    Caller passes the already-parsed messages of a conversation (we
+    don't re-walk the binary log, and its whole alias group is in
+    them); their stored Labels are looked up by hash. Cheap because
+    the lookup is a few batched queries and resolution is a dict hit
+    per message.
     """
-    by_hash = labels_for_partner(
-        conn, character, partner, partner_aliases=partner_aliases
-    )
+    messages = list(messages)
+    by_hash = labels_for_messages(conn, messages)
     counts = {LABEL_IC: 0, LABEL_OOC: 0, LABEL_UNLABELED: 0}
     for msg in messages:
         lab = resolve(msg, by_hash.get(msg_hash(msg)), settings)
-        counts[lab] = counts.get(lab, 0) + 1
+        if lab is not None:
+            counts[lab] = counts.get(lab, 0) + 1
     return counts
 
 

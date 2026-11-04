@@ -156,7 +156,9 @@ Nothing lives next to the program. Everything goes under
 - `characters/`: your characters: each one's Live (the profile as
   last pulled from F-list), its Workbench (your editable copy), its
   Backups (zips), images and Trash
-- `foreign/`: a cache of other people's profiles you looked at
+- `foreign/`: a cache of other people's profiles you or a model
+  looked at, kept until the cache's cap evicts them (1 GB by default;
+  Settings → Foreign profiles sets the cap and clears the cache)
 - `settings.db`: preferences (F-Chat log folder, embedding and
   reranker model, search tuning)
 - `labels.db`: the IC/OOC Label of each Log message, partner aliases,

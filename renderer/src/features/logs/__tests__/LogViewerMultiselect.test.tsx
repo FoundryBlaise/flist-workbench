@@ -68,7 +68,7 @@ function row(n: number): HTMLElement {
   return el as HTMLElement
 }
 
-function labelOf(n: number): string | undefined {
+function labelOf(n: number): string | null | undefined {
   return useStore
     .getState()
     .messagesByPartner[`${CHAR}::${PARTNER}`].find((m) => m.hash === `h${n}`)?.label
@@ -214,4 +214,15 @@ it('undo puts back each row’s own earlier verdict', async () => {
       [null, ['h2', 'h3']]
     ])
   )
+})
+
+it('a system line shows no Label badge', () => {
+  seed([
+    msg(1, { kind: 'system', type_name: 'ad', label: null }),
+    msg(2, { label: 'OOC' })
+  ])
+  render(<LogViewer />)
+
+  expect(row(1).querySelector('.log-label')).toBeNull()
+  expect(row(2).querySelector('.log-label')?.textContent).toBe('OOC')
 })

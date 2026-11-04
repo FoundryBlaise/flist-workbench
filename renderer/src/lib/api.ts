@@ -138,8 +138,9 @@ export type FlistTrashedBackup = {
 export type FlistTrashedLabels = {
   /** What put-back and purge take. */
   id: string
-  /** The Log character they were cleared for. */
-  character: string
+  /** The Log character they were cleared for; null for Labels whose
+   *  messages were in none of the Logs when every Label was reset. */
+  character: string | null
   /** The conversation cleared; null when every conversation was. */
   partner: string | null
   /** How many Labels the entry holds. */
@@ -317,9 +318,9 @@ export type LogMessage = {
   // primary key. The renderer passes this back when overriding.
   hash: string
   // label is the semantic IC/OOC classification from the resolver. Always
-  // present for chat/action messages; absent label_source means rule-or-unlabeled
-  // (no explicit DB row).
-  label?: Label
+  // present for chat/action messages, null for a system line (it never gets
+  // a Label); absent label_source means rule-or-unlabeled (no explicit DB row).
+  label?: Label | null
   label_source?: LabelSource
   // Free-text reason the labeller gave for the verdict. Surfaced in
   // the badge tooltip so users can audit why a label was chosen.
@@ -465,6 +466,20 @@ export type McpEndpoint = {
  *  clients get the tools that return Log text; off by default. */
 export type McpSettings = {
   log_text: boolean
+}
+
+/** The Foreign profile cache's cap, in whole megabytes (at least 1).
+ *  Only the window sets it; a lower cap evicts at once. */
+export type ForeignSettings = {
+  cache_cap_mb: number
+  defaults: { cache_cap_mb: number }
+}
+
+/** What the Foreign profile cache holds on disk, and what it may hold. */
+export type ForeignCacheUsage = {
+  bytes: number
+  profiles: number
+  cap_bytes: number
 }
 
 export type McpInfo = {
@@ -674,6 +689,12 @@ export const api = {
    *  scrolling a gallery twice costs one fetch per image, not two. */
   foreignImageUrl: (name: string, imageId: string) =>
     `${base()}/foreign/character/${encodeURIComponent(name)}/image/${encodeURIComponent(imageId)}`,
+  foreignCacheUsage: () => get<ForeignCacheUsage>('/foreign/cache'),
+  /** Delete every cached Foreign profile, images and avatars included. */
+  foreignCacheClear: () =>
+    request<ForeignCacheUsage & { removed: number }>('/foreign/cache', {
+      method: 'DELETE'
+    }),
   health: () => get<{ status: string; version: string }>('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
     get<{
@@ -737,6 +758,7 @@ export const api = {
       rag: RagSettings
       image_import_roots: string[]
       mcp: McpSettings
+      foreign: ForeignSettings
     }>('/settings'),
   settingsUpdate: (body: {
     fchat_data_dir?: string | null
@@ -744,6 +766,7 @@ export const api = {
     rag?: Partial<Omit<RagSettings, 'defaults'>>
     image_import_roots?: string[]
     mcp?: Partial<McpSettings>
+    foreign?: Partial<Omit<ForeignSettings, 'defaults'>>
   }) =>
     request<{
       fchat_data_dir: string | null
@@ -753,6 +776,7 @@ export const api = {
       rag: RagSettings
       image_import_roots: string[]
       mcp: McpSettings
+      foreign: ForeignSettings
     }>('/settings', {
       method: 'PUT',
       body: JSON.stringify(body)

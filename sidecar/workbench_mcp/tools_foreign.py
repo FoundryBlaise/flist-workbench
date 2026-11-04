@@ -20,6 +20,7 @@ each fetch; a cache hit costs nothing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import flist_api
@@ -56,12 +57,47 @@ _REPORTED_KEYS = frozenset(
 _EXTRA_MAX_CHARS = 2000
 
 
-def _as_tool_error(exc: foreign_service.ForeignError) -> ToolError:
+def _as_tool_error(
+    exc: foreign_service.ForeignError,
+    shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> ToolError:
     """Map a service error onto the tool vocabulary. `not_signed_in`
     already means the same thing on both sides; the rest keep their
     codes so a model can tell a missing character from a spent
-    budget."""
+    budget.
+
+    A spent budget can carry the cached copy (`details.cached`); `shape`
+    turns it into what the tool would have returned, so the model reads
+    it the same way as a success."""
+    cached = exc.details.get("cached")
+    if shape is not None and isinstance(cached, dict):
+        return ToolError(exc.code, exc.message, cached=shape(cached))
     return ToolError(exc.code, exc.message)
+
+
+def _audit_read(
+    tool_name: str, result: dict[str, Any], *, status: str | None = None
+) -> None:
+    """Record which Foreign profile a model read, from F-list or the
+    cache. `status` says when it came with a refusal (a spent budget
+    handing back the cached copy)."""
+    fields: dict[str, Any] = {"character": result["name"], "from_cache": result["from_cache"]}
+    if status is not None:
+        fields["status"] = status
+    audit(tool_name, **fields)
+
+
+def _foreign_error(
+    tool_name: str,
+    exc: foreign_service.ForeignError,
+    shape: Callable[[dict[str, Any]], dict[str, Any]],
+) -> ToolError:
+    """`_as_tool_error`, audited when the refusal still hands over the
+    cached copy: the model read that profile all the same."""
+    cached = exc.details.get("cached")
+    if isinstance(cached, dict):
+        _audit_read(tool_name, cached, status=exc.code)
+    return _as_tool_error(exc, shape)
 
 
 def _extra_fields(profile: dict[str, Any]) -> dict[str, Any]:
@@ -148,14 +184,26 @@ async def get_foreign_profile(
     into the user's own characters, and this tool is not a step
     towards one: there is no Workbench, Backup or export behind it.
 
-    Served from a local cache for 24 hours; `refresh=true` fetches
-    again. Pass `include_description=true` for the BBCode itself,
+    Served from the local cache while the copy is under 24 hours old;
+    `refresh=true` fetches again. The cache keeps profiles until its
+    size cap evicts them, and the activity log records each one you
+    read. Pass `include_description=true` for the BBCode itself,
     which can run to tens of kilobytes.
 
     Fetching costs one call against a quarter-share of the hourly
     F-list budget. Cache hits are free, so re-reading a profile you
-    already opened costs nothing.
+    already opened costs nothing. A spent share answers `rate_limited`,
+    with the cached copy under `cached` when there is one.
+
+    When F-list is offline or failing, the cached copy comes back
+    marked `stale`. When F-list says the profile is gone or not
+    visible (deleted, private, or the owner blocked the account), the
+    answer is `not_found` and the cached copy is deleted.
     """
+
+    def shape(result: dict[str, Any]) -> dict[str, Any]:
+        return _profile_out(result, include_description=include_description)
+
     try:
         result = await foreign_service.get_profile(
             character,
@@ -163,8 +211,16 @@ async def get_foreign_profile(
             budget=flist_api.mcp_character_budget(),
         )
     except foreign_service.ForeignError as exc:
-        raise _as_tool_error(exc) from exc
+        raise _foreign_error("get_foreign_profile", exc, shape) from exc
 
+    out = shape(result)
+    out["budget_remaining"] = flist_api.mcp_character_budget().remaining()
+    _audit_read("get_foreign_profile", result)
+    return out
+
+
+def _profile_out(result: dict[str, Any], *, include_description: bool) -> dict[str, Any]:
+    """`get_foreign_profile`'s answer for one service result."""
     profile = result["profile"]
     description = profile.get("description") or ""
     out: dict[str, Any] = {
@@ -191,12 +247,6 @@ async def get_foreign_profile(
     extra = _extra_fields(profile)
     if extra:
         out["extra"] = extra
-    out["budget_remaining"] = flist_api.mcp_character_budget().remaining()
-    audit(
-        "get_foreign_profile",
-        character=result["name"],
-        from_cache=result["from_cache"],
-    )
     return out
 
 
@@ -222,12 +272,21 @@ async def get_foreign_kinks(character: str) -> dict[str, Any]:
             character, budget=flist_api.mcp_character_budget()
         )
     except foreign_service.ForeignError as exc:
-        raise _as_tool_error(exc) from exc
+        raise _foreign_error("get_foreign_kinks", exc, _kinks_out) from exc
+    _audit_read("get_foreign_kinks", result)
+    return _kinks_out(result)
+
+
+def _kinks_out(result: dict[str, Any]) -> dict[str, Any]:
+    """`get_foreign_kinks`'s answer for one service result."""
     profile = result["profile"]
-    return {
+    out: dict[str, Any] = {
         "character": result["name"],
         "kinks": profile.get("kinks") or {},
         "custom_kinks": profile.get("custom_kinks") or {},
         "from_cache": result["from_cache"],
         "read_only": True,
     }
+    if result.get("stale"):
+        out["stale"] = True
+    return out

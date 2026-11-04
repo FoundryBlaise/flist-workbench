@@ -61,6 +61,12 @@ _DISK_ALLOWED_FIELDS = frozenset({
     "idle_seconds",     # int
 })
 
+# Events that keep `character` on disk too: a model reading a Foreign
+# profile. The log promises to say which profiles a model fetched, and
+# that has to survive a restart. Every other event keeps it in memory
+# only, as before.
+_FOREIGN_READ_KINDS = frozenset({"mcp:get_foreign_profile", "mcp:get_foreign_kinks"})
+
 # Substrings that we redact out of any string field before writing. F-list
 # errors don't contain credentials in practice, but a defence-in-depth
 # pass costs almost nothing.
@@ -102,9 +108,12 @@ def _redact_value(value: Any) -> Any:
 
 def _redacted_for_disk(event: dict[str, Any]) -> dict[str, Any]:
     """Strip non-allow-listed keys and redact known-sensitive substrings."""
+    allowed = _DISK_ALLOWED_FIELDS
+    if event.get("kind") in _FOREIGN_READ_KINDS:
+        allowed = allowed | {"character"}
     out: dict[str, Any] = {}
     for k, v in event.items():
-        if k not in _DISK_ALLOWED_FIELDS:
+        if k not in allowed:
             continue
         out[k] = _redact_value(v)
     return out

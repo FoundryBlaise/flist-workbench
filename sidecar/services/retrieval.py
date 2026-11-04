@@ -21,7 +21,7 @@ import rag as rag_settings
 import rag_lexical
 import rag_query
 import rag_store
-from refusals import NoIndex
+from refusals import KeywordBackfillFailed, NoIndex
 from services import index as index_service
 
 
@@ -38,14 +38,25 @@ class SearchHit:
     label: str
     speakers: list[str]
     text: str
+    #: The fused (RRF) score: what the order before reranking rests on.
     score: float
     message_count: int
     ts_start: int
     ts_end: int
-    expanded: bool
+    #: 1-based place after fusing the dense and keyword halves.
+    fused_rank: int
+    #: 1-based place in each half; None when that half did not find it
+    #: (always None for `lexical_rank` when hybrid search is off).
+    dense_rank: int | None
+    lexical_rank: int | None
+    #: The cross-encoder's score; None when reranking did not run.
+    rerank_score: float | None
+    #: The chunks right before and after this one in its Log, in time
+    #: order: context for reading the hit, not matches themselves.
+    context: dict[str, list[dict[str, Any]]]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "chunk_id": self.chunk_id,
             "character": self.character,
             "partner": self.partner,
@@ -54,14 +65,19 @@ class SearchHit:
             "speakers": self.speakers,
             "text": self.text,
             "score": round(self.score, 4),
+            "fused_rank": self.fused_rank,
+            "dense_rank": self.dense_rank,
+            "lexical_rank": self.lexical_rank,
             "message_count": self.message_count,
             "ts_start": self.ts_start,
             "ts_end": self.ts_end,
-            # True when the chunk was pulled in as a neighbour of a
-            # match rather than matching itself — useful context, but
-            # not evidence the search found it.
-            "expanded": self.expanded,
+            "context": self.context,
         }
+        # Present exactly when reranking ran, so its absence is the
+        # answer rather than a null to interpret.
+        if self.rerank_score is not None:
+            out["rerank_score"] = round(self.rerank_score, 4)
+        return out
 
 
 @dataclass(frozen=True)
@@ -132,8 +148,9 @@ def search(
     this one call; None means "use what is configured". `offset` skips
     that many of the best matches, for the next page. Raises
     `NoIndexError` when nothing has been ingested, `IndexBusy` while an
-    ingest holds the Index, and `rag_embed.EmbedError` when the
-    embedding endpoint is unreachable.
+    ingest holds the Index, `rag_embed.EmbedError` when the
+    embedding endpoint is unreachable, and `KeywordBackfillFailed` when
+    a hybrid search cannot fill an empty keyword half of the Index.
     """
     rag_set = rag_settings.load_settings()
     resolved_scope = expand_scope(scope)
@@ -161,17 +178,9 @@ def search(
         lex: rag_lexical.LexicalStore | None = None
         if use_hybrid:
             lex = rag_lexical.LexicalStore()
-            # Backfill safety net: someone who enables hybrid after an
-            # existing ingest has an empty FTS5 table while Qdrant holds
-            # thousands of chunks. Rebuilding from payloads takes
-            # seconds and avoids the "I turned it on and got no hits"
-            # surprise.
-            try:
-                if lex.count() == 0 and store.count() > 0:
-                    rag_lexical.backfill_from_qdrant(store, lex)
-            except Exception:  # noqa: BLE001, S110 — backfill is best-effort
-                pass
         try:
+            if lex is not None:
+                _backfill_if_empty(store, lex)
             result = rag_query.run_query(
                 question,
                 scope=resolved_scope,
@@ -203,21 +212,60 @@ def search(
     )
 
 
+def _backfill_if_empty(store: rag_store.RagStore, lex: rag_lexical.LexicalStore) -> None:
+    """Fill an empty keyword half of the Index from the vector half.
+
+    Someone who turns hybrid search on after an earlier ingest has an
+    empty keyword half while the vector half holds thousands of chunks;
+    copying the payloads takes seconds and avoids "I turned it on and
+    got no hits". A copy that fails is reported, so a hybrid search
+    never quietly answers from one half: a keyword write the database
+    refuses, and a vector half that cannot be read (the embedded Qdrant
+    raises no one error type for that)."""
+    try:
+        if lex.count() > 0 or store.count() == 0:
+            return
+        rag_lexical.backfill_from_qdrant(store, lex)
+    except Exception as exc:  # noqa: BLE001 — reported, never swallowed
+        raise KeywordBackfillFailed(
+            "Hybrid search needs the keyword half of the Index, which is "
+            f"empty and could not be filled from the vector half: {exc}. "
+            "Search with hybrid off meanwhile; once the cause is fixed, "
+            "Settings → Index maintenance can fill it again."
+        ) from exc
+
+
+def _chunk_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """What a chunk says and when, from its stored payload: the fields a
+    hit and a neighbouring chunk share. A neighbour carries nothing
+    more: it was not ranked, and its conversation is the hit's own."""
+    payload = raw.get("payload") or {}
+    return {
+        "chunk_id": str(payload.get("chunk_id") or ""),
+        "date": str(payload.get("date") or ""),
+        "speakers": list(payload.get("speakers") or []),
+        "text": str(payload.get("text") or ""),
+        "message_count": int(payload.get("msg_count") or 0),
+        "ts_start": int(payload.get("ts_start") or 0),
+        "ts_end": int(payload.get("ts_end") or 0),
+    }
+
+
 def _to_hit(raw: dict[str, Any]) -> SearchHit:
     payload = raw.get("payload") or {}
     return SearchHit(
-        chunk_id=str(payload.get("chunk_id") or ""),
+        **_chunk_fields(raw),
         character=str(payload.get("char_owner") or ""),
         partner=str(payload.get("partner") or ""),
-        date=str(payload.get("date") or ""),
         label=str(payload.get("label") or ""),
-        speakers=list(payload.get("speakers") or []),
-        text=str(payload.get("text") or ""),
-        score=float(raw.get("score") or 0.0),
-        message_count=int(payload.get("msg_count") or 0),
-        ts_start=int(payload.get("ts_start") or 0),
-        ts_end=int(payload.get("ts_end") or 0),
-        # `expand_with_neighbors` marks the chunks it pulled in on
-        # the payload, not the hit envelope.
-        expanded=bool(payload.get("expanded")),
+        score=float(raw.get("fused_score") or 0.0),
+        fused_rank=int(raw.get("fused_rank") or 0),
+        dense_rank=raw.get("dense_rank"),
+        lexical_rank=raw.get("lexical_rank"),
+        rerank_score=raw.get("rerank_score"),
+        context={
+            side: [_chunk_fields(c) for c in chunks]
+            for side, chunks in (raw.get("context") or {}).items()
+        }
+        or {"before": [], "after": []},
     )

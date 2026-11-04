@@ -2,10 +2,11 @@
  *
  *  These render a `character-data.php` payload directly. They are
  *  deliberately *not* the editor's own panes: those bind to the
- *  working-set slot in the store, and a stranger's profile has no
- *  business anywhere near that machinery. What they do share is the
- *  editor's markup and class names, so a profile reads the same here
- *  as it does on the user's own characters.
+ *  Workbench in the store, and a Foreign profile has no business
+ *  anywhere near that machinery. What they do share are the
+ *  editor's read-only building blocks (kink columns, field shell and
+ *  groups, theme switch), so a profile reads the same here as it does
+ *  on the user's own characters, and both change together.
  *
  *  Nothing here offers an action. No copy button, no "use this", no
  *  export. Text is selectable, because reading how a profile is
@@ -21,14 +22,20 @@ import { api } from '../../lib/api'
 import { bbcodeToHtml, type InlinesManifest } from '../../lib/bbcode'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { useStore } from '../../state'
+import { PreviewThemeSwitch } from '../editor/PreviewThemeSwitch'
 import { resolveInfotagDescriptors } from '../flist/infotagsResolver'
-import { buildUnifiedKinks, sortUnifiedKinks } from '../flist/kinksUnified'
-import { CHOICE_LABELS, type KinkChoice } from '../flist/ChoiceButtons'
+import { InfotagFieldShell } from '../flist/infotagFields/TextField'
+import { InfotagSection } from '../flist/ProfileFieldsTab'
+import { KINK_BUCKET_ORDER } from '../flist/ChoiceButtons'
+import {
+  bucketByChoice,
+  buildUnifiedKinks,
+  readCustomsFirst,
+  sortUnifiedKinks
+} from '../flist/kinksUnified'
+import { KinkColumns } from '../flist/KinkColumns'
 
 type Mapping = Record<string, unknown> | null
-
-/** Same order and labels as the editor's Kinks tab. */
-const BUCKET_ORDER: KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -103,7 +110,6 @@ export function ForeignDescriptionPreview({
   const inlines = profile.inlines as InlinesManifest | undefined
   const html = useMemo(() => bbcodeToHtml(source, { inlines }), [source, inlines])
   const previewTheme = useStore((s) => s.previewTheme)
-  const setPreviewTheme = useStore((s) => s.setPreviewTheme)
 
   return (
     <section
@@ -116,25 +122,7 @@ export function ForeignDescriptionPreview({
         <span className="preview-readonly-hint" title="Somebody else's profile">
           · read-only
         </span>
-        <div
-          className="preview-theme-switch"
-          role="group"
-          aria-label="F-list theme"
-          data-testid="foreign-theme-switch"
-        >
-          {(['dark', 'default', 'light'] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              className={`preview-theme-btn${previewTheme === t ? ' on' : ''}`}
-              aria-pressed={previewTheme === t}
-              title={`Preview as F-list ${t[0].toUpperCase() + t.slice(1)} theme`}
-              onClick={() => setPreviewTheme(t)}
-            >
-              {t[0].toUpperCase() + t.slice(1)}
-            </button>
-          ))}
-        </div>
+        <PreviewThemeSwitch testId="foreign-theme-switch" />
       </header>
       <div className="pane-body">
         {source.trim() ? (
@@ -231,36 +219,26 @@ export function ForeignFieldsPane({
           </section>
         )}
         {groups.map((group) => (
-          <section
+          <InfotagSection
             key={group.id}
-            className="profile-fields-section"
-            data-group-id={group.id}
+            groupId={group.id}
+            label={group.label}
+            collapsed={!!collapsed[group.id]}
+            onToggle={() =>
+              setCollapsed((prev) => ({ ...prev, [group.id]: !prev[group.id] }))
+            }
           >
-            <button
-              type="button"
-              className="profile-fields-section-toggle"
-              aria-expanded={!collapsed[group.id]}
-              onClick={() =>
-                setCollapsed((prev) => ({ ...prev, [group.id]: !prev[group.id] }))
-              }
-            >
-              {collapsed[group.id] ? '▸' : '▾'} {group.label}
-            </button>
-            {!collapsed[group.id] && (
-              <div className="profile-fields-section-body">
-                {group.rows.map((row) => (
-                  <ForeignField key={row.id} label={row.label} value={row.value} />
-                ))}
-              </div>
-            )}
-          </section>
+            {group.rows.map((row) => (
+              <ForeignField key={row.id} label={row.label} value={row.value} />
+            ))}
+          </InfotagSection>
         ))}
       </div>
     </section>
   )
 }
 
-/** One field, in the editor's own shell markup.
+/** One field, in the editor's own field shell.
  *
  *  `readOnly` rather than `disabled`: a disabled input matches the
  *  editor's Live view exactly but greys the text out and refuses
@@ -268,34 +246,28 @@ export function ForeignFieldsPane({
  *  somebody else's profile. */
 function ForeignField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="infotag-field" data-testid={`foreign-field-${label}`}>
-      <label className="infotag-field-label">
-        <span className="infotag-field-name">{label}</span>
-      </label>
-      <div className="infotag-field-control">
-        <input
-          type="text"
-          className="infotag-field-input"
-          value={value}
-          readOnly
-          tabIndex={-1}
-        />
-      </div>
-    </div>
+    <InfotagFieldShell label={label} testId={`foreign-field-${label}`}>
+      <input
+        type="text"
+        className="infotag-field-input"
+        value={value}
+        readOnly
+        tabIndex={-1}
+      />
+    </InfotagFieldShell>
   )
 }
 
 // ---- Kinks ------------------------------------------------------------
 
-/** Four columns — Fave / Yes / Maybe / No — exactly as the editor's
- *  Kinks tab lays them out.
+/** Four columns — Fave / Yes / Maybe / No — drawn by the editor's own
+ *  Kinks columns, read-only.
  *
  *  The first version of this pane listed every chosen kink in one
  *  flowing grid with its description underneath, which on a profile
  *  with a hundred favourites was a wall of text nobody could scan.
  *  The editor solved that already: short rows, one column per choice,
- *  description on hover. The classes below are the editor's, so the
- *  two stay in step.
+ *  description on hover. Sharing the component keeps the two in step.
  *
  *  Undecided is left out. On the user's own profile that column is a
  *  to-do list; on somebody else's it is every kink they never
@@ -308,22 +280,14 @@ export function ForeignKinksPane({
   mapping: Mapping
 }) {
   const buckets = useMemo(() => {
-    const all = buildUnifiedKinks(
-      { payload: profile as Record<string, unknown> },
-      mapping
+    const slot = { payload: profile as Record<string, unknown> }
+    const assigned = buildUnifiedKinks(slot, mapping).filter(
+      (k) => k.choice !== 'undecided'
     )
-    const customsFirst = asRecord(profile.settings).customs_first === true
-    const out: Record<string, ReturnType<typeof buildUnifiedKinks>> = {}
-    for (const choice of BUCKET_ORDER) {
-      out[choice] = sortUnifiedKinks(
-        all.filter((k) => k.choice === choice),
-        customsFirst
-      )
-    }
-    return out
+    return bucketByChoice(sortUnifiedKinks(assigned, readCustomsFirst(slot)))
   }, [profile, mapping])
 
-  const total = BUCKET_ORDER.reduce((n, c) => n + buckets[c].length, 0)
+  const total = KINK_BUCKET_ORDER.reduce((n, c) => n + buckets[c].length, 0)
   if (total === 0) {
     return (
       <section className="pane foreign-pane">
@@ -335,48 +299,7 @@ export function ForeignKinksPane({
 
   return (
     <div className="kinks-pane foreign-kinks-pane" data-testid="foreign-kinks">
-      <div className="kinks-pane-columns">
-        {BUCKET_ORDER.map((bucket) => (
-          <section
-            key={bucket}
-            className={`kink-column kink-column-${bucket}`}
-            data-testid={`foreign-kink-column-${bucket}`}
-          >
-            <header className="kink-column-header">
-              <span className={`kink-column-title kink-choice-${bucket}`}>
-                {CHOICE_LABELS[bucket]}
-              </span>
-              <span className="kink-column-count">{buckets[bucket].length}</span>
-            </header>
-            {buckets[bucket].length === 0 ? (
-              <div className="kink-column-empty">—</div>
-            ) : (
-              <ul className="kink-column-list">
-                {buckets[bucket].map((entry) => (
-                  <li
-                    key={entry.id}
-                    className={`kink-row kink-row-${entry.type} kink-row-${entry.choice} kink-row-readonly`}
-                    title={entry.description || undefined}
-                    data-kink-id={entry.id}
-                    data-kink-type={entry.type}
-                  >
-                    {entry.type === 'custom' && (
-                      <span
-                        className="kink-row-pip"
-                        aria-label="Custom kink"
-                        title="Custom kink"
-                      >
-                        ★
-                      </span>
-                    )}
-                    <span className="kink-row-name">{entry.name}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        ))}
-      </div>
+      <KinkColumns buckets={buckets} readOnly testIdPrefix="foreign-kink-column" />
     </div>
   )
 }

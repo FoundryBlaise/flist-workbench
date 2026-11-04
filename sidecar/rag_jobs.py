@@ -20,7 +20,8 @@ either:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import dataclass, field
 from typing import Any
 
 import aliases as aliases_store
@@ -58,6 +59,9 @@ class IngestProgress:
     # (MCP: get_unlabeled_messages / set_message_labels) first.
     skipped_unlabeled: int = 0
     failed: int = 0
+    # The days whose chunks did not reach both halves of the Index, as
+    # {character, partner, date}; `last_error` says why.
+    failed_days: list[dict[str, str]] = field(default_factory=list)
     total_chunks: int = 0
     current_partner: str | None = None
     last_error: str | None = None
@@ -78,6 +82,7 @@ def summary(progress: IngestProgress) -> dict[str, Any]:
         "chunks_removed": progress.removed,
         "skipped_unlabeled": progress.skipped_unlabeled,
         "failed": progress.failed,
+        "failed_days": list(progress.failed_days),
     }
 
 
@@ -327,17 +332,12 @@ def _ingest_one_partner(
         job.progress.last_error = f"{character} / {partner}: {exc}"
         return
 
-    # Look up the full alias group so labels written under any of the
-    # member names apply to this conversation. (_resolve_targets has
-    # already normalised `partner` to the primary name for single-
-    # conversation scopes, but for character / all-characters scopes
-    # we still get the primary names from list_partners.) Also passed
-    # to the chunker as speaker_aliases so messages from the pre-
-    # rename name read as the canonical name in the LLM context.
+    # A conversation's Labels are those of the messages its Log holds
+    # (ADR 0004), looked up by hash. The alias group is passed to the
+    # chunker as speaker_aliases so messages from the pre-rename name
+    # read as the canonical name in the LLM context.
+    by_hash = labels_store.labels_for_messages(labels_conn, messages)
     alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-    by_hash = labels_store.labels_for_partner(
-        labels_conn, character, partner, partner_aliases=alias_group
-    )
     unlabeled_counter = [0]
     chunks = chunker.chunk_messages(
         messages,
@@ -382,21 +382,19 @@ def _ingest_one_partner(
             pending.append(c)
         elif stored != rag_store.chunk_payload(c):
             repointed.append(c)
-    job.progress.skipped_existing += len(chunks) - len(pending)
     # Same text, so the same vector; only a neighbour pointer moved.
     store.replace_payloads(repointed)
     # The vector Index is current for these but the lexical one is not
-    # (a lexical mirror that failed on an earlier ingest).
+    # (a keyword write that failed on an earlier ingest).
     pending_ids = {c["chunk_id"] for c in pending}
-    _mirror_lexical(
-        [
-            c
-            for c in chunks
-            if c["chunk_id"] not in pending_ids and lexical.get(c["chunk_id"]) != c["text"]
-        ],
-        lex=lex,
-        job=job,
-        where=f"{character} / {partner}",
+    stale_lexical = [
+        c
+        for c in chunks
+        if c["chunk_id"] not in pending_ids and lexical.get(c["chunk_id"]) != c["text"]
+    ]
+    repaired = _write_days(stale_lexical, lex=lex, job=job)
+    job.progress.skipped_existing += (
+        len(chunks) - len(pending) - (len(stale_lexical) - len(repaired))
     )
 
     for i in range(0, len(pending), EMBED_BATCH):
@@ -416,23 +414,38 @@ def _ingest_one_partner(
             job.progress.last_error = f"{character} / {partner}: {exc}"
             continue
         job.progress.embedded += len(vectors)
-        store.upsert_chunks(batch, vectors)
-        # Mirror into the FTS5 lexical index inline so dense + lexical
-        # stay equivalent in chunk_id coverage.
-        _mirror_lexical(batch, lex=lex, job=job, where=f"{character} / {partner}")
-        job.progress.upserted += len(batch)
+        vector_of = {c["chunk_id"]: v for c, v in zip(batch, vectors, strict=True)}
+        # The keyword half first: a day it refuses never reaches the
+        # vector half either, so the two cannot disagree on it.
+        written = _write_days(batch, lex=lex, job=job)
+        store.upsert_chunks(written, [vector_of[c["chunk_id"]] for c in written])
+        job.progress.upserted += len(written)
 
 
-def _mirror_lexical(
-    chunks: list[dict], *, lex: rag_lexical.LexicalStore, job: Job, where: str
-) -> None:
-    """Write chunks to the lexical Index. Cheap (no network). A failure
-    here should not abort the dense upsert the user already paid for, so
-    it is swallowed into last_error; the next ingest sees the lexical
-    text differ and writes it again."""
-    if not chunks:
-        return
-    try:
-        lex.upsert_chunks(chunks)
-    except Exception as exc:  # noqa: BLE001 — lexical mirror is best-effort
-        job.progress.last_error = f"{where}: lexical mirror failed: {exc}"
+def _write_days(
+    chunks: list[dict], *, lex: rag_lexical.LexicalStore, job: Job
+) -> list[dict]:
+    """Write chunks to the keyword half of the Index one day at a time
+    and return the ones written. A day whose write fails is that day's
+    failed ingest step: its chunks count as failed, the day goes into
+    `failed_days` and the error into `last_error`. The next ingest sees
+    the day's text differ and writes it again."""
+    days: dict[tuple[str, str, str], list[dict]] = {}
+    for c in chunks:
+        days.setdefault((c["char_owner"], c["partner"], c["date"]), []).append(c)
+    written: list[dict] = []
+    for (character, partner, date), day in days.items():
+        try:
+            lex.upsert_chunks(day)
+        except sqlite3.Error as exc:
+            job.progress.failed += len(day)
+            job.progress.failed_days.append(
+                {"character": character, "partner": partner, "date": date}
+            )
+            job.progress.last_error = (
+                f"{character} / {partner} / {date}: "
+                f"the keyword half of the Index could not be written: {exc}"
+            )
+            continue
+        written.extend(day)
+    return written

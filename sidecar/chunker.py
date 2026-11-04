@@ -221,7 +221,7 @@ def chunk_messages(
 ) -> list[Chunk]:
     """Group an in-memory conversation into retrieval chunks.
 
-    `labels_by_hash` is what `labels.labels_for_partner` returns (just
+    `labels_by_hash` is what `labels.labels_for_messages` returns (just
     the DB rows). The resolver fills in rule-driven IC/OOC outcomes
     on the fly — we never trust a Unlabeled message into the corpus.
 
@@ -257,7 +257,7 @@ def chunk_messages(
         # F-Chat 'system' (warn/event/etc) is never useful for RP
         # retrieval. The parser's kind field already buckets these,
         # so we skip them before even touching the resolver.
-        if m.get("kind") == "system":
+        if labels_store.is_system_line(m):
             continue
         h = msg_hash(m)
         label = labels_store.resolve(m, labels_by_hash.get(h), label_settings)

@@ -151,15 +151,35 @@ it('free text never calls the search endpoint', async () => {
   expect(api.foreignSearch).not.toHaveBeenCalled()
 })
 
-it('explains a name F-list does not know', async () => {
+it('says a profile F-list will not show may be missing, deleted, private or blocked', async () => {
   vi.mocked(api.foreignProfile).mockRejectedValue(
-    new RefusalError('not_found', 404, 'HTTP 404: no such character')
+    new RefusalError('not_found', 404, 'HTTP 404: This profile is not available.')
   )
   render(<ForeignWorkspace />)
   fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))
 
   const alert = await screen.findByRole('alert')
-  expect(alert.textContent).toContain('no character called')
+  expect(alert.textContent).toBe(
+    'F-list will not show "Anexample Person": there is no character by that name, ' +
+      'or it was deleted, is private or blocks your account.'
+  )
+})
+
+it('says an F-list server error in the sidecar’s words', async () => {
+  vi.mocked(api.foreignProfile).mockRejectedValue(
+    new RefusalError(
+      'flist_server_error',
+      502,
+      'HTTP 502: F-list is down for maintenance; this says nothing about the character.'
+    )
+  )
+  render(<ForeignWorkspace />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Anexample Person' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe(
+    'F-list is down for maintenance; this says nothing about the character.'
+  )
 })
 
 // ---- loaded profile ---------------------------------------------------
@@ -211,6 +231,25 @@ it('lays the profile fields out as a vertical list', async () => {
   expect(species.querySelector('.infotag-field-name')?.textContent).toBe('Species')
   expect(pane.classList.contains('foreign-fields-vertical')).toBe(true)
   expect(screen.getByTestId('foreign-row').getAttribute('data-split')).toBe('split')
+})
+
+it('folds a field group away and back', async () => {
+  seedLoaded()
+  render(<ForeignWorkspace />)
+  fireEvent.click(screen.getByRole('tab', { name: 'Profile fields' }))
+
+  const species = await screen.findByTestId('foreign-field-Species')
+  const toggle = species
+    .closest('.profile-fields-section')!
+    .querySelector<HTMLButtonElement>('.profile-fields-section-toggle')!
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryByTestId('foreign-field-Species')).toBeNull()
+
+  fireEvent.click(toggle)
+  expect(screen.getByTestId('foreign-field-Species')).toBeDefined()
 })
 
 it('renders the Info preview beside the profile fields', async () => {

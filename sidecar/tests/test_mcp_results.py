@@ -36,7 +36,12 @@ CHAR = "Lady Amber Blaise"
 
 
 @pytest.fixture
-def scene(workbench, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
+def scene(
+    workbench,  # noqa: F811
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """One character with a Live, F-Chat Logs, an image in the pool, a
     folder cleared for import, and stubbed embedding: enough for any
     tool to do its work for real."""
@@ -49,7 +54,10 @@ def scene(workbench, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     monkeypatch.setattr(jobs, "_registry", jobs.JobRegistry())
     _stub_index_services(monkeypatch)
     archive_images.write_character_image("42", "7", "png", _png())
-    folder = tmp_path / "Outputs"
+    (tmp_path / "Outputs").mkdir()
+    # Beside the data folder (`tmp_path`), not in it: nothing under the
+    # data folder can be imported.
+    folder = tmp_path_factory.mktemp("elsewhere") / "Cleared"
     folder.mkdir()
     (folder / "new.png").write_bytes(_png(2))
     settings_service.update({"image_import_roots": [str(folder)]})
@@ -291,8 +299,10 @@ async def _(session, _dir):  # noqa: ANN001, ANN202
 
 
 @writes("import_images")
-async def _(session, data_dir):  # noqa: ANN001, ANN202
-    items = [{"source_path": str(data_dir / "Outputs" / "new.png")}]
+async def _(session, _dir):  # noqa: ANN001, ANN202
+    from services import image_import
+
+    items = [{"source_path": str(image_import.import_roots()[0] / "new.png")}]
     return await _call(session, "import_images", character=CHAR, items=items)
 
 
@@ -810,6 +820,41 @@ async def test_a_semantic_search_caps_its_hits_and_pages_the_rest(scene: Path) -
     assert second["page"]["next_offset"] is None
     both = {first["hits"][0]["chunk_id"], second["hits"][0]["chunk_id"]}
     assert both == {hit["chunk_id"] for hit in asked_too_much["hits"]}
+
+
+async def test_a_semantic_search_hit_says_where_it_ranked(scene: Path) -> None:
+    """Each hit carries its fused rank and score, where the dense and
+    keyword halves put it, and its neighbours inside it; with too few
+    candidates to reorder, no reranking ran and no hit claims it did."""
+    async with mcp_client("logs") as session:
+        for partner in (PARTNER, "Azure Viper"):
+            await _call(
+                session,
+                "label_all_unlabeled",
+                character=CHAR,
+                partner=partner,
+                label="IC",
+                confirm=True,
+            )
+        await _call(session, "ingest_logs", character=CHAR)
+        body = await _call(
+            session,
+            "search_logs_semantic",
+            question="lighthouse",
+            character=CHAR,
+            neighbors=1,
+            hybrid=True,
+        )
+
+    hits = body["hits"]
+    assert body["retrieval"]["rerank_applied"] is False
+    assert [hit["fused_rank"] for hit in hits] == [1, 2]
+    assert body["page"]["returned"] == 2
+    for hit in hits:
+        assert hit["score"] > 0
+        assert {"dense_rank", "lexical_rank"} <= set(hit)
+        assert set(hit["context"]) == {"before", "after"}
+        assert "rerank_score" not in hit
 
 
 # ---- the error codes MCP.md lists ------------------------------------------

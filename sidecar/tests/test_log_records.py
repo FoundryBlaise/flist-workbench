@@ -7,6 +7,8 @@ text is made up for the test.
 
 from __future__ import annotations
 
+import ctypes
+import time
 from pathlib import Path
 
 import pytest
@@ -104,20 +106,19 @@ def test_chat_just_under_the_threshold_is_ooc_and_at_it_is_unlabeled(window) -> 
     assert got == [(199, "OOC"), (200, "Unlabeled")]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a /me action is measured with the speaker-name prefix today #5",
+@pytest.mark.parametrize(
+    "speaker", [ME, "Lady Seraphine Ashgrove of the Northern Marches"]
 )
 def test_an_action_just_under_the_threshold_is_ooc_and_at_it_is_unlabeled(
-    window,
+    window, speaker: str
 ) -> None:
     """A `/me` action is measured like chat, by what the user typed: the
     speaker's name the parser puts in front does not count, so a long
     name does not reach the threshold earlier (decided on #5)."""
     client, log = window
     write_log(log, [
-        action(ME, "a" * (THRESHOLD - 1), at=1700000000),
-        action(ME, "b" * THRESHOLD, at=1700000060),
+        action(speaker, "a" * (THRESHOLD - 1), at=1700000000),
+        action(speaker, "b" * THRESHOLD, at=1700000060),
     ])
 
     got = [m["label"] for m in _messages(client)]
@@ -198,8 +199,27 @@ def test_ads_and_rolls_are_system_lines_the_chunker_leaves_out(
     assert "1d20" not in chunks[0]["text"]
 
 
+def _reload_local_zone() -> None:
+    """Make the C runtime read TZ again (Python has no tzset on Windows)."""
+    if hasattr(time, "tzset"):
+        time.tzset()
+    else:
+        ctypes.cdll.ucrtbase._tzset()
+
+
+@pytest.fixture
+def local_zone_far_from_utc(monkeypatch: pytest.MonkeyPatch):
+    """Local time 14 hours ahead of UTC for one test, so a day cut in
+    local time lands on another date even on a CI runner set to UTC."""
+    monkeypatch.setenv("TZ", "XYZ-14")
+    _reload_local_zone()
+    yield
+    monkeypatch.undo()
+    _reload_local_zone()
+
+
 def test_messages_either_side_of_midnight_land_on_their_own_days(
-    tmp_path: Path,
+    tmp_path: Path, local_zone_far_from_utc: None
 ) -> None:
     late = "Late: " + LONG_IC
     early = "Early: " + LONG_IC
@@ -217,8 +237,8 @@ def test_messages_either_side_of_midnight_land_on_their_own_days(
 #
 # A Label is a verdict on a message a person wrote. Ads, rolls and status
 # lines never get one, so they are never Unlabeled and never offered to a
-# model. Today the resolver does not know about system lines, so the
-# window counts them as Unlabeled and the model is handed them.
+# model. The resolver itself knows them, so the counts, the batches handed
+# to a model and the chunker all agree.
 
 
 def _system_lines_only(log: Path) -> None:
@@ -226,15 +246,13 @@ def _system_lines_only(log: Path) -> None:
         ad("Aina Sato", "Seeking a slow-burn mystery set aboard a sky ship. " * 5,
            at=1700000000),
         roll(PARTNER, "rolls 1d20 for the lock: 17. " * 8, at=1700000060),
+        warn("Aina Sato", "Please keep scenes in this channel to the posted rules. " * 4,
+             at=1700000090),
         event(PARTNER, "is now looking for a scene, any genre, any length. " * 5,
               at=1700000120),
     ])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="system lines are counted as Unlabeled; the resolver must exclude them (#5)",
-)
 def test_system_lines_never_count_as_unlabeled(window) -> None:
     client, log = window
     _system_lines_only(log)
@@ -245,15 +263,89 @@ def test_system_lines_never_count_as_unlabeled(window) -> None:
     assert res.json()["unlabeled"] == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="system lines are offered to the model for a Label; they must not be (#5)",
-)
+def test_system_lines_are_in_none_of_the_counts(window) -> None:
+    client, log = window
+    write_log(log, [
+        ad("Aina Sato", "A short ad.", at=1700000000),
+        roll(PARTNER, "rolls 1d20 for the lock: 17. " * 8, at=1700000060),
+        event(PARTNER, "is now away.", at=1700000090),
+        chat(ME, "Hm.", at=1700000200),
+    ])
+
+    stats =client.get("/labels/stats", params={"char": ME, "partner": PARTNER})
+    every = client.get("/labels/stats-all", params={"char": ME})
+
+    assert stats.status_code == 200, stats.text
+    counts = {k: stats.json()[k] for k in ("ic", "ooc", "unlabeled", "total")}
+    assert counts == {"ic": 0, "ooc": 1, "unlabeled": 0, "total": 1}
+    (row,) = every.json()["partners"]
+    assert (row["ooc"], row["total"]) == (1, 1)
+
+
+def test_system_lines_carry_no_label_in_the_window(window) -> None:
+    client, log = window
+    write_log(log, [
+        ad("Aina Sato", "A short ad.", at=1700000000),
+        roll(PARTNER, "rolls 1d20 for the lock: 17. " * 8, at=1700000060),
+        chat(ME, "Hm.", at=1700000120),
+    ])
+
+    got = [m["label"] for m in _messages(client)]
+
+    assert got == [None, None, "OOC"]
+
+
+async def test_a_model_reads_system_lines_without_a_label(window) -> None:
+    from mcp_helpers import allow_log_text, call_tool, mcp_client
+
+    _, log = window
+    write_log(log, [
+        ad("Aina Sato", "A short ad.", at=1700000000),
+        chat(ME, "Hm.", at=1700000120),
+    ])
+    allow_log_text()
+
+    async with mcp_client("logs") as session:
+        _, every = await call_tool(
+            session, "read_log_messages", character=ME, partner=PARTNER
+        )
+        _, ooc = await call_tool(
+            session, "read_log_messages", character=ME, partner=PARTNER, labels=["OOC"]
+        )
+
+    assert [m["label"] for m in every["messages"]] == [None, "OOC"]
+    assert [m["text"] for m in ooc["messages"]] == ["Hm."]
+
+
+def test_filling_a_conversation_leaves_system_lines_out_of_the_totals(window) -> None:
+    import labels
+
+    _, log = window
+    write_log(log, [
+        ad("Aina Sato", "Seeking a slow-burn mystery set aboard a sky ship. " * 5,
+           at=1700000000),
+        chat(ME, "Hm.", at=1700000120),
+    ])
+    messages = list(parser.parse_log(log))
+    conn = labels.connect()
+    try:
+        result = labels.fill_unlabeled(
+            conn, messages, label=labels.LABEL_IC,
+            settings=labels.LabelsSettings(threshold_chars=THRESHOLD),
+            source="manual", reason="test",
+        )
+    finally:
+        conn.close()
+
+    assert (result["total_messages"], result["decided_by_rules"]) == (1, 1)
+
+
 async def test_system_lines_are_never_offered_to_the_model(window) -> None:
-    from mcp_helpers import call_tool, mcp_client
+    from mcp_helpers import allow_log_text, call_tool, mcp_client
 
     _, log = window
     _system_lines_only(log)
+    allow_log_text()
 
     async with mcp_client("logs") as session:
         _, body = await call_tool(

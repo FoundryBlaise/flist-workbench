@@ -41,9 +41,13 @@ def labels_stats_all(char: str) -> dict:
     return {"character": char, "partners": label_service.character_stats(char)}
 
 
+# `character` and `partner` in the override and delete bodies name the
+# conversation the window shows; a Label belongs to the message (ADR
+# 0004), so they decide nothing, may be left out and are only echoed
+# back.
 class LabelOverride(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     hash: str
     ts: int
     speaker: str
@@ -58,8 +62,8 @@ class LabelOverrideItem(BaseModel):
 
 
 class LabelOverrideMany(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     items: list[LabelOverrideItem]
     # label=None deletes the rows (revert to rule / Unlabeled).
     label: str | None = None
@@ -83,7 +87,8 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     return {
         "character": body.character,
         "partner": body.partner,
-        **cleared,
+        "deleted": cleared["deleted"],
+        "trash_id": cleared["trash_id"],
     }
 
 
@@ -93,9 +98,10 @@ def labels_clear_all() -> dict:
 
     The Settings → Labels "Reset all labels…" button calls this. After
     it returns, every message in every conversation falls back to
-    rule-on-read — manual overrides are gone too. Each character's
-    cleared Labels go to its Trash first, as one entry per character;
-    the renderer still confirms before invoking this.
+    rule-on-read — manual overrides are gone too. The cleared Labels go
+    to the Trash first, one entry per character whose Logs hold the
+    messages and one, with no character, for messages in none of the
+    Logs; the renderer still confirms before invoking this.
     """
     cleared = label_service.clear_all()
     return {"labels_deleted": cleared["deleted"], "trash_ids": cleared["trash_ids"]}
@@ -120,8 +126,8 @@ class LabelsFillUnlabeled(BaseModel):
 
 
 class LabelsDeleteHashes(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     hashes: list[str]
 
 
@@ -140,7 +146,9 @@ def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> dict:
     own. The response carries every hash written, which is what makes
     the undo exact.
     """
-    result = label_service.fill_unlabeled(body.character, body.partner, body.label)
+    result = label_service.fill_unlabeled(
+        body.character, body.partner, body.label, source="manual"
+    )
     return {"character": body.character, "partner": body.partner, **result}
 
 
@@ -152,15 +160,13 @@ def labels_delete_hashes(body: LabelsDeleteHashes) -> dict:
     return {
         "character": body.character,
         "partner": body.partner,
-        "deleted": label_service.delete(body.character, body.partner, body.hashes),
+        "deleted": label_service.delete(body.hashes),
     }
 
 
 @router.post("/labels/override")
 def labels_override(body: LabelOverride) -> dict:
     return label_service.override(
-        body.character,
-        body.partner,
         hash=body.hash,
         ts=body.ts,
         speaker=body.speaker,
@@ -173,10 +179,7 @@ def labels_override_many(body: LabelOverrideMany) -> dict:
     """`/labels/override` for the log view's multi-select: one verdict,
     or a reset, for any set of messages in one conversation."""
     changed = label_service.override_many(
-        body.character,
-        body.partner,
-        [(i.hash, i.ts, i.speaker) for i in body.items],
-        body.label,
+        [(i.hash, i.ts, i.speaker) for i in body.items], body.label
     )
     return {
         "character": body.character,

@@ -300,6 +300,20 @@ def read_messages(
             return
 
 
+def read_conversations(character: str) -> Iterator[tuple[str, list[Message]]]:
+    """Every conversation of `character` as `(partner, messages)`, in
+    the order `list_partners` lists them, each read with its whole
+    alias group. A conversation whose Log cannot be read (deleted
+    meanwhile, permission denied) is left out. Raises `LogNotFound`,
+    on the first step, when `character` has no Logs."""
+    for entry in list_partners(character):
+        try:
+            messages = list(read_messages(character, entry.name))
+        except LogDirError:
+            continue
+        yield entry.name, messages
+
+
 def _alias_paths(character: str, partner: str, root: Path | None) -> list[Path]:
     """Return every existing on-disk log path for `partner` and any of
     its aliases. Used by read_messages + alias-aware label queries."""

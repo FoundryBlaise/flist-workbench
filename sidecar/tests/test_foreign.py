@@ -100,6 +100,24 @@ def test_unsafe_names_hash_into_an_f_prefixed_folder(data_dir: Path) -> None:
     assert "/" not in slug
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["..", ".", "...", "..hidden", "trailing.", "CON", "nul", "Com1.txt", "LPT9", "../escape", "..\\escape"],
+)
+def test_dots_and_reserved_names_stay_inside_the_cache_folder(
+    data_dir: Path, name: str
+) -> None:
+    import foreign_cache
+
+    folder = foreign_cache.profile_dir(name)
+    foreign_cache.write_profile(name, _profile(name))
+
+    assert folder.resolve().parent == foreign_cache.root().resolve()
+    assert foreign_cache.read_profile(name) is not None
+    assert foreign_cache.delete_profile(name) is True
+    assert foreign_cache.root().is_dir()
+
+
 def test_read_profile_rejects_a_folder_holding_another_character(
     data_dir: Path,
 ) -> None:
@@ -217,16 +235,10 @@ async def test_a_stale_copy_survives_a_failed_refresh(
 
 
 @pytest.mark.anyio
-async def test_an_unknown_name_with_no_cached_copy_is_not_found(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import flist_api
+async def test_an_unknown_name_with_no_cached_copy_is_not_found(flist) -> None:
     from services import foreign as foreign_service
 
-    async def _boom(name: str, *, client=None):
-        raise flist_api.FlistApiError("no such character")
-
-    monkeypatch.setattr(flist_api, "fetch_character_data", _boom)
+    _flist_answers(flist, json={"error": "No such character."})
     with pytest.raises(foreign_service.ForeignError) as excinfo:
         await foreign_service.get_profile("Nobody At All")
     assert excinfo.value.code == "not_found"
@@ -479,6 +491,78 @@ async def test_a_lookup_that_never_reached_f_list_costs_a_model_nothing(
     assert body["budget_remaining"] == flist_api.HARD_PER_HOUR // 4 - 1
 
 
+async def test_the_activity_log_records_which_profiles_a_model_fetched(
+    mcp_budget: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The docs promise it: whichever tool read the profile, the
+    activity log names it, and still does after the sidecar restarts."""
+    import flist_activity
+    from mcp_helpers import call_tool, mcp_client
+
+    _stub_any_profile(monkeypatch)
+    flist_activity.reset()
+    flist_activity.enable_disk_writes()
+
+    async with mcp_client() as session:
+        await _model_opens(session, "Anexample Person")
+        await call_tool(session, "get_foreign_kinks", character="Another Example")
+
+    flist_activity.reset()
+    flist_activity.hydrate_from_disk()
+    fetched = [
+        (e["kind"], e.get("character"))
+        for e in flist_activity.snapshot()["events"]
+        if e["kind"].startswith("mcp:get_foreign")
+    ]
+    assert fetched == [
+        ("mcp:get_foreign_profile", "Anexample Person"),
+        ("mcp:get_foreign_kinks", "Another Example"),
+    ]
+
+
+def test_only_foreign_profile_reads_keep_their_character_on_disk(
+    data_dir: Path,
+) -> None:
+    """Story 24 asks the log to name the Foreign profiles a model read.
+    What a model did to the user's own characters keeps its old shape on
+    disk: the tool, not the name."""
+    import flist_activity
+
+    flist_activity.reset()
+    flist_activity.enable_disk_writes()
+    flist_activity.record("mcp:edit_description", source="mcp", character="Azure Viper")
+    flist_activity.record("mcp:get_foreign_profile", source="mcp", character="Antiquill")
+
+    flist_activity.reset()
+    flist_activity.hydrate_from_disk()
+    kept = {e["kind"]: e.get("character") for e in flist_activity.snapshot()["events"]}
+    assert kept == {"mcp:edit_description": None, "mcp:get_foreign_profile": "Antiquill"}
+
+
+async def test_a_spent_budget_handing_back_the_cached_copy_is_in_the_activity_log(
+    flist,
+) -> None:
+    import flist_activity
+    import flist_api
+    from mcp_helpers import call_tool, mcp_client
+
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    async with mcp_client() as session:
+        await _model_opens(session, "Anexample Person")
+        _age_past_the_ttl("Anexample Person")
+        budget = flist_api.mcp_character_budget()
+        while budget.remaining():
+            budget.charge()
+        flist_activity.reset()
+        await call_tool(session, "get_foreign_profile", character="Anexample Person")
+
+    (event,) = [
+        e for e in flist_activity.snapshot()["events"]
+        if e["kind"] == "mcp:get_foreign_profile"
+    ]
+    assert (event["character"], event["status"]) == ("Anexample Person", "rate_limited")
+
+
 # ---- routes -----------------------------------------------------------
 
 
@@ -628,6 +712,462 @@ def test_image_route_404s_when_the_profile_was_never_opened(
 ) -> None:
     res = client.get("/foreign/character/Never Opened/image/900")
     assert res.status_code == 404
+
+
+# ---- what F-list answered ---------------------------------------------
+#
+# F-list at the HTTP seam, with a session open. character-data.php
+# answers a profile it will not show (deleted, private, or the owner
+# blocked the account) with a 200 carrying an `error` text; the client
+# cannot tell those three apart, and none of them may keep a copy.
+
+
+@pytest.fixture
+def flist(data_dir: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock):
+    """A signed-in F-list with the per-second pacing taken out."""
+    import flist_api
+
+    fast = flist_api.RateLimiter(per_second=1000.0, per_hour_cap=1_000_000)
+    monkeypatch.setattr(flist_api, "_LIMITER", fast)
+    flist_api.ticket_store().set(
+        flist_api.Ticket(
+            account="test-account",
+            value="test-ticket",
+            password="test-password",
+            acquired_at=time.monotonic(),
+        )
+    )
+    flist_api.reset_mcp_budget()
+    yield httpx_mock
+    flist_api.reset_mcp_budget()
+    flist_api.ticket_store().clear()
+
+
+def _flist_answers(httpx_mock, **kwargs: Any) -> None:
+    import flist_api
+
+    httpx_mock.add_response(url=flist_api.CHARACTER_DATA_URL, method="POST", **kwargs)
+
+
+def _flist_unreachable(httpx_mock, exc: Exception) -> None:
+    import flist_api
+
+    httpx_mock.add_exception(exc, url=flist_api.CHARACTER_DATA_URL, method="POST")
+
+
+def _open_with_files(client: TestClient, httpx_mock) -> Path:
+    """Open the profile in the window, with its avatar and one gallery
+    image, as a user looking at it would. Returns its cache folder."""
+    import flist_api
+    import foreign_cache
+
+    _flist_answers(httpx_mock, json={**_profile(), "error": ""})
+    httpx_mock.add_response(url=flist_api.avatar_url("Anexample Person"), content=b"AVATAR")
+    httpx_mock.add_response(
+        url=f"{flist_api.STATIC_BASE}/images/charimage/900.png", content=b"PNGDATA"
+    )
+    assert client.get("/foreign/character/Anexample Person").status_code == 200
+    assert client.get("/foreign/character/Anexample Person/avatar").status_code == 200
+    assert client.get("/foreign/character/Anexample Person/image/900").status_code == 200
+    folder = foreign_cache.profile_dir("Anexample Person")
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == [
+        "900.png",
+        "avatar.png",
+        "profile.json",
+    ]
+    return folder
+
+
+def test_a_profile_f_list_will_not_show_is_dropped_with_its_files(
+    client: TestClient, flist
+) -> None:
+    folder = _open_with_files(client, flist)
+    _flist_answers(flist, json={"error": "This profile is not available."})
+
+    res = client.get("/foreign/character/Anexample Person", params={"refresh": "true"})
+
+    assert res.status_code == 404, res.text
+    assert res.json()["code"] == "not_found"
+    assert not folder.exists()
+    again = client.get("/foreign/character/Anexample Person/image/900")
+    assert again.json()["code"] == "profile_not_cached"
+
+
+def test_a_refresh_keeps_the_avatar_while_the_new_one_cannot_be_fetched(
+    client: TestClient, flist
+) -> None:
+    import httpx
+
+    import flist_api
+
+    _open_with_files(client, flist)
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get(
+        "/foreign/character/Anexample Person", params={"refresh": "true"}
+    ).status_code == 200
+    flist.add_exception(
+        httpx.ConnectError("offline"), url=flist_api.avatar_url("Anexample Person")
+    )
+
+    res = client.get("/foreign/character/Anexample Person/avatar")
+
+    assert res.status_code == 200, res.text
+    assert res.content == b"AVATAR"
+
+
+def test_a_refresh_replaces_the_avatar_once_the_new_one_arrives(
+    client: TestClient, flist
+) -> None:
+    import flist_api
+
+    _open_with_files(client, flist)
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get(
+        "/foreign/character/Anexample Person", params={"refresh": "true"}
+    ).status_code == 200
+    flist.add_response(url=flist_api.avatar_url("Anexample Person"), content=b"NEWER")
+
+    first = client.get("/foreign/character/Anexample Person/avatar")
+    again = client.get("/foreign/character/Anexample Person/avatar")
+
+    assert (first.content, again.content) == (b"NEWER", b"NEWER")
+
+
+@pytest.mark.parametrize(
+    "error", ["Invalid ticket.", "Ticket expired.", "Login required."]
+)
+def test_a_rejected_ticket_says_not_signed_in_and_keeps_the_cached_copy(
+    client: TestClient, flist, error: str
+) -> None:
+    folder = _open_with_files(client, flist)
+    _flist_answers(flist, json={"error": error})
+
+    res = client.get("/foreign/character/Anexample Person", params={"refresh": "true"})
+
+    assert res.status_code == 401, res.text
+    assert res.json()["code"] == "not_signed_in"
+    assert sorted(p.name for p in folder.rglob("*") if p.is_file()) == [
+        "900.png",
+        "avatar.png",
+        "profile.json",
+    ]
+
+
+async def test_a_model_asking_for_a_profile_f_list_will_not_show_drops_it_too(
+    flist, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import foreign_cache
+    from mcp_helpers import call_tool, mcp_client, tool_error_text
+
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    _flist_answers(flist, json={"error": "This profile is not available."})
+    async with mcp_client() as session:
+        opened, _ = await _model_opens(session, "Anexample Person")
+        refused, _ = await call_tool(
+            session, "get_foreign_profile", character="Anexample Person", refresh=True
+        )
+
+    assert not opened.isError
+    assert "not_found:" in tool_error_text(refused)
+    assert foreign_cache.read_profile("Anexample Person") is None
+    assert not foreign_cache.profile_dir("Anexample Person").exists()
+
+
+@pytest.mark.parametrize("failure", ["connect", "timeout"])
+def test_offline_serves_the_cached_copy_marked_stale(
+    client: TestClient, flist, failure: str
+) -> None:
+    import httpx
+
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get("/foreign/character/Anexample Person").status_code == 200
+    exc = httpx.ConnectError("offline") if failure == "connect" else httpx.ReadTimeout("slow")
+    _flist_unreachable(flist, exc)
+
+    res = client.get("/foreign/character/Anexample Person", params={"refresh": "true"})
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["stale"] is True
+    assert body["profile"]["description"] == "[b]Hello[/b]"
+
+
+@pytest.mark.parametrize("failure", ["connect", "timeout"])
+def test_offline_without_a_cached_copy_says_f_list_could_not_be_reached(
+    client: TestClient, flist, failure: str
+) -> None:
+    import httpx
+
+    exc = httpx.ConnectError("offline") if failure == "connect" else httpx.ReadTimeout("slow")
+    _flist_unreachable(flist, exc)
+
+    res = client.get("/foreign/character/Anexample Person")
+
+    assert res.status_code == 503, res.text
+    assert res.json()["code"] == "flist_unreachable"
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_an_f_list_server_error_is_reported_as_one(
+    client: TestClient, flist, status: int
+) -> None:
+    _flist_answers(flist, status_code=status, text="<html>maintenance</html>")
+
+    res = client.get("/foreign/character/Anexample Person")
+
+    assert res.status_code == 502, res.text
+    assert res.json()["code"] == "flist_server_error"
+
+
+def test_an_f_list_server_error_serves_the_cached_copy_marked_stale(
+    client: TestClient, flist
+) -> None:
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    assert client.get("/foreign/character/Anexample Person").status_code == 200
+    _flist_answers(flist, status_code=502)
+
+    res = client.get("/foreign/character/Anexample Person", params={"refresh": "true"})
+
+    assert res.status_code == 200, res.text
+    assert res.json()["stale"] is True
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [{"status_code": 403, "text": "Forbidden"}, {"status_code": 200, "text": "<html>"}],
+    ids=["http-403", "not-json"],
+)
+def test_an_answer_that_is_not_f_lists_word_on_the_profile_is_never_not_found(
+    client: TestClient, flist, answer: dict[str, Any]
+) -> None:
+    _flist_answers(flist, **answer)
+
+    res = client.get("/foreign/character/Anexample Person")
+
+    assert res.status_code == 502, res.text
+    assert res.json()["code"] != "not_found"
+
+
+def _age_past_the_ttl(name: str) -> None:
+    """Make the cached copy a day and more old, so the next look asks
+    F-list again."""
+    import foreign_cache
+
+    path = foreign_cache.profile_dir(name) / "profile.json"
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored["fetched_at"] = int(time.time()) - (25 * 3600)
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+
+def _tool_error_details(result: Any) -> dict[str, Any]:
+    """The JSON details a `code: message {...}` tool error carries."""
+    from mcp_helpers import tool_error_text
+
+    text = tool_error_text(result)
+    details, _ = json.JSONDecoder().raw_decode(text[text.index(" {") + 1 :])
+    return details
+
+
+@pytest.mark.parametrize(
+    ("tool", "field"),
+    [("get_foreign_profile", "custom_kink_count"), ("get_foreign_kinks", "kinks")],
+)
+async def test_a_spent_budget_is_rate_limited_and_still_hands_over_the_cached_copy(
+    flist, tool: str, field: str
+) -> None:
+    import flist_api
+    from mcp_helpers import call_tool, mcp_client, tool_error_text
+
+    _flist_answers(flist, json={**_profile(), "error": ""})
+    async with mcp_client() as session:
+        opened, _ = await _model_opens(session, "Anexample Person")
+        _age_past_the_ttl("Anexample Person")
+        budget = flist_api.mcp_character_budget()
+        while budget.remaining():
+            budget.charge()
+        refused, _ = await call_tool(session, tool, character="Anexample Person")
+
+    assert not opened.isError
+    assert "rate_limited:" in tool_error_text(refused)
+    cached = _tool_error_details(refused)["cached"]
+    assert cached["character"] == "Anexample Person"
+    assert cached["stale"] is True
+    assert field in cached
+
+
+async def test_a_spent_budget_with_nothing_cached_is_plainly_rate_limited(flist) -> None:
+    import flist_api
+    from mcp_helpers import mcp_client, tool_error_text
+
+    budget = flist_api.mcp_character_budget()
+    while budget.remaining():
+        budget.charge()
+    async with mcp_client() as session:
+        refused, _ = await _model_opens(session, "Anexample Person")
+
+    text = tool_error_text(refused)
+    assert "rate_limited:" in text
+    assert "cached" not in text
+
+
+# ---- the size cap -----------------------------------------------------
+#
+# The cache is a copy of other people's profiles, so it is bounded: the
+# least recently viewed profile goes, with its images and avatar, when
+# a new one no longer fits under the cap set in Settings.
+
+MB = 1024 * 1024
+
+
+def _set_cap_mb(client: TestClient, mb: int) -> None:
+    res = client.put("/settings", json={"foreign": {"cache_cap_mb": mb}})
+    assert res.status_code == 200, res.text
+
+
+def _view_new(
+    client: TestClient,
+    httpx_mock,
+    name: str,
+    image_id: str,
+    image_bytes: int,
+    *,
+    refresh: bool = False,
+    avatar: bytes = b"AVATAR",
+) -> None:
+    """Open `name` in the window as F-list answers it: the profile, its
+    avatar and its one gallery image of `image_bytes` bytes."""
+    import flist_api
+
+    _flist_answers(
+        httpx_mock,
+        json={**_profile(name, images=[{"image_id": image_id, "extension": "png"}]), "error": ""},
+    )
+    httpx_mock.add_response(url=flist_api.avatar_url(name), content=avatar)
+    httpx_mock.add_response(
+        url=f"{flist_api.STATIC_BASE}/images/charimage/{image_id}.png",
+        content=b"x" * image_bytes,
+    )
+    params = {"refresh": "true"} if refresh else {}
+    assert client.get(f"/foreign/character/{name}", params=params).status_code == 200
+    assert client.get(f"/foreign/character/{name}/avatar").status_code == 200
+    assert client.get(f"/foreign/character/{name}/image/{image_id}").status_code == 200
+
+
+def _cached(name: str) -> bool:
+    import foreign_cache
+
+    return foreign_cache.profile_dir(name).exists()
+
+
+def test_with_a_small_cap_a_new_profile_evicts_the_least_recently_viewed_with_its_files(
+    client: TestClient, flist
+) -> None:
+    _set_cap_mb(client, 1)
+    _view_new(client, flist, "First Visit", "901", 400_000)
+    _view_new(client, flist, "Second Visit", "902", 400_000)
+
+    _view_new(client, flist, "Third Visit", "903", 400_000)
+
+    assert not _cached("First Visit")
+    assert _cached("Second Visit") and _cached("Third Visit")
+    gone = client.get("/foreign/character/First Visit/image/901")
+    assert gone.json()["code"] == "profile_not_cached"
+
+
+def test_viewing_a_cached_profile_again_keeps_it_through_the_next_eviction(
+    client: TestClient, flist
+) -> None:
+    _set_cap_mb(client, 1)
+    _view_new(client, flist, "First Visit", "901", 400_000)
+    _view_new(client, flist, "Second Visit", "902", 400_000)
+    again = client.get("/foreign/character/First Visit")
+    assert again.json()["from_cache"] is True
+
+    _view_new(client, flist, "Third Visit", "903", 400_000)
+
+    assert _cached("First Visit") and _cached("Third Visit")
+    assert not _cached("Second Visit")
+
+
+def test_a_refresh_drops_images_that_left_the_gallery_and_replaces_the_avatar(
+    client: TestClient, flist
+) -> None:
+    import foreign_cache
+
+    _view_new(client, flist, "Anexample Person", "901", 1000)
+
+    _view_new(client, flist, "Anexample Person", "902", 1000, refresh=True, avatar=b"NEW")
+
+    images = foreign_cache.profile_dir("Anexample Person") / "images"
+    assert sorted(p.name for p in images.iterdir()) == ["902.png"]
+    avatar = client.get("/foreign/character/Anexample Person/avatar")
+    assert avatar.content == b"NEW"
+
+
+def test_the_cap_is_a_gigabyte_until_settings_change_it(client: TestClient) -> None:
+    body = client.get("/settings").json()
+    assert body["foreign"] == {"cache_cap_mb": 1024, "defaults": {"cache_cap_mb": 1024}}
+    assert client.get("/foreign/cache").json()["cap_bytes"] == 1024 * MB
+
+    res = client.put("/settings", json={"foreign": {"cache_cap_mb": 0}})
+
+    assert res.json()["foreign"]["cache_cap_mb"] == 1
+    assert client.get("/foreign/cache").json()["cap_bytes"] == MB
+
+
+def test_the_cache_reports_what_it_holds_and_clears_on_request(
+    client: TestClient, flist
+) -> None:
+    import foreign_cache
+
+    _view_new(client, flist, "First Visit", "901", 300_000)
+    _view_new(client, flist, "Second Visit", "902", 300_000)
+    on_disk = sum(p.stat().st_size for p in foreign_cache.root().rglob("*") if p.is_file())
+
+    usage = client.get("/foreign/cache").json()
+    assert usage["profiles"] == 2
+    assert 600_000 < usage["bytes"] <= on_disk
+
+    cleared = client.delete("/foreign/cache").json()
+
+    assert (cleared["removed"], cleared["bytes"], cleared["profiles"]) == (2, 0, 0)
+    assert not _cached("First Visit") and not _cached("Second Visit")
+    assert client.get("/foreign/cache").json()["bytes"] == 0
+
+
+def test_a_cache_from_before_the_size_index_is_counted(client: TestClient) -> None:
+    import foreign_cache
+
+    foreign_cache.write_profile("Old Visit", _profile("Old Visit"))
+    foreign_cache.image_path("Old Visit", "900", "png").write_bytes(b"x" * 5000)
+
+    usage = client.get("/foreign/cache").json()
+
+    assert usage["profiles"] == 1
+    assert usage["bytes"] > 5000
+
+
+def test_lowering_the_cap_evicts_at_once_but_keeps_the_last_viewed_profile(
+    client: TestClient, flist
+) -> None:
+    _view_new(client, flist, "First Visit", "901", 400_000)
+    _view_new(client, flist, "Second Visit", "902", 400_000)
+    _view_new(client, flist, "Third Visit", "903", 400_000)
+
+    _set_cap_mb(client, 1)
+
+    assert not _cached("First Visit")
+    assert _cached("Second Visit") and _cached("Third Visit")
+
+
+def test_a_profile_larger_than_the_cap_still_opens(client: TestClient, flist) -> None:
+    _set_cap_mb(client, 1)
+    _view_new(client, flist, "First Visit", "901", 400_000)
+
+    _view_new(client, flist, "Huge Gallery", "902", 2 * MB)
+
+    assert _cached("Huge Gallery")
+    assert not _cached("First Visit")
 
 
 def test_signing_out_drops_the_memoised_social_lists(

@@ -289,7 +289,7 @@ id = "A12"
 suite = "sidecar"
 file = "sidecar/archive_registry.py"
 breaks = "A Foreign profile slug starting with a dot (such as `..`) is accepted, so its cache can escape its folder."
-tests = ["@archive", "@mcp"]
+tests = ["@archive", "@mcp", "sidecar/tests/test_foreign.py"]
 audit = "survived"
 spec = 5
 # audit: M12 slug safety: leading-dot check dropped ('..' escapes cache)
@@ -456,14 +456,14 @@ find = '''
     if db_label is not None:
         # sqlite3.Row supports __getitem__ like a dict
         return db_label["label"]
-    text = (msg.get("text") or "").strip()
+    text = _written_text(msg)
     if not text:
         return LABEL_OOC
     if len(text) < settings.threshold_chars:
         return LABEL_OOC
 '''
 replace = '''
-    text = (msg.get("text") or "").strip()
+    text = _written_text(msg)
     if not text:
         return LABEL_OOC
     if len(text) < settings.threshold_chars:
@@ -475,18 +475,22 @@ replace = '''
 [[mutation]]
 id = "L06"
 suite = "sidecar"
-file = "sidecar/labels.py"
+file = "sidecar/services/label_trash.py"
 breaks = "Resetting Labels for one partner wipes that partner's Labels for every one of your characters."
 tests = ["@logs", "@mcp"]
 audit = "survived"
 spec = 9
 # audit: M06 delete_labels_for_partner ignores character
+# (re-anchored for #94: a reset is scoped by the conversation's Log)
 find = '''
-f"DELETE FROM labels WHERE character = ? AND partner IN ({placeholders})",
-        (character, *names),'''
+            return list(log_store.read_messages(character, partner))'''
 replace = '''
-f"DELETE FROM labels WHERE partner IN ({placeholders})",
-        (*names,),'''
+            return [
+                m
+                for c in log_store.list_characters()
+                if (log_store.data_dir() / c.name / "logs" / partner).is_file()
+                for m in log_store.read_messages(c.name, partner)
+            ]'''
 
 [[mutation]]
 id = "L07"
@@ -514,7 +518,7 @@ audit = "killed"
 spec = 5
 # audit: M08 chunker keeps system lines
 find = '''
-        if m.get("kind") == "system":
+        if labels_store.is_system_line(m):
             continue'''
 replace = '''
         pass'''
@@ -631,14 +635,14 @@ tests = ["@logs", "@mcp"]
 audit = "survived"
 spec = 9
 # audit: M16 unlabeled_remaining ignores alias group (moved to the Labels service, #71)
+# (re-anchored for #94: a conversation's Labels are those of its Logs'
+# messages, so counting only the partner's own Log is the same bug)
 find = '''
-        partner_aliases=aliases_store.all_names_for(conn, character, partner),
-    )
-    return {'''
+def _messages(character: str, partner: str) -> list[dict]:
+    return list(log_store.read_messages(character, partner))'''
 replace = '''
-        partner_aliases=None,
-    )
-    return {'''
+def _messages(character: str, partner: str) -> list[dict]:
+    return list(log_store.parse_log(log_store.log_path(character, partner)))'''
 
 [[mutation]]
 id = "L17"
@@ -653,6 +657,34 @@ find = '''
 "logs": frozenset({TAG_CORE, TAG_LOGS}),'''
 replace = '''
 "logs": frozenset({TAG_CORE, TAG_LOGS, TAG_CHARACTER}),'''
+
+[[mutation]]
+id = "L18"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "System lines (ads, rolls, status events) get a Label: they are counted as OOC or Unlabeled and shown with one."
+tests = ["@logs", "@mcp"]
+spec = 5
+find = '''
+    if is_system_line(msg):
+        return None
+    if db_label is not None:'''
+replace = '''
+    if db_label is not None:'''
+
+[[mutation]]
+id = "L19"
+suite = "sidecar"
+file = "sidecar/labels.py"
+breaks = "A `/me` action is measured with the speaker name in front, so a long name reaches the short-message threshold earlier."
+tests = ["@logs", "@mcp"]
+spec = 5
+find = '''
+    if msg.get("type_name") == "action":
+        prefix'''
+replace = '''
+    if False:
+        prefix'''
 
 [[mutation]]
 id = "R01"

@@ -91,11 +91,12 @@ type State = {
    *  panel into a read-only state showing somebody else's profile.
    *
    *  It is a slot, not a character. It has no id, no archive entry, no
-   *  working set and no `flistActiveCharacterId` — which is exactly
+   *  Workbench and no `flistActiveCharacterId` — which is exactly
    *  what stops every edit, pull, backup and export path from finding
-   *  anything to act on. Nothing here is persisted: the profile lives
-   *  in memory for as long as the app runs and is never written to the
-   *  character archive. */
+   *  anything to act on. The slot itself is not persisted: it lives in
+   *  memory for as long as the app runs and is never written to the
+   *  character archive. The sidecar's Foreign profile cache keeps the
+   *  profile on disk until its size cap evicts it. */
   foreignActive: boolean
   foreignName: string | null
   foreignProfile: ForeignProfilePayload | null
@@ -781,6 +782,12 @@ function _beginOpen(characterId: string): number {
 function _isNewestOpen(characterId: string, token: number): boolean {
   return _openTokens.get(characterId) === token
 }
+
+// Request token for foreignLoad: the number of the newest load. Picking
+// profiles quickly leaves several reads in flight, landing in any
+// order; only the newest may apply its answer, so the view always ends
+// on the profile the user picked last. foreignUnload bumps it as well.
+let _foreignLoadToken = 0
 
 /** The editor patch that shows a character's Workbench as the slot in
  *  memory holds it, unsaved keystrokes included. */
@@ -4209,6 +4216,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   foreignUnload() {
+    // Emptying the slot is a newer pick too: a read still in flight
+    // must not fill it again.
+    _foreignLoadToken++
     set({
       foreignName: null,
       foreignProfile: null,
@@ -4224,9 +4234,11 @@ export const useStore = create<State>((set, get) => ({
   async foreignLoad(name, refresh = false) {
     const clean = name.trim()
     if (!clean) return
+    const token = ++_foreignLoadToken
     set({ foreignStatus: 'loading', foreignError: null, foreignActive: true })
     try {
       const res = await api.foreignProfile(clean, refresh)
+      if (token !== _foreignLoadToken) return
       set({
         foreignName: res.name,
         foreignProfile: res.profile,
@@ -4238,20 +4250,21 @@ export const useStore = create<State>((set, get) => ({
         foreignError: null
       })
     } catch (err) {
+      if (token !== _foreignLoadToken) return
       // The sidecar answers these with a code so the window can say
       // something useful instead of echoing an HTTP status at someone
       // who mistyped a name.
+      // Any other code (flist_server_error, flist_unreachable, ...)
+      // already comes with the sidecar's own words.
       const code = err instanceof RefusalError ? err.code : undefined
-      const message =
-        code === 'not_found'
-          ? `F-list has no character called "${clean}".`
-          : code === 'rate_limited'
-            ? 'F-list is rate-limiting us. Give it a minute and try again.'
-            : code === 'not_signed_in'
-              ? 'Your F-list session expired. Sign in again to look up profiles.'
-              : err instanceof Error
-                ? err.message
-                : String(err)
+      const worded: Record<string, string> = {
+        not_found:
+          `F-list will not show "${clean}": there is no character by that name, ` +
+          'or it was deleted, is private or blocks your account.',
+        rate_limited: 'F-list is rate-limiting us. Give it a minute and try again.',
+        not_signed_in: 'Your F-list session expired. Sign in again to look up profiles.'
+      }
+      const message = (code && worded[code]) || errorDetail(err)
       set({ foreignStatus: 'error', foreignError: message })
     }
   },

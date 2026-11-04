@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-import aliases as aliases_store
 import labels as labels_store
 import logs as log_store
 
@@ -124,8 +123,6 @@ class PendingBatch:
 def collect_pending(
     messages: Iterable[dict],
     labels_conn,
-    character: str,
-    partner: str,
     settings: labels_store.LabelsSettings,
     *,
     limit: int = 40,
@@ -135,33 +132,18 @@ def collect_pending(
 ) -> PendingBatch:
     """Messages from `cursor` onward whose label is still `Unlabeled`.
 
-    A message is skipped when it already has a stored verdict, or when
-    the rules resolve it without help. `cursor` is an index into the
+    A message is skipped when it already has a stored verdict, from
+    whichever of the user's Logs it was labelled in (ADR 0004), or when
+    the rules resolve it without help. A system line has no Label and is
+    in none of the counts. `cursor` is an index into the
     conversation, so a caller can walk a long log in batches without
     re-reading what it already judged.
     """
     msgs = list(messages)
-    alias_group = aliases_store.all_names_for(labels_conn, character, partner)
-    by_hash = labels_store.labels_for_partner(
-        labels_conn, character, partner, partner_aliases=alias_group
-    )
-
-    already_labelled = 0
-    decided_by_rules = 0
-    pending_indices: list[tuple[int, str]] = []
-
-    for idx, msg in enumerate(msgs):
-        h = labels_store.msg_hash(msg)
-        if h in by_hash:
-            already_labelled += 1
-            continue
-        if labels_store.resolve(msg, None, settings) != labels_store.LABEL_UNLABELED:
-            decided_by_rules += 1
-            continue
-        pending_indices.append((idx, h))
+    sorted_out = labels_store.triage(labels_conn, msgs, settings)
 
     start = max(0, int(cursor))
-    in_window = [(idx, h) for idx, h in pending_indices if idx >= start]
+    in_window = [(idx, h) for idx, h in sorted_out.pending if idx >= start]
     batch = in_window[: max(0, int(limit))]
 
     items: list[PendingMessage] = []
@@ -192,8 +174,8 @@ def collect_pending(
         next_cursor=next_cursor,
         remaining=len(in_window) - len(batch),
         total_messages=len(msgs),
-        already_labelled=already_labelled,
-        decided_by_rules=decided_by_rules,
+        already_labelled=sorted_out.already_labelled,
+        decided_by_rules=sorted_out.decided_by_rules,
     )
 
 
@@ -214,8 +196,6 @@ def pending(
         return collect_pending(
             messages,
             conn,
-            character,
-            partner,
             labels_store.load_settings(),
             limit=limit,
             cursor=cursor,

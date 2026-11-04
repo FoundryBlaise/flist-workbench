@@ -8,10 +8,12 @@ Labels and clearing them all live here once. The REST router
 these and shape the answer, so the two surfaces cannot drift.
 
 A Label belongs to the message (ADR 0004). A conversation's Labels are
-read across the partner's whole alias group and written under its
-primary name, so a rename does not orphan them. The SQL itself stays
-in the Label store (`labels.py`), which announces every change on the
-event bus once; clearing goes through the Trash (`label_trash`).
+the Labels of the messages its Log holds, the partner's whole alias
+group included, found by message hash: a line in two of the user's own
+Logs shows one Label in both, and a rename or an unlinked alias orphans
+none; a Label stores no owner. The SQL itself stays in the Label
+store (`labels.py`), which announces every change on the event bus
+once; clearing goes through the Trash (`label_trash`).
 
 The rule threshold is a setting; it is read here, never validated.
 """
@@ -34,6 +36,11 @@ VERDICTS = (labels_store.LABEL_IC, labels_store.LABEL_OOC)
 
 #: How much of a model's reason is kept with its verdict.
 REASON_MAX_CHARS = 500
+
+#: Why a model's Label was not written over one the user set.
+MANUAL_SKIP_REASON = (
+    "The user set this Label by hand; only the user changes it, in the window."
+)
 
 
 def not_a_verdict(label: object) -> ValidationFailed:
@@ -70,18 +77,9 @@ def _messages(character: str, partner: str) -> list[dict]:
 def _counts(
     conn: sqlite3.Connection,
     settings: labels_store.LabelsSettings,
-    character: str,
-    partner: str,
     messages: list[dict],
 ) -> dict[str, int]:
-    counts = labels_store.stats(
-        conn,
-        character,
-        partner,
-        messages,
-        settings,
-        partner_aliases=aliases_store.all_names_for(conn, character, partner),
-    )
+    counts = labels_store.stats(conn, messages, settings)
     return {
         "ic": counts[labels_store.LABEL_IC],
         "ooc": counts[labels_store.LABEL_OOC],
@@ -98,7 +96,7 @@ def conversation_stats(character: str, partner: str) -> dict[str, int]:
     alias group included."""
     messages = _messages(character, partner)
     with _store() as (conn, settings):
-        return _counts(conn, settings, character, partner, messages)
+        return _counts(conn, settings, messages)
 
 
 def character_stats(character: str) -> list[dict[str, Any]]:
@@ -112,30 +110,24 @@ def character_stats(character: str) -> list[dict[str, Any]]:
     between calls, permission denied) is left out rather than failing
     the whole list.
     """
-    entries = log_store.list_partners(character)
+    conversations = log_store.read_conversations(character)
     base = log_store.data_dir() / character / "logs"
     rows: list[dict[str, Any]] = []
     with _store() as (conn, settings):
-        for entry in entries:
-            try:
-                messages = _messages(character, entry.name)
-            except log_store.LogDirError:
-                continue
-            alias_group = aliases_store.all_names_for(conn, character, entry.name)
+        for partner, messages in conversations:
+            alias_group = aliases_store.all_names_for(conn, character, partner)
             log_mtime = 0.0
-            for member in alias_group or [entry.name]:
+            for member in alias_group or [partner]:
                 try:
                     log_mtime = max(log_mtime, (base / member).stat().st_mtime)
                 except OSError:
                     continue
             rows.append(
                 {
-                    "partner": entry.name,
-                    **_counts(conn, settings, character, entry.name, messages),
+                    "partner": partner,
+                    **_counts(conn, settings, messages),
                     "log_mtime": log_mtime if log_mtime > 0 else None,
-                    "last_label_at": labels_store.max_label_time(
-                        conn, character, entry.name, partner_aliases=alias_group
-                    ),
+                    "last_label_at": labels_store.max_label_time(conn, messages),
                 }
             )
     return rows
@@ -153,18 +145,12 @@ def rollup() -> dict[str, Any]:
     with _store() as (conn, settings):
         manual = labels_store.count_by_source(conn, "manual")
         for char in characters:
-            try:
-                entries = log_store.list_partners(char.name)
-            except log_store.LogDirError:
-                continue
-            for entry in entries:
-                try:
-                    messages = _messages(char.name, entry.name)
-                except log_store.LogDirError:
-                    continue
-                counts = _counts(conn, settings, char.name, entry.name, messages)
-                for key in totals:
-                    totals[key] += counts[key]
+            # A character folder whose Logs cannot be listed counts nothing.
+            with contextlib.suppress(log_store.LogDirError):
+                for _, messages in log_store.read_conversations(char.name):
+                    counts = _counts(conn, settings, messages)
+                    for key in totals:
+                        totals[key] += counts[key]
     return {
         "ic": totals["ic"],
         "ooc": totals["ooc"],
@@ -177,38 +163,35 @@ def rollup() -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class LabelledMessage:
-    """One message with the Label it resolves to. `stored` is its
-    stored Label row (`labels.LABEL_COLUMNS`), None when a rule decides
-    or nothing does."""
+    """One message with the Label it resolves to, None for a system
+    line. `stored` is its stored Label row (`labels.LABEL_COLUMNS`),
+    None when a rule decides or nothing does."""
 
     message: dict
     hash: str
-    label: str
+    label: str | None
     stored: dict | None
 
 
-def label_messages(
-    character: str, partner: str, messages: Iterable[dict]
-) -> list[LabelledMessage]:
+def label_messages(messages: Iterable[dict]) -> list[LabelledMessage]:
     """Resolve each of `messages` from one conversation to IC, OOC or
     Unlabeled, live: a stored Label first, then the rules at the current
-    threshold."""
+    threshold. A system line resolves to no Label."""
+    messages = list(messages)
     with _store() as (conn, settings):
-        by_hash = labels_store.labels_for_partner(
-            conn,
-            character,
-            partner,
-            partner_aliases=aliases_store.all_names_for(conn, character, partner),
-        )
+        by_hash = labels_store.labels_for_messages(conn, messages)
         out = []
         for msg in messages:
             h = labels_store.msg_hash(msg)
-            row = by_hash.get(h)
+            label = labels_store.resolve(msg, by_hash.get(h), settings)
+            # A row left on a system line from before they had no Label
+            # decides nothing, so it is not shown either.
+            row = by_hash.get(h) if label is not None else None
             out.append(
                 LabelledMessage(
                     message=msg,
                     hash=h,
-                    label=labels_store.resolve(msg, row, settings),
+                    label=label,
                     stored=dict(row) if row is not None else None,
                 )
             )
@@ -219,8 +202,6 @@ def label_messages(
 
 
 def override(
-    character: str,
-    partner: str,
     *,
     hash: str,
     ts: int,
@@ -246,8 +227,6 @@ def override(
         labels_store.upsert_label(
             conn,
             hash=hash,
-            character=character,
-            partner=aliases_store.primary_for(conn, character, partner),
             ts=ts,
             speaker=speaker,
             label=label,
@@ -267,30 +246,19 @@ def override(
 
 
 def override_many(
-    character: str,
-    partner: str,
-    items: Iterable[tuple[str, int, str]],
-    label: str | None,
+    items: Iterable[tuple[str, int, str]], label: str | None
 ) -> int:
-    """`override` for any set of `(hash, ts, speaker)` in one
-    conversation: one verdict for all, or with `label` None their
-    removal. Returns how many Labels changed."""
+    """`override` for any set of `(hash, ts, speaker)`: one verdict for
+    all, or with `label` None their removal. Returns how many Labels
+    changed."""
     if label is not None:
         label = verdict(label)
     items = list(items)
     conn = labels_store.connect()
     try:
         if label is None:
-            return labels_store.delete_labels_by_hash(
-                conn, [h for h, _ts, _speaker in items], character=character, partner=partner
-            )
-        return labels_store.upsert_labels_many(
-            conn,
-            items,
-            character=character,
-            partner=aliases_store.primary_for(conn, character, partner),
-            label=label,
-        )
+            return labels_store.delete_labels_by_hash(conn, [h for h, _ts, _speaker in items])
+        return labels_store.upsert_labels_many(conn, items, label=label)
     finally:
         conn.close()
 
@@ -304,8 +272,11 @@ class Verdicts:
     unknown: list[str] = field(default_factory=list)
     #: Items that carried no usable verdict, with the reason.
     rejected: list[dict[str, str]] = field(default_factory=list)
+    #: Messages whose Label the user set by hand, `{hash, reason}`
+    #: each: only the window changes those.
+    skipped: list[dict[str, str]] = field(default_factory=list)
     #: Messages of the conversation still without a verdict, counted
-    #: after the write (None when nothing was written). A caller that
+    #: after the write (None when no hash was known). A caller that
     #: only ever hears `written: 20` has nothing to check its own
     #: bookkeeping against; this number says whether the work is done.
     unlabeled_remaining: int | None = None
@@ -319,7 +290,8 @@ def record_verdicts(
     Only hashes of this conversation's messages are written: a wrong
     hash would label some other message, so it is reported back as
     unknown instead. An item without a verdict is rejected on its own;
-    the rest of the batch is still written, in one go.
+    the rest of the batch is still written, in one go. A message whose
+    Label the user set by hand keeps it and is reported as skipped.
     """
     messages = _messages(character, partner)
     by_hash = {labels_store.msg_hash(m): m for m in messages}
@@ -350,30 +322,33 @@ def record_verdicts(
                 str(reason)[:REASON_MAX_CHARS] if reason else None,
             )
         )
-        result.written.append(h)
     if not rows:
         return result
     with _store() as (conn, settings):
-        labels_store.upsert_verdicts(
-            conn,
-            rows,
-            character=character,
-            partner=aliases_store.primary_for(conn, character, partner),
-            source="mcp",
-        )
-        result.unlabeled_remaining = _counts(
-            conn, settings, character, partner, messages
-        )["unlabeled"]
+        known = list(dict.fromkeys(row[0] for row in rows))
+        manual = labels_store.manual_hashes(conn, known)
+        result.skipped = [
+            {"hash": h, "reason": MANUAL_SKIP_REASON} for h in known if h in manual
+        ]
+        rows = [row for row in rows if row[0] not in manual]
+        result.written = [row[0] for row in rows]
+        if rows:
+            labels_store.upsert_verdicts(conn, rows, source="mcp")
+        result.unlabeled_remaining = _counts(conn, settings, messages)["unlabeled"]
     return result
 
 
-def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
+def fill_unlabeled(
+    character: str, partner: str, label: str, *, source: str
+) -> dict[str, Any]:
     """Give every still-Unlabeled message of one conversation the same
     verdict, for a conversation the user knows is all IC (or all OOC).
 
     Messages with a stored Label keep it and messages the rules decide
     keep resolving through the rules, so this adds Labels and never
-    overwrites one. Returns `{label, labeled, hashes, already_labeled,
+    overwrites one. `source` says who wrote them: 'manual' from the
+    window, 'mcp' from a connected model, whose Labels a later MCP
+    clear may take again. Returns `{label, labeled, hashes, already_labeled,
     decided_by_rules, total_messages}`; `hashes` is exactly what was
     written, which `delete` takes to undo it.
     """
@@ -381,36 +356,39 @@ def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
     messages = _messages(character, partner)
     with _store() as (conn, settings):
         return labels_store.fill_unlabeled(
-            conn,
-            character,
-            aliases_store.primary_for(conn, character, partner),
-            messages,
-            settings,
-            label,
-            partner_aliases=aliases_store.all_names_for(conn, character, partner),
+            conn, messages, settings, label, source=source
         )
 
 
-def delete(character: str, partner: str, hashes: Iterable[str]) -> int:
+def delete(hashes: Iterable[str]) -> int:
     """Remove the named Labels and nothing else: the undo of one
     `fill_unlabeled`. Returns how many were removed."""
     conn = labels_store.connect()
     try:
-        return labels_store.delete_labels_by_hash(
-            conn, list(hashes), character=character, partner=partner
-        )
+        return labels_store.delete_labels_by_hash(conn, list(hashes))
     finally:
         conn.close()
 
 
-def clear(character: str, partner: str | None = None) -> dict[str, Any]:
+def clear(
+    character: str, partner: str | None = None, *, keep_manual: bool = False
+) -> dict[str, Any]:
     """Clear every Label of one conversation, or of every conversation
     of `character` when `partner` is None, a copy going to the Trash
-    first. Returns `{deleted, trash_id}`."""
-    return label_trash.clear(character, partner)
+    first. The window clears them all; MCP passes `keep_manual`, since
+    only the window changes or clears a Label the user set by hand.
+    Returns `{deleted, trash_id, skipped}`, `skipped` naming each
+    manual Label left alone as `{hash, reason}`."""
+    cleared = label_trash.clear(character, partner, keep_manual=keep_manual)
+    return {
+        "deleted": cleared["deleted"],
+        "trash_id": cleared["trash_id"],
+        "skipped": [{"hash": h, "reason": MANUAL_SKIP_REASON} for h in cleared["kept"]],
+    }
 
 
 def clear_all() -> dict[str, Any]:
-    """Clear every Label there is, one Trash entry per character.
-    Returns `{deleted, trash_ids}`."""
+    """Clear every Label there is, one Trash entry per character whose
+    Logs hold the messages (see `label_trash.clear_all`). Returns
+    `{deleted, trash_ids}`."""
     return label_trash.clear_all()

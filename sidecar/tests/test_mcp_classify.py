@@ -432,7 +432,7 @@ async def test_clearing_requires_confirmation(conversation) -> None:
         )
     text = tool_error_text(result)
     assert "confirm_required" in text
-    assert "manual overrides" in text
+    assert "set by hand stay" in text
 
 
 async def test_clearing_reverts_to_unlabeled(conversation) -> None:
@@ -790,3 +790,108 @@ async def test_labelling_everything_at_once_refuses_a_non_verdict(
             confirm=True,
         )
     assert "validation_failed" in tool_error_text(result)
+
+
+# ---- a partner known under two names -----------------------------------
+
+#: Daelan Envale's name before a rename; F-Chat kept a Log under it.
+OLD_NAME = "Daelan"
+LONG_OLD = "He tied the boat to the post and climbed onto the jetty. " * 6
+
+
+@pytest.fixture
+def aliased(conversation: Path):
+    """The conversation plus an older Log under Daelan Envale's former
+    name, linked to him as an alias; returns a REST client."""
+    from sidecar_client import app_client
+
+    import server
+
+    write_log(
+        conversation / "Lady Amber Blaise" / "logs" / OLD_NAME,
+        [chat(OLD_NAME, LONG_OLD, at=1690000000)],
+    )
+    client = app_client(server.app)
+    res = client.post(
+        "/aliases",
+        json={
+            "character": "Lady Amber Blaise",
+            "name": OLD_NAME,
+            "primary_name": "Daelan Envale",
+        },
+    )
+    assert res.status_code == 201, res.text
+    return client
+
+
+async def _stats(**where) -> dict:
+    async with mcp_client("logs") as session:
+        _, body = await call_tool(session, "get_label_stats", **where)
+    return body
+
+
+async def _label(partner: str, verdicts: dict[str, str]) -> None:
+    """Label the messages whose text starts as each key, over MCP."""
+    async with mcp_client("logs") as session:
+        _, batch = await call_tool(
+            session,
+            "get_unlabeled_messages",
+            character="Lady Amber Blaise",
+            partner=partner,
+        )
+        items = [
+            {"hash": m["hash"], "label": label}
+            for m in batch["messages"]
+            for start, label in verdicts.items()
+            if m["text"].startswith(start)
+        ]
+        assert len(items) == len(verdicts), batch
+        result, body = await call_tool(
+            session,
+            "set_message_labels",
+            character="Lady Amber Blaise",
+            partner=partner,
+            items=items,
+        )
+    assert not result.isError, body
+
+
+async def test_the_unlabeled_count_covers_every_log_of_an_aliased_partner(
+    aliased,
+) -> None:
+    before = await _stats(character="Lady Amber Blaise", partner="Daelan Envale")
+    assert (before["unlabeled"], before["total"]) == (3, 4)
+
+    # Labelled through the old name: still one of Daelan Envale's.
+    await _label(OLD_NAME, {LONG_OLD[:20]: "OOC"})
+
+    after = await _stats(character="Lady Amber Blaise", partner="Daelan Envale")
+    assert (after["ic"], after["ooc"], after["unlabeled"]) == (0, 2, 2)
+    rest = aliased.get(
+        "/labels/stats", params={"char": "Lady Amber Blaise", "partner": "Daelan Envale"}
+    ).json()
+    assert (rest["ic"], rest["ooc"], rest["unlabeled"]) == (0, 2, 2)
+
+
+async def test_per_character_stats_and_the_rollup_count_every_message_once(
+    aliased,
+) -> None:
+    await _label("Daelan Envale", {LONG_A[:20]: "IC", LONG_OLD[:20]: "OOC"})
+
+    per_character = aliased.get(
+        "/labels/stats-all", params={"char": "Lady Amber Blaise"}
+    ).json()["partners"]
+    rollup = aliased.get("/labels/rollup").json()
+
+    [row] = per_character
+    assert row["partner"] == "Daelan Envale"
+    assert {k: row[k] for k in ("ic", "ooc", "unlabeled", "total")} == {
+        "ic": 1,
+        "ooc": 2,
+        "unlabeled": 1,
+        "total": 4,
+    }
+    assert row["last_label_at"] is not None
+    assert {
+        k: rollup[k] for k in ("ic", "ooc", "unlabeled", "manual", "total", "character_count")
+    } == {"ic": 1, "ooc": 2, "unlabeled": 1, "manual": 0, "total": 4, "character_count": 1}

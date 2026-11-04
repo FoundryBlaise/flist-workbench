@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   type FlistTrashedLabels,
+  type ForeignCacheUsage,
+  type ForeignSettings,
   type LabelsSettings,
   type McpInfo,
   type RagSettings
 } from '../../lib/api'
+import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
@@ -43,6 +46,7 @@ export type SectionId =
   | 'embedding'
   | 'mcp'
   | 'security'
+  | 'foreign'
 
 const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: string }> = [
   { id: 'general', label: 'General', subtitle: 'Data directory + index status' },
@@ -51,7 +55,8 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
   { id: 'retrieval', label: 'Retrieval', subtitle: 'How log search ranks results' },
   { id: 'embedding', label: 'RAG · Embedding', subtitle: 'Index shape (requires re-ingest)' },
   { id: 'mcp', label: 'MCP', subtitle: 'Let a model drive Workbench' },
-  { id: 'security', label: 'Security', subtitle: 'Browser extension and pairing' }
+  { id: 'security', label: 'Security', subtitle: 'Browser extension and pairing' },
+  { id: 'foreign', label: 'Foreign profiles', subtitle: 'Cache size + clear' }
 ]
 
 /** Whether the sign-in auto-refresh sweep runs at all. Default off — the
@@ -183,7 +188,9 @@ function dirtySections(draft: Draft, baseline: Draft): Record<SectionId, boolean
     embedding: embeddingDirty,
     // Read-only panes — nothing to save, so never dirty.
     mcp: false,
-    security: false
+    security: false,
+    // Saves its cap with its own button, outside the footer's Save.
+    foreign: false
   }
 }
 
@@ -499,6 +506,7 @@ export function SettingsModal({
                 )}
                 {activeSection === 'mcp' && <McpPane />}
                 {activeSection === 'security' && <SecurityPane />}
+                {activeSection === 'foreign' && <ForeignPane foreign={state.foreign} />}
               </>
             )}
           </div>
@@ -2032,6 +2040,150 @@ function EmbeddingPane({
               Rebuild failed: {lexicalResult.error}
             </span>
           )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** Settings → Foreign profiles. The cache of other people's profiles
+ *  you opened, here or through a model: how much disk it takes, its
+ *  cap, and a way to empty it. The cap saves with its own button, like
+ *  the MCP switch, because the sidecar evicts at once when it drops. */
+function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
+  const [usage, setUsage] = useState<ForeignCacheUsage | null>(null)
+  const [capRaw, setCapRaw] = useState<string>(String(foreign.cache_cap_mb))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadUsage = async () => {
+    try {
+      const u = await api.foreignCacheUsage()
+      setUsage(u)
+      setCapRaw(String(Math.round(u.cap_bytes / MB)))
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  useEffect(() => {
+    void loadUsage()
+  }, [])
+
+  const setCap = async () => {
+    const n = Number(capRaw)
+    if (!Number.isInteger(n) || n < 1) {
+      setError('The cap must be a whole number of at least 1 MB.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const updated = await api.settingsUpdate({ foreign: { cache_cap_mb: n } })
+      setCapRaw(String(updated.foreign.cache_cap_mb))
+      // A lower cap has evicted profiles already: show what is left.
+      await loadUsage()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clear = async () => {
+    const ok = window.confirm(
+      'Delete every cached Foreign profile, images included?\n\n' +
+        'They are copies of other people’s profiles, so they do not go ' +
+        'to the Trash. Opening a profile again fetches it from F-list.'
+    )
+    if (!ok) return
+    setBusy(true)
+    setError(null)
+    try {
+      setUsage(await api.foreignCacheClear())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <PaneHeader
+        title="Foreign profiles"
+        subtitle="Profiles of other people's characters you opened, here or through a model, are cached on disk until the cap below evicts them."
+      />
+
+      <div className="settings-section">
+        <h3 className="settings-section-title">Cache</h3>
+        <p className="settings-help">
+          Each Foreign profile you open is kept with its gallery images and
+          avatar, so opening it again costs no F-list request. When the cache
+          outgrows its cap, the least recently viewed profiles go first; the
+          one you are viewing always stays. A profile F-list no longer shows
+          (deleted, private or blocked) is deleted at once. The activity log
+          (Help → F-list Activity Log) records which profiles a model fetched.
+        </p>
+        <p className="settings-meta">
+          In use:{' '}
+          <strong data-testid="settings-foreign-cache-used">
+            {usage
+              ? `${formatBytes(usage.bytes)} in ${usage.profiles.toLocaleString()} profile${
+                  usage.profiles === 1 ? '' : 's'
+                }`
+              : '…'}
+          </strong>
+        </p>
+        <div className="settings-field">
+          <label className="settings-label" htmlFor="foreign-cache-cap">
+            Cap (MB)
+          </label>
+          <div className="settings-row">
+            <input
+              id="foreign-cache-cap"
+              type="number"
+              min={1}
+              step={1}
+              className="settings-input settings-input-narrow"
+              value={capRaw}
+              onChange={(e) => setCapRaw(e.target.value)}
+              data-testid="settings-foreign-cache-cap"
+            />
+            <button
+              type="button"
+              className="settings-save"
+              onClick={() => void setCap()}
+              disabled={busy}
+              data-testid="settings-foreign-cache-cap-set"
+            >
+              Set cap
+            </button>
+            <button
+              type="button"
+              className="settings-clear"
+              onClick={() => setCapRaw(String(foreign.defaults.cache_cap_mb))}
+            >
+              Default ({foreign.defaults.cache_cap_mb})
+            </button>
+          </div>
+          <p className="settings-help settings-help-tight">
+            A lower cap evicts profiles right away; a higher one applies from
+            the next profile you open or refresh.
+          </p>
+        </div>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-clear"
+            onClick={() => void clear()}
+            disabled={busy || usage?.profiles === 0}
+            data-testid="settings-foreign-cache-clear"
+          >
+            Clear the cache…
+          </button>
+          {error && <span className="settings-meta classify-last-error">{error}</span>}
         </div>
       </div>
     </>

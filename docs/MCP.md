@@ -144,9 +144,15 @@ finds a name in the user's bookmarks, friends list or chat logs;
 `get_foreign_profile` and `get_foreign_kinks` then read it. Strictly
 read-only, and there is no tool that copies one of these into the
 user's own characters — if asked to, say the app does not do that.
-Results cache for 24 hours, and fetching spends a quarter-share of
+A fetched profile is cached on disk until the cache's size cap evicts
+it or the user clears it (Settings → Foreign profiles); after 24 hours
+the next read fetches it again. Fetching spends a quarter-share of
 the hourly F-list budget so a model browsing profiles cannot leave
-the user unable to pull their own.
+the user unable to pull their own. The activity log records each
+profile a model read, by name, also when a spent budget hands back
+the cached copy, and keeps those names across a restart. When F-list
+says a profile is gone or not visible, its cached copy is deleted on
+the spot.
 
 **Looking at the result** — `render_profile_image` returns the profile
 as a picture, rendered by the app's own preview: same BBCode renderer,
@@ -173,7 +179,9 @@ by accident, with either.
 **Images from elsewhere** — `import_images` copies files from folders
 you cleared under Settings → Security into a character's pool, and can
 swap each one into the place of an existing gallery image
-(`replace_image_id`) in the same call. Files over F-list's limits come
+(`replace_image_id`) in the same call. Nothing under the app's own
+data folder is imported, even when a cleared folder holds it, so cached
+Foreign profile images never reach the pool. Files over F-list's limits come
 with a warning; `convert_to_jpeg` re-encodes them where that helps.
 `trash_images` deletes into the character's Trash, taking an image off
 the gallery first; only you empty the Trash, in the window.
@@ -245,8 +253,11 @@ about their weekend, and indexing the latter poisons results — so
 ingest skips them.
 
 Three rules decide the easy cases without a model: an empty message, a
-message shorter than the threshold (200 characters by default), and one
-starting with `((` are all OOC. Everything else is Unlabeled until
+message shorter than the threshold (200 characters by default; a `/me`
+action counts without the speaker name in front), and one starting
+with `((` are all OOC. System lines (ads, rolls, warnings, status
+events) never get a Label and are never handed to the model. Everything
+else is Unlabeled until
 something judges it. The app used to run a classifier for that; now
 the model you connect does it. It needs the [Log text](#log-text)
 switch on:
@@ -259,6 +270,13 @@ set_message_labels(character, partner, [...]) the Labels
                                               repeat while remaining > 0
 ```
 
+A Label the user set by hand in the app is never replaced by a model.
+`set_message_labels` leaves it as it is, writes the rest of the call
+and lists the hashes it left alone under `skipped`, each with the
+reason. `clear_labels` takes only what a model wrote: it keeps every
+Label set by hand and lists those under `skipped` the same way. Only
+the user changes or clears such a Label, in the window.
+
 Some conversations do not need judging at all. A user who knows a
 chat is in-character from the first line to the last can say so once —
 `label_all_unlabeled(character, partner, "IC", confirm=true)`, or
@@ -266,8 +284,10 @@ right-click the conversation header in the app — and every unlabeled
 message in it gets that Label in one write. It only ever adds:
 messages that already carry a Label keep it, and the rules keep
 deciding the short lines and `((` asides. The app can undo exactly
-that write. A model must not reach for it on its own — only when the
-user has said it about that conversation.
+that write. Filled through the tool, they count as a model's Labels,
+which `clear_labels` takes again; filled in the app, as Labels set by
+hand. A model must not reach for it on its own — only when the user
+has said it about that conversation.
 
 Each batch reports how many are left and roughly how many more calls
 that means. Worth telling the user before starting: on a long log this
@@ -340,7 +360,7 @@ that happens the window shows a banner and asks which version to keep
 show up in the window without a reload.
 
 The activity log (Help → F-list Activity Log) records every change a
-tool made, prefixed `mcp:`.
+tool made, and every Foreign profile a tool read, prefixed `mcp:`.
 
 ## When something goes wrong
 
@@ -372,10 +392,16 @@ window gets for the same situation:
 | `index_busy` | an ingest (or a wipe) is changing the Index; details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `character_busy` | a Pull of that character, or Back up all, is running (one at a time); details carry its `job_id` to poll with `get_job` or stop with `cancel_job` |
 | `index_unreadable` | the Index is there but could not be read; not the same as empty |
+| `keyword_backfill_failed` | a hybrid search found the keyword half of the Index empty and could not fill it from the vector half; search with `hybrid=false` meanwhile |
 | `job_not_found` | no job with that id: finished jobs are forgotten after a few minutes, and none survive a restart |
 | `embedding_failed` | the embedding model would not load (it runs in-process and downloads itself on first use); `get_rag_status` with `check_embedding=true` checks it |
 | `embedding_model_changed` | an ingest found an Index built with another embedding model; `wipe_search_index`, then ingest again |
 | `log_dir_unavailable` | the F-Chat data directory in Settings is wrong |
+| `not_found` | F-list will not show that Foreign profile: no such character, or it is deleted, private or blocks the account (F-list's answer does not say which); any cached copy has been deleted |
+| `rate_limited` | MCP's share of the hourly F-list budget is spent; details carry the stale cached copy under `cached` when there is one |
+| `flist_unreachable` | F-list could not be reached (offline, timed out) and nothing is cached; with a cached copy the tool answers with it marked `stale` instead |
+| `flist_server_error` | F-list's server failed (HTTP 5xx) and nothing is cached; says nothing about whether the character exists |
+| `flist_error` | F-list answered in a way no other code covers (an HTTP 4xx, a page that is not JSON, its own error text); the message carries F-list's words. For a Foreign profile with a cached copy the tool answers with it marked `stale` instead, and it never means the character does not exist |
 
 ## Tools by endpoint
 
@@ -448,7 +474,7 @@ server, so they cannot drift from it.
 | `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
-| `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
+| `clear_labels` | Clear the Labels a model wrote into the Trash; Labels set by hand stay. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |
 | `search_logs_semantic` | *Log text, opt-in.* Find passages that are about something, not ones holding a word. |
 | `get_rag_status` | What the Index holds, and whether the embedding model loads. |
@@ -533,7 +559,7 @@ server, so they cannot drift from it.
 | `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
-| `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
+| `clear_labels` | Clear the Labels a model wrote into the Trash; Labels set by hand stay. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |
 | `search_logs_semantic` | *Log text, opt-in.* Find passages that are about something, not ones holding a word. |
 | `get_rag_status` | What the Index holds, and whether the embedding model loads. |

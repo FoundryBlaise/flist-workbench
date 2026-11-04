@@ -129,8 +129,6 @@ def test_job_runs_single_partner_to_done(
             labels_store.upsert_label(
                 labels_conn,
                 hash=labels_store.msg_hash(m),
-                character="Char",
-                partner="Partner",
                 ts=m["ts"],
                 speaker=m["speaker"],
                 label="IC",
@@ -376,6 +374,73 @@ def test_a_new_day_embeds_only_that_day(index_window) -> None:
     assert _found_as_ic("lighthouse")
 
 
+def _keyword_writes_fail_on(monkeypatch: pytest.MonkeyPatch, date: str) -> dict:
+    """Make the keyword half of the Index refuse any write that holds a
+    chunk of `date`, the way a locked or full labels.db would. Setting
+    the returned dict's "on" to False lets writes through again."""
+    import sqlite3
+
+    import rag_lexical
+
+    real = rag_lexical.LexicalStore.upsert_chunks
+    switch = {"on": True}
+
+    def failing(self, chunks):
+        if switch["on"] and any(c["date"] == date for c in chunks):
+            raise sqlite3.OperationalError("database is locked")
+        return real(self, chunks)
+
+    monkeypatch.setattr(rag_lexical.LexicalStore, "upsert_chunks", failing)
+    return switch
+
+
+def test_a_day_whose_keyword_write_fails_is_reported_as_failed(
+    index_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 10, 21)),
+    ])
+    _label(client, OPENING, "IC")
+    _label(client, REPLY, "IC")
+    _keyword_writes_fail_on(monkeypatch, "2024-03-10")
+
+    job = _ingest(client)
+
+    assert job["result"]["failed"] == 1
+    assert job["result"]["failed_days"] == [
+        {"character": ME, "partner": PARTNER, "date": "2024-03-10"}
+    ]
+    assert "2024-03-10" in job["progress"]["last_error"]
+    assert "database is locked" in job["progress"]["last_error"]
+    # Neither half holds the failed day, so they still agree; the other
+    # day went into both.
+    assert not _found_as_ic(REPLY_MARK)
+    assert _found_as_ic("lighthouse")
+
+
+def test_a_day_whose_keyword_write_failed_is_written_by_the_next_ingest(
+    index_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, log = index_window
+    write_log(log, [
+        chat(ME, OPENING, at=utc(2024, 3, 9, 20)),
+        chat(PARTNER, REPLY, at=utc(2024, 3, 10, 21)),
+    ])
+    _label(client, OPENING, "IC")
+    _label(client, REPLY, "IC")
+    keyword_failure = _keyword_writes_fail_on(monkeypatch, "2024-03-10")
+    _ingest(client)
+    keyword_failure["on"] = False
+
+    again = _ingest(client)
+
+    assert again["result"]["failed"] == 0
+    assert again["result"]["failed_days"] == []
+    assert _found_as_ic(REPLY_MARK)
+
+
 def test_job_writes_manifest_after_first_ingest(
     workbench_dir: Path,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,
@@ -389,8 +454,6 @@ def test_job_writes_manifest_after_first_ingest(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -445,8 +508,6 @@ def test_job_detects_dim_mismatch_and_aborts(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -492,8 +553,6 @@ def test_job_detects_orphan_collection_as_model_swap(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -585,8 +644,6 @@ def test_job_scoped_force_rewipe_deletes_only_that_scope(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="A",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -630,8 +687,6 @@ def test_job_with_force_rewipe_recreates_collection(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -886,8 +941,6 @@ def test_ingest_endpoint_returns_job_id(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
@@ -936,8 +989,6 @@ def test_rag_status_after_ingest(
         labels_store.upsert_label(
             labels_conn,
             hash=labels_store.msg_hash(msgs[0]),
-            character="Char",
-            partner="Partner",
             ts=msgs[0]["ts"],
             speaker="Bob",
             label="IC",
