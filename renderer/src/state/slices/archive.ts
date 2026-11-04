@@ -357,20 +357,20 @@ async function _followPull(
   set({ flistPullAbortController: ctrl })
   try {
     await open({
-      onJob: (job) => setStatus({ pullJobId: job.id }),
-      onCancelled: () =>
+      job: (job) => setStatus({ pullJobId: job.id }),
+      cancelled: () =>
         setStatus({ pullStatus: 'idle', pullStage: 'cancelled', pullError: null, pullJobId: null }),
-      onTicket: () =>
+      ticket: () =>
         setStatus({ pullStatus: 'running', pullStage: 'ticket' }),
-      onFetching: () =>
+      fetching: () =>
         setStatus({ pullStatus: 'running', pullStage: 'fetching' }),
-      onImages: ({ total }) =>
+      images: ({ total }) =>
         setStatus({
           pullStatus: 'running',
           pullStage: 'images',
           pullProgress: { done: 0, total }
         }),
-      onImage: ({ index, total, ok, cached }) => {
+      image: ({ index, total, ok, cached }) => {
         setStatus({ pullProgress: { done: index, total } })
         // Refresh the per-character images map so the Images tab's
         // thumbnails update as files arrive. Only every 10th image to
@@ -382,7 +382,7 @@ async function _followPull(
           void get().flistLoadCharacterImages(targetId)
         }
       },
-      onDone: async (info) => {
+      done: async (info) => {
         // We know the character_id now even if we didn't before. Make
         // sure the per-id slot exists and gets reloaded.
         set((s) => ({
@@ -405,7 +405,7 @@ async function _followPull(
         // The Workbench open on this character follows the new Live.
         get().flistNoteNewLive(info.character_id)
       },
-      onError: ({ message }) => {
+      error: ({ message }) => {
         setStatus({ pullStatus: 'error', pullError: message, pullJobId: null })
       }
     }, ctrl.signal)
@@ -445,10 +445,10 @@ async function _followBackupAll(
 ): Promise<void> {
   try {
     await open({
-      onJob: (job) => {
+      job: (job) => {
         set((s) => ({ flistBackupAllStatus: { ...s.flistBackupAllStatus, jobId: job.id } }))
       },
-      onCancelled: () => {
+      cancelled: () => {
         set((s) => ({
           flistBackupAllStatus: {
             ...s.flistBackupAllStatus,
@@ -459,12 +459,12 @@ async function _followBackupAll(
         }))
         _clearBackupAllStatusLater(get, set, 'cancelled')
       },
-      onStart: ({ total }) => {
+      start: ({ total }) => {
         set((s) => ({
           flistBackupAllStatus: { ...s.flistBackupAllStatus, total }
         }))
       },
-      onCharacter: (info) => {
+      character: (info) => {
         set((s) => {
           const cur = s.flistBackupAllStatus
           if (info.status === 'fetching') {
@@ -502,7 +502,7 @@ async function _followBackupAll(
           void get().flistLoadArchive(info.character_id!)
         }
       },
-      onDone: () => {
+      done: () => {
         set((s) => ({
           flistBackupAllStatus: {
             ...s.flistBackupAllStatus,
@@ -530,7 +530,7 @@ async function _followBackupAll(
           }
         }, 6000)
       },
-      onError: ({ message }) => {
+      error: ({ message }) => {
         set((s) => ({
           flistBackupAllStatus: {
             ...s.flistBackupAllStatus,

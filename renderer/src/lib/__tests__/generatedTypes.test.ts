@@ -109,14 +109,14 @@ it("reads a Pull's events with the data the sidecar's events model declares", as
     'POST /flist/character/Quill/pull',
     sse(['image', { index: 1, total: 1, image_id: '123', ok: true, cached: true }])
   )
-  const seen: Parameters<NonNullable<FlistPullHandlers['onImage']>>[0][] = []
+  const seen: Parameters<NonNullable<FlistPullHandlers['image']>>[0][] = []
 
-  await api.flistPull('Quill', { onImage: (info) => seen.push(info) })
+  await api.flistPull('Quill', { image: (info) => seen.push(info) })
 
   expect(seen.map((info) => info.image_id)).toEqual(['123'])
   // @ts-expect-error PullImage has no `url`
   expect(seen[0].url).toBeUndefined()
   // @ts-expect-error a Pull sends no `progress` event
-  const unknown: FlistPullHandlers = { onProgress: () => {} }
+  const unknown: FlistPullHandlers = { progress: () => {} }
   void unknown
 })

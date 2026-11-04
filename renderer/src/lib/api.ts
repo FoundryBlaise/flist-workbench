@@ -148,38 +148,27 @@ export type ForeignProfileResult = Omit<Schema<'ForeignProfile'>, 'profile'> & {
 }
 
 
-/** A Pull's events by name, each with its data, as the sidecar's
- *  schema declares them. */
-type PullEvents = Schema<'PullEvents'>
-/** Back up all's events by name, each with its data. */
-type BackupAllEvents = Schema<'BackupAllEvents'>
+/** What to do with each event of a stream, by its name: the names
+ *  and data are the stream's events model's, so an event the sidecar
+ *  renames or reshapes fails the type-check where it is handled. */
+export type EventTable<Events> = { [Name in keyof Events]?: (data: Events[Name]) => void }
 
-/** A Pull or Back up all runs as a job: the stream's first event is the
+/** A Pull's events by name, each with its data, as the sidecar's
+ *  schema declares them. A Pull runs as a job: the first event is the
  *  job (its id is what Cancel and a reopened view use), and a cancel by
  *  id ends the events with `cancelled`. */
-type JobStreamHandlers = {
-  onJob?: (job: Job) => void
-  onCancelled?: () => void
-}
+type PullEvents = Schema<'PullEvents'>
+/** Back up all's events by name, each with its data; a job like a Pull. */
+type BackupAllEvents = Schema<'BackupAllEvents'>
 
-export type FlistPullHandlers = JobStreamHandlers & {
-  onTicket?: () => void
-  onFetching?: () => void
-  onImages?: (info: PullEvents['images']) => void
-  onImage?: (info: PullEvents['image']) => void
-  onDone?: (info: PullEvents['done']) => void
-  onError?: (info: StreamError) => void
-}
+/** What a follower of a Pull does with its events. */
+export type FlistPullHandlers = EventTable<PullEvents>
 
 /** One character of Back up all, as it is pulled and as it ends. */
 export type FlistBackupAllCharacterEvent = BackupAllEvents['character']
 
-export type FlistBackupAllHandlers = JobStreamHandlers & {
-  onStart?: (info: BackupAllEvents['start']) => void
-  onCharacter?: (info: FlistBackupAllCharacterEvent) => void
-  onDone?: (info: BackupAllEvents['done']) => void
-  onError?: (info: StreamError) => void
-}
+/** What a follower of Back up all does with its events. */
+export type FlistBackupAllHandlers = EventTable<BackupAllEvents>
 
 /** One conversation of a character: the partner, or the primary name
  *  of an alias group whose other members are `aliases`. */
@@ -908,19 +897,14 @@ export const api = {
    *  renders. It runs as a job: aborting `opts.signal` only stops
    *  following; `jobCancel` stops the sweep. */
   flistBackupAll: (handlers: FlistBackupAllHandlers, opts?: ApiOptions): Promise<void> =>
-    requestStream(
-      '/flist/backup-all',
-      { method: 'POST' },
-      (block) => dispatchBackupAllStream(block, handlers),
-      opts
-    ),
+    requestStream('/flist/backup-all', { method: 'POST' }, (block) => dispatch(block, handlers), opts),
   /** Starts a Pull of `name` and follows its progress (SSE). A job, like
    *  Back up all: aborting `opts.signal` only stops following. */
   flistPull: (name: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
     requestStream(
       url('/flist/character/{name}/pull', { name }),
       { method: 'POST' },
-      (block) => dispatchPullStream(block, handlers),
+      (block) => dispatch(block, handlers),
       opts
     ),
   /** Every job the sidecar remembers: running ones, and finished ones
@@ -928,19 +912,14 @@ export const api = {
   jobsList: (opts?: ApiOptions) => get('/jobs', {}, opts),
   /** Follow a running Pull from the start of its events. */
   flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
-    requestStream(jobEventsPath(jobId), {}, (block) => dispatchPullStream(block, handlers), opts),
+    requestStream(jobEventsPath(jobId), {}, (block) => dispatch(block, handlers), opts),
   /** Follow a running Back up all from the start of its events. */
   flistBackupAllFollow: (
     jobId: string,
     handlers: FlistBackupAllHandlers,
     opts?: ApiOptions
   ): Promise<void> =>
-    requestStream(
-      jobEventsPath(jobId),
-      {},
-      (block) => dispatchBackupAllStream(block, handlers),
-      opts
-    ),
+    requestStream(jobEventsPath(jobId), {}, (block) => dispatch(block, handlers), opts),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () => get('/restore/handshake/pending'),
@@ -1008,39 +987,10 @@ function parseBlock(block: string): { event: string | null; data: unknown } {
   return { event, data }
 }
 
-/** What to do with each event of a stream, by its name: the names
- *  and data are the stream's events model's, so an event the sidecar
- *  renames or reshapes fails the type-check here. */
-type EventTable<Events> = { [Name in keyof Events]?: (data: Events[Name]) => void }
-
+/** Hand one SSE block to the handler its event name picks, if any. */
 function dispatch<Events>(block: string, table: EventTable<Events>): void {
   const { event, data } = parseBlock(block)
   if (!event || !Object.hasOwn(table, event)) return
   const handle = table[event as keyof Events]
   handle?.(data as Events[keyof Events])
 }
-
-function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
-  dispatch<PullEvents>(block, {
-    job: (job) => handlers.onJob?.(job),
-    cancelled: () => handlers.onCancelled?.(),
-    ticket: () => handlers.onTicket?.(),
-    fetching: () => handlers.onFetching?.(),
-    images: (info) => handlers.onImages?.(info),
-    image: (info) => handlers.onImage?.(info),
-    done: (info) => handlers.onDone?.(info),
-    error: (info) => handlers.onError?.(info)
-  })
-}
-
-function dispatchBackupAllStream(block: string, handlers: FlistBackupAllHandlers): void {
-  dispatch<BackupAllEvents>(block, {
-    job: (job) => handlers.onJob?.(job),
-    cancelled: () => handlers.onCancelled?.(),
-    start: (info) => handlers.onStart?.(info),
-    character: (info) => handlers.onCharacter?.(info),
-    done: (info) => handlers.onDone?.(info),
-    error: (info) => handlers.onError?.(info)
-  })
-}
-
