@@ -4,6 +4,7 @@
 // the pure parts of that: which images to look for, how the gallery
 // follows a file that came back under another id, and the note.
 
+import type { UndoAction } from '../lib/undoRedo'
 import { galleryRows, type GalleryRow, type WorkingPayload } from './flist'
 
 function galleryIds(payload: WorkingPayload | undefined): string[] {
@@ -47,12 +48,18 @@ function listed(items: string[]): string {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
 
+/** "Undo" or "Redo", as a note starts. */
+export function stepName(action: UndoAction): 'Undo' | 'Redo' {
+  return action === 'undo' ? 'Undo' : 'Redo'
+}
+
 /** "Undo put back sunset.png from the Trash." and what else happened:
  *  null when the step brought back no missing file. */
 export function putBackNote(
-  step: 'Undo' | 'Redo',
+  action: UndoAction,
   outcome: { putBack: string[]; leftInTrash: string[]; missing: string[] }
 ): string | null {
+  const step = stepName(action)
   const parts: string[] = []
   if (outcome.putBack.length) {
     parts.push(`${step} put back ${listed(outcome.putBack)} from the Trash.`)

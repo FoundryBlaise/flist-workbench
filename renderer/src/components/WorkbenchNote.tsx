@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useStore } from '../state'
+import { parseOrigin } from '../state/commit'
 import { describeOrigin } from './describeOrigin'
 import { FadingNote, useFadeAfter } from './FadingNote'
 
@@ -32,7 +33,7 @@ function noteText(note: Note): string | null {
   if (action === 'updated') {
     // The app's own maintenance passes run after most Pulls; taking
     // one in is not news. Undoing one is.
-    if (label.startsWith('internal:')) return null
+    if (parseOrigin(label)?.writer === 'internal') return null
     const by = describeOrigin(label)
     return by ? `Updated by ${by}.` : 'Updated outside the editor.'
   }

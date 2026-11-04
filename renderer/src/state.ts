@@ -49,7 +49,8 @@ import {
   takeUndo,
   unhideWorkbench
 } from './state/undoStack'
-import { imagesToFind, putBackNote, renameGalleryRows } from './state/undoTrash'
+import { imagesToFind, putBackNote, renameGalleryRows, stepName } from './state/undoTrash'
+import type { UndoAction } from './lib/undoRedo'
 import { mergeWorkbench, type MergeSide } from './state/merge'
 
 export type {
@@ -347,7 +348,7 @@ type State = {
    *  window; null when there is nothing to say. */
   flistWorkbenchNote: {
     characterId: string
-    action: 'updated' | 'undo' | 'redo'
+    action: 'updated' | UndoAction
     label: CommitLabel
     at: number
   } | null
@@ -996,7 +997,7 @@ function _undoStep(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  action: 'undo' | 'redo'
+  action: UndoAction
 ): CommitLabel | null {
   const take = action === 'undo' ? takeUndo : takeRedo
   const s = get()
@@ -1014,7 +1015,7 @@ function _undoStep(
     () => ({ flistWorkbenchNote: { characterId, action, label: entry.label, at: Date.now() } })
   )
   if (toFind.length > 0) {
-    _putBackBeforeSave(get, set, characterId, toFind, action === 'undo' ? 'Undo' : 'Redo')
+    _putBackBeforeSave(get, set, characterId, toFind, action)
   }
   return entry.label
 }
@@ -1029,12 +1030,12 @@ function _putBackBeforeSave(
   set: SlotSet,
   characterId: string,
   imageIds: string[],
-  step: 'Undo' | 'Redo'
+  action: UndoAction
 ): void {
   const prior = _flushInflight.get(characterId)
   const link = (async () => {
     if (prior) await prior.catch(() => {})
-    await _putBackFromTrash(get, set, characterId, imageIds, step)
+    await _putBackFromTrash(get, set, characterId, imageIds, action)
   })()
   _flushInflight.set(characterId, link)
   const done = () => {
@@ -1048,7 +1049,7 @@ async function _putBackFromTrash(
   set: SlotSet,
   characterId: string,
   imageIds: string[],
-  step: 'Undo' | 'Redo'
+  action: UndoAction
 ): Promise<void> {
   const note = (text: string | null) => {
     if (!text) return
@@ -1110,10 +1111,12 @@ async function _putBackFromTrash(
         undoStep: true
       })
     }
-    note(putBackNote(step, { putBack, leftInTrash, missing: gone }))
+    note(putBackNote(action, { putBack, leftInTrash, missing: gone }))
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e)
-    note(`${step} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`)
+    note(
+      `${stepName(action)} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`
+    )
   }
 }
 

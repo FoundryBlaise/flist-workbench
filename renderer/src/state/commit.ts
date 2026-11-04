@@ -46,10 +46,23 @@ export type CommitLabel =
   | 'reset-to-live'
   | ExternalLabel
 
+/** A writer an origin names: `mcp:<tool>`, `extension:<what>`,
+ *  `internal:<pass>`, or a bare `mcp` (a model, tool not named). Null
+ *  for anything else (`ui`, `unknown`). The one reader of origins. */
+export function parseOrigin(
+  origin: string
+): { writer: 'mcp' | 'extension' | 'internal'; name: string } | null {
+  const m = /^(mcp|extension|internal)(?::(.+))?$/.exec(origin)
+  if (!m) return null
+  const writer = m[1] as 'mcp' | 'extension' | 'internal'
+  if (!m[2] && writer !== 'mcp') return null
+  return { writer, name: m[2] ?? '' }
+}
+
 /** The label for taking over another writer's change, from the origin
  *  its event carried. */
 export function externalLabel(origin: string): ExternalLabel {
-  return /^(mcp|extension|internal):./.test(origin) ? (origin as ExternalLabel) : 'unknown'
+  return parseOrigin(origin)?.name ? (origin as ExternalLabel) : 'unknown'
 }
 
 export type Commit =
