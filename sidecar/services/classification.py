@@ -140,26 +140,10 @@ def collect_pending(
     re-reading what it already judged.
     """
     msgs = list(messages)
-    by_hash = labels_store.labels_for_messages(labels_conn, msgs)
-
-    already_labelled = 0
-    decided_by_rules = 0
-    pending_indices: list[tuple[int, str]] = []
-
-    for idx, msg in enumerate(msgs):
-        if labels_store.is_system_line(msg):
-            continue
-        h = labels_store.msg_hash(msg)
-        if h in by_hash:
-            already_labelled += 1
-            continue
-        if labels_store.resolve(msg, None, settings) != labels_store.LABEL_UNLABELED:
-            decided_by_rules += 1
-            continue
-        pending_indices.append((idx, h))
+    sorted_out = labels_store.triage(labels_conn, msgs, settings)
 
     start = max(0, int(cursor))
-    in_window = [(idx, h) for idx, h in pending_indices if idx >= start]
+    in_window = [(idx, h) for idx, h in sorted_out.pending if idx >= start]
     batch = in_window[: max(0, int(limit))]
 
     items: list[PendingMessage] = []
@@ -190,8 +174,8 @@ def collect_pending(
         next_cursor=next_cursor,
         remaining=len(in_window) - len(batch),
         total_messages=len(msgs),
-        already_labelled=already_labelled,
-        decided_by_rules=decided_by_rules,
+        already_labelled=sorted_out.already_labelled,
+        decided_by_rules=sorted_out.decided_by_rules,
     )
 
 
