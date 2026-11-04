@@ -55,6 +55,8 @@ export type LogsSlice = LogsState & {
   loadCharacters: () => Promise<void>
   setCrossSearchOpen: (open: boolean) => void
   loadPartners: (char: string) => Promise<void>
+  /** The Logs follow the character picked: its Logs, no partner open. */
+  setActiveCharacter: (name: string | null) => void
   selectPartner: (name: string | null) => void
   loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
   invalidateMessages: (char: string, partner: string) => void
@@ -142,6 +144,10 @@ export const createLogsSlice: SliceCreator<LogsSlice> = (set, get) => ({
         partnersStatus: { ...s.partnersStatus, [char]: 'error' }
       }))
     }
+  },
+
+  setActiveCharacter(name) {
+    set({ activeCharacter: name, activePartner: null })
   },
 
   selectPartner(name) {
