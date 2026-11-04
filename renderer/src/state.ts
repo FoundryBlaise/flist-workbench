@@ -9,6 +9,7 @@ import {
   type FlistPullHandlers,
   type FlistZipBackupEntry,
   type FlistCharacterImage,
+  type FlistTrashItem,
   type FlistRosterEntry,
   type FlistSessionStatus,
   type ForeignProfilePayload,
@@ -38,6 +39,7 @@ import {
   type CommitLabel
 } from './state/commit'
 import { recordChange, resetUndoStacks, takeRedo, takeUndo } from './state/undoStack'
+import { imagesToFind, putBackNote, renameGalleryRows } from './state/undoTrash'
 
 export type {
   FlistSaveStatus,
@@ -323,6 +325,10 @@ type State = {
     label: CommitLabel
     at: number
   } | null
+  /** What an undo or redo did about gallery images whose files were not
+   *  in the pool: put back from the Trash, or missing. Keyed by
+   *  character id; the window shows the active character's and fades it. */
+  flistUndoNotes: Record<string, { text: string; at: number }>
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
@@ -652,6 +658,7 @@ type State = {
   flistUndo: (characterId: string) => CommitLabel | null
   /** Ctrl+Y: the mirror of flistUndo, applying the undone change again. */
   flistRedo: (characterId: string) => CommitLabel | null
+  flistDismissUndoNote: (characterId: string) => void
   /** Saves every character's pending edits now, waiting out the
    *  autosave's debounce and any save already on its way. */
   flistFlushAllWorking: () => Promise<void>
@@ -973,6 +980,8 @@ function _undoStep(
   if (!slot || _showsReadOnlyView(s, characterId)) return null
   const entry = take(characterId, slot.payload)
   if (!entry) return null
+  const pool = s.flistCharacterImages[characterId]
+  const toFind = imagesToFind(entry.payload, slot.payload, pool?.byId ?? null)
   _commit(
     get,
     set,
@@ -980,7 +989,108 @@ function _undoStep(
     { kind: 'edit', label: 'edit', payload: entry.payload, undoStep: true },
     () => ({ flistWorkbenchNote: { characterId, action, label: entry.label, at: Date.now() } })
   )
+  if (toFind.length > 0) {
+    _putBackBeforeSave(get, set, characterId, toFind, action === 'undo' ? 'Undo' : 'Redo')
+  }
   return entry.label
+}
+
+/** An undo or redo brought back gallery images the pool may not hold.
+ *  Their files are put back from the Trash before the payload is saved:
+ *  the work is a link in the character's flush chain (see
+ *  flistFlushWorking), so the autosave the step scheduled waits for it.
+ *  Never rejects; what happened goes into the character's undo note. */
+function _putBackBeforeSave(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  imageIds: string[],
+  step: 'Undo' | 'Redo'
+): void {
+  const prior = _flushInflight.get(characterId)
+  const link = (async () => {
+    if (prior) await prior.catch(() => {})
+    await _putBackFromTrash(get, set, characterId, imageIds, step)
+  })()
+  _flushInflight.set(characterId, link)
+  const done = () => {
+    if (_flushInflight.get(characterId) === link) _flushInflight.delete(characterId)
+  }
+  void link.then(done, done)
+}
+
+async function _putBackFromTrash(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  imageIds: string[],
+  step: 'Undo' | 'Redo'
+): Promise<void> {
+  const note = (text: string | null) => {
+    if (!text) return
+    set((s) => ({
+      flistUndoNotes: { ...s.flistUndoNotes, [characterId]: { text, at: Date.now() } }
+    }))
+  }
+  try {
+    // Only a pool the window has read can say which files are missing.
+    if (get().flistCharacterImages[characterId]?.status !== 'ready') {
+      await get().flistLoadCharacterImages(characterId)
+    }
+    const pool = get().flistCharacterImages[characterId]
+    if (pool?.status !== 'ready') throw new Error('the pool could not be read')
+    const missing = imageIds.filter((id) => !(id in pool.byId))
+    if (missing.length === 0) return
+
+    // The Trash lists the newest delete first: of several files trashed
+    // under one id, the newest is the one the gallery last showed.
+    const { items } = await api.flistTrashList(characterId)
+    const inTrash = new Map<string, FlistTrashItem>()
+    for (const item of items) {
+      if (missing.includes(item.image_id) && !inTrash.has(item.image_id)) {
+        inTrash.set(item.image_id, item)
+      }
+    }
+    const putBack: string[] = []
+    const back = new Set<string>()
+    const renames = new Map<string, string>()
+    if (inTrash.size > 0) {
+      const res = await api.flistTrashPutBack(
+        characterId,
+        [...inTrash.values()].map((i) => i.trash_id)
+      )
+      for (const r of res.restored) {
+        const item = [...inTrash.values()].find((i) => i.trash_id === r.from)
+        if (!item) continue
+        back.add(item.image_id)
+        putBack.push(item.source_name ?? item.filename)
+        if (r.image_id !== item.image_id) renames.set(item.image_id, r.image_id)
+      }
+      await get().flistLoadCharacterImages(characterId)
+    }
+    const leftInTrash = missing.filter((id) => inTrash.has(id) && !back.has(id))
+    const gone = missing.filter((id) => !inTrash.has(id))
+
+    // A file the pool already had (same bytes) or that came back under
+    // `local-<sha8>` keeps its picture on the profile under that id.
+    const s = get()
+    const slot = s.flistWorking[characterId]
+    const renamed = slot && !_showsReadOnlyView(s, characterId)
+      ? renameGalleryRows(slot.payload, renames)
+      : null
+    if (renamed) {
+      _commit(get, set, characterId, {
+        kind: 'edit',
+        label: 'edit',
+        payload: renamed,
+        undoStep: true
+      })
+    }
+    note(putBackNote(step, { putBack, leftInTrash, missing: gone }))
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e)
+    note(`${step} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`)
+  }
 }
 
 type ExternalChange = NonNullable<State['flistExternalChange'][string]>
@@ -2063,6 +2173,7 @@ export const useStore = create<State>((set, get) => ({
   flistViewingLive: {},
   flistExternalChange: {},
   flistWorkbenchNote: null,
+  flistUndoNotes: {},
   flistMapping: {
     status: 'idle',
     payload: null,
@@ -2372,6 +2483,7 @@ export const useStore = create<State>((set, get) => ({
       flistViewingLive: {},
       flistExternalChange: {},
       flistWorkbenchNote: null,
+      flistUndoNotes: {},
       flistDriftBanners: {},
       flistResetUndo: null,
       flistDiffRightSource: {},
@@ -2998,6 +3110,15 @@ export const useStore = create<State>((set, get) => ({
 
   flistRedo(characterId) {
     return _undoStep(get, set, characterId, 'redo')
+  },
+
+  flistDismissUndoNote(characterId) {
+    set((s) => {
+      if (!s.flistUndoNotes[characterId]) return {}
+      const flistUndoNotes = { ...s.flistUndoNotes }
+      delete flistUndoNotes[characterId]
+      return { flistUndoNotes }
+    })
   },
 
   async flistFlushAllWorking() {
