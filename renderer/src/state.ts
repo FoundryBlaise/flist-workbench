@@ -326,7 +326,9 @@ type State = {
    *  changed differently: the window asks "Keep mine" / "Take theirs"
    *  for each of `fields` (merge field keys, state/merge.ts) before
    *  anything is committed. `theirs` is that version, on disk at
-   *  `etag`; `label` names the writer. Keyed by character id. */
+   *  `etag`; `label` names the writer; `answered` holds the answers
+   *  already given when a later edit raised new fields to ask about.
+   *  Keyed by character id. */
   flistMergeQuestion: Record<
     string,
     {
@@ -334,6 +336,7 @@ type State = {
       etag: string
       theirs: WorkingPayload
       fields: string[]
+      answered?: Record<string, MergeSide>
       at: number
     } | null
   >
@@ -622,7 +625,9 @@ type State = {
   ) => void
   /** Answer the merge question: for each field asked about, keep mine
    *  or take theirs (a field left out keeps mine). The merge is then one
-   *  commit, one undo entry, saved over the other writer's etag. */
+   *  commit, one undo entry, saved over the other writer's etag; unless
+   *  an edit since the question was asked changed another field they
+   *  changed too, which is then asked about first. */
   flistAnswerMerge: (characterId: string, choices: Record<string, MergeSide>) => void
   /** Tools → "Back up all characters". Walks the signed-in account
    *  roster, pulls each character (JSON + images + avatar), and
@@ -3371,7 +3376,17 @@ export const useStore = create<State>((set, get) => ({
     const slot = get().flistWorking[characterId]
     if (!question || !slot) return
     // Mine as it is now: the merge is made again with the answers.
-    const { payload } = mergeWorkbench(slot.saved, slot.payload, question.theirs, choices)
+    const answered = { ...question.answered, ...choices }
+    const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, question.theirs, answered)
+    if (conflicts.length > 0) {
+      set((s) => ({
+        flistMergeQuestion: {
+          ...s.flistMergeQuestion,
+          [characterId]: { ...question, fields: conflicts, answered, at: Date.now() }
+        }
+      }))
+      return
+    }
     _commitMerge(
       get,
       set,
