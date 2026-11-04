@@ -2,8 +2,7 @@
 //
 // Every new payload the window puts into `flistWorking[characterId]`
 // goes through the store's `_commit` (state.ts), which builds the slot
-// here and then reports the commit to the listeners below. A commit is
-// one of four kinds:
+// here. A commit is one of four kinds:
 //
 //   edit     the window changed the payload: the slot turns unsaved and
 //            the autosave is scheduled.
@@ -19,10 +18,11 @@
 //            read, or the seed from Live), or the slot being dropped
 //            (a Pull landing, sign-out). A view has no label.
 //
-// The undo stack (state/undoStack.ts) hangs off this point: every edit
-// and written commit records the payload it replaced, with its label;
-// a view never does, nor does an undo or redo step itself. Keystrokes
-// (an edit with `typing`) record only the first of a burst.
+// `_commit` also records the change on the undo stack
+// (state/undoStack.ts): every edit, written and merged commit records
+// the payload it replaced, with its label; a view never does, nor does
+// an undo or redo step itself. Keystrokes (an edit with `typing`)
+// record only the first of a burst.
 
 import { emptyWorkingSlot, type FlistWorkingSlot, type WorkingPayload } from './flist'
 
@@ -46,10 +46,32 @@ export type CommitLabel =
   | 'reset-to-live'
   | ExternalLabel
 
+/** A writer an origin names: `mcp:<tool>`, `extension:<what>`,
+ *  `internal:<pass>`, or a bare `mcp` (a model, tool not named). Null
+ *  for anything else (`ui`, `unknown`). The one reader of origins. */
+export function parseOrigin(
+  origin: string
+): { writer: 'mcp' | 'extension' | 'internal'; name: string } | null {
+  const m = /^(mcp|extension|internal)(?::(.+))?$/.exec(origin)
+  if (!m) return null
+  const writer = m[1] as 'mcp' | 'extension' | 'internal'
+  if (!m[2] && writer !== 'mcp') return null
+  return { writer, name: m[2] ?? '' }
+}
+
 /** The label for taking over another writer's change, from the origin
  *  its event carried. */
 export function externalLabel(origin: string): ExternalLabel {
-  return /^(mcp|extension|internal):./.test(origin) ? (origin as ExternalLabel) : 'unknown'
+  return parseOrigin(origin)?.name ? (origin as ExternalLabel) : 'unknown'
+}
+
+/** Another writer's version of a Workbench, read after its change:
+ *  the payload it left (`theirs`), the etag that is on disk at, and the
+ *  label its change is recorded under. */
+export interface TheirVersion {
+  label: CommitLabel
+  theirs: WorkingPayload
+  etag: string
 }
 
 export type Commit =
@@ -102,8 +124,8 @@ export type Commit =
       slot: FlistWorkingSlot | null
     }
 
-/** What a commit did, for the listeners. `previous` is the payload the
- *  slot held before, null when there was no slot. */
+/** What a commit did. `previous` is the payload the slot held before,
+ *  null when there was no slot. */
 export interface CommitEvent {
   characterId: string
   kind: Commit['kind']
@@ -175,19 +197,4 @@ export function commitSlot(
       }
     }
   }
-}
-
-const listeners = new Set<(event: CommitEvent) => void>()
-
-/** Hear about every commit, after the store has taken it. Returns the
- *  function that stops listening. */
-export function onWorkbenchCommit(listener: (event: CommitEvent) => void): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
-}
-
-export function notifyCommit(event: CommitEvent): void {
-  for (const listener of listeners) listener(event)
 }

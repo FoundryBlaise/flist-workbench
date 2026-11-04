@@ -1,4 +1,4 @@
-// The field-by-field merge of two versions of a Workbench (#114): the
+// The field-by-field merge of two versions of a Workbench: the
 // window's (mine, with unsaved edits) and another writer's (theirs, a
 // model's tool call, say), both grown from the payload last saved
 // (base). The overlay cannot tell which side changed a field: it lists
@@ -26,7 +26,7 @@
 //
 // Pure: no store import.
 
-import { isDeepEqual, type WorkingPayload } from './flist'
+import { galleryRows, isDeepEqual, type WorkingPayload } from './flist'
 
 export type MergeSide = 'mine' | 'theirs'
 
@@ -40,24 +40,23 @@ export interface MergeResult {
 export const GALLERY_ORDER = 'images#order'
 export const CUSTOM_KINK_ORDER = 'custom_kinks#order'
 
+/** A field key's parts: the payload key it sits under, and the member's
+ *  id for a field inside a keyed container or the gallery
+ *  (`infotags.9` is `infotags` and `9`; `settings` has no id). */
+export function splitField(key: string): { top: string; id: string | null } {
+  const dot = key.indexOf('.')
+  return dot < 0 ? { top: key, id: null } : { top: key.slice(0, dot), id: key.slice(dot + 1) }
+}
+
 /** Containers whose entries are fields of their own. */
 const KEYED = new Set(['character', 'infotags', 'kinks', 'custom_kinks'])
 /** Marks a keyed container (or the gallery) as present on a side. */
 const PRESENT = Object.freeze({ present: true })
 
-type GalleryRow = { image_id: string; sort_order?: number } & Record<string, unknown>
 type Fields = Map<string, unknown>
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
-}
-
-function galleryOf(payload: WorkingPayload | null): GalleryRow[] {
-  const raw = payload?.images
-  if (!Array.isArray(raw)) return []
-  return raw.filter(
-    (r): r is GalleryRow => isPlainObject(r) && typeof r.image_id === 'string'
-  )
 }
 
 function customKinkOrderOf(payload: WorkingPayload | null): string[] {
@@ -82,7 +81,7 @@ function fieldsOf(payload: WorkingPayload | null): Fields {
     } else if (key === 'images' && Array.isArray(value)) {
       out.set(key, PRESENT)
       // A row's position is the order field's business, not the row's.
-      for (const row of galleryOf(payload)) {
+      for (const row of galleryRows(payload)) {
         const rest: Record<string, unknown> = { ...row }
         delete rest.sort_order
         out.set(`images.${row.image_id}`, rest)
@@ -138,7 +137,7 @@ export function mergeWorkbench(
   const sides = [base, mine, theirs] as const
   const [b, m, t] = sides.map(fieldsOf)
 
-  const galleries = sides.map(galleryOf)
+  const galleries = sides.map(galleryRows)
   const galleryIds = galleries.map((g) => g.map((r) => r.image_id)) as [
     string[],
     string[],
@@ -181,13 +180,12 @@ export function mergeWorkbench(
   const payload: WorkingPayload = {}
   for (const [key, value] of merged) {
     if (value === undefined || key === GALLERY_ORDER || key === CUSTOM_KINK_ORDER) continue
-    const dot = key.indexOf('.')
-    const top = dot < 0 ? key : key.slice(0, dot)
+    const { top, id } = splitField(key)
     if (top === 'images') {
-      if (dot < 0) payload.images = []
+      if (id === null) payload.images = []
       continue
     }
-    if (dot < 0) {
+    if (id === null) {
       if (value === PRESENT) {
         if (!isPlainObject(payload[key])) payload[key] = {}
       } else {
@@ -196,16 +194,16 @@ export function mergeWorkbench(
       continue
     }
     if (!isPlainObject(payload[top])) payload[top] = {}
-    ;(payload[top] as Record<string, unknown>)[key.slice(dot + 1)] = value
+    ;(payload[top] as Record<string, unknown>)[id] = value
   }
 
   // The gallery: its members are the images whose field kept them.
   if (Array.isArray(payload.images)) {
-    const members = new Set(
-      [...merged.keys()]
-        .filter((k) => k.startsWith('images.') && merged.get(k) !== undefined)
-        .map((k) => k.slice('images.'.length))
-    )
+    const members = new Set<string>()
+    for (const [k, v] of merged) {
+      const { top, id } = splitField(k)
+      if (top === 'images' && id !== null && v !== undefined) members.add(id)
+    }
     const ids = arrange(merged.get(GALLERY_ORDER) as string[], members, [
       galleryIds[2],
       galleryIds[1]
@@ -258,7 +256,7 @@ export function mergeWorkbench(
  *  the custom kinks' whole order for the order fields, undefined for a
  *  field the side does not have. */
 export function fieldValue(payload: WorkingPayload, key: string): unknown {
-  if (key === GALLERY_ORDER) return galleryOf(payload).map((r) => r.image_id)
+  if (key === GALLERY_ORDER) return galleryRows(payload).map((r) => r.image_id)
   if (key === CUSTOM_KINK_ORDER) return customKinkOrderOf(payload)
   const value = fieldsOf(payload).get(key)
   return value === PRESENT ? undefined : value

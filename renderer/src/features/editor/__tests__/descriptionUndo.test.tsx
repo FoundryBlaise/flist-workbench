@@ -1,4 +1,4 @@
-// The description editor on the Workbench undo stack (#111): typing in
+// The description editor on the Workbench undo stack: typing in
 // it is a burst per pause or blur on the character's stack, Ctrl+Z in
 // it goes to that stack, and the editor keeps no history of its own,
 // so changes from outside it (a reload, another field) cannot land in
@@ -221,6 +221,30 @@ describe('the editor keeps no history of its own', () => {
     pressInEditor('y')
     pressInEditor('y')
     expect(view().state.doc.toString()).toBe('Hello there')
+  })
+})
+
+describe('the cursor across tab switches', () => {
+  it('coming back to the Description tab puts the cursor where it was', async () => {
+    seed('Hello there')
+    renderEditor()
+    act(() => view().dispatch({ selection: { anchor: 5 } }))
+    act(() => store().setEditorActiveTab('kinks'))
+    act(() => store().setEditorActiveTab('description'))
+
+    expect(view().state.selection.main.head).toBe(5)
+  })
+
+  it('a text that got shorter meanwhile puts it at the end at most', async () => {
+    seed('Hello there')
+    renderEditor()
+    act(() => view().dispatch({ selection: { anchor: 11 } }))
+    act(() => store().setEditorActiveTab('diff'))
+    act(() => store().setEditorContent('Hi'))
+    act(() => store().setEditorActiveTab('description'))
+
+    expect(view().state.doc.toString()).toBe('Hi')
+    expect(view().state.selection.main.head).toBe(2)
   })
 })
 

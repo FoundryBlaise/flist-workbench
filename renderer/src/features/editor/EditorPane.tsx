@@ -4,11 +4,18 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { selectWorkingSlot, useStore } from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
 import { KinksPane } from '../flist/KinksPane'
 import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane } from '../flist/DiffPane'
 import { ImagesTab } from '../flist/ImagesTab'
+
+/** Where the cursor was in each editor (by its key below) when it was
+ *  last left, so coming back to the Description tab, which mounts a new
+ *  editor, puts it there again. Only the selection: the editor keeps no
+ *  history of its own. */
+const lastSelection = new Map<string, { anchor: number; head: number }>()
 
 function formatKindLabel(kind: string): string {
   switch (kind) {
@@ -306,7 +313,7 @@ function EditorActiveTabBody(props: {
         <div
           className="editor-cm"
           data-testid="editor-cm"
-          data-undo="workbench"
+          {...WORKBENCH_UNDO_MARK}
           onBlur={() => endTyping(flistActiveId)}
         >
           <CodeMirror
@@ -326,8 +333,22 @@ function EditorActiveTabBody(props: {
               indentOnInput: false
             }}
             onChange={(value) => props.setContent(value)}
+            onUpdate={(update) => {
+              if (update.selectionSet) {
+                const { anchor, head } = update.state.selection.main
+                lastSelection.set(cmKey, { anchor, head })
+              }
+            }}
             onCreateEditor={(view) => {
               props.viewRef.current = view
+              const at = lastSelection.get(cmKey)
+              if (at) {
+                const end = view.state.doc.length
+                view.dispatch({
+                  selection: { anchor: Math.min(at.anchor, end), head: Math.min(at.head, end) },
+                  scrollIntoView: true
+                })
+              }
             }}
           />
         </div>

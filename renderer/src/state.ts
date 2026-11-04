@@ -29,15 +29,16 @@ import {
   isDeepEqual,
   seedWorkingFromLive,
   type FlistWorkingSlot,
+  type GalleryRow,
   type WorkingPayload
 } from './state/flist'
 import {
   commitSlot,
   externalLabel,
-  notifyCommit,
   type Commit,
   type CommitEvent,
-  type CommitLabel
+  type CommitLabel,
+  type TheirVersion
 } from './state/commit'
 import {
   endTyping,
@@ -49,7 +50,8 @@ import {
   takeUndo,
   unhideWorkbench
 } from './state/undoStack'
-import { imagesToFind, putBackNote, renameGalleryRows } from './state/undoTrash'
+import { imagesToFind, putBackNote, renameGalleryRows, stepName } from './state/undoTrash'
+import type { UndoAction } from './lib/undoRedo'
 import { mergeWorkbench, type MergeSide } from './state/merge'
 
 export type {
@@ -326,16 +328,17 @@ type State = {
    *  changed differently: the window asks "Keep mine" / "Take theirs"
    *  for each of `fields` (merge field keys, state/merge.ts) before
    *  anything is committed. `theirs` is that version, on disk at
-   *  `etag`; `label` names the writer. Keyed by character id. */
+   *  `etag`; `label` names the writer; `answered` holds the answers
+   *  already given when a later edit raised new fields to ask about.
+   *  Keyed by character id. */
   flistMergeQuestion: Record<
     string,
-    {
-      label: CommitLabel
-      etag: string
-      theirs: WorkingPayload
-      fields: string[]
-      at: number
-    } | null
+    | (TheirVersion & {
+        fields: string[]
+        answered?: Record<string, MergeSide>
+        at: number
+      })
+    | null
   >
   /** The last thing the window did to a Workbench by itself or on
    *  Ctrl+Z / Ctrl+Y that the user should be told about: another
@@ -344,7 +347,7 @@ type State = {
    *  window; null when there is nothing to say. */
   flistWorkbenchNote: {
     characterId: string
-    action: 'updated' | 'undo' | 'redo'
+    action: 'updated' | UndoAction
     label: CommitLabel
     at: number
   } | null
@@ -622,7 +625,9 @@ type State = {
   ) => void
   /** Answer the merge question: for each field asked about, keep mine
    *  or take theirs (a field left out keeps mine). The merge is then one
-   *  commit, one undo entry, saved over the other writer's etag. */
+   *  commit, one undo entry, saved over the other writer's etag; unless
+   *  an edit since the question was asked changed another field they
+   *  changed too, which is then asked about first. */
   flistAnswerMerge: (characterId: string, choices: Record<string, MergeSide>) => void
   /** Tools → "Back up all characters". Walks the signed-in account
    *  roster, pulls each character (JSON + images + avatar), and
@@ -936,8 +941,8 @@ function _commit(
       flistWorking,
       ..._editorFollows(s, characterId, next, commit)
     }
-    done.covered = _showsReadOnlyView(s, characterId)
-    done.coveredAfter = _showsReadOnlyView({ ...s, ...patch }, characterId)
+    done.covered = _slotHoldsView(s, characterId)
+    done.coveredAfter = _slotHoldsView({ ...s, ...patch }, characterId)
     return patch
   })
   const event = done.event
@@ -964,13 +969,23 @@ function _commit(
       void get().flistFlushWorking(characterId)
     })
   }
-  notifyCommit(event)
 }
 
 /** True while the window shows a character's Live or a Backup being
  *  browsed in its Workbench slot: nothing may be written from there. */
 function _showsReadOnlyView(s: State, characterId: string): boolean {
   return !!s.flistViewingLive[characterId] || s.flistBrowseBackup?.characterId === characterId
+}
+
+/** True while a character's slot holds Live or a browsed Backup instead
+ *  of the Workbench, which the undo stack then keeps aside. A Backup
+ *  still loading for browse is not in the slot yet. */
+function _slotHoldsView(s: State, characterId: string): boolean {
+  const browse = s.flistBrowseBackup
+  return (
+    !!s.flistViewingLive[characterId] ||
+    (browse?.characterId === characterId && browse.status === 'ready')
+  )
 }
 
 /** One undo or redo step: the stack moves and hands back the payload to
@@ -981,7 +996,7 @@ function _undoStep(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  action: 'undo' | 'redo'
+  action: UndoAction
 ): CommitLabel | null {
   const take = action === 'undo' ? takeUndo : takeRedo
   const s = get()
@@ -999,7 +1014,7 @@ function _undoStep(
     () => ({ flistWorkbenchNote: { characterId, action, label: entry.label, at: Date.now() } })
   )
   if (toFind.length > 0) {
-    _putBackBeforeSave(get, set, characterId, toFind, action === 'undo' ? 'Undo' : 'Redo')
+    _putBackBeforeSave(get, set, characterId, toFind, action)
   }
   return entry.label
 }
@@ -1014,12 +1029,12 @@ function _putBackBeforeSave(
   set: SlotSet,
   characterId: string,
   imageIds: string[],
-  step: 'Undo' | 'Redo'
+  action: UndoAction
 ): void {
   const prior = _flushInflight.get(characterId)
   const link = (async () => {
     if (prior) await prior.catch(() => {})
-    await _putBackFromTrash(get, set, characterId, imageIds, step)
+    await _putBackFromTrash(get, set, characterId, imageIds, action)
   })()
   _flushInflight.set(characterId, link)
   const done = () => {
@@ -1033,7 +1048,7 @@ async function _putBackFromTrash(
   set: SlotSet,
   characterId: string,
   imageIds: string[],
-  step: 'Undo' | 'Redo'
+  action: UndoAction
 ): Promise<void> {
   const note = (text: string | null) => {
     if (!text) return
@@ -1095,10 +1110,12 @@ async function _putBackFromTrash(
         undoStep: true
       })
     }
-    note(putBackNote(step, { putBack, leftInTrash, missing: gone }))
+    note(putBackNote(action, { putBack, leftInTrash, missing: gone }))
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e)
-    note(`${step} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`)
+    note(
+      `${stepName(action)} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`
+    )
   }
 }
 
@@ -1157,7 +1174,7 @@ async function _takeExternalChange(
     // entry now, stepping from the Workbench the view hid. A read that
     // brings nothing new (the event of a write an earlier read already
     // took in) is not a change.
-    if (hidden && JSON.stringify(hidden) !== JSON.stringify(payload)) {
+    if (hidden && !isDeepEqual(hidden, payload)) {
       recordChange(characterId, label, hidden)
       hideWorkbench(characterId, { ...payload })
     }
@@ -1171,7 +1188,7 @@ async function _takeExternalChange(
   }
   if (slot.unsavedDirty) {
     // Typing while the read was out is in the slot already: it is mine.
-    _mergeExternal(get, set, characterId, label, payload, res.etag, settled, cleared)
+    _mergeExternal(get, set, characterId, { label, theirs: payload, etag: res.etag }, settled, cleared)
     return
   }
   _commit(
@@ -1184,7 +1201,7 @@ async function _takeExternalChange(
 }
 
 /** Merge the slot's unsaved edits with another writer's version
- *  (`theirs`, on disk at `etag`), field by field against the payload
+ *  (`their.theirs`, on disk at `their.etag`), field by field against the payload
  *  last saved (state/merge.ts). Settled at once, the merge is committed:
  *  one undo entry, saved over the other writer's etag. Fields both sides
  *  changed are asked about first (flistMergeQuestion), and the answer
@@ -1194,26 +1211,24 @@ function _mergeExternal(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  label: CommitLabel,
-  theirs: WorkingPayload,
-  etag: string,
+  their: TheirVersion,
   merged: (s: State) => Partial<State>,
   asked: (s: State) => Partial<State>
 ): void {
   const slot = get().flistWorking[characterId]
   if (!slot) return
-  const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, theirs)
+  const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, their.theirs)
   if (conflicts.length > 0) {
     set((s) => ({
       ...asked(s),
       flistMergeQuestion: {
         ...s.flistMergeQuestion,
-        [characterId]: { label, etag, theirs, fields: conflicts, at: Date.now() }
+        [characterId]: { ...their, fields: conflicts, at: Date.now() }
       }
     }))
     return
   }
-  _commitMerge(get, set, characterId, label, payload, theirs, etag, merged)
+  _commitMerge(get, set, characterId, payload, their, merged)
 }
 
 /** A merge's one commit. A merge that comes out as their version (every
@@ -1223,10 +1238,8 @@ function _commitMerge(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  label: CommitLabel,
   payload: WorkingPayload,
-  theirs: WorkingPayload,
-  etag: string,
+  { label, theirs, etag }: TheirVersion,
   also: (s: State) => Partial<State>
 ): void {
   const commit: Commit = isDeepEqual(payload, theirs)
@@ -1237,22 +1250,9 @@ function _commitMerge(
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
 function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<State>): void {
-  const events: CommitEvent[] = []
-  set((s) => {
-    for (const [characterId, slot] of Object.entries(s.flistWorking)) {
-      events.push({
-        characterId,
-        kind: 'view',
-        label: null,
-        previous: slot.payload,
-        next: null
-      })
-    }
-    return { ...also(s), flistWorking: {} }
-  })
+  set((s) => ({ ...also(s), flistWorking: {} }))
   // Another account may sign in next: nothing of this one's to undo.
   resetUndoStacks()
-  for (const event of events) notifyCommit(event)
 }
 
 function _cancelFlush(characterId: string): void {
@@ -1392,6 +1392,17 @@ async function _flushWorkingNow(
     set((s) => {
       const existing = s.flistWorking[characterId]
       if (!existing) return {}
+      const info = {
+        // The Workbench row's "last changed" follows the save.
+        flistWorkbenchInfo: {
+          ...s.flistWorkbenchInfo,
+          [characterId]: { updatedAt: Math.floor(Date.now() / 1000) }
+        }
+      }
+      // Another writer's version was taken in while this save was out
+      // (a merge or a reload): the slot sits on that newer version, which
+      // already holds this save, and must not go back to this etag.
+      if (existing.etag !== slot.etag) return info
       // If the user typed something newer while we were saving, the
       // newer slot's `payload` won't match `sentPayload` — keep
       // unsavedDirty=true so the next flush picks up the delta.
@@ -1406,14 +1417,7 @@ async function _flushWorkingNow(
         materialised: true,
         saved: sentPayload
       }
-      return {
-        flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
-        // The Workbench row's "last changed" follows the save.
-        flistWorkbenchInfo: {
-          ...s.flistWorkbenchInfo,
-          [characterId]: { updatedAt: Math.floor(Date.now() / 1000) }
-        }
-      }
+      return { ...info, flistWorking: { ...s.flistWorking, [characterId]: nextSlot } }
     })
     // If a newer payload is waiting, schedule a follow-up flush so
     // the user's most recent edits land without needing another
@@ -1526,7 +1530,6 @@ async function _saveTypedEdits(get: () => State, characterId: string): Promise<b
 
 /** The slot for a Workbench payload the sidecar answered with, and the
  *  etag the next save goes over. */
-type GalleryRow = { image_id: string; description: string; sort_order: number }
 
 /** The gallery rows of a Workbench slot's payload; none without one. */
 function galleryOf(slot: FlistWorkingSlot | undefined): GalleryRow[] {
@@ -1551,18 +1554,34 @@ function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot
   }
 }
 
-/** Show the Workbench the sidecar just wrote, replacing the slot
- *  whatever it held: Live, or the Workbench before a Restore. */
+/** Show the Workbench the sidecar just wrote (a Restore, a reset to
+ *  Live), replacing the slot whatever it held: the Workbench before, or
+ *  the Live view or browsed Backup it was made from, which ends. */
 function _showWorkbench(
   get: () => State,
   set: (fn: (s: State) => Partial<State>) => void,
   characterId: string,
-  payload: WorkingPayload,
-  etag: string
+  commit: Commit & { kind: 'written' }
 ): void {
-  _commit(get, set, characterId, { kind: 'written', label: 'restore', payload, etag }, (s) => ({
-    flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
-  }))
+  _commit(get, set, characterId, commit, (s) => {
+    const browse = s.flistBrowseBackup
+    if (browse?.characterId !== characterId) {
+      return { flistViewingLive: { ...s.flistViewingLive, [characterId]: false } }
+    }
+    // A browsed Backup ends too: Live goes back to what the browse
+    // stood in for.
+    return {
+      flistViewingLive: { ...s.flistViewingLive, [characterId]: false },
+      flistBrowseBackup: null,
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: {
+          ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
+          live: browse.previousLive
+        }
+      }
+    }
+  })
   if (get().flistActiveCharacterId === characterId) {
     set((s) => _workbenchInEditor(s, characterId))
   }
@@ -3117,7 +3136,6 @@ export const useStore = create<State>((set, get) => ({
     const slot = get().flistWorking[characterId]
     if (!slot) return
     const live = get().flistArchive[characterId]?.live ?? null
-    type GalleryRow = { image_id: string; description: string; sort_order: number }
     const readGallery = (payload: unknown): GalleryRow[] => {
       if (!payload || typeof payload !== 'object') return []
       const raw = (payload as { images?: unknown }).images
@@ -3289,9 +3307,9 @@ export const useStore = create<State>((set, get) => ({
         materialised: false
       }
     }
-    // The commit puts the fresh description into the editor; the
-    // replaced Workbench becomes the undo entry.
-    _commit(get, set, characterId, fresh)
+    // The fresh Workbench is shown, even from Live or a browsed Backup;
+    // the replaced one becomes the undo entry.
+    _showWorkbench(get, set, characterId, fresh)
     // The Backup the sidecar just kept belongs in the list.
     if (kept) void _refreshBackupList(characterId, set)
   },
@@ -3326,7 +3344,12 @@ export const useStore = create<State>((set, get) => ({
       }))
       // The restored Workbench goes into the editor even when the
       // Workbench is already shown, and switches the view from Live.
-      _showWorkbench(get, set, characterId, res.payload as WorkingPayload, res.etag)
+      _showWorkbench(get, set, characterId, {
+        kind: 'written',
+        label: 'restore',
+        payload: res.payload as WorkingPayload,
+        etag: res.etag
+      })
       get().flistDismissRestoreRefusal(characterId)
       // The Backup kept of the replaced Workbench belongs in the list.
       if (res.backed_up_first) await get().flistLoadArchive(characterId)
@@ -3367,17 +3390,20 @@ export const useStore = create<State>((set, get) => ({
     const slot = get().flistWorking[characterId]
     if (!question || !slot) return
     // Mine as it is now: the merge is made again with the answers.
-    const { payload } = mergeWorkbench(slot.saved, slot.payload, question.theirs, choices)
-    _commitMerge(
-      get,
-      set,
-      characterId,
-      question.label,
-      payload,
-      question.theirs,
-      question.etag,
-      (s) => ({ flistMergeQuestion: { ...s.flistMergeQuestion, [characterId]: null } })
-    )
+    const answered = { ...question.answered, ...choices }
+    const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, question.theirs, answered)
+    if (conflicts.length > 0) {
+      set((s) => ({
+        flistMergeQuestion: {
+          ...s.flistMergeQuestion,
+          [characterId]: { ...question, fields: conflicts, answered, at: Date.now() }
+        }
+      }))
+      return
+    }
+    _commitMerge(get, set, characterId, payload, question, (s) => ({
+      flistMergeQuestion: { ...s.flistMergeQuestion, [characterId]: null }
+    }))
   },
 
   async flistShowLive(characterId) {

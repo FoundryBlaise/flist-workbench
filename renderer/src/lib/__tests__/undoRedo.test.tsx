@@ -1,4 +1,4 @@
-// Routing of Ctrl+Z / Ctrl+Y and the menus' Undo / Redo (#110): outside
+// Routing of Ctrl+Z / Ctrl+Y and the menus' Undo / Redo: outside
 // a text control they step the active character's Workbench back and
 // forth; inside one they are left to it. Driven through the window's
 // keydown handler and the dispatcher the menus call, against the real
@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
 import { AppContextMenu } from '../../components/AppContextMenu'
 import { useStore } from '../../state'
 import { resetUndoStacks } from '../../state/undoStack'
@@ -116,7 +117,7 @@ describe('the Workbench’s own text fields put their typing on its stack', () =
     ['the description editor', '<div data-undo="workbench"><div class="cm-editor"><div id="t" contenteditable="true"></div></div></div>'],
     ['the preview', '<div id="t" data-undo="workbench" contenteditable="true"></div>'],
     ['a caption', '<textarea id="t" data-undo="workbench"></textarea>'],
-    ['an infotag field with nothing typed since its last commit', '<input type="text" id="t" data-undo="workbench">']
+    ['an infotag field', '<input type="text" id="t" data-undo="workbench">']
   ])('Ctrl+Z and Ctrl+Y in %s step the Workbench', (_name, html) => {
     twoChanges()
     document.body.innerHTML = html
@@ -124,14 +125,6 @@ describe('the Workbench’s own text fields put their typing on its stack', () =
     expect(press('z', {}, t).defaultPrevented).toBe(true)
     expect(kinks()).toEqual({ '12': 'fave' })
     press('y', {}, t)
-    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
-  })
-
-  it('an infotag field with typing it has not committed yet keeps Ctrl+Z to itself', () => {
-    twoChanges()
-    document.body.innerHTML = '<input type="text" id="t" data-undo="workbench" data-undo-pending="true">'
-    const e = press('z', {}, document.getElementById('t')!)
-    expect(e.defaultPrevented).toBe(false)
     expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
   })
 
@@ -189,6 +182,57 @@ describe('the menus go through the same routing', () => {
   })
 })
 
+describe('the right-click menu on a Workbench text field offers what the Workbench can undo', () => {
+  const menuItem = (name: string) => screen.getByRole('menuitem', { name })
+
+  it('in the description editor', () => {
+    render(<AppContextMenu />)
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('data-undo', 'workbench')
+    document.body.appendChild(wrapper)
+    const view = new EditorView({ parent: wrapper, doc: 'text' })
+    useStore.setState({
+      flistWorking: { [CID]: workingSlot(workbenchPayload({ kinks: { '12': 'yes' } })) },
+      flistActiveCharacterId: CID
+    })
+
+    fireEvent.contextMenu(view.contentDOM)
+    expect(menuItem('Undo')).toHaveProperty('disabled', true)
+    expect(menuItem('Redo')).toHaveProperty('disabled', true)
+
+    useStore.getState().flistStandardKinkSet(CID, '12', 'fave')
+    fireEvent.contextMenu(view.contentDOM)
+    expect(menuItem('Undo')).toHaveProperty('disabled', false)
+    expect(menuItem('Redo')).toHaveProperty('disabled', true)
+    fireEvent.click(menuItem('Undo'))
+    expect(kinks()).toEqual({ '12': 'yes' })
+    fireEvent.contextMenu(view.contentDOM)
+    expect(menuItem('Undo')).toHaveProperty('disabled', true)
+    expect(menuItem('Redo')).toHaveProperty('disabled', false)
+    view.destroy()
+    cleanup()
+  })
+
+  it('in a caption', () => {
+    render(<AppContextMenu />)
+    const caption = document.createElement('textarea')
+    caption.setAttribute('data-undo', 'workbench')
+    document.body.appendChild(caption)
+    useStore.setState({
+      flistWorking: { [CID]: workingSlot(workbenchPayload({ kinks: { '12': 'yes' } })) },
+      flistActiveCharacterId: CID
+    })
+
+    fireEvent.contextMenu(caption)
+    expect(menuItem('Undo')).toHaveProperty('disabled', true)
+    useStore.getState().flistStandardKinkSet(CID, '12', 'fave')
+    fireEvent.contextMenu(caption)
+    expect(menuItem('Undo')).toHaveProperty('disabled', false)
+    expect(menuItem('Redo')).toHaveProperty('disabled', true)
+    cleanup()
+  })
+})
+
 describe('where there is no Workbench to undo', () => {
   it('the Logs, a Foreign profile and no character leave it alone', () => {
     twoChanges()
@@ -201,6 +245,23 @@ describe('where there is no Workbench to undo', () => {
     useStore.setState({ foreignActive: false, flistActiveCharacterId: null })
     press('z')
     expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+  })
+
+  it('a modal dialog is open: the keys and the Edit menu leave the Workbench behind it alone', () => {
+    twoChanges()
+    document.body.innerHTML =
+      '<div role="dialog" aria-modal="true"><button id="b">Keep mine</button></div>'
+    const button = document.getElementById('b')!
+    button.focus()
+    expect(press('z', {}, button).defaultPrevented).toBe(false)
+    press('y', {}, button)
+    runUndoRedo('undo')
+    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+    expect(workbenchUndoState()).toBeNull()
+
+    document.body.innerHTML = ''
+    press('z')
+    expect(kinks()).toEqual({ '12': 'fave' })
   })
 
   it('the right-click menu offers no Undo while the window shows Live or a Backup', () => {

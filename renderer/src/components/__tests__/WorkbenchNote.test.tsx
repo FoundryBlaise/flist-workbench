@@ -1,5 +1,5 @@
 // The short note the window shows after it took another writer's change
-// in by itself, or after Ctrl+Z / Ctrl+Y stepped over one (#113). It
+// in by itself, or after Ctrl+Z / Ctrl+Y stepped over one. It
 // names the writer, since that is the part the user cannot see.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'

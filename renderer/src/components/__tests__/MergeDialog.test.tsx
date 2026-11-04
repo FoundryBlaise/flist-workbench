@@ -1,5 +1,5 @@
 // The question the window asks when a model and the user changed the
-// same fields of a Workbench (#114): exactly those fields, by the names
+// same fields of a Workbench: exactly those fields, by the names
 // the user knows them by, "Keep mine" / "Take theirs" each, and the
 // merge applied once all are answered. Driven from a real model event
 // through the store against the fake sidecar.

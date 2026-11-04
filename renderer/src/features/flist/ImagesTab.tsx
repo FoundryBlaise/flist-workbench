@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { api, type FlistImageReferences } from '../../lib/api'
+import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { selectWorkingSlot, useStore } from '../../state'
 import {
   EMPTY_SELECTION,
@@ -624,7 +625,7 @@ export function ImagesTab({
                     value={entry.description}
                     placeholder="(no description)"
                     disabled={readOnly}
-                    data-undo="workbench"
+                    {...WORKBENCH_UNDO_MARK}
                     onChange={(e) => setCaption(entry.image_id, e.target.value)}
                     onBlur={() => endTyping(characterId)}
                     rows={2}

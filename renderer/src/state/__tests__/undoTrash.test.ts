@@ -1,5 +1,5 @@
-// Undo never quietly brings back an image whose file went to the Trash
-// (#115). When an undo or redo puts back a gallery that names a file
+// Undo never quietly brings back an image whose file went to the Trash.
+// When an undo or redo puts back a gallery that names a file
 // no longer in the pool, the window puts that file back from the Trash
 // before the save, and says so; a file in neither place leaves the undo
 // applied and the note says it is missing. Driven through the store's

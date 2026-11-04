@@ -1,4 +1,4 @@
-// Ctrl+Z / Ctrl+Y on every tab (#110): one undo stack per character of
+// Ctrl+Z / Ctrl+Y on every tab: one undo stack per character of
 // Workbench payloads. These tests drive the store through its actions,
 // the way the window does, and watch the payload and the saves that
 // reach the fake sidecar.
@@ -505,6 +505,59 @@ describe('a Restore and a reset to Live are undo entries', () => {
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     const [undoSave] = fake.requestsTo(SAVE)
     expect(descOf(undoSave.body)).toBe('mine')
+    expect(undoSave.headers['If-Match']).toBe('after-restore')
+  })
+
+  it('a reset to Live made while Live is shown shows the Workbench it produced, and is undone to the Workbench', async () => {
+    seed(CID, { character: { description: 'mine' }, _overlay: ['character.description'] })
+    useStore.setState({
+      flistArchive: { [CID]: { live: { character: { description: 'live' } }, pullStatus: 'idle' } }
+    })
+    sidecarKeepsBackups()
+    sidecarResets('live', 'after-reset')
+    await useStore.getState().flistShowLive(CID)
+    await useStore.getState().flistResetWorkingToLive(CID)
+
+    expect(useStore.getState().flistViewingLive[CID]).toBe(false)
+    expect(useStore.getState().editorReadOnly).toBe(false)
+    expect(slotOf().etag).toBe('after-reset')
+
+    fake.on(SAVE, json({ etag: 'after-undo' }))
+    expect(useStore.getState().flistUndo(CID)).toBe('reset-to-live')
+    expect(descOf(slotOf().payload)).toBe('mine')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [undoSave] = fake.requestsTo(SAVE)
+    expect(descOf(undoSave.body)).toBe('mine')
+    expect(undoSave.headers['If-Match']).toBe('after-reset')
+  })
+
+  it('a Restore while a Backup is browsed ends the browse, shows the restored Workbench, and is undone to the Workbench', async () => {
+    seed(CID, { character: { description: 'mine' }, _overlay: ['character.description'] })
+    const live = { character: { description: 'live' } }
+    useStore.setState({ flistArchive: { [CID]: { live, pullStatus: 'idle' } } })
+    sidecarKeepsBackups()
+    sidecarRestores('parked', 'after-restore')
+    fake.on(
+      `GET /flist/character/${CID}/zip-backups/${PARKED}/payload`,
+      json({ payload: { character: { description: 'parked' } }, meta: { kind: 'manual_single' } })
+    )
+    await useStore.getState().flistOpenBrowseBackup(CID, PARKED)
+    expect(useStore.getState().flistBrowseBackup?.status).toBe('ready')
+
+    await useStore.getState().flistLoadBackupIntoWorkbench(CID, PARKED)
+
+    expect(useStore.getState().flistBrowseBackup).toBeNull()
+    expect(useStore.getState().flistViewingLive[CID]).toBe(false)
+    expect(useStore.getState().editorReadOnly).toBe(false)
+    expect(useStore.getState().flistArchive[CID]?.live).toEqual(live)
+    expect(descOf(slotOf().payload)).toBe('parked')
+    expect(useStore.getState().editorContent).toBe('parked')
+
+    fake.on(SAVE, json({ etag: 'after-undo' }))
+    expect(useStore.getState().flistUndo(CID)).toBe('restore')
+    expect(descOf(slotOf().payload)).toBe('mine')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [undoSave] = fake.requestsTo(SAVE)
     expect(undoSave.headers['If-Match']).toBe('after-restore')
   })
 })

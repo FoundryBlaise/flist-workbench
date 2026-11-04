@@ -1,7 +1,6 @@
-import { useEffect } from 'react'
+import { useCallback } from 'react'
 import { useStore } from '../state'
-
-const NOTE_MS = 8000
+import { FadingNote, useFadeAfter } from './FadingNote'
 
 /** What an undo or redo did about a gallery image whose file was not in
  *  the pool: put back from the Trash, or missing. An undo never brings
@@ -11,16 +10,14 @@ export function UndoNote() {
   const characterId = useStore((s) => s.flistActiveCharacterId)
   const note = useStore((s) => (characterId ? s.flistUndoNotes[characterId] : undefined))
   const dismiss = useStore((s) => s.flistDismissUndoNote)
-
-  useEffect(() => {
-    if (!characterId || !note) return
-    const id = window.setTimeout(() => dismiss(characterId), NOTE_MS)
-    return () => window.clearTimeout(id)
-  }, [characterId, note, dismiss])
+  const fade = useCallback(() => {
+    if (characterId) dismiss(characterId)
+  }, [characterId, dismiss])
+  useFadeAfter(characterId ? note : null, fade)
 
   if (!characterId || !note) return null
   return (
-    <div className="workbench-note undo-note" role="status" data-testid="undo-note">
+    <FadingNote className="undo-note" testId="undo-note">
       <span>{note.text}</span>
       <button
         type="button"
@@ -31,6 +28,6 @@ export function UndoNote() {
       >
         ✕
       </button>
-    </div>
+    </FadingNote>
   )
 }

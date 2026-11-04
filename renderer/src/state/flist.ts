@@ -23,6 +23,20 @@ export type WorkingPayload = Record<string, unknown> & {
 
 export type FlistSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
+/** One image on a Workbench's gallery, as its payload holds it. */
+export type GalleryRow = { image_id: string; description: string; sort_order: number }
+
+/** A payload's gallery rows: those that name an image; none when it has
+ *  no gallery. */
+export function galleryRows(payload: WorkingPayload | null | undefined): GalleryRow[] {
+  const raw = payload?.images
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (r): r is GalleryRow =>
+      !!r && typeof r === 'object' && typeof (r as { image_id?: unknown }).image_id === 'string'
+  )
+}
+
 export interface FlistWorkingSlot {
   payload: WorkingPayload
   /** Dotted paths the user has authored on this working copy. */

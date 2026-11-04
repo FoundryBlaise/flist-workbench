@@ -1,4 +1,4 @@
-// A model's change while the window holds unsaved edits (#114): the
+// A model's change while the window holds unsaved edits: the
 // store merges the two field by field against the payload last saved.
 // Changes to different fields both stay, as one undo entry and one save
 // over the model's etag; a field both changed is asked about. A save
@@ -205,6 +205,26 @@ describe('the model and I changed the same field', () => {
     expect(bodyOf(save.body).infotags?.['3']).toBe('Drow')
     expect(bodyOf(save.body).kinks?.['10']).toBe('fave')
   })
+
+  it('a field I changed after the question was asked, which they changed too, is asked about before anything is applied', async () => {
+    await bothChangedTheField()
+    // Typed behind the dialog: their kink 11 is now mine to decide too.
+    store().flistSetWorkingField(CID, 'kinks.11', 'yes')
+
+    store().flistAnswerMerge(CID, { 'infotags.3': 'mine' })
+
+    expect(store().flistMergeQuestion[CID]?.fields).toEqual(['kinks.11'])
+    expect(bodyOf(slotOf().payload).kinks?.['11']).toBe('yes')
+    expect(slotOf().etag).toBe('seed-etag')
+
+    store().flistAnswerMerge(CID, { 'kinks.11': 'theirs' })
+
+    expect(store().flistMergeQuestion[CID]).toBeFalsy()
+    const merged = bodyOf(slotOf().payload)
+    expect(merged.infotags?.['3']).toBe('Half-elf')
+    expect(merged.kinks).toEqual({ '10': 'fave', '11': 'maybe' })
+    expect(slotOf().etag).toBe('theirs')
+  })
 })
 
 describe('the description is one field', () => {
@@ -329,6 +349,39 @@ describe('timing', () => {
     expect(slotOf().unsavedDirty).toBe(false)
     expect(slotOf().saveError).toBeNull()
     expect(slotOf().etag).toBe('merged')
+  })
+
+  it('my save answered after the model wrote over it leaves the slot on the model version, and undo of the model sticks', async () => {
+    seed()
+    fake.hold(SAVE)
+    store().flistSetWorkingField(CID, 'infotags.3', 'Half-elf')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [mine] = fake.pending(SAVE)
+
+    // My save reached the disk (E1); the model wrote over it (E2), and
+    // its event arrives before my save's answer.
+    fake.on(READ, theirs((p) => {
+      p.infotags!['3'] = 'Half-elf'
+      p.character!.custom_title = 'renamed by the model'
+      p._overlay = ['infotags.3', 'character.custom_title']
+    }))
+    await dispatch()
+    expect(slotOf()).toMatchObject({ etag: 'theirs', unsavedDirty: false })
+    mine.resolve(json({ etag: 'mine' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(slotOf().etag).toBe('theirs')
+    expect(bodyOf(slotOf().saved).character?.custom_title).toBe('renamed by the model')
+
+    expect(store().flistUndo(CID)).toBe('mcp:set_description')
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
+    const [undo] = fake.pending(SAVE)
+    expect(undo.request.headers['If-Match']).toBe('theirs')
+    undo.resolve(json({ etag: 'undone' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(slotOf()).toMatchObject({ etag: 'undone', unsavedDirty: false })
+    expect(bodyOf(slotOf().payload).character?.custom_title).toBe('the wanderer')
+    expect(bodyOf(slotOf().payload).infotags?.['3']).toBe('Half-elf')
   })
 })
 

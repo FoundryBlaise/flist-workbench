@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
-import { runUndoRedo, workbenchUndoState } from '../lib/undoRedo'
+import { runUndoRedo, undoStateAt, workbenchUndoState } from '../lib/undoRedo'
 import { findEnclosingTag } from '../lib/bbcode/findEnclosingTag'
 import { applyAction, TOOLBAR_ACTIONS, type ToolbarAction } from '../features/editor/Toolbar'
 
@@ -353,10 +353,11 @@ function buildEditorItems(
   if (!view) return []
   const isEditable = view.state.facet(EditorView.editable)
   const hasSelection = !view.state.selection.main.empty
+  const undoable = undoStateAt(editorEl)
   const items: Item[] = [
     {
       label: 'Undo',
-      enabled: isEditable,
+      enabled: undoable.undo,
       onClick: () => {
         runUndoRedo('undo', editorEl)
         view.focus()
@@ -364,7 +365,7 @@ function buildEditorItems(
     },
     {
       label: 'Redo',
-      enabled: isEditable,
+      enabled: undoable.redo,
       onClick: () => {
         runUndoRedo('redo', editorEl)
         view.focus()
@@ -492,10 +493,11 @@ function buildInputItems(input: HTMLElement): Item[] {
   const focusFirst = () => {
     if (document.activeElement !== input) input.focus()
   }
+  const undoable = undoStateAt(input)
   return [
     {
       label: 'Undo',
-      enabled: !readonly,
+      enabled: !readonly && undoable.undo,
       onClick: () => {
         focusFirst()
         runUndoRedo('undo', input)
@@ -503,7 +505,7 @@ function buildInputItems(input: HTMLElement): Item[] {
     },
     {
       label: 'Redo',
-      enabled: !readonly,
+      enabled: !readonly && undoable.redo,
       onClick: () => {
         focusFirst()
         runUndoRedo('redo', input)

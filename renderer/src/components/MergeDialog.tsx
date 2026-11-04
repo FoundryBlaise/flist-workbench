@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../state'
-import { CUSTOM_KINK_ORDER, GALLERY_ORDER, fieldValue, type MergeSide } from '../state/merge'
+import {
+  CUSTOM_KINK_ORDER,
+  GALLERY_ORDER,
+  fieldValue,
+  splitField,
+  type MergeSide
+} from '../state/merge'
 import type { WorkingPayload } from '../state/flist'
 import {
   resolveInfotagDescriptors,
@@ -66,7 +72,7 @@ function MergeQuestion({
           <ul className="merge-fields">
             {question.fields.map((field) => (
               <li key={field} className="merge-field" data-testid="merge-field" data-field={field}>
-                <div className="merge-field-name">{names(field, mine, question.theirs)}</div>
+                <div className="merge-field-name">{names.field(field, mine, question.theirs)}</div>
                 <MergeSideRow
                   side="mine"
                   label="Keep mine"
@@ -124,13 +130,16 @@ function MergeSideRow(props: {
   )
 }
 
-type Namer = ((field: string, mine: WorkingPayload, theirs: WorkingPayload) => string) & {
+interface FieldNames {
+  /** The field's name, as the user knows it. */
+  field: (field: string, mine: WorkingPayload, theirs: WorkingPayload) => string
+  /** A list field's value by its item's label. */
   listItem: (field: string, value: string) => string
 }
 
 /** User-facing names of merge fields (state/merge.ts), with the mapping
  *  list for profile fields and kinks when the window has it. */
-function fieldNamer(mapping: Record<string, unknown> | null): Namer {
+function fieldNamer(mapping: Record<string, unknown> | null): FieldNames {
   const resolver: ResolvedInfotagModel | null = mapping ? resolveInfotagDescriptors(mapping) : null
   const kinkNames = new Map<string, string>()
   if (Array.isArray(mapping?.kinks)) {
@@ -139,12 +148,11 @@ function fieldNamer(mapping: Record<string, unknown> | null): Namer {
       if (e && e.id != null && typeof e.name === 'string') kinkNames.set(String(e.id), e.name)
     }
   }
-  const namer = ((field: string, mine: WorkingPayload, theirs: WorkingPayload): string => {
+  const nameOf = (field: string, mine: WorkingPayload, theirs: WorkingPayload): string => {
     if (field === GALLERY_ORDER) return 'Order of the gallery'
     if (field === CUSTOM_KINK_ORDER) return 'Order of the custom kinks'
-    const dot = field.indexOf('.')
-    const top = dot < 0 ? field : field.slice(0, dot)
-    const id = field.slice(dot + 1)
+    const { top, id: member } = splitField(field)
+    const id = member ?? field
     switch (top) {
       case 'character':
         if (id === 'description') return 'Description'
@@ -170,23 +178,22 @@ function fieldNamer(mapping: Record<string, unknown> | null): Namer {
       default:
         return field
     }
-  }) as Namer
-  namer.listItem = (field, value) => {
-    if (!field.startsWith('infotags.')) return value
-    const item = resolver?.byId
-      .get(field.slice('infotags.'.length))
-      ?.listItems?.find((i) => i.value === value)
+  }
+  const listItem = (field: string, value: string): string => {
+    const { top, id } = splitField(field)
+    if (top !== 'infotags' || id === null) return value
+    const item = resolver?.byId.get(id)?.listItems?.find((i) => i.value === value)
     return item?.label ?? value
   }
-  return namer
+  return { field: nameOf, listItem }
 }
 
 const PREVIEW_CHARS = 160
 
 /** One side's value, short enough for a row. */
-function preview(field: string, value: unknown, names: Namer): string {
+function preview(field: string, value: unknown, names: FieldNames): string {
   if (value === undefined || value === null) {
-    return field.startsWith('images.') ? 'Not on the profile' : 'Not set'
+    return splitField(field).top === 'images' ? 'Not on the profile' : 'Not set'
   }
   if (typeof value === 'string') {
     if (value === '') return 'Empty'
@@ -196,7 +203,7 @@ function preview(field: string, value: unknown, names: Namer): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (Array.isArray(value)) return value.join(', ')
   const v = value as { name?: unknown; description?: unknown; choice?: unknown; _deleted?: unknown }
-  if (field.startsWith('images.')) {
+  if (splitField(field).top === 'images') {
     return typeof v.description === 'string' && v.description
       ? `On the profile, captioned “${v.description}”`
       : 'On the profile, no caption'
