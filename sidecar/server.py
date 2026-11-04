@@ -20,7 +20,7 @@ import flist_api
 import model_weights
 import workbench_mcp
 import workbench_migration
-from refusals import INTERNAL_ERROR, Refusal
+from refusals import INTERNAL_ERROR, REFUSAL_RESPONSES, Refusal
 from routers import (
     aliases,
     flist_session,
@@ -273,7 +273,8 @@ for _area in (
     aliases,
     settings,
 ):
-    app.include_router(_area.router)
+    # Every route's non-2xx answer is a RefusalBody, in the schema too.
+    app.include_router(_area.router, responses=REFUSAL_RESPONSES)
 
 
 # Entry point: the packaged app spawns sidecar.exe (this script frozen),

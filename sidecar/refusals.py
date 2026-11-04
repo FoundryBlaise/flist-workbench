@@ -20,12 +20,114 @@ handler `server` registered for it.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
+
+from pydantic import BaseModel
 
 #: The `code` of a failure nothing turned into a refusal: the REST
 #: answer's 500, a job that stopped on something nothing expected, a
 #: stream's unexpected `error` event, and the MCP tool reporting it.
 INTERNAL_ERROR = "internal_error"
+
+
+class RefusalCode(StrEnum):
+    """Every `code` a REST refusal can carry. The OpenAPI schema lists
+    them, so the window's `RefusalCode` is a generated union and a
+    switch on a code the sidecar never answers fails the type-check.
+
+    A class below names its code where it is defined; this list repeats
+    it for the schema. `tests/test_openapi_schema.py` fails when a
+    `Refusal` subclass carries a code missing here (its `code`, or the
+    keys of `STATUS_BY_CODE` / `CODES` for classes coded per instance).
+    """
+
+    # Raised without a Refusal class: the local-access guard
+    # (services.local_access), the framework (a path no route serves, a
+    # method a route does not take) and server.py's handlers.
+    UNAUTHORIZED = "unauthorized"
+    FORBIDDEN_ORIGIN = "forbidden_origin"
+    FORBIDDEN_HOST = "forbidden_host"
+    HTTP_404 = "http_404"
+    HTTP_405 = "http_405"
+    INTERNAL_ERROR = INTERNAL_ERROR
+    INVALID_REQUEST = "invalid_request"
+    # Refusal and its subclasses, here and in archive_errors, logs,
+    # services.foreign, services.retrieval.
+    REFUSED = "refused"
+    INVALID_FILE_NAME = "invalid_file_name"
+    LOG_NAME_REFUSED = "log_name_refused"
+    LOG_CHARACTER_NOT_FOUND = "log_character_not_found"
+    PARTNER_NOT_FOUND = "partner_not_found"
+    LOG_DIR_UNAVAILABLE = "log_dir_unavailable"
+    LOG_NOT_FOUND = "log_not_found"
+    BACKUP_NOT_UPLOADABLE = "backup_not_uploadable"
+    BACKUP_TOO_OLD = "backup_too_old"
+    BACKUP_HOLDS_NO_PROFILE = "backup_holds_no_profile"
+    BACKUP_NOT_FOUND = "backup_not_found"
+    BACKUP_UNREADABLE = "backup_unreadable"
+    BACKUP_NOT_WRITTEN = "backup_not_written"
+    NOT_TRASHED = "not_trashed"
+    IMAGE_NOT_FOUND = "image_not_found"
+    NO_AVATAR = "no_avatar"
+    PROFILE_NOT_CACHED = "profile_not_cached"
+    JOB_NOT_FOUND = "job_not_found"
+    NO_INDEX = "no_index"
+    RESOURCE_BUSY = "resource_busy"
+    INDEX_BUSY = "index_busy"
+    CHARACTER_BUSY = "character_busy"
+    INDEX_UNREADABLE = "index_unreadable"
+    KEYWORD_BACKFILL_FAILED = "keyword_backfill_failed"
+    UNSUPPORTED_TYPE = "unsupported_type"
+    TOO_LARGE = "too_large"
+    NOT_PAIRED = "not_paired"
+    VALIDATION_FAILED = "validation_failed"
+    FLIST_ERROR = "flist_error"
+    NOT_SIGNED_IN = "not_signed_in"
+    SIGN_IN_FAILED = "sign_in_failed"
+    NOT_FOUND = "not_found"
+    RATE_LIMITED = "rate_limited"
+    FLIST_UNREACHABLE = "flist_unreachable"
+    FLIST_SERVER_ERROR = "flist_server_error"
+    NOT_STOPPABLE = "not_stoppable"
+    INVALID_CHARACTER_ID = "invalid_character_id"
+    CHARACTER_NOT_FOUND = "character_not_found"
+    WORKBENCH_NOT_KEPT = "workbench_not_kept"
+    NO_LIVE = "no_live"
+    NO_WORKBENCH = "no_workbench"
+    ETAG_REQUIRED = "etag_required"
+    ETAG_MISMATCH = "etag_mismatch"
+    INVALID_WORKBENCH_PAYLOAD = "invalid_workbench_payload"
+    # Image imports (services.image_import.ImportRefused); MCP's
+    # import_images raises them today, no REST route does.
+    SOURCE_PATH_MISSING = "source_path_missing"
+    SOURCE_PATH_NOT_ABSOLUTE = "source_path_not_absolute"
+    NO_IMPORT_FOLDERS = "no_import_folders"
+    SOURCE_NOT_FOUND = "source_not_found"
+    SOURCE_NOT_ALLOWED = "source_not_allowed"
+    SOURCE_IN_APP_DATA = "source_in_app_data"
+    SOURCE_UNREADABLE = "source_unreadable"
+    SOURCE_TOO_LARGE = "source_too_large"
+    NOT_AN_IMAGE = "not_an_image"
+    STORE_FAILED = "store_failed"
+
+
+class RefusalBody(BaseModel):
+    """What every route answers when it is not ok, as the schema
+    declares it (`REFUSAL_RESPONSES`). `Refusal.body()` and server.py's
+    handlers build the dict; this only describes it."""
+
+    code: RefusalCode
+    message: str
+    details: dict[str, Any]
+
+
+#: The `responses` every router is included with (server.py): a
+#: non-2xx answer of any route is a `RefusalBody`. Also keeps FastAPI
+#: from declaring its own 422 body, which this app never answers.
+REFUSAL_RESPONSES: dict[int | str, dict[str, Any]] = {
+    "default": {"model": RefusalBody, "description": "Refused: `{code, message, details}`."}
+}
 
 
 class Refusal(Exception):

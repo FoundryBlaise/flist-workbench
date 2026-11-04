@@ -69,6 +69,8 @@ class WorkbenchConflict(Refusal):
     carries the current etag, so the caller can read again and decide."""
 
     status = 409
+    #: The codes it is raised with.
+    CODES = ("etag_required", "etag_mismatch")
 
     def __init__(self, code: str, message: str, current_etag: str | None) -> None:
         super().__init__(message, details={"current_etag": current_etag})
