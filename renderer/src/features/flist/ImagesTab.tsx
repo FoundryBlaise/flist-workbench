@@ -401,7 +401,7 @@ export function ImagesTab({
                 className="flist-images-pane__add"
                 onClick={() => setView('trash')}
                 data-testid="flist-images-trash-toggle"
-                title="Images moved out of the pool. Put them back, or delete them for good."
+                title="Images moved out of the Pool. Put them back, or delete them for good."
               >
                 Trash{trashCount ? ` (${trashCount})` : ''}
               </button>
@@ -655,7 +655,7 @@ export function ImagesTab({
                       type="button"
                       className="flist-images-gallery-item__btn"
                       onClick={() => handleMoveToPool(entry.image_id)}
-                      title="Move to pool (image stays on disk)"
+                      title="Move to Pool (image stays on disk)"
                     >
                       ×
                     </button>
@@ -663,7 +663,7 @@ export function ImagesTab({
                       type="button"
                       className="flist-images-gallery-item__btn flist-images-gallery-item__btn--danger"
                       onClick={() => setConfirmTrash([entry.image_id])}
-                      title="Move to Trash (off the profile and out of the pool)"
+                      title="Move to Trash (off the profile and out of the Pool)"
                       data-testid="flist-images-gallery-trash"
                     >
                       Trash
@@ -677,7 +677,7 @@ export function ImagesTab({
                 Empty gallery.{' '}
                 {readOnly
                   ? ''
-                  : 'Drag from the pool, or use → on a pool row to add.'}
+                  : 'Drag from the Pool, or use → on a Pool row to add.'}
               </li>
             )}
           </ol>
@@ -735,8 +735,8 @@ export function ImagesTab({
           title={`Move ${confirmTrash.length} image${confirmTrash.length === 1 ? '' : 's'} to the Trash?`}
           body={
             confirmTrash.some((id) => galleryImageIds.has(id))
-              ? 'It comes off the profile and leaves the pool. Putting it back from the Trash returns it to the pool, until you empty the Trash.'
-              : 'They leave the pool and can be put back from the Trash until you empty it.'
+              ? 'It comes off the profile and leaves the Pool. Putting it back from the Trash returns it to the Pool, until you empty the Trash.'
+              : 'They leave the Pool and can be put back from the Trash until you empty it.'
           }
           notes={usageNotes(confirmTrash, refs)}
           thumbs={confirmTrash.flatMap((id) => {

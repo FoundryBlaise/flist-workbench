@@ -777,7 +777,7 @@ def remove_image(
     character: str,
     image_id: str,
 ) -> dict[str, Any]:
-    """Take an image off the profile. The file stays in the pool, and
+    """Take an image off the profile. The file stays in the Pool, and
     add_image can put it back. To delete the image, use trash_images.
     """
     from services import payload_ops
@@ -800,7 +800,7 @@ def remove_image(
     return {
         "character": target.name,
         "image_id": image_id,
-        "note": "The file is still in the pool; add_image can put it back.",
+        "note": "The file is still in the Pool; add_image can put it back.",
     }
 
 
@@ -808,8 +808,8 @@ def remove_image(
 def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
     """Delete images: move their files to the character's Trash. An
     image in the Workbench's gallery is taken off it first
-    (`off_gallery`); one only in the pool just leaves the pool.
-    `put_back_images` puts each back into the pool, not onto the
+    (`off_gallery`); one only in the Pool just leaves the Pool.
+    `put_back_images` puts each back into the Pool, not onto the
     profile; only the user can empty the Trash, in the window.
 
     To take an image off the profile and keep it, use remove_image. An
@@ -842,7 +842,7 @@ def trash_images(character: str, image_ids: list[str]) -> dict[str, Any]:
         out["on_live_profile"] = on_live
         out["note"] = (
             "These are on the live profile, so the next pull downloads "
-            "them into the pool again."
+            "them into the Pool again."
         )
     return out
 
@@ -853,7 +853,7 @@ def list_trash(
 ) -> dict[str, Any]:
     """What the character's Trash holds, newest first, with when and by
     whom (`ui` or `mcp`): `items` are deleted images, which
-    `put_back_images` puts back into the pool by `trash_id` (the image
+    `put_back_images` puts back into the Pool by `trash_id` (the image
     id, unless the Trash holds several files under one id because a Pull
     replaced it); `backups` are deleted Backups and `labels` are cleared
     Labels (one entry per clear, with its conversation, or `partner` null
@@ -889,9 +889,9 @@ def put_back_images(
     image_id: str | None = None,
     image_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Move images from the Trash back into the pool — not onto the
+    """Move images from the Trash back into the Pool — not onto the
     profile; use add_image for that. Give one `image_id` or several
-    `image_ids`, as list_trash's `trash_id`. If the pool already holds
+    `image_ids`, as list_trash's `trash_id`. If the Pool already holds
     the same bytes, the Trash entry is dropped and the existing id is
     reported instead. If it holds a different picture under that id,
     the one put back comes as `local-<sha8>`, so both are kept.
@@ -1082,7 +1082,7 @@ def _import_batch(
                             f"{prepared[index].source_name} is the same picture "
                             f"as {new_id!r}, which is already on this profile, "
                             f"so it can't also take {old_id!r}'s place. The "
-                            "files were imported into the pool."
+                            "files were imported into the Pool."
                         )
                     description = (
                         item.description
@@ -1155,7 +1155,7 @@ def _workbench_for_reporting(target):  # noqa: ANN001, ANN202
     return workbench_target(target)
 
 
-@tool(tags=TAG_CHARACTER, title="Import images into the pool")
+@tool(tags=TAG_CHARACTER, title="Import images into the Pool")
 def import_images(
     character: str,
     items: list[ImportItem],
@@ -1163,7 +1163,7 @@ def import_images(
     convert_to_jpeg: bool = False,
 ) -> dict[str, Any]:
     """Copy image files from this machine into the character's image
-    folder (the pool), and optionally onto the profile.
+    folder (the Pool), and optionally onto the profile.
 
     Each item names an absolute `source_path`. Only folders the user has
     cleared under Settings → Security can be read; there is no tool to
@@ -1173,7 +1173,7 @@ def import_images(
 
     - `replace_image_id`: the new picture takes exactly that image's
       place in the gallery, keeping its description unless `description`
-      is given. The old image leaves the gallery and stays in the pool.
+      is given. The old image leaves the gallery and stays in the Pool.
     - `add_to_gallery`: items without `replace_image_id` are appended to
       the end of the gallery, in the order given.
     - Identical bytes are stored once: the result then says

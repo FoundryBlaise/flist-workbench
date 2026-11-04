@@ -37,7 +37,7 @@ def flist_character_images_list(character_id: str) -> dict:
     """List the files in `images/`. Each row: `{image_id, extension,
     size, added_at}`. Renderer pairs these with description/sort_order
     from the Workbench to decide which are on the profile vs. in the
-    pool view."""
+    Pool view."""
     return {
         "character_id": character_id,
         "images": archive_images.list_character_images(character_id),
@@ -123,7 +123,7 @@ class _ImageIdsBody(BaseModel):
 
 @router.post("/flist/character/{character_id}/images/trash")
 def flist_character_images_trash(character_id: str, body: _ImageIdsBody) -> dict:
-    """Delete images, whether in the gallery or only in the pool: the
+    """Delete images, whether in the gallery or only in the Pool: the
     window's delete, and the same function MCP's `trash_images` calls.
     A gallery image is taken off the Workbench's gallery first; the
     answer's `etag` is the Workbench's new one (None when the gallery
@@ -164,7 +164,7 @@ def flist_character_trash_file(character_id: str, filename: str) -> FileResponse
 
 @router.post("/flist/character/{character_id}/trash/put-back")
 def flist_character_trash_put_back(character_id: str, body: _ImageIdsBody) -> dict:
-    """Put trashed files back into the pool (not onto the profile)."""
+    """Put trashed files back into the Pool (not onto the profile)."""
     return image_trash_service.restore_images(character_id, body.image_ids)
 
 

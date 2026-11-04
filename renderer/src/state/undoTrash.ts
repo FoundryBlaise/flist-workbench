@@ -68,14 +68,14 @@ export function putBackNote(
     const one = outcome.leftInTrash.length === 1
     parts.push(
       `${step} brought back ${one ? 'image' : 'images'} ${listed(outcome.leftInTrash)}, ` +
-        `which ${one ? 'stays' : 'stay'} in the Trash: the pool has a different file under that name.`
+        `which ${one ? 'stays' : 'stay'} in the Trash: the Pool has a different file under that name.`
     )
   }
   if (outcome.missing.length) {
     const one = outcome.missing.length === 1
     parts.push(
       `${step} brought back ${one ? 'image' : 'images'} ${listed(outcome.missing)}, ` +
-        `which ${one ? 'is' : 'are'} in neither the pool nor the Trash.`
+        `which ${one ? 'is' : 'are'} in neither the Pool nor the Trash.`
     )
   }
   return parts.length ? parts.join(' ') : null

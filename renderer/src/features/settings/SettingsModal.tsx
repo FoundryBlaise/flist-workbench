@@ -1361,7 +1361,7 @@ function ImageImportFolders() {
       <div className="settings-import-roots" data-testid="settings-import-roots">
         <p className="settings-help">
           A model connected over MCP can copy images from these folders, and
-          their subfolders, into a character&apos;s pool with{' '}
+          their subfolders, into a character&apos;s Pool with{' '}
           <code>import_images</code>. Nothing outside them can be read, and
           only you can change this list. The source files are copied, never
           moved or changed.

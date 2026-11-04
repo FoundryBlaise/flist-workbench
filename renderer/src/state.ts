@@ -1062,7 +1062,7 @@ async function _putBackFromTrash(
       await get().flistLoadCharacterImages(characterId)
     }
     const pool = get().flistCharacterImages[characterId]
-    if (pool?.status !== 'ready') throw new Error('the pool could not be read')
+    if (pool?.status !== 'ready') throw new Error('the Pool could not be read')
     const missing = imageIds.filter((id) => !(id in pool.byId))
     if (missing.length === 0) return
 

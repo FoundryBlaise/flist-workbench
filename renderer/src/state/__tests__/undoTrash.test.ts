@@ -220,7 +220,7 @@ describe('undo of a gallery image that is in neither the pool nor the Trash', ()
     const saves = fake.requestsTo(SAVE)
     expect(saves).toHaveLength(1)
     expect((saves[0].body as { images: Row[] }).images.map((r) => r.image_id)).toEqual(['a', 'b'])
-    expect(noteOf()).toBe('Undo brought back image a, which is in neither the pool nor the Trash.')
+    expect(noteOf()).toBe('Undo brought back image a, which is in neither the Pool nor the Trash.')
   })
 })
 
