@@ -3792,7 +3792,6 @@ body {
 }
 .profile-fields-banner-warning { border-color: #c98c4a; color: #f0d8b0; }
 .profile-fields-banner-drift { border-color: #d4a04a; color: #f5c87a; }
-.profile-fields-banner-undo { border-color: var(--accent); }
 .profile-fields-banner-dismiss {
   margin-left: auto;
   background: transparent;

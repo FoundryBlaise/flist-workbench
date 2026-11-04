@@ -41,7 +41,6 @@ beforeEach(() => {
     flistArchive: {},
     flistViewingLive: {},
     flistCustomKinksUI: {},
-    flistResetUndo: null,
     flistBrowseBackup: null,
     flistActiveCharacterId: null,
     editorReadOnly: false,
