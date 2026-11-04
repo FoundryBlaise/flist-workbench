@@ -99,6 +99,7 @@ export function ImagesTab({
   const moveToPool = useStore((s) => s.flistMoveImageToPool)
   const addToProfile = useStore((s) => s.flistAddImagesToProfile)
   const setGallery = useStore((s) => s.flistSetGalleryImages)
+  const endTyping = useStore((s) => s.flistEndTyping)
   const openExportRestore = useStore((s) => s.flistOpenExportRestore)
 
   useEffect(() => {
@@ -294,10 +295,13 @@ export function ImagesTab({
     )
   }
 
+  // A caption's keystrokes coalesce into one undo entry per pause or
+  // blur, like the description's.
   const setCaption = (imageId: string, description: string) => {
     setGallery(
       characterId,
-      gallery.map((e) => (e.image_id === imageId ? { ...e, description } : e))
+      gallery.map((e) => (e.image_id === imageId ? { ...e, description } : e)),
+      { typing: `images.${imageId}.description` }
     )
   }
 
@@ -620,7 +624,9 @@ export function ImagesTab({
                     value={entry.description}
                     placeholder="(no description)"
                     disabled={readOnly}
+                    data-undo="workbench"
                     onChange={(e) => setCaption(entry.image_id, e.target.value)}
+                    onBlur={() => endTyping(characterId)}
                     rows={2}
                   />
                 </div>

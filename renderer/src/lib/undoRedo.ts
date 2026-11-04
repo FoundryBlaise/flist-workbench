@@ -7,18 +7,25 @@ export type UndoAction = 'undo' | 'redo'
 
 /** Where an undo goes, decided by the element it is aimed at:
  *
- *   - native   a writable text input or textarea: Chromium's own undo
- *              on that element (typing is not on the Workbench stack's
- *              terms yet, #111).
- *   - editor   the description editor or the preview beside it: the
- *              editor's history. The preview's writeback funnels
- *              through the editor view, so its stack is the whole
- *              cross-pane timeline.
- *   - workbench anything else (a kink, a field's choice, an image, no
- *              focus at all): the active character's Workbench undo
- *              stack.
+ *   - workbench the active character's Workbench undo stack: anything
+ *              that is not a text control (a kink, a field's choice, an
+ *              image, no focus at all), and the Workbench's own text
+ *              fields, marked `data-undo="workbench"` (the description
+ *              editor, its preview, captions, infotag fields). Their
+ *              typing is on that stack already, a burst per pause or
+ *              blur (#111), so its newest entry is the pending typing.
+ *   - native   a writable text input or textarea of the window (search,
+ *              filters), or a Workbench field still holding typing it
+ *              has not committed (`data-undo-pending`, an infotag field
+ *              before blur): Chromium's own undo on that element.
+ *   - editor   any other CodeMirror or contenteditable (a Foreign
+ *              profile's source): that editor's own history.
  */
 type Route = 'native' | 'editor' | 'workbench'
+
+/** The mark of a Workbench text field, whose typing goes on the
+ *  Workbench undo stack. */
+const WORKBENCH_FIELD = '[data-undo="workbench"]'
 
 /** Input types that hold typed text, and so their own undo. A focused
  *  checkbox or radio is not one: Ctrl+Z there undoes the Workbench. */
@@ -34,6 +41,9 @@ const TEXT_INPUT_TYPES = new Set([
 
 function routeOf(target: Element | null): Route {
   const active = target
+  if (active?.closest(WORKBENCH_FIELD) && !active.closest('[data-undo-pending]')) {
+    return 'workbench'
+  }
   if (
     active instanceof HTMLInputElement ||
     active instanceof HTMLTextAreaElement
@@ -51,7 +61,8 @@ function routeOf(target: Element | null): Route {
 }
 
 /** True when `target` is a text control that keeps its own undo, so
- *  Ctrl+Z there is left to it. */
+ *  Ctrl+Z there is left to it. The Workbench's own text fields are not,
+ *  unless they hold typing they have not committed yet. */
 export function isTextControl(target: Element | null): boolean {
   return routeOf(target) !== 'workbench'
 }
@@ -133,9 +144,9 @@ export function undoKeyOf(e: KeyboardEvent): UndoAction | null {
 }
 
 /** The window's keydown handler for Ctrl+Z / Ctrl+Y. The menu leaves
- *  these keys to the focused element, so a text control (and the
- *  description editor's own keymap) keeps handling them; everywhere
- *  else they undo and redo the Workbench. */
+ *  these keys to the focused element, so a text control with its own
+ *  undo keeps handling them; everywhere else, the Workbench's own text
+ *  fields included, they undo and redo the Workbench. */
 export function handleUndoKeydown(e: KeyboardEvent): void {
   if (e.defaultPrevented) return
   const action = undoKeyOf(e)

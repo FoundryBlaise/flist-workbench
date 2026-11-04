@@ -30,6 +30,7 @@ exports[`infotag field renderers > TextField set + overlaid matches snapshot (re
       <input
         class="infotag-field-input"
         data-testid="infotag-9-input"
+        data-undo="workbench"
         placeholder="—"
         type="text"
         value="Human (mod)"
@@ -69,6 +70,7 @@ exports[`infotag field renderers > TextField unset matches snapshot 1`] = `
       <input
         class="infotag-field-input"
         data-testid="infotag-9-input"
+        data-undo="workbench"
         placeholder="—"
         type="text"
         value=""

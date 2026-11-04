@@ -111,6 +111,43 @@ describe('the keys inside a text control are left to it', () => {
   })
 })
 
+describe('the Workbench’s own text fields put their typing on its stack', () => {
+  it.each([
+    ['the description editor', '<div data-undo="workbench"><div class="cm-editor"><div id="t" contenteditable="true"></div></div></div>'],
+    ['the preview', '<div id="t" data-undo="workbench" contenteditable="true"></div>'],
+    ['a caption', '<textarea id="t" data-undo="workbench"></textarea>'],
+    ['an infotag field with nothing typed since its last commit', '<input type="text" id="t" data-undo="workbench">']
+  ])('Ctrl+Z and Ctrl+Y in %s step the Workbench', (_name, html) => {
+    twoChanges()
+    document.body.innerHTML = html
+    const t = document.getElementById('t')!
+    expect(press('z', {}, t).defaultPrevented).toBe(true)
+    expect(kinks()).toEqual({ '12': 'fave' })
+    press('y', {}, t)
+    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+  })
+
+  it('an infotag field with typing it has not committed yet keeps Ctrl+Z to itself', () => {
+    twoChanges()
+    document.body.innerHTML = '<input type="text" id="t" data-undo="workbench" data-undo-pending="true">'
+    const e = press('z', {}, document.getElementById('t')!)
+    expect(e.defaultPrevented).toBe(false)
+    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+  })
+
+  it('Ctrl+Z in a text input of the window never reaches the Workbench or its editor', () => {
+    twoChanges()
+    document.body.innerHTML =
+      '<div data-undo="workbench"><div class="cm-editor"><div contenteditable="true"></div></div></div>' +
+      '<input type="search" id="t">'
+    const input = document.getElementById('t') as HTMLInputElement
+    input.focus()
+    expect(press('z', {}, input).defaultPrevented).toBe(false)
+    runUndoRedo('undo')
+    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+  })
+})
+
 describe('the menus go through the same routing', () => {
   it('Edit → Undo / Redo with nothing focused step the Workbench', () => {
     twoChanges()

@@ -5,7 +5,13 @@ import {
   resolveInfotagDescriptors,
   type InfotagDescriptor
 } from './infotagsResolver'
-import { ListField, NumberField, TextField, UnknownField } from './infotagFields/TextField'
+import {
+  ListField,
+  NumberField,
+  TextField,
+  UnknownField,
+  undoMarks
+} from './infotagFields/TextField'
 import { MappingListStaleness } from './MappingListStaleness'
 import { ResetUndoBanner } from './ResetUndoBanner'
 
@@ -482,6 +488,7 @@ function CustomTitleField({
           type="text"
           className="infotag-field-input"
           value={local}
+          {...undoMarks(local !== value)}
           onChange={(e) => setLocal(e.target.value)}
           onBlur={() => {
             if (local !== value) onCommit(local)
