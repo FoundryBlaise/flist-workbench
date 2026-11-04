@@ -1,12 +1,12 @@
 import { sidecarFetch } from './sidecar'
 import { renderProfileToPng, type RenderTheme } from './renderProfile'
 import type { InlinesManifest } from '../renderer/src/lib/bbcode'
-import type { components } from '../renderer/src/lib/api.gen'
+import type { Schema } from '../renderer/src/lib/schema'
 
 /** The long-poll's answer: something to draw, or null. */
-type RenderPoll = components['schemas']['RenderPoll']
+type RenderPoll = Schema<'RenderPoll'>
 /** Why the window could not draw one. */
-type RenderFailedRequest = components['schemas']['RenderFailedRequest']
+type RenderFailedRequest = Schema<'RenderFailedRequest'>
 
 /** Answers the sidecar's render requests for as long as the app runs.
  *

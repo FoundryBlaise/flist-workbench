@@ -123,7 +123,7 @@ function knownNames(file: ts.SourceFile): Set<string> {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const from = node.moduleSpecifier.text
       const bindings = node.importClause?.namedBindings
-      if (/(^|\/)api(\.gen)?$/.test(from) && bindings && ts.isNamedImports(bindings)) {
+      if (/(^|\/)(api|api\.gen|schema)$/.test(from) && bindings && ts.isNamedImports(bindings)) {
         for (const el of bindings.elements) names.add(el.name.text)
       }
     }

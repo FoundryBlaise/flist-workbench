@@ -788,7 +788,7 @@ function McpPane() {
   const mcpRevokeToken = useStore((s) => s.mcpRevokeToken)
   const mcpSetLogText = useStore((s) => s.mcpSetLogText)
   // null until the sidecar has said whether the switch is on.
-  const logText = useStore((s) => (s.settings ? (s.settings.mcp?.log_text ?? false) : null))
+  const logText = useStore((s) => (s.settings ? s.settings.mcp.log_text : null))
   const [actionError, setActionError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)

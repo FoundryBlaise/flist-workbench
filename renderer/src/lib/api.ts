@@ -1,4 +1,5 @@
-import type { components, paths } from './api.gen'
+import type { paths } from './api.gen'
+import type { Schema } from './schema'
 
 type ApiOptions = { signal?: AbortSignal }
 
@@ -11,7 +12,7 @@ type ApiOptions = { signal?: AbortSignal }
 // `lib/__tests__/wireTypes.test.ts` fails on one written by hand.
 
 /** A model the sidecar's schema names, by its Python class name. */
-export type Schema<Name extends keyof components['schemas']> = components['schemas'][Name]
+export type { Schema } from './schema'
 
 type Method = 'get' | 'put' | 'post' | 'delete' | 'patch'
 /** The methods `P` serves. */
