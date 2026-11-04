@@ -8064,3 +8064,42 @@ export interface operations {
         };
     };
 }
+type FlattenedDeepRequired<T> = {
+    [K in keyof T]-?: FlattenedDeepRequired<T[K] extends unknown[] | undefined | null ? Extract<T[K], unknown[]>[number] : T[K]>;
+};
+type ReadonlyArray<T> = [
+    Exclude<T, undefined>
+] extends [
+    unknown[]
+] ? Readonly<Exclude<T, undefined>> : Readonly<Exclude<T, undefined>[]>;
+export const backupSourceAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Backup"]["source"]> = ["live", "workbench"];
+export const backupOccasionAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Backup"]["occasion"]> = ["manual", "before-upload", "before-restore", "before-replace", "migration", "backup-all"];
+export const backupAllCharacterStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupAllCharacter"]["status"]> = ["fetching", "saved", "unchanged", "error"];
+export const backupNotSavedReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupNotSaved"]["reason"]> = ["unchanged", "no_live"];
+export const backupSavedSourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupSaved"]["source"]> = ["live", "workbench"];
+export const backupSavedOccasionValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["BackupSaved"]["occasion"]> = ["manual", "before-upload", "before-restore", "before-replace", "migration", "backup-all"];
+export const changeHintEventValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ChangeHint"]["event"]> = ["set-payload-changed", "sets-changed", "live-changed", "labels-changed", "settings-changed", "index-changed", "images-changed", "backups-changed", "characters-changed"];
+export const eiconsStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Eicons"]["status"]> = ["loading", "ready", "error"];
+export const foreignSearchSourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["ForeignSearch"]["source"]> = ["bookmarks", "friends", "logs", "name"];
+export const ingestJobStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["IngestJob"]["state"]> = ["pending", "running", "done", "cancelled", "failed"];
+export const jobStateValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["Job"]["state"]> = ["pending", "running", "done", "cancelled", "failed"];
+export const jobFailureCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["JobFailureCode"]> = ["embedding_failed", "embedding_model_changed"];
+export const labelSetLabelAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["label"]> = ["IC", "OOC"];
+export const labelSetSourceAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["source"]> = ["mcp", "manual", "llm"];
+export const labelSetPrior_labelAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["prior_label"]> = ["IC", "OOC"];
+export const labelSetPrior_sourceAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelSet"]["prior_source"]> = ["mcp", "manual", "llm"];
+export const labelledMessageKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["kind"]> = ["ic", "ooc", "system"];
+export const labelledMessageLabelAnyOf0Values: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["label"]> = ["IC", "OOC", "Unlabeled"];
+export const labelledMessageLabel_sourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["label_source"]> = ["mcp", "manual", "llm"];
+export const labelledMessagePrior_labelValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["prior_label"]> = ["IC", "OOC"];
+export const labelledMessagePrior_sourceValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LabelledMessage"]["prior_source"]> = ["mcp", "manual", "llm"];
+export const logSearchHitKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["LogSearchHit"]["kind"]> = ["ic", "ooc", "system"];
+export const mcpEndpointIdValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["McpEndpoint"]["id"]> = ["all", "character", "logs", "classify"];
+export const pairingHandshakeStatusStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PairingHandshakeStatus"]["status"]> = ["pending", "accepted", "rejected", "expired"];
+export const pullDonePull_statusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PullDone"]["pull_status"]> = ["never_pulled", "unknown", "interrupted", "partial", "complete"];
+export const pullStatusStatusValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["PullStatus"]["status"]> = ["never_pulled", "unknown", "interrupted", "partial", "complete"];
+export const refusalCodeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RefusalCode"]> = ["unauthorized", "forbidden_origin", "forbidden_host", "http_404", "http_405", "internal_error", "invalid_request", "refused", "invalid_file_name", "log_name_refused", "log_character_not_found", "partner_not_found", "log_dir_unavailable", "log_not_found", "backup_not_uploadable", "backup_too_old", "backup_holds_no_profile", "backup_not_found", "backup_unreadable", "backup_not_written", "not_trashed", "image_not_found", "no_avatar", "profile_not_cached", "job_not_found", "no_index", "resource_busy", "index_busy", "character_busy", "index_unreadable", "keyword_backfill_failed", "unsupported_type", "too_large", "not_paired", "validation_failed", "flist_error", "not_signed_in", "sign_in_failed", "not_found", "rate_limited", "flist_unreachable", "flist_server_error", "not_stoppable", "invalid_character_id", "character_not_found", "workbench_not_kept", "no_live", "no_workbench", "etag_required", "etag_mismatch", "invalid_workbench_payload", "source_path_missing", "source_path_not_absolute", "no_import_folders", "source_not_found", "source_not_allowed", "source_in_app_data", "source_unreadable", "source_too_large", "not_an_image", "store_failed"];
+export const renderDeliveredMimeValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["RenderDelivered"]["mime"]> = ["image/png", "image/jpeg"];
+export const unlabeledFilledLabelValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UnlabeledFilled"]["label"]> = ["IC", "OOC"];
+export const uploadSourceBackupKindValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["UploadSourceBackup"]["kind"]> = ["backup", "pre-restore"];
+export const workbenchAbsentReasonValues: ReadonlyArray<FlattenedDeepRequired<components>["schemas"]["WorkbenchAbsent"]["reason"]> = ["no_live", "not_created_yet"];

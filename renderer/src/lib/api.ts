@@ -1,4 +1,4 @@
-import type { paths } from './api.gen'
+import { refusalCodeValues, type paths } from './api.gen'
 import type { Schema } from './schema'
 
 type ApiOptions = { signal?: AbortSignal }
@@ -369,15 +369,23 @@ export class RefusalError extends HttpError {
   }
 }
 
+/** The codes the sidecar's schema lists (`refusals.RefusalCode`), at
+ *  run time: a body's code is a `RefusalCode` only when it is one. */
+const REFUSAL_CODES: ReadonlySet<string> = new Set(refusalCodeValues)
+
+/** A body that says why, in the sidecar's words, whatever its code. */
+function hasMessage(body: unknown): body is Pick<ErrorBody, 'message'> {
+  return !!body && typeof body === 'object' && typeof (body as Partial<ErrorBody>).message === 'string'
+}
+
 function isErrorBody(body: unknown): body is ErrorBody {
-  if (!body || typeof body !== 'object') return false
-  const b = body as Partial<ErrorBody>
-  return typeof b.code === 'string' && typeof b.message === 'string'
+  return hasMessage(body) && REFUSAL_CODES.has(String((body as Partial<ErrorBody>).code))
 }
 
 /** The error a failed response stands for: a `RefusalError` carrying
  *  the sidecar's code, message and details, or a plain `HttpError`
- *  when the body is not one (a proxy, a crash mid-stream). */
+ *  when the body is not one (a proxy, a crash mid-stream) or carries a
+ *  code the schema does not list (its message still reads as said). */
 async function failure(res: Response): Promise<HttpError> {
   const body: unknown = await res.json().catch(() => null)
   if (isErrorBody(body)) {
@@ -385,7 +393,7 @@ async function failure(res: Response): Promise<HttpError> {
       body.details && typeof body.details === 'object' ? body.details : {}
     return new RefusalError(body.code, res.status, body.message, details)
   }
-  return new HttpError(res.status, res.statusText)
+  return new HttpError(res.status, hasMessage(body) ? body.message : res.statusText)
 }
 
 /** What a failed request says, ready to show: the sidecar's or
