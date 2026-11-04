@@ -280,3 +280,78 @@ it('catches a wire type written by hand', () => {
   expect(handWritten(pulled.type, known)).toBe('string')
   expect(handWritten(kept.type, known)).toBeNull()
 })
+
+// ---- The store ----------------------------------------------------------
+// The slices and the store's modules (renderer/src/state/**) hold the
+// sidecar's answers and keep state of their own beside them. Their own
+// types are not checked; a shape written there for an answer is: an
+// object type whose fields are all fields of one schema model, at least
+// two of them in the sidecar's snake_case (the store names its own
+// fields in camelCase).
+
+/** Every model's JSON field names, from the committed schema. */
+function schemaFields(): Map<string, Set<string>> {
+  const schema = JSON.parse(readFileSync(join(ROOT, 'sidecar', 'openapi.json'), 'utf-8')) as {
+    components: { schemas: Record<string, { properties?: Record<string, unknown> }> }
+  }
+  return new Map(
+    Object.entries(schema.components.schemas).map(([name, model]) => [
+      name,
+      new Set(Object.keys(model.properties ?? {}))
+    ])
+  )
+}
+
+const WIRE_KEY = /^_?[a-z0-9]+(_[a-z0-9]+)+$|^_[a-z0-9]+$/
+
+/** Every object type in `module` shaped like a schema model, as
+ *  `<module>: <type text>: <model>`. */
+function storeWireShapes(module: string, models: Map<string, Set<string>>): string[] {
+  const file = parse(module)
+  const found: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeLiteralNode(node)) {
+      const names = node.members.flatMap((m) =>
+        m.name && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)) ? [m.name.text] : []
+      )
+      if (names.filter((n) => WIRE_KEY.test(n)).length >= 2) {
+        const model = [...models].find(([, fields]) => names.every((n) => fields.has(n)))
+        if (model) found.push(`${module}: ${node.getText().replace(/\s+/g, ' ').slice(0, 80)}: ${model[0]}`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return found
+}
+
+it('the store types no sidecar answer by hand', () => {
+  const models = schemaFields()
+  const store = sources(join(ROOT, 'renderer', 'src', 'state')).map(rel)
+  expect(store.flatMap((module) => storeWireShapes(module, models))).toEqual([])
+})
+
+it('catches a sidecar answer typed by hand in the store', () => {
+  const file = ts.createSourceFile(
+    'probe.ts',
+    "type Kept = { status: string; payload: { _etag: string | null; _fetched_at: number | null } | null; fetchedAt: number | null }",
+    ts.ScriptTarget.Latest,
+    true
+  )
+  const literals: ts.TypeLiteralNode[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeLiteralNode(node)) literals.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  const names = literals.map((l) =>
+    l.members.flatMap((m) => (m.name && ts.isIdentifier(m.name) ? [m.name.text] : []))
+  )
+  const models = schemaFields()
+  const shaped = names.filter(
+    (n) =>
+      n.filter((x) => WIRE_KEY.test(x)).length >= 2 &&
+      [...models.values()].some((fields) => n.every((x) => fields.has(x)))
+  )
+  expect(shaped).toEqual([['_etag', '_fetched_at']])
+})

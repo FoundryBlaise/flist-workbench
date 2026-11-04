@@ -15,14 +15,18 @@ import {
   refusalCode,
   type FlistAccountCharacter,
   type FlistRosterEntry,
-  type FlistSessionStatus
+  type FlistSessionStatus,
+  type Schema
 } from '../../lib/api'
 import type { State } from '../../state'
 import type { SliceCreator } from './slice'
 
-type MappingList = {
+/** The F-list mapping list as the window holds it: the sidecar's
+ *  answer (F-list's payload with the cache's `_etag`, `_fetched_at`)
+ *  and how reading it went. */
+type MappingListState = {
   status: 'idle' | 'loading' | 'ready' | 'error'
-  payload: (Record<string, unknown> & { _etag: string | null; _fetched_at: number | null }) | null
+  payload: Schema<'MappingList'> | null
   fetchedAt: number | null
   etag: string | null
   error: string | null
@@ -44,7 +48,7 @@ export type AccountState = {
   /** Cached mapping-list payload. Tier 2 fetches once on first mount of
    *  the Profile-fields tab; ↻ on the staleness chip re-fetches with
    *  force=true. Purged on sign-out. */
-  flistMapping: MappingList
+  flistMapping: MappingListState
   /** Modal visibility for the sign-in dialog. */
   flistSignInOpen: boolean
   /** Last error from a sign-in attempt; passed verbatim from F-list per
@@ -108,7 +112,7 @@ export type AccountSlice = AccountState & {
   flistLoadMapping: (opts?: { force?: boolean }) => Promise<void>
 }
 
-function idleMapping(): MappingList {
+function idleMapping(): MappingListState {
   return { status: 'idle', payload: null, fetchedAt: null, etag: null, error: null }
 }
 
