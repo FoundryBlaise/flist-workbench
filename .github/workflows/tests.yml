@@ -58,7 +58,8 @@ jobs:
 
       # --no-sync: test exactly the environment the step above built.
       # pyproject's addopts (-rfEs) list every failure and the reason
-      # for every skipped test.
+      # for every skipped test. tests/test_openapi_schema.py fails
+      # when the committed sidecar/openapi.json is not the app's schema.
       - name: pytest
         working-directory: sidecar
         run: uv run --no-sync pytest -q
@@ -102,6 +103,9 @@ jobs:
         with:
           node: 'true'
 
+      # Starts with `npm run api:check`: renderer/src/lib/api.gen.ts
+      # must be what openapi-typescript makes of sidecar/openapi.json.
+      # Then tsc fails wherever the window disagrees with those types.
       - name: typecheck
         run: npm run typecheck
 

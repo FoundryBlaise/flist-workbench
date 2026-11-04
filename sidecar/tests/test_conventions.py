@@ -21,7 +21,9 @@ Rules:
   writing and no fixed `.tmp` name anywhere else.
 * router-layering: every REST route lives in a router under
   `sidecar/routers/`; only `server.py` (app setup and router
-  registration) imports routers, and nothing imports `server.py`.
+  registration) imports routers, and nothing imports `server.py`
+  except the schema dump `openapi_schema.py`, which reads the built
+  app from above it and is imported by nothing.
 * label-layering: SQL on the labels table lives only in the Label
   store (`labels.py`) and the Labels service (`services/labels.py`);
   REST routers and MCP tools take only pure names from the store and
@@ -269,6 +271,9 @@ def test_files_are_written_atomically():
 # router-layering
 
 ENTRY_MODULE = "sidecar/server.py"
+#: Sits above the app like the entry module: it imports `server` to
+#: read the OpenAPI schema (`npm run gen:api`). Nothing imports it.
+SCHEMA_DUMP_MODULE = "sidecar/openapi_schema.py"
 ROUTE_DECORATORS = {"get", "post", "put", "patch", "delete", "api_route", "websocket", "route"}
 
 
@@ -291,14 +296,19 @@ def imported_names(path: str) -> list[tuple[int, str]]:
 def test_only_the_entry_module_imports_routers():
     """A router never imports another router, and nothing below the REST
     surface (services, the archive, MCP tools) imports a router or the
-    entry module: what two routers share lives in services/."""
+    entry module: what two routers share lives in services/. The schema
+    dump may import the entry module; nothing imports the dump."""
     sites = [
         f"{path}:{line}: imports {name} (rule router-layering)"
         for path in sidecar_sources()
         if path != ENTRY_MODULE
         for line, name in imported_names(path)
-        if name in ("server", "routers")
-        or name.startswith(("server.", "routers."))
+        if (
+            path != SCHEMA_DUMP_MODULE
+            and (name in ("server", "routers") or name.startswith(("server.", "routers.")))
+        )
+        or name == "openapi_schema"
+        or name.startswith("openapi_schema.")
         or (name == "." and path.startswith("sidecar/routers/"))
     ]
     assert not sites, report("router-layering", sites)
