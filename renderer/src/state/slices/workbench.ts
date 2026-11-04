@@ -2,9 +2,10 @@
 // profile as the window holds it. Opening a character (with the
 // open-race guard), the editor showing it, the save pipeline with its
 // autosave timers, single-flight saves and the etag, changes another
-// writer made and the merge with them, Undo and Redo, reset to Live,
-// Restore, and the edit actions of every tab (profile fields, kinks,
-// custom kinks, the gallery, the Diff tab's reset).
+// writer made and the merge with them, Undo and Redo (through the undo
+// module, state/undo.ts), reset to Live, Restore, and the edit actions
+// of every tab (profile fields, kinks, custom kinks, the gallery, the
+// Diff tab's reset).
 //
 // What the Workbench needs of the other slices goes through their
 // actions: Live and an ended browse through the Archive
@@ -19,7 +20,6 @@ import {
   RefusalError,
   refusalCode,
   workbenchConflict,
-  type FlistTrashItem,
   type InlineImage
 } from '../../lib/api'
 import {
@@ -46,15 +46,13 @@ import {
 } from '../commit'
 import {
   endTyping,
-  hiddenWorkbench,
-  hideWorkbench,
-  recordChange,
+  recordChangeUnderView,
+  recordCommit,
   resetUndoStacks,
-  takeRedo,
-  takeUndo,
-  unhideWorkbench
-} from '../undoStack'
-import { imagesToFind, putBackNote, renameGalleryRows, stepName } from '../undoTrash'
+  undoStep,
+  viewHidesWorkbench,
+  type UndoHost
+} from '../undo'
 import type { UndoAction } from '../../lib/undoRedo'
 import { mergeWorkbench, type MergeSide } from '../merge'
 import type { State } from '../../state'
@@ -489,8 +487,9 @@ function _scheduleFlush(characterId: string, fn: () => void): void {
 }
 
 // A helper's set: it writes only Workbench fields, and reaches the other
-// slices through their actions.
-type SlotSet = (fn: (s: State) => Partial<WorkbenchState>) => void
+// slices through their actions. The undo module gets the same set
+// through its host (UndoHost in state/undo.ts).
+export type SlotSet = (fn: (s: State) => Partial<WorkbenchState>) => void
 
 /** The editor follows the active character's slot: whatever a commit
  *  leaves in the payload is the description the editor shows. Edits and
@@ -516,8 +515,9 @@ function _editorFollows(
  *  character's Workbench slot (see state/commit.ts for the kinds). An
  *  edit marks the slot unsaved and schedules the autosave; a written
  *  commit adopts the sidecar's etag; a view replaces or drops the slot
- *  without being a change. `also` adds to the same store update, so the
- *  slot and whatever goes with it change together. */
+ *  without being a change. The undo module records every commit made
+ *  here. `also` adds to the same store update, so the slot and whatever
+ *  goes with it change together. */
 function _commit(
   get: () => State,
   set: SlotSet,
@@ -527,10 +527,10 @@ function _commit(
 ): void {
   // Filled in by the update below; a callback assignment TypeScript
   // would not see through a plain `let`.
-  const done: { event: CommitEvent | null; covered: boolean; coveredAfter: boolean } = {
+  const done: { event: CommitEvent | null; before: State | null; after: State | null } = {
     event: null,
-    covered: false,
-    coveredAfter: false
+    before: null,
+    after: null
   }
   set((s) => {
     const current = s.flistWorking[characterId]
@@ -551,29 +551,13 @@ function _commit(
       flistWorking,
       ..._editorFollows(s, characterId, next, commit)
     }
-    done.covered = _slotHoldsView(s, characterId)
-    done.coveredAfter = _slotHoldsView({ ...s, ...patch }, characterId)
+    done.before = s
+    done.after = { ...s, ...patch }
     return patch
   })
-  const event = done.event
-  if (!event) return
-  if (commit.kind === 'view') endTyping(characterId)
-  else {
-    // Under a view the slot holds Live or a Backup, not the Workbench: a
-    // change made from there replaced the Workbench the view hides.
-    const replaced = done.covered ? hiddenWorkbench(characterId) : event.previous
-    if (replaced && !(commit.kind === 'edit' && commit.undoStep)) {
-      recordChange(
-        characterId,
-        commit.label,
-        replaced,
-        commit.kind === 'edit' ? commit.typing : undefined
-      )
-    }
-  }
-  if (!done.coveredAfter) unhideWorkbench(characterId)
-  else if (!done.covered && event.previous) hideWorkbench(characterId, event.previous)
-  else if (commit.kind !== 'view' && event.next) hideWorkbench(characterId, event.next)
+  const { event, before, after } = done
+  if (!event || !before || !after) return
+  recordCommit(commit, event, before, after)
   if (commit.kind === 'edit' || commit.kind === 'merged') {
     _scheduleFlush(characterId, () => {
       void get().flistFlushWorking(characterId)
@@ -581,152 +565,30 @@ function _commit(
   }
 }
 
-/** True while the window shows a character's Live or a Backup being
- *  browsed in its Workbench slot: nothing may be written from there. */
-function _showsReadOnlyView(s: State, characterId: string): boolean {
-  return !!s.flistViewingLive[characterId] || s.flistBrowseBackup?.characterId === characterId
-}
-
-/** True while a character's slot holds Live or a browsed Backup instead
- *  of the Workbench, which the undo stack then keeps aside. A Backup
- *  still loading for browse is not in the slot yet. */
-function _slotHoldsView(s: State, characterId: string): boolean {
-  const browse = s.flistBrowseBackup
-  return (
-    !!s.flistViewingLive[characterId] ||
-    (browse?.characterId === characterId && browse.status === 'ready')
-  )
-}
-
-/** One undo or redo step: the stack moves and hands back the payload to
- *  put in, which is committed as an edit, so it is unsaved and the
- *  autosave writes it over the etag the slot holds. The note says which
- *  change was stepped over. */
-function _undoStep(
-  get: () => State,
-  set: SlotSet,
-  characterId: string,
-  action: UndoAction
-): CommitLabel | null {
-  const take = action === 'undo' ? takeUndo : takeRedo
-  const s = get()
-  const slot = s.flistWorking[characterId]
-  if (!slot || _showsReadOnlyView(s, characterId)) return null
-  const entry = take(characterId, slot.payload)
-  if (!entry) return null
-  const pool = s.flistCharacterImages[characterId]
-  const toFind = imagesToFind(entry.payload, slot.payload, pool?.byId ?? null)
-  _commit(
+/** What the undo module may do to the Workbench: write its fields, commit
+ *  through the one commit point, and put work ahead of the next save. */
+function _undoHost(get: () => State, set: SlotSet): UndoHost {
+  return {
     get,
     set,
-    characterId,
-    { kind: 'edit', label: 'edit', payload: entry.payload, undoStep: true },
-    () => ({ flistWorkbenchNote: { characterId, action, label: entry.label, at: Date.now() } })
-  )
-  if (toFind.length > 0) {
-    _putBackBeforeSave(get, set, characterId, toFind, action)
+    commit: (characterId, commit, also) => _commit(get, set, characterId, commit, also),
+    beforeSave: _beforeNextSave
   }
-  return entry.label
 }
 
-/** An undo or redo brought back gallery images the pool may not hold.
- *  Their files are put back from the Trash before the payload is saved:
- *  the work is a link in the character's flush chain (see
- *  flistFlushWorking), so the autosave the step scheduled waits for it.
- *  Never rejects; what happened goes into the character's undo note. */
-function _putBackBeforeSave(
-  get: () => State,
-  set: SlotSet,
-  characterId: string,
-  imageIds: string[],
-  action: UndoAction
-): void {
+/** Run `work` as a link in the character's flush chain (see
+ *  flistFlushWorking): the next save waits for it. Never rejects. */
+function _beforeNextSave(characterId: string, work: () => Promise<void>): void {
   const prior = _flushInflight.get(characterId)
   const link = (async () => {
     if (prior) await prior.catch(() => {})
-    await _putBackFromTrash(get, set, characterId, imageIds, action)
+    await work()
   })()
   _flushInflight.set(characterId, link)
   const done = () => {
     if (_flushInflight.get(characterId) === link) _flushInflight.delete(characterId)
   }
   void link.then(done, done)
-}
-
-async function _putBackFromTrash(
-  get: () => State,
-  set: SlotSet,
-  characterId: string,
-  imageIds: string[],
-  action: UndoAction
-): Promise<void> {
-  const note = (text: string | null) => {
-    if (!text) return
-    set((s) => ({
-      flistUndoNotes: { ...s.flistUndoNotes, [characterId]: { text, at: Date.now() } }
-    }))
-  }
-  try {
-    // Only a pool the window has read can say which files are missing.
-    if (get().flistCharacterImages[characterId]?.status !== 'ready') {
-      await get().flistLoadCharacterImages(characterId)
-    }
-    const pool = get().flistCharacterImages[characterId]
-    if (pool?.status !== 'ready') throw new Error('the Pool could not be read')
-    const missing = imageIds.filter((id) => !(id in pool.byId))
-    if (missing.length === 0) return
-
-    // The Trash lists the newest delete first: of several files trashed
-    // under one id, the newest is the one the gallery last showed.
-    const { items } = await api.flistTrashList(characterId)
-    const inTrash = new Map<string, FlistTrashItem>()
-    for (const item of items) {
-      if (missing.includes(item.image_id) && !inTrash.has(item.image_id)) {
-        inTrash.set(item.image_id, item)
-      }
-    }
-    const putBack: string[] = []
-    const back = new Set<string>()
-    const renames = new Map<string, string>()
-    if (inTrash.size > 0) {
-      const res = await api.flistTrashPutBack(
-        characterId,
-        [...inTrash.values()].map((i) => i.trash_id)
-      )
-      for (const r of res.restored) {
-        const item = [...inTrash.values()].find((i) => i.trash_id === r.from)
-        if (!item) continue
-        back.add(item.image_id)
-        putBack.push(item.source_name ?? item.filename)
-        if (r.image_id !== item.image_id) renames.set(item.image_id, r.image_id)
-      }
-      await get().flistLoadCharacterImages(characterId)
-    }
-    const leftInTrash = missing.filter((id) => inTrash.has(id) && !back.has(id))
-    const gone = missing.filter((id) => !inTrash.has(id))
-
-    // A file the pool already had (same bytes) or that came back under
-    // `local-<sha8>` keeps its picture on the profile under that id.
-    const s = get()
-    const slot = s.flistWorking[characterId]
-    const renamed = slot && !_showsReadOnlyView(s, characterId)
-      ? renameGalleryRows(slot.payload, renames)
-      : null
-    if (renamed) {
-      _commit(get, set, characterId, {
-        kind: 'edit',
-        label: 'edit',
-        payload: renamed,
-        undoStep: true
-      })
-    }
-    note(putBackNote(action, { putBack, leftInTrash, missing: gone }))
-  } catch (e) {
-    const why = e instanceof Error ? e.message : String(e)
-    note(
-      `${stepName(action)} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`
-    )
-  }
 }
 
 type ExternalChange = NonNullable<State['flistExternalChange'][string]>
@@ -776,18 +638,12 @@ async function _takeExternalChange(
     ...cleared(st),
     flistWorkbenchNote: { characterId, action: 'updated' as const, label, at: Date.now() }
   })
-  const hidden = hiddenWorkbench(characterId)
-  if (s.flistViewingLive[characterId] || hidden) {
+  if (s.flistViewingLive[characterId] || viewHidesWorkbench(characterId)) {
     // The slot shows Live or a Backup, not the Workbench (or is about to
     // get the Workbench back from its own read): leave the slot alone.
-    // Going back to the Workbench reads it from disk; the change is its
-    // entry now, stepping from the Workbench the view hid. A read that
-    // brings nothing new (the event of a write an earlier read already
-    // took in) is not a change.
-    if (hidden && !isDeepEqual(hidden, payload)) {
-      recordChange(characterId, label, hidden)
-      hideWorkbench(characterId, { ...payload })
-    }
+    // Going back to the Workbench reads it from disk; the change is the
+    // Workbench's undo entry now.
+    recordChangeUnderView(characterId, label, payload)
     set(settled)
     return
   }
@@ -1567,11 +1423,11 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
   },
 
   flistUndo(characterId) {
-    return _undoStep(get, set, characterId, 'undo')
+    return undoStep(_undoHost(get, set), characterId, 'undo')
   },
 
   flistRedo(characterId) {
-    return _undoStep(get, set, characterId, 'redo')
+    return undoStep(_undoHost(get, set), characterId, 'redo')
   },
 
   flistDismissUndoNote(characterId) {
