@@ -8,6 +8,12 @@ export type {
 
 export { selectWorkingSlot } from './state/flist'
 export { selectDiffSources, type DiffSource } from './state/diffSources'
+export {
+  selectEditorDescription,
+  selectEditorDirty,
+  selectEditorInlines,
+  selectEditorTitle
+} from './state/editorView'
 
 // The store's slices, one file each; state/slices/slice.ts says what one is.
 import { createUiSlice, type UiSlice } from './state/slices/ui'

@@ -7,7 +7,7 @@ import { Toolbar } from '../features/editor/Toolbar'
 import { Tabs, type TabsTab } from './Tabs'
 import { countKinksWithChoice } from '../features/flist/kinksUnified'
 import { countDiffChanges } from '../features/flist/DiffPane'
-import { selectWorkingSlot } from '../state'
+import { selectEditorDirty, selectEditorTitle, selectWorkingSlot } from '../state'
 import { LogViewer } from '../features/logs/LogViewer'
 import { CrossSearch } from '../features/logs/CrossSearch'
 import { FindContactsModal } from '../features/logs/FindContactsModal'
@@ -39,8 +39,8 @@ export function AppLayout() {
   const setMode = useStore((s) => s.setMode)
   const activeChar = useStore((s) => s.activeCharacter)
   const activePartner = useStore((s) => s.activePartner)
-  const editorTitle = useStore((s) => s.editorTitle)
-  const dirty = useStore((s) => s.editorDirty)
+  const editorTitle = useStore(selectEditorTitle)
+  const dirty = useStore(selectEditorDirty)
   const browseBackup = useStore((s) => s.flistBrowseBackup)
   const crossSearchOpen = useStore((s) => s.crossSearchOpen)
   const setCrossSearchOpen = useStore((s) => s.setCrossSearchOpen)

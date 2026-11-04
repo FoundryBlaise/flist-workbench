@@ -135,11 +135,35 @@ def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
 #: The router modules whose routes declare what they answer (spec #8:
 #: #127 health + settings; #128-#130 add theirs; #131 makes it every
 #: group and drops this list).
-TYPED_GROUPS = {"health", "settings", "logs", "labels", "aliases", "index", "jobs"}
+TYPED_GROUPS = {
+    "health",
+    "settings",
+    "live",
+    "workbench",
+    "pull_backups",
+    "upload",
+    "logs",
+    "labels",
+    "aliases",
+    "index",
+    "jobs",
+}
 
 #: What a route that answers no JSON model declares instead: an event
 #: stream, bytes, or nothing.
 NOT_JSON = {"text/event-stream", "application/octet-stream", "application/zip", "image/png", "image/jpeg"}
+
+
+def _names_models(schema: dict) -> bool:
+    """Whether a body schema is a model, a list of models, or one of
+    several models (a route answering either shape, such as a Backup
+    saved or not)."""
+    if schema.get("$ref", "").startswith("#/components/schemas/"):
+        return True
+    if schema.get("type") == "array":
+        return _names_models(schema.get("items", {}))
+    branches = schema.get("anyOf") or schema.get("oneOf")
+    return bool(branches) and all(_names_models(b) for b in branches)
 
 
 def _undeclared_answer(operation: dict) -> str | None:
@@ -159,10 +183,7 @@ def _undeclared_answer(operation: dict) -> str | None:
         for media_type, body in content.items():
             if media_type in NOT_JSON:
                 continue
-            schema = body.get("schema", {})
-            # One model, or one of several (`LabelSet | LabelRemoved`).
-            refs = [s.get("$ref", "") for s in schema.get("anyOf", [schema])]
-            if not all(ref.startswith("#/components/schemas/") for ref in refs):
+            if not _names_models(body.get("schema", {})):
                 return f"{status} {media_type} names no model: {body.get('schema')}"
     return None
 

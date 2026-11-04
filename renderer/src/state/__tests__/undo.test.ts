@@ -4,7 +4,7 @@
 // reach the fake sidecar.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, useStore } from '../../state'
 import { resetUndoStacks } from '../undoStack'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 import { workbenchPayload, workingSlot } from '../../test/payloads'
@@ -43,9 +43,7 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistActiveCharacterId: null,
     editorActiveTab: 'description',
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -402,7 +400,7 @@ describe('a Restore and a reset to Live are undo entries', () => {
     expect(useStore.getState().flistUndo(CID)).toBe('restore')
     expect(descOf(slotOf().payload)).toBe('mine')
     expect(slotOf().overlay).toEqual(['character.description'])
-    expect(useStore.getState().editorContent).toBe('mine')
+    expect(selectEditorDescription(useStore.getState())).toBe('mine')
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
 
     // The undo is one ordinary save; the Backup kept is still there.
@@ -551,7 +549,7 @@ describe('a Restore and a reset to Live are undo entries', () => {
     expect(useStore.getState().editorReadOnly).toBe(false)
     expect(useStore.getState().flistArchive[CID]?.live).toEqual(live)
     expect(descOf(slotOf().payload)).toBe('parked')
-    expect(useStore.getState().editorContent).toBe('parked')
+    expect(selectEditorDescription(useStore.getState())).toBe('parked')
 
     fake.on(SAVE, json({ etag: 'after-undo' }))
     expect(useStore.getState().flistUndo(CID)).toBe('restore')

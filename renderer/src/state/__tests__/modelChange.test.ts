@@ -5,7 +5,7 @@
 // dispatch and the store's actions against the fake sidecar.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, selectEditorDirty, useStore } from '../../state'
 import { resetUndoStacks } from '../undoStack'
 import { applyWorkbenchEvent } from '../workbenchEvents'
 import type { WorkbenchEvent } from '../../lib/eventStream'
@@ -66,9 +66,7 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistWorkbenchNote: null,
     flistActiveCharacterId: CID,
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -81,7 +79,6 @@ afterEach(() => {
 describe('a model changes the Workbench while nothing is unsaved', () => {
   it('the window reloads it, shows the new description, and the change is one entry named after the tool', async () => {
     seed('as I left her')
-    useStore.setState({ editorContent: 'as I left her' })
     fake.on(READ, theirs('as the model wrote her', 'theirs'))
 
     await dispatch(modelEvent('theirs'))
@@ -89,8 +86,8 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
     expect(descOf(slotOf().payload)).toBe('as the model wrote her')
     expect(slotOf().etag).toBe('theirs')
     expect(slotOf().unsavedDirty).toBe(false)
-    expect(useStore.getState().editorContent).toBe('as the model wrote her')
-    expect(useStore.getState().editorDirty).toBe(false)
+    expect(selectEditorDescription(useStore.getState())).toBe('as the model wrote her')
+    expect(selectEditorDirty(useStore.getState())).toBe(false)
     expect(useStore.getState().flistExternalChange[CID]).toBeFalsy()
 
     expect(useStore.getState().flistUndo(CID)).toBe('mcp:set_description')
@@ -138,13 +135,13 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
   it('a character the window is not showing is reloaded too, and the editor keeps the active one', async () => {
     seed('the active one', '7')
     seed('as I left her')
-    useStore.setState({ flistActiveCharacterId: '7', editorContent: 'the active one' })
+    useStore.setState({ flistActiveCharacterId: '7' })
     fake.on(READ, theirs('as the model wrote her', 'theirs'))
 
     await dispatch(modelEvent('theirs'))
 
     expect(descOf(slotOf().payload)).toBe('as the model wrote her')
-    expect(useStore.getState().editorContent).toBe('the active one')
+    expect(selectEditorDescription(useStore.getState())).toBe('the active one')
     expect(useStore.getState().flistUndo(CID)).toBe('mcp:set_description')
   })
 
@@ -161,7 +158,6 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
 
   it('typing in the description while the reload is out is kept, and the description is asked about', async () => {
     seed('as I left her')
-    useStore.setState({ editorContent: 'as I left her' })
     fake.hold(READ)
     await dispatch(modelEvent('theirs'))
     useStore.getState().setEditorContent('as I left her, and more')
@@ -187,7 +183,7 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
 
     expect(useStore.getState().flistViewingLive[CID]).toBe(true)
     expect(descOf(slotOf().payload)).toBe('as published')
-    expect(useStore.getState().editorContent).toBe('as published')
+    expect(selectEditorDescription(useStore.getState())).toBe('as published')
     expect(useStore.getState().flistExternalChange[CID]).toBeFalsy()
 
     await useStore.getState().flistOpenWorking(CID)
