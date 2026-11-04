@@ -149,9 +149,10 @@ it or the user clears it (Settings → Foreign profiles); after 24 hours
 the next read fetches it again. Fetching spends a quarter-share of
 the hourly F-list budget so a model browsing profiles cannot leave
 the user unable to pull their own. The activity log records each
-profile a model read, by name, also when a spent budget hands back the
-cached copy, and keeps those names across a restart. When F-list says a profile is gone
-or not visible, its cached copy is deleted on the spot.
+profile a model read, by name, also when a spent budget hands back
+the cached copy, and keeps those names across a restart. When F-list
+says a profile is gone or not visible, its cached copy is deleted on
+the spot.
 
 **Looking at the result** — `render_profile_image` returns the profile
 as a picture, rendered by the app's own preview: same BBCode renderer,

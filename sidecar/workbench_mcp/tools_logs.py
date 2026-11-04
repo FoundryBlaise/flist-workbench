@@ -117,8 +117,9 @@ def read_log_messages(
     Each message carries its `hash` (needed to set a label) and its
     resolved IC/OOC Label; a system line (ad, roll, warning, status
     event) has `label: null` and is left out when `labels` is given.
-    `labels` filters to any of IC, OOC or Unlabeled. Long conversations run to tens of thousands of messages
-    — page with `offset`.
+    `labels` filters to any of IC, OOC or Unlabeled. Long
+    conversations run to tens of thousands of messages — page with
+    `offset`.
     """
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
