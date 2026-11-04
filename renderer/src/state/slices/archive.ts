@@ -25,7 +25,11 @@ import {
 import type { State } from '../../state'
 import type { SliceCreator } from './slice'
 
-type ArchiveSet = Parameters<SliceCreator<ArchiveSlice>>[0]
+// A helper's set: it writes only Archive fields, and reaches the other
+// slices through their actions (as the Workbench's `WorkbenchSet`).
+type ArchiveSet = (
+  patch: Partial<ArchiveState> | ((s: State) => Partial<ArchiveState>)
+) => void
 type ArchiveGet = () => State
 
 export type ArchiveState = {
