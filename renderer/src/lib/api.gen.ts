@@ -2236,6 +2236,75 @@ export interface components {
             /** Primary Name */
             primary_name: string;
         };
+        /**
+         * Backup
+         * @description One Backup as the Backup list shows it (`list_zip_backups`).
+         *     `kind` is the older provenance the extension sorts by, as the
+         *     Backup's `backup-meta.json` records it ("unknown" without one);
+         *     `source` and `occasion` are "unknown" and null for a Backup from
+         *     before they were recorded. `holds_profile` is false for the Backup
+         *     the move to one Workbench made, which can only be downloaded.
+         *     `name` is the user's rename, null until there is one.
+         */
+        Backup: {
+            /** Filename */
+            filename: string;
+            /** Created At */
+            created_at: number;
+            /** Size */
+            size: number;
+            /** Kind */
+            kind: string;
+            /** Source */
+            source: ("live" | "workbench") | "unknown";
+            /** Occasion */
+            occasion: ("manual" | "before-upload" | "before-restore" | "before-replace" | "migration" | "backup-all") | null;
+            /** Holds Profile */
+            holds_profile: boolean;
+            /** Name */
+            name: string | null;
+        };
+        /** BackupList */
+        BackupList: {
+            /** Character Id */
+            character_id: string;
+            /** Backups */
+            backups: components["schemas"]["Backup"][];
+        };
+        /**
+         * BackupNotSaved
+         * @description Nothing written: the newest Backup already holds this content,
+         *     or the character has no Live to back up.
+         */
+        BackupNotSaved: {
+            /**
+             * Saved
+             * @constant
+             */
+            saved: false;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "unchanged" | "no_live";
+        };
+        /**
+         * BackupPayload
+         * @description A Backup's profile, for browsing it read-only. `meta` is its
+         *     `backup-meta.json`, null for a Backup without one.
+         */
+        BackupPayload: {
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Filename */
+            filename: string;
+            /** Meta */
+            meta: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** BackupRestored */
         BackupRestored: {
             workbench: components["schemas"]["WorkbenchInfo"];
@@ -2248,6 +2317,34 @@ export interface components {
             /** Loaded */
             loaded: string;
             backed_up_first: components["schemas"]["KeptBackup"] | null;
+        };
+        /** BackupSaved */
+        BackupSaved: {
+            /**
+             * Saved
+             * @constant
+             */
+            saved: true;
+            /** Path */
+            path: string;
+            /** Filename */
+            filename: string;
+            /** Created At */
+            created_at: number;
+            /** Size */
+            size: number;
+            /** Kind */
+            kind: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "live" | "workbench";
+            /**
+             * Occasion
+             * @enum {string}
+             */
+            occasion: "manual" | "before-upload" | "before-restore" | "before-replace" | "migration" | "backup-all";
         };
         /**
          * DiscoverModelsRequest
@@ -2317,6 +2414,59 @@ export interface components {
             status: "ok";
             /** Version */
             version: string;
+        };
+        /**
+         * Job
+         * @description Long work the sidecar runs as a job, of any kind (`services.jobs`):
+         *     a Pull, Back up all, an ingest. `params`, `progress` and `result`
+         *     are the kind's own. The routes that start one and `/jobs` answer it.
+         */
+        Job: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Resource */
+            resource: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "running" | "done" | "cancelled" | "failed";
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Progress */
+            progress: {
+                [key: string]: unknown;
+            };
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            } | null;
+            error: components["schemas"]["JobError"] | null;
+            /** Cancel Requested */
+            cancel_requested: boolean;
+            /** Created At */
+            created_at: number;
+            /** Finished At */
+            finished_at: number | null;
+        };
+        /**
+         * JobError
+         * @description Why a job failed, in the one error shape. `code` is the job's own
+         *     (such as `embedding_model_changed`), not only a refusal code.
+         */
+        JobError: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Details */
+            details: {
+                [key: string]: unknown;
+            };
         };
         /**
          * KeptBackup
@@ -3309,13 +3459,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The job, then its progress events until it ends. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": string;
+                };
+            };
+            /** @description The job, started (`wait=false`). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3348,9 +3507,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BackupSaved"] | components["schemas"]["BackupNotSaved"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3381,9 +3538,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BackupList"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3449,9 +3604,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Backup"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3477,13 +3630,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The Backup's zip, as it is on disk. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/zip": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3515,9 +3668,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BackupPayload"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3542,13 +3693,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The job, then its progress events until it ends. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": string;
+                };
+            };
+            /** @description The job, started (`wait=false`). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */

@@ -570,10 +570,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The job, then its progress events until it ends.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -583,6 +585,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The job, started (`wait=false`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -622,8 +634,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupSaved"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BackupNotSaved"
+                    }
+                  ],
                   "title": "Response Flist Character Zip Backup Flist Character  Character Id  Zip Backup Post"
                 }
               }
@@ -663,9 +681,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Zip Backups Flist Character  Character Id  Zip Backups Get"
+                  "$ref": "#/components/schemas/BackupList"
                 }
               }
             }
@@ -764,9 +780,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Zip Backup Rename Flist Character  Character Id  Zip Backups  Filename  Patch"
+                  "$ref": "#/components/schemas/Backup"
                 }
               }
             }
@@ -811,10 +825,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Backup's zip, as it is on disk.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -862,9 +879,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Zip Backup Payload Flist Character  Character Id  Zip Backups  Filename  Payload Get"
+                  "$ref": "#/components/schemas/BackupPayload"
                 }
               }
             }
@@ -901,10 +916,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The job, then its progress events until it ends.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -914,6 +931,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The job, started (`wait=false`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -4771,6 +4798,171 @@
         ],
         "title": "AliasAdd"
       },
+      "Backup": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "live",
+                  "workbench"
+                ]
+              },
+              {
+                "type": "string",
+                "const": "unknown"
+              }
+            ],
+            "title": "Source"
+          },
+          "occasion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "before-upload",
+                  "before-restore",
+                  "before-replace",
+                  "migration",
+                  "backup-all"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occasion"
+          },
+          "holds_profile": {
+            "type": "boolean",
+            "title": "Holds Profile"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "created_at",
+          "size",
+          "kind",
+          "source",
+          "occasion",
+          "holds_profile",
+          "name"
+        ],
+        "title": "Backup",
+        "description": "One Backup as the Backup list shows it (`list_zip_backups`).\n`kind` is the older provenance the extension sorts by, as the\nBackup's `backup-meta.json` records it (\"unknown\" without one);\n`source` and `occasion` are \"unknown\" and null for a Backup from\nbefore they were recorded. `holds_profile` is false for the Backup\nthe move to one Workbench made, which can only be downloaded.\n`name` is the user's rename, null until there is one."
+      },
+      "BackupList": {
+        "properties": {
+          "character_id": {
+            "type": "string",
+            "title": "Character Id"
+          },
+          "backups": {
+            "items": {
+              "$ref": "#/components/schemas/Backup"
+            },
+            "type": "array",
+            "title": "Backups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character_id",
+          "backups"
+        ],
+        "title": "BackupList"
+      },
+      "BackupNotSaved": {
+        "properties": {
+          "saved": {
+            "type": "boolean",
+            "const": false,
+            "title": "Saved"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "unchanged",
+              "no_live"
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "saved",
+          "reason"
+        ],
+        "title": "BackupNotSaved",
+        "description": "Nothing written: the newest Backup already holds this content,\nor the character has no Live to back up."
+      },
+      "BackupPayload": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "payload",
+          "filename",
+          "meta"
+        ],
+        "title": "BackupPayload",
+        "description": "A Backup's profile, for browsing it read-only. `meta` is its\n`backup-meta.json`, null for a Backup without one."
+      },
       "BackupRestored": {
         "properties": {
           "workbench": {
@@ -4810,6 +5002,68 @@
           "backed_up_first"
         ],
         "title": "BackupRestored"
+      },
+      "BackupSaved": {
+        "properties": {
+          "saved": {
+            "type": "boolean",
+            "const": true,
+            "title": "Saved"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "workbench"
+            ],
+            "title": "Source"
+          },
+          "occasion": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "before-upload",
+              "before-restore",
+              "before-replace",
+              "migration",
+              "backup-all"
+            ],
+            "title": "Occasion"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "saved",
+          "path",
+          "filename",
+          "created_at",
+          "size",
+          "kind",
+          "source",
+          "occasion"
+        ],
+        "title": "BackupSaved"
       },
       "DiscoverModelsRequest": {
         "properties": {},
@@ -4992,6 +5246,127 @@
         ],
         "title": "Health",
         "description": "The sidecar answers, and which app version started it."
+      },
+      "Job": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "resource": {
+            "type": "string",
+            "title": "Resource"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "cancelled",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "progress": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Progress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "resource",
+          "state",
+          "params",
+          "progress",
+          "result",
+          "error",
+          "cancel_requested",
+          "created_at",
+          "finished_at"
+        ],
+        "title": "Job",
+        "description": "Long work the sidecar runs as a job, of any kind (`services.jobs`):\na Pull, Back up all, an ingest. `params`, `progress` and `result`\nare the kind's own. The routes that start one and `/jobs` answer it."
+      },
+      "JobError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "JobError",
+        "description": "Why a job failed, in the one error shape. `code` is the job's own\n(such as `embedding_model_changed`), not only a refusal code."
       },
       "KeptBackup": {
         "properties": {

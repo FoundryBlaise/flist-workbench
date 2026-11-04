@@ -86,51 +86,10 @@ export type FlistRosterEntry = {
   pull_status?: FlistPullStatus
 }
 
-/** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
- *  Each backup is a userscript-restoreable archive (JSON + images +
- *  avatar) written by the Tools → Back up all sweep or the per-
- *  character right-click → Back up now action. `kind` is read from
- *  the embedded `backup-meta.json` (added 2026-06-17); older backups
- *  predating that write come back as `"unknown"`. */
-export type FlistZipBackupKind =
-  | 'manual_single'
-  | 'manual_bulk'
-  | 'import'
-  | 'scheduled'
-  | 'pre_upload'
-  | 'unknown'
-
-/** What a Backup holds: the Live or the Workbench of its moment.
- *  Backups from before the app recorded it come back as `'unknown'`. */
-export type FlistBackupSource = 'live' | 'workbench' | 'unknown'
-
-/** Why a Backup was made; `null` for Backups from before the app
- *  recorded it. */
-export type FlistBackupOccasion =
-  | 'manual'
-  | 'before-upload'
-  | 'before-restore'
-  | 'before-replace'
-  | 'migration'
-  | 'backup-all'
-
-export type FlistZipBackupEntry = {
-  filename: string
-  created_at: number
-  size: number
-  kind: FlistZipBackupKind
-  source: FlistBackupSource
-  occasion: FlistBackupOccasion | null
-  /** False for a Backup that holds no profile: the one the move to one
-   *  Workbench made of the older copies from before the upgrade. The
-   *  sidecar refuses to restore, browse or upload it; it can be
-   *  downloaded. */
-  holds_profile: boolean
-  /** User-set name from `_names.json`. `null` when the user hasn't
-   *  renamed this backup yet — the UI then derives a default label
-   *  from the timestamp. */
-  name: string | null
-}
+/** A Backup as the Backup list shows it: its origin (`source`,
+ *  `occasion`; `kind` is the older one the extension sorts by),
+ *  whether it holds a profile, and the user's rename (`name`). */
+export type FlistZipBackupEntry = Schema<'Backup'>
 
 export type FlistCharacterImage = {
   image_id: string
@@ -1041,19 +1000,12 @@ export const api = {
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
-    request<{
-      saved: boolean
-      path?: string
-      filename?: string
-      created_at?: number
-      size?: number
-      reason?: string
-    }>(
+    request<Answer<'/flist/character/{character_id}/zip-backup', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backup`,
       { method: 'POST' }
     ),
   flistZipBackups: (characterId: string | number) =>
-    get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
+    get<Answer<'/flist/character/{character_id}/zip-backups', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
   /** Rename a single backup (user-set label persisted in a sidecar
@@ -1065,7 +1017,7 @@ export const api = {
     filename: string,
     name: string
   ) =>
-    request<FlistZipBackupEntry>(
+    request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'patch'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
       { method: 'PATCH', body: JSON.stringify({ name }) }
     ),
@@ -1079,7 +1031,7 @@ export const api = {
     filename: string
   ): Promise<void> => {
     try {
-      await request<unknown>(
+      await request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'delete'>>(
         `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
         { method: 'DELETE' }
       )
@@ -1105,11 +1057,7 @@ export const api = {
     characterId: string | number,
     filename: string
   ) =>
-    get<{
-      payload: Record<string, unknown>
-      filename: string
-      meta: { kind?: string; created_at?: string; note?: string } | null
-    }>(
+    get<Answer<'/flist/character/{character_id}/zip-backups/{filename}/payload', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/payload`
     ),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
