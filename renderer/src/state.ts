@@ -1172,7 +1172,7 @@ async function _takeExternalChange(
     // entry now, stepping from the Workbench the view hid. A read that
     // brings nothing new (the event of a write an earlier read already
     // took in) is not a change.
-    if (hidden && JSON.stringify(hidden) !== JSON.stringify(payload)) {
+    if (hidden && !isDeepEqual(hidden, payload)) {
       recordChange(characterId, label, hidden)
       hideWorkbench(characterId, { ...payload })
     }
