@@ -76,7 +76,7 @@ def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
 #: The router modules whose routes declare what they answer (spec #8:
 #: #127 health + settings; #128-#130 add theirs; #131 makes it every
 #: group and drops this list).
-TYPED_GROUPS = {"health", "settings", "live", "workbench", "pull_backups"}
+TYPED_GROUPS = {"health", "settings", "live", "workbench", "pull_backups", "upload"}
 
 #: What a route that answers no JSON model declares instead: an event
 #: stream, bytes, or nothing.

@@ -2376,6 +2376,17 @@ export interface components {
             /** Error */
             error: string | null;
         };
+        /**
+         * ExtensionSeen
+         * @description The extension version as of its last paired call; both null
+         *     until it has made one since the sidecar started.
+         */
+        ExtensionSeen: {
+            /** Version */
+            version: string | null;
+            /** Seen At */
+            seen_at: number | null;
+        };
         /** FlistSignInRequest */
         FlistSignInRequest: {
             /** Account */
@@ -2402,6 +2413,30 @@ export interface components {
             /** Cache Cap Mb */
             cache_cap_mb?: number | null;
         };
+        /** HandshakeAnswered */
+        HandshakeAnswered: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
+        /**
+         * HandshakeUnknown
+         * @description The handshake expired or never existed.
+         */
+        HandshakeUnknown: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: false;
+            /**
+             * Error
+             * @constant
+             */
+            error: "expired_or_unknown";
+        };
         /**
          * Health
          * @description The sidecar answers, and which app version started it.
@@ -2414,6 +2449,13 @@ export interface components {
             status: "ok";
             /** Version */
             version: string;
+        };
+        /** ImageIdsDeferred */
+        ImageIdsDeferred: {
+            /** Character */
+            character: string;
+            /** Deferred */
+            deferred: boolean;
         };
         /**
          * Job
@@ -2632,6 +2674,93 @@ export interface components {
             /** Required */
             required: boolean;
         };
+        /**
+         * PairingHandshake
+         * @description A pairing the extension started: it keeps `token` and polls the
+         *     handshake's status until the window accepts it.
+         */
+        PairingHandshake: {
+            /** Handshake Id */
+            handshake_id: string;
+            /** Token */
+            token: string;
+        };
+        /** PairingHandshakeStatus */
+        PairingHandshakeStatus: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "accepted" | "rejected" | "expired";
+        };
+        /** PairingRevoked */
+        PairingRevoked: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** PairingStatus */
+        PairingStatus: {
+            /** Paired */
+            paired: boolean;
+        };
+        /**
+         * PendingHandshake
+         * @description A pairing waiting for the window's accept. `fingerprint` is a
+         *     short form of the token, for the user to compare.
+         */
+        PendingHandshake: {
+            /** Handshake Id */
+            handshake_id: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Created At */
+            created_at: number;
+        };
+        /** PendingHandshakes */
+        PendingHandshakes: {
+            /** Pending */
+            pending: components["schemas"]["PendingHandshake"][];
+        };
+        /**
+         * PreUploadBackupKept
+         * @description The Backup taken before an Upload; `snapshot_id` is the
+         *     extension's name for its file name.
+         */
+        PreUploadBackupKept: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Path */
+            path: string;
+            /** Bytes */
+            bytes: number;
+        };
+        /** PreUploadBackupNotKept */
+        PreUploadBackupNotKept: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: false;
+            /**
+             * Error
+             * @constant
+             */
+            error: "unknown_character";
+        };
+        /** PullScheduled */
+        PullScheduled: {
+            /** Scheduled */
+            scheduled: boolean;
+            /** Character */
+            character: string;
+            /** Delay Seconds */
+            delay_seconds: number;
+        };
         /** RagIngestRequest */
         RagIngestRequest: {
             /** Character */
@@ -2811,6 +2940,74 @@ export interface components {
         ShutdownStarted: {
             /** Stopping */
             stopping: boolean;
+        };
+        /**
+         * UploadCharacter
+         * @description An archived character the extension can take Upload sources from.
+         */
+        UploadCharacter: {
+            /** Name */
+            name: string;
+            /** Character Id */
+            character_id: string;
+        };
+        /** UploadDone */
+        UploadDone: {
+            /** Ok */
+            ok: boolean;
+        };
+        /**
+         * UploadSourceBackup
+         * @description A Backup as an Upload source. `kind` "pre-restore" is the
+         *     extension's name for a Backup taken before an Upload; `backup_kind`
+         *     is the Backup list's `kind`. `upload_refused` says why it cannot be
+         *     uploaded, or is null.
+         */
+        UploadSourceBackup: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "backup" | "pre-restore";
+            /** Label */
+            label: string;
+            /** Created At */
+            created_at: string | null;
+            /** Image Count */
+            image_count: number;
+            /** Backup Kind */
+            backup_kind: string | null;
+            /** Name */
+            name: string | null;
+            /** Upload Refused */
+            upload_refused: string | null;
+        };
+        /**
+         * UploadSourceWorkbench
+         * @description The Workbench as an Upload source. `kind` is "set" because
+         *     extension 0.1.1 finds the Workbench by it.
+         */
+        UploadSourceWorkbench: {
+            /**
+             * Id
+             * @constant
+             */
+            id: "workbench";
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "set";
+            /** Label */
+            label: string;
+            /** Created At */
+            created_at: string | null;
+            /** Image Count */
+            image_count: number;
+            /** Upload Refused */
+            upload_refused: null;
         };
         /**
          * WorkbenchAbsent
@@ -4688,13 +4885,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The Upload ZIP, as an attachment. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/zip": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4723,9 +4920,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["PairingHandshake"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4756,9 +4951,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["PairingHandshakeStatus"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4787,9 +4980,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PendingHandshakes"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4822,9 +5013,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["HandshakeAnswered"] | components["schemas"]["HandshakeUnknown"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4857,9 +5046,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["HandshakeAnswered"] | components["schemas"]["HandshakeUnknown"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4888,9 +5075,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["PairingRevoked"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4919,9 +5104,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["PairingStatus"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4950,9 +5133,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ExtensionSeen"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -4984,9 +5165,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["UploadCharacter"][];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5020,9 +5199,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": (components["schemas"]["UploadSourceWorkbench"] | components["schemas"]["UploadSourceBackup"])[];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5052,13 +5229,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The Upload source's zip. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/zip": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5094,9 +5271,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PreUploadBackupKept"] | components["schemas"]["PreUploadBackupNotKept"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5132,9 +5307,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ImageIdsDeferred"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5170,9 +5343,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PullScheduled"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -5208,9 +5379,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["UploadDone"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */

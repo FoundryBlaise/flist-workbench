@@ -2277,10 +2277,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Upload ZIP, as an attachment.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -2307,11 +2310,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object",
-                  "title": "Response Handshake Begin Restore Handshake Post"
+                  "$ref": "#/components/schemas/PairingHandshake"
                 }
               }
             }
@@ -2350,11 +2349,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Handshake Status Restore Handshake Status Get"
+                  "$ref": "#/components/schemas/PairingHandshakeStatus"
                 }
               }
             }
@@ -2382,9 +2377,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Handshake Pending Restore Handshake Pending Get"
+                  "$ref": "#/components/schemas/PendingHandshakes"
                 }
               }
             }
@@ -2422,8 +2415,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandshakeAnswered"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HandshakeUnknown"
+                    }
+                  ],
                   "title": "Response Handshake Accept Restore Handshake Accept Post"
                 }
               }
@@ -2462,8 +2461,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandshakeAnswered"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HandshakeUnknown"
+                    }
+                  ],
                   "title": "Response Handshake Reject Restore Handshake Reject Post"
                 }
               }
@@ -2492,11 +2497,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "type": "object",
-                  "title": "Response Pairing Token Revoke Restore Token Delete"
+                  "$ref": "#/components/schemas/PairingRevoked"
                 }
               }
             }
@@ -2525,11 +2526,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "type": "object",
-                  "title": "Response Pairing Status Pairing Get"
+                  "$ref": "#/components/schemas/PairingStatus"
                 }
               }
             }
@@ -2558,9 +2555,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Extension Seen Restore Extension Get"
+                  "$ref": "#/components/schemas/ExtensionSeen"
                 }
               }
             }
@@ -2624,8 +2619,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/UploadCharacter"
                   },
                   "title": "Response Upload Characters Restore Characters Get"
                 }
@@ -2700,8 +2694,14 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/UploadSourceWorkbench"
+                      },
+                      {
+                        "$ref": "#/components/schemas/UploadSourceBackup"
+                      }
+                    ]
                   },
                   "title": "Response Upload Sources Restore Snapshots Get"
                 }
@@ -2780,10 +2780,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Upload source's zip.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -2854,8 +2857,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PreUploadBackupKept"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PreUploadBackupNotKept"
+                    }
+                  ],
                   "title": "Response Pre Upload Backup Restore Snapshot Fresh Post"
                 }
               }
@@ -2929,9 +2938,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Upload Image Ids Restore Image Ids Post"
+                  "$ref": "#/components/schemas/ImageIdsDeferred"
                 }
               }
             }
@@ -3004,9 +3011,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Upload Saved Restore Saved Post"
+                  "$ref": "#/components/schemas/PullScheduled"
                 }
               }
             }
@@ -3078,11 +3083,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "title": "Response Upload Done Restore Done Post"
+                  "$ref": "#/components/schemas/UploadDone"
                 }
               }
             }
@@ -5154,6 +5155,40 @@
         ],
         "title": "EmbeddingModels"
       },
+      "ExtensionSeen": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "seen_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seen At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "seen_at"
+        ],
+        "title": "ExtensionSeen",
+        "description": "The extension version as of its last paired call; both null\nuntil it has made one since the sidecar started."
+      },
       "FlistSignInRequest": {
         "properties": {
           "account": {
@@ -5226,6 +5261,43 @@
         "type": "object",
         "title": "ForeignSettingsUpdate"
       },
+      "HandshakeAnswered": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "HandshakeAnswered"
+      },
+      "HandshakeUnknown": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ok"
+          },
+          "error": {
+            "type": "string",
+            "const": "expired_or_unknown",
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "error"
+        ],
+        "title": "HandshakeUnknown",
+        "description": "The handshake expired or never existed."
+      },
       "Health": {
         "properties": {
           "status": {
@@ -5246,6 +5318,25 @@
         ],
         "title": "Health",
         "description": "The sidecar answers, and which app version started it."
+      },
+      "ImageIdsDeferred": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "deferred": {
+            "type": "boolean",
+            "title": "Deferred"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "deferred"
+        ],
+        "title": "ImageIdsDeferred"
       },
       "Job": {
         "properties": {
@@ -5804,6 +5895,192 @@
           "required"
         ],
         "title": "McpTokenRevoked"
+      },
+      "PairingHandshake": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "handshake_id",
+          "token"
+        ],
+        "title": "PairingHandshake",
+        "description": "A pairing the extension started: it keeps `token` and polls the\nhandshake's status until the window accepts it."
+      },
+      "PairingHandshakeStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "rejected",
+              "expired"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "PairingHandshakeStatus"
+      },
+      "PairingRevoked": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "PairingRevoked"
+      },
+      "PairingStatus": {
+        "properties": {
+          "paired": {
+            "type": "boolean",
+            "title": "Paired"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "paired"
+        ],
+        "title": "PairingStatus"
+      },
+      "PendingHandshake": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "handshake_id",
+          "fingerprint",
+          "created_at"
+        ],
+        "title": "PendingHandshake",
+        "description": "A pairing waiting for the window's accept. `fingerprint` is a\nshort form of the token, for the user to compare."
+      },
+      "PendingHandshakes": {
+        "properties": {
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/PendingHandshake"
+            },
+            "type": "array",
+            "title": "Pending"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pending"
+        ],
+        "title": "PendingHandshakes"
+      },
+      "PreUploadBackupKept": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "snapshot_id",
+          "path",
+          "bytes"
+        ],
+        "title": "PreUploadBackupKept",
+        "description": "The Backup taken before an Upload; `snapshot_id` is the\nextension's name for its file name."
+      },
+      "PreUploadBackupNotKept": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ok"
+          },
+          "error": {
+            "type": "string",
+            "const": "unknown_character",
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "error"
+        ],
+        "title": "PreUploadBackupNotKept"
+      },
+      "PullScheduled": {
+        "properties": {
+          "scheduled": {
+            "type": "boolean",
+            "title": "Scheduled"
+          },
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Delay Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scheduled",
+          "character",
+          "delay_seconds"
+        ],
+        "title": "PullScheduled"
       },
       "RagIngestRequest": {
         "properties": {
@@ -6394,6 +6671,171 @@
           "stopping"
         ],
         "title": "ShutdownStarted"
+      },
+      "UploadCharacter": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "character_id": {
+            "type": "string",
+            "title": "Character Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "character_id"
+        ],
+        "title": "UploadCharacter",
+        "description": "An archived character the extension can take Upload sources from."
+      },
+      "UploadDone": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "UploadDone"
+      },
+      "UploadSourceBackup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "backup",
+              "pre-restore"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "image_count": {
+            "type": "integer",
+            "title": "Image Count"
+          },
+          "backup_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backup Kind"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "upload_refused": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Refused"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "created_at",
+          "image_count",
+          "backup_kind",
+          "name",
+          "upload_refused"
+        ],
+        "title": "UploadSourceBackup",
+        "description": "A Backup as an Upload source. `kind` \"pre-restore\" is the\nextension's name for a Backup taken before an Upload; `backup_kind`\nis the Backup list's `kind`. `upload_refused` says why it cannot be\nuploaded, or is null."
+      },
+      "UploadSourceWorkbench": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "const": "workbench",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "set",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "image_count": {
+            "type": "integer",
+            "title": "Image Count"
+          },
+          "upload_refused": {
+            "type": "null",
+            "title": "Upload Refused"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "created_at",
+          "image_count",
+          "upload_refused"
+        ],
+        "title": "UploadSourceWorkbench",
+        "description": "The Workbench as an Upload source. `kind` is \"set\" because\nextension 0.1.1 finds the Workbench by it."
       },
       "WorkbenchAbsent": {
         "properties": {

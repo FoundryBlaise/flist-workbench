@@ -1309,29 +1309,27 @@ export const api = {
 
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () =>
-    get<{ pending: { handshake_id: string; fingerprint: string; created_at: number }[] }>(
-      '/restore/handshake/pending'
-    ),
+    get<Answer<'/restore/handshake/pending', 'get'>>('/restore/handshake/pending'),
   restoreAcceptHandshake: (handshakeId: string) =>
-    request<{ ok: boolean; error?: string }>('/restore/handshake/accept', {
+    request<Answer<'/restore/handshake/accept', 'post'>>('/restore/handshake/accept', {
       method: 'POST',
       body: JSON.stringify({ handshake_id: handshakeId })
     }),
   restoreRejectHandshake: (handshakeId: string) =>
-    request<{ ok: boolean; error?: string }>('/restore/handshake/reject', {
+    request<Answer<'/restore/handshake/reject', 'post'>>('/restore/handshake/reject', {
       method: 'POST',
       body: JSON.stringify({ handshake_id: handshakeId })
     }),
   restoreRevokeToken: () =>
-    request<{ ok: boolean }>('/restore/token', { method: 'DELETE' }),
+    request<Answer<'/restore/token', 'delete'>>('/restore/token', { method: 'DELETE' }),
   /** Whether a pairing token is stored. The token itself never comes
    *  back; only the app window can ask. */
-  pairingStatus: () => get<{ paired: boolean }>('/pairing'),
+  pairingStatus: () => get<Answer<'/pairing', 'get'>>('/pairing'),
 
   /** The extension version the browser runs, as of its last paired
    *  call. Null until the extension has made one since the app started. */
   restoreExtensionSeen: () =>
-    request<{ version: string | null; seen_at: number | null }>('/restore/extension')
+    request<Answer<'/restore/extension', 'get'>>('/restore/extension')
 }
 
 function jobEventsPath(jobId: string): string {
