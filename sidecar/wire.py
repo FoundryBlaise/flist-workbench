@@ -8,6 +8,9 @@ Every route says what its ok answer is, so the schema (`openapi.json`,
   The class name is the schema's and the renderer's name for it, so it
   is unique across the app. A model lives in the router file that
   answers it; one that several routers answer lives here.
+- A key an answer sometimes leaves out is typed `X | MISSING`, default
+  `MISSING`: the model leaves it out too (rather than sending null),
+  and the schema makes it optional (`key?: X` in the renderer's types).
 - An event stream, bytes or no body has no model; the route declares
   `response_class=` and `responses=` from the helpers below (or
   `status_code=204, response_class=Response` for no body).
@@ -22,6 +25,9 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+from pydantic.experimental.missing_sentinel import MISSING
+
+__all__ = ["MISSING", "WireModel", "binary", "event_stream", "image"]
 
 
 class WireModel(BaseModel):
@@ -55,5 +61,20 @@ def binary(media_type: str, description: str) -> dict[int | str, dict[str, Any]]
         200: {
             "description": description,
             "content": {media_type: {"schema": {"type": "string", "format": "binary"}}},
+        }
+    }
+
+
+#: The types an image route may answer: the file's own.
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif")
+
+
+def image(description: str) -> dict[int | str, dict[str, Any]]:
+    """The `responses=` of a route answering an image file, a PNG, JPEG
+    or GIF as the file is (with `response_class=FileResponse`)."""
+    return {
+        200: {
+            "description": description,
+            "content": {t: {"schema": {"type": "string", "format": "binary"}} for t in IMAGE_TYPES},
         }
     }

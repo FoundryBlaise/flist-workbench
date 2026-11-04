@@ -209,9 +209,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Eicons Search Eicons Search Get"
+                  "$ref": "#/components/schemas/Eicons"
                 }
               }
             }
@@ -251,9 +249,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Profile Profile  Name  Get"
+                  "$ref": "#/components/schemas/PublicProfile"
                 }
               }
             }
@@ -282,9 +278,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Flist Session Get Flist Session Get"
+                  "$ref": "#/components/schemas/FlistSession"
                 }
               }
             }
@@ -321,9 +315,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Flist Session Create Flist Session Post"
+                  "$ref": "#/components/schemas/SignedIn"
                 }
               }
             }
@@ -349,9 +341,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Flist Session Delete Flist Session Delete"
+                  "$ref": "#/components/schemas/SignedOut"
                 }
               }
             }
@@ -380,9 +370,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Flist Avatars Prefetch Flist Avatars Prefetch Post"
+                  "$ref": "#/components/schemas/AvatarPrefetchScheduled"
                 }
               }
             }
@@ -411,9 +399,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Flist Activity Snapshot Flist Activity Get"
+                  "$ref": "#/components/schemas/FlistActivity"
                 }
               }
             }
@@ -442,9 +428,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Flist Characters Flist Characters Get"
+                  "$ref": "#/components/schemas/Roster"
                 }
               }
             }
@@ -484,9 +468,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Mapping List Flist Mapping List Get"
+                  "$ref": "#/components/schemas/MappingList"
                 }
               }
             }
@@ -522,10 +504,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The avatar F-list has for the character.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -1306,10 +1291,25 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "An image file in the Pool.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -1348,9 +1348,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Images List Flist Character  Character Id  Images Get"
+                  "$ref": "#/components/schemas/Pool"
                 }
               }
             }
@@ -1388,9 +1386,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Image Upload Flist Character  Character Id  Images Post"
+                  "$ref": "#/components/schemas/UploadedImage"
                 }
               }
             }
@@ -1435,10 +1431,25 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Pool's image file of that id.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -1477,9 +1488,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Images Repair Flist Character  Character Id  Images Repair Post"
+                  "$ref": "#/components/schemas/GalleryRepair"
                 }
               }
             }
@@ -1528,9 +1537,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Image Remove Flist Character  Character Id  Images  Image Id  Delete"
+                  "$ref": "#/components/schemas/ImageTrashed"
                 }
               }
             }
@@ -1580,9 +1587,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Images Trash Flist Character  Character Id  Images Trash Post"
+                  "$ref": "#/components/schemas/ImagesDeleted"
                 }
               }
             }
@@ -1622,9 +1627,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Image References Flist Character  Character Id  Image References Get"
+                  "$ref": "#/components/schemas/ImageReferences"
                 }
               }
             }
@@ -1663,9 +1666,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash List Flist Character  Character Id  Trash Get"
+                  "$ref": "#/components/schemas/Trash"
                 }
               }
             }
@@ -1703,9 +1704,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Empty Flist Character  Character Id  Trash Delete"
+                  "$ref": "#/components/schemas/TrashEmptied"
                 }
               }
             }
@@ -1750,10 +1749,25 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "An image file in the Trash.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -1802,9 +1816,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Put Back Flist Character  Character Id  Trash Put Back Post"
+                  "$ref": "#/components/schemas/ImagesPutBack"
                 }
               }
             }
@@ -1854,9 +1866,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Backups Put Back Flist Character  Character Id  Trash Backups Put Back Post"
+                  "$ref": "#/components/schemas/BackupsPutBack"
                 }
               }
             }
@@ -1906,9 +1916,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Labels Put Back Flist Character  Character Id  Trash Labels Put Back Post"
+                  "$ref": "#/components/schemas/LabelsPutBack"
                 }
               }
             }
@@ -1957,9 +1965,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Purge Flist Character  Character Id  Trash Purge Post"
+                  "$ref": "#/components/schemas/TrashPurged"
                 }
               }
             }
@@ -2008,9 +2014,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Backups Purge Flist Character  Character Id  Trash Backups Purge Post"
+                  "$ref": "#/components/schemas/TrashPurged"
                 }
               }
             }
@@ -2059,9 +2063,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Trash Labels Purge Flist Character  Character Id  Trash Labels Purge Post"
+                  "$ref": "#/components/schemas/TrashPurged"
                 }
               }
             }
@@ -2105,10 +2107,25 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "An inline image file of the profile.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -2136,9 +2153,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Trash List Labels Trash Get"
+                  "$ref": "#/components/schemas/LabelsTrash"
                 }
               }
             }
@@ -2177,9 +2192,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Trash Put Back Labels Trash Put Back Post"
+                  "$ref": "#/components/schemas/LabelsPutBack"
                 }
               }
             }
@@ -2218,9 +2231,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Trash Purge Labels Trash Purge Post"
+                  "$ref": "#/components/schemas/TrashPurged"
                 }
               }
             }
@@ -3111,9 +3122,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Foreign Search Foreign Search Get"
+                  "$ref": "#/components/schemas/ForeignSearch"
                 }
               }
             }
@@ -3142,9 +3151,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Foreign Cache Usage Foreign Cache Get"
+                  "$ref": "#/components/schemas/ForeignCacheUsage"
                 }
               }
             }
@@ -3171,9 +3178,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Foreign Cache Clear Foreign Cache Delete"
+                  "$ref": "#/components/schemas/ForeignCacheCleared"
                 }
               }
             }
@@ -3223,9 +3228,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Foreign Character Foreign Character  Name  Get"
+                  "$ref": "#/components/schemas/ForeignProfile"
                 }
               }
             }
@@ -3261,10 +3264,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The avatar of the Foreign profile.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3308,10 +3314,25 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "A gallery image of the Foreign profile.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/gif": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3658,9 +3679,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Render Next Request Render Requests Get"
+                  "$ref": "#/components/schemas/RenderPoll"
                 }
               }
             }
@@ -3700,9 +3719,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Render Deliver Render Result  Request Id  Post"
+                  "$ref": "#/components/schemas/RenderDelivered"
                 }
               }
             }
@@ -3760,9 +3777,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Render Fail Render Failed  Request Id  Post"
+                  "$ref": "#/components/schemas/RenderFailReported"
                 }
               }
             }
@@ -4748,6 +4763,36 @@
   },
   "components": {
     "schemas": {
+      "AccountCharacter": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "id"
+        ],
+        "title": "AccountCharacter",
+        "description": "A character on the signed-in F-list account. `id` is F-list's\ncharacter id when it gave one."
+      },
       "AliasAdd": {
         "properties": {
           "character": {
@@ -4777,11 +4822,108 @@
         ],
         "title": "AliasAdd"
       },
+      "AvatarPrefetchScheduled": {
+        "properties": {
+          "scheduled": {
+            "type": "integer",
+            "title": "Scheduled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scheduled"
+        ],
+        "title": "AvatarPrefetchScheduled"
+      },
+      "BackupsPutBack": {
+        "properties": {
+          "restored": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Restored"
+          },
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Found"
+          },
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "restored",
+          "not_found",
+          "conflicts"
+        ],
+        "title": "BackupsPutBack"
+      },
       "DiscoverModelsRequest": {
         "properties": {},
         "type": "object",
         "title": "DiscoverModelsRequest",
         "description": "No fields — kept so the route keeps its POST shape."
+      },
+      "Eicons": {
+        "properties": {
+          "eicons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Eicons"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "as_of": {
+            "type": "integer",
+            "title": "As Of"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "loading",
+              "ready",
+              "error"
+            ],
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "eicons",
+          "total",
+          "as_of",
+          "status",
+          "error"
+        ],
+        "title": "Eicons",
+        "description": "Eicon names matching the search, from the cached catalogue.\n`status` is 'loading' until the first fetch has answered."
       },
       "EmbeddingModel": {
         "properties": {
@@ -4866,6 +5008,107 @@
         ],
         "title": "EmbeddingModels"
       },
+      "FlistActivity": {
+        "properties": {
+          "started_at": {
+            "type": "number",
+            "title": "Started At"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "max_events": {
+            "type": "integer",
+            "title": "Max Events"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/FlistActivityEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "started_at",
+          "event_count",
+          "max_events",
+          "events"
+        ],
+        "title": "FlistActivity",
+        "description": "The in-memory record of F-list operations this run, oldest first."
+      },
+      "FlistActivityEvent": {
+        "properties": {
+          "t": {
+            "type": "number",
+            "title": "T"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "t",
+          "kind"
+        ],
+        "title": "FlistActivityEvent",
+        "description": "One F-list operation: when (`t`), what (`kind`), and the fields\nthat kind records."
+      },
+      "FlistSession": {
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          },
+          "expires_in_sec": {
+            "type": "integer",
+            "title": "Expires In Sec"
+          },
+          "needs_refresh": {
+            "type": "boolean",
+            "title": "Needs Refresh"
+          },
+          "password_cached": {
+            "type": "boolean",
+            "title": "Password Cached"
+          },
+          "api_hourly_count": {
+            "type": "integer",
+            "title": "Api Hourly Count"
+          },
+          "password_idle_seconds_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Idle Seconds Remaining"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "active",
+          "api_hourly_count",
+          "password_idle_seconds_remaining"
+        ],
+        "title": "FlistSession",
+        "description": "The F-list session the sidecar holds. Signed out, it is only\n`active` (false), `api_hourly_count` and a null countdown."
+      },
       "FlistSignInRequest": {
         "properties": {
           "account": {
@@ -4888,6 +5131,61 @@
         ],
         "title": "FlistSignInRequest"
       },
+      "ForeignCacheCleared": {
+        "properties": {
+          "removed": {
+            "type": "integer",
+            "title": "Removed"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "profiles": {
+            "type": "integer",
+            "title": "Profiles"
+          },
+          "cap_bytes": {
+            "type": "integer",
+            "title": "Cap Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "removed",
+          "bytes",
+          "profiles",
+          "cap_bytes"
+        ],
+        "title": "ForeignCacheCleared",
+        "description": "How many cached Foreign profiles went, and what the cache holds after."
+      },
+      "ForeignCacheUsage": {
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "profiles": {
+            "type": "integer",
+            "title": "Profiles"
+          },
+          "cap_bytes": {
+            "type": "integer",
+            "title": "Cap Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bytes",
+          "profiles",
+          "cap_bytes"
+        ],
+        "title": "ForeignCacheUsage",
+        "description": "What the Foreign profile cache holds on disk, and what it may hold."
+      },
       "ForeignDefaults": {
         "properties": {
           "cache_cap_mb": {
@@ -4901,6 +5199,111 @@
           "cache_cap_mb"
         ],
         "title": "ForeignDefaults"
+      },
+      "ForeignProfile": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Profile"
+          },
+          "from_cache": {
+            "type": "boolean",
+            "title": "From Cache"
+          },
+          "age_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Sec"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "refresh_error": {
+            "type": "string",
+            "title": "Refresh Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "profile",
+          "from_cache",
+          "age_sec",
+          "fetched_at"
+        ],
+        "title": "ForeignProfile",
+        "description": "A Foreign profile. `profile` is F-list's character-data payload\nas cached, with the cache's `fetched_at` stamp."
+      },
+      "ForeignSearch": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "bookmarks",
+              "friends",
+              "logs",
+              "name"
+            ],
+            "title": "Source"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "results": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "exact": {
+            "type": "boolean",
+            "title": "Exact"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "query",
+          "results",
+          "truncated",
+          "exact"
+        ],
+        "title": "ForeignSearch",
+        "description": "Candidate names from one source. `exact`: the free-text source\nanswers what was typed, not a name known to exist."
       },
       "ForeignSettings": {
         "properties": {
@@ -4938,6 +5341,58 @@
         "type": "object",
         "title": "ForeignSettingsUpdate"
       },
+      "GalleryRepair": {
+        "properties": {
+          "relinked": {
+            "items": {
+              "$ref": "#/components/schemas/Relinked"
+            },
+            "type": "array",
+            "title": "Relinked"
+          },
+          "duplicates_removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Duplicates Removed"
+          },
+          "stale_removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stale Removed"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unresolved"
+          },
+          "workbench_rewritten": {
+            "type": "boolean",
+            "title": "Workbench Rewritten"
+          },
+          "repaired": {
+            "type": "boolean",
+            "title": "Repaired"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "relinked",
+          "duplicates_removed",
+          "stale_removed",
+          "unresolved",
+          "workbench_rewritten",
+          "repaired"
+        ],
+        "title": "GalleryRepair",
+        "description": "What putting the gallery back together changed."
+      },
       "Health": {
         "properties": {
           "status": {
@@ -4958,6 +5413,155 @@
         ],
         "title": "Health",
         "description": "The sidecar answers, and which app version started it."
+      },
+      "ImageReference": {
+        "properties": {
+          "workbench": {
+            "type": "boolean",
+            "title": "Workbench"
+          },
+          "live": {
+            "type": "boolean",
+            "title": "Live"
+          },
+          "backups": {
+            "type": "integer",
+            "title": "Backups"
+          },
+          "newest_backup": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newest Backup"
+          },
+          "migration_backup": {
+            "type": "boolean",
+            "title": "Migration Backup"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench",
+          "live",
+          "backups",
+          "newest_backup",
+          "migration_backup"
+        ],
+        "title": "ImageReference",
+        "description": "Where an image id is still used beyond the Pool: the Workbench's\ngallery, Live, and how many Backups keep it (each with its own copy\nof the bytes), with the newest of them. `migration_backup`: the\nolder copies from before the upgrade name it; that Backup holds\nJSON only, no copy of the bytes, and is not counted in `backups`."
+      },
+      "ImageReferences": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ImageReference"
+        },
+        "type": "object",
+        "title": "ImageReferences",
+        "description": "Every image id mentioned anywhere, and where."
+      },
+      "ImageTrashed": {
+        "properties": {
+          "trashed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Trashed"
+          },
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "trashed",
+          "image_id"
+        ],
+        "title": "ImageTrashed"
+      },
+      "ImagesDeleted": {
+        "properties": {
+          "trashed": {
+            "items": {
+              "$ref": "#/components/schemas/TrashedImage"
+            },
+            "type": "array",
+            "title": "Trashed"
+          },
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Found"
+          },
+          "off_gallery": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Off Gallery"
+          },
+          "etag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etag"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "trashed",
+          "not_found",
+          "off_gallery",
+          "etag"
+        ],
+        "title": "ImagesDeleted",
+        "description": "Images deleted: their files went to the Trash (`trashed`), and\nthose the Workbench's gallery showed came off it (`off_gallery`).\n`etag` is the Workbench's new one; null when the gallery was left\nalone."
+      },
+      "ImagesPutBack": {
+        "properties": {
+          "restored": {
+            "items": {
+              "$ref": "#/components/schemas/PutBackImage"
+            },
+            "type": "array",
+            "title": "Restored"
+          },
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Found"
+          },
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "restored",
+          "not_found",
+          "conflicts"
+        ],
+        "title": "ImagesPutBack"
       },
       "LabelOverride": {
         "properties": {
@@ -5180,6 +5784,31 @@
         ],
         "title": "LabelsFillUnlabeled"
       },
+      "LabelsPutBack": {
+        "properties": {
+          "restored": {
+            "items": {
+              "$ref": "#/components/schemas/PutBackLabels"
+            },
+            "type": "array",
+            "title": "Restored"
+          },
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Found"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "restored",
+          "not_found"
+        ],
+        "title": "LabelsPutBack"
+      },
       "LabelsSettings": {
         "properties": {
           "threshold_chars": {
@@ -5215,6 +5844,57 @@
         },
         "type": "object",
         "title": "LabelsSettingsUpdate"
+      },
+      "LabelsTrash": {
+        "properties": {
+          "labels": {
+            "items": {
+              "$ref": "#/components/schemas/TrashedLabels"
+            },
+            "type": "array",
+            "title": "Labels"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "labels"
+        ],
+        "title": "LabelsTrash"
+      },
+      "MappingList": {
+        "properties": {
+          "_etag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etag"
+          },
+          "_fetched_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "_etag",
+          "_fetched_at"
+        ],
+        "title": "MappingList",
+        "description": "F-list's mapping list (kinks, infotags and their groups, list\nitems) as F-list sent it, then two keys of the sidecar's: the\ncached file's sha256 (`_etag`) and when it was fetched\n(`_fetched_at`, unix seconds)."
       },
       "McpAuth": {
         "properties": {
@@ -5369,6 +6049,268 @@
           "required"
         ],
         "title": "McpTokenRevoked"
+      },
+      "MissingImage": {
+        "properties": {
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          },
+          "extension": {
+            "type": "string",
+            "title": "Extension"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_id",
+          "extension"
+        ],
+        "title": "MissingImage"
+      },
+      "PendingRender": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "bbcode": {
+            "type": "string",
+            "title": "Bbcode"
+          },
+          "inlines": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inlines"
+          },
+          "theme": {
+            "type": "string",
+            "title": "Theme"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bbcode",
+          "inlines",
+          "theme",
+          "width",
+          "label"
+        ],
+        "title": "PendingRender",
+        "description": "Something a tool asked the app to draw: BBCode, the inline\nimages it names, the preview theme and the width in pixels.\n`label` is for the app's log line only."
+      },
+      "Pool": {
+        "properties": {
+          "character_id": {
+            "type": "string",
+            "title": "Character Id"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/PoolImage"
+            },
+            "type": "array",
+            "title": "Images"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character_id",
+          "images"
+        ],
+        "title": "Pool"
+      },
+      "PoolImage": {
+        "properties": {
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          },
+          "extension": {
+            "type": "string",
+            "title": "Extension"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "added_at": {
+            "type": "integer",
+            "title": "Added At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_id",
+          "extension",
+          "size",
+          "added_at"
+        ],
+        "title": "PoolImage",
+        "description": "An image file in the character's Pool."
+      },
+      "PublicProfile": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "avatar_url": {
+            "type": "string",
+            "title": "Avatar Url"
+          },
+          "bbcode": {
+            "type": "string",
+            "title": "Bbcode"
+          },
+          "stats": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Stats"
+          },
+          "inlines": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Inlines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "avatar_url",
+          "bbcode",
+          "stats",
+          "inlines"
+        ],
+        "title": "PublicProfile",
+        "description": "A character's public profile, for the editor's \"Fetch profile\".\n`stats` are its infotags by label; `inlines` F-list's inline images\nby id, as F-list sent them."
+      },
+      "PullStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "never_pulled",
+              "unknown",
+              "interrupted",
+              "partial",
+              "complete"
+            ],
+            "title": "Status"
+          },
+          "missing_image_ids": {
+            "items": {
+              "$ref": "#/components/schemas/MissingImage"
+            },
+            "type": "array",
+            "title": "Missing Image Ids"
+          },
+          "expected": {
+            "type": "integer",
+            "title": "Expected"
+          },
+          "present": {
+            "type": "integer",
+            "title": "Present"
+          },
+          "last_attempt_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt Ts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "missing_image_ids",
+          "expected",
+          "present",
+          "last_attempt_ts"
+        ],
+        "title": "PullStatus",
+        "description": "Whether a character's last Pull got every image."
+      },
+      "PutBackImage": {
+        "properties": {
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          },
+          "deduplicated": {
+            "type": "boolean",
+            "title": "Deduplicated"
+          },
+          "from": {
+            "type": "string",
+            "title": "From"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_id",
+          "deduplicated",
+          "from"
+        ],
+        "title": "PutBackImage",
+        "description": "An image back in the Pool. `deduplicated`: the Pool already held\nthese bytes (under `image_id`), so the Trash's copy was dropped."
+      },
+      "PutBackLabels": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "restored": {
+            "type": "integer",
+            "title": "Restored"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "restored",
+          "skipped"
+        ],
+        "title": "PutBackLabels",
+        "description": "One cleared-Labels entry put back. A message labelled again\nsince keeps its newer Label; its hash is under `skipped`."
       },
       "RagIngestRequest": {
         "properties": {
@@ -5777,6 +6719,173 @@
         "title": "RefusalCode",
         "description": "Every `code` a REST refusal can carry. The OpenAPI schema lists\nthem, so the window's `RefusalCode` is a generated union and a\nswitch on a code the sidecar never answers fails the type-check.\n\nA class below names its code where it is defined; this list repeats\nit for the schema. `tests/test_openapi_schema.py` fails when a\n`Refusal` subclass carries a code missing here (its `code`, or the\nkeys of `STATUS_BY_CODE` / `CODES` for classes coded per instance)."
       },
+      "Relinked": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "Relinked"
+      },
+      "RenderDelivered": {
+        "properties": {
+          "delivered": {
+            "type": "boolean",
+            "title": "Delivered"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "mime": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "title": "Mime"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "delivered",
+          "bytes",
+          "mime"
+        ],
+        "title": "RenderDelivered"
+      },
+      "RenderFailReported": {
+        "properties": {
+          "reported": {
+            "type": "boolean",
+            "title": "Reported"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reported"
+        ],
+        "title": "RenderFailReported"
+      },
+      "RenderPoll": {
+        "properties": {
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingRender"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request"
+        ],
+        "title": "RenderPoll"
+      },
+      "Roster": {
+        "properties": {
+          "characters": {
+            "items": {
+              "$ref": "#/components/schemas/RosterEntry"
+            },
+            "type": "array",
+            "title": "Characters"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "characters"
+        ],
+        "title": "Roster"
+      },
+      "RosterEntry": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "on_account": {
+            "type": "boolean",
+            "title": "On Account"
+          },
+          "has_archive": {
+            "type": "boolean",
+            "title": "Has Archive"
+          },
+          "has_logs": {
+            "type": "boolean",
+            "title": "Has Logs"
+          },
+          "last_pulled_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pulled At"
+          },
+          "backup_count": {
+            "type": "integer",
+            "title": "Backup Count"
+          },
+          "pull_status": {
+            "$ref": "#/components/schemas/PullStatus",
+            "title": "Pull Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "id",
+          "on_account",
+          "has_archive",
+          "has_logs",
+          "last_pulled_at",
+          "backup_count"
+        ],
+        "title": "RosterEntry",
+        "description": "A character the picker lists: on the account, kept in the app, or\nwith Logs, and which of those."
+      },
       "Settings": {
         "properties": {
           "fchat_data_dir": {
@@ -5917,6 +7026,405 @@
           "stopping"
         ],
         "title": "ShutdownStarted"
+      },
+      "SignedIn": {
+        "properties": {
+          "characters": {
+            "items": {
+              "$ref": "#/components/schemas/AccountCharacter"
+            },
+            "type": "array",
+            "title": "Characters"
+          },
+          "expires_in_sec": {
+            "type": "integer",
+            "title": "Expires In Sec"
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "characters",
+          "expires_in_sec",
+          "account"
+        ],
+        "title": "SignedIn"
+      },
+      "SignedOut": {
+        "properties": {
+          "signed_out": {
+            "type": "boolean",
+            "const": true,
+            "title": "Signed Out"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "signed_out"
+        ],
+        "title": "SignedOut"
+      },
+      "Trash": {
+        "properties": {
+          "character_id": {
+            "type": "string",
+            "title": "Character Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TrashItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "backups": {
+            "items": {
+              "$ref": "#/components/schemas/TrashedBackup"
+            },
+            "type": "array",
+            "title": "Backups"
+          },
+          "labels": {
+            "items": {
+              "$ref": "#/components/schemas/TrashedLabels"
+            },
+            "type": "array",
+            "title": "Labels"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character_id",
+          "items",
+          "backups",
+          "labels"
+        ],
+        "title": "Trash",
+        "description": "A character's Trash: images, Backups and cleared Labels."
+      },
+      "TrashEmptied": {
+        "properties": {
+          "purged": {
+            "type": "integer",
+            "title": "Purged"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "purged"
+        ],
+        "title": "TrashEmptied"
+      },
+      "TrashItem": {
+        "properties": {
+          "trash_id": {
+            "type": "string",
+            "title": "Trash Id"
+          },
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          },
+          "extension": {
+            "type": "string",
+            "title": "Extension"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "deleted_at": {
+            "type": "integer",
+            "title": "Deleted At"
+          },
+          "deleted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted By"
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "trash_id",
+          "image_id",
+          "extension",
+          "filename",
+          "size",
+          "deleted_at",
+          "deleted_by",
+          "source_name"
+        ],
+        "title": "TrashItem",
+        "description": "An image file in a character's Trash."
+      },
+      "TrashPurged": {
+        "properties": {
+          "purged": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Purged"
+          },
+          "not_found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Found"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "purged",
+          "not_found"
+        ],
+        "title": "TrashPurged",
+        "description": "What was deleted for good from the Trash, by the id it had there."
+      },
+      "TrashedBackup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "deleted_at": {
+            "type": "integer",
+            "title": "Deleted At"
+          },
+          "deleted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "name",
+          "size",
+          "deleted_at",
+          "deleted_by"
+        ],
+        "title": "TrashedBackup",
+        "description": "A deleted Backup in a character's Trash."
+      },
+      "TrashedImage": {
+        "properties": {
+          "trash_id": {
+            "type": "string",
+            "title": "Trash Id"
+          },
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          },
+          "extension": {
+            "type": "string",
+            "title": "Extension"
+          },
+          "deleted_at": {
+            "type": "integer",
+            "title": "Deleted At"
+          },
+          "deleted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted By"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "trash_id",
+          "image_id",
+          "extension",
+          "deleted_at",
+          "deleted_by",
+          "size",
+          "sha256",
+          "source_name"
+        ],
+        "title": "TrashedImage",
+        "description": "An image just moved into the Trash."
+      },
+      "TrashedLabels": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "deleted_at": {
+            "type": "integer",
+            "title": "Deleted At"
+          },
+          "deleted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "character",
+          "partner",
+          "count",
+          "deleted_at",
+          "deleted_by"
+        ],
+        "title": "TrashedLabels",
+        "description": "Labels cleared in one go, kept in the Trash."
+      },
+      "UploadedImage": {
+        "properties": {
+          "image_id": {
+            "type": "string",
+            "title": "Image Id"
+          },
+          "extension": {
+            "type": "string",
+            "title": "Extension"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "added_at": {
+            "type": "integer",
+            "title": "Added At"
+          },
+          "deduplicated": {
+            "type": "boolean",
+            "title": "Deduplicated"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_id",
+          "extension",
+          "size",
+          "added_at",
+          "deduplicated"
+        ],
+        "title": "UploadedImage",
+        "description": "The Pool image an upload landed as. `deduplicated`: the Pool\nalready held these bytes, and this is that file."
       },
       "_ImageIdsBody": {
         "properties": {

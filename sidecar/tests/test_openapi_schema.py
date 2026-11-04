@@ -74,13 +74,22 @@ def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
 
 
 #: The router modules whose routes declare what they answer (spec #8:
-#: #127 health + settings; #128-#130 add theirs; #131 makes it every
+#: #127 health + settings; #128-#130 add theirs (#130: the F-list
+#: session, Foreign profiles, the Pool and the Trash, look-ups and
+#: rendering); #131 makes it every
 #: group and drops this list).
-TYPED_GROUPS = {"health", "settings"}
+TYPED_GROUPS = {"health", "settings", "flist_session", "foreign", "images_trash", "lookups", "render"}
 
 #: What a route that answers no JSON model declares instead: an event
 #: stream, bytes, or nothing.
-NOT_JSON = {"text/event-stream", "application/octet-stream", "application/zip", "image/png", "image/jpeg"}
+NOT_JSON = {
+    "text/event-stream",
+    "application/octet-stream",
+    "application/zip",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+}
 
 
 def _undeclared_answer(operation: dict) -> str | None:

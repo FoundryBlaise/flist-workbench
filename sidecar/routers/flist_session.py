@@ -1,8 +1,10 @@
 """The F-list session, the account's characters and their avatars."""
 
+from typing import Literal
+
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 import archive_images
 import archive_registry
@@ -12,6 +14,7 @@ from logs import LogDirError, list_characters
 from refusals import FlistRefused, NoAvatar
 from services import avatars, password_idle
 from services import foreign as foreign_service
+from wire import MISSING, WireModel, binary
 
 router = APIRouter()
 
@@ -21,8 +24,122 @@ class FlistSignInRequest(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class AccountCharacter(WireModel):
+    """A character on the signed-in F-list account. `id` is F-list's
+    character id when it gave one."""
+
+    name: str
+    id: int | str | None
+
+
+class SignedIn(WireModel):
+    characters: list[AccountCharacter]
+    expires_in_sec: int
+    account: str
+
+
+class AvatarPrefetchScheduled(WireModel):
+    scheduled: int
+
+
+class SignedOut(WireModel):
+    signed_out: Literal[True]
+
+
+class FlistActivityEvent(WireModel):
+    """One F-list operation: when (`t`), what (`kind`), and the fields
+    that kind records."""
+
+    model_config = ConfigDict(extra="allow")
+
+    t: float
+    kind: str
+
+
+class FlistActivity(WireModel):
+    """The in-memory record of F-list operations this run, oldest first."""
+
+    started_at: float
+    event_count: int
+    max_events: int
+    events: list[FlistActivityEvent]
+
+
+class FlistSession(WireModel):
+    """The F-list session the sidecar holds. Signed out, it is only
+    `active` (false), `api_hourly_count` and a null countdown."""
+
+    active: bool
+    account: str | MISSING = MISSING
+    expires_in_sec: int | MISSING = MISSING
+    needs_refresh: bool | MISSING = MISSING
+    #: True while the sidecar still holds the password for refreshing
+    #: the ticket; false once the idle watchdog dropped it.
+    password_cached: bool | MISSING = MISSING
+    api_hourly_count: int
+    #: Seconds until the idle watchdog drops the password; null when
+    #: nothing is held or the watchdog is off.
+    password_idle_seconds_remaining: int | None
+
+
+class MissingImage(WireModel):
+    image_id: str
+    extension: str
+
+
+class PullStatus(WireModel):
+    """Whether a character's last Pull got every image."""
+
+    status: Literal["never_pulled", "unknown", "interrupted", "partial", "complete"]
+    missing_image_ids: list[MissingImage]
+    expected: int
+    present: int
+    last_attempt_ts: int | float | None
+
+
+class RosterEntry(WireModel):
+    """A character the picker lists: on the account, kept in the app, or
+    with Logs, and which of those."""
+
+    name: str
+    id: int | str | None
+    on_account: bool
+    has_archive: bool
+    has_logs: bool
+    last_pulled_at: int | float | None
+    #: How many Backups the character has.
+    backup_count: int
+    #: Only for a character the app keeps (`has_archive`).
+    pull_status: PullStatus | MISSING = MISSING
+
+
+class Roster(WireModel):
+    characters: list[RosterEntry]
+
+
+class MappingList(WireModel):
+    """F-list's mapping list (kinks, infotags and their groups, list
+    items) as F-list sent it, then two keys of the sidecar's: the
+    cached file's sha256 (`_etag`) and when it was fetched
+    (`_fetched_at`, unix seconds)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    etag: str | None = Field(alias="_etag")
+    fetched_at: int | None = Field(alias="_fetched_at")
+
+    @model_serializer(mode="wrap")
+    def _flist_keys_first(self, handler: SerializerFunctionWrapHandler):
+        # Extras serialise after the declared fields; on the wire
+        # F-list's keys come first. (No return annotation: one would
+        # replace the model's schema with the annotation's.)
+        out = handler(self)
+        extra = self.__pydantic_extra__ or {}
+        return {**{k: v for k, v in out.items() if k in extra}, **{k: v for k, v in out.items() if k not in extra}}
+
+
 @router.post("/flist/session")
-async def flist_session_create(body: FlistSignInRequest) -> dict:
+async def flist_session_create(body: FlistSignInRequest) -> SignedIn:
     """Trade (account, password) for an F-list session ticket.
 
     The ticket is held in sidecar RAM only (`flist_api.TicketStore`).
@@ -58,7 +175,7 @@ async def flist_session_create(body: FlistSignInRequest) -> dict:
     )
     if names:
         _asyncio.create_task(_prefetch_avatars(names))
-    return result
+    return SignedIn.model_validate(result)
 
 
 async def _prefetch_avatars(names: list[str]) -> None:
@@ -96,7 +213,7 @@ async def _prefetch_avatars(names: list[str]) -> None:
 
 
 @router.post("/flist/avatars/prefetch")
-async def flist_avatars_prefetch() -> dict:
+async def flist_avatars_prefetch() -> AvatarPrefetchScheduled:
     """Explicit re-trigger of the avatar warm-up.
 
     Useful if a sign-in race left some avatars un-cached, or if F-list
@@ -110,11 +227,11 @@ async def flist_avatars_prefetch() -> dict:
     names = [c["name"] for c in chars if c.get("name")]
     if names:
         _asyncio.create_task(_prefetch_avatars(names))
-    return {"scheduled": len(names)}
+    return AvatarPrefetchScheduled(scheduled=len(names))
 
 
 @router.delete("/flist/session")
-async def flist_session_delete() -> dict:
+async def flist_session_delete() -> SignedOut:
     status = flist_api.ticket_store().status()
     flist_api.ticket_store().clear()
     # Bookmarks and friends are account-scoped and memoised for ten
@@ -125,21 +242,21 @@ async def flist_session_delete() -> dict:
         "sign-out",
         account=status.get("account"),
     )
-    return {"signed_out": True}
+    return SignedOut(signed_out=True)
 
 
 @router.get("/flist/activity")
-async def flist_activity_snapshot() -> dict:
+async def flist_activity_snapshot() -> FlistActivity:
     """In-memory append-only audit log of F-list operations (sign-in,
     ticket refresh, per-character pull stages, idle password clear,
     sign-out). Closes the trust-question gap surfaced by the
     2026-05-30 UX subagent review — see UX F4 in
     REVIEW_2026-05-30_post_tier1_polish.md."""
-    return flist_activity.snapshot()
+    return FlistActivity.model_validate(flist_activity.snapshot())
 
 
 @router.get("/flist/session")
-async def flist_session_get() -> dict:
+async def flist_session_get() -> FlistSession:
     """Footer chip polls this every 60s for session age + hourly count.
     Stateless — never refreshes the ticket on its own; refresh happens
     on the next ticket-requiring action.
@@ -165,11 +282,11 @@ async def flist_session_get() -> dict:
         # a countdown; renderer suppresses its "stay signed in" warning
         # when this field is null.
         status["password_idle_seconds_remaining"] = None
-    return status
+    return FlistSession.model_validate(status)
 
 
 @router.get("/flist/characters")
-def flist_characters() -> dict:
+def flist_characters() -> Roster:
     """Roster union: account roster (if signed in) + archived characters
     + characters with local F-Chat logs. Each entry carries flags so the
     picker can render status badges.
@@ -188,11 +305,11 @@ def flist_characters() -> dict:
     for row in rows:
         if row.get("has_archive") and row.get("id") is not None:
             row["pull_status"] = archive_images.compute_pull_status(row["id"])
-    return {"characters": rows}
+    return Roster.model_validate({"characters": rows})
 
 
 @router.get("/flist/mapping-list")
-async def flist_mapping_list(force: bool = False) -> dict:
+async def flist_mapping_list(force: bool = False) -> MappingList:
     cache_path = archive_registry.cache_root() / "mapping-list.json"
     try:
         mapping = await flist_api.fetch_mapping_list(cache_path, force=force)
@@ -214,10 +331,14 @@ async def flist_mapping_list(force: bool = False) -> dict:
         etag = hashlib.sha256(cache_path.read_bytes()).hexdigest()
     except OSError:
         pass
-    return {**mapping, "_etag": etag, "_fetched_at": fetched_at}
+    return MappingList.model_validate({**mapping, "_etag": etag, "_fetched_at": fetched_at})
 
 
-@router.get("/flist/avatar/{name}")
+@router.get(
+    "/flist/avatar/{name}",
+    response_class=FileResponse,
+    responses=binary("image/png", "The avatar F-list has for the character."),
+)
 async def flist_avatar(name: str) -> FileResponse:
     """Serve a cached avatar from `<userdata>/avatars/`. Fetches on
     miss; avatars are public so this works signed-out too.
