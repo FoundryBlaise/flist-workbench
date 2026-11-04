@@ -16,8 +16,9 @@
 //            read, or the seed from Live), or the slot being dropped
 //            (a Pull landing, sign-out). A view has no label.
 //
-// The undo stack (#110) hangs off this point: edit and written commits
-// are changes it can record with their label, a view never is.
+// The undo stack (state/undoStack.ts) hangs off this point: every edit
+// and written commit records the payload it replaced, with its label;
+// a view never does, nor does an undo or redo step itself.
 
 import { emptyWorkingSlot, type FlistWorkingSlot, type WorkingPayload } from './flist'
 
@@ -55,6 +56,9 @@ export type Commit =
       /** Clear the slot's save error. By default an edit keeps it, so
        *  a conflict message is not dismissed by the next keystroke. */
       clearSaveError?: boolean
+      /** An undo or redo step: the undo stack has already moved, so
+       *  this commit is not recorded as a new change. */
+      undoStep?: boolean
     }
   | {
       kind: 'written'

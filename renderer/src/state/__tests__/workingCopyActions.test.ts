@@ -30,7 +30,6 @@ beforeEach(() => {
     flistArchive: {},
     flistCustomKinksUI: {},
     flistResetUndo: null,
-    flistTombstoneUndo: null,
     flistActiveCharacterId: null,
     editorReadOnly: false,
     editorContent: '',

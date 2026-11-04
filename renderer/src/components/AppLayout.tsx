@@ -22,7 +22,7 @@ import { SettingsModal, type SectionId } from '../features/settings/SettingsModa
 import { ForeignWorkspace } from '../features/foreign/ForeignWorkspace'
 import { UpdateAvailableModal, type UpdaterStatus } from '../features/updater/UpdateAvailableModal'
 import { AppContextMenu } from './AppContextMenu'
-import { runUndoRedo } from '../lib/undoRedo'
+import { handleUndoKeydown, runUndoRedo } from '../lib/undoRedo'
 import { IngestDialog } from '../features/rag/IngestDialog'
 import { useStore } from '../state'
 import { api } from '../lib/api'
@@ -277,6 +277,14 @@ export function AppLayout() {
       flistSessionActive: !!flistSession.active
     })
   }, [activeChar, activePartner, flistSession.active])
+
+  // Ctrl+Z / Ctrl+Y outside a text control: the menu leaves the keys to
+  // the focused element (registerAccelerator: false), so the window
+  // routes them to the Workbench undo itself.
+  useEffect(() => {
+    document.addEventListener('keydown', handleUndoKeydown)
+    return () => document.removeEventListener('keydown', handleUndoKeydown)
+  }, [])
 
   // Native menu (electron/menu.ts) dispatches actions over IPC. Route
   // them to the existing local/store handlers so the menu items are

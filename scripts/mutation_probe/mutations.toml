@@ -968,15 +968,16 @@ for (const entry of list) if (entry.choice !== 'undecided') buckets[entry.choice
 id = "R19"
 suite = "renderer"
 file = "renderer/src/lib/undoRedo.ts"
-breaks = "Undo and redo are swapped in the description editor."
+breaks = "Ctrl+Z redoes and Ctrl+Y undoes the Workbench."
 tests = ["@renderer"]
 audit = "survived"
 spec = 7
-# audit: M19 undo/redo swapped for CodeMirror
+# audit: M19 undo/redo swapped for CodeMirror; re-anchored in #110 on
+# the Workbench routing, which every key and menu goes through
 find = '''
-if (action === 'undo') undo(view)'''
+if (action === 'undo') store.flistUndo(characterId)'''
 replace = '''
-if (action !== 'undo') undo(view)'''
+if (action !== 'undo') store.flistUndo(characterId)'''
 
 [[mutation]]
 id = "R20"

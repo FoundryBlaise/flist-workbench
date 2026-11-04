@@ -34,8 +34,10 @@ import {
   externalLabel,
   notifyCommit,
   type Commit,
-  type CommitEvent
+  type CommitEvent,
+  type CommitLabel
 } from './state/commit'
+import { recordChange, resetUndoStacks, takeRedo, takeUndo } from './state/undoStack'
 
 export type {
   FlistSaveStatus,
@@ -358,14 +360,6 @@ type State = {
      *  to choose between reverting that change and keeping it. */
     conflict: boolean
   } | null
-  /** 5-second undo banner shown after a custom-kink tombstone. Single
-   *  banner across both surfaces (single + bulk tombstone). Tier 3 §Step 8. */
-  flistTombstoneUndo: {
-    characterId: string
-    snapshot: FlistWorkingSlot
-    kinkIds: string[]
-    expiresAt: number
-  } | null
   /** Tier 4 — per-character right-hand source for the Diff tab.
    *  Ephemeral (no disk persistence — default = Live each session). */
   flistDiffRightSource: Record<
@@ -554,6 +548,9 @@ type State = {
     characterId: string,
     imageId: string
   ) => void
+  /** Append several images to the gallery in the order given, as one
+   *  change (one undo entry). Ids already in the gallery are skipped. */
+  flistAddImagesToProfile: (characterId: string, imageIds: string[]) => void
   /** Drop `imageId` from working.json's gallery (move profile→pool).
    *  The file stays in the pool — flistTrashImages moves it to the Trash. */
   flistMoveImageToPool: (
@@ -636,6 +633,14 @@ type State = {
    *  Live for that one image, leaving other gallery edits intact. */
   flistResetImageRow: (characterId: string, imageId: string) => void
   flistFlushWorking: (characterId: string) => Promise<void>
+  /** Ctrl+Z on a Workbench: puts back the payload from before the
+   *  character's last change, as an unsaved edit the autosave writes
+   *  over the etag the window holds. Does nothing while the window
+   *  shows Live or a browsed Backup, or with nothing to undo. Returns
+   *  the label of the change it undid, or null. */
+  flistUndo: (characterId: string) => CommitLabel | null
+  /** Ctrl+Y: the mirror of flistUndo, applying the undone change again. */
+  flistRedo: (characterId: string) => CommitLabel | null
   /** Saves every character's pending edits now, waiting out the
    *  autosave's debounce and any save already on its way. */
   flistFlushAllWorking: () => Promise<void>
@@ -686,7 +691,6 @@ type State = {
   ) => void
   flistCustomKinksClearMulti: (characterId: string) => void
   flistCustomKinksBulkTombstone: (characterId: string, kinkIds: string[]) => void
-  flistUndoTombstone: () => void
   flistStandardKinkSet: (characterId: string, kinkId: string, choice: string) => void
   flistStandardKinksBulkSetChoice: (
     characterId: string,
@@ -757,9 +761,6 @@ function partnerKey(char: string, partner: string): string {
 // timer can be cleared on user dismiss or character switch without
 // growing the store with timer ids.
 const _resetUndoTimers = new Map<string, ReturnType<typeof setTimeout>>()
-// Tombstone-undo timer is single-banner (vs per-character) since the
-// UI surfaces one toast at a time across both surfaces.
-let _tombstoneUndoTimer: ReturnType<typeof setTimeout> | null = null
 const RESET_UNDO_MS = 5_000
 
 // Per-character autosave debouncers (Tier 2 §1.5 — 500 ms quiet time).
@@ -910,12 +911,44 @@ function _commit(
   })
   const event = done.event
   if (!event) return
+  if (commit.kind !== 'view' && event.previous && !(commit.kind === 'edit' && commit.undoStep)) {
+    recordChange(characterId, commit.label, event.previous)
+  }
   if (commit.kind === 'edit') {
     _scheduleFlush(characterId, () => {
       void get().flistFlushWorking(characterId)
     })
   }
   notifyCommit(event)
+}
+
+/** True while the window shows a character's Live or a Backup being
+ *  browsed in its Workbench slot: nothing may be written from there. */
+function _showsReadOnlyView(s: State, characterId: string): boolean {
+  return !!s.flistViewingLive[characterId] || s.flistBrowseBackup?.characterId === characterId
+}
+
+/** One undo or redo step: `take` moves the character's stack and hands
+ *  back the payload to put in, which is committed as an edit, so it is
+ *  unsaved and the autosave writes it over the etag the slot holds. */
+function _undoStep(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  take: typeof takeUndo
+): CommitLabel | null {
+  const s = get()
+  const slot = s.flistWorking[characterId]
+  if (!slot || _showsReadOnlyView(s, characterId)) return null
+  const entry = take(characterId, slot.payload)
+  if (!entry) return null
+  _commit(get, set, characterId, {
+    kind: 'edit',
+    label: 'edit',
+    payload: entry.payload,
+    undoStep: true
+  })
+  return entry.label
 }
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
@@ -933,6 +966,8 @@ function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<State>): 
     }
     return { ...also(s), flistWorking: {} }
   })
+  // Another account may sign in next: nothing of this one's to undo.
+  resetUndoStacks()
   for (const event of events) notifyCommit(event)
 }
 
@@ -949,10 +984,6 @@ function _cancelAllPendingTimers(): void {
   _autosaveTimers.clear()
   for (const [, t] of _resetUndoTimers) clearTimeout(t)
   _resetUndoTimers.clear()
-  if (_tombstoneUndoTimer) {
-    clearTimeout(_tombstoneUndoTimer)
-    _tombstoneUndoTimer = null
-  }
 }
 
 // Tracks whether an account-wide sweep is in flight. Shared between
@@ -1712,41 +1743,6 @@ function _tombstonedPayload(slot: FlistWorkingSlot, kinkIds: string[]): WorkingP
   return payload
 }
 
-/** Arm the 5-second tombstone undo banner. Captures `prevSlot` so undo
- *  restores the pre-delete payload + overlay exactly (Tier 3 §Step 8). */
-function _armTombstoneUndo(
-  characterId: string,
-  prevSlot: FlistWorkingSlot,
-  kinkIds: string[],
-  setFn: (
-    update:
-      | Partial<State>
-      | ((s: State) => Partial<State> | State)
-  ) => void,
-  getFn: () => State
-): void {
-  if (_tombstoneUndoTimer) {
-    clearTimeout(_tombstoneUndoTimer)
-    _tombstoneUndoTimer = null
-  }
-  const expiresAt = Date.now() + RESET_UNDO_MS
-  setFn({
-    flistTombstoneUndo: {
-      characterId,
-      snapshot: prevSlot,
-      kinkIds: [...kinkIds],
-      expiresAt
-    }
-  })
-  _tombstoneUndoTimer = setTimeout(() => {
-    _tombstoneUndoTimer = null
-    const undo = getFn().flistTombstoneUndo
-    if (undo && undo.expiresAt <= Date.now()) {
-      setFn({ flistTombstoneUndo: null })
-    }
-  }, RESET_UNDO_MS + 50)
-}
-
 /** Collect the dotted overlay candidate paths Tier 2 currently tracks
  *  for drift detection: description + each infotag id present in either
  *  payload. Tier 3 will extend with custom-kinks paths. */
@@ -1990,7 +1986,6 @@ export const useStore = create<State>((set, get) => ({
   },
   flistDriftBanners: {},
   flistResetUndo: null,
-  flistTombstoneUndo: null,
   flistDiffRightSource: {},
   flistDiffBackupCache: {},
   flistDiffBackupStatus: {},
@@ -2627,18 +2622,23 @@ export const useStore = create<State>((set, get) => ({
   },
 
   flistMoveImageToProfile(characterId, imageId) {
+    get().flistAddImagesToProfile(characterId, [imageId])
+  },
+
+  flistAddImagesToProfile(characterId, imageIds) {
     const slot = get().flistWorking[characterId]
     if (!slot) return
-    const images = galleryOf(slot)
-    if (images.some((e) => e.image_id === imageId)) return
-    const nextOrder =
+    const images = [...galleryOf(slot)]
+    let nextOrder =
       images.length === 0
         ? 0
         : Math.max(...images.map((e) => e.sort_order)) + 1
-    get().flistSetGalleryImages(characterId, [
-      ...images,
-      { image_id: imageId, description: '', sort_order: nextOrder }
-    ])
+    for (const imageId of imageIds) {
+      if (images.some((e) => e.image_id === imageId)) continue
+      images.push({ image_id: imageId, description: '', sort_order: nextOrder++ })
+    }
+    if (images.length === galleryOf(slot).length) return
+    get().flistSetGalleryImages(characterId, images)
   },
 
   flistMoveImageToPool(characterId, imageId) {
@@ -2893,6 +2893,14 @@ export const useStore = create<State>((set, get) => ({
         _flushInflight.delete(characterId)
       }
     }
+  },
+
+  flistUndo(characterId) {
+    return _undoStep(get, set, characterId, takeUndo)
+  },
+
+  flistRedo(characterId) {
+    return _undoStep(get, set, characterId, takeRedo)
   },
 
   async flistFlushAllWorking() {
@@ -3811,26 +3819,7 @@ export const useStore = create<State>((set, get) => ({
       label: 'edit',
       payload: _tombstonedPayload(prevSlot, kinkIds)
     })
-    _armTombstoneUndo(characterId, prevSlot, kinkIds, set, get)
     get().flistCustomKinksClearMulti(characterId)
-  },
-
-  flistUndoTombstone() {
-    const undo = get().flistTombstoneUndo
-    if (!undo) return
-    if (_tombstoneUndoTimer) {
-      clearTimeout(_tombstoneUndoTimer)
-      _tombstoneUndoTimer = null
-    }
-    // The payload from before the tombstone, as an edit saved over the
-    // etag the slot holds now.
-    _commit(
-      get,
-      set,
-      undo.characterId,
-      { kind: 'edit', label: 'edit', payload: undo.snapshot.payload },
-      () => ({ flistTombstoneUndo: null })
-    )
   },
 
   flistStandardKinksBulkSetChoice(characterId, kinkIds, choice) {
@@ -3908,7 +3897,6 @@ export const useStore = create<State>((set, get) => ({
       label: 'edit',
       payload: _tombstonedPayload(prevSlot, [kinkId])
     })
-    _armTombstoneUndo(characterId, prevSlot, [kinkId], set, get)
   },
 
   flistCustomKinksUndelete(characterId, kinkId) {

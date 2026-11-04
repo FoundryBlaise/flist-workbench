@@ -97,6 +97,7 @@ export function ImagesTab({
   const trashImages = useStore((s) => s.flistTrashImages)
   const moveToProfile = useStore((s) => s.flistMoveImageToProfile)
   const moveToPool = useStore((s) => s.flistMoveImageToPool)
+  const addToProfile = useStore((s) => s.flistAddImagesToProfile)
   const setGallery = useStore((s) => s.flistSetGalleryImages)
   const openExportRestore = useStore((s) => s.flistOpenExportRestore)
 
@@ -274,41 +275,9 @@ export function ImagesTab({
     }
   }
 
-  // ---- gallery <-> pool moves (5s undo toast) -------------------------
-  const [moveUndo, setMoveUndo] = useState<
-    | {
-        previous: GalleryEntry[]
-        message: string
-      }
-    | null
-  >(null)
-  useEffect(() => {
-    if (!moveUndo) return
-    const id = window.setTimeout(() => setMoveUndo(null), TOAST_MS)
-    return () => window.clearTimeout(id)
-  }, [moveUndo])
-
-  const handleMoveToPool = (imageId: string) => {
-    setMoveUndo({
-      previous: gallery,
-      message: 'Moved to pool. Bytes stay on disk.'
-    })
-    moveToPool(characterId, imageId)
-  }
-
-  const handleMoveToProfile = (imageId: string) => {
-    setMoveUndo({
-      previous: gallery,
-      message: 'Added to profile.'
-    })
-    moveToProfile(characterId, imageId)
-  }
-
-  const undoMove = () => {
-    if (!moveUndo) return
-    setGallery(characterId, moveUndo.previous)
-    setMoveUndo(null)
-  }
+  // ---- gallery <-> pool moves (Ctrl+Z undoes them) ---------------------
+  const handleMoveToPool = (imageId: string) => moveToPool(characterId, imageId)
+  const handleMoveToProfile = (imageId: string) => moveToProfile(characterId, imageId)
 
   const moveGalleryEntry = (imageId: string, dir: -1 | 1) => {
     const idx = gallery.findIndex((e) => e.image_id === imageId)
@@ -348,15 +317,11 @@ export function ImagesTab({
     }
   }
 
-  // Appends in the order the images were picked, under one undo.
+  // Appends in the order the images were picked, as one undo step.
   const addSelectedToGallery = () => {
     const ids = sel.ids
     if (!ids.length) return
-    setMoveUndo({
-      previous: gallery,
-      message: `${ids.length} added to the profile.`
-    })
-    for (const id of ids) moveToProfile(characterId, id)
+    addToProfile(characterId, ids)
     setSel(EMPTY_SELECTION)
   }
 
@@ -753,22 +718,6 @@ export function ImagesTab({
             aria-label="Dismiss"
           >
             ✕
-          </button>
-        </div>
-      )}
-      {moveUndo && (
-        <div
-          className="flist-images-toast flist-images-toast--undo"
-          role="status"
-        >
-          <span>{moveUndo.message}</span>
-          <button
-            type="button"
-            className="flist-images-toast__action"
-            onClick={undoMove}
-            data-testid="flist-images-move-undo"
-          >
-            Undo
           </button>
         </div>
       )}

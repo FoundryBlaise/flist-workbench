@@ -29,7 +29,6 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistCustomKinksUI: {},
-    flistTombstoneUndo: null,
     flistResetUndo: null
   })
 })
@@ -85,19 +84,7 @@ describe('custom-kinks reducer surface', () => {
     expect(slot.payload._custom_kinks_order).not.toContain(id)
   })
 
-  it('Undo tombstone restores the pre-delete snapshot exactly', () => {
-    seedSlot('99', {
-      custom_kinks: { '12345': { name: 'A', choice: 'fave', children: [] } },
-      _custom_kinks_order: ['12345']
-    })
-    const before = JSON.stringify(useStore.getState().flistWorking['99'].payload)
-    useStore.getState().flistCustomKinksTombstone('99', '12345')
-    useStore.getState().flistUndoTombstone()
-    const after = JSON.stringify(useStore.getState().flistWorking['99'].payload)
-    expect(after).toBe(before)
-  })
-
-  it('Bulk tombstone marks all selected ids in a single batch + arms one undo', () => {
+  it('Bulk tombstone marks all selected ids in a single batch', () => {
     seedSlot('99', {
       custom_kinks: {
         '1': { name: 'A', choice: 'fave', children: [] },
@@ -115,8 +102,6 @@ describe('custom-kinks reducer surface', () => {
     expect(slot.overlay).toContain('custom_kinks.1._deleted')
     expect(slot.overlay).toContain('custom_kinks.2._deleted')
     expect(slot.overlay).toContain('custom_kinks.3._deleted')
-    const undo = useStore.getState().flistTombstoneUndo
-    expect(undo?.kinkIds.length).toBe(3)
   })
 
   it('Reorder writes _custom_kinks_order + adds custom_kinks._order to overlay', () => {
