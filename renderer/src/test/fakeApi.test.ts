@@ -3,7 +3,7 @@
 // that held requests settle only when — and in the order — a test says.
 
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { installFakeApi, json, networkError, type FakeApi } from './fakeApi'
+import { bytes, installFakeApi, json, networkError, type FakeApi } from './fakeApi'
 
 const BASE = 'http://127.0.0.1:27384'
 const ORIGINAL_FETCH = globalThis.fetch
@@ -99,6 +99,12 @@ it('a reply can be computed from the request', async () => {
   fake.on(/^POST \/echo/, (req) => json({ got: req.body }))
   const res = await fetch(`${BASE}/echo`, { method: 'POST', body: '{"n":1}' })
   expect(await res.json()).toEqual({ got: { n: 1 } })
+})
+
+it('answers binary replies with their bytes', async () => {
+  fake.on('GET /zip', bytes(new Uint8Array([80, 75, 3, 4])))
+  const res = await fetch(`${BASE}/zip`)
+  expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([80, 75, 3, 4]))
 })
 
 it('restore rejects whatever is still held and puts fetch back', async () => {
