@@ -2,7 +2,10 @@ import { create } from 'zustand'
 import {
   api,
   errorDetail,
+  HttpError,
   RefusalError,
+  refusalCode,
+  workbenchConflict,
   type FlistAccountCharacter,
   type FlistBackupAllHandlers,
   type FlistPullHandlers,
@@ -370,6 +373,9 @@ type Unsliced = {
   /** Last error from a sign-in attempt; passed verbatim from F-list per
    *  the Tier 1 decision. */
   flistSignInError: string | null
+  /** The sidecar's code for that error (`sign_in_failed` when F-list
+   *  turned the login down); null for none or a network failure. */
+  flistSignInErrorCode: string | null
   flistSignInStatus: 'idle' | 'submitting' | 'error'
   /** Saved-credential metadata, read from the OS keychain via the
    *  Electron preload. `account` is the saved username (or null if
@@ -1330,12 +1336,12 @@ async function _flushWorkingNow(
       })
     }
   } catch (err) {
-    if (err instanceof Error && err.message === 'etag_mismatch') {
-      const errWith = err as Error & { currentEtag?: string | null }
-      _noteSaveConflict(get, set, characterId, baseEtag, errWith.currentEtag ?? null)
+    const conflict = workbenchConflict(err)
+    if (conflict) {
+      _noteSaveConflict(get, set, characterId, baseEtag, conflict.currentEtag)
       return
     }
-    const raw = err instanceof Error ? err.message : String(err)
+    const raw = errorDetail(err)
     set((s) => {
       const existing = s.flistWorking[characterId]
       if (!existing) return {}
@@ -2178,6 +2184,7 @@ export const useStore = create<State>((set, get, store) => ({
   editorReadOnly: false,
   flistSignInOpen: false,
   flistSignInError: null,
+  flistSignInErrorCode: null,
   flistSignInStatus: 'idle',
   flistSavedCreds: {
     account: null,
@@ -2190,7 +2197,7 @@ export const useStore = create<State>((set, get, store) => ({
   // ---- F-list actions ----------------------------------------------------
 
   flistOpenSignIn() {
-    set({ flistSignInOpen: true, flistSignInError: null, flistSignInStatus: 'idle' })
+    set({ flistSignInOpen: true, flistSignInError: null, flistSignInErrorCode: null, flistSignInStatus: 'idle' })
   },
 
   async flistLoadSavedCreds() {
@@ -2259,7 +2266,7 @@ export const useStore = create<State>((set, get, store) => ({
   },
 
   async flistSignIn(account, password, opts) {
-    set({ flistSignInStatus: 'submitting', flistSignInError: null })
+    set({ flistSignInStatus: 'submitting', flistSignInError: null, flistSignInErrorCode: null })
     try {
       const res = await api.flistSignIn({ account, password })
       get().flistRememberAccount(account)
@@ -2357,7 +2364,7 @@ export const useStore = create<State>((set, get, store) => ({
     } catch (err) {
       // The modal shows "Invalid account name or password", not
       // "HTTP 401: Invalid account name or password".
-      set({ flistSignInStatus: 'error', flistSignInError: errorDetail(err) })
+      set({ flistSignInStatus: 'error', flistSignInError: errorDetail(err), flistSignInErrorCode: refusalCode(err) })
     }
   },
 
@@ -4218,20 +4225,22 @@ export const useStore = create<State>((set, get, store) => ({
   ...createWorkbenchSlice(set, get, store),
 }))
 
+/** What a failed profile look-up says, chosen by the refusal's code
+ *  and status, never by its words. */
 function humanizeFetchError(err: unknown, name: string): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  // 401 — JSON API path now requires sign-in. Surface a clear CTA.
-  if (/HTTP 401/.test(raw)) {
+  // The look-up needs a sign-in. Surface a clear CTA.
+  const code = refusalCode(err)
+  if (code === 'not_signed_in') {
     return 'Sign in to F-list to fetch profiles. Click the chip in the sidebar.'
   }
-  // 404 from the sidecar — F-list said "no such character".
-  if (/HTTP 404/.test(raw)) return `No character named "${name}" on F-list.`
-  // Network reach failures: fetch throws "Failed to fetch" / "TypeError"
-  // on the renderer side when the sidecar is down.
-  if (/Failed to fetch|NetworkError|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(raw)) {
+  if (code === 'not_found') return `No character named "${name}" on F-list.`
+  // fetch rejects with a TypeError when the sidecar is down.
+  if (err instanceof TypeError) {
     return "Can't reach the app's sidecar. Restart the app and try again."
   }
-  if (/HTTP 5\d\d/.test(raw)) return 'F-list is having trouble right now. Try again in a moment.'
-  if (/HTTP 4\d\d/.test(raw)) return `F-list refused that name (${errorDetail(err)}).`
-  return raw
+  if (err instanceof HttpError && err.status >= 500) {
+    return 'F-list is having trouble right now. Try again in a moment.'
+  }
+  if (err instanceof HttpError) return `F-list refused that name (${errorDetail(err)}).`
+  return errorDetail(err)
 }

@@ -27,6 +27,7 @@ export type RecordedRequest = {
 
 export type FakeReply =
   | { kind: 'json'; status: number; body: unknown }
+  | { kind: 'bytes'; data: Uint8Array }
   | { kind: 'sse'; events: [string, unknown][] }
   | { kind: 'error'; error: Error }
 
@@ -57,6 +58,11 @@ export type FakeApi = {
 /** A JSON reply. Any status outside 2xx reaches the app as an error. */
 export function json(body: unknown, status = 200): FakeReply {
   return { kind: 'json', status, body }
+}
+
+/** A binary reply, the way a Backup's zip is downloaded. */
+export function bytes(data: Uint8Array): FakeReply {
+  return { kind: 'bytes', data }
 }
 
 /** A server-sent event stream that sends `events` and ends, the way a
@@ -99,6 +105,12 @@ function parseBody(body: unknown): unknown {
 
 function toResponse(reply: FakeReply): Response {
   if (reply.kind === 'error') throw reply.error
+  if (reply.kind === 'bytes') {
+    return new Response(reply.data.slice().buffer as ArrayBuffer, {
+      status: 200,
+      headers: { 'Content-Type': 'application/octet-stream' }
+    })
+  }
   if (reply.kind === 'sse') {
     const text = reply.events
       .map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)

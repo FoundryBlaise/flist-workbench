@@ -76,7 +76,7 @@ it('says busy rather than zero chunks while a job holds the Index', async () => 
 
 it('shows an Index that cannot be read as an error, not as empty', async () => {
   vi.spyOn(api, 'ragStatus').mockRejectedValue(
-    new RefusalError('index_unreadable', 500, 'HTTP 500: The Index could not be read: boom', {})
+    new RefusalError('index_unreadable', 500, 'The Index could not be read: boom', {})
   )
   render(<IndexStatus />)
 
