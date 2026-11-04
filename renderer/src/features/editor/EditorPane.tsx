@@ -10,6 +10,12 @@ import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { DiffPane } from '../flist/DiffPane'
 import { ImagesTab } from '../flist/ImagesTab'
 
+/** Where the cursor was in each editor (by its key below) when it was
+ *  last left, so coming back to the Description tab, which mounts a new
+ *  editor, puts it there again. Only the selection: the editor keeps no
+ *  history of its own. */
+const lastSelection = new Map<string, { anchor: number; head: number }>()
+
 function formatKindLabel(kind: string): string {
   switch (kind) {
     case 'manual_single':
@@ -326,8 +332,22 @@ function EditorActiveTabBody(props: {
               indentOnInput: false
             }}
             onChange={(value) => props.setContent(value)}
+            onUpdate={(update) => {
+              if (update.selectionSet) {
+                const { anchor, head } = update.state.selection.main
+                lastSelection.set(cmKey, { anchor, head })
+              }
+            }}
             onCreateEditor={(view) => {
               props.viewRef.current = view
+              const at = lastSelection.get(cmKey)
+              if (at) {
+                const end = view.state.doc.length
+                view.dispatch({
+                  selection: { anchor: Math.min(at.anchor, end), head: Math.min(at.head, end) },
+                  scrollIntoView: true
+                })
+              }
             }}
           />
         </div>

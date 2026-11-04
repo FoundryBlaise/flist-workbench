@@ -224,6 +224,30 @@ describe('the editor keeps no history of its own', () => {
   })
 })
 
+describe('the cursor across tab switches', () => {
+  it('coming back to the Description tab puts the cursor where it was', async () => {
+    seed('Hello there')
+    renderEditor()
+    act(() => view().dispatch({ selection: { anchor: 5 } }))
+    act(() => store().setEditorActiveTab('kinks'))
+    act(() => store().setEditorActiveTab('description'))
+
+    expect(view().state.selection.main.head).toBe(5)
+  })
+
+  it('a text that got shorter meanwhile puts it at the end at most', async () => {
+    seed('Hello there')
+    renderEditor()
+    act(() => view().dispatch({ selection: { anchor: 11 } }))
+    act(() => store().setEditorActiveTab('diff'))
+    act(() => store().setEditorContent('Hi'))
+    act(() => store().setEditorActiveTab('description'))
+
+    expect(view().state.doc.toString()).toBe('Hi')
+    expect(view().state.selection.main.head).toBe(2)
+  })
+})
+
 describe('the preview beside the editor', () => {
   it('Ctrl+Z there undoes the description typing on the Workbench stack and shows the result', async () => {
     seed()
