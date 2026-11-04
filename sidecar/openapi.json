@@ -942,9 +942,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Live Flist Character  Character Id  Live Get"
+                  "$ref": "#/components/schemas/Live"
                 }
               }
             }
@@ -994,8 +992,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkbenchExists"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorkbenchAbsent"
+                    }
+                  ],
                   "title": "Response Flist Character Workbench Flist Character  Character Id  Workbench Get"
                 }
               }
@@ -1046,9 +1050,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Payload Get Flist Character  Character Id  Workbench Payload Get"
+                  "$ref": "#/components/schemas/WorkbenchPayload"
                 }
               }
             }
@@ -1114,9 +1116,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Payload Put Flist Character  Character Id  Workbench Payload Put"
+                  "$ref": "#/components/schemas/WorkbenchSaved"
                 }
               }
             }
@@ -1166,9 +1166,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Load Backup Flist Character  Character Id  Workbench Load Backup Post"
+                  "$ref": "#/components/schemas/BackupRestored"
                 }
               }
             }
@@ -1208,9 +1206,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Reset To Live Flist Character  Character Id  Workbench Reset To Live Post"
+                  "$ref": "#/components/schemas/WorkbenchResetToLive"
                 }
               }
             }
@@ -1259,9 +1255,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Load Preflight Flist Character  Character Id  Workbench Load Backup Preflight Get"
+                  "$ref": "#/components/schemas/RestorePreflight"
                 }
               }
             }
@@ -4777,6 +4771,46 @@
         ],
         "title": "AliasAdd"
       },
+      "BackupRestored": {
+        "properties": {
+          "workbench": {
+            "$ref": "#/components/schemas/WorkbenchInfo"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "loaded": {
+            "type": "string",
+            "title": "Loaded"
+          },
+          "backed_up_first": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KeptBackup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench",
+          "payload",
+          "etag",
+          "loaded",
+          "backed_up_first"
+        ],
+        "title": "BackupRestored"
+      },
       "DiscoverModelsRequest": {
         "properties": {},
         "type": "object",
@@ -4958,6 +4992,26 @@
         ],
         "title": "Health",
         "description": "The sidecar answers, and which app version started it."
+      },
+      "KeptBackup": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "created_at"
+        ],
+        "title": "KeptBackup",
+        "description": "The Backup that keeps the Workbench a Restore or a reset to Live\nreplaced."
       },
       "LabelOverride": {
         "properties": {
@@ -5215,6 +5269,12 @@
         },
         "type": "object",
         "title": "LabelsSettingsUpdate"
+      },
+      "Live": {
+        "additionalProperties": true,
+        "type": "object",
+        "title": "Live",
+        "description": "A character's Live: F-list's character-data answer as the last\nPull stored it, plus `fetched_at`. Free-form, because F-list may add\nfields and the window passes on what it does not know."
       },
       "McpAuth": {
         "properties": {
@@ -5777,6 +5837,48 @@
         "title": "RefusalCode",
         "description": "Every `code` a REST refusal can carry. The OpenAPI schema lists\nthem, so the window's `RefusalCode` is a generated union and a\nswitch on a code the sidecar never answers fails the type-check.\n\nA class below names its code where it is defined; this list repeats\nit for the schema. `tests/test_openapi_schema.py` fails when a\n`Refusal` subclass carries a code missing here (its `code`, or the\nkeys of `STATUS_BY_CODE` / `CODES` for classes coded per instance)."
       },
+      "RestorePreflight": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "backup_created_at": {
+            "type": "integer",
+            "title": "Backup Created At"
+          },
+          "live_pulled_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Pulled At"
+          },
+          "live_diverged": {
+            "type": "boolean",
+            "title": "Live Diverged"
+          },
+          "workbench_has_edits": {
+            "type": "boolean",
+            "title": "Workbench Has Edits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "backup_created_at",
+          "live_pulled_at",
+          "live_diverged",
+          "workbench_has_edits"
+        ],
+        "title": "RestorePreflight",
+        "description": "What the Restore confirm dialog says: whether the Workbench holds\nedits, and whether Live was pulled after the Backup was taken."
+      },
       "Settings": {
         "properties": {
           "fchat_data_dir": {
@@ -5917,6 +6019,139 @@
           "stopping"
         ],
         "title": "ShutdownStarted"
+      },
+      "WorkbenchAbsent": {
+        "properties": {
+          "workbench": {
+            "type": "null",
+            "title": "Workbench"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "no_live",
+              "not_created_yet"
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench",
+          "reason"
+        ],
+        "title": "WorkbenchAbsent",
+        "description": "No Workbench yet. `no_live`: the character was never pulled, so\nthere is nothing to copy from; `not_created_yet`: nobody has edited\nit yet."
+      },
+      "WorkbenchExists": {
+        "properties": {
+          "workbench": {
+            "$ref": "#/components/schemas/WorkbenchInfo"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench"
+        ],
+        "title": "WorkbenchExists"
+      },
+      "WorkbenchInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "integer",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkbenchInfo",
+        "description": "When the Workbench was made and last saved (unix seconds)."
+      },
+      "WorkbenchPayload": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "payload",
+          "etag",
+          "created"
+        ],
+        "title": "WorkbenchPayload",
+        "description": "The Workbench payload and the etag a save sends back as\n`If-Match`. `created`: this read made it from Live."
+      },
+      "WorkbenchResetToLive": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "backed_up_first": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KeptBackup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "payload",
+          "etag",
+          "backed_up_first"
+        ],
+        "title": "WorkbenchResetToLive"
+      },
+      "WorkbenchSaved": {
+        "properties": {
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "etag"
+        ],
+        "title": "WorkbenchSaved"
       },
       "_ImageIdsBody": {
         "properties": {

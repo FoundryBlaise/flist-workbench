@@ -250,13 +250,6 @@ export type ForeignProfileResult = {
   refresh_error?: string
 }
 
-/** The Workbench's metadata as the sidecar sends it. The window reads
- *  only `updated_at`, for the Workbench row's "last changed". */
-export type WorkbenchInfoWire = {
-  name: string
-  created_at: number
-  updated_at: number
-}
 
 /** A Pull or Back up all runs as a job: the stream's first event is the
  *  job (its id is what Cancel and a reopened view use), and a cancel by
@@ -1042,7 +1035,7 @@ export const api = {
     }>('/flist/activity'),
   flistRoster: () => get<{ characters: FlistRosterEntry[] }>('/flist/characters'),
   flistLive: (characterId: string | number) =>
-    get<Record<string, unknown>>(
+    get<Answer<'/flist/character/{character_id}/live', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/live`
     ),
   /** Right-click → 'Back up now': pulls (assumed already done by the
@@ -1135,10 +1128,7 @@ export const api = {
    *  what a read-only render wants — merely looking at a character
    *  should not bring a bench into being. */
   flistWorkbench: (characterId: string | number, create = true) =>
-    get<{
-      workbench: WorkbenchInfoWire | null
-      reason?: string
-    }>(
+    get<Answer<'/flist/character/{character_id}/workbench', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
         + (create ? '' : '?create=false')
     ),
@@ -1150,7 +1140,7 @@ export const api = {
     characterId: string | number,
     opts: { create?: boolean } = {}
   ) =>
-    get<{ payload: Record<string, unknown>; etag: string; created: boolean }>(
+    get<Answer<'/flist/character/{character_id}/workbench/payload', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
         + (opts.create === false ? '?create=false' : '')
     ),
@@ -1160,10 +1150,10 @@ export const api = {
    *  the refusal. */
   flistWorkbenchPayloadPut: (
     characterId: string | number,
-    payload: Record<string, unknown>,
+    payload: BodyOf<'/flist/character/{character_id}/workbench/payload', 'put'>,
     etag: string | null
   ) =>
-    request<{ etag: string }>(
+    request<Answer<'/flist/character/{character_id}/workbench/payload', 'put'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
       {
         method: 'PUT',
@@ -1177,11 +1167,7 @@ export const api = {
    *  its etag. When the Backup cannot be written nothing is replaced:
    *  a `workbench_not_kept` refusal. */
   flistWorkbenchResetToLive: (characterId: string | number) =>
-    request<{
-      payload: Record<string, unknown>
-      etag: string
-      backed_up_first: { filename: string; created_at: number } | null
-    }>(
+    request<Answer<'/flist/character/{character_id}/workbench/reset-to-live', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
       { method: 'POST' }
     ),
@@ -1192,13 +1178,7 @@ export const api = {
     characterId: string | number,
     filename: string
   ) =>
-    get<{
-      filename: string
-      backup_created_at: number | null
-      live_pulled_at: number | null
-      live_diverged: boolean
-      workbench_has_edits: boolean
-    }>(
+    get<Answer<'/flist/character/{character_id}/workbench/load-backup/preflight', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}`
         + `/workbench/load-backup/preflight?filename=`
         + encodeURIComponent(filename)
@@ -1208,13 +1188,7 @@ export const api = {
    *  null when there was no Workbench yet); when it cannot, nothing is
    *  replaced: a `workbench_not_kept` refusal. */
   flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
-    request<{
-      workbench: WorkbenchInfoWire
-      payload: Record<string, unknown>
-      etag: string
-      loaded: string
-      backed_up_first: { filename: string; created_at: number } | null
-    }>(
+    request<Answer<'/flist/character/{character_id}/workbench/load-backup', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}`
         + `/workbench/load-backup`,
       {

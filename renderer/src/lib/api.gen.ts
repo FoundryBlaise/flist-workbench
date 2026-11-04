@@ -2236,6 +2236,19 @@ export interface components {
             /** Primary Name */
             primary_name: string;
         };
+        /** BackupRestored */
+        BackupRestored: {
+            workbench: components["schemas"]["WorkbenchInfo"];
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Etag */
+            etag: string;
+            /** Loaded */
+            loaded: string;
+            backed_up_first: components["schemas"]["KeptBackup"] | null;
+        };
         /**
          * DiscoverModelsRequest
          * @description No fields — kept so the route keeps its POST shape.
@@ -2304,6 +2317,17 @@ export interface components {
             status: "ok";
             /** Version */
             version: string;
+        };
+        /**
+         * KeptBackup
+         * @description The Backup that keeps the Workbench a Restore or a reset to Live
+         *     replaced.
+         */
+        KeptBackup: {
+            /** Filename */
+            filename: string;
+            /** Created At */
+            created_at: number;
         };
         /** LabelOverride */
         LabelOverride: {
@@ -2385,6 +2409,15 @@ export interface components {
         LabelsSettingsUpdate: {
             /** Threshold Chars */
             threshold_chars?: number | null;
+        };
+        /**
+         * Live
+         * @description A character's Live: F-list's character-data answer as the last
+         *     Pull stored it, plus `fetched_at`. Free-form, because F-list may add
+         *     fields and the window passes on what it does not know.
+         */
+        Live: {
+            [key: string]: unknown;
         };
         /**
          * McpAuth
@@ -2579,6 +2612,23 @@ export interface components {
          */
         RefusalCode: "unauthorized" | "forbidden_origin" | "forbidden_host" | "http_404" | "http_405" | "internal_error" | "invalid_request" | "refused" | "invalid_file_name" | "log_name_refused" | "log_character_not_found" | "partner_not_found" | "log_dir_unavailable" | "log_not_found" | "backup_not_uploadable" | "backup_too_old" | "backup_holds_no_profile" | "backup_not_found" | "backup_unreadable" | "backup_not_written" | "not_trashed" | "image_not_found" | "no_avatar" | "profile_not_cached" | "job_not_found" | "no_index" | "resource_busy" | "index_busy" | "character_busy" | "index_unreadable" | "keyword_backfill_failed" | "unsupported_type" | "too_large" | "not_paired" | "validation_failed" | "flist_error" | "not_signed_in" | "sign_in_failed" | "not_found" | "rate_limited" | "flist_unreachable" | "flist_server_error" | "not_stoppable" | "invalid_character_id" | "character_not_found" | "workbench_not_kept" | "no_live" | "no_workbench" | "etag_required" | "etag_mismatch" | "invalid_workbench_payload" | "source_path_missing" | "source_path_not_absolute" | "no_import_folders" | "source_not_found" | "source_not_allowed" | "source_in_app_data" | "source_unreadable" | "source_too_large" | "not_an_image" | "store_failed";
         /**
+         * RestorePreflight
+         * @description What the Restore confirm dialog says: whether the Workbench holds
+         *     edits, and whether Live was pulled after the Backup was taken.
+         */
+        RestorePreflight: {
+            /** Filename */
+            filename: string;
+            /** Backup Created At */
+            backup_created_at: number;
+            /** Live Pulled At */
+            live_pulled_at: number | null;
+            /** Live Diverged */
+            live_diverged: boolean;
+            /** Workbench Has Edits */
+            workbench_has_edits: boolean;
+        };
+        /**
          * Settings
          * @description The settings the sidecar keeps, as Settings shows them.
          */
@@ -2611,6 +2661,67 @@ export interface components {
         ShutdownStarted: {
             /** Stopping */
             stopping: boolean;
+        };
+        /**
+         * WorkbenchAbsent
+         * @description No Workbench yet. `no_live`: the character was never pulled, so
+         *     there is nothing to copy from; `not_created_yet`: nobody has edited
+         *     it yet.
+         */
+        WorkbenchAbsent: {
+            /** Workbench */
+            workbench: null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "no_live" | "not_created_yet";
+        };
+        /** WorkbenchExists */
+        WorkbenchExists: {
+            workbench: components["schemas"]["WorkbenchInfo"];
+        };
+        /**
+         * WorkbenchInfo
+         * @description When the Workbench was made and last saved (unix seconds).
+         */
+        WorkbenchInfo: {
+            /** Name */
+            name: string;
+            /** Created At */
+            created_at: number;
+            /** Updated At */
+            updated_at: number;
+        };
+        /**
+         * WorkbenchPayload
+         * @description The Workbench payload and the etag a save sends back as
+         *     `If-Match`. `created`: this read made it from Live.
+         */
+        WorkbenchPayload: {
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Etag */
+            etag: string;
+            /** Created */
+            created: boolean;
+        };
+        /** WorkbenchResetToLive */
+        WorkbenchResetToLive: {
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Etag */
+            etag: string;
+            backed_up_first: components["schemas"]["KeptBackup"] | null;
+        };
+        /** WorkbenchSaved */
+        WorkbenchSaved: {
+            /** Etag */
+            etag: string;
         };
         /** _ImageIdsBody */
         _ImageIdsBody: {
@@ -3468,9 +3579,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Live"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3503,9 +3612,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WorkbenchExists"] | components["schemas"]["WorkbenchAbsent"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3538,9 +3645,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WorkbenchPayload"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3579,9 +3684,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WorkbenchSaved"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3616,9 +3719,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BackupRestored"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3649,9 +3750,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WorkbenchResetToLive"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -3684,9 +3783,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["RestorePreflight"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
