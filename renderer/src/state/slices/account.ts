@@ -350,14 +350,6 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
         // status that pre-dated sign-in would stay stuck forever
         // because the epoch-bumped in-flight call returns silently.
         const mappingNeedsReset = s.flistMapping.status !== 'ready'
-        // Wipe stale "not signed in" pullErrors left by auto-pull
-        // attempts that fired before the session was active — sign-in
-        // just made them obsolete. Other pullError causes (network,
-        // ticket-expired) will re-surface on the next pull attempt.
-        const archive: typeof s.flistArchive = {}
-        for (const [id, slot] of Object.entries(s.flistArchive)) {
-          archive[id] = slot.pullError ? { ...slot, pullError: null } : slot
-        }
         return {
           flistSignInStatus: 'idle',
           flistSignInOpen: false,
@@ -367,11 +359,12 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
             account: res.account,
             expires_in_sec: res.expires_in_sec
           },
-          // Archive-owned field: flistArchive.
-          flistArchive: archive,
           ...(mappingNeedsReset ? { flistMapping: idleMapping() } : {})
         }
       })
+      // Wipe stale "not signed in" Pull errors left by auto-pull
+      // attempts that fired before the session was active.
+      get().flistClearPullErrors()
       await get().flistLoadRoster()
       // Auto-refresh: walk the roster and queue a background pull
       // for every account character whose local copy is older than
@@ -401,10 +394,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       get().flistBackupAllStatus.jobId
     ].filter((id): id is string => Boolean(id))
     await Promise.all(jobIds.map((id) => api.jobCancel(id).catch(() => undefined)))
-    const ctrl = get().flistPullAbortController
-    if (ctrl) {
-      try { ctrl.abort() } catch { /* already aborted */ }
-    }
+    get().flistStopFollowingPull()
     try {
       await api.flistSignOut()
     } catch {
@@ -423,9 +413,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       flistSession: { active: false },
       flistAccountCharacters: [],
       // Purge the mapping cache too.
-      flistMapping: idleMapping(),
-      // Archive-owned field: flistPullAbortController.
-      flistPullAbortController: null
+      flistMapping: idleMapping()
     })
     await get().flistLoadRoster()
   },
@@ -449,30 +437,8 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
     set({ flistRosterStatus: 'loading' })
     try {
       const { characters } = await api.flistRoster()
-      set((s) => {
-        // Archive-owned field: flistArchive (each entry's integrity).
-        const archive = { ...s.flistArchive }
-        for (const entry of characters) {
-          if (entry.id === null || !entry.pull_status) continue
-          const key = String(entry.id)
-          const prev = archive[key] ?? {
-            live: null,
-            pullStatus: 'idle' as const,
-          }
-          archive[key] = {
-            ...prev,
-            integrity: {
-              status: entry.pull_status.status,
-              missing: entry.pull_status.missing_image_ids.length,
-            },
-          }
-        }
-        return {
-          flistRoster: characters,
-          flistRosterStatus: 'ready',
-          flistArchive: archive,
-        }
-      })
+      set({ flistRoster: characters, flistRosterStatus: 'ready' })
+      get().flistNotePullIntegrity(characters)
       // Restore the previously-selected character so signing back in
       // lands the user on their default rather than the picker's
       // empty state. Only fires when nothing is currently selected

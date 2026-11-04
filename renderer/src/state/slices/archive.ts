@@ -18,6 +18,7 @@ import {
   type FlistBackupAllHandlers,
   type FlistCharacterImage,
   type FlistPullHandlers,
+  type FlistRosterEntry,
   type FlistZipBackupEntry,
   type Job
 } from '../../lib/api'
@@ -223,6 +224,15 @@ export type ArchiveSlice = ArchiveState & {
    *  shows next is the caller's to decide. For the Workbench, when a
    *  Restore or reset to Live replaces the browsed view. */
   flistEndBrowse: () => void
+  /** Drop every slot's Pull error: signing in makes the "not signed in"
+   *  ones obsolete, and any other cause shows again at the next Pull. */
+  flistClearPullErrors: () => void
+  /** Each rostered character's Pull integrity (complete, partial and
+   *  how many images it misses), from the roster just read. */
+  flistNotePullIntegrity: (roster: FlistRosterEntry[]) => void
+  /** Stop following the running Pull (sign-out): the job runs on, or is
+   *  cancelled by id; the window just no longer reads its events. */
+  flistStopFollowingPull: () => void
   /** Right-click → Download ZIP… on a Backups row. OS save dialog
    *  defaults the filename to the backup's on-disk name; we don't
    *  invent a friendlier one because the timestamp+UTC marker is
@@ -1145,6 +1155,47 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
     const browse = get().flistBrowseBackup
     if (!browse) return
     _restoreFromBrowse(get, browse)
+  },
+
+  flistClearPullErrors() {
+    set((s) => {
+      const archive: typeof s.flistArchive = {}
+      for (const [id, slot] of Object.entries(s.flistArchive)) {
+        archive[id] = slot.pullError ? { ...slot, pullError: null } : slot
+      }
+      return { flistArchive: archive }
+    })
+  },
+
+  flistNotePullIntegrity(roster) {
+    set((s) => {
+      const archive = { ...s.flistArchive }
+      for (const entry of roster) {
+        if (entry.id === null || !entry.pull_status) continue
+        const key = String(entry.id)
+        const prev = archive[key] ?? { live: null, pullStatus: 'idle' as const }
+        archive[key] = {
+          ...prev,
+          integrity: {
+            status: entry.pull_status.status,
+            missing: entry.pull_status.missing_image_ids.length
+          }
+        }
+      }
+      return { flistArchive: archive }
+    })
+  },
+
+  flistStopFollowingPull() {
+    const ctrl = get().flistPullAbortController
+    if (ctrl) {
+      try {
+        ctrl.abort()
+      } catch {
+        // already aborted
+      }
+    }
+    set({ flistPullAbortController: null })
   },
 
   flistEndBrowse() {
