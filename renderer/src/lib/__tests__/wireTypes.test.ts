@@ -250,7 +250,13 @@ it('checks every module that talks to the sidecar', () => {
     .map(rel)
     .sort()
 
-  expect(calling).toEqual([...WIRE_MODULES, ...Object.keys(READS_NO_ANSWER)].sort())
+  // eventStream.ts reads the change hints through api.ts: checked,
+  // though it calls nothing itself.
+  expect(calling).toEqual(
+    [...WIRE_MODULES, ...Object.keys(READS_NO_ANSWER)]
+      .filter((module) => module !== 'renderer/src/lib/eventStream.ts')
+      .sort()
+  )
 })
 
 it('types every request and answer from the sidecar schema', () => {

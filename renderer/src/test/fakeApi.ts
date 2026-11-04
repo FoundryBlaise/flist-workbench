@@ -10,6 +10,10 @@
 // rejected with an error naming the request, so a test never passes
 // against a route it forgot to set up.
 //
+// An open stream (`stream(route)`) stays open like `/events` does: the
+// test sends events into it (`streams()`) and ends it; the window
+// aborting the request closes it.
+//
 // Held requests are the point: a test can leave a save in flight, type
 // over it, and then release or fail the responses in whatever order the
 // race it is pinning needs. `restore()` rejects anything still held so
@@ -42,6 +46,17 @@ export type PendingRequest = {
   reject: (reply?: FakeReply) => void
 }
 
+export type OpenStream = {
+  request: RecordedRequest
+  /** The sidecar sends a named event; `data` goes as JSON unless it is
+   *  a string already. */
+  send: (event: string, data: unknown) => void
+  /** The sidecar ends the stream. */
+  end: () => void
+  /** Ended, by the sidecar or by the window aborting the request. */
+  readonly closed: boolean
+}
+
 export type FakeApi = {
   /** Every request in the order it was made, answered or not. */
   readonly requests: RecordedRequest[]
@@ -49,6 +64,10 @@ export type FakeApi = {
   on: (route: Route, reply: Responder) => FakeApi
   once: (route: Route, reply: Responder) => FakeApi
   hold: (route: Route) => FakeApi
+  /** Requests to `route` get an event stream that stays open. */
+  stream: (route: Route) => FakeApi
+  /** The open streams' and the ended ones', oldest first. */
+  streams: (route?: Route) => OpenStream[]
   fallback: (reply: Responder) => FakeApi
   /** Held requests not yet settled, oldest first. */
   pending: (route?: Route) => PendingRequest[]
@@ -124,14 +143,54 @@ function toResponse(reply: FakeReply): Response {
   })
 }
 
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted.', 'AbortError')
+}
+
 export function installFakeApi(): FakeApi {
   const original = globalThis.fetch
   const requests: RecordedRequest[] = []
   const onceRoutes: { route: Route; reply: Responder }[] = []
   const standing: { route: Route; reply: Responder }[] = []
   const holds: Route[] = []
+  const streamRoutes: Route[] = []
+  const opened: OpenStream[] = []
   const held: (PendingRequest & { settled: boolean })[] = []
   let fallbackReply: Responder | null = null
+
+  const openStream = (req: RecordedRequest, signal?: AbortSignal): Response => {
+    if (signal?.aborted) throw abortError()
+    const encoder = new TextEncoder()
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    let closed = false
+    const body = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) })
+    const stream: OpenStream = {
+      request: req,
+      send(event, data) {
+        if (closed) return
+        const raw = typeof data === 'string' ? data : JSON.stringify(data)
+        controller.enqueue(encoder.encode(`event: ${event}
+data: ${raw}
+
+`))
+      },
+      end() {
+        if (closed) return
+        closed = true
+        controller.close()
+      },
+      get closed() {
+        return closed
+      }
+    }
+    signal?.addEventListener('abort', () => {
+      if (closed) return
+      closed = true
+      controller.error(abortError())
+    })
+    opened.push(stream)
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+  }
 
   const answer = (reply: Responder, req: RecordedRequest) =>
     toResponse(typeof reply === 'function' ? reply(req) : reply)
@@ -152,6 +211,9 @@ export function installFakeApi(): FakeApi {
     if (onceIdx >= 0) {
       const [hit] = onceRoutes.splice(onceIdx, 1)
       return answer(hit.reply, req)
+    }
+    if (streamRoutes.some((route) => matches(route, req))) {
+      return openStream(req, init?.signal ?? undefined)
     }
     if (holds.some((route) => matches(route, req))) {
       return new Promise<Response>((resolve, reject) => {
@@ -193,6 +255,11 @@ export function installFakeApi(): FakeApi {
       holds.push(route)
       return api
     },
+    stream(route) {
+      streamRoutes.push(route)
+      return api
+    },
+    streams: (route) => opened.filter((o) => !route || matches(route, o.request)),
     fallback(reply) {
       fallbackReply = reply
       return api
@@ -203,6 +270,7 @@ export function installFakeApi(): FakeApi {
       for (const p of held) {
         if (!p.settled) p.reject(networkError('fakeApi: test ended'))
       }
+      for (const o of opened) o.end()
       globalThis.fetch = original
     }
   }

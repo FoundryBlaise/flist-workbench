@@ -160,6 +160,9 @@ export type EventTable<Events> = { [Name in keyof Events]?: (data: Events[Name])
 type PullEvents = Schema<'PullEvents'>
 /** Back up all's events by name, each with its data; a job like a Pull. */
 type BackupAllEvents = Schema<'BackupAllEvents'>
+/** The change broadcast's events (`/events`): `ready`, then a change
+ *  hint per change to shared state. */
+type ChangeEvents = Schema<'ChangeEvents'>
 
 /** What a follower of a Pull does with its events. */
 export type FlistPullHandlers = EventTable<PullEvents>
@@ -169,6 +172,9 @@ export type FlistBackupAllCharacterEvent = BackupAllEvents['character']
 
 /** What a follower of Back up all does with its events. */
 export type FlistBackupAllHandlers = EventTable<BackupAllEvents>
+
+/** What the window does with the change broadcast's events. */
+export type ChangeEventHandlers = EventTable<ChangeEvents>
 
 /** One conversation of a character: the partner, or the primary name
  *  of an alias group whose other members are `aliases`. */
@@ -920,6 +926,13 @@ export const api = {
     opts?: ApiOptions
   ): Promise<void> =>
     requestStream(jobEventsPath(jobId), {}, (block) => dispatch(block, handlers), opts),
+
+  /** The sidecar's change broadcast: each change to shared state (a
+   *  model's edit over MCP, this window's own) as a hint, until the
+   *  stream ends or `opts.signal` is aborted. The window holds one open
+   *  for its life (`lib/eventStream`, which opens it again). */
+  changeEvents: (handlers: ChangeEventHandlers, opts?: ApiOptions): Promise<void> =>
+    requestStream('/events', {}, (block) => dispatch(block, handlers), opts),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () => get('/restore/handshake/pending'),
