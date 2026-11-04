@@ -7,10 +7,12 @@
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import {
   api,
+  EMBEDDING_MODEL_CHANGED,
   refusalCode,
   RefusalError,
   type Answer,
   type BodyOf,
+  type Job,
   type McpInfo,
   type RefusalCode
 } from '../api'
@@ -73,4 +75,30 @@ it('types a route by what its response model declares', async () => {
   // @ts-expect-error /health serves no POST
   const posted: Answer<'/health', 'post'> = health
   void posted
+})
+
+it('reads why a job failed by a code a refusal or a job carries', async () => {
+  const failed: Job = {
+    id: 'job1',
+    kind: 'ingest',
+    resource: 'index',
+    state: 'failed',
+    params: {},
+    progress: {},
+    result: null,
+    error: { code: 'embedding_model_changed', message: 'model changed', details: {} },
+    cancel_requested: false,
+    created_at: 1_700_000_000,
+    finished_at: 1_700_000_001
+  }
+  fake.on('GET /jobs/job1', json(failed))
+
+  const job = await api.jobGet('job1')
+
+  expect(job.error?.code).toBe(EMBEDDING_MODEL_CHANGED)
+  // @ts-expect-error a code no job fails with is not a job's error code
+  expect(job.error?.code === 'model_swapped').toBe(false)
+  // @ts-expect-error a job's state is one of the five the sidecar names
+  const odd: Job['state'] = 'paused'
+  void odd
 })
