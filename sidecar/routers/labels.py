@@ -145,7 +145,9 @@ def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> dict:
     own. The response carries every hash written, which is what makes
     the undo exact.
     """
-    result = label_service.fill_unlabeled(body.character, body.partner, body.label)
+    result = label_service.fill_unlabeled(
+        body.character, body.partner, body.label, source="manual"
+    )
     return {"character": body.character, "partner": body.partner, **result}
 
 

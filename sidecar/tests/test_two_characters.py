@@ -309,6 +309,36 @@ async def test_a_clear_over_mcp_that_finds_only_manual_labels_is_not_an_error(
     assert two_characters.client.get("/labels/trash").json()["labels"] == []
 
 
+async def test_filling_a_conversation_over_mcp_writes_a_models_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, filled = await call_tool(
+            session, "label_all_unlabeled",
+            character=AZURE, partner=PARTNER, label="IC", confirm=True,
+        )
+    assert not result.isError, filled
+    assert filled["labeled"] == 2
+
+    written = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
+    assert (written["label"], written["label_source"]) == ("IC", "mcp")
+    assert two_characters.client.get("/labels/rollup").json()["manual"] == 0
+    # A model's Labels, so a model may clear them again.
+    assert (await _clear_over_mcp(character=AZURE, partner=PARTNER))["deleted"] == 2
+
+
+def test_filling_a_conversation_in_the_window_writes_manual_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.client.post(
+        "/labels/fill-unlabeled",
+        json={"character": AZURE, "partner": PARTNER, "label": "IC"},
+    )
+
+    written = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
+    assert (written["label"], written["label_source"]) == ("IC", "manual")
+
+
 def test_the_windows_clear_still_takes_manual_labels(
     two_characters: TwoCharacters,
 ) -> None:

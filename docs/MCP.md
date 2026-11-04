@@ -283,8 +283,10 @@ right-click the conversation header in the app — and every unlabeled
 message in it gets that Label in one write. It only ever adds:
 messages that already carry a Label keep it, and the rules keep
 deciding the short lines and `((` asides. The app can undo exactly
-that write. A model must not reach for it on its own — only when the
-user has said it about that conversation.
+that write. Filled through the tool, they count as a model's Labels,
+which `clear_labels` takes again; filled in the app, as Labels set by
+hand. A model must not reach for it on its own — only when the user
+has said it about that conversation.
 
 Each batch reports how many are left and roughly how many more calls
 that means. Worth telling the user before starting: on a long log this

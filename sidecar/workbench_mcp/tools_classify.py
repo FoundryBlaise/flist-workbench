@@ -375,7 +375,9 @@ def label_all_unlabeled(
     Messages that already have a Label keep it, and messages the
     rules decide (empty, short, `((` prefix) keep resolving through the
     rules — so this adds labels and never overwrites. `labeled` in the
-    reply counts what was written; the user can undo it in the app.
+    reply counts what was written. They are stored as a model's Labels,
+    not as ones the user set by hand, so clear_labels takes them again
+    and the user can change any of them in the app.
 
     Unlabeled messages are skipped by ingest, so a conversation filled
     this way is found by search only after the next ingest_logs.
@@ -385,7 +387,7 @@ def label_all_unlabeled(
     conv = resolve_conversation(character, partner)
     character, partner = conv.character, conv.partner
 
-    result = label_service.fill_unlabeled(character, partner, label)
+    result = label_service.fill_unlabeled(character, partner, label, source="mcp")
 
     audit(
         "label_all_unlabeled",

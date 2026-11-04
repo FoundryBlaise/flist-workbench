@@ -347,20 +347,26 @@ def record_verdicts(
     return result
 
 
-def fill_unlabeled(character: str, partner: str, label: str) -> dict[str, Any]:
+def fill_unlabeled(
+    character: str, partner: str, label: str, *, source: str
+) -> dict[str, Any]:
     """Give every still-Unlabeled message of one conversation the same
     verdict, for a conversation the user knows is all IC (or all OOC).
 
     Messages with a stored Label keep it and messages the rules decide
     keep resolving through the rules, so this adds Labels and never
-    overwrites one. Returns `{label, labeled, hashes, already_labeled,
+    overwrites one. `source` says who wrote them: 'manual' from the
+    window, 'mcp' from a connected model, whose Labels a later MCP
+    clear may take again. Returns `{label, labeled, hashes, already_labeled,
     decided_by_rules, total_messages}`; `hashes` is exactly what was
     written, which `delete` takes to undo it.
     """
     label = verdict(label)
     messages = _messages(character, partner)
     with _store() as (conn, settings):
-        return labels_store.fill_unlabeled(conn, messages, settings, label)
+        return labels_store.fill_unlabeled(
+            conn, messages, settings, label, source=source
+        )
 
 
 def delete(hashes: Iterable[str]) -> int:
