@@ -17,6 +17,7 @@ import { ExtensionPairWatcher } from '../features/flist/ExtensionPairModal'
 import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
 import { ExternalChangeBanner } from './ExternalChangeBanner'
+import { UndoNote } from './UndoNote'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
 import { SettingsModal, type SectionId } from '../features/settings/SettingsModal'
 import { ForeignWorkspace } from '../features/foreign/ForeignWorkspace'
@@ -492,6 +493,7 @@ export function AppLayout() {
         </div>
       )}
       <ExternalChangeBanner />
+      <UndoNote />
       <BackupAllBanner />
       <ExtensionPairWatcher />
       {contactsOpen && <FindContactsModal onClose={() => setContactsOpen(false)} />}
