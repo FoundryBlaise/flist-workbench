@@ -27,6 +27,12 @@ uploaded later. Each Backup holds either the Live or the Workbench of its
 moment, and knows which, and why it was made.
 _Avoid_: snapshot, bundle, archive, export
 
+**Pool**:
+A character's image files kept in the app, whether or not the
+Workbench's gallery shows them. Taking an image off the gallery leaves
+it in the Pool; deleting it moves it to the Trash.
+_Avoid_: library, image store, unused images
+
 **Trash**:
 Where deleted images and Backups, and cleared Labels, wait until a human
 empties it. Nothing empties it on its own. Images and Backups wait in
