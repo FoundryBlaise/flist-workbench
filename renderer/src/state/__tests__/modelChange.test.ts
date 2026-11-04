@@ -1,5 +1,5 @@
 // A model's change to the Workbench while the window holds nothing
-// unsaved (#113): the store reloads it by itself, for any character, and
+// unsaved: the store reloads it by itself, for any character, and
 // the change is one undo entry named after the tool. Undoing it is a
 // real save over the etag the reload took. Driven through the event
 // dispatch and the store's actions against the fake sidecar.

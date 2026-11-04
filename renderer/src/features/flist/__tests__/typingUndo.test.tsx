@@ -1,5 +1,5 @@
 // Typing in the Workbench's text fields on the Profile fields and
-// Images tabs and the undo keys (#111): a caption's typing is a burst
+// Images tabs and the undo keys: a caption's typing is a burst
 // per pause or blur on the Workbench undo stack, and so is an infotag
 // field's. Rendered with the real store and the window's
 // keydown handler, against the fake sidecar.

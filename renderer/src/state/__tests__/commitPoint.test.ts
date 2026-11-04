@@ -1,5 +1,5 @@
 // Every change to a character's Workbench payload goes through one
-// commit point (#109). These tests drive the store through its actions,
+// commit point. These tests drive the store through its actions,
 // the way the window does, and watch the commits it reports.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

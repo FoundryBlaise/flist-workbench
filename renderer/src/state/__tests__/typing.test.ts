@@ -1,4 +1,4 @@
-// Typing on the Workbench undo stack (#111): keystrokes in one text
+// Typing on the Workbench undo stack: keystrokes in one text
 // field coalesce into one undo entry per pause or blur, the way an
 // editor groups typing. Driven through the store the way the window
 // does (the editor's and the caption's change handlers), against the

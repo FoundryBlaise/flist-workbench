@@ -1,4 +1,4 @@
-// The field-by-field merge of two versions of a Workbench (#114): the
+// The field-by-field merge of two versions of a Workbench: the
 // window's (mine, with unsaved edits) and another writer's (theirs, a
 // model's tool call, say), both grown from the payload last saved
 // (base). The overlay cannot tell which side changed a field: it lists

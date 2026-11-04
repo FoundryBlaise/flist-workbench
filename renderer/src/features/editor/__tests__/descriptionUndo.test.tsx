@@ -1,4 +1,4 @@
-// The description editor on the Workbench undo stack (#111): typing in
+// The description editor on the Workbench undo stack: typing in
 // it is a burst per pause or blur on the character's stack, Ctrl+Z in
 // it goes to that stack, and the editor keeps no history of its own,
 // so changes from outside it (a reload, another field) cannot land in

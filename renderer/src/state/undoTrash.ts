@@ -1,5 +1,5 @@
 // An undo or redo that brings back a gallery image whose file has since
-// gone to the Trash (#115). The store puts the file back from the Trash
+// gone to the Trash. The store puts the file back from the Trash
 // before the undone payload is saved and says so in a note; these are
 // the pure parts of that: which images to look for, how the gallery
 // follows a file that came back under another id, and the note.

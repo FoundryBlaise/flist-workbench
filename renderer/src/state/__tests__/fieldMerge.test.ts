@@ -1,4 +1,4 @@
-// A model's change while the window holds unsaved edits (#114): the
+// A model's change while the window holds unsaved edits: the
 // store merges the two field by field against the payload last saved.
 // Changes to different fields both stay, as one undo entry and one save
 // over the model's etag; a field both changed is asked about. A save

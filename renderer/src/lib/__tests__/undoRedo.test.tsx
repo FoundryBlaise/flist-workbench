@@ -1,4 +1,4 @@
-// Routing of Ctrl+Z / Ctrl+Y and the menus' Undo / Redo (#110): outside
+// Routing of Ctrl+Z / Ctrl+Y and the menus' Undo / Redo: outside
 // a text control they step the active character's Workbench back and
 // forth; inside one they are left to it. Driven through the window's
 // keydown handler and the dispatcher the menus call, against the real

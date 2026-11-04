@@ -1,5 +1,5 @@
 // The window's undo stack: one per character, of whole Workbench
-// payloads, each labelled with where the change came from (#110).
+// payloads, each labelled with where the change came from.
 //
 // The store's commit point records the payload a change replaced;
 // undo hands that payload back for the store to commit, and keeps the
@@ -7,14 +7,14 @@
 // The stacks live as long as the app runs (ADR 0003): anything older
 // is recovered from a Backup.
 //
-// Typing is coalesced here (#111): the first keystroke in a text field
+// Typing is coalesced here: the first keystroke in a text field
 // records the payload from before it, and further keystrokes in the
 // same field record nothing until the burst ends: a pause of
 // TYPING_PAUSE_MS, the field losing focus (endTyping), any other
 // change, an undo or redo, or the Workbench being shown afresh.
 //
 // No store import: the store calls in, so this file can move with the
-// store's split (spec #8) without dragging it along.
+// store's split into modules without dragging it along.
 
 import type { CommitLabel } from './commit'
 import type { WorkingPayload } from './flist'

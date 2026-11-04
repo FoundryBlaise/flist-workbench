@@ -1,4 +1,4 @@
-// Ctrl+Z / Ctrl+Y on every tab (#110): one undo stack per character of
+// Ctrl+Z / Ctrl+Y on every tab: one undo stack per character of
 // Workbench payloads. These tests drive the store through its actions,
 // the way the window does, and watch the payload and the saves that
 // reach the fake sidecar.
