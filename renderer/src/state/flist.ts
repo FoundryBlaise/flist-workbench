@@ -39,6 +39,11 @@ export interface FlistWorkingSlot {
    *  preview that has never been written to disk. Flips true on the first
    *  successful PUT. */
   materialised: boolean
+  /** The payload on disk at `etag`, as the window last read or wrote
+   *  it: the base a merge with another writer's version compares both
+   *  sides against (the overlay cannot say which side changed a
+   *  field). Null when the window has none, an empty slot. */
+  saved: WorkingPayload | null
 }
 
 export const WORKING_SCHEMA_VERSION = 4
@@ -232,7 +237,8 @@ export function emptyWorkingSlot(): FlistWorkingSlot {
     saveStatus: 'idle',
     saveError: null,
     lastSavedAt: null,
-    materialised: false
+    materialised: false,
+    saved: null
   }
 }
 
@@ -259,7 +265,7 @@ export function detectLiveDrift(
   return out
 }
 
-function isDeepEqual(a: unknown, b: unknown): boolean {
+export function isDeepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (a === null || b === null || a === undefined || b === undefined) return false
   if (typeof a !== typeof b) return false

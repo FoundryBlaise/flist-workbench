@@ -1611,16 +1611,12 @@ body {
   z-index: 30;
   max-width: 460px;
 }
-/* Shown when a model editing through MCP changed the working set the
-   user has open. Sits at the top, not the bottom: this is a decision
-   the user has to make, not a notice they can scroll past. */
 /* What the window did to the Workbench without the user doing it by
    hand: another writer's change taken in while nothing was unsaved, or
    the change an undo or redo stepped over (WorkbenchNote). A note, not
    a decision — it says which tool ran, because that is the part they
-   cannot see, and then it goes away. Floats like the banner below: in
-   the flow it became an extra row of .app's grid and stretched to fill
-   half the window. */
+   cannot see, and then it goes away. Floats: in the flow it became an
+   extra row of .app's grid and stretched to fill half the window. */
 .workbench-note {
   position: fixed;
   top: 48px;
@@ -1642,7 +1638,7 @@ body {
 }
 
 /* An undo that put an image back from the Trash, or found it missing.
-   Below the external-change note, so both can show at once. */
+   Below the Workbench note, so both can show at once. */
 .undo-note {
   top: 84px;
   pointer-events: auto;
@@ -1654,48 +1650,36 @@ body {
   cursor: pointer;
 }
 
-.external-change-banner {
-  position: fixed;
-  top: 48px;
-  left: 50%;
-  transform: translateX(-50%);
+/* Fields both the window and another writer changed (MergeDialog):
+   one row each, "Keep mine" / "Take theirs" with both values. */
+.merge-dialog { max-width: 640px; }
+.merge-fields {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.merge-field-name { font-weight: 600; margin-bottom: 4px; }
+.merge-side {
+  display: flex;
+  align-items: baseline;
   gap: 10px;
-  align-items: center;
-  padding: 10px 14px;
-  background: var(--select);
-  color: var(--text);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  font-size: var(--font-meta);
-  z-index: 40;
-  max-width: 720px;
+  margin-top: 4px;
 }
-.external-change-reload,
-.external-change-keep,
-.external-change-dismiss {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: var(--btn-radius);
-  padding: 4px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.external-change-reload {
+.merge-choice { white-space: nowrap; min-width: 96px; }
+.merge-choice[aria-pressed='true'] {
   border-color: var(--accent);
-}
-.external-change-reload:hover,
-.external-change-keep:hover {
   background: var(--hover-soft);
 }
-.external-change-dismiss {
-  border: none;
+.merge-value {
   color: var(--text-dim);
-  padding: 4px 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.external-change-dismiss:hover { color: var(--text); }
 
 .backup-all-banner {
   position: fixed;

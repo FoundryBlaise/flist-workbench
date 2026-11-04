@@ -794,15 +794,16 @@ return commit.keepPending ? { editorContent } : { editorDirty: false }'''
 id = "R07"
 suite = "renderer"
 file = "renderer/src/state.ts"
-breaks = "Keeping my version after an external change saves against my stale etag."
+breaks = "Merging my unsaved edits with another writer's change saves the merge over my stale etag instead of theirs."
 tests = ["@renderer"]
 audit = "killed"
 spec = 7
-# audit: M07 keep-mine writes against own stale etag
+# audit: M07 keep-mine writes against own stale etag; #114 replaced
+# keep-mine with the field merge, which takes the other writer's etag.
 find = '''
-api.flistWorkbenchPayloadPut(characterId, slot.payload, change.etag)'''
+_mergeExternal(get, set, characterId, label, payload, res.etag, settled, cleared)'''
 replace = '''
-api.flistWorkbenchPayloadPut(characterId, slot.payload, slot.etag)'''
+_mergeExternal(get, set, characterId, label, payload, slot.etag as string, settled, cleared)'''
 
 [[mutation]]
 id = "R08"
