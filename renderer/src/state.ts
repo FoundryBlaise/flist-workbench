@@ -941,8 +941,8 @@ function _commit(
       flistWorking,
       ..._editorFollows(s, characterId, next, commit)
     }
-    done.covered = _showsReadOnlyView(s, characterId)
-    done.coveredAfter = _showsReadOnlyView({ ...s, ...patch }, characterId)
+    done.covered = _slotHoldsView(s, characterId)
+    done.coveredAfter = _slotHoldsView({ ...s, ...patch }, characterId)
     return patch
   })
   const event = done.event
@@ -976,6 +976,17 @@ function _commit(
  *  browsed in its Workbench slot: nothing may be written from there. */
 function _showsReadOnlyView(s: State, characterId: string): boolean {
   return !!s.flistViewingLive[characterId] || s.flistBrowseBackup?.characterId === characterId
+}
+
+/** True while a character's slot holds Live or a browsed Backup instead
+ *  of the Workbench, which the undo stack then keeps aside. A Backup
+ *  still loading for browse is not in the slot yet. */
+function _slotHoldsView(s: State, characterId: string): boolean {
+  const browse = s.flistBrowseBackup
+  return (
+    !!s.flistViewingLive[characterId] ||
+    (browse?.characterId === characterId && browse.status === 'ready')
+  )
 }
 
 /** One undo or redo step: the stack moves and hands back the payload to
@@ -1560,18 +1571,34 @@ function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot
   }
 }
 
-/** Show the Workbench the sidecar just wrote, replacing the slot
- *  whatever it held: Live, or the Workbench before a Restore. */
+/** Show the Workbench the sidecar just wrote (a Restore, a reset to
+ *  Live), replacing the slot whatever it held: the Workbench before, or
+ *  the Live view or browsed Backup it was made from, which ends. */
 function _showWorkbench(
   get: () => State,
   set: (fn: (s: State) => Partial<State>) => void,
   characterId: string,
-  payload: WorkingPayload,
-  etag: string
+  commit: Commit & { kind: 'written' }
 ): void {
-  _commit(get, set, characterId, { kind: 'written', label: 'restore', payload, etag }, (s) => ({
-    flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
-  }))
+  _commit(get, set, characterId, commit, (s) => {
+    const browse = s.flistBrowseBackup
+    if (browse?.characterId !== characterId) {
+      return { flistViewingLive: { ...s.flistViewingLive, [characterId]: false } }
+    }
+    // A browsed Backup ends too: Live goes back to what the browse
+    // stood in for.
+    return {
+      flistViewingLive: { ...s.flistViewingLive, [characterId]: false },
+      flistBrowseBackup: null,
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: {
+          ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
+          live: browse.previousLive
+        }
+      }
+    }
+  })
   if (get().flistActiveCharacterId === characterId) {
     set((s) => _workbenchInEditor(s, characterId))
   }
@@ -3298,9 +3325,9 @@ export const useStore = create<State>((set, get) => ({
         materialised: false
       }
     }
-    // The commit puts the fresh description into the editor; the
-    // replaced Workbench becomes the undo entry.
-    _commit(get, set, characterId, fresh)
+    // The fresh Workbench is shown, even from Live or a browsed Backup;
+    // the replaced one becomes the undo entry.
+    _showWorkbench(get, set, characterId, fresh)
     // The Backup the sidecar just kept belongs in the list.
     if (kept) void _refreshBackupList(characterId, set)
   },
@@ -3335,7 +3362,12 @@ export const useStore = create<State>((set, get) => ({
       }))
       // The restored Workbench goes into the editor even when the
       // Workbench is already shown, and switches the view from Live.
-      _showWorkbench(get, set, characterId, res.payload as WorkingPayload, res.etag)
+      _showWorkbench(get, set, characterId, {
+        kind: 'written',
+        label: 'restore',
+        payload: res.payload as WorkingPayload,
+        etag: res.etag
+      })
       get().flistDismissRestoreRefusal(characterId)
       // The Backup kept of the replaced Workbench belongs in the list.
       if (res.backed_up_first) await get().flistLoadArchive(characterId)
