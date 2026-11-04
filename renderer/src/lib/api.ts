@@ -36,126 +36,43 @@ export type BodyOf<P extends keyof paths, M extends MethodOf<P>> =
 /** Every code a sidecar refusal can carry (`refusals.RefusalCode`). */
 export type RefusalCode = Schema<'RefusalCode'>
 
+/** An inline image as F-list's profile payload lists it. */
 export type InlineImage = { hash: string; extension: string; nsfw: boolean }
 
 export type CharacterEntry = { name: string; mtime: number }
 
 // ---- F-list character archive (Phase 7 Tier 1) ----
 
-export type FlistAccountCharacter = {
-  name: string
-  id: number | string | null
-}
+export type FlistAccountCharacter = Schema<'AccountCharacter'>
 
-export type FlistSessionStatus = {
-  active: boolean
-  account?: string
-  expires_in_sec?: number
-  needs_refresh?: boolean
-  api_hourly_count?: number
-  // True while the sidecar still has the password cached for
-  // auto-refresh. False after the idle watchdog drops it.
-  password_cached?: boolean
-  // Seconds remaining until the idle watchdog drops the cached
-  // password; null when nothing is cached. Used by the renderer to
-  // surface a pre-drop warning banner.
-  password_idle_seconds_remaining?: number | null
-}
+/** What the window knows of the F-list session: `GET /flist/session`'s
+ *  answer, or the part a sign-in or sign-out already tells. */
+export type FlistSessionStatus = Pick<Schema<'FlistSession'>, 'active'> &
+  Partial<Omit<Schema<'FlistSession'>, 'active'>>
 
-export type FlistPullStatus = {
-  status: 'never_pulled' | 'unknown' | 'interrupted' | 'partial' | 'complete'
-  missing_image_ids: { image_id: string; extension: string }[]
-  expected: number
-  present: number
-  last_attempt_ts: number | null
-}
+export type FlistPullStatus = Schema<'PullStatus'>
 
-export type FlistRosterEntry = {
-  name: string
-  id: number | string | null
-  on_account: boolean
-  has_archive: boolean
-  has_logs: boolean
-  last_pulled_at: number | null
-  /** Count of ZIP backups in `backups/` — the explicit "Back up"
-   *  artefacts that include images + avatar. */
-  backup_count: number
-  // Only present for rows where has_archive is true. Surfaces whether
-  // a prior pull was interrupted or had image failures so the renderer
-  // can prompt the user to resume.
-  pull_status?: FlistPullStatus
-}
+export type FlistRosterEntry = Schema<'RosterEntry'>
 
 /** A Backup as the Backup list shows it: its origin (`source`,
  *  `occasion`; `kind` is the older one the extension sorts by),
  *  whether it holds a profile, and the user's rename (`name`). */
 export type FlistZipBackupEntry = Schema<'Backup'>
 
-export type FlistCharacterImage = {
-  image_id: string
-  extension: string
-  size: number
-  /** File mtime in unix seconds. Used to sort the Pool pane newest-
-   *  first; absent on older sidecar builds, in which case the renderer
-   *  falls back to image_id order. */
-  added_at?: number
-}
+/** An image file in a character's Pool. */
+export type FlistCharacterImage = Schema<'PoolImage'>
 
-/** A file in a character's image trash (`<character>/trash/`). */
-export type FlistTrashItem = {
-  /** Names this entry for put-back and purge. The image id, unless the
-   *  Trash holds several files under that id (a Pull replaced one). */
-  trash_id: string
-  image_id: string
-  extension: string
-  filename: string
-  size: number
-  deleted_at: number
-  /** 'ui' or 'mcp'; null for a file that got there without an index entry. */
-  deleted_by: string | null
-  source_name: string | null
-}
+/** A file in a character's image Trash (`<character>/trash/`). */
+export type FlistTrashItem = Schema<'TrashItem'>
 
 /** A deleted Backup in a character's Trash (`<character>/trash/backups/`). */
-export type FlistTrashedBackup = {
-  /** Its file name in the Trash; what put-back and purge take. */
-  id: string
-  /** The Backup's file name in the Backup list, where a put-back returns it. */
-  filename: string
-  /** The user-set name it had, kept for the put-back. */
-  name: string | null
-  size: number
-  deleted_at: number
-  deleted_by: string | null
-}
+export type FlistTrashedBackup = Schema<'TrashedBackup'>
 
-/** Labels cleared in one go, kept in the character's Trash. */
-export type FlistTrashedLabels = {
-  /** What put-back and purge take. */
-  id: string
-  /** The Log character they were cleared for; null for Labels whose
-   *  messages were in none of the Logs when every Label was reset. */
-  character: string | null
-  /** The conversation cleared; null when every conversation was. */
-  partner: string | null
-  /** How many Labels the entry holds. */
-  count: number
-  deleted_at: number
-  deleted_by: string | null
-}
+/** Labels cleared in one go, kept in the Trash. */
+export type FlistTrashedLabels = Schema<'TrashedLabels'>
 
-/** Where an image id is still used, beyond the pool: the Workbench's
- *  gallery, Live, and how many Backups keep it (each with its own copy
- *  of the bytes), with the newest of them. `migration_backup`: the
- *  older copies from before the upgrade name it; that Backup holds JSON
- *  only, no copy of the bytes, and is not counted in `backups`. */
-export type FlistImageReferences = {
-  workbench: boolean
-  live: boolean
-  backups: number
-  newest_backup: string | null
-  migration_backup: boolean
-}
+/** Where an image id is still used, beyond the Pool. */
+export type FlistImageReferences = Schema<'ImageReference'>
 
 
 // ---- foreign profiles (read-only viewer) ----------------------------
@@ -168,17 +85,9 @@ export type FlistImageReferences = {
 
 /** Where the viewer's candidate names come from. `name` is free text
  *  taken as an exact character name — F-list has no search endpoint. */
-export type ForeignSource = 'bookmarks' | 'friends' | 'logs' | 'name'
+export type ForeignSource = Schema<'ForeignSearch'>['source']
 
-export type ForeignSearchResult = {
-  source: ForeignSource
-  query: string
-  results: string[]
-  truncated: boolean
-  /** True for the free-text source: the row is what the user typed,
-   *  not something known to exist. */
-  exact: boolean
-}
+export type ForeignSearchResult = Schema<'ForeignSearch'>
 
 /** A character-data.php payload plus the cache's `fetched_at` stamp.
  *  Indexed because F-list may add fields and the viewer passes
@@ -198,15 +107,10 @@ export type ForeignProfilePayload = Record<string, unknown> & {
   fetched_at?: number
 }
 
-export type ForeignProfileResult = {
-  name: string
+/** A Foreign profile as the sidecar answers it, its F-list payload
+ *  read as `ForeignProfilePayload`. */
+export type ForeignProfileResult = Omit<Schema<'ForeignProfile'>, 'profile'> & {
   profile: ForeignProfilePayload
-  from_cache: boolean
-  age_sec: number | null
-  fetched_at: number | null
-  /** Set when a refresh failed and the cached copy was served anyway. */
-  stale?: boolean
-  refresh_error?: string
 }
 
 
@@ -263,11 +167,9 @@ export type FlistBackupAllHandlers = JobStreamHandlers & {
   onError?: (info: StreamError) => void
 }
 
-export type Profile = {
-  name: string
-  avatar_url: string | null
-  stats: Record<string, string>
-  bbcode: string
+/** A public profile for the editor's "Fetch profile", its F-list
+ *  inlines read as `InlineImage`. */
+export type Profile = Omit<Schema<'PublicProfile'>, 'inlines'> & {
   inlines: Record<string, InlineImage>
 }
 
@@ -421,11 +323,7 @@ export type McpSettings = Schema<'McpSettings'>
 export type ForeignSettings = Schema<'ForeignSettings'>
 
 /** What the Foreign profile cache holds on disk, and what it may hold. */
-export type ForeignCacheUsage = {
-  bytes: number
-  profiles: number
-  cap_bytes: number
-}
+export type ForeignCacheUsage = Schema<'ForeignCacheUsage'>
 
 /** The MCP endpoints and the optional bearer token. The token is off
  *  by default: the endpoints are loopback-only, so requiring one buys
@@ -697,7 +595,7 @@ export const api = {
   base,
   // ---- foreign profiles (read-only viewer) ----
   foreignSearch: (source: ForeignSource, q: string, opts?: ApiOptions) =>
-    get<ForeignSearchResult>(
+    get<Answer<'/foreign/search', 'get'>>(
       `/foreign/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
       opts
     ),
@@ -715,21 +613,15 @@ export const api = {
    *  scrolling a gallery twice costs one fetch per image, not two. */
   foreignImageUrl: (name: string, imageId: string) =>
     `${base()}/foreign/character/${encodeURIComponent(name)}/image/${encodeURIComponent(imageId)}`,
-  foreignCacheUsage: () => get<ForeignCacheUsage>('/foreign/cache'),
+  foreignCacheUsage: () => get<Answer<'/foreign/cache', 'get'>>('/foreign/cache'),
   /** Delete every cached Foreign profile, images and avatars included. */
   foreignCacheClear: () =>
-    request<ForeignCacheUsage & { removed: number }>('/foreign/cache', {
+    request<Answer<'/foreign/cache', 'delete'>>('/foreign/cache', {
       method: 'DELETE'
     }),
   health: () => get<Answer<'/health', 'get'>>('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
-    get<{
-      eicons: string[]
-      total: number
-      as_of: number
-      status: 'loading' | 'ready' | 'error'
-      error: string | null
-    }>(`/eicons/search?q=${encodeURIComponent(q)}&limit=${limit}`, opts),
+    get<Answer<'/eicons/search', 'get'>>(`/eicons/search?q=${encodeURIComponent(q)}&limit=${limit}`, opts),
   characters: () => get<{ characters: CharacterEntry[] }>('/logs/characters'),
   partners: (char: string) =>
     get<{ character: string; partners: PartnerEntry[] }>(
@@ -819,17 +711,14 @@ export const api = {
     }),
   /** Every cleared-Labels entry in the Trash, whichever character it
    *  was cleared for: Settings → Labels lists them. */
-  labelsTrashList: () => get<{ labels: FlistTrashedLabels[] }>('/labels/trash'),
+  labelsTrashList: () => get<Answer<'/labels/trash', 'get'>>('/labels/trash'),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
   labelsTrashPutBack: (ids: string[]) =>
-    request<{
-      restored: { id: string; restored: number; skipped: string[] }[]
-      not_found: string[]
-    }>('/labels/trash/put-back', { method: 'POST', body: JSON.stringify({ ids }) }),
+    request<Answer<'/labels/trash/put-back', 'post'>>('/labels/trash/put-back', { method: 'POST', body: JSON.stringify({ ids }) }),
   /** Delete cleared Labels for good. */
   labelsTrashPurge: (ids: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>('/labels/trash/purge', {
+    request<Answer<'/labels/trash/purge', 'post'>>('/labels/trash/purge', {
       method: 'POST',
       body: JSON.stringify({ ids })
     }),
@@ -973,26 +862,17 @@ export const api = {
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // ---- F-list character archive ----
-  flistSignIn: (body: { account: string; password: string }) =>
-    request<{
-      characters: FlistAccountCharacter[]
-      expires_in_sec: number
-      account: string
-    }>('/flist/session', {
+  flistSignIn: (body: BodyOf<'/flist/session', 'post'>) =>
+    request<Answer<'/flist/session', 'post'>>('/flist/session', {
       method: 'POST',
       body: JSON.stringify(body)
     }),
   flistSignOut: () =>
-    request<{ signed_out: true }>('/flist/session', { method: 'DELETE' }),
-  flistSession: () => get<FlistSessionStatus>('/flist/session'),
+    request<Answer<'/flist/session', 'delete'>>('/flist/session', { method: 'DELETE' }),
+  flistSession: () => get<Answer<'/flist/session', 'get'>>('/flist/session'),
   flistActivity: () =>
-    get<{
-      started_at: number
-      event_count: number
-      max_events: number
-      events: { t: number; kind: string; [k: string]: unknown }[]
-    }>('/flist/activity'),
-  flistRoster: () => get<{ characters: FlistRosterEntry[] }>('/flist/characters'),
+    get<Answer<'/flist/activity', 'get'>>('/flist/activity'),
+  flistRoster: () => get<Answer<'/flist/characters', 'get'>>('/flist/characters'),
   flistLive: (characterId: string | number) =>
     get<Answer<'/flist/character/{character_id}/live', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/live`
@@ -1062,12 +942,7 @@ export const api = {
     ),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
   flistMappingList: (opts?: { force?: boolean }) =>
-    get<
-      Record<string, unknown> & {
-        _etag: string | null
-        _fetched_at: number | null
-      }
-    >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
+    get<Answer<'/flist/mapping-list', 'get'>>(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
   // ---- The workbench --------------------------------------------
   // A character has one editable copy of its profile beside Live,
   // seeded from Live when first needed (ADR 0001).
@@ -1159,26 +1034,19 @@ export const api = {
    *  shows as a black placeholder and drops out of the restore ZIP,
    *  which the extension reads as "delete this from the profile". */
   flistRepairGallery: (characterId: string | number) =>
-    request<{
-      relinked: { from: string; to: string }[]
-      duplicates_removed: string[]
-      stale_removed: string[]
-      unresolved: string[]
-      sets_rewritten: number
-      repaired: boolean
-    }>(
+    request<Answer<'/flist/character/{character_id}/images/repair', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/repair`,
       { method: 'POST' }
     ),
   flistCharacterImages: (characterId: string | number) =>
-    get<{ character_id: string; images: FlistCharacterImage[] }>(
+    get<Answer<'/flist/character/{character_id}/images', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images`
     ),
   /** Upload a local image (PNG/JPG/GIF). Lands as `images/local-<sha8>.<ext>`
    *  and shows up in the renderer's Pool view; only a working.json
    *  gallery edit moves it on-profile. */
   flistImageUpload: (characterId: string | number, data: Blob) =>
-    request<FlistCharacterImage>(
+    request<Answer<'/flist/character/{character_id}/images', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images`,
       { method: 'POST', body: data }
     ),
@@ -1188,78 +1056,61 @@ export const api = {
    *  `etag`, null when the gallery was left alone; every file goes to
    *  the Trash. */
   flistImagesTrash: (characterId: string | number, imageIds: string[]) =>
-    request<{
-      trashed: FlistTrashItem[]
-      not_found: string[]
-      off_gallery: string[]
-      etag: string | null
-    }>(
+    request<Answer<'/flist/character/{character_id}/images/trash', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
       { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
     ),
   /** Where each image id is still used: the Workbench, Live, Backups. */
   flistImageReferences: (characterId: string | number) =>
-    get<Record<string, FlistImageReferences>>(
+    get<Answer<'/flist/character/{character_id}/image-references', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
     ),
   flistTrashList: (characterId: string | number) =>
-    get<{
-      character_id: string
-      items: FlistTrashItem[]
-      backups?: FlistTrashedBackup[]
-      labels?: FlistTrashedLabels[]
-    }>(
+    get<Answer<'/flist/character/{character_id}/trash', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash`
     ),
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
   /** Back into the pool, not onto the profile. Takes trash ids. */
   flistTrashPutBack: (characterId: string | number, trashIds: string[]) =>
-    request<{
-      restored: { image_id: string; deduplicated: boolean; from: string }[]
-      not_found: string[]
-      conflicts: string[]
-    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/put-back`, {
-      method: 'POST',
-      body: JSON.stringify({ image_ids: trashIds })
-    }),
+    request<Answer<'/flist/character/{character_id}/trash/put-back', 'post'>>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/put-back`,
+      { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
+    ),
   /** Delete trashed files for good. Takes trash ids. */
   flistTrashPurge: (characterId: string | number, trashIds: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>(
+    request<Answer<'/flist/character/{character_id}/trash/purge', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
       { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
     ),
   /** Back into the Backup list, under the name they had. */
   flistTrashBackupsPutBack: (characterId: string | number, ids: string[]) =>
-    request<{ restored: string[]; not_found: string[]; conflicts: string[] }>(
+    request<Answer<'/flist/character/{character_id}/trash/backups/put-back', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/put-back`,
       { method: 'POST', body: JSON.stringify({ ids }) }
     ),
   /** Delete trashed Backups for good. */
   flistTrashBackupsPurge: (characterId: string | number, ids: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>(
+    request<Answer<'/flist/character/{character_id}/trash/backups/purge', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/purge`,
       { method: 'POST', body: JSON.stringify({ ids }) }
     ),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
   flistTrashLabelsPutBack: (characterId: string | number, ids: string[]) =>
-    request<{
-      restored: { id: string; restored: number; skipped: string[] }[]
-      not_found: string[]
-    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/put-back`, {
-      method: 'POST',
-      body: JSON.stringify({ ids })
-    }),
+    request<Answer<'/flist/character/{character_id}/trash/labels/put-back', 'post'>>(
+      `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/put-back`,
+      { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
   /** Delete cleared Labels for good. */
   flistTrashLabelsPurge: (characterId: string | number, ids: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>(
+    request<Answer<'/flist/character/{character_id}/trash/labels/purge', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/purge`,
       { method: 'POST', body: JSON.stringify({ ids }) }
     ),
   /** Empty the whole Trash: images, Backups and cleared Labels. */
   flistTrashEmpty: (characterId: string | number) =>
-    request<{ purged: number }>(
+    request<Answer<'/flist/character/{character_id}/trash', 'delete'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/trash`,
       { method: 'DELETE' }
     ),
