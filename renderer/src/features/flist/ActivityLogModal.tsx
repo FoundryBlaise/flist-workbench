@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../../lib/api'
+import { api, errorDetail } from '../../lib/api'
 import { EmptyState } from '../../components/EmptyState'
 
 type Snapshot = Awaited<ReturnType<typeof api.flistActivity>>
@@ -72,7 +72,7 @@ export function ActivityLogModal({ onClose }: { onClose: () => void }) {
       setSnap(data)
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorDetail(e))
     } finally {
       setLoading(false)
     }

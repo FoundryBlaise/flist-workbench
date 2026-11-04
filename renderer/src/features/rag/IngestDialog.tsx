@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   api,
+  errorDetail,
   EMBEDDING_MODEL_CHANGED,
   type IngestJob,
   type IngestJobScope
@@ -72,7 +73,7 @@ export function IngestDialog({
         startPolling(j.id)
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err))
+        setError(errorDetail(err))
       })
   }
 
@@ -91,7 +92,7 @@ export function IngestDialog({
           }
         })
         .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : String(err))
+          setError(errorDetail(err))
         })
     }, POLL_MS)
   }
@@ -102,7 +103,7 @@ export function IngestDialog({
     try {
       await api.jobCancel(id)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorDetail(err))
     }
   }
 

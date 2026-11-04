@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type FlistTrashedBackup, type FlistTrashedLabels } from '../../lib/api'
+import { api, errorDetail, type FlistTrashedBackup, type FlistTrashedLabels } from '../../lib/api'
 import { useStore } from '../../state'
 import { ImagesConfirmModal } from './ImagesConfirmModal'
 import { formatBytes } from './imageUsage'
@@ -53,7 +53,7 @@ function TrashedEntries<T extends TrashedEntry>({
     try {
       setMessage(await what())
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e))
+      setMessage(errorDetail(e))
     }
     await onChanged()
   }

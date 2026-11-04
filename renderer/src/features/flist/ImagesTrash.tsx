@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import {
   api,
+  errorDetail,
   type FlistTrashItem,
   type FlistTrashedBackup,
   type FlistTrashedLabels
@@ -64,7 +65,7 @@ export function ImagesTrash({
       setLabels(res.labels ?? [])
       onCountChange(trashEntryCount(res))
     } catch (e) {
-      setMessage(`Couldn’t read the Trash: ${e instanceof Error ? e.message : String(e)}`)
+      setMessage(`Couldn’t read the Trash: ${errorDetail(e)}`)
     }
   }
 
@@ -82,7 +83,7 @@ export function ImagesTrash({
     try {
       setMessage(await what())
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : String(e))
+      setMessage(errorDetail(e))
     }
     setSel(EMPTY_SELECTION)
     await load()

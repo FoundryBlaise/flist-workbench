@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../state'
-import { api, type Schema } from '../../lib/api'
+import { api, errorDetail, type Schema } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 
 type PartnerHits = Schema<'LogSearchPartner'>
@@ -51,7 +51,7 @@ export function CrossSearch({ onClose }: { onClose: () => void }) {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(errorDetail(err))
         setStatus('error')
       })
     return () => {

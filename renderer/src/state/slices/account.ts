@@ -531,7 +531,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
         })
       } catch (err) {
         if (epoch !== _flistSessionEpoch) return
-        const raw = err instanceof Error ? err.message : String(err)
+        const raw = errorDetail(err)
         set((s) => ({
           flistMapping: { ...s.flistMapping, status: 'error', error: raw }
         }))

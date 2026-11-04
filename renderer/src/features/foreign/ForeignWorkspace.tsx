@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type ForeignSource } from '../../lib/api'
+import { api, errorDetail, type ForeignSource } from '../../lib/api'
 import { useStore } from '../../state'
 import { Tabs, type TabsTab } from '../../components/Tabs'
 import { displayCharacter } from '../../lib/partnerName'
@@ -277,7 +277,7 @@ function ForeignLookup() {
       })
       .catch((err: unknown) => {
         if (cancelled || controller.signal.aborted) return
-        setPoolError(err instanceof Error ? err.message : String(err))
+        setPoolError(errorDetail(err))
         setPoolStatus('error')
       })
     return () => {

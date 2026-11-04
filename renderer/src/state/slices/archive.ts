@@ -13,6 +13,7 @@
 
 import {
   api,
+  errorDetail,
   RefusalError,
   type FlistBackupAllHandlers,
   type FlistCharacterImage,
@@ -412,7 +413,7 @@ async function _followPull(
   } catch (err) {
     // AbortError = user-initiated (sign-out / explicit cancel).
     // Don't surface as a scary error to the user.
-    const raw = err instanceof Error ? err.message : String(err)
+    const raw = errorDetail(err)
     const busyWith = _characterBusyWith(err)
     if (err instanceof Error && err.name === 'AbortError') {
       setStatus({ pullStatus: 'idle', pullError: null })
@@ -548,7 +549,7 @@ async function _followBackupAll(
         ? 'A Pull is running. Start Back up all again once it has finished.'
         : busyWith === 'backup-all'
           ? 'Back up all is already running.'
-          : ((err as Error).message ?? 'backup-all failed')
+          : errorDetail(err)
     set((s) => ({
       flistBackupAllStatus: {
         ...s.flistBackupAllStatus,
@@ -710,7 +711,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
             ? { ok: true as const, backups: [] }
             : {
                 ok: false as const,
-                error: err instanceof Error ? err.message : String(err)
+                error: errorDetail(err)
               }
         )
     ])
@@ -959,7 +960,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
             done: 1,
             failed: 1,
             errorMessage:
-              err instanceof Error ? err.message : 'pull failed'
+              errorDetail(err)
           },
           false
         )
@@ -1026,7 +1027,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
           done: 1,
           failed: 1,
           errorMessage:
-            err instanceof Error ? err.message : 'ZIP write failed'
+            errorDetail(err)
         },
         false
       )
@@ -1102,7 +1103,7 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
           filename: backupFilename,
           status: 'error',
           payload: null,
-          error: err instanceof Error ? err.message : String(err),
+          error: errorDetail(err),
           previousLive,
           previousViewingLive
         }

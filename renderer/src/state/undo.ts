@@ -16,7 +16,7 @@
 // (`UndoHost`): a `set` that writes Workbench fields only, and the
 // slice's commit point.
 
-import { api, type FlistTrashItem } from '../lib/api'
+import { api, errorDetail, type FlistTrashItem } from '../lib/api'
 import type { UndoAction } from '../lib/undoRedo'
 import type { State } from '../state'
 import type { Commit, CommitEvent, CommitLabel } from './commit'
@@ -222,7 +222,7 @@ async function putBackFromTrash(
     }
     note(putBackNote(action, { putBack, leftInTrash, missing: gone }))
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e)
+    const why = errorDetail(e)
     note(
       `${stepName(action)} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`
     )

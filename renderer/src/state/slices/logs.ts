@@ -5,7 +5,7 @@
 // sidecar and never reaches the Workbench: picking a character for both
 // the Logs and the profile editor is the Workbench's selectCharacter.
 
-import { api, type CharacterEntry, type LogMessage, type PartnerEntry } from '../../lib/api'
+import { api, errorDetail, type CharacterEntry, type LogMessage, type PartnerEntry } from '../../lib/api'
 import type { SliceCreator } from './slice'
 
 /** One conversation's key in the per-conversation maps. */
@@ -122,7 +122,7 @@ export const createLogsSlice: SliceCreator<LogsSlice> = (set, get) => ({
     } catch (err) {
       set({
         charactersStatus: 'error',
-        charactersError: err instanceof Error ? err.message : String(err)
+        charactersError: errorDetail(err)
       })
     }
   },
@@ -172,7 +172,7 @@ export const createLogsSlice: SliceCreator<LogsSlice> = (set, get) => ({
         messagesStatus: { ...s.messagesStatus, [key]: 'error' },
         messagesError: {
           ...s.messagesError,
-          [key]: err instanceof Error ? err.message : String(err)
+          [key]: errorDetail(err)
         }
       }))
     }

@@ -704,9 +704,7 @@ async function _flushWorkingNow(
       readError =
         err instanceof RefusalError && err.code === 'no_workbench'
           ? 'No Workbench yet — pull this character first.'
-          : err instanceof Error
-            ? err.message
-            : String(err)
+          : errorDetail(err)
     }
     if (!bench) {
       // Keep the edits in memory and say so, rather than pretending
@@ -1341,7 +1339,7 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
       } catch (err) {
         // Nothing was replaced, so nothing changes here either; the
         // reason shows where a failed save does.
-        const reason = err instanceof Error ? err.message : String(err)
+        const reason = errorDetail(err)
         set((s) => {
           const now = s.flistWorking[characterId]
           if (!now) return {}

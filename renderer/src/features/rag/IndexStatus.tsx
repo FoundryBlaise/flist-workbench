@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type RagStatus } from '../../lib/api'
+import { api, errorDetail, type RagStatus } from '../../lib/api'
 import { useStore } from '../../state'
 
 /** "N chunks indexed" for Settings. Read again whenever the sidecar
@@ -22,7 +22,7 @@ export function IndexStatus() {
         setError(null)
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+        if (!cancelled) setError(errorDetail(err))
       })
     return () => {
       cancelled = true

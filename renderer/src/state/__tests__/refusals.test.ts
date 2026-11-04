@@ -27,7 +27,7 @@ it('shows the reason a Log was refused', async () => {
   await useStore.getState().loadMessages('me', 'stranger')
 
   const errors = Object.values(useStore.getState().messagesError)
-  expect(errors).toEqual(['HTTP 404: no such log'])
+  expect(errors).toEqual(['no such log'])
 })
 
 it('hands the refusal code to the caller', async () => {
