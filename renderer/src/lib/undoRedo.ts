@@ -40,20 +40,19 @@ const TEXT_INPUT_TYPES = new Set([
 ])
 
 function routeOf(target: Element | null): Route {
-  const active = target
-  if (active?.closest(WORKBENCH_FIELD)) {
+  if (target?.closest(WORKBENCH_FIELD)) {
     return 'workbench'
   }
   if (
-    active instanceof HTMLInputElement ||
-    active instanceof HTMLTextAreaElement
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement
   ) {
-    if (active instanceof HTMLTextAreaElement || TEXT_INPUT_TYPES.has(active.type)) {
+    if (target instanceof HTMLTextAreaElement || TEXT_INPUT_TYPES.has(target.type)) {
       return 'native'
     }
   }
   if (
-    active?.closest('.cm-editor, [contenteditable=""], [contenteditable="true"]')
+    target?.closest('.cm-editor, [contenteditable=""], [contenteditable="true"]')
   ) {
     return 'editor'
   }
@@ -62,7 +61,7 @@ function routeOf(target: Element | null): Route {
 
 /** True when `target` is a text control that keeps its own undo, so
  *  Ctrl+Z there is left to it. The Workbench's own text fields are not. */
-export function isTextControl(target: Element | null): boolean {
+export function keepsOwnUndo(target: Element | null): boolean {
   return routeOf(target) !== 'workbench'
 }
 
@@ -183,7 +182,7 @@ export function handleUndoKeydown(e: KeyboardEvent): void {
   const action = undoKeyOf(e)
   if (!action) return
   const target = e.target instanceof Element ? e.target : null
-  if (isTextControl(target) || modalOpen()) return
+  if (keepsOwnUndo(target) || modalOpen()) return
   e.preventDefault()
   runUndoRedo(action, target)
 }

@@ -66,7 +66,7 @@ function MergeQuestion({
           <ul className="merge-fields">
             {question.fields.map((field) => (
               <li key={field} className="merge-field" data-testid="merge-field" data-field={field}>
-                <div className="merge-field-name">{names(field, mine, question.theirs)}</div>
+                <div className="merge-field-name">{names.field(field, mine, question.theirs)}</div>
                 <MergeSideRow
                   side="mine"
                   label="Keep mine"
@@ -124,13 +124,16 @@ function MergeSideRow(props: {
   )
 }
 
-type Namer = ((field: string, mine: WorkingPayload, theirs: WorkingPayload) => string) & {
+interface FieldNames {
+  /** The field's name, as the user knows it. */
+  field: (field: string, mine: WorkingPayload, theirs: WorkingPayload) => string
+  /** A list field's value by its item's label. */
   listItem: (field: string, value: string) => string
 }
 
 /** User-facing names of merge fields (state/merge.ts), with the mapping
  *  list for profile fields and kinks when the window has it. */
-function fieldNamer(mapping: Record<string, unknown> | null): Namer {
+function fieldNamer(mapping: Record<string, unknown> | null): FieldNames {
   const resolver: ResolvedInfotagModel | null = mapping ? resolveInfotagDescriptors(mapping) : null
   const kinkNames = new Map<string, string>()
   if (Array.isArray(mapping?.kinks)) {
@@ -139,7 +142,7 @@ function fieldNamer(mapping: Record<string, unknown> | null): Namer {
       if (e && e.id != null && typeof e.name === 'string') kinkNames.set(String(e.id), e.name)
     }
   }
-  const namer = ((field: string, mine: WorkingPayload, theirs: WorkingPayload): string => {
+  const nameOf = (field: string, mine: WorkingPayload, theirs: WorkingPayload): string => {
     if (field === GALLERY_ORDER) return 'Order of the gallery'
     if (field === CUSTOM_KINK_ORDER) return 'Order of the custom kinks'
     const dot = field.indexOf('.')
@@ -170,21 +173,21 @@ function fieldNamer(mapping: Record<string, unknown> | null): Namer {
       default:
         return field
     }
-  }) as Namer
-  namer.listItem = (field, value) => {
+  }
+  const listItem = (field: string, value: string): string => {
     if (!field.startsWith('infotags.')) return value
     const item = resolver?.byId
       .get(field.slice('infotags.'.length))
       ?.listItems?.find((i) => i.value === value)
     return item?.label ?? value
   }
-  return namer
+  return { field: nameOf, listItem }
 }
 
 const PREVIEW_CHARS = 160
 
 /** One side's value, short enough for a row. */
-function preview(field: string, value: unknown, names: Namer): string {
+function preview(field: string, value: unknown, names: FieldNames): string {
   if (value === undefined || value === null) {
     return field.startsWith('images.') ? 'Not on the profile' : 'Not set'
   }

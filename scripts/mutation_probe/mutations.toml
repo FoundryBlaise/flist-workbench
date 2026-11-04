@@ -994,7 +994,7 @@ audit = "survived"
 spec = 7
 # audit: M20 undo in text inputs falls through to CodeMirror
 find = '''
-    active instanceof HTMLInputElement ||
+    target instanceof HTMLInputElement ||
 '''
 replace = '''
     false ||
