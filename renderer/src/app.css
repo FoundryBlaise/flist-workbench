@@ -1640,6 +1640,19 @@ body {
   pointer-events: none;
 }
 
+/* An undo that put an image back from the Trash, or found it missing.
+   Below the external-change note, so both can show at once. */
+.undo-note {
+  top: 84px;
+  pointer-events: auto;
+}
+.undo-note-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
 .external-change-banner {
   position: fixed;
   top: 48px;
