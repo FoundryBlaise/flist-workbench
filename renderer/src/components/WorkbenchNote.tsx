@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useStore } from '../state'
 import { describeOrigin } from './describeOrigin'
+import { FadingNote, useFadeAfter } from './FadingNote'
 
 type Note = NonNullable<ReturnType<typeof useStore.getState>['flistWorkbenchNote']>
-
-const NOTE_MS = 8000
 
 /** A short note on what just happened to the Workbench on screen without
  *  the user doing it by hand: another writer's change the window took in
@@ -15,20 +14,15 @@ export function WorkbenchNote() {
   const characterId = useStore((s) => s.flistActiveCharacterId)
   const note = useStore((s) => s.flistWorkbenchNote)
   const [faded, setFaded] = useState<Note | null>(null)
-
-  useEffect(() => {
-    if (!note) return
-    const id = window.setTimeout(() => setFaded(note), NOTE_MS)
-    return () => window.clearTimeout(id)
-  }, [note])
+  useFadeAfter(note, setFaded)
 
   if (!note || note === faded || note.characterId !== characterId) return null
   const text = noteText(note)
   if (!text) return null
   return (
-    <div className="workbench-note" role="status" data-testid="workbench-note">
+    <FadingNote testId="workbench-note">
       <span aria-hidden>✓</span> {text}
-    </div>
+    </FadingNote>
   )
 }
 

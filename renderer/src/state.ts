@@ -29,6 +29,7 @@ import {
   isDeepEqual,
   seedWorkingFromLive,
   type FlistWorkingSlot,
+  type GalleryRow,
   type WorkingPayload
 } from './state/flist'
 import {
@@ -1531,7 +1532,6 @@ async function _saveTypedEdits(get: () => State, characterId: string): Promise<b
 
 /** The slot for a Workbench payload the sidecar answered with, and the
  *  etag the next save goes over. */
-type GalleryRow = { image_id: string; description: string; sort_order: number }
 
 /** The gallery rows of a Workbench slot's payload; none without one. */
 function galleryOf(slot: FlistWorkingSlot | undefined): GalleryRow[] {
@@ -3138,7 +3138,6 @@ export const useStore = create<State>((set, get) => ({
     const slot = get().flistWorking[characterId]
     if (!slot) return
     const live = get().flistArchive[characterId]?.live ?? null
-    type GalleryRow = { image_id: string; description: string; sort_order: number }
     const readGallery = (payload: unknown): GalleryRow[] => {
       if (!payload || typeof payload !== 'object') return []
       const raw = (payload as { images?: unknown }).images

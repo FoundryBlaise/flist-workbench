@@ -4,13 +4,10 @@
 // the pure parts of that: which images to look for, how the gallery
 // follows a file that came back under another id, and the note.
 
-import type { WorkingPayload } from './flist'
-
-type GalleryRow = { image_id: string; description: string; sort_order: number }
+import { galleryRows, type GalleryRow, type WorkingPayload } from './flist'
 
 function galleryIds(payload: WorkingPayload | undefined): string[] {
-  const images = (payload as { images?: unknown } | undefined)?.images
-  return Array.isArray(images) ? (images as GalleryRow[]).map((r) => r.image_id) : []
+  return galleryRows(payload).map((r) => r.image_id)
 }
 
 /** Gallery images the undone payload names that the gallery it replaces

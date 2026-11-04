@@ -26,7 +26,7 @@
 //
 // Pure: no store import.
 
-import { isDeepEqual, type WorkingPayload } from './flist'
+import { galleryRows, isDeepEqual, type WorkingPayload } from './flist'
 
 export type MergeSide = 'mine' | 'theirs'
 
@@ -45,19 +45,10 @@ const KEYED = new Set(['character', 'infotags', 'kinks', 'custom_kinks'])
 /** Marks a keyed container (or the gallery) as present on a side. */
 const PRESENT = Object.freeze({ present: true })
 
-type GalleryRow = { image_id: string; sort_order?: number } & Record<string, unknown>
 type Fields = Map<string, unknown>
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
-}
-
-function galleryOf(payload: WorkingPayload | null): GalleryRow[] {
-  const raw = payload?.images
-  if (!Array.isArray(raw)) return []
-  return raw.filter(
-    (r): r is GalleryRow => isPlainObject(r) && typeof r.image_id === 'string'
-  )
 }
 
 function customKinkOrderOf(payload: WorkingPayload | null): string[] {
@@ -82,7 +73,7 @@ function fieldsOf(payload: WorkingPayload | null): Fields {
     } else if (key === 'images' && Array.isArray(value)) {
       out.set(key, PRESENT)
       // A row's position is the order field's business, not the row's.
-      for (const row of galleryOf(payload)) {
+      for (const row of galleryRows(payload)) {
         const rest: Record<string, unknown> = { ...row }
         delete rest.sort_order
         out.set(`images.${row.image_id}`, rest)
@@ -138,7 +129,7 @@ export function mergeWorkbench(
   const sides = [base, mine, theirs] as const
   const [b, m, t] = sides.map(fieldsOf)
 
-  const galleries = sides.map(galleryOf)
+  const galleries = sides.map(galleryRows)
   const galleryIds = galleries.map((g) => g.map((r) => r.image_id)) as [
     string[],
     string[],
@@ -258,7 +249,7 @@ export function mergeWorkbench(
  *  the custom kinks' whole order for the order fields, undefined for a
  *  field the side does not have. */
 export function fieldValue(payload: WorkingPayload, key: string): unknown {
-  if (key === GALLERY_ORDER) return galleryOf(payload).map((r) => r.image_id)
+  if (key === GALLERY_ORDER) return galleryRows(payload).map((r) => r.image_id)
   if (key === CUSTOM_KINK_ORDER) return customKinkOrderOf(payload)
   const value = fieldsOf(payload).get(key)
   return value === PRESENT ? undefined : value
