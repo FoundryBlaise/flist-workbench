@@ -38,7 +38,15 @@ import {
   type CommitEvent,
   type CommitLabel
 } from './state/commit'
-import { recordChange, resetUndoStacks, takeRedo, takeUndo } from './state/undoStack'
+import {
+  hiddenWorkbench,
+  hideWorkbench,
+  recordChange,
+  resetUndoStacks,
+  takeRedo,
+  takeUndo,
+  unhideWorkbench
+} from './state/undoStack'
 import { imagesToFind, putBackNote, renameGalleryRows } from './state/undoTrash'
 
 export type {
@@ -799,13 +807,6 @@ const AUTOSAVE_DEBOUNCE_MS = 500
 // payload (or a stale etag) back over a newer one.
 const _openTokens = new Map<string, number>()
 
-// The Workbench a read-only view (Live, a Backup being browsed) put out
-// of the slot, per character, until the Workbench is shown again: its
-// payload and the etag it was read with. A change that lands meanwhile
-// (another writer's, a Restore) steps from it on the undo stack, not
-// from the view.
-const _workbenchBehindView = new Map<string, { payload: WorkingPayload; etag: string | null }>()
-
 function _beginOpen(characterId: string): number {
   const token = (_openTokens.get(characterId) ?? 0) + 1
   _openTokens.set(characterId, token)
@@ -913,10 +914,13 @@ function _commit(
 ): void {
   // Filled in by the update below; a callback assignment TypeScript
   // would not see through a plain `let`.
-  const done: { event: CommitEvent | null; etag: string | null } = { event: null, etag: null }
+  const done: { event: CommitEvent | null; covered: boolean; coveredAfter: boolean } = {
+    event: null,
+    covered: false,
+    coveredAfter: false
+  }
   set((s) => {
     const current = s.flistWorking[characterId]
-    done.etag = current?.etag ?? null
     const next = commitSlot(current, commit)
     if (next === undefined) return {}
     const flistWorking = { ...s.flistWorking }
@@ -929,27 +933,26 @@ function _commit(
       previous: current?.payload ?? null,
       next: next?.payload ?? null
     }
-    return {
+    const patch = {
       ...also?.(s),
       flistWorking,
       ..._editorFollows(s, characterId, next, commit)
     }
+    done.covered = _showsReadOnlyView(s, characterId)
+    done.coveredAfter = _showsReadOnlyView({ ...s, ...patch }, characterId)
+    return patch
   })
   const event = done.event
   if (!event) return
-  // While Live or a Backup is shown, the slot holds that view and the
-  // Workbench waits in _workbenchBehindView; a change steps from there.
-  const previous = _workbenchBehindView.get(characterId)?.payload ?? event.previous
-  if (commit.kind === 'view' && get().flistViewingLive[characterId]) {
-    if (!_workbenchBehindView.has(characterId) && event.previous) {
-      _workbenchBehindView.set(characterId, { payload: event.previous, etag: done.etag })
-    }
-  } else {
-    _workbenchBehindView.delete(characterId)
+  // Under a view the slot holds Live or a Backup, not the Workbench: a
+  // change made from there replaced the Workbench the view hides.
+  const replaced = done.covered ? hiddenWorkbench(characterId) : event.previous
+  if (commit.kind !== 'view' && replaced && !(commit.kind === 'edit' && commit.undoStep)) {
+    recordChange(characterId, commit.label, replaced)
   }
-  if (commit.kind !== 'view' && previous && !(commit.kind === 'edit' && commit.undoStep)) {
-    recordChange(characterId, commit.label, previous)
-  }
+  if (!done.coveredAfter) unhideWorkbench(characterId)
+  else if (!done.covered && event.previous) hideWorkbench(characterId, event.previous)
+  else if (commit.kind !== 'view' && event.next) hideWorkbench(characterId, event.next)
   if (commit.kind === 'edit') {
     _scheduleFlush(characterId, () => {
       void get().flistFlushWorking(characterId)
@@ -1132,16 +1135,17 @@ async function _takeExternalChange(
       ? { flistWorkbenchNote: { characterId, action: 'updated' as const, label, at: Date.now() } }
       : {})
   })
-  if (s.flistViewingLive[characterId]) {
-    // The slot shows Live or a Backup, not the Workbench: leave the
-    // view alone. Going back to the Workbench reads it from disk; the
-    // change is its entry now, stepping from the Workbench the view hid.
-    const hidden = _workbenchBehindView.get(characterId)
-    // Its etag says whether this read brings anything the window
-    // has not taken in already.
-    if (hidden && hidden.etag !== res.etag) {
-      recordChange(characterId, label, hidden.payload)
-      _workbenchBehindView.set(characterId, { payload: { ...payload }, etag: res.etag })
+  const hidden = hiddenWorkbench(characterId)
+  if (s.flistViewingLive[characterId] || hidden) {
+    // The slot shows Live or a Backup, not the Workbench (or is about to
+    // get the Workbench back from its own read): leave the slot alone.
+    // Going back to the Workbench reads it from disk; the change is its
+    // entry now, stepping from the Workbench the view hid. A read that
+    // brings nothing new (the event of a write an earlier read already
+    // took in) is not a change.
+    if (hidden && JSON.stringify(hidden) !== JSON.stringify(payload)) {
+      recordChange(characterId, label, hidden)
+      hideWorkbench(characterId, { ...payload })
     }
     set(settled)
     return
@@ -1172,7 +1176,6 @@ function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<State>): 
   })
   // Another account may sign in next: nothing of this one's to undo.
   resetUndoStacks()
-  _workbenchBehindView.clear()
   for (const event of events) notifyCommit(event)
 }
 
