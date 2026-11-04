@@ -6,7 +6,6 @@ import {
   RefusalError,
   refusalCode,
   workbenchConflict,
-  type CharacterEntry,
   type FlistAccountCharacter,
   type FlistBackupAllHandlers,
   type FlistPullHandlers,
@@ -17,9 +16,7 @@ import {
   type FlistSessionStatus,
   type ForeignProfilePayload,
   type InlineImage,
-  type Job,
-  type LogMessage,
-  type PartnerEntry
+  type Job
 } from './lib/api'
 import {
   DESCRIPTION_PATH,
@@ -100,14 +97,6 @@ const STALE_AGE_SEC = 30 * 60
 
 /** The store's state and actions not yet moved into a slice. */
 type Unsliced = {
-  characters: CharacterEntry[]
-  charactersStatus: 'idle' | 'loading' | 'ready' | 'error'
-  charactersError: string | null
-
-  activeCharacter: string | null
-  /** When true, the logs main pane shows the cross-conversation search view. */
-  crossSearchOpen: boolean
-
   /** The "Foreign profile" slot: a stand-in character the picker
    *  offers alongside the real ones. Selecting it puts the editor
    *  panel into a read-only state showing somebody else's profile.
@@ -130,33 +119,6 @@ type Unsliced = {
   foreignStatus: 'idle' | 'loading' | 'ready' | 'error'
   foreignError: string | null
 
-  partners: Record<string, PartnerEntry[]>
-  partnersStatus: Record<string, 'loading' | 'ready' | 'error'>
-
-  activePartner: string | null
-
-  /** When set, a RAG-ingest progress dialog is open over the app.
-   *  forceRewipe=true makes the dialog start the job with wipe-and-
-   *  reingest semantics; used by the Settings → RAG "Re-ingest all"
-   *  button after the user confirms. Default false. */
-  ingestTarget:
-    | {
-        scope: { character?: string | null; partner?: string | null }
-        label: string
-        forceRewipe: boolean
-      }
-    | null
-  /** Bumped whenever the sidecar says the Index changed (an ingest
-   *  started or ended, a wipe). Views that show the Index status
-   *  re-read it when this moves. */
-  indexRevision: number
-  /** Bumped whenever another writer changed Labels (a model labelled
-   *  or cleared them). Views listing cleared Labels re-read it. */
-  labelsRevision: number
-
-  messagesByPartner: Record<string, LogMessage[]>
-  messagesStatus: Record<string, 'loading' | 'ready' | 'error'>
-  messagesError: Record<string, string | null>
   /** Counts settings changes made outside this window. An open
    *  Settings re-reads them when it moves. */
   settingsRevision: number
@@ -433,9 +395,7 @@ type Unsliced = {
    *  doesn't flash open before the silent sign-in completes. */
   flistAutoLoginInFlight: boolean
 
-  loadCharacters: () => Promise<void>
   selectCharacter: (name: string | null) => void
-  setCrossSearchOpen: (open: boolean) => void
   /** Select the Foreign slot. Leaves the real active character alone
    *  so going back to it restores exactly what was open. */
   foreignOpenSlot: () => void
@@ -445,34 +405,10 @@ type Unsliced = {
   foreignLoad: (name: string, refresh?: boolean) => Promise<void>
   /** Drop the loaded profile, back to the lookup form. */
   foreignUnload: () => void
-  loadPartners: (char: string) => Promise<void>
-  selectPartner: (name: string | null) => void
-  loadMessages: (char: string, partner: string, opts?: { force?: boolean }) => Promise<void>
-  invalidateMessages: (char: string, partner: string) => void
   /** Something outside this window changed settings (the
    *  `settings-changed` event); `fields` names them, as the sidecar's
    *  settings service does (`labels.threshold_chars`, `rag.top_k`). */
   noteSettingsChanged: (fields: string[]) => void
-  openIngest: (
-    scope: { character?: string | null; partner?: string | null },
-    label: string,
-    opts?: { forceRewipe?: boolean }
-  ) => void
-  closeIngest: () => void
-  /** The Index changed elsewhere: views showing its status re-read. */
-  noteIndexChanged: () => void
-  /** Labels changed elsewhere: views listing cleared Labels re-read. */
-  noteLabelsChanged: () => void
-  /** One message by hash, or every message in a set of hashes. */
-  applyLabelOverride: (
-    char: string,
-    partner: string,
-    hash: string | ReadonlySet<string>,
-    patch: {
-      label?: 'IC' | 'OOC'
-      label_source?: 'llm' | 'manual'
-    } | null
-  ) => void
   setEditorContent: (value: string) => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
@@ -761,10 +697,6 @@ type Unsliced = {
     name: string
   ) => Promise<boolean>
 
-}
-
-function partnerKey(char: string, partner: string): string {
-  return `${char}::${partner}`
 }
 
 // Per-character autosave debouncers (Tier 2 §1.5 — 500 ms quiet time).
@@ -2185,12 +2117,6 @@ function editorReplaceState(profile: {
 }
 
 export const useStore = create<State>((set, get, store) => ({
-  characters: [],
-  charactersStatus: 'idle',
-  charactersError: null,
-
-  activeCharacter: null,
-  crossSearchOpen: false,
   foreignActive: false,
   foreignName: null,
   foreignProfile: null,
@@ -2201,17 +2127,6 @@ export const useStore = create<State>((set, get, store) => ({
   foreignStatus: 'idle',
   foreignError: null,
 
-  partners: {},
-  partnersStatus: {},
-  activePartner: null,
-
-  ingestTarget: null,
-  indexRevision: 0,
-  labelsRevision: 0,
-
-  messagesByPartner: {},
-  messagesStatus: {},
-  messagesError: {},
   settingsRevision: 0,
 
   editorContent: '',
@@ -4081,23 +3996,6 @@ export const useStore = create<State>((set, get, store) => ({
     _commit(get, set, characterId, { kind: 'edit', label: 'edit', payload: next.payload })
   },
 
-  async loadCharacters() {
-    set({ charactersStatus: 'loading', charactersError: null })
-    try {
-      const { characters } = await api.characters()
-      set({
-        characters,
-        charactersStatus: 'ready',
-        activeCharacter: get().activeCharacter ?? characters[0]?.name ?? null
-      })
-    } catch (err) {
-      set({
-        charactersStatus: 'error',
-        charactersError: err instanceof Error ? err.message : String(err)
-      })
-    }
-  },
-
   selectCharacter(name) {
     // Picking a real character leaves the Foreign slot. What the slot
     // holds is kept, so going back to it shows the same profile again
@@ -4181,10 +4079,6 @@ export const useStore = create<State>((set, get, store) => ({
     }
   },
 
-  setCrossSearchOpen(open) {
-    set({ crossSearchOpen: open })
-  },
-
   // ---- foreign profile slot ----
   //
   // Read-only, in-memory, and pointedly not a character. None of these
@@ -4254,63 +4148,6 @@ export const useStore = create<State>((set, get, store) => ({
     }
   },
 
-  async loadPartners(char) {
-    set((s) => ({ partnersStatus: { ...s.partnersStatus, [char]: 'loading' } }))
-    try {
-      const { partners } = await api.partners(char)
-      set((s) => ({
-        partners: { ...s.partners, [char]: partners },
-        partnersStatus: { ...s.partnersStatus, [char]: 'ready' }
-      }))
-    } catch {
-      set((s) => ({
-        partnersStatus: { ...s.partnersStatus, [char]: 'error' }
-      }))
-    }
-  },
-
-  selectPartner(name) {
-    set({ activePartner: name, crossSearchOpen: false })
-  },
-
-  async loadMessages(char, partner, opts) {
-    const key = partnerKey(char, partner)
-    if (get().messagesStatus[key] === 'ready' && !opts?.force) return
-    set((s) => ({
-      messagesStatus: { ...s.messagesStatus, [key]: 'loading' },
-      messagesError: { ...s.messagesError, [key]: null }
-    }))
-    try {
-      const { messages } = await api.messages(char, partner)
-      set((s) => ({
-        messagesByPartner: { ...s.messagesByPartner, [key]: messages },
-        messagesStatus: { ...s.messagesStatus, [key]: 'ready' }
-      }))
-    } catch (err) {
-      set((s) => ({
-        messagesStatus: { ...s.messagesStatus, [key]: 'error' },
-        messagesError: {
-          ...s.messagesError,
-          [key]: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  // Drop the cached entry so the next loadMessages refetches. Used
-  // after a multi-scope classify so the currently open conversation
-  // doesn't show stale labels.
-  invalidateMessages(char, partner) {
-    const key = partnerKey(char, partner)
-    set((s) => {
-      const { [key]: _, ...byPartner } = s.messagesByPartner
-      const { [key]: __, ...status } = s.messagesStatus
-      void _
-      void __
-      return { messagesByPartner: byPartner, messagesStatus: status }
-    })
-  },
-
   noteSettingsChanged(fields) {
     set((s) => ({ settingsRevision: s.settingsRevision + 1 }))
     // The OOC threshold is applied when a Log is read, so the open
@@ -4320,58 +4157,6 @@ export const useStore = create<State>((set, get, store) => ({
       get().invalidateMessages(char, partner)
       void get().loadMessages(char, partner, { force: true })
     }
-  },
-
-  openIngest(scope, label, opts) {
-    set({
-      ingestTarget: { scope, label, forceRewipe: opts?.forceRewipe ?? false }
-    })
-  },
-
-  closeIngest() {
-    set({ ingestTarget: null })
-  },
-
-  noteIndexChanged() {
-    set((s) => ({ indexRevision: s.indexRevision + 1 }))
-  },
-
-  noteLabelsChanged() {
-    set((s) => ({ labelsRevision: s.labelsRevision + 1 }))
-  },
-
-  // Patches one message's label fields in place, or those of every
-  // message in a set of hashes (the log view's multi-select) in the same
-  // single pass over the conversation. `patch === null`
-  // clears label fields back to rule/Unlabeled resolution — but since
-  // the resolver runs server-side, we approximate locally by removing
-  // label_source and falling back to the rule the renderer can compute
-  // (or 'Unlabeled' if unknown). The next loadMessages refresh
-  // re-resolves from the sidecar authoritatively.
-  applyLabelOverride(char, partner, hash, patch) {
-    const key = partnerKey(char, partner)
-    const hit =
-      typeof hash === 'string' ? (h: string) => h === hash : (h: string) => hash.has(h)
-    set((s) => {
-      const list = s.messagesByPartner[key]
-      if (!list) return s
-      const next = list.map((m) => {
-        if (!hit(m.hash)) return m
-        if (patch === null) {
-          const { label_source, ...rest } = m
-          void label_source
-          // Drop the explicit label so the UI treats it as needing
-          // rule recomputation; the resolver re-runs on next fetch.
-          return { ...rest, label: undefined }
-        }
-        return {
-          ...m,
-          label: patch.label ?? m.label,
-          label_source: patch.label_source ?? m.label_source
-        }
-      })
-      return { messagesByPartner: { ...s.messagesByPartner, [key]: next } }
-    })
   },
 
   setEditorContent(value) {
