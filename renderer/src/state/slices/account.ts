@@ -17,7 +17,6 @@ import {
   type FlistRosterEntry,
   type FlistSessionStatus
 } from '../../lib/api'
-import { readAutoRefreshEnabled, readAutoRefreshHours } from '../../features/settings/SettingsModal'
 import type { State } from '../../state'
 import type { SliceCreator } from './slice'
 
@@ -217,8 +216,8 @@ async function _flistAutoRefreshOnLogin(
   // User opt-in. Default off — see Settings → F-list. The 30-min
   // lazy-pull-on-select keeps the active character fresh without
   // hammering the API for every character on the account.
-  if (!readAutoRefreshEnabled()) return
-  const thresholdSec = readAutoRefreshHours() * 3600
+  if (!get().flistAutoRefreshEnabled) return
+  const thresholdSec = get().flistAutoRefreshHours * 3600
   await _flistAccountSweep(get, set, thresholdSec)
 }
 

@@ -556,39 +556,15 @@ function EditorWorkspace() {
   const flistActiveId = useStore((s) => s.flistActiveCharacterId)
   const flistTabsVisible = flistActiveId !== null
 
-  // Per-character active-tab persistence. Switching characters reads
-  // the last-used tab for the new character so a Kinks-tab pin
-  // doesn't follow you between profiles (UX P3-11).
-  const tabKey = flistActiveId
-    ? `flist-workbench:active-editor-tab:${flistActiveId}`
-    : 'flist-workbench:active-editor-tab'
+  // Switching characters shows the tab last used with the new one; the
+  // UI slice keeps it per character (UX P3-11).
   const editorActiveTab = useStore((s) => s.editorActiveTab)
   const setEditorActiveTab = useStore((s) => s.setEditorActiveTab)
-  const [hydrated, setHydrated] = useState(false)
+  const editorRestoreTab = useStore((s) => s.editorRestoreTab)
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(tabKey)
-      if (stored) {
-        setEditorActiveTab(stored)
-      } else {
-        setEditorActiveTab('description')
-      }
-    } catch {
-      // ignore
-    }
-    setHydrated(true)
-    // re-run on character switch (tabKey change) only
-  }, [tabKey])
-
-  useEffect(() => {
-    if (!hydrated) return
-    try {
-      localStorage.setItem(tabKey, editorActiveTab)
-    } catch {
-      // ignore
-    }
-  }, [editorActiveTab, tabKey, hydrated])
+    editorRestoreTab(flistActiveId)
+  }, [flistActiveId, editorRestoreTab])
 
   // Snap back to description when the F-list tab surface vanishes
   // (no active character, or a stand-alone document is open).

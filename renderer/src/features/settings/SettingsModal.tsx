@@ -3,6 +3,10 @@ import type { ForeignSettings, LabelsSettings, IndexSettings } from '../../lib/a
 import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
 import { errorText, type ActionResult } from '../../state/actionResult'
+import {
+  FLIST_AUTO_REFRESH_DEFAULT_HOURS,
+  FLIST_AUTO_REFRESH_MIN_HOURS
+} from '../../state/slices/ui'
 import type { EmbeddingTestResult, Settings, SettingsPatch } from '../../state/slices/settings'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
@@ -61,34 +65,6 @@ const SECTION_ORDER: ReadonlyArray<{ id: SectionId; label: string; subtitle: str
  *  default means sign-in just loads roster metadata; characters get
  *  pulled lazily on selection (30-min cache) or via the picker's
  *  "↻ Refresh all" button. */
-export const FLIST_AUTO_REFRESH_ENABLED_KEY = 'workbench.flistAutoRefreshEnabled'
-
-/** Threshold for the sign-in sweep, in hours. Floored to 24 to be kind
- *  to the F-list API — anything faster is what the manual button is for. */
-export const FLIST_AUTO_REFRESH_HOURS_KEY = 'workbench.flistAutoRefreshHours'
-
-export const FLIST_AUTO_REFRESH_MIN_HOURS = 24
-export const FLIST_AUTO_REFRESH_DEFAULT_HOURS = 24
-
-export function readAutoRefreshEnabled(): boolean {
-  try {
-    return localStorage.getItem(FLIST_AUTO_REFRESH_ENABLED_KEY) === 'true'
-  } catch {
-    return false
-  }
-}
-
-export function readAutoRefreshHours(): number {
-  try {
-    const raw = localStorage.getItem(FLIST_AUTO_REFRESH_HOURS_KEY)
-    if (raw === null) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
-    const n = Number(raw)
-    if (!Number.isFinite(n)) return FLIST_AUTO_REFRESH_DEFAULT_HOURS
-    return Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
-  } catch {
-    return FLIST_AUTO_REFRESH_DEFAULT_HOURS
-  }
-}
 
 // Local working copy of every editable field, kept alongside the
 // loaded snapshot so we can compute per-section dirty state in O(fields).
@@ -623,35 +599,21 @@ function GeneralPane({
 }
 
 function FlistPane() {
-  // Stored in localStorage rather than the sidecar `/settings` blob
-  // because this preference only affects renderer-side timing — the
-  // sidecar is stateless about login-triggered work. Persisted-on-
-  // change, no Save button needed for this surface (matches the
-  // mirrorEndpoints toggle pattern).
-  const [enabled, setEnabled] = useState<boolean>(() => readAutoRefreshEnabled())
+  // Kept in browser storage by the UI slice rather than in the
+  // sidecar's settings: it only times what the window does after a
+  // sign-in. Saved on change, no Save button.
+  const enabled = useStore((s) => s.flistAutoRefreshEnabled)
+  const persistEnabled = useStore((s) => s.setFlistAutoRefreshEnabled)
+  const setAutoRefreshHours = useStore((s) => s.setFlistAutoRefreshHours)
   const [hoursRaw, setHoursRaw] = useState<string>(() =>
-    String(readAutoRefreshHours())
+    String(useStore.getState().flistAutoRefreshHours)
   )
-
-  const persistEnabled = (next: boolean) => {
-    setEnabled(next)
-    try {
-      localStorage.setItem(FLIST_AUTO_REFRESH_ENABLED_KEY, next ? 'true' : 'false')
-    } catch {
-      // localStorage unavailable — setting just won't survive a reload.
-    }
-  }
 
   const persistHours = (raw: string) => {
     setHoursRaw(raw)
     const n = Number(raw)
     if (!raw.trim() || !Number.isFinite(n)) return
-    const floored = Math.max(FLIST_AUTO_REFRESH_MIN_HOURS, Math.floor(n))
-    try {
-      localStorage.setItem(FLIST_AUTO_REFRESH_HOURS_KEY, String(floored))
-    } catch {
-      // localStorage unavailable — setting just won't survive a reload.
-    }
+    setAutoRefreshHours(n)
   }
 
   // Snap the displayed value up to the floor when the user leaves the
