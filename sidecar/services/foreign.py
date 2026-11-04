@@ -248,18 +248,21 @@ _NO_WORD_ON_THE_PROFILE: dict[type[flist_api.FlistApiError], tuple[str, str]] = 
 }
 
 
-def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
-    """The cached copy, served because F-list could not answer for it."""
+def _from_cache(cached: dict[str, Any], clean: str) -> dict[str, Any]:
+    """The cached copy as the answer to a profile read."""
     foreign_cache.mark_viewed(clean)
     return {
         "name": cached.get("name") or clean,
         "profile": cached,
         "from_cache": True,
-        "stale": True,
         "age_sec": foreign_cache.age_sec(cached),
         "fetched_at": cached.get("fetched_at"),
-        "refresh_error": str(exc),
     }
+
+
+def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
+    """The cached copy, served because F-list could not answer for it."""
+    return {**_from_cache(cached, clean), "stale": True, "refresh_error": str(exc)}
 
 
 def _rate_limited(
@@ -304,14 +307,7 @@ async def get_profile(
 
     cached = foreign_cache.read_profile(clean)
     if cached is not None and not refresh and foreign_cache.is_fresh(cached, ttl_sec):
-        foreign_cache.mark_viewed(clean)
-        return {
-            "name": cached.get("name") or clean,
-            "profile": cached,
-            "from_cache": True,
-            "age_sec": foreign_cache.age_sec(cached),
-            "fetched_at": cached.get("fetched_at"),
-        }
+        return _from_cache(cached, clean)
 
     if budget is not None:
         try:
