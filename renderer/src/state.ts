@@ -37,7 +37,8 @@ import {
   externalLabel,
   type Commit,
   type CommitEvent,
-  type CommitLabel
+  type CommitLabel,
+  type TheirVersion
 } from './state/commit'
 import {
   endTyping,
@@ -332,14 +333,12 @@ type State = {
    *  Keyed by character id. */
   flistMergeQuestion: Record<
     string,
-    {
-      label: CommitLabel
-      etag: string
-      theirs: WorkingPayload
-      fields: string[]
-      answered?: Record<string, MergeSide>
-      at: number
-    } | null
+    | (TheirVersion & {
+        fields: string[]
+        answered?: Record<string, MergeSide>
+        at: number
+      })
+    | null
   >
   /** The last thing the window did to a Workbench by itself or on
    *  Ctrl+Z / Ctrl+Y that the user should be told about: another
@@ -1189,7 +1188,7 @@ async function _takeExternalChange(
   }
   if (slot.unsavedDirty) {
     // Typing while the read was out is in the slot already: it is mine.
-    _mergeExternal(get, set, characterId, label, payload, res.etag, settled, cleared)
+    _mergeExternal(get, set, characterId, { label, theirs: payload, etag: res.etag }, settled, cleared)
     return
   }
   _commit(
@@ -1202,7 +1201,7 @@ async function _takeExternalChange(
 }
 
 /** Merge the slot's unsaved edits with another writer's version
- *  (`theirs`, on disk at `etag`), field by field against the payload
+ *  (`their.theirs`, on disk at `their.etag`), field by field against the payload
  *  last saved (state/merge.ts). Settled at once, the merge is committed:
  *  one undo entry, saved over the other writer's etag. Fields both sides
  *  changed are asked about first (flistMergeQuestion), and the answer
@@ -1212,26 +1211,24 @@ function _mergeExternal(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  label: CommitLabel,
-  theirs: WorkingPayload,
-  etag: string,
+  their: TheirVersion,
   merged: (s: State) => Partial<State>,
   asked: (s: State) => Partial<State>
 ): void {
   const slot = get().flistWorking[characterId]
   if (!slot) return
-  const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, theirs)
+  const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, their.theirs)
   if (conflicts.length > 0) {
     set((s) => ({
       ...asked(s),
       flistMergeQuestion: {
         ...s.flistMergeQuestion,
-        [characterId]: { label, etag, theirs, fields: conflicts, at: Date.now() }
+        [characterId]: { ...their, fields: conflicts, at: Date.now() }
       }
     }))
     return
   }
-  _commitMerge(get, set, characterId, label, payload, theirs, etag, merged)
+  _commitMerge(get, set, characterId, payload, their, merged)
 }
 
 /** A merge's one commit. A merge that comes out as their version (every
@@ -1241,10 +1238,8 @@ function _commitMerge(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  label: CommitLabel,
   payload: WorkingPayload,
-  theirs: WorkingPayload,
-  etag: string,
+  { label, theirs, etag }: TheirVersion,
   also: (s: State) => Partial<State>
 ): void {
   const commit: Commit = isDeepEqual(payload, theirs)
@@ -3406,16 +3401,9 @@ export const useStore = create<State>((set, get) => ({
       }))
       return
     }
-    _commitMerge(
-      get,
-      set,
-      characterId,
-      question.label,
-      payload,
-      question.theirs,
-      question.etag,
-      (s) => ({ flistMergeQuestion: { ...s.flistMergeQuestion, [characterId]: null } })
-    )
+    _commitMerge(get, set, characterId, payload, question, (s) => ({
+      flistMergeQuestion: { ...s.flistMergeQuestion, [characterId]: null }
+    }))
   },
 
   async flistShowLive(characterId) {

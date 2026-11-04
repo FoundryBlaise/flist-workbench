@@ -801,9 +801,9 @@ spec = 7
 # audit: M07 keep-mine writes against own stale etag; #114 replaced
 # keep-mine with the field merge, which takes the other writer's etag.
 find = '''
-_mergeExternal(get, set, characterId, label, payload, res.etag, settled, cleared)'''
+_mergeExternal(get, set, characterId, { label, theirs: payload, etag: res.etag }, settled, cleared)'''
 replace = '''
-_mergeExternal(get, set, characterId, label, payload, slot.etag as string, settled, cleared)'''
+_mergeExternal(get, set, characterId, { label, theirs: payload, etag: slot.etag as string }, settled, cleared)'''
 
 [[mutation]]
 id = "R08"

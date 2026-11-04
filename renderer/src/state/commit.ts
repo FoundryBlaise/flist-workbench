@@ -65,6 +65,15 @@ export function externalLabel(origin: string): ExternalLabel {
   return parseOrigin(origin)?.name ? (origin as ExternalLabel) : 'unknown'
 }
 
+/** Another writer's version of a Workbench, read after its change:
+ *  the payload it left (`theirs`), the etag that is on disk at, and the
+ *  label its change is recorded under. */
+export interface TheirVersion {
+  label: CommitLabel
+  theirs: WorkingPayload
+  etag: string
+}
+
 export type Commit =
   | {
       kind: 'edit'
