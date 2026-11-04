@@ -18,11 +18,11 @@
 //            read, or the seed from Live), or the slot being dropped
 //            (a Pull landing, sign-out). A view has no label.
 //
-// `_commit` also records the change on the undo stack
-// (state/undoStack.ts): every edit, written and merged commit records
-// the payload it replaced, with its label; a view never does, nor does
-// an undo or redo step itself. Keystrokes (an edit with `typing`)
-// record only the first of a burst.
+// `_commit` also hands every commit to the undo module (state/undo.ts),
+// which records it on the undo stack: every edit, written and merged
+// commit records the payload it replaced, with its label; a view never
+// does, nor does an undo or redo step itself. Keystrokes (an edit with
+// `typing`) record only the first of a burst.
 
 import { emptyWorkingSlot, type FlistWorkingSlot, type WorkingPayload } from './flist'
 
