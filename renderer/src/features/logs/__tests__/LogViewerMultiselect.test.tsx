@@ -80,16 +80,19 @@ let overrideOne: MockInstance<typeof api.labelsOverride>
 beforeEach(() => {
   overrideMany = vi
     .spyOn(api, 'labelsOverrideMany')
-    .mockImplementation(async (body) => ({
-      character: body.character,
-      partner: body.partner,
-      label: body.label,
-      changed: body.items.length
-    }))
-  overrideOne = vi.spyOn(api, 'labelsOverride').mockImplementation(async (body) => ({
-    hash: body.hash,
-    label: body.label
-  }))
+    .mockImplementation(
+      async (body) =>
+        ({
+          character: body.character,
+          partner: body.partner,
+          label: body.label,
+          changed: body.items.length
+        }) as Awaited<ReturnType<typeof api.labelsOverrideMany>>
+    )
+  overrideOne = vi.spyOn(api, 'labelsOverride').mockImplementation(
+    async (body) =>
+      ({ hash: body.hash, label: body.label }) as Awaited<ReturnType<typeof api.labelsOverride>>
+  )
 })
 
 afterEach(() => {

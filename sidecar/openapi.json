@@ -3381,9 +3381,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Logs Characters Logs Characters Get"
+                  "$ref": "#/components/schemas/LogCharacters"
                 }
               }
             }
@@ -3422,9 +3420,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Logs Partners Logs Partners Get"
+                  "$ref": "#/components/schemas/LogPartners"
                 }
               }
             }
@@ -3498,9 +3494,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Logs Messages Logs Messages Get"
+                  "$ref": "#/components/schemas/LogMessages"
                 }
               }
             }
@@ -3557,9 +3551,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Logs Search Logs Search Get"
+                  "$ref": "#/components/schemas/LogSearch"
                 }
               }
             }
@@ -3617,8 +3609,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LogSearchAll"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LogSearchAllNothing"
+                    }
+                  ],
                   "title": "Response Logs Search All Logs Search All Get"
                 }
               }
@@ -3658,9 +3656,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Logs Contacts Logs Contacts Get"
+                  "$ref": "#/components/schemas/LogContacts"
                 }
               }
             }
@@ -3847,9 +3843,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Labels Stats Labels Stats Get"
+                  "$ref": "#/components/schemas/LabelStats"
                 }
               }
             }
@@ -3889,9 +3883,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Labels Stats All Labels Stats All Get"
+                  "$ref": "#/components/schemas/CharacterLabelStats"
                 }
               }
             }
@@ -3930,9 +3922,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Clear Labels Clear Post"
+                  "$ref": "#/components/schemas/LabelsCleared"
                 }
               }
             }
@@ -3961,9 +3951,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Clear All Labels Clear All Post"
+                  "$ref": "#/components/schemas/AllLabelsCleared"
                 }
               }
             }
@@ -3992,9 +3980,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Rollup Labels Rollup Get"
+                  "$ref": "#/components/schemas/LabelsRollup"
                 }
               }
             }
@@ -4033,9 +4019,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Fill Unlabeled Labels Fill Unlabeled Post"
+                  "$ref": "#/components/schemas/UnlabeledFilled"
                 }
               }
             }
@@ -4074,9 +4058,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Delete Hashes Labels Delete Hashes Post"
+                  "$ref": "#/components/schemas/LabelsDeleted"
                 }
               }
             }
@@ -4114,8 +4096,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LabelSet"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LabelRemoved"
+                    }
+                  ],
                   "title": "Response Labels Override Labels Override Post"
                 }
               }
@@ -4155,9 +4143,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Labels Override Many Labels Override Many Post"
+                  "$ref": "#/components/schemas/LabelsOverridden"
                 }
               }
             }
@@ -4196,9 +4182,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Rag Test Embedding Rag Test Embedding Post"
+                  "$ref": "#/components/schemas/EmbeddingTest"
                 }
               }
             }
@@ -4236,9 +4220,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Rag Ingest Start Rag Ingest Post"
+                  "$ref": "#/components/schemas/IngestJob"
                 }
               }
             }
@@ -4267,9 +4249,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Rag Wipe Rag Wipe Post"
+                  "$ref": "#/components/schemas/IndexWiped"
                 }
               }
             }
@@ -4298,9 +4278,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Rag Lexical Rebuild Rag Lexical Rebuild Post"
+                  "$ref": "#/components/schemas/LexicalRebuilt"
                 }
               }
             }
@@ -4329,9 +4307,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Rag Status Rag Status Get"
+                  "$ref": "#/components/schemas/IndexStatus"
                 }
               }
             }
@@ -4359,9 +4335,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Jobs List Jobs Get"
+                  "$ref": "#/components/schemas/JobList"
                 }
               }
             }
@@ -4400,9 +4374,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Job Get Jobs  Job Id  Get"
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -4440,9 +4412,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Job Cancel Jobs  Job Id  Delete"
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -4478,10 +4448,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "A Pull's or Back up all's events: first `job` (the job as `GET /jobs/{job_id}` answers it), then each event it sent and sends, ending with `done`, `error` (`{stage, code, message, details}`) or `cancelled`.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -4520,9 +4492,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Aliases List Aliases Get"
+                  "$ref": "#/components/schemas/CharacterAliases"
                 }
               }
             }
@@ -4559,9 +4529,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Aliases Add Aliases Post"
+                  "$ref": "#/components/schemas/AliasLinked"
                 }
               }
             }
@@ -4608,9 +4576,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Aliases Remove Aliases Delete"
+                  "$ref": "#/components/schemas/AliasRemoved"
                 }
               }
             }
@@ -4659,9 +4625,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Aliases Unlink Group Aliases Group Delete"
+                  "$ref": "#/components/schemas/AliasGroupUnlinked"
                 }
               }
             }
@@ -4843,6 +4807,107 @@
           "primary_name"
         ],
         "title": "AliasAdd"
+      },
+      "AliasGroupUnlinked": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "primary": {
+            "type": "string",
+            "title": "Primary"
+          },
+          "deleted": {
+            "type": "integer",
+            "title": "Deleted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "primary",
+          "deleted"
+        ],
+        "title": "AliasGroupUnlinked",
+        "description": "`deleted`: how many names left the group."
+      },
+      "AliasLinked": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "primary_name": {
+            "type": "string",
+            "title": "Primary Name"
+          },
+          "group": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "primary_name",
+          "group"
+        ],
+        "title": "AliasLinked",
+        "description": "`group`: every name now linked to `primary_name`, sorted."
+      },
+      "AliasRemoved": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "removed": {
+            "type": "boolean",
+            "title": "Removed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "name",
+          "removed"
+        ],
+        "title": "AliasRemoved",
+        "description": "`removed` is false when the name was in no group."
+      },
+      "AllLabelsCleared": {
+        "properties": {
+          "labels_deleted": {
+            "type": "integer",
+            "title": "Labels Deleted"
+          },
+          "trash_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Trash Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "labels_deleted",
+          "trash_ids"
+        ],
+        "title": "AllLabelsCleared",
+        "description": "Every Label went to the Trash, one entry per character."
       },
       "AvatarPrefetchScheduled": {
         "properties": {
@@ -5158,6 +5223,54 @@
         ],
         "title": "BackupsPutBack"
       },
+      "CharacterAliases": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "groups": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Groups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "groups"
+        ],
+        "title": "CharacterAliases",
+        "description": "A character's alias groups: each primary name with every member\nof its group, the primary included."
+      },
+      "CharacterLabelStats": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partners": {
+            "items": {
+              "$ref": "#/components/schemas/PartnerLabelStats"
+            },
+            "type": "array",
+            "title": "Partners"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partners"
+        ],
+        "title": "CharacterLabelStats"
+      },
       "DiscoverModelsRequest": {
         "properties": {},
         "type": "object",
@@ -5296,6 +5409,55 @@
           "error"
         ],
         "title": "EmbeddingModels"
+      },
+      "EmbeddingTest": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "title": "Elapsed Ms"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "error",
+          "dimension",
+          "model",
+          "elapsed_ms"
+        ],
+        "title": "EmbeddingTest",
+        "description": "One canned embedding: `ok` with its dimension, or `ok: false`\nwith the error. Always a 200, like the Labels connection test."
       },
       "ExtensionSeen": {
         "properties": {
@@ -5942,6 +6104,397 @@
         ],
         "title": "ImagesPutBack"
       },
+      "IndexStatus": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          },
+          "embed_dimension": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Dimension"
+          },
+          "last_ingest_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ingest At"
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Job"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chunk_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "embed_dimension",
+          "last_ingest_at",
+          "busy",
+          "job",
+          "chunk_count"
+        ],
+        "title": "IndexStatus",
+        "description": "What the Index holds: model, dimension, last ingest, chunk\ncount. While a job holds the Index, `busy` and that `job` instead,\nand `chunk_count` is null because the Index can't be counted."
+      },
+      "IndexWiped": {
+        "properties": {
+          "wiped": {
+            "type": "boolean",
+            "const": true,
+            "title": "Wiped"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "wiped"
+        ],
+        "title": "IndexWiped"
+      },
+      "IngestFailedDay": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "date": {
+            "type": "string",
+            "title": "Date"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "date"
+        ],
+        "title": "IngestFailedDay",
+        "description": "A day whose chunks did not reach both halves of the Index."
+      },
+      "IngestJob": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "resource": {
+            "type": "string",
+            "title": "Resource"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "cancelled",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "params": {
+            "$ref": "#/components/schemas/IngestParams"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/IngestProgress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IngestSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "resource",
+          "state",
+          "params",
+          "progress",
+          "result",
+          "error",
+          "cancel_requested",
+          "created_at",
+          "finished_at"
+        ],
+        "title": "IngestJob",
+        "description": "An ingest as a job: a `Job` whose params, progress and result\nare the ingest's."
+      },
+      "IngestParams": {
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/IngestScope"
+          },
+          "include_ooc": {
+            "type": "boolean",
+            "title": "Include Ooc"
+          },
+          "force_rewipe": {
+            "type": "boolean",
+            "title": "Force Rewipe"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scope",
+          "include_ooc",
+          "force_rewipe"
+        ],
+        "title": "IngestParams"
+      },
+      "IngestProgress": {
+        "properties": {
+          "chunked": {
+            "type": "integer",
+            "title": "Chunked"
+          },
+          "embedded": {
+            "type": "integer",
+            "title": "Embedded"
+          },
+          "upserted": {
+            "type": "integer",
+            "title": "Upserted"
+          },
+          "skipped_existing": {
+            "type": "integer",
+            "title": "Skipped Existing"
+          },
+          "removed": {
+            "type": "integer",
+            "title": "Removed"
+          },
+          "skipped_unlabeled": {
+            "type": "integer",
+            "title": "Skipped Unlabeled"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "failed_days": {
+            "items": {
+              "$ref": "#/components/schemas/IngestFailedDay"
+            },
+            "type": "array",
+            "title": "Failed Days"
+          },
+          "total_chunks": {
+            "type": "integer",
+            "title": "Total Chunks"
+          },
+          "current_partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Partner"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          },
+          "embed_dimension": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Dimension"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "chunked",
+          "embedded",
+          "upserted",
+          "skipped_existing",
+          "removed",
+          "skipped_unlabeled",
+          "failed",
+          "failed_days",
+          "total_chunks",
+          "current_partner",
+          "last_error",
+          "embed_model",
+          "embed_dimension"
+        ],
+        "title": "IngestProgress",
+        "description": "What an ingest has done so far (`rag_jobs.IngestProgress`).\n`skipped_unlabeled`: messages left out for lack of an IC/OOC\nverdict; a high count means the classification flow should run\nfirst."
+      },
+      "IngestScope": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "IngestScope",
+        "description": "What an ingest covers: every Log (`{}`), every conversation of\none character, or one conversation."
+      },
+      "IngestSummary": {
+        "properties": {
+          "chunks_indexed": {
+            "type": "integer",
+            "title": "Chunks Indexed"
+          },
+          "chunks_already_present": {
+            "type": "integer",
+            "title": "Chunks Already Present"
+          },
+          "chunks_removed": {
+            "type": "integer",
+            "title": "Chunks Removed"
+          },
+          "skipped_unlabeled": {
+            "type": "integer",
+            "title": "Skipped Unlabeled"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "failed_days": {
+            "items": {
+              "$ref": "#/components/schemas/IngestFailedDay"
+            },
+            "type": "array",
+            "title": "Failed Days"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "chunks_indexed",
+          "chunks_already_present",
+          "chunks_removed",
+          "skipped_unlabeled",
+          "failed",
+          "failed_days"
+        ],
+        "title": "IngestSummary",
+        "description": "What a finished ingest did (`rag_jobs.summary`)."
+      },
       "Job": {
         "properties": {
           "id": {
@@ -6035,12 +6588,19 @@
           "finished_at"
         ],
         "title": "Job",
-        "description": "Long work the sidecar runs as a job, of any kind (`services.jobs`):\na Pull, Back up all, an ingest. `params`, `progress` and `result`\nare the kind's own. The routes that start one and `/jobs` answer it."
+        "description": "Long work the sidecar runs as a job, of any kind\n(`services.jobs`): started by its own route, then polled and\ncancelled by id (`/jobs/{id}`). `params`, `progress` and `result`\nare the kind's own; `error` is set when it failed."
       },
       "JobError": {
         "properties": {
           "code": {
-            "type": "string",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefusalCode"
+              },
+              {
+                "$ref": "#/components/schemas/JobFailureCode"
+              }
+            ],
             "title": "Code"
           },
           "message": {
@@ -6061,7 +6621,34 @@
           "details"
         ],
         "title": "JobError",
-        "description": "Why a job failed, in the one error shape. `code` is the job's own\n(such as `embedding_model_changed`), not only a refusal code."
+        "description": "Why a job failed, in the one error shape `{code, message,\ndetails}`."
+      },
+      "JobFailureCode": {
+        "type": "string",
+        "enum": [
+          "embedding_failed",
+          "embedding_model_changed"
+        ],
+        "title": "JobFailureCode",
+        "description": "The codes a job fails with that no refusal carries. A job's\n`error.code` is a refusal code (`refusals.RefusalCode`: what\nstopped it was a refusal, or `internal_error`) or one of these.\n`tests/test_openapi_schema.py` fails when a job or a job's stream\nfails with a code in neither list."
+      },
+      "JobList": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "title": "JobList",
+        "description": "Every job the sidecar remembers: running ones, and finished ones\nfor a few minutes."
       },
       "KeptBackup": {
         "properties": {
@@ -6211,6 +6798,267 @@
         ],
         "title": "LabelOverrideMany"
       },
+      "LabelRemoved": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          },
+          "label": {
+            "type": "null",
+            "title": "Label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "hash",
+          "deleted",
+          "label"
+        ],
+        "title": "LabelRemoved",
+        "description": "The message's stored Label is gone (`deleted` is false when it\nhad none); the rules, or nobody, decide it again."
+      },
+      "LabelSet": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "IC",
+                  "OOC"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "mcp",
+                  "manual",
+                  "llm"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "prior_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "IC",
+                  "OOC"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Label"
+          },
+          "prior_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "mcp",
+                  "manual",
+                  "llm"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "hash",
+          "label",
+          "source",
+          "prior_label",
+          "prior_source"
+        ],
+        "title": "LabelSet",
+        "description": "The user's Label as stored, with the verdict it replaced."
+      },
+      "LabelStats": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "ic": {
+            "type": "integer",
+            "title": "Ic"
+          },
+          "ooc": {
+            "type": "integer",
+            "title": "Ooc"
+          },
+          "unlabeled": {
+            "type": "integer",
+            "title": "Unlabeled"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "ic",
+          "ooc",
+          "unlabeled",
+          "total"
+        ],
+        "title": "LabelStats",
+        "description": "How a conversation's messages resolve, its alias group included."
+      },
+      "LabelledMessage": {
+        "properties": {
+          "ts": {
+            "type": "integer",
+            "title": "Ts"
+          },
+          "iso": {
+            "type": "string",
+            "title": "Iso"
+          },
+          "type": {
+            "type": "integer",
+            "title": "Type"
+          },
+          "type_name": {
+            "type": "string",
+            "title": "Type Name"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "raw": {
+            "type": "string",
+            "title": "Raw"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "mentions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mentions"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ic",
+              "ooc",
+              "system"
+            ],
+            "title": "Kind"
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "IC",
+                  "OOC",
+                  "Unlabeled"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "label_source": {
+            "type": "string",
+            "enum": [
+              "mcp",
+              "manual",
+              "llm"
+            ],
+            "title": "Label Source"
+          },
+          "label_reason": {
+            "type": "string",
+            "title": "Label Reason"
+          },
+          "prior_label": {
+            "type": "string",
+            "enum": [
+              "IC",
+              "OOC"
+            ],
+            "title": "Prior Label"
+          },
+          "prior_source": {
+            "type": "string",
+            "enum": [
+              "mcp",
+              "manual",
+              "llm"
+            ],
+            "title": "Prior Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ts",
+          "iso",
+          "type",
+          "type_name",
+          "speaker",
+          "raw",
+          "text",
+          "mentions",
+          "kind",
+          "hash",
+          "label"
+        ],
+        "title": "LabelledMessage",
+        "description": "A message with the Label it resolves to (null for a system line)\nand its `hash`, which the Label routes take. `label_source` and the\nrest are there only when a stored Label decides it: who set it, the\nreason given, and the verdict it replaced."
+      },
       "LabelsClearRequest": {
         "properties": {
           "character": {
@@ -6228,6 +7076,43 @@
           "partner"
         ],
         "title": "LabelsClearRequest"
+      },
+      "LabelsCleared": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "deleted": {
+            "type": "integer",
+            "title": "Deleted"
+          },
+          "trash_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trash Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "deleted",
+          "trash_id"
+        ],
+        "title": "LabelsCleared",
+        "description": "One conversation's Labels went to the Trash as `trash_id` (null\nwhen there were none)."
       },
       "LabelsDefaults": {
         "properties": {
@@ -6281,6 +7166,44 @@
         ],
         "title": "LabelsDeleteHashes"
       },
+      "LabelsDeleted": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "deleted": {
+            "type": "integer",
+            "title": "Deleted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "deleted"
+        ],
+        "title": "LabelsDeleted"
+      },
       "LabelsFillUnlabeled": {
         "properties": {
           "character": {
@@ -6303,6 +7226,57 @@
           "label"
         ],
         "title": "LabelsFillUnlabeled"
+      },
+      "LabelsOverridden": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "changed": {
+            "type": "integer",
+            "title": "Changed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "label",
+          "changed"
+        ],
+        "title": "LabelsOverridden",
+        "description": "`label` as the request gave it; `changed` counts the Labels\nwritten or removed."
       },
       "LabelsPutBack": {
         "properties": {
@@ -6328,6 +7302,46 @@
           "not_found"
         ],
         "title": "LabelsPutBack"
+      },
+      "LabelsRollup": {
+        "properties": {
+          "ic": {
+            "type": "integer",
+            "title": "Ic"
+          },
+          "ooc": {
+            "type": "integer",
+            "title": "Ooc"
+          },
+          "unlabeled": {
+            "type": "integer",
+            "title": "Unlabeled"
+          },
+          "manual": {
+            "type": "integer",
+            "title": "Manual"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "character_count": {
+            "type": "integer",
+            "title": "Character Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ic",
+          "ooc",
+          "unlabeled",
+          "manual",
+          "total",
+          "character_count"
+        ],
+        "title": "LabelsRollup",
+        "description": "Counts across every conversation of every character, and how\nmany Labels the user set by hand."
       },
       "LabelsSettings": {
         "properties": {
@@ -6382,11 +7396,385 @@
         ],
         "title": "LabelsTrash"
       },
+      "LexicalRebuilt": {
+        "properties": {
+          "indexed": {
+            "type": "integer",
+            "title": "Indexed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "indexed"
+        ],
+        "title": "LexicalRebuilt",
+        "description": "How many chunks the lexical half of the Index now holds."
+      },
       "Live": {
         "additionalProperties": true,
         "type": "object",
         "title": "Live",
         "description": "A character's Live: F-list's character-data answer as the last\nPull stored it, plus `fetched_at`. Free-form, because F-list may add\nfields and the window passes on what it does not know."
+      },
+      "LogCharacter": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mtime": {
+            "type": "number",
+            "title": "Mtime"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "mtime"
+        ],
+        "title": "LogCharacter",
+        "description": "One of the user's characters with Logs. `mtime`: the newest\nchange in its Logs folder (epoch seconds), 0 when it has none."
+      },
+      "LogCharacters": {
+        "properties": {
+          "characters": {
+            "items": {
+              "$ref": "#/components/schemas/LogCharacter"
+            },
+            "type": "array",
+            "title": "Characters"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "characters"
+        ],
+        "title": "LogCharacters"
+      },
+      "LogContact": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "mtime": {
+            "type": "number",
+            "title": "Mtime"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "bytes",
+          "mtime"
+        ],
+        "title": "LogContact",
+        "description": "One of the user's characters with a 1-on-1 Log with the name."
+      },
+      "LogContacts": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dm": {
+            "items": {
+              "$ref": "#/components/schemas/LogContact"
+            },
+            "type": "array",
+            "title": "Dm"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "dm"
+        ],
+        "title": "LogContacts"
+      },
+      "LogMessages": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/LabelledMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "offset",
+          "messages"
+        ],
+        "title": "LogMessages"
+      },
+      "LogPartner": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "bytes",
+          "aliases"
+        ],
+        "title": "LogPartner",
+        "description": "One conversation of a character. `name` is the partner, or the\nprimary name of an alias group whose other members are `aliases`;\n`bytes` counts the whole group's Logs."
+      },
+      "LogPartners": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partners": {
+            "items": {
+              "$ref": "#/components/schemas/LogPartner"
+            },
+            "type": "array",
+            "title": "Partners"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partners"
+        ],
+        "title": "LogPartners"
+      },
+      "LogSearch": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/LogSearchHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "query",
+          "hits"
+        ],
+        "title": "LogSearch"
+      },
+      "LogSearchAll": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "partners": {
+            "items": {
+              "$ref": "#/components/schemas/LogSearchPartner"
+            },
+            "type": "array",
+            "title": "Partners"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "query",
+          "partners"
+        ],
+        "title": "LogSearchAll"
+      },
+      "LogSearchAllNothing": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/LogSearchHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "query",
+          "hits"
+        ],
+        "title": "LogSearchAllNothing",
+        "description": "What a search of every conversation answers for an empty query."
+      },
+      "LogSearchHit": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index"
+          },
+          "ts": {
+            "type": "integer",
+            "title": "Ts"
+          },
+          "iso": {
+            "type": "string",
+            "title": "Iso"
+          },
+          "type": {
+            "type": "integer",
+            "title": "Type"
+          },
+          "type_name": {
+            "type": "string",
+            "title": "Type Name"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "raw": {
+            "type": "string",
+            "title": "Raw"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "mentions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mentions"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ic",
+              "ooc",
+              "system"
+            ],
+            "title": "Kind"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "index",
+          "ts",
+          "iso",
+          "type",
+          "type_name",
+          "speaker",
+          "raw",
+          "text",
+          "mentions",
+          "kind"
+        ],
+        "title": "LogSearchHit",
+        "description": "A message that matches a search, with its `index` in its\nconversation. (Bases in this order put `index` first, as the\nanswer has it.)"
+      },
+      "LogSearchPartner": {
+        "properties": {
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/LogSearchHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "partner",
+          "bytes",
+          "hits",
+          "truncated"
+        ],
+        "title": "LogSearchPartner",
+        "description": "One conversation's matches; `truncated` when it had more than\nthe limit (open the conversation to see the rest)."
       },
       "MappingList": {
         "properties": {
@@ -6662,6 +8050,65 @@
           "paired"
         ],
         "title": "PairingStatus"
+      },
+      "PartnerLabelStats": {
+        "properties": {
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "ic": {
+            "type": "integer",
+            "title": "Ic"
+          },
+          "ooc": {
+            "type": "integer",
+            "title": "Ooc"
+          },
+          "unlabeled": {
+            "type": "integer",
+            "title": "Unlabeled"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "log_mtime": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Mtime"
+          },
+          "last_label_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Label At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "partner",
+          "ic",
+          "ooc",
+          "unlabeled",
+          "total",
+          "log_mtime",
+          "last_label_at"
+        ],
+        "title": "PartnerLabelStats",
+        "description": "`LabelStats` of one conversation in a character's list.\n`log_mtime` (the newest of the group's Logs) later than\n`last_label_at` (its newest Label) means messages arrived that no\none has judged yet. Both epoch seconds, null when there is none."
       },
       "PendingHandshake": {
         "properties": {
@@ -8144,6 +9591,63 @@
         ],
         "title": "TrashedLabels",
         "description": "Labels cleared in one go, kept in the Trash."
+      },
+      "UnlabeledFilled": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "partner": {
+            "type": "string",
+            "title": "Partner"
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "IC",
+              "OOC"
+            ],
+            "title": "Label"
+          },
+          "labeled": {
+            "type": "integer",
+            "title": "Labeled"
+          },
+          "hashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hashes"
+          },
+          "already_labeled": {
+            "type": "integer",
+            "title": "Already Labeled"
+          },
+          "decided_by_rules": {
+            "type": "integer",
+            "title": "Decided By Rules"
+          },
+          "total_messages": {
+            "type": "integer",
+            "title": "Total Messages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "partner",
+          "label",
+          "labeled",
+          "hashes",
+          "already_labeled",
+          "decided_by_rules",
+          "total_messages"
+        ],
+        "title": "UnlabeledFilled",
+        "description": "`hashes` is exactly what was written, which\n`/labels/delete-hashes` takes to undo it."
       },
       "UploadCharacter": {
         "properties": {

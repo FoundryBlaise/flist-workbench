@@ -5,6 +5,8 @@ each route says what it answers."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import openapi_schema
 
 
@@ -62,6 +64,63 @@ def test_the_schema_names_the_refusals_no_class_raises() -> None:
     } <= _schema_refusal_codes()
 
 
+#: Where a job takes its code from something other than a literal or a
+#: constant: `_drive` fails a stream job with the code of the stream's
+#: `error` event, which `sse.error` (checked below) or a refusal built.
+FORWARDED_JOB_CODES = {("services/jobs.py", "_drive")}
+
+
+def _job_failure_codes_in_code() -> tuple[set[str], list[str]]:
+    """Every code a job fails with (`job.fail(code, ...)`) or a job's
+    stream stops with (`sse.error(stage, code, ...)`), read from the
+    source; plus the calls whose code could not be read."""
+    import ast
+    import importlib
+
+    sidecar = Path(openapi_schema.__file__).resolve().parent
+    codes: set[str] = set()
+    unreadable: list[str] = []
+    for path in sorted(sidecar.rglob("*.py")):
+        rel = path.relative_to(sidecar).as_posix()
+        if rel.startswith((".venv/", "tests/")):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        module = None
+        # Module functions and methods, each with the functions nested in it.
+        defs = tree.body + [n for c in tree.body if isinstance(c, ast.ClassDef) for n in c.body]
+        for func in [n for n in defs if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            for call in [n for n in ast.walk(func) if isinstance(n, ast.Call)]:
+                f = call.func
+                if not isinstance(f, ast.Attribute) or not isinstance(f.value, ast.Name):
+                    continue
+                if (f.value.id, f.attr) == ("job", "fail"):
+                    arg = call.args[0]
+                elif (f.value.id, f.attr) == ("sse", "error"):
+                    arg = call.args[1]
+                else:
+                    continue
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    codes.add(arg.value)
+                elif isinstance(arg, ast.Name):
+                    if module is None:
+                        module = importlib.import_module(rel.removesuffix(".py").replace("/", "."))
+                    codes.add(str(getattr(module, arg.id)))
+                elif (rel, func.name) not in FORWARDED_JOB_CODES:
+                    unreadable.append(f"{rel}:{call.lineno}")
+    return codes, unreadable
+
+
+def test_the_schema_names_every_code_a_job_fails_with() -> None:
+    schemas = openapi_schema.schema()["components"]["schemas"]
+    job_codes = set(schemas["RefusalCode"]["enum"]) | set(schemas["JobFailureCode"]["enum"])
+    codes, unreadable = _job_failure_codes_in_code()
+
+    assert unreadable == [], "use a literal or a module constant as the code"
+    assert {"embedding_model_changed", "not_signed_in", "internal_error"} <= codes
+    missing = codes - job_codes
+    assert missing == set(), f"add these to wire.JobFailureCode: {sorted(missing)}"
+
+
 def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
     undeclared = [
         f"{method.upper()} {path}"
@@ -84,6 +143,11 @@ TYPED_GROUPS = {
     "workbench",
     "pull_backups",
     "upload",
+    "logs",
+    "labels",
+    "aliases",
+    "index",
+    "jobs",
     "flist_session",
     "foreign",
     "images_trash",

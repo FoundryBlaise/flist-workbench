@@ -2247,6 +2247,52 @@ export interface components {
             /** Primary Name */
             primary_name: string;
         };
+        /**
+         * AliasGroupUnlinked
+         * @description `deleted`: how many names left the group.
+         */
+        AliasGroupUnlinked: {
+            /** Character */
+            character: string;
+            /** Primary */
+            primary: string;
+            /** Deleted */
+            deleted: number;
+        };
+        /**
+         * AliasLinked
+         * @description `group`: every name now linked to `primary_name`, sorted.
+         */
+        AliasLinked: {
+            /** Character */
+            character: string;
+            /** Primary Name */
+            primary_name: string;
+            /** Group */
+            group: string[];
+        };
+        /**
+         * AliasRemoved
+         * @description `removed` is false when the name was in no group.
+         */
+        AliasRemoved: {
+            /** Character */
+            character: string;
+            /** Name */
+            name: string;
+            /** Removed */
+            removed: boolean;
+        };
+        /**
+         * AllLabelsCleared
+         * @description Every Label went to the Trash, one entry per character.
+         */
+        AllLabelsCleared: {
+            /** Labels Deleted */
+            labels_deleted: number;
+            /** Trash Ids */
+            trash_ids: string[];
+        };
         /** AvatarPrefetchScheduled */
         AvatarPrefetchScheduled: {
             /** Scheduled */
@@ -2372,6 +2418,26 @@ export interface components {
             conflicts: string[];
         };
         /**
+         * CharacterAliases
+         * @description A character's alias groups: each primary name with every member
+         *     of its group, the primary included.
+         */
+        CharacterAliases: {
+            /** Character */
+            character: string;
+            /** Groups */
+            groups: {
+                [key: string]: string[];
+            };
+        };
+        /** CharacterLabelStats */
+        CharacterLabelStats: {
+            /** Character */
+            character: string;
+            /** Partners */
+            partners: components["schemas"]["PartnerLabelStats"][];
+        };
+        /**
          * DiscoverModelsRequest
          * @description No fields — kept so the route keeps its POST shape.
          */
@@ -2420,6 +2486,23 @@ export interface components {
             source: "local";
             /** Error */
             error: string | null;
+        };
+        /**
+         * EmbeddingTest
+         * @description One canned embedding: `ok` with its dimension, or `ok: false`
+         *     with the error. Always a 200, like the Labels connection test.
+         */
+        EmbeddingTest: {
+            /** Ok */
+            ok: boolean;
+            /** Error */
+            error: string | null;
+            /** Dimension */
+            dimension: number | null;
+            /** Model */
+            model: string;
+            /** Elapsed Ms */
+            elapsed_ms: number;
         };
         /**
          * ExtensionSeen
@@ -2701,10 +2784,150 @@ export interface components {
             conflicts: string[];
         };
         /**
+         * IndexStatus
+         * @description What the Index holds: model, dimension, last ingest, chunk
+         *     count. While a job holds the Index, `busy` and that `job` instead,
+         *     and `chunk_count` is null because the Index can't be counted.
+         */
+        IndexStatus: {
+            /** Embed Model */
+            embed_model: string | null;
+            /** Embed Dimension */
+            embed_dimension: number | null;
+            /** Last Ingest At */
+            last_ingest_at: number | null;
+            /** Busy */
+            busy: boolean;
+            job: components["schemas"]["Job"] | null;
+            /** Chunk Count */
+            chunk_count: number | null;
+        };
+        /** IndexWiped */
+        IndexWiped: {
+            /**
+             * Wiped
+             * @constant
+             */
+            wiped: true;
+        };
+        /**
+         * IngestFailedDay
+         * @description A day whose chunks did not reach both halves of the Index.
+         */
+        IngestFailedDay: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /** Date */
+            date: string;
+        };
+        /**
+         * IngestJob
+         * @description An ingest as a job: a `Job` whose params, progress and result
+         *     are the ingest's.
+         */
+        IngestJob: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Resource */
+            resource: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "running" | "done" | "cancelled" | "failed";
+            params: components["schemas"]["IngestParams"];
+            progress: components["schemas"]["IngestProgress"];
+            result: components["schemas"]["IngestSummary"] | null;
+            error: components["schemas"]["JobError"] | null;
+            /** Cancel Requested */
+            cancel_requested: boolean;
+            /** Created At */
+            created_at: number;
+            /** Finished At */
+            finished_at: number | null;
+        };
+        /** IngestParams */
+        IngestParams: {
+            scope: components["schemas"]["IngestScope"];
+            /** Include Ooc */
+            include_ooc: boolean;
+            /** Force Rewipe */
+            force_rewipe: boolean;
+        };
+        /**
+         * IngestProgress
+         * @description What an ingest has done so far (`rag_jobs.IngestProgress`).
+         *     `skipped_unlabeled`: messages left out for lack of an IC/OOC
+         *     verdict; a high count means the classification flow should run
+         *     first.
+         */
+        IngestProgress: {
+            /** Chunked */
+            chunked: number;
+            /** Embedded */
+            embedded: number;
+            /** Upserted */
+            upserted: number;
+            /** Skipped Existing */
+            skipped_existing: number;
+            /** Removed */
+            removed: number;
+            /** Skipped Unlabeled */
+            skipped_unlabeled: number;
+            /** Failed */
+            failed: number;
+            /** Failed Days */
+            failed_days: components["schemas"]["IngestFailedDay"][];
+            /** Total Chunks */
+            total_chunks: number;
+            /** Current Partner */
+            current_partner: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Embed Model */
+            embed_model: string | null;
+            /** Embed Dimension */
+            embed_dimension: number | null;
+        };
+        /**
+         * IngestScope
+         * @description What an ingest covers: every Log (`{}`), every conversation of
+         *     one character, or one conversation.
+         */
+        IngestScope: {
+            /** Character */
+            character?: string;
+            /** Partner */
+            partner?: string;
+        };
+        /**
+         * IngestSummary
+         * @description What a finished ingest did (`rag_jobs.summary`).
+         */
+        IngestSummary: {
+            /** Chunks Indexed */
+            chunks_indexed: number;
+            /** Chunks Already Present */
+            chunks_already_present: number;
+            /** Chunks Removed */
+            chunks_removed: number;
+            /** Skipped Unlabeled */
+            skipped_unlabeled: number;
+            /** Failed */
+            failed: number;
+            /** Failed Days */
+            failed_days: components["schemas"]["IngestFailedDay"][];
+        };
+        /**
          * Job
-         * @description Long work the sidecar runs as a job, of any kind (`services.jobs`):
-         *     a Pull, Back up all, an ingest. `params`, `progress` and `result`
-         *     are the kind's own. The routes that start one and `/jobs` answer it.
+         * @description Long work the sidecar runs as a job, of any kind
+         *     (`services.jobs`): started by its own route, then polled and
+         *     cancelled by id (`/jobs/{id}`). `params`, `progress` and `result`
+         *     are the kind's own; `error` is set when it failed.
          */
         Job: {
             /** Id */
@@ -2740,18 +2963,37 @@ export interface components {
         };
         /**
          * JobError
-         * @description Why a job failed, in the one error shape. `code` is the job's own
-         *     (such as `embedding_model_changed`), not only a refusal code.
+         * @description Why a job failed, in the one error shape `{code, message,
+         *     details}`.
          */
         JobError: {
             /** Code */
-            code: string;
+            code: components["schemas"]["RefusalCode"] | components["schemas"]["JobFailureCode"];
             /** Message */
             message: string;
             /** Details */
             details: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * JobFailureCode
+         * @description The codes a job fails with that no refusal carries. A job's
+         *     `error.code` is a refusal code (`refusals.RefusalCode`: what
+         *     stopped it was a refusal, or `internal_error`) or one of these.
+         *     `tests/test_openapi_schema.py` fails when a job or a job's stream
+         *     fails with a code in neither list.
+         * @enum {string}
+         */
+        JobFailureCode: "embedding_failed" | "embedding_model_changed";
+        /**
+         * JobList
+         * @description Every job the sidecar remembers: running ones, and finished ones
+         *     for a few minutes.
+         */
+        JobList: {
+            /** Jobs */
+            jobs: components["schemas"]["Job"][];
         };
         /**
          * KeptBackup
@@ -2799,12 +3041,125 @@ export interface components {
             /** Label */
             label?: string | null;
         };
+        /**
+         * LabelRemoved
+         * @description The message's stored Label is gone (`deleted` is false when it
+         *     had none); the rules, or nobody, decide it again.
+         */
+        LabelRemoved: {
+            /** Hash */
+            hash: string;
+            /** Deleted */
+            deleted: boolean;
+            /** Label */
+            label: null;
+        };
+        /**
+         * LabelSet
+         * @description The user's Label as stored, with the verdict it replaced.
+         */
+        LabelSet: {
+            /** Hash */
+            hash: string;
+            /** Label */
+            label: ("IC" | "OOC") | null;
+            /** Source */
+            source: ("mcp" | "manual" | "llm") | null;
+            /** Prior Label */
+            prior_label: ("IC" | "OOC") | null;
+            /** Prior Source */
+            prior_source: ("mcp" | "manual" | "llm") | null;
+        };
+        /**
+         * LabelStats
+         * @description How a conversation's messages resolve, its alias group included.
+         */
+        LabelStats: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /** Ic */
+            ic: number;
+            /** Ooc */
+            ooc: number;
+            /** Unlabeled */
+            unlabeled: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * LabelledMessage
+         * @description A message with the Label it resolves to (null for a system line)
+         *     and its `hash`, which the Label routes take. `label_source` and the
+         *     rest are there only when a stored Label decides it: who set it, the
+         *     reason given, and the verdict it replaced.
+         */
+        LabelledMessage: {
+            /** Ts */
+            ts: number;
+            /** Iso */
+            iso: string;
+            /** Type */
+            type: number;
+            /** Type Name */
+            type_name: string;
+            /** Speaker */
+            speaker: string;
+            /** Raw */
+            raw: string;
+            /** Text */
+            text: string;
+            /** Mentions */
+            mentions: string[];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "ic" | "ooc" | "system";
+            /** Hash */
+            hash: string;
+            /** Label */
+            label: ("IC" | "OOC" | "Unlabeled") | null;
+            /**
+             * Label Source
+             * @enum {string}
+             */
+            label_source?: "mcp" | "manual" | "llm";
+            /** Label Reason */
+            label_reason?: string;
+            /**
+             * Prior Label
+             * @enum {string}
+             */
+            prior_label?: "IC" | "OOC";
+            /**
+             * Prior Source
+             * @enum {string}
+             */
+            prior_source?: "mcp" | "manual" | "llm";
+        };
         /** LabelsClearRequest */
         LabelsClearRequest: {
             /** Character */
             character: string;
             /** Partner */
             partner: string;
+        };
+        /**
+         * LabelsCleared
+         * @description One conversation's Labels went to the Trash as `trash_id` (null
+         *     when there were none).
+         */
+        LabelsCleared: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /** Deleted */
+            deleted: number;
+            /** Trash Id */
+            trash_id: string | null;
         };
         /** LabelsDefaults */
         LabelsDefaults: {
@@ -2820,6 +3175,15 @@ export interface components {
             /** Hashes */
             hashes: string[];
         };
+        /** LabelsDeleted */
+        LabelsDeleted: {
+            /** Character */
+            character: string | null;
+            /** Partner */
+            partner: string | null;
+            /** Deleted */
+            deleted: number;
+        };
         /** LabelsFillUnlabeled */
         LabelsFillUnlabeled: {
             /** Character */
@@ -2829,12 +3193,46 @@ export interface components {
             /** Label */
             label: string;
         };
+        /**
+         * LabelsOverridden
+         * @description `label` as the request gave it; `changed` counts the Labels
+         *     written or removed.
+         */
+        LabelsOverridden: {
+            /** Character */
+            character: string | null;
+            /** Partner */
+            partner: string | null;
+            /** Label */
+            label: string | null;
+            /** Changed */
+            changed: number;
+        };
         /** LabelsPutBack */
         LabelsPutBack: {
             /** Restored */
             restored: components["schemas"]["PutBackLabels"][];
             /** Not Found */
             not_found: string[];
+        };
+        /**
+         * LabelsRollup
+         * @description Counts across every conversation of every character, and how
+         *     many Labels the user set by hand.
+         */
+        LabelsRollup: {
+            /** Ic */
+            ic: number;
+            /** Ooc */
+            ooc: number;
+            /** Unlabeled */
+            unlabeled: number;
+            /** Manual */
+            manual: number;
+            /** Total */
+            total: number;
+            /** Character Count */
+            character_count: number;
         };
         /**
          * LabelsSettings
@@ -2858,6 +3256,14 @@ export interface components {
             labels: components["schemas"]["TrashedLabels"][];
         };
         /**
+         * LexicalRebuilt
+         * @description How many chunks the lexical half of the Index now holds.
+         */
+        LexicalRebuilt: {
+            /** Indexed */
+            indexed: number;
+        };
+        /**
          * Live
          * @description A character's Live: F-list's character-data answer as the last
          *     Pull stored it, plus `fetched_at`. Free-form, because F-list may add
@@ -2865,6 +3271,153 @@ export interface components {
          */
         Live: {
             [key: string]: unknown;
+        };
+        /**
+         * LogCharacter
+         * @description One of the user's characters with Logs. `mtime`: the newest
+         *     change in its Logs folder (epoch seconds), 0 when it has none.
+         */
+        LogCharacter: {
+            /** Name */
+            name: string;
+            /** Mtime */
+            mtime: number;
+        };
+        /** LogCharacters */
+        LogCharacters: {
+            /** Characters */
+            characters: components["schemas"]["LogCharacter"][];
+        };
+        /**
+         * LogContact
+         * @description One of the user's characters with a 1-on-1 Log with the name.
+         */
+        LogContact: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /** Bytes */
+            bytes: number;
+            /** Mtime */
+            mtime: number;
+        };
+        /** LogContacts */
+        LogContacts: {
+            /** Name */
+            name: string;
+            /** Dm */
+            dm: components["schemas"]["LogContact"][];
+        };
+        /** LogMessages */
+        LogMessages: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /** Offset */
+            offset: number;
+            /** Messages */
+            messages: components["schemas"]["LabelledMessage"][];
+        };
+        /**
+         * LogPartner
+         * @description One conversation of a character. `name` is the partner, or the
+         *     primary name of an alias group whose other members are `aliases`;
+         *     `bytes` counts the whole group's Logs.
+         */
+        LogPartner: {
+            /** Name */
+            name: string;
+            /** Bytes */
+            bytes: number;
+            /** Aliases */
+            aliases: string[];
+        };
+        /** LogPartners */
+        LogPartners: {
+            /** Character */
+            character: string;
+            /** Partners */
+            partners: components["schemas"]["LogPartner"][];
+        };
+        /** LogSearch */
+        LogSearch: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /** Query */
+            query: string;
+            /** Hits */
+            hits: components["schemas"]["LogSearchHit"][];
+        };
+        /** LogSearchAll */
+        LogSearchAll: {
+            /** Character */
+            character: string;
+            /** Query */
+            query: string;
+            /** Partners */
+            partners: components["schemas"]["LogSearchPartner"][];
+        };
+        /**
+         * LogSearchAllNothing
+         * @description What a search of every conversation answers for an empty query.
+         */
+        LogSearchAllNothing: {
+            /** Character */
+            character: string;
+            /** Query */
+            query: string;
+            /** Hits */
+            hits: components["schemas"]["LogSearchHit"][];
+        };
+        /**
+         * LogSearchHit
+         * @description A message that matches a search, with its `index` in its
+         *     conversation. (Bases in this order put `index` first, as the
+         *     answer has it.)
+         */
+        LogSearchHit: {
+            /** Index */
+            index: number;
+            /** Ts */
+            ts: number;
+            /** Iso */
+            iso: string;
+            /** Type */
+            type: number;
+            /** Type Name */
+            type_name: string;
+            /** Speaker */
+            speaker: string;
+            /** Raw */
+            raw: string;
+            /** Text */
+            text: string;
+            /** Mentions */
+            mentions: string[];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "ic" | "ooc" | "system";
+        };
+        /**
+         * LogSearchPartner
+         * @description One conversation's matches; `truncated` when it had more than
+         *     the limit (open the conversation to see the rest).
+         */
+        LogSearchPartner: {
+            /** Partner */
+            partner: string;
+            /** Bytes */
+            bytes: number;
+            /** Hits */
+            hits: components["schemas"]["LogSearchHit"][];
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * MappingList
@@ -2979,6 +3532,29 @@ export interface components {
         PairingStatus: {
             /** Paired */
             paired: boolean;
+        };
+        /**
+         * PartnerLabelStats
+         * @description `LabelStats` of one conversation in a character's list.
+         *     `log_mtime` (the newest of the group's Logs) later than
+         *     `last_label_at` (its newest Label) means messages arrived that no
+         *     one has judged yet. Both epoch seconds, null when there is none.
+         */
+        PartnerLabelStats: {
+            /** Partner */
+            partner: string;
+            /** Ic */
+            ic: number;
+            /** Ooc */
+            ooc: number;
+            /** Unlabeled */
+            unlabeled: number;
+            /** Total */
+            total: number;
+            /** Log Mtime */
+            log_mtime: number | null;
+            /** Last Label At */
+            last_label_at: number | null;
         };
         /**
          * PendingHandshake
@@ -3511,6 +4087,32 @@ export interface components {
             deleted_at: number;
             /** Deleted By */
             deleted_by: string | null;
+        };
+        /**
+         * UnlabeledFilled
+         * @description `hashes` is exactly what was written, which
+         *     `/labels/delete-hashes` takes to undo it.
+         */
+        UnlabeledFilled: {
+            /** Character */
+            character: string;
+            /** Partner */
+            partner: string;
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "IC" | "OOC";
+            /** Labeled */
+            labeled: number;
+            /** Hashes */
+            hashes: string[];
+            /** Already Labeled */
+            already_labeled: number;
+            /** Decided By Rules */
+            decided_by_rules: number;
+            /** Total Messages */
+            total_messages: number;
         };
         /**
          * UploadCharacter
@@ -6140,9 +6742,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LogCharacters"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6173,9 +6773,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LogPartners"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6209,9 +6807,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LogMessages"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6244,9 +6840,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LogSearch"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6279,9 +6873,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LogSearchAll"] | components["schemas"]["LogSearchAllNothing"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6312,9 +6904,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LogContacts"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6445,9 +7035,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelStats"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6478,9 +7066,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CharacterLabelStats"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6513,9 +7099,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsCleared"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6544,9 +7128,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AllLabelsCleared"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6575,9 +7157,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsRollup"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6610,9 +7190,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["UnlabeledFilled"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6645,9 +7223,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsDeleted"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6680,9 +7256,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelSet"] | components["schemas"]["LabelRemoved"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6715,9 +7289,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LabelsOverridden"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6750,9 +7322,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["EmbeddingTest"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6785,9 +7355,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["IngestJob"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6816,9 +7384,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["IndexWiped"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6847,9 +7413,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LexicalRebuilt"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6878,9 +7442,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["IndexStatus"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6909,9 +7471,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JobList"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6942,9 +7502,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -6975,9 +7533,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -7002,13 +7558,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description A Pull's or Back up all's events: first `job` (the job as `GET /jobs/{job_id}` answers it), then each event it sent and sends, ending with `done`, `error` (`{stage, code, message, details}`) or `cancelled`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": string;
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -7039,9 +7595,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CharacterAliases"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -7074,9 +7628,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AliasLinked"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -7108,9 +7660,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AliasRemoved"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */
@@ -7142,9 +7692,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AliasGroupUnlinked"];
                 };
             };
             /** @description Refused: `{code, message, details}`. */

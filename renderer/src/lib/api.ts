@@ -39,7 +39,9 @@ export type RefusalCode = Schema<'RefusalCode'>
 /** An inline image as F-list's profile payload lists it. */
 export type InlineImage = { hash: string; extension: string; nsfw: boolean }
 
-export type CharacterEntry = { name: string; mtime: number }
+/** One of the user's characters with Logs; `mtime` is the newest
+ *  change in its Logs folder. */
+export type CharacterEntry = Schema<'LogCharacter'>
 
 // ---- F-list character archive (Phase 7 Tier 1) ----
 
@@ -173,141 +175,55 @@ export type Profile = Omit<Schema<'PublicProfile'>, 'inlines'> & {
   inlines: Record<string, InlineImage>
 }
 
-export type PartnerEntry = {
-  name: string
-  bytes: number
-  // Alternate names linked to this partner via the alias system.
-  // Empty array for unaliased entries. The entry's `name` is the
-  // primary; `aliases` are the other members of the group.
-  aliases: string[]
+/** One conversation of a character: the partner, or the primary name
+ *  of an alias group whose other members are `aliases`. */
+export type PartnerEntry = Schema<'LogPartner'>
+
+/** A Log's message with the Label it resolves to (null for a system
+ *  line) and the `hash` the Label routes take. `label_source` and the
+ *  rest are there only when a stored Label decides it. The sidecar
+ *  always sends `label`; the window leaves it out of a message whose
+ *  Label it just reset, until the next read resolves it again. */
+export type LogMessage = Omit<Schema<'LabelledMessage'>, 'label'> & {
+  label?: Schema<'LabelledMessage'>['label']
 }
 
-export type AliasGroups = Record<string, string[]>
-
-export type Label = 'IC' | 'OOC' | 'Unlabeled'
+export type Label = NonNullable<LogMessage['label']>
 /** Who decided a stored verdict. 'mcp' is the model the user connected
  *  over MCP; 'manual' is their own right-click override; 'llm' only
  *  appears on rows written by the in-app classifier that existed
  *  before the MCP migration. */
-export type LabelSource = 'mcp' | 'manual' | 'llm'
-export type PriorSource = LabelSource | null
-
-export type LogMessage = {
-  ts: number
-  iso: string
-  type: number
-  type_name: string
-  speaker: string
-  raw: string
-  text: string
-  mentions: string[]
-  // kind is F-Chat's message type bucket (chat/action vs ad/roll/warn/event).
-  // Used to keep "System" filtering working independently of semantic IC/OOC.
-  kind: 'ic' | 'ooc' | 'system'
-  // Sidecar-computed sha1(ts|speaker|raw)[:16] used as the labels-DB
-  // primary key. The renderer passes this back when overriding.
-  hash: string
-  // label is the semantic IC/OOC classification from the resolver. Always
-  // present for chat/action messages, null for a system line (it never gets
-  // a Label); absent label_source means rule-or-unlabeled (no explicit DB row).
-  label?: Label | null
-  label_source?: LabelSource
-  // Free-text reason the labeller gave for the verdict. Surfaced in
-  // the badge tooltip so users can audit why a label was chosen.
-  label_reason?: string
-  // Snapshot of what the label was before the most recent change.
-  // Present only on manual overrides; lets the UI surface "the model
-  // said IC; you changed it to OOC" without a separate lookup.
-  prior_label?: 'IC' | 'OOC'
-  prior_source?: LabelSource
-  // Present when label === 'Failed'. Holds the classifier's error
-  // message (truncated) so the badge tooltip can explain why the
-  // message couldn't be classified — e.g. "bad json: '<garbage>'" or
-  // "api error: HTTP 500". The full prompt + context lives in
-  // <user_data>/classify-failures.log, surfaced via Tools → Open log.
-  label_error?: string
-}
+export type LabelSource = NonNullable<LogMessage['label_source']>
 
 /** Messages shorter than `threshold_chars` are OOC without asking
  *  anyone; `defaults` for the "(default)" hints. */
 export type LabelsSettings = Schema<'LabelsSettings'>
 export type RagSettings = Schema<'RagSettings'>
 
-export type LabelsStats = {
-  character: string
-  partner: string
-  ic: number
-  ooc: number
-  unlabeled: number
-  total: number
-}
-
-export type IngestJobScope = {
-  character?: string | null
-  partner?: string | null
-}
-
-export type JobState = 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+/** What an ingest covers: every Log, every conversation of one
+ *  character, or one conversation. */
+export type IngestJobScope = Pick<BodyOf<'/rag/ingest', 'post'>, 'character' | 'partner'>
 
 /** Long work the sidecar runs as a job, of any kind: started by its
  *  own route, then polled and cancelled by id (`/jobs/{id}`). `error`
  *  is set when it failed. */
-export type Job<Params = Record<string, unknown>, Progress = Record<string, unknown>, Result = Record<string, unknown>> = {
-  id: string
-  kind: string
-  resource: string
-  state: JobState
-  params: Params
-  progress: Progress
-  result: Result | null
-  error: ErrorBody | null
-  cancel_requested: boolean
-  created_at: number
-  finished_at: number | null
-}
+export type Job = Schema<'Job'>
 
-export type IngestProgress = {
-  chunked: number
-  embedded: number
-  upserted: number
-  skipped_existing: number
-  removed: number
-  /** Messages dropped for lack of an IC/OOC verdict. A high count
-   *  means the classification flow should run first — an unjudged
-   *  message could be either IC prose or OOC chatter, and indexing OOC
-   *  poisons retrieval. */
-  skipped_unlabeled: number
-  failed: number
-  total_chunks: number
-  current_partner: string | null
-  last_error: string | null
-  embed_model: string | null
-  embed_dimension: number | null
-}
+/** Why a job failed: a refusal code, or a code only a job fails with
+ *  (`JobFailureCode`). */
+export type JobError = Schema<'JobError'>
 
-export type IngestJob = Job<
-  {
-    scope: { character?: string; partner?: string }
-    include_ooc: boolean
-    force_rewipe: boolean
-  },
-  IngestProgress
->
+/** An ingest as a job, with the ingest's params, progress and result. */
+export type IngestJob = Schema<'IngestJob'>
 
 /** The `error.code` of an ingest stopped because the Index was built
  *  with another embedding model; the dialog offers wipe + re-ingest. */
-export const EMBEDDING_MODEL_CHANGED = 'embedding_model_changed'
+export const EMBEDDING_MODEL_CHANGED: Schema<'JobFailureCode'> = 'embedding_model_changed'
 
-export type RagStatus = {
-  embed_model: string | null
-  embed_dimension: number | null
-  last_ingest_at: number | null
-  /** A job (an ingest, a wipe) holds the Index right now: `job` is it,
-   *  and `chunk_count` is null because the Index can't be counted. */
-  busy: boolean
-  job: Job | null
-  chunk_count: number | null
-}
+/** What the Index holds; while a job (an ingest, a wipe) holds it,
+ *  `busy` and that `job`, and `chunk_count` is null because the Index
+ *  can't be counted. */
+export type RagStatus = Schema<'IndexStatus'>
 
 /** One MCP endpoint the sidecar serves. `all` carries every tool; the
  *  narrow ones exist because small local models choke on long tool
@@ -394,18 +310,14 @@ type WindowCreds = {
   getPassword: () => Promise<string | null>
 }
 
-/** Every error the sidecar answers: a code to switch on, a message to
- *  show, and whatever else the situation carries (the etag on disk,
- *  the field that was wrong). */
-export type ErrorBody = {
-  code: string
-  message: string
-  details: Record<string, unknown>
-}
+/** Every error the sidecar answers: a code to switch on (one its
+ *  schema lists), a message to show, and whatever else the situation
+ *  carries (the etag on disk, the field that was wrong). */
+export type ErrorBody = Schema<'RefusalBody'>
 
 /** A Pull's or Back up all's `error` event: where it stopped, then
- *  the same three fields a REST error carries. */
-export type StreamError = ErrorBody & { stage: string }
+ *  the same three fields a job's error carries. */
+export type StreamError = JobError & { stage: string }
 
 /**
  * A sidecar answer that was not ok. `status` is its HTTP status and
@@ -462,8 +374,7 @@ async function failure(res: Response): Promise<HttpError> {
   if (isErrorBody(body)) {
     const details =
       body.details && typeof body.details === 'object' ? body.details : {}
-    // The sidecar answers only codes its schema lists (RefusalCode).
-    return new RefusalError(body.code as RefusalCode, res.status, body.message, details)
+    return new RefusalError(body.code, res.status, body.message, details)
   }
   return new HttpError(res.status, res.statusText)
 }
@@ -622,50 +533,39 @@ export const api = {
   health: () => get<Answer<'/health', 'get'>>('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
     get<Answer<'/eicons/search', 'get'>>(`/eicons/search?q=${encodeURIComponent(q)}&limit=${limit}`, opts),
-  characters: () => get<{ characters: CharacterEntry[] }>('/logs/characters'),
+  characters: () => get<Answer<'/logs/characters', 'get'>>('/logs/characters'),
   partners: (char: string) =>
-    get<{ character: string; partners: PartnerEntry[] }>(
-      `/logs/partners?char=${encodeURIComponent(char)}`
-    ),
+    get<Answer<'/logs/partners', 'get'>>(`/logs/partners?char=${encodeURIComponent(char)}`),
   messages: (char: string, partner: string) =>
-    get<{ character: string; partner: string; messages: LogMessage[] }>(
+    get<Answer<'/logs/messages', 'get'>>(
       `/logs/messages?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
     ),
+  /** Search every conversation of `char` for `q`, which must not be
+   *  empty: an empty query answers `hits: []` instead of `partners`
+   *  (`LogSearchAllNothing`), which this call does not type. */
   searchAll: (char: string, q: string) =>
-    get<{
-      character: string
-      query: string
-      partners: {
-        partner: string
-        bytes: number
-        hits: (LogMessage & { index: number })[]
-        truncated: boolean
-      }[]
-    }>(`/logs/search_all?char=${encodeURIComponent(char)}&q=${encodeURIComponent(q)}`),
+    get<Schema<'LogSearchAll'>>(
+      `/logs/search_all?char=${encodeURIComponent(char)}&q=${encodeURIComponent(q)}`
+    ),
   aliasesList: (char: string) =>
-    get<{ character: string; groups: AliasGroups }>(
-      `/aliases?char=${encodeURIComponent(char)}`
-    ),
-  aliasesAdd: (body: { character: string; name: string; primary_name: string }) =>
-    request<{ character: string; primary_name: string; group: string[] }>(
-      '/aliases',
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
+    get<Answer<'/aliases', 'get'>>(`/aliases?char=${encodeURIComponent(char)}`),
+  aliasesAdd: (body: BodyOf<'/aliases', 'post'>) =>
+    request<Answer<'/aliases', 'post'>>('/aliases', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
   aliasesRemove: (char: string, name: string) =>
-    request<{ character: string; name: string; removed: boolean }>(
+    request<Answer<'/aliases', 'delete'>>(
       `/aliases?char=${encodeURIComponent(char)}&name=${encodeURIComponent(name)}`,
       { method: 'DELETE' }
     ),
   aliasesUnlinkGroup: (char: string, primary: string) =>
-    request<{ character: string; primary: string; deleted: number }>(
+    request<Answer<'/aliases/group', 'delete'>>(
       `/aliases/group?char=${encodeURIComponent(char)}&primary=${encodeURIComponent(primary)}`,
       { method: 'DELETE' }
     ),
   findContacts: (name: string) =>
-    get<{
-      name: string
-      dm: { character: string; partner: string; bytes: number; mtime: number }[]
-    }>(`/logs/contacts?name=${encodeURIComponent(name)}`),
+    get<Answer<'/logs/contacts', 'get'>>(`/logs/contacts?name=${encodeURIComponent(name)}`),
 
   settingsGet: () => get<Answer<'/settings', 'get'>>('/settings'),
   /** Fields left out (or null, for the numbers) stay as they are. */
@@ -675,38 +575,25 @@ export const api = {
       body: JSON.stringify(body)
     }),
   labelsStats: (char: string, partner: string) =>
-    get<LabelsStats>(
+    get<Answer<'/labels/stats', 'get'>>(
       `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
     ),
   // Batch coverage stats for every partner of a character. Lets the
   // sidebar render per-partner pips in a single roundtrip instead of
   // fanning out 30+ /labels/stats requests on first paint.
+  // `log_mtime > last_label_at` means the conversation grew since the
+  // last classify run: a stale dot in the sidebar.
   labelsStatsAll: (char: string) =>
-    get<{
-      character: string
-      partners: Array<{
-        partner: string
-        ic: number
-        ooc: number
-        unlabeled: number
-        total: number
-        // Epoch seconds. `log_mtime > last_label_at` means the
-        // conversation grew since the last classify run — surfaced as
-        // a stale dot in the sidebar.
-        log_mtime: number | null
-        last_label_at: number | null
-      }>
-    }>(`/labels/stats-all?char=${encodeURIComponent(char)}`),
-  labelsClear: (body: { character: string; partner: string }) =>
-    request<{ character: string; partner: string; deleted: number; trash_id: string | null }>(
-      '/labels/clear',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      }
+    get<Answer<'/labels/stats-all', 'get'>>(
+      `/labels/stats-all?char=${encodeURIComponent(char)}`
     ),
+  labelsClear: (body: BodyOf<'/labels/clear', 'post'>) =>
+    request<Answer<'/labels/clear', 'post'>>('/labels/clear', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
   labelsClearAll: () =>
-    request<{ labels_deleted: number; trash_ids: string[] }>('/labels/clear-all', {
+    request<Answer<'/labels/clear-all', 'post'>>('/labels/clear-all', {
       method: 'POST'
     }),
   /** Every cleared-Labels entry in the Trash, whichever character it
@@ -726,91 +613,35 @@ export const api = {
    *  verdict. Adds labels only: an existing verdict is kept, and the
    *  rules keep deciding what they decide. `hashes` is exactly what
    *  was written, which is what `labelsDeleteHashes` undoes. */
-  labelsFillUnlabeled: (body: {
-    character: string
-    partner: string
-    label: 'IC' | 'OOC'
-  }) =>
-    request<{
-      character: string
-      partner: string
-      label: 'IC' | 'OOC'
-      labeled: number
-      hashes: string[]
-      already_labeled: number
-      decided_by_rules: number
-      total_messages: number
-    }>('/labels/fill-unlabeled', {
+  labelsFillUnlabeled: (body: BodyOf<'/labels/fill-unlabeled', 'post'>) =>
+    request<Answer<'/labels/fill-unlabeled', 'post'>>('/labels/fill-unlabeled', {
       method: 'POST',
       body: JSON.stringify(body)
     }),
   /** Undo for the above — removes named labels and nothing else.
    *  `labelsClear` would take the model's verdicts with it. */
-  labelsDeleteHashes: (body: {
-    character: string
-    partner: string
-    hashes: string[]
-  }) =>
-    request<{ character: string; partner: string; deleted: number }>(
-      '/labels/delete-hashes',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      }
-    ),
-  labelsRollup: () =>
-    get<{
-      ic: number
-      ooc: number
-      unlabeled: number
-      manual: number
-      total: number
-      character_count: number
-    }>('/labels/rollup'),
-  labelsOverride: (body: {
-    character: string
-    partner: string
-    hash: string
-    ts: number
-    speaker: string
-    label: Label | null
-  }) =>
-    request<{
-      hash: string
-      label: Label | null
-      source?: LabelSource
-      prior_label?: Label | null
-      prior_source?: LabelSource | null
-      deleted?: boolean
-    }>('/labels/override', {
+  labelsDeleteHashes: (body: BodyOf<'/labels/delete-hashes', 'post'>) =>
+    request<Answer<'/labels/delete-hashes', 'post'>>('/labels/delete-hashes', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  labelsRollup: () => get<Answer<'/labels/rollup', 'get'>>('/labels/rollup'),
+  /** The user's verdict on one message (`LabelSet`), or with
+   *  `label: null` its removal (`LabelRemoved`). */
+  labelsOverride: (body: BodyOf<'/labels/override', 'post'>) =>
+    request<Answer<'/labels/override', 'post'>>('/labels/override', {
       method: 'POST',
       body: JSON.stringify(body)
     }),
   /** One verdict (or a reset, with `label: null`) for any set of
    *  messages in a conversation — the log view's multi-select. */
-  labelsOverrideMany: (body: {
-    character: string
-    partner: string
-    items: { hash: string; ts: number; speaker: string }[]
-    label: Label | null
-  }) =>
-    request<{ character: string; partner: string; label: Label | null; changed: number }>(
-      '/labels/override-many',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      }
-    ),
-  ragTestEmbedding: (body: {
-    embed_model?: string
-  }) =>
-    request<{
-      ok: boolean
-      elapsed_ms: number
-      dimension: number | null
-      model: string
-      error: string | null
-    }>('/rag/test-embedding', {
+  labelsOverrideMany: (body: BodyOf<'/labels/override-many', 'post'>) =>
+    request<Answer<'/labels/override-many', 'post'>>('/labels/override-many', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  ragTestEmbedding: (body: BodyOf<'/rag/test-embedding', 'post'>) =>
+    request<Answer<'/rag/test-embedding', 'post'>>('/rag/test-embedding', {
       method: 'POST',
       body: JSON.stringify(body)
     }),
@@ -829,7 +660,7 @@ export const api = {
     scope: IngestJobScope,
     opts: { include_ooc?: boolean; force_rewipe?: boolean } = {}
   ) =>
-    request<IngestJob>('/rag/ingest', {
+    request<Answer<'/rag/ingest', 'post'>>('/rag/ingest', {
       method: 'POST',
       body: JSON.stringify({
         ...scope,
@@ -843,7 +674,7 @@ export const api = {
   /** Ask a job to stop; answers the job as it stands. */
   jobCancel: <J extends Job = Job>(id: string) =>
     request<J>(`/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  ragStatus: () => get<RagStatus>('/rag/status'),
+  ragStatus: () => get<Answer<'/rag/status', 'get'>>('/rag/status'),
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */
   mcpInfo: () => get<Answer<'/mcp-info', 'get'>>('/mcp-info'),
@@ -853,12 +684,11 @@ export const api = {
   /** Turn the bearer requirement back off. */
   mcpRevokeToken: () =>
     request<Answer<'/mcp-info/token', 'delete'>>('/mcp-info/token', { method: 'DELETE' }),
-  ragWipe: () =>
-    request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
+  ragWipe: () => request<Answer<'/rag/wipe', 'post'>>('/rag/wipe', { method: 'POST' }),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.
   // Cheaper than a full re-ingest — no LLM calls, no embeddings.
   ragLexicalRebuild: () =>
-    request<{ indexed: number }>('/rag/lexical/rebuild', { method: 'POST' }),
+    request<Answer<'/rag/lexical/rebuild', 'post'>>('/rag/lexical/rebuild', { method: 'POST' }),
   profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
 
   // ---- F-list character archive ----
@@ -1141,7 +971,7 @@ export const api = {
     ),
   /** Every job the sidecar remembers: running ones, and finished ones
    *  for a few minutes. A reopened window finds its Pulls here. */
-  jobsList: (opts?: ApiOptions) => get<{ jobs: Job[] }>('/jobs', opts),
+  jobsList: (opts?: ApiOptions) => get<Answer<'/jobs', 'get'>>('/jobs', opts),
   /** Follow a running Pull from the start of its events. */
   flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
     requestStream(jobEventsPath(jobId), {}, (block) => dispatchPullStream(block, handlers), opts),
