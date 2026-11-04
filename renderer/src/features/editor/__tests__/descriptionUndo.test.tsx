@@ -34,8 +34,7 @@ function seed(text = '', extra: Record<string, unknown> = {}) {
     },
     flistActiveCharacterId: CID,
     editorActiveTab: 'description',
-    editorReadOnly: false,
-    editorContent: text
+    editorReadOnly: false
   })
 }
 
@@ -100,8 +99,7 @@ beforeEach(() => {
     flistExternalChange: {},
     flistMergeQuestion: {},
     flistViewingLive: {},
-    flistBrowseBackup: null,
-    editorDirty: false
+    flistBrowseBackup: null
   })
   document.addEventListener('keydown', handleUndoKeydown)
 })

@@ -113,9 +113,7 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistUndoNotes: {},
     flistActiveCharacterId: null,
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 

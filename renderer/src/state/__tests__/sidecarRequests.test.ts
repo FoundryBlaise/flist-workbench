@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
-import { bytes, installFakeApi, json, networkError, type FakeApi } from '../../test/fakeApi'
+import { bytes, installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 import { workbenchPayload, workingSlot } from '../../test/payloads'
 
 const CID = '99'
@@ -26,9 +26,7 @@ beforeEach(() => {
     flistMergeQuestion: {},
     flistArchive: {},
     flistActiveCharacterId: null,
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -184,22 +182,20 @@ describe('a route refused because the F-list session is gone', () => {
     expect(store().flistCharacterImages[CID].byId['local-ab12']).toBeTruthy()
   })
 
-  it('a profile look-up signs back in and fills the editor', async () => {
+  it('reading the Backup list signs back in once and lists them', async () => {
     keychain()
-    useStore.setState({ editorFetchStatus: 'idle', editorFetchError: null })
+    const LIST = `GET /flist/character/${CID}/zip-backups`
     fake
-      .once('GET /profile/Corin', sessionLost())
-      .on(
-        'GET /profile/Corin',
-        json({ name: 'Corin', avatar_url: null, stats: {}, bbcode: '[b]hi[/b]', inlines: {} })
-      )
+      .once(LIST, sessionLost())
+      .on(LIST, json({ character_id: CID, backups: [backupEntry('the good one')] }))
       .on(SIGN_IN, json({ characters: [], expires_in_sec: 1800, account: 'Quill Account' }))
+    useStore.setState({ flistArchive: { [CID]: { live: null, pullStatus: 'idle' } } })
 
-    await store().fetchProfile('Corin')
+    await store().flistLoadBackups(CID)
 
-    expect(store().editorFetchStatus).toBe('ok')
-    expect(store().editorContent).toBe('[b]hi[/b]')
+    expect(fake.requestsTo(LIST)).toHaveLength(2)
     expect(fake.requestsTo(SIGN_IN)).toHaveLength(1)
+    expect(store().flistArchive[CID].zipBackups?.map((b) => b.name)).toEqual(['the good one'])
   })
 
   it('without auto sign-in, a Backup download hears the session expired and signs nobody in', async () => {
@@ -265,48 +261,5 @@ describe('binary answers', () => {
       bytes: 5
     })
     expect(written).toEqual([{ path: 'C:/out.zip', data: new Uint8Array([80, 75, 3, 4, 9]) }])
-  })
-})
-
-describe('what a failed profile look-up says', () => {
-  beforeEach(() => {
-    useStore.setState({ editorFetchStatus: 'idle', editorFetchError: null })
-  })
-
-  const said = async (reply: ReturnType<typeof json>) => {
-    fake.on('GET /profile/Corin', reply)
-    await store().fetchProfile('Corin')
-    expect(store().editorFetchStatus).toBe('error')
-    return store().editorFetchError
-  }
-
-  it('asks to sign in when the F-list session is gone', async () => {
-    expect(await said(sessionLost('the ticket ran out'))).toBe(
-      'Sign in to F-list to fetch profiles. Click the chip in the sidebar.'
-    )
-  })
-
-  it('names the character F-list does not know', async () => {
-    expect(
-      await said(json({ code: 'not_found', message: 'nobody home', details: {} }, 404))
-    ).toBe('No character named "Corin" on F-list.')
-  })
-
-  it('says F-list is having trouble when it fails', async () => {
-    expect(
-      await said(json({ code: 'flist_error', message: 'upstream said 503', details: {} }, 502))
-    ).toBe('F-list is having trouble right now. Try again in a moment.')
-  })
-
-  it('gives F-list’s own words for any other refusal', async () => {
-    expect(
-      await said(json({ code: 'rate_limited', message: 'slow down', details: {} }, 429))
-    ).toBe('F-list refused that name (slow down).')
-  })
-
-  it('says the sidecar cannot be reached when the request never arrives', async () => {
-    expect(await said(networkError('Load failed'))).toBe(
-      "Can't reach the app's sidecar. Restart the app and try again."
-    )
   })
 })
