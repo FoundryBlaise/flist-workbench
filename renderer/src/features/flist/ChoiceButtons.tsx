@@ -3,43 +3,12 @@
 // rest of the kink UI inherits this palette.
 
 import { useEffect, useRef } from 'react'
-
-export type KinkChoice = 'fave' | 'yes' | 'maybe' | 'no' | 'undecided'
-
-export const CHOICE_LABELS: Record<KinkChoice, string> = {
-  fave: '★ Fave',
-  yes: 'Yes',
-  maybe: 'Maybe',
-  no: 'No',
-  undecided: '– Undecided'
-}
-
-// Compact variant labels — explicit map vs regex-strip of CHOICE_LABELS
-// (QA P3-2: prefix-glyph changes would otherwise silently break compact).
-export const CHOICE_LABELS_COMPACT: Record<KinkChoice, string> = {
-  fave: 'Fave',
-  yes: 'Yes',
-  maybe: 'Maybe',
-  no: 'No',
-  undecided: 'Undecided'
-}
-
-/** The assigned choices, in the order their columns appear. Undecided
- *  is not a column: the editor shows it as a separate pool, the Foreign
- *  view not at all. */
-export const KINK_BUCKET_ORDER: readonly KinkChoice[] = ['fave', 'yes', 'maybe', 'no']
-
-export const CHOICE_ORDER: readonly KinkChoice[] = [...KINK_BUCKET_ORDER, 'undecided']
-
-export function isKinkChoice(value: unknown): value is KinkChoice {
-  return (
-    value === 'fave' ||
-    value === 'yes' ||
-    value === 'maybe' ||
-    value === 'no' ||
-    value === 'undecided'
-  )
-}
+import {
+  CHOICE_LABELS,
+  CHOICE_LABELS_COMPACT,
+  CHOICE_ORDER,
+  type KinkChoice
+} from './constants'
 
 export function ChoiceButtons({
   value,

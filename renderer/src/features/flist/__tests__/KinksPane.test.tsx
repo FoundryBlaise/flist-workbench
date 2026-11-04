@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useStore } from '../../../state'
 import { KinksPane } from '../KinksPane'
-import { KINK_DRAG_MIME } from '../KinkRow'
+import { KINK_DRAG_MIME } from '../constants'
 
 const CID = '42'
 

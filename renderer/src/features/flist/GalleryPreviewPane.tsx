@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
 import { selectWorkingSlot, useStore } from '../../state'
+import { DRAG_MIME_GALLERY_REORDER } from './constants'
 
 type GalleryRow = {
   image_id: string
   description: string
   sort_order: number
 }
-
-// Shared with ImagesTab. Drop is accepted by any gallery item rendering
-// in either view, so reordering on one side reflects on the other via
-// working.json's `images` array.
-const DRAG_MIME_GALLERY_REORDER = 'application/x-flist-gallery-reorder'
 
 function reorderGallery(
   list: GalleryRow[],
