@@ -1614,13 +1614,14 @@ body {
 /* Shown when a model editing through MCP changed the working set the
    user has open. Sits at the top, not the bottom: this is a decision
    the user has to make, not a notice they can scroll past. */
-/* The harmless half of an external change: the working set moved, the
-   user had nothing unsaved, and the window has already caught up. A
-   note, not a decision — it says which tool ran, because that is the
-   part they cannot see, and then it goes away. Floats like the banner
-   below: in the flow it became an extra row of .app's grid and
-   stretched to fill half the window. */
-.external-change-note {
+/* What the window did to the Workbench without the user doing it by
+   hand: another writer's change taken in while nothing was unsaved, or
+   the change an undo or redo stepped over (WorkbenchNote). A note, not
+   a decision — it says which tool ran, because that is the part they
+   cannot see, and then it goes away. Floats like the banner below: in
+   the flow it became an extra row of .app's grid and stretched to fill
+   half the window. */
+.workbench-note {
   position: fixed;
   top: 48px;
   left: 50%;

@@ -1,21 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../state'
+import { describeOrigin } from './describeOrigin'
 
-/** Something outside this window changed the working set the user has
- *  open — in practice, a model editing through MCP.
+/** Something outside this window changed the Workbench the user has
+ *  open while the window holds unsaved edits: two versions exist and
+ *  one has to win, because the in-memory copy autosaves and would
+ *  otherwise overwrite the other writer. The banner asks, and waits.
  *
- *  Two situations, and only one of them is the user's problem.
- *
- *  With unsaved edits in the window, it is a genuine decision: two
- *  versions exist and one has to win, because the in-memory copy
- *  autosaves and would otherwise overwrite the other writer. That is
- *  the banner below, and it waits.
- *
- *  Without unsaved edits there is nothing to decide. The change is
- *  already on disk; asking the user to press "Reload" is asking them
- *  to confirm a foregone conclusion. So the window just reloads and
- *  says what happened — which tool ran, since that is the part they
- *  cannot see for themselves — and the note fades on its own.
+ *  Without unsaved edits there is nothing to decide; the store takes
+ *  the change in by itself (`flistNoteExternalChange`) and
+ *  WorkbenchNote says who made it.
  */
 export function ExternalChangeBanner() {
   const characterId = useStore((s) => s.flistActiveCharacterId)
@@ -28,33 +21,6 @@ export function ExternalChangeBanner() {
   const reload = useStore((s) => s.flistReloadAfterExternalChange)
   const overwrite = useStore((s) => s.flistOverwriteAfterExternalChange)
   const dismiss = useStore((s) => s.flistDismissExternalChange)
-
-  const [note, setNote] = useState<string | null>(null)
-  const handled = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (!characterId || !change || dirty) return
-    // Guard against re-entry: reload() clears the change, but the
-    // effect can run again before that lands.
-    const token = `${characterId}:${change.at}:${change.origin}`
-    if (handled.current === token) return
-    handled.current = token
-    // The app's own maintenance passes (dedupe after a pull, gallery
-    // repair) are not news when nothing was at stake: they run after
-    // most pulls, and a note each time is noise. They still name
-    // themselves in the banner above when there are unsaved edits.
-    if (!change.origin.startsWith('internal:')) {
-      const by = describeOrigin(change.origin)
-      setNote(by ? `Updated by ${by}.` : 'Updated outside the editor.')
-    }
-    void reload(characterId)
-  }, [characterId, change, dirty, reload])
-
-  useEffect(() => {
-    if (!note) return
-    const id = window.setTimeout(() => setNote(null), 8000)
-    return () => window.clearTimeout(id)
-  }, [note])
 
   if (characterId && change && dirty) {
     const by = describeOrigin(change.origin)
@@ -100,40 +66,5 @@ export function ExternalChangeBanner() {
     )
   }
 
-  if (note) {
-    return (
-      <div
-        className="external-change-note"
-        role="status"
-        data-testid="external-change-note"
-      >
-        <span aria-hidden>✓</span> {note}
-      </div>
-    )
-  }
-
-  return null
-}
-
-/** "mcp:set_description" reads better as "a connected model —
- *  set_description". An unattributed change says nothing. The
- *  internal:/extension: origins are the sidecar's attribution of the
- *  maintenance writes (gallery repair, image-id folding) that rewrite
- *  sets without anyone clicking anything; naming them is what keeps a
- *  "Someone else changed this set" from being a mystery. */
-function describeOrigin(origin: string): string | null {
-  if (!origin || origin === 'ui') return null
-  if (origin.startsWith('mcp:')) {
-    return `a connected model — ${origin.slice(4)}`
-  }
-  if (origin === 'mcp') return 'a connected model'
-  if (origin.startsWith('internal:')) {
-    const name = origin.slice(9).replace(/-/g, ' ')
-    return `a maintenance pass in the app (${name})`
-  }
-  if (origin.startsWith('extension:')) {
-    const name = origin.slice(10).replace(/-/g, ' ')
-    return `the browser extension (${name})`
-  }
   return null
 }

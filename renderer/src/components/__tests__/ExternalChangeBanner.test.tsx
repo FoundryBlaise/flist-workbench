@@ -1,9 +1,9 @@
-// A model edited the working set through MCP. Whether that is the
+// A model edited the Workbench through MCP. Whether that is the
 // user's problem depends entirely on whether they have unsaved edits
 // of their own — and the window used to ask either way.
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { useStore } from '../../state'
 import { ExternalChangeBanner } from '../ExternalChangeBanner'
 
@@ -38,24 +38,14 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('reloads by itself when there is nothing to decide', async () => {
-  // The change is already on disk. Asking the user to press "Reload"
-  // is asking them to confirm a foregone conclusion.
+it('leaves a change with nothing unsaved to the store', () => {
+  // The store takes it in by itself (state/__tests__/modelChange.test.ts);
+  // the banner is only for the case with something to decide.
   seed({ dirty: false })
-  render(<ExternalChangeBanner />)
+  const { container } = render(<ExternalChangeBanner />)
 
-  await waitFor(() => {
-    expect(useStore.getState().flistReloadAfterExternalChange).toHaveBeenCalledWith(CID)
-  })
-  expect(screen.queryByTestId('external-change-banner')).toBeNull()
-})
-
-it('says which tool did it, since that is the invisible part', async () => {
-  seed({ dirty: false })
-  render(<ExternalChangeBanner />)
-
-  const note = await screen.findByTestId('external-change-note')
-  expect(note.textContent).toContain('set_profile_field')
+  expect(container.firstChild).toBeNull()
+  expect(useStore.getState().flistReloadAfterExternalChange).not.toHaveBeenCalled()
 })
 
 it('still asks when both sides have changes', () => {
@@ -82,28 +72,6 @@ it('names the app\'s own maintenance pass as the writer', async () => {
   expect(banner.textContent).toContain(
     'maintenance pass in the app (gallery repair)'
   )
-})
-
-it('catches up on a maintenance pass without a note when nothing was at stake', async () => {
-  seed({ dirty: false, origin: 'internal:dedupe-after-pull' })
-  const { container } = render(<ExternalChangeBanner />)
-
-  await waitFor(() => {
-    expect(useStore.getState().flistReloadAfterExternalChange).toHaveBeenCalledWith(CID)
-  })
-  expect(screen.queryByTestId('external-change-note')).toBeNull()
-  expect(container.firstChild).toBeNull()
-})
-
-it('reloads once, not once per render', async () => {
-  seed({ dirty: false })
-  const { rerender } = render(<ExternalChangeBanner />)
-  rerender(<ExternalChangeBanner />)
-  rerender(<ExternalChangeBanner />)
-
-  await waitFor(() => {
-    expect(useStore.getState().flistReloadAfterExternalChange).toHaveBeenCalledTimes(1)
-  })
 })
 
 it('shows nothing at all when nothing changed', () => {
