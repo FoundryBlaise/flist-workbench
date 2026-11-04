@@ -1,19 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  api,
-  type FlistTrashedLabels,
-  type ForeignCacheUsage,
-  type ForeignSettings,
-  type LabelsSettings,
-  type McpInfo,
-  type RagSettings
-} from '../../lib/api'
+import type { ForeignSettings, LabelsSettings, RagSettings } from '../../lib/api'
 import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
+import type { EmbeddingTestResult, Settings, SettingsPatch } from '../../state/slices/settings'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
 
-type SettingsState = Awaited<ReturnType<typeof api.settingsGet>>
+// The dialog's panes ask the sidecar nothing themselves: every read and
+// write is a Settings slice action, and what they show of the sidecar's
+// answers comes from the store.
 
 // Reranker dropdown options — fastembed's TextCrossEncoder list plus
 // a "disabled" sentinel the sidecar honours.
@@ -119,7 +114,7 @@ type Draft = {
   }
 }
 
-function buildDraft(state: SettingsState): Draft {
+function buildDraft(state: Settings): Draft {
   return {
     fchat_data_dir: state.fchat_data_dir ?? '',
     labels: {
@@ -210,15 +205,6 @@ const clampFloat = (s: string, lo: number, hi: number, fallback: number): number
   return Math.max(lo, Math.min(hi, n))
 }
 
-// Per-endpoint discover-button cache, scoped to a single SettingsModal
-// lifetime. Cleared on close so a re-opened modal re-queries against
-// the (possibly now-running) inference server. ModelField looks up
-// `endpoint.trim()` here before issuing the network call.
-const discoverCache = new Map<
-  string,
-  { models: string[]; error: string | null }
->()
-
 export function SettingsModal({
   onClose,
   initialSection = 'general'
@@ -227,72 +213,46 @@ export function SettingsModal({
   /** Section to open on, for callers that link to one directly. */
   initialSection?: SectionId
 }) {
-  const loadCharacters = useStore((s) => s.loadCharacters)
-  const [state, setState] = useState<SettingsState | null>(null)
+  const settings = useStore((s) => s.settings)
+  const settingsError = useStore((s) => s.settingsError)
+  const settingsLoad = useStore((s) => s.settingsLoad)
+  const settingsSave = useStore((s) => s.settingsSave)
+  // The settings the draft was built from. Null until this dialog's
+  // own read answered: settings an earlier dialog read may be stale.
+  const draftBaseRef = useRef<Settings | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [activeSection, setActiveSection] = useState<SectionId>(initialSection)
-  const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'error'>(
-    'loading'
-  )
+  const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const firstFieldRef = useRef<HTMLInputElement | null>(null)
   const focusedOnceRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
-    api
-      .settingsGet()
-      .then((s) => {
-        if (cancelled) return
-        setState(s)
-        setDraft(buildDraft(s))
-        setStatus('idle')
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setSaveError(err instanceof Error ? err.message : String(err))
-        setStatus('error')
-      })
-    return () => {
-      cancelled = true
-      // Drop the discover cache on close so re-opening Settings
-      // re-queries — important after the user (typically) tabs over to
-      // LM Studio / Ollama to fix what the empty list told them about.
-      discoverCache.clear()
-    }
-  }, [])
-
-  // A model changed settings while this is open: show its values, but
-  // keep any field the user has edited and not saved yet.
-  const settingsRevision = useStore((s) => s.settingsRevision)
-  const seenRevisionRef = useRef(settingsRevision)
-  const stateRef = useRef(state)
-  useEffect(() => {
-    stateRef.current = state
-  }, [state])
-  useEffect(() => {
-    if (settingsRevision === seenRevisionRef.current) return
-    seenRevisionRef.current = settingsRevision
-    let cancelled = false
-    api
-      .settingsGet()
-      .then((next) => {
-        if (cancelled) return
-        const prev = stateRef.current
-        setState(next)
-        setDraft((d) =>
-          d && prev ? rebaseDraft(d, buildDraft(prev), buildDraft(next)) : buildDraft(next)
-        )
-      })
-      .catch(() => {
-        // The next save or reopen reads them again.
-      })
+    void settingsLoad().then(() => {
+      const loaded = useStore.getState().settings
+      if (cancelled || !loaded) return
+      draftBaseRef.current = loaded
+      setDraft(buildDraft(loaded))
+    })
     return () => {
       cancelled = true
     }
-  }, [settingsRevision])
+  }, [settingsLoad])
 
-  const baseline = useMemo(() => (state ? buildDraft(state) : null), [state])
+  // The settings moved under the draft (a model changed them, or a
+  // pane saved its own field): show the new values, but keep any field
+  // the user has edited and not saved yet.
+  useEffect(() => {
+    const base = draftBaseRef.current
+    if (!settings || !base || settings === base) return
+    draftBaseRef.current = settings
+    const oldBase = buildDraft(base)
+    const newBase = buildDraft(settings)
+    setDraft((d) => (d ? rebaseDraft(d, oldBase, newBase) : newBase))
+  }, [settings])
+
+  const baseline = useMemo(() => (settings ? buildDraft(settings) : null), [settings])
   const dirtyByDraft = useMemo(
     () => (draft && baseline ? dirtySections(draft, baseline) : null),
     [draft, baseline]
@@ -322,11 +282,11 @@ export function SettingsModal({
   // ref so save-and-stay-on-the-modal doesn't yank focus back to the
   // dir input every time settings round-trip.
   useEffect(() => {
-    if (focusedOnceRef.current || status !== 'idle' || !draft) return
+    if (focusedOnceRef.current || !draft) return
     focusedOnceRef.current = true
     const id = requestAnimationFrame(() => firstFieldRef.current?.focus())
     return () => cancelAnimationFrame(id)
-  }, [status, draft])
+  }, [draft])
 
   const updateLabels = (patch: Partial<Draft['labels']>) =>
     setDraft((d) => (d ? { ...d, labels: { ...d.labels, ...patch } } : d))
@@ -336,11 +296,10 @@ export function SettingsModal({
     setDraft((d) => (d ? { ...d, ...patch } : d))
 
   const saveAll = async () => {
-    if (!state || !draft || !dirtyByDraft) return
+    if (!settings || !draft || !dirtyByDraft) return
     // The remote-endpoint consent prompt that used to live here is
     // gone with the endpoints themselves: embedding runs in-process,
     // so no setting can send a log chunk anywhere any more.
-    setStatus('saving')
     setSaveError(null)
     // Validate Labels threshold up-front — non-finite or zero would
     // be silently coerced by the sidecar to its default, which is
@@ -349,83 +308,87 @@ export function SettingsModal({
     const parsedThreshold = Number(draft.labels.threshold_chars)
     if (!Number.isFinite(parsedThreshold) || parsedThreshold < 1) {
       setSaveError('Threshold must be a positive integer.')
-      setStatus('error')
       setActiveSection('labels')
       return
     }
-    try {
-      const payload: Parameters<typeof api.settingsUpdate>[0] = {}
-      if (dirtyByDraft.general) {
-        payload.fchat_data_dir = draft.fchat_data_dir.trim() || null
-      }
-      if (dirtyByDraft.labels) {
-        payload.labels = { threshold_chars: Math.floor(parsedThreshold) }
-      }
-      if (dirtyByDraft.retrieval || dirtyByDraft.embedding) {
-        const nextChunkMax = clampInt(
-          draft.rag.chunk_max_chars,
-          500,
-          20000,
-          state.rag.chunk_max_chars
+    setSaving(true)
+    const payload: SettingsPatch = {}
+    if (dirtyByDraft.general) {
+      payload.fchat_data_dir = draft.fchat_data_dir.trim() || null
+    }
+    if (dirtyByDraft.labels) {
+      payload.labels = { threshold_chars: Math.floor(parsedThreshold) }
+    }
+    if (dirtyByDraft.retrieval || dirtyByDraft.embedding) {
+      const nextChunkMax = clampInt(
+        draft.rag.chunk_max_chars,
+        500,
+        20000,
+        settings.rag.chunk_max_chars
+      )
+      payload.rag = {
+        embed_model: draft.rag.embed_model,
+        rerank_model: draft.rag.rerank_model,
+        rerank_candidates: clampInt(
+          draft.rag.rerank_candidates,
+          1,
+          200,
+          settings.rag.rerank_candidates
+        ),
+        top_k: clampInt(draft.rag.top_k, 1, 50, settings.rag.top_k),
+        neighbors: clampInt(draft.rag.neighbors, 0, 5, settings.rag.neighbors),
+        rerank_min_ratio: clampFloat(
+          draft.rag.rerank_min_ratio,
+          0,
+          1,
+          settings.rag.rerank_min_ratio
+        ),
+        hybrid_enabled: draft.rag.hybrid_enabled,
+        hybrid_bm25_candidates: clampInt(
+          draft.rag.hybrid_bm25_candidates,
+          1,
+          200,
+          settings.rag.hybrid_bm25_candidates
+        ),
+        chunk_max_chars: nextChunkMax,
+        chunk_soft_split_chars: clampInt(
+          draft.rag.chunk_soft_split_chars,
+          400,
+          Math.max(500, nextChunkMax - 100),
+          settings.rag.chunk_soft_split_chars
+        ),
+        chunk_overlap_msgs: clampInt(
+          draft.rag.chunk_overlap_msgs,
+          0,
+          5,
+          settings.rag.chunk_overlap_msgs
         )
-        payload.rag = {
-          embed_model: draft.rag.embed_model,
-          rerank_model: draft.rag.rerank_model,
-          rerank_candidates: clampInt(
-            draft.rag.rerank_candidates,
-            1,
-            200,
-            state.rag.rerank_candidates
-          ),
-          top_k: clampInt(draft.rag.top_k, 1, 50, state.rag.top_k),
-          neighbors: clampInt(draft.rag.neighbors, 0, 5, state.rag.neighbors),
-          rerank_min_ratio: clampFloat(
-            draft.rag.rerank_min_ratio,
-            0,
-            1,
-            state.rag.rerank_min_ratio
-          ),
-          hybrid_enabled: draft.rag.hybrid_enabled,
-          hybrid_bm25_candidates: clampInt(
-            draft.rag.hybrid_bm25_candidates,
-            1,
-            200,
-            state.rag.hybrid_bm25_candidates
-          ),
-          chunk_max_chars: nextChunkMax,
-          chunk_soft_split_chars: clampInt(
-            draft.rag.chunk_soft_split_chars,
-            400,
-            Math.max(500, nextChunkMax - 100),
-            state.rag.chunk_soft_split_chars
-          ),
-          chunk_overlap_msgs: clampInt(
-            draft.rag.chunk_overlap_msgs,
-            0,
-            5,
-            state.rag.chunk_overlap_msgs
-          )
-        }
       }
-      const updated = await api.settingsUpdate(payload)
-      setState(updated)
-      setDraft(buildDraft(updated))
-      setStatus('idle')
-      if (dirtyByDraft.general) {
-        // Refresh the sidebar so the new directory's characters appear.
-        await loadCharacters()
-      }
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err))
-      setStatus('error')
+    }
+    const error = await settingsSave(payload)
+    setSaving(false)
+    if (error) {
+      setSaveError(error)
+      return
+    }
+    // What was saved is the new baseline, clamped values included.
+    const saved = useStore.getState().settings
+    if (saved) {
+      draftBaseRef.current = saved
+      setDraft(buildDraft(saved))
     }
   }
 
   const discardAll = () => {
-    if (!state) return
-    setDraft(buildDraft(state))
+    if (!settings) return
+    draftBaseRef.current = settings
+    setDraft(buildDraft(settings))
     setSaveError(null)
   }
+
+  // A failed first read is shown until this dialog has a draft; later
+  // re-reads that fail leave the settings shown as they are.
+  const shownError = saveError ?? (draft ? null : settingsError)
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -469,14 +432,14 @@ export function SettingsModal({
             ))}
           </nav>
           <div className="settings-pane">
-            {status === 'loading' && (
+            {!draft && !settingsError && (
               <p className="settings-help">Loading settings…</p>
             )}
-            {state && draft && (
+            {settings && draft && (
               <>
                 {activeSection === 'general' && (
                   <GeneralPane
-                    state={state}
+                    state={settings}
                     draft={draft}
                     onChange={updateGeneral}
                     firstFieldRef={firstFieldRef}
@@ -485,41 +448,41 @@ export function SettingsModal({
                 {activeSection === 'flist' && <FlistPane />}
                 {activeSection === 'labels' && (
                   <LabelsPane
-                    labels={state.labels}
+                    labels={settings.labels}
                     draft={draft.labels}
                     onChange={updateLabels}
                   />
                 )}
                 {activeSection === 'retrieval' && (
                   <RetrievalPane
-                    rag={state.rag}
+                    rag={settings.rag}
                     draft={draft.rag}
                     onChange={updateRag}
                   />
                 )}
                 {activeSection === 'embedding' && (
                   <EmbeddingPane
-                    rag={state.rag}
+                    rag={settings.rag}
                     draft={draft.rag}
                     onChange={updateRag}
                   />
                 )}
                 {activeSection === 'mcp' && <McpPane />}
                 {activeSection === 'security' && <SecurityPane />}
-                {activeSection === 'foreign' && <ForeignPane foreign={state.foreign} />}
+                {activeSection === 'foreign' && <ForeignPane foreign={settings.foreign} />}
               </>
             )}
           </div>
         </div>
         <footer className="settings-footer">
-          {saveError && <span className="settings-error">{saveError}</span>}
+          {shownError && <span className="settings-error">{shownError}</span>}
           <span className="settings-footer-spacer" />
           <button
             type="button"
             className="settings-clear"
             onClick={discardAll}
             disabled={
-              status === 'saving' || !dirtyByDraft || !anyDirty(dirtyByDraft)
+              saving || !dirtyByDraft || !anyDirty(dirtyByDraft)
             }
             data-testid="settings-discard"
           >
@@ -530,11 +493,11 @@ export function SettingsModal({
             className="settings-save"
             onClick={() => void saveAll()}
             disabled={
-              status === 'saving' || !dirtyByDraft || !anyDirty(dirtyByDraft)
+              saving || !dirtyByDraft || !anyDirty(dirtyByDraft)
             }
             data-testid="settings-save"
           >
-            {status === 'saving' ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </footer>
       </div>
@@ -574,7 +537,7 @@ function GeneralPane({
   onChange,
   firstFieldRef
 }: {
-  state: SettingsState
+  state: Settings
   draft: Draft
   onChange: (patch: Partial<Pick<Draft, 'fchat_data_dir'>>) => void
   firstFieldRef: React.RefObject<HTMLInputElement>
@@ -818,27 +781,22 @@ function FlistPane() {
  *  Setup wizard: Workbench has no model of its own any more, so the
  *  only thing to configure is which client drives it. */
 function McpPane() {
-  const [info, setInfo] = useState<McpInfo | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const info = useStore((s) => s.mcpInfo)
+  const loadError = useStore((s) => s.mcpError)
+  const mcpLoadInfo = useStore((s) => s.mcpLoadInfo)
+  const mcpCreateToken = useStore((s) => s.mcpCreateToken)
+  const mcpRevokeToken = useStore((s) => s.mcpRevokeToken)
+  const mcpSetLogText = useStore((s) => s.mcpSetLogText)
+  // null until the sidecar has said whether the switch is on.
+  const logText = useStore((s) => (s.settings ? (s.settings.mcp?.log_text ?? false) : null))
+  const [actionError, setActionError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // null until the sidecar has said whether the switch is on.
-  const [logText, setLogText] = useState<boolean | null>(null)
+  const error = actionError ?? loadError
 
   useEffect(() => {
-    let alive = true
-    api
-      .mcpInfo()
-      .then((next) => alive && setInfo(next))
-      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
-    api
-      .settingsGet()
-      .then((s) => alive && setLogText(s.mcp?.log_text ?? false))
-      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
-    return () => {
-      alive = false
-    }
-  }, [])
+    void mcpLoadInfo()
+  }, [mcpLoadInfo])
 
   const copy = async (id: string, text: string) => {
     try {
@@ -882,33 +840,15 @@ function McpPane() {
     2
   )
 
-  const setToken = async (create: boolean) => {
+  const run = async (action: () => Promise<string | null>) => {
     setBusy(true)
-    try {
-      if (create) await api.mcpCreateToken()
-      else await api.mcpRevokeToken()
-      setInfo(await api.mcpInfo())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
+    const failed = await action()
+    if (failed) setActionError(failed)
+    setBusy(false)
   }
-
-  // Saved at once, like the token: there is no draft to lose. The
-  // endpoints' tool counts change with it, so they are read again.
-  const setLogTextOn = async (on: boolean) => {
-    setBusy(true)
-    try {
-      const s = await api.settingsUpdate({ mcp: { log_text: on } })
-      setLogText(s.mcp.log_text)
-      setInfo(await api.mcpInfo())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const setToken = (create: boolean) => run(create ? mcpCreateToken : mcpRevokeToken)
+  // Saved at once, like the token: there is no draft to lose.
+  const setLogTextOn = (on: boolean) => run(() => mcpSetLogText(on))
 
   return (
     <>
@@ -1113,18 +1053,16 @@ function BrowserExtensionInstall() {
   type Status = { bundled: string | null; installed: string | null; path: string }
   const bridge = window.workbench?.browserExtension
   const [status, setStatus] = useState<Status | null>(null)
-  const [running, setRunning] = useState<string | null>(null)
+  const running = useStore((s) => s.extensionRunningVersion)
+  const loadRunning = useStore((s) => s.extensionLoadRunningVersion)
   const [msg, setMsg] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (!bridge) return
     void bridge.status().then(setStatus, () => setStatus(null))
-    void api.restoreExtensionSeen().then(
-      (r) => setRunning(r.version),
-      () => setRunning(null)
-    )
-  }, [bridge])
+    void loadRunning()
+  }, [bridge, loadRunning])
 
   if (!bridge) return null
 
@@ -1229,39 +1167,28 @@ function BrowserExtensionInstall() {
 }
 
 function SecurityPane() {
-  // Whether the sidecar holds an accepted pairing token. Only the
-  // extension has the token; the sidecar tells the app window whether
-  // one is stored, never the token itself. 'unavailable': the sidecar
-  // could not be asked, so neither answer is shown.
-  const [paired, setPaired] = useState<'checking' | 'yes' | 'no' | 'unavailable'>('checking')
+  // Whether the sidecar holds an accepted pairing token; see
+  // ExtensionPairing. 'unavailable' shows neither answer.
+  const paired = useStore((s) => s.extensionPairing)
+  const loadPairing = useStore((s) => s.extensionLoadPairing)
+  const revokePairing = useStore((s) => s.extensionRevokePairing)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
-  const refresh = async () => {
-    try {
-      const res = await api.pairingStatus()
-      setPaired(res.paired ? 'yes' : 'no')
-    } catch {
-      setPaired('unavailable')
-    }
-  }
-
   useEffect(() => {
-    refresh()
-  }, [])
+    void loadPairing()
+  }, [loadPairing])
 
   const rotate = async () => {
     setBusy(true)
     setMsg(null)
-    try {
-      await api.restoreRevokeToken()
-      setMsg('Token revoked. The extension will need to re-pair on its next request.')
-      await refresh()
-    } catch (e) {
-      setMsg(`Could not revoke: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy(false)
-    }
+    const failed = await revokePairing()
+    setMsg(
+      failed
+        ? `Could not revoke: ${failed}`
+        : 'Token revoked. The extension will need to re-pair on its next request.'
+    )
+    setBusy(false)
   }
 
   return (
@@ -1272,8 +1199,8 @@ function SecurityPane() {
         <span className="settings-label">Status</span>
         <div className="settings-inline-input">
           <strong>
-            {paired === 'yes' && '● Paired'}
-            {paired === 'no' && '○ Not paired'}
+            {paired === 'paired' && '● Paired'}
+            {paired === 'unpaired' && '○ Not paired'}
             {paired === 'checking' && '… Checking'}
             {paired === 'unavailable' && 'Pairing status unavailable'}
           </strong>
@@ -1296,7 +1223,7 @@ function SecurityPane() {
             type="button"
             className="settings-clear"
             onClick={rotate}
-            disabled={busy || paired !== 'yes'}
+            disabled={busy || paired !== 'paired'}
             data-testid="settings-security-rotate"
           >
             {busy ? 'Revoking…' : 'Rotate token'}
@@ -1320,32 +1247,14 @@ function SecurityPane() {
  *  above: there is no draft to lose. Only this pane can set them — the
  *  MCP settings tool can read the list but not change it. */
 function ImageImportFolders() {
-  const [roots, setRoots] = useState<string[] | null>(null)
+  const settings = useStore((s) => s.settings)
+  const roots = settings ? (settings.image_import_roots ?? []) : null
+  const settingsSave = useStore((s) => s.settingsSave)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .settingsGet()
-      .then((s) => {
-        if (!cancelled) setRoots(s.image_import_roots ?? [])
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const save = async (next: string[]) => {
     setError(null)
-    try {
-      const s = await api.settingsUpdate({ image_import_roots: next })
-      setRoots(s.image_import_roots)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
+    setError(await settingsSave({ image_import_roots: next }))
   }
 
   const add = async () => {
@@ -1413,45 +1322,28 @@ function LabelsPane({
   draft: Draft['labels']
   onChange: (patch: Partial<Draft['labels']>) => void
 }) {
-  type Rollup = Awaited<ReturnType<typeof api.labelsRollup>>
-  const [rollup, setRollup] = useState<Rollup | null>(null)
-  const [rollupStatus, setRollupStatus] = useState<'idle' | 'loading' | 'error'>(
-    'loading'
-  )
+  const rollup = useStore((s) => s.labelsRollup)
+  const rollupStatus = useStore((s) => s.labelsRollupStatus)
+  const loadRollup = useStore((s) => s.labelsLoadRollup)
+  const clearAll = useStore((s) => s.labelsClearAll)
   const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'done' | 'error'>(
     'idle'
   )
   const [resetError, setResetError] = useState<string | null>(null)
 
-  const refreshRollup = async () => {
-    setRollupStatus('loading')
-    try {
-      const r = await api.labelsRollup()
-      setRollup(r)
-      setRollupStatus('idle')
-    } catch {
-      setRollupStatus('error')
-    }
-  }
-
   // Every cleared-Labels entry, whichever character it was cleared for:
   // a Log character with no Workbench has no character Trash view, so
   // this is the one place its cleared Labels can always be put back.
-  const [trashed, setTrashed] = useState<FlistTrashedLabels[]>([])
-  const [trashError, setTrashError] = useState<string | null>(null)
-  const loadTrash = async () => {
-    try {
-      setTrashed((await api.labelsTrashList()).labels)
-      setTrashError(null)
-    } catch (err) {
-      setTrashError(err instanceof Error ? err.message : String(err))
-    }
-  }
+  const trashed = useStore((s) => s.labelsTrash)
+  const trashError = useStore((s) => s.labelsTrashError)
+  const loadTrash = useStore((s) => s.labelsLoadTrash)
+  const putBack = useStore((s) => s.labelsTrashPutBack)
+  const purge = useStore((s) => s.labelsTrashPurge)
 
   useEffect(() => {
-    void refreshRollup()
+    void loadRollup()
     void loadTrash()
-  }, [])
+  }, [loadRollup, loadTrash])
   // Labels another writer cleared (a model over MCP) land in the Trash.
   const labelsRevision = useStore((s) => s.labelsRevision)
   const seenLabelsRevision = useRef(labelsRevision)
@@ -1473,15 +1365,9 @@ function LabelsPane({
     if (!confirmed) return
     setResetStatus('resetting')
     setResetError(null)
-    try {
-      await api.labelsClearAll()
-      setResetStatus('done')
-      void refreshRollup()
-      void loadTrash()
-    } catch (err) {
-      setResetStatus('error')
-      setResetError(err instanceof Error ? err.message : String(err))
-    }
+    const failed = await clearAll()
+    setResetStatus(failed ? 'error' : 'done')
+    setResetError(failed)
   }
 
   return (
@@ -1555,8 +1441,8 @@ function LabelsPane({
           heading="In the Trash"
           items={trashed}
           readOnly={false}
-          putBack={(ids) => api.labelsTrashPutBack(ids)}
-          purge={(ids) => api.labelsTrashPurge(ids)}
+          putBack={putBack}
+          purge={purge}
           onChanged={loadTrash}
         />
       </div>
@@ -1804,15 +1690,12 @@ function EmbeddingPane({
   const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'ok' | 'fail'>(
     'idle'
   )
-  const [testResult, setTestResult] = useState<{
-    ok: boolean
-    elapsed_ms: number
-    dimension: number | null
-    model: string
-    error: string | null
-  } | null>(null)
+  const [testResult, setTestResult] = useState<EmbeddingTestResult | null>(null)
 
   const openIngest = useStore((s) => s.openIngest)
+  const testEmbedding = useStore((s) => s.indexTestEmbedding)
+  const wipeIndex = useStore((s) => s.indexWipe)
+  const rebuildLexical = useStore((s) => s.indexRebuildLexical)
   const [wipeStatus, setWipeStatus] = useState<
     'idle' | 'wiping' | 'wiped' | 'error'
   >('idle')
@@ -1821,22 +1704,9 @@ function EmbeddingPane({
   const runTest = async () => {
     setTestStatus('running')
     setTestResult(null)
-    try {
-      const result = await api.ragTestEmbedding({
-        embed_model: draft.embed_model
-      })
-      setTestResult(result)
-      setTestStatus(result.ok ? 'ok' : 'fail')
-    } catch (err) {
-      setTestResult({
-        ok: false,
-        elapsed_ms: 0,
-        dimension: null,
-        model: draft.embed_model,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      setTestStatus('fail')
-    }
+    const result = await testEmbedding(draft.embed_model)
+    setTestResult(result)
+    setTestStatus(result.ok ? 'ok' : 'fail')
   }
 
   const triggerWipe = async () => {
@@ -1850,13 +1720,9 @@ function EmbeddingPane({
     if (!confirmed) return
     setWipeStatus('wiping')
     setWipeError(null)
-    try {
-      await api.ragWipe()
-      setWipeStatus('wiped')
-    } catch (err) {
-      setWipeStatus('error')
-      setWipeError(err instanceof Error ? err.message : String(err))
-    }
+    const failed = await wipeIndex()
+    setWipeStatus(failed ? 'error' : 'wiped')
+    setWipeError(failed)
   }
 
   const [lexicalStatus, setLexicalStatus] = useState<
@@ -1871,16 +1737,9 @@ function EmbeddingPane({
     if (lexicalStatus === 'rebuilding') return
     setLexicalStatus('rebuilding')
     setLexicalResult(null)
-    try {
-      const r = await api.ragLexicalRebuild()
-      setLexicalResult({ indexed: r.indexed })
-      setLexicalStatus('done')
-    } catch (err) {
-      setLexicalResult({
-        error: err instanceof Error ? err.message : String(err)
-      })
-      setLexicalStatus('error')
-    }
+    const result = await rebuildLexical()
+    setLexicalResult(result)
+    setLexicalStatus('error' in result ? 'error' : 'done')
   }
 
   const triggerReingestAll = () => {
@@ -2051,44 +1910,36 @@ function EmbeddingPane({
  *  cap, and a way to empty it. The cap saves with its own button, like
  *  the MCP switch, because the sidecar evicts at once when it drops. */
 function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
-  const [usage, setUsage] = useState<ForeignCacheUsage | null>(null)
+  const usage = useStore((s) => s.foreignCacheUsage)
+  const loadError = useStore((s) => s.foreignCacheError)
+  const loadUsage = useStore((s) => s.foreignCacheLoad)
+  const saveCap = useStore((s) => s.foreignCacheSetCap)
+  const clearCache = useStore((s) => s.foreignCacheClear)
   const [capRaw, setCapRaw] = useState<string>(String(foreign.cache_cap_mb))
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const loadUsage = async () => {
-    try {
-      const u = await api.foreignCacheUsage()
-      setUsage(u)
-      setCapRaw(String(Math.round(u.cap_bytes / MB)))
-      setError(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
+  const [actionError, setActionError] = useState<string | null>(null)
+  const error = actionError ?? loadError
 
   useEffect(() => {
     void loadUsage()
-  }, [])
+  }, [loadUsage])
+
+  // The cap field follows the cap the sidecar reports.
+  const capBytes = usage?.cap_bytes
+  useEffect(() => {
+    if (capBytes !== undefined) setCapRaw(String(Math.round(capBytes / MB)))
+  }, [capBytes])
 
   const setCap = async () => {
     const n = Number(capRaw)
     if (!Number.isInteger(n) || n < 1) {
-      setError('The cap must be a whole number of at least 1 MB.')
+      setActionError('The cap must be a whole number of at least 1 MB.')
       return
     }
     setBusy(true)
-    setError(null)
-    try {
-      const updated = await api.settingsUpdate({ foreign: { cache_cap_mb: n } })
-      setCapRaw(String(updated.foreign.cache_cap_mb))
-      // A lower cap has evicted profiles already: show what is left.
-      await loadUsage()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+    setActionError(null)
+    setActionError(await saveCap(n))
+    setBusy(false)
   }
 
   const clear = async () => {
@@ -2099,14 +1950,9 @@ function ForeignPane({ foreign }: { foreign: ForeignSettings }) {
     )
     if (!ok) return
     setBusy(true)
-    setError(null)
-    try {
-      setUsage(await api.foreignCacheClear())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+    setActionError(null)
+    setActionError(await clearCache())
+    setBusy(false)
   }
 
   return (
