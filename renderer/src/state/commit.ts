@@ -3,7 +3,7 @@
 // Every new payload the window puts into `flistWorking[characterId]`
 // goes through the store's `_commit` (state.ts), which builds the slot
 // here and then reports the commit to the listeners below. A commit is
-// one of three kinds:
+// one of four kinds:
 //
 //   edit     the window changed the payload: the slot turns unsaved and
 //            the autosave is scheduled.
@@ -11,6 +11,9 @@
 //            (reset to Live, Restore, a reload after an external
 //            change, the Trash taking images off the gallery): it adopts
 //            that etag and is not unsaved, so nothing is scheduled.
+//   merged   the window's unsaved edits merged onto another writer's
+//            version (state/merge.ts): the slot now sits on that
+//            version's etag, is unsaved, and the autosave is scheduled.
 //   view     not a change to the Workbench at all: a read-only view
 //            (Live, a Backup being browsed), opening a character (its
 //            read, or the seed from Live), or the slot being dropped
@@ -80,6 +83,18 @@ export type Commit =
        *  meanwhile still waits for its save. Without it the slot is
        *  replaced whole and is clean. */
       keepPending?: boolean
+      /** What is on disk at `etag`, when that is not `payload` itself
+       *  (keepPending with typing still unsaved). */
+      saved?: WorkingPayload
+    }
+  | {
+      kind: 'merged'
+      label: CommitLabel
+      payload: WorkingPayload
+      /** The other writer's etag: the merge is saved over it. */
+      etag: string
+      /** The other writer's version, now the base of the next merge. */
+      saved: WorkingPayload
     }
   | {
       kind: 'view'
@@ -129,9 +144,10 @@ export function commitSlot(
       const payload = { ...commit.payload }
       const overlay = overlayOf(payload)
       const materialised = commit.materialised ?? true
+      const saved = commit.saved ?? payload
       if (commit.keepPending) {
         if (!current) return undefined
-        return { ...current, payload, overlay, etag: commit.etag, materialised }
+        return { ...current, payload, overlay, etag: commit.etag, materialised, saved }
       }
       return {
         ...emptyWorkingSlot(),
@@ -139,7 +155,23 @@ export function commitSlot(
         overlay,
         etag: commit.etag,
         materialised,
-        lastSavedAt: commit.lastSavedAt ?? null
+        lastSavedAt: commit.lastSavedAt ?? null,
+        saved
+      }
+    }
+    case 'merged': {
+      if (!current) return undefined
+      const payload = { ...commit.payload }
+      return {
+        ...current,
+        payload,
+        overlay: overlayOf(payload),
+        etag: commit.etag,
+        saved: commit.saved,
+        materialised: true,
+        unsavedDirty: true,
+        saveStatus: 'idle',
+        saveError: null
       }
     }
   }

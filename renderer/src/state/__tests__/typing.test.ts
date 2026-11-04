@@ -73,6 +73,7 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {},
     flistViewingLive: {},
     flistBrowseBackup: null,

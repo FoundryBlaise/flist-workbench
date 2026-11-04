@@ -16,7 +16,7 @@ import { ActivityLogModal } from '../features/flist/ActivityLogModal'
 import { ExtensionPairWatcher } from '../features/flist/ExtensionPairModal'
 import { UserscriptHelpModal } from '../features/flist/UserscriptHelpModal'
 import { BackupAllBanner } from '../features/flist/BackupAllBanner'
-import { ExternalChangeBanner } from './ExternalChangeBanner'
+import { MergeDialog } from './MergeDialog'
 import { WorkbenchNote } from './WorkbenchNote'
 import { UndoNote } from './UndoNote'
 import { ExportRestoreModal } from '../features/flist/ExportRestoreModal'
@@ -487,7 +487,7 @@ export function AppLayout() {
           </button>
         </div>
       )}
-      <ExternalChangeBanner />
+      <MergeDialog />
       <WorkbenchNote />
       <UndoNote />
       <BackupAllBanner />

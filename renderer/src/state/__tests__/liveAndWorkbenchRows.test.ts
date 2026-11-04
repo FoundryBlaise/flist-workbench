@@ -34,6 +34,7 @@ beforeEach(() => {
     flistViewingLive: {},
     flistWorkbenchInfo: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {
       [CID]: archiveEntry(livePayload({ character: { description: 'published' } }))
     },

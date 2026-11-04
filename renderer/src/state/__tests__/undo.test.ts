@@ -36,6 +36,7 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {},
     flistViewingLive: {},
     flistCustomKinksUI: {},
@@ -509,7 +510,7 @@ describe('a Restore and a reset to Live are undo entries', () => {
 })
 
 describe('the undo save is an ordinary save', () => {
-  it('a conflict on it is handled like any other save conflict', async () => {
+  it('a conflict on it is merged like any other save conflict', async () => {
     seed(CID, { kinks: { '12': 'yes' } })
     fake.on(SAVE, json({ etag: 'e1' }))
     useStore.getState().flistStandardKinkSet(CID, '12', 'fave')
@@ -526,12 +527,17 @@ describe('the undo save is an ordinary save', () => {
         409
       )
     )
+    // Another writer set a different kink meanwhile.
+    fake.on(
+      `GET /flist/character/${CID}/workbench/payload`,
+      json({ payload: workbenchPayload({ kinks: { '12': 'fave', '13': 'no' } }), etag: 'theirs' })
+    )
     useStore.getState().flistUndo(CID)
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     expect(fake.requestsTo(SAVE)[1].headers['If-Match']).toBe('e1')
     expect(slotOf().unsavedDirty).toBe(true)
-    expect(kinksOf()).toEqual({ '12': 'yes' })
-    expect(useStore.getState().flistExternalChange[CID]).toMatchObject({ etag: 'theirs' })
+    expect(kinksOf()).toEqual({ '12': 'yes', '13': 'no' })
+    expect(slotOf().etag).toBe('theirs')
   })
 })
 

@@ -27,6 +27,7 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {},
     flistCustomKinksUI: {},
     flistActiveCharacterId: null,
@@ -326,35 +327,26 @@ describe('flistFlushWorking 409 etag-mismatch path', () => {
     await vi.advanceTimersByTimeAsync(500)
     const slot = useStore.getState().flistWorking['99']
     expect(slot.unsavedDirty).toBe(true)
-    expect(slot.saveError).toMatch(/whose version to keep/i)
+    expect(slot.saveError).toMatch(/merging their version/i)
     expect(slot.etag).toBe('seed-etag')
   })
 
-  it('raises the conflict banner carrying the server etag', async () => {
+  it('reads the version on disk to merge the edits with', async () => {
+    // The merge itself is in fieldMerge.test.ts.
     seedSlot('99', { character: { description: 'mine' } })
     fake.on(SAVE, conflict)
+    fake.hold(`GET ${BENCH_URL}`)
     useStore.getState().flistSetWorkingField('99', 'character.description', 'mine-updated')
     await vi.advanceTimersByTimeAsync(500)
-    const change = useStore.getState().flistExternalChange['99']
-    expect(change).toBeTruthy()
-    expect(change?.etag).toBe('server-etag')
+    expect(fake.pending(`GET ${BENCH_URL}`)).toHaveLength(1)
+    expect(useStore.getState().flistExternalChange['99']?.etag).toBe('server-etag')
   })
 })
 
-describe('external-change resolution', () => {
+describe('external changes', () => {
   // With nothing unsaved the store takes a change in by itself
-  // (modelChange.test.ts); these are the cases with unsaved edits, where
-  // the banner asks.
-  function seedUnsaved(characterId: string, payload: Record<string, unknown>) {
-    seedSlot(characterId, payload)
-    useStore.setState((s) => ({
-      flistWorking: {
-        ...s.flistWorking,
-        [characterId]: { ...s.flistWorking[characterId], unsavedDirty: true }
-      }
-    }))
-  }
-
+  // (modelChange.test.ts); with unsaved edits it merges
+  // (fieldMerge.test.ts).
   it('ignores a change carrying the etag we already hold', () => {
     // Our own write comes back over the event stream too.
     seedSlot('99', { character: { description: 'mine' } })
@@ -363,93 +355,7 @@ describe('external-change resolution', () => {
       origin: 'mcp:set_description'
     })
     expect(useStore.getState().flistExternalChange['99']).toBeUndefined()
-  })
-
-  it('raises a banner for a change made by something else', () => {
-    seedUnsaved('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    const change = useStore.getState().flistExternalChange['99']
-    expect(change?.origin).toBe('mcp:set_description')
-  })
-
-  it('reload takes their version and clears the banner', async () => {
-    seedUnsaved('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(
-      `GET ${BENCH_URL}`,
-      json(payloadRead(workbenchPayload({ character: { description: 'theirs' } }), 'theirs'))
-    )
-    await useStore.getState().flistReloadAfterExternalChange('99')
-    const slot = useStore.getState().flistWorking['99']
-    const char = slot.payload.character as { description?: string } | undefined
-    expect(char?.description).toBe('theirs')
-    expect(slot.unsavedDirty).toBe(false)
-    expect(slot.etag).toBe('theirs')
-    expect(useStore.getState().flistExternalChange['99']).toBeNull()
-  })
-
-  it('after discarding mine the editor shows the reloaded description', async () => {
-    // The slot taking their version is half of it; the open editor has
-    // to show it too, or the next keystroke saves the old text over it.
-    seedUnsaved('99', { character: { description: 'Lady Amber Blaise, as I left her' } })
-    useStore.setState({ editorContent: 'Lady Amber Blaise, as I left her' })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(
-      `GET ${BENCH_URL}`,
-      json(
-        payloadRead(
-          workbenchPayload({
-            _overlay: ['character.description'],
-            character: { description: 'Lady Amber Blaise, as the model wrote her' }
-          }),
-          'theirs'
-        )
-      )
-    )
-
-    await useStore.getState().flistReloadAfterExternalChange('99')
-
-    expect(useStore.getState().editorContent).toBe(
-      'Lady Amber Blaise, as the model wrote her'
-    )
-    expect(useStore.getState().editorDirty).toBe(false)
-    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
-  })
-
-  it('keep-mine writes against their etag, which is what makes it win', async () => {
-    seedUnsaved('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(SAVE, json({ etag: 'mine-now' }))
-    await useStore.getState().flistOverwriteAfterExternalChange('99')
-    const [put] = fake.requestsTo(SAVE)
-    expect(put?.headers['If-Match']).toBe('theirs')
-    const slot = useStore.getState().flistWorking['99']
-    expect(slot.etag).toBe('mine-now')
-    expect(slot.unsavedDirty).toBe(false)
-    expect(useStore.getState().flistExternalChange['99']).toBeNull()
-  })
-
-  it('a failed keep-mine leaves the banner up', async () => {
-    seedUnsaved('99', { character: { description: 'mine' } })
-    useStore.getState().flistNoteExternalChange('99', {
-      etag: 'theirs',
-      origin: 'mcp:set_description'
-    })
-    fake.on(SAVE, conflict)
-    await useStore.getState().flistOverwriteAfterExternalChange('99')
-    expect(useStore.getState().flistExternalChange['99']).toBeTruthy()
+    expect(fake.requests).toHaveLength(0)
   })
 })
 
@@ -587,7 +493,11 @@ describe('the first edit of a character with no Workbench', () => {
     const slot = useStore.getState().flistWorking['99']
     expect(slot.unsavedDirty).toBe(true)
     expect(descOf(slot.payload)).toBe('typed')
-    expect(useStore.getState().flistExternalChange['99']?.etag).toBe('theirs')
+    // Both wrote the description, over the same Live: the user decides.
+    expect(useStore.getState().flistMergeQuestion['99']).toMatchObject({
+      etag: 'theirs',
+      fields: ['character.description']
+    })
   })
 
   it('a character never pulled keeps the edit in memory and says so', async () => {

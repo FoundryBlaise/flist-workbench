@@ -499,7 +499,8 @@ until a reload. Fix in phase 5:
    `job-progress`.
 2. Renderer subscribes once (`AppLayout`). On an event for the open
    set: no local pending edits → reload silently and toast "Updated by
-   <tool>"; pending edits → banner with *Reload* / *Keep mine*.
+   <tool>"; pending edits → merged field by field, asking only about
+   fields both changed (spec #7, #114).
 3. Same bus refreshes label chips after `set_message_labels`, the
    sidebar lists, and the Settings → MCP pane ("last tool call: …").
 

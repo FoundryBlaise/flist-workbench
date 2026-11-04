@@ -26,6 +26,7 @@ import {
   detectLiveDrift,
   emptyWorkingSlot,
   extractInlines as flistExtractInlines,
+  isDeepEqual,
   seedWorkingFromLive,
   type FlistWorkingSlot,
   type WorkingPayload
@@ -49,6 +50,7 @@ import {
   unhideWorkbench
 } from './state/undoStack'
 import { imagesToFind, putBackNote, renameGalleryRows } from './state/undoTrash'
+import { mergeWorkbench, type MergeSide } from './state/merge'
 
 export type {
   FlistSaveStatus,
@@ -311,17 +313,29 @@ type State = {
    *  Workbench. The window's own choice: nothing on disk records it, so
    *  looking at Live writes nothing and no other writer can flip it. */
   flistViewingLive: Record<string, boolean>
-  /** A change to a working set that this window did not make — almost
-   *  always a model editing through MCP. Keyed by character id.
-   *
-   *  This exists because the window is no longer the only writer. It
-   *  used to be safe to assume the slot in memory matched disk; now it
-   *  can be stale, and autosaving a stale payload overwrites whatever
-   *  the other writer did. The banner this drives makes the user pick:
-   *  take theirs, or keep mine. */
+  /** A change to a Workbench that this window did not make (almost
+   *  always a model editing through MCP, or a save refused as stale)
+   *  whose read is still out. Keyed by character id; null or absent
+   *  when none is. The read takes the change in, or merges it with the
+   *  window's unsaved edits. */
   flistExternalChange: Record<
     string,
     { etag: string | null; origin: string; at: number } | null
+  >
+  /** A merge with another writer's version that found fields both sides
+   *  changed differently: the window asks "Keep mine" / "Take theirs"
+   *  for each of `fields` (merge field keys, state/merge.ts) before
+   *  anything is committed. `theirs` is that version, on disk at
+   *  `etag`; `label` names the writer. Keyed by character id. */
+  flistMergeQuestion: Record<
+    string,
+    {
+      label: CommitLabel
+      etag: string
+      theirs: WorkingPayload
+      fields: string[]
+      at: number
+    } | null
   >
   /** The last thing the window did to a Workbench by itself or on
    *  Ctrl+Z / Ctrl+Y that the user should be told about: another
@@ -606,11 +620,10 @@ type State = {
     characterId: string,
     change: { etag: string | null; origin: string }
   ) => void
-  /** Take the other writer's version, discarding unsaved local edits. */
-  flistReloadAfterExternalChange: (characterId: string) => Promise<void>
-  /** Keep this window's version, overwriting the other writer's. */
-  flistOverwriteAfterExternalChange: (characterId: string) => Promise<void>
-  flistDismissExternalChange: (characterId: string) => void
+  /** Answer the merge question: for each field asked about, keep mine
+   *  or take theirs (a field left out keeps mine). The merge is then one
+   *  commit, one undo entry, saved over the other writer's etag. */
+  flistAnswerMerge: (characterId: string, choices: Record<string, MergeSide>) => void
   /** Tools → "Back up all characters". Walks the signed-in account
    *  roster, pulls each character (JSON + images + avatar), and
    *  writes a userscript-restoreable ZIP per character. Single-flight:
@@ -878,7 +891,7 @@ function _editorFollows(
   const editorContent = descriptionOf(next.payload)
   if (commit.kind === 'view') return { editorContent, editorDirty: false }
   if (s.editorReadOnly) return {}
-  if (commit.kind === 'edit') {
+  if (commit.kind === 'edit' || commit.kind === 'merged') {
     return { editorContent, editorDirty: s.editorDirty || editorContent !== s.editorContent }
   }
   return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }
@@ -946,7 +959,7 @@ function _commit(
   if (!done.coveredAfter) unhideWorkbench(characterId)
   else if (!done.covered && event.previous) hideWorkbench(characterId, event.previous)
   else if (commit.kind !== 'view' && event.next) hideWorkbench(characterId, event.next)
-  if (commit.kind === 'edit') {
+  if (commit.kind === 'edit' || commit.kind === 'merged') {
     _scheduleFlush(characterId, () => {
       void get().flistFlushWorking(characterId)
     })
@@ -1093,47 +1106,48 @@ type ExternalChange = NonNullable<State['flistExternalChange'][string]>
 
 /** Take another writer's version of a character's Workbench: read it
  *  and commit it over its etag, an undo entry labelled with the writer.
- *  `auto` is the store doing it by itself because nothing was unsaved;
- *  then anything the window commits while the read is out (typing) is
- *  newer and stays, and the change waits for the banner. Without
- *  `auto` the user chose to discard theirs. A failed read leaves the
- *  change pending. */
+ *  With unsaved edits in the slot, made before the read or while it was
+ *  out (typing included), the two versions are merged field by field
+ *  instead (_mergeExternal). A failed read drops the change: the next
+ *  save goes over the stale etag, is refused, and reads again. */
 async function _takeExternalChange(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  change: ExternalChange,
-  auto: boolean
+  change: ExternalChange
 ): Promise<void> {
-  if (!auto) _cancelFlush(characterId)
   const before = get().flistWorking[characterId]
   let res: Awaited<ReturnType<typeof api.flistWorkbenchPayloadRead>>
   try {
     res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
   } catch {
+    set((st) =>
+      st.flistExternalChange[characterId] === change
+        ? { flistExternalChange: { ...st.flistExternalChange, [characterId]: null } }
+        : {}
+    )
     return
   }
   const s = get()
   // A newer change came in while this read was out; its own read
   // brings the newer payload.
   if (s.flistExternalChange[characterId] !== change) return
-  if (auto && s.flistWorking[characterId] !== before) {
+  const slot = s.flistWorking[characterId]
+  if (slot !== before && !slot?.unsavedDirty) {
     // Still nothing unsaved (the slot became a view, say): read again
     // against what the slot holds now.
-    if (!s.flistWorking[characterId]?.unsavedDirty) {
-      void _takeExternalChange(get, set, characterId, change, true)
-    }
+    void _takeExternalChange(get, set, characterId, change)
     return
   }
   const label = externalLabel(change.origin)
   const payload = res.payload as WorkingPayload
+  const cleared = (st: State): Partial<State> => ({
+    flistExternalChange: { ...st.flistExternalChange, [characterId]: null }
+  })
+  // Taken in by itself: say who changed it, the part the user cannot see.
   const settled = (st: State): Partial<State> => ({
-    flistExternalChange: { ...st.flistExternalChange, [characterId]: null },
-    // Taken in by itself: say who changed it, the part the user cannot
-    // see. Chosen from the banner, the user knows.
-    ...(auto
-      ? { flistWorkbenchNote: { characterId, action: 'updated' as const, label, at: Date.now() } }
-      : {})
+    ...cleared(st),
+    flistWorkbenchNote: { characterId, action: 'updated' as const, label, at: Date.now() }
   })
   const hidden = hiddenWorkbench(characterId)
   if (s.flistViewingLive[characterId] || hidden) {
@@ -1150,6 +1164,16 @@ async function _takeExternalChange(
     set(settled)
     return
   }
+  // Nothing to take: the slot is gone, or already on this version.
+  if (!slot || slot.etag === res.etag) {
+    set(cleared)
+    return
+  }
+  if (slot.unsavedDirty) {
+    // Typing while the read was out is in the slot already: it is mine.
+    _mergeExternal(get, set, characterId, label, payload, res.etag, settled, cleared)
+    return
+  }
   _commit(
     get,
     set,
@@ -1157,6 +1181,58 @@ async function _takeExternalChange(
     { kind: 'written', label, payload, etag: res.etag, lastSavedAt: Date.now() },
     settled
   )
+}
+
+/** Merge the slot's unsaved edits with another writer's version
+ *  (`theirs`, on disk at `etag`), field by field against the payload
+ *  last saved (state/merge.ts). Settled at once, the merge is committed:
+ *  one undo entry, saved over the other writer's etag. Fields both sides
+ *  changed are asked about first (flistMergeQuestion), and the answer
+ *  commits (flistAnswerMerge). `merged` and `asked` add to the store
+ *  update of each outcome. */
+function _mergeExternal(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  label: CommitLabel,
+  theirs: WorkingPayload,
+  etag: string,
+  merged: (s: State) => Partial<State>,
+  asked: (s: State) => Partial<State>
+): void {
+  const slot = get().flistWorking[characterId]
+  if (!slot) return
+  const { payload, conflicts } = mergeWorkbench(slot.saved, slot.payload, theirs)
+  if (conflicts.length > 0) {
+    set((s) => ({
+      ...asked(s),
+      flistMergeQuestion: {
+        ...s.flistMergeQuestion,
+        [characterId]: { label, etag, theirs, fields: conflicts, at: Date.now() }
+      }
+    }))
+    return
+  }
+  _commitMerge(get, set, characterId, label, payload, theirs, etag, merged)
+}
+
+/** A merge's one commit. A merge that comes out as their version (every
+ *  unsaved edit was one they made too) is simply theirs, saved; anything
+ *  else is unsaved and goes over their etag. */
+function _commitMerge(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  label: CommitLabel,
+  payload: WorkingPayload,
+  theirs: WorkingPayload,
+  etag: string,
+  also: (s: State) => Partial<State>
+): void {
+  const commit: Commit = isDeepEqual(payload, theirs)
+    ? { kind: 'written', label, payload: theirs, etag, lastSavedAt: Date.now() }
+    : { kind: 'merged', label, payload, etag, saved: theirs }
+  _commit(get, set, characterId, commit, also)
 }
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
@@ -1293,7 +1369,7 @@ async function _flushWorkingNow(
       return
     }
     if (!bench.created) {
-      _noteSaveConflict(characterId, bench.etag, set)
+      _noteSaveConflict(get, set, characterId, null, bench.etag)
       return
     }
     baseEtag = bench.etag
@@ -1327,7 +1403,8 @@ async function _flushWorkingNow(
         saveStatus: isFresh ? 'saved' : existing.saveStatus,
         saveError: null,
         lastSavedAt: Date.now(),
-        materialised: true
+        materialised: true,
+        saved: sentPayload
       }
       return {
         flistWorking: { ...s.flistWorking, [characterId]: nextSlot },
@@ -1350,7 +1427,7 @@ async function _flushWorkingNow(
   } catch (err) {
     if (err instanceof Error && err.message === 'etag_mismatch') {
       const errWith = err as Error & { currentEtag?: string | null }
-      _noteSaveConflict(characterId, errWith.currentEtag ?? null, set)
+      _noteSaveConflict(get, set, characterId, baseEtag, errWith.currentEtag ?? null)
       return
     }
     const raw = err instanceof Error ? err.message : String(err)
@@ -1369,41 +1446,62 @@ async function _flushWorkingNow(
 
 /** A save the sidecar refused because the Workbench on disk is not the
  *  one the window read: something else wrote it. The edits stay in the
- *  slot and the banner asks whose version to keep. */
+ *  slot, and the other version is read and merged with them, as for a
+ *  change the event stream announced. `sentEtag` is the etag the save
+ *  went over: a slot that has moved off it meanwhile was already merged
+ *  onto the newer version, and its next save goes over that one. */
 function _noteSaveConflict(
+  get: () => State,
+  set: SlotSet,
   characterId: string,
-  currentEtag: string | null,
-  set: (fn: (s: State) => Partial<State>) => void
+  sentEtag: string | null,
+  currentEtag: string | null
 ): void {
-  set((s) => {
-    const existing = s.flistWorking[characterId]
+  const s = get()
+  const slot = s.flistWorking[characterId]
+  if (!slot) return
+  if (slot.etag !== sentEtag) {
+    set((st) => {
+      const existing = st.flistWorking[characterId]
+      if (!existing) return {}
+      return {
+        flistWorking: { ...st.flistWorking, [characterId]: { ...existing, saveStatus: 'idle' } }
+      }
+    })
+    if (get().flistWorking[characterId]?.unsavedDirty) {
+      _scheduleFlush(characterId, () => {
+        void get().flistFlushWorking(characterId)
+      })
+    }
+    return
+  }
+  set((st) => {
+    const existing = st.flistWorking[characterId]
     if (!existing) return {}
     return {
       flistWorking: {
-        ...s.flistWorking,
+        ...st.flistWorking,
         [characterId]: {
           ...existing,
           saveStatus: 'error',
-          saveError: 'Someone else changed this Workbench. Choose whose version to keep.',
-          // The server etag is deliberately NOT adopted on a
-          // conflict. Adopting it would let the next keystroke's
-          // autosave succeed and silently overwrite the other
-          // writer; keeping the stale one makes every retry
-          // conflict until the user decides.
+          saveError: 'Someone else changed this Workbench. Merging their version with yours.',
+          // The server etag is deliberately NOT adopted here. Adopting
+          // it would let the next keystroke's autosave succeed and
+          // silently overwrite the other writer; only the merge, which
+          // holds their version, moves the slot onto it.
           etag: existing.etag,
           unsavedDirty: true
-        }
-      },
-      flistExternalChange: {
-        ...s.flistExternalChange,
-        [characterId]: {
-          etag: currentEtag,
-          origin: 'unknown',
-          at: Date.now()
         }
       }
     }
   })
+  // A read already out, or a question already asked about this very
+  // version, brings the merge.
+  const asked = s.flistMergeQuestion[characterId]
+  if (s.flistExternalChange[characterId] || (asked && asked.etag === currentEtag)) return
+  const change: ExternalChange = { etag: currentEtag, origin: 'unknown', at: Date.now() }
+  set((st) => ({ flistExternalChange: { ...st.flistExternalChange, [characterId]: change } }))
+  void _takeExternalChange(get, set, characterId, change)
 }
 
 /** Save what was typed into the Workbench now, instead of after the
@@ -1448,7 +1546,8 @@ function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot
     payload,
     overlay: Array.isArray(payload._overlay) ? payload._overlay : [],
     etag,
-    materialised: true
+    materialised: true,
+    saved: payload
   }
 }
 
@@ -2162,6 +2261,7 @@ export const useStore = create<State>((set, get) => ({
   flistRestoreRefusal: {},
   flistViewingLive: {},
   flistExternalChange: {},
+  flistMergeQuestion: {},
   flistWorkbenchNote: null,
   flistUndoNotes: {},
   flistMapping: {
@@ -2471,6 +2571,7 @@ export const useStore = create<State>((set, get) => ({
       flistRestoreRefusal: {},
       flistViewingLive: {},
       flistExternalChange: {},
+      flistMergeQuestion: {},
       flistWorkbenchNote: null,
       flistUndoNotes: {},
       flistDriftBanners: {},
@@ -2796,9 +2897,13 @@ export const useStore = create<State>((set, get) => ({
     // etag. Anything typed meanwhile stays unsaved and goes with it.
     const slot = get().flistWorking[characterId]
     if (slot && res.etag && offGallery.length > 0) {
-      const images = galleryOf(slot)
-        .filter((e) => !offGallery.includes(e.image_id))
-        .map((e, i) => ({ ...e, sort_order: i }))
+      const off = (payload: WorkingPayload): WorkingPayload => ({
+        ...payload,
+        images: galleryOf({ ...slot, payload })
+          .filter((e) => !offGallery.includes(e.image_id))
+          .map((e, i) => ({ ...e, sort_order: i })),
+        _overlay: Array.from(new Set([...(payload._overlay ?? []), 'images']))
+      })
       _commit(
         get,
         set,
@@ -2806,9 +2911,12 @@ export const useStore = create<State>((set, get) => ({
         {
           kind: 'written',
           label: 'edit',
-          payload: { ...slot.payload, images, _overlay: _withOverlay(slot, ['images']) },
+          payload: off(slot.payload),
           etag: res.etag,
-          keepPending: true
+          keepPending: true,
+          // On disk now: what was saved, less those images. Typing
+          // since is not in it.
+          saved: slot.saved ? off(slot.saved) : undefined
         },
         poolWithoutMoved
       )
@@ -2947,6 +3055,9 @@ export const useStore = create<State>((set, get) => ({
           payload: liveForSeed ? seedWorkingFromLive(liveForSeed) : { ...emptyWorkingSlot().payload },
           materialised: false
         }
+        // Nothing on disk yet: the first save makes the Workbench from
+        // Live, so the seed is what a merge compares against.
+        read.saved = read.payload
       } else {
         read = null
       }
@@ -3247,52 +3358,26 @@ export const useStore = create<State>((set, get) => ({
     if (!slot) return
     const pending = { ...change, at: Date.now() }
     set((s) => ({ flistExternalChange: { ...s.flistExternalChange, [characterId]: pending } }))
-    // With unsaved edits there are two versions, and the banner asks.
-    // Without, there is nothing to decide: take theirs.
-    if (!slot.unsavedDirty) void _takeExternalChange(get, set, characterId, pending, true)
+    // Read it: taken in as it is, or merged with what is unsaved.
+    void _takeExternalChange(get, set, characterId, pending)
   },
 
-  async flistReloadAfterExternalChange(characterId) {
-    const change = get().flistExternalChange[characterId]
-    if (!change) return
-    await _takeExternalChange(get, set, characterId, change, false)
-  },
-
-  async flistOverwriteAfterExternalChange(characterId) {
-    const change = get().flistExternalChange[characterId]
+  flistAnswerMerge(characterId, choices) {
+    const question = get().flistMergeQuestion[characterId]
     const slot = get().flistWorking[characterId]
-    if (!change || !slot) return
-    _cancelFlush(characterId)
-    try {
-      // Write against the etag the other writer left, which is what
-      // makes this an overwrite rather than another conflict.
-      const { etag } = await api.flistWorkbenchPayloadPut(characterId, slot.payload, change.etag)
-      set((s) => {
-        const existing = s.flistWorking[characterId]
-        if (!existing) return {}
-        const next: FlistWorkingSlot = {
-          ...existing,
-          etag,
-          unsavedDirty: false,
-          saveStatus: 'saved',
-          saveError: null,
-          lastSavedAt: Date.now(),
-          materialised: true
-        }
-        return {
-          flistWorking: { ...s.flistWorking, [characterId]: next },
-          flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-        }
-      })
-    } catch {
-      // Still conflicting — a third write landed. The banner stays.
-    }
-  },
-
-  flistDismissExternalChange(characterId) {
-    set((s) => ({
-      flistExternalChange: { ...s.flistExternalChange, [characterId]: null }
-    }))
+    if (!question || !slot) return
+    // Mine as it is now: the merge is made again with the answers.
+    const { payload } = mergeWorkbench(slot.saved, slot.payload, question.theirs, choices)
+    _commitMerge(
+      get,
+      set,
+      characterId,
+      question.label,
+      payload,
+      question.theirs,
+      question.etag,
+      (s) => ({ flistMergeQuestion: { ...s.flistMergeQuestion, [characterId]: null } })
+    )
   },
 
   async flistShowLive(characterId) {
@@ -3314,7 +3399,8 @@ export const useStore = create<State>((set, get) => ({
       saveStatus: 'idle',
       saveError: null,
       lastSavedAt: null,
-      materialised: true
+      materialised: true,
+      saved: null
     }
     _commit(get, set, characterId, { kind: 'view', slot }, (s) => ({
       flistViewingLive: { ...s.flistViewingLive, [characterId]: true },
@@ -3616,7 +3702,8 @@ export const useStore = create<State>((set, get) => ({
       saveStatus: 'idle',
       saveError: null,
       lastSavedAt: null,
-      materialised: true
+      materialised: true,
+      saved: null
     }
 
     _commit(get, set, characterId, { kind: 'view', slot }, (s) => {

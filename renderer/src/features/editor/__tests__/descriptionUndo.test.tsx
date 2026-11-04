@@ -98,6 +98,7 @@ beforeEach(() => {
     foreignActive: false,
     flistWorking: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistViewingLive: {},
     flistBrowseBackup: null,
     editorDirty: false

@@ -60,6 +60,7 @@ beforeEach(() => {
   useStore.setState({
     flistWorking: {},
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistArchive: {},
     flistViewingLive: {},
     flistBrowseBackup: null,
@@ -158,7 +159,7 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
     expect(useStore.getState().flistUndo(CID)).toBe('internal:gallery-repair')
   })
 
-  it('typing while the reload is out is kept, and the change waits for the banner', async () => {
+  it('typing in the description while the reload is out is kept, and the description is asked about', async () => {
     seed('as I left her')
     useStore.setState({ editorContent: 'as I left her' })
     fake.hold(READ)
@@ -169,7 +170,11 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
 
     expect(descOf(slotOf().payload)).toBe('as I left her, and more')
     expect(slotOf().unsavedDirty).toBe(true)
-    expect(useStore.getState().flistExternalChange[CID]?.origin).toBe('mcp:set_description')
+    // Both wrote the description (fieldMerge.test.ts has the rest).
+    expect(useStore.getState().flistMergeQuestion[CID]).toMatchObject({
+      label: 'mcp:set_description',
+      fields: ['character.description']
+    })
   })
 
   it('while the window shows Live, Live stays on screen, and back on the Workbench the change is one entry', async () => {

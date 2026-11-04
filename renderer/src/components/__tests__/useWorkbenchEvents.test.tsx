@@ -39,6 +39,7 @@ beforeEach(() => {
       [CID]: workingSlot(workbenchPayload({ character: { description: 'as I left her' } }))
     },
     flistExternalChange: {},
+    flistMergeQuestion: {},
     flistViewingLive: {},
     flistBrowseBackup: null,
     flistWorkbenchNote: null,
