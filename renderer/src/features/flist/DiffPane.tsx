@@ -11,11 +11,7 @@ import {
 import { DiffRow } from './DiffRow'
 import { DescriptionDiffView } from './DescriptionDiffView'
 import { BackupPicker } from './BackupPicker'
-
-// Module-level singleton — Zustand selectors are identity-compared,
-// so a `?? { kind: 'live' }` fallback inline would allocate a fresh
-// object every render and trigger an infinite re-render loop.
-const DEFAULT_RIGHT_SOURCE = { kind: 'live' } as const
+import { DEFAULT_DIFF_RIGHT_SOURCE } from './constants'
 
 const CATEGORY_LABEL: Record<DiffCategory, string> = {
   character: 'Character',
@@ -42,7 +38,7 @@ export function DiffPane({ characterId }: { characterId: string }) {
   const mappingStatus = useStore((s) => s.flistMapping.status)
   const loadMapping = useStore((s) => s.flistLoadMapping)
   const source = useStore(
-    (s) => s.flistDiffRightSource[characterId] ?? DEFAULT_RIGHT_SOURCE
+    (s) => s.flistDiffRightSource[characterId] ?? DEFAULT_DIFF_RIGHT_SOURCE
   )
   const backupCache = useStore((s) => s.flistDiffBackupCache)
   const backupStatus = useStore((s) => s.flistDiffBackupStatus)

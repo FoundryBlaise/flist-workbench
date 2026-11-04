@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { selectWorkingSlot, useStore } from '../../state'
-import { CHOICE_LABELS, type KinkChoice } from './ChoiceButtons'
+import { CHOICE_LABELS, KINK_DRAG_MIME, type KinkChoice } from './constants'
 import {
   buildUnifiedKinks,
   readCustomsFirst,
@@ -9,7 +9,7 @@ import {
   type KinkGroup,
   type UnifiedKink
 } from './kinksUnified'
-import { KinkRow, parseKinkDrag, KINK_DRAG_MIME } from './KinkRow'
+import { KinkRow, parseKinkDrag } from './KinkRow'
 import { useKinkSelection } from './useKinkSelection'
 
 const COLLAPSE_KEY = 'flist-workbench:kinks-pool-group-collapsed'

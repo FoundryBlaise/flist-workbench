@@ -71,45 +71,40 @@ import {
   readAutoRefreshHours
 } from './features/settings/SettingsModal'
 
-export type Mode = 'editor' | 'logs'
+// The store's slices, one file each; state/slices/slice.ts says what one is.
+import { createUiSlice, type UiSlice } from './state/slices/ui'
+import { createSettingsSlice, type SettingsSlice } from './state/slices/settings'
+import { createLogsSlice, type LogsSlice } from './state/slices/logs'
+import { createAccountSlice, type AccountSlice } from './state/slices/account'
+import { createForeignSlice, type ForeignSlice } from './state/slices/foreign'
+import { createArchiveSlice, type ArchiveSlice } from './state/slices/archive'
+import { createWorkbenchSlice, type WorkbenchSlice } from './state/slices/workbench'
 
-const LAST_SEEN_KEY = 'flist-workbench:char-last-seen'
-const FLIST_ACCOUNT_KEY = 'flist-workbench:last-account'
-const FLIST_LAST_CHAR_KEY = 'flist-workbench:last-flist-char-id'
+export type { Mode } from './state/slices/ui'
+
+/** The one store's state: every slice, and what is not in one yet. */
+export type State = UiSlice &
+  SettingsSlice &
+  LogsSlice &
+  AccountSlice &
+  ForeignSlice &
+  ArchiveSlice &
+  WorkbenchSlice &
+  Unsliced
+
 // Auto-pull threshold. Matches the picker's own staleness display so
 // the UI and the auto-pull policy can't drift apart. F-list's hourly
 // API cap is 200 — even a user hopping between 30 characters all day
 // stays well under it at this rate.
 const STALE_AGE_SEC = 30 * 60
 
-function readLastSeen(): Record<string, number> {
-  if (typeof localStorage === 'undefined') return {}
-  try {
-    const raw = localStorage.getItem(LAST_SEEN_KEY)
-    return raw ? (JSON.parse(raw) as Record<string, number>) : {}
-  } catch {
-    return {}
-  }
-}
-
-function writeLastSeen(map: Record<string, number>): void {
-  if (typeof localStorage === 'undefined') return
-  try {
-    localStorage.setItem(LAST_SEEN_KEY, JSON.stringify(map))
-  } catch {
-    // private mode / storage full — fine, dots just won't persist
-  }
-}
-
-type State = {
+/** The store's state and actions not yet moved into a slice. */
+type Unsliced = {
   characters: CharacterEntry[]
   charactersStatus: 'idle' | 'loading' | 'ready' | 'error'
   charactersError: string | null
-  /** Last time the user opened the log tab for each character (epoch seconds). */
-  charLastSeen: Record<string, number>
 
   activeCharacter: string | null
-  mode: Mode
   /** When true, the logs main pane shows the cross-conversation search view. */
   crossSearchOpen: boolean
 
@@ -172,14 +167,6 @@ type State = {
   editorFetchStatus: 'idle' | 'fetching' | 'ok' | 'error'
   editorFetchError: string | null
   editorDirty: boolean
-  /** Which editor tab is active. Mirrored from EditorTabsHost so the
-   *  preview pane can swap content per tab (e.g. show a website-style
-   *  Info-pane view when the user is on Profile fields). */
-  editorActiveTab: string
-  /** Description-tab view mode. Only applied while the active tab is
-   *  Description (other tabs always render side-by-side). Persisted
-   *  in localStorage. */
-  editorViewMode: 'split' | 'preview' | 'code'
 
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
   saveError: string | null
@@ -233,11 +220,6 @@ type State = {
       }
     }
   >
-  /** Open-restore-preview-modal target. When non-null, the export
-   *  preview modal is open for this character; clicking "Download" in
-   *  the modal navigates to the export.zip route. Lives in the store so
-   *  the menu / sidebar / Images tab can all open it from anywhere. */
-  flistExportRestoreCharacterId: string | null
   /** Currently-open read-only backup browse target, or null when
    *  the user is editing their live working copy. When set, the
    *  editor pane renders the backup's contents via the
@@ -424,11 +406,6 @@ type State = {
    *  mode. Set whenever the user opens a Live or historical Backup
    *  document. */
   editorReadOnly: boolean
-  /** Which F-list theme palette the preview pane mimics. Values match
-   *  F-list's own theme picker (Settings → Display). Persisted in
-   *  localStorage so it sticks across launches. */
-  previewTheme: 'dark' | 'default' | 'light'
-  setPreviewTheme: (next: 'dark' | 'default' | 'light') => void
   /** Modal visibility for the sign-in dialog. */
   flistSignInOpen: boolean
   /** Last error from a sign-in attempt; passed verbatim from F-list per
@@ -458,8 +435,6 @@ type State = {
 
   loadCharacters: () => Promise<void>
   selectCharacter: (name: string | null) => void
-  markCharacterSeen: (name: string) => void
-  setMode: (mode: Mode) => void
   setCrossSearchOpen: (open: boolean) => void
   /** Select the Foreign slot. Leaves the real active character alone
    *  so going back to it restores exactly what was open. */
@@ -499,8 +474,6 @@ type State = {
     } | null
   ) => void
   setEditorContent: (value: string) => void
-  setEditorActiveTab: (tab: string) => void
-  setEditorViewMode: (mode: 'split' | 'preview' | 'code') => void
   fetchProfile: (name: string) => Promise<void>
   resetEditorDirty: () => void
 
@@ -553,9 +526,6 @@ type State = {
    *  character on the current roster. Single-flight: triggering while
    *  a sweep is running (either this or the sign-in sweep) is a no-op. */
   flistRefreshAllAccount: () => Promise<void>
-  // ---- Tier 6 export-restore preview ----
-  flistOpenExportRestore: (characterId: string) => void
-  flistCloseExportRestore: () => void
   // ---- v5 image actions ----
   flistLoadCharacterImages: (characterId: string) => Promise<void>
   /** Upload a local image. Lands in `images/` as a `local-<sha8>` and
@@ -603,7 +573,6 @@ type State = {
    *  edits stay in `flistWorking` so a later switch-back restores them
    *  verbatim. */
   flistOpenWorking: (characterId: string) => Promise<void>
-  flistGetLastAccount: () => string
   /** Ask the sidecar whether the character has a Workbench yet and
    *  when it last changed, for the Workbench row. Creates nothing. */
   flistLoadWorkbenchInfo: (characterId: string) => Promise<void>
@@ -2215,14 +2184,12 @@ function editorReplaceState(profile: {
   }
 }
 
-export const useStore = create<State>((set, get) => ({
+export const useStore = create<State>((set, get, store) => ({
   characters: [],
   charactersStatus: 'idle',
   charactersError: null,
-  charLastSeen: readLastSeen(),
 
   activeCharacter: null,
-  mode: 'editor',
   crossSearchOpen: false,
   foreignActive: false,
   foreignName: null,
@@ -2253,18 +2220,6 @@ export const useStore = create<State>((set, get) => ({
   editorFetchStatus: 'idle',
   editorFetchError: null,
   editorDirty: false,
-  editorActiveTab: 'description',
-  editorViewMode: ((): 'split' | 'preview' | 'code' => {
-    try {
-      const stored = localStorage.getItem('flist-workbench:editor-view-mode')
-      if (stored === 'split' || stored === 'preview' || stored === 'code') {
-        return stored
-      }
-    } catch {
-      // ignore
-    }
-    return 'split'
-  })(),
 
   saveStatus: 'idle',
   saveError: null,
@@ -2278,7 +2233,6 @@ export const useStore = create<State>((set, get) => ({
   flistActiveCharacterId: null,
   flistArchive: {},
   flistCharacterImages: {},
-  flistExportRestoreCharacterId: null,
   flistBrowseBackup: null,
   flistWorking: {},
   flistWorkingLoadStatus: {},
@@ -2313,23 +2267,6 @@ export const useStore = create<State>((set, get) => ({
   flistCustomKinksUI: {},
   flistPullAbortController: null,
   editorReadOnly: false,
-  previewTheme: ((): 'dark' | 'default' | 'light' => {
-    try {
-      const raw = localStorage.getItem('workbench.previewTheme')
-      if (raw === 'dark' || raw === 'default' || raw === 'light') return raw
-    } catch {
-      /* localStorage unavailable — fall through */
-    }
-    return 'default'
-  })(),
-  setPreviewTheme: (next) => {
-    try {
-      localStorage.setItem('workbench.previewTheme', next)
-    } catch {
-      /* best-effort persistence */
-    }
-    set({ previewTheme: next })
-  },
   flistSignInOpen: false,
   flistSignInError: null,
   flistSignInErrorCode: null,
@@ -2343,25 +2280,6 @@ export const useStore = create<State>((set, get) => ({
   flistAutoLoginInFlight: false,
 
   // ---- F-list actions ----------------------------------------------------
-
-  // Return type is annotated on purpose: the body reads back through
-  // `useStore`, so without it TypeScript has to infer `useStore` from
-  // an initializer that references `useStore` and gives up — turning
-  // the whole store into `any` and silently disabling type checking
-  // in every component that selects from it.
-  flistGetLastAccount(): string {
-    // Saved-creds account wins when present so the sign-in modal
-    // pre-fills the username the user explicitly chose to remember.
-    // Falls back to the localStorage last-used account otherwise.
-    const saved: string | null = useStore.getState().flistSavedCreds.account
-    if (saved) return saved
-    if (typeof localStorage === 'undefined') return ''
-    try {
-      return localStorage.getItem(FLIST_ACCOUNT_KEY) ?? ''
-    } catch {
-      return ''
-    }
-  },
 
   flistOpenSignIn() {
     set({ flistSignInOpen: true, flistSignInError: null, flistSignInErrorCode: null, flistSignInStatus: 'idle' })
@@ -2436,11 +2354,7 @@ export const useStore = create<State>((set, get) => ({
     set({ flistSignInStatus: 'submitting', flistSignInError: null, flistSignInErrorCode: null })
     try {
       const res = await api.flistSignIn({ account, password })
-      try {
-        localStorage.setItem(FLIST_ACCOUNT_KEY, account)
-      } catch {
-        // localStorage unavailable — account just won't pre-fill next session
-      }
+      get().flistRememberAccount(account)
       // Persist (or clear) saved credentials based on the modal's
       // checkbox state. Auto-login implies remember-password — the
       // modal enforces that, but we also enforce it here so a
@@ -2662,12 +2576,7 @@ export const useStore = create<State>((set, get) => ({
       // characters when loadCharacters() races in and defaults
       // activeCharacter to characters[0].
       if (get().flistActiveCharacterId === null) {
-        let savedId: string | null = null
-        try {
-          savedId = localStorage.getItem(FLIST_LAST_CHAR_KEY)
-        } catch {
-          savedId = null
-        }
+        const savedId = get().flistLastCharacterId()
         if (savedId) {
           const entry = characters.find((c) => String(c.id ?? '') === savedId)
           if (entry) {
@@ -2706,11 +2615,7 @@ export const useStore = create<State>((set, get) => ({
       set({ editorReadOnly: false })
       return
     }
-    try {
-      localStorage.setItem(FLIST_LAST_CHAR_KEY, characterId)
-    } catch {
-      // ignore
-    }
+    get().flistRememberCharacter(characterId)
     await get().flistLoadArchive(characterId)
   },
 
@@ -2820,14 +2725,6 @@ export const useStore = create<State>((set, get) => ({
         )
       }
     }
-  },
-
-  flistOpenExportRestore(characterId) {
-    set({ flistExportRestoreCharacterId: characterId })
-  },
-
-  flistCloseExportRestore() {
-    set({ flistExportRestoreCharacterId: null })
   },
 
   async flistLoadCharacterImages(characterId) {
@@ -4236,11 +4133,7 @@ export const useStore = create<State>((set, get) => ({
         void get().flistFlushWorking(prevId).catch(() => {})
       }
       if (switched) {
-        try {
-          localStorage.setItem(FLIST_LAST_CHAR_KEY, id)
-        } catch {
-          // ignore
-        }
+        get().flistRememberCharacter(id)
         set({ flistActiveCharacterId: id })
         // From here on a keystroke is saved into this character's
         // Workbench, so the editor must stop showing the one being left.
@@ -4286,19 +4179,6 @@ export const useStore = create<State>((set, get) => ({
       // previous character.
       set({ flistActiveCharacterId: null, editorReadOnly: false })
     }
-  },
-
-  markCharacterSeen(name) {
-    const now = Date.now() / 1000
-    set((s) => {
-      const next = { ...s.charLastSeen, [name]: now }
-      writeLastSeen(next)
-      return { charLastSeen: next }
-    })
-  },
-
-  setMode(mode) {
-    set({ mode, crossSearchOpen: mode === 'logs' ? get().crossSearchOpen : false })
   },
 
   setCrossSearchOpen(open) {
@@ -4521,21 +4401,6 @@ export const useStore = create<State>((set, get) => ({
     set({ editorDirty: false })
   },
 
-  setEditorActiveTab(tab) {
-    if (get().editorActiveTab === tab) return
-    set({ editorActiveTab: tab })
-  },
-
-  setEditorViewMode(mode) {
-    if (get().editorViewMode === mode) return
-    set({ editorViewMode: mode })
-    try {
-      localStorage.setItem('flist-workbench:editor-view-mode', mode)
-    } catch {
-      // ignore
-    }
-  },
-
   async fetchProfile(name) {
     // Synchronous guard against rapid duplicate clicks: a `disabled`
     // button alone doesn't help because React hasn't repainted between
@@ -4564,6 +4429,15 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  // The slices come last: a member still written above for a field a
+  // slice now owns is then a compile error (TS2783), not a silent override.
+  ...createUiSlice(set, get, store),
+  ...createSettingsSlice(set, get, store),
+  ...createLogsSlice(set, get, store),
+  ...createAccountSlice(set, get, store),
+  ...createForeignSlice(set, get, store),
+  ...createArchiveSlice(set, get, store),
+  ...createWorkbenchSlice(set, get, store),
 }))
 
 /** What a failed profile look-up says, chosen by the refusal's code

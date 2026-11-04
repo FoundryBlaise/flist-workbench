@@ -26,7 +26,7 @@ import { PreviewThemeSwitch } from '../editor/PreviewThemeSwitch'
 import { resolveInfotagDescriptors } from '../flist/infotagsResolver'
 import { InfotagFieldShell } from '../flist/infotagFields/TextField'
 import { InfotagSection } from '../flist/ProfileFieldsTab'
-import { KINK_BUCKET_ORDER } from '../flist/ChoiceButtons'
+import { KINK_BUCKET_ORDER } from '../flist/constants'
 import {
   bucketByChoice,
   buildUnifiedKinks,

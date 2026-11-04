@@ -1,8 +1,6 @@
 import { useMemo } from 'react'
 import { selectDiffSources, useStore } from '../../state'
-
-// Stable fallback — see DiffPane for the same identity guard.
-const DEFAULT_RIGHT_SOURCE = { kind: 'live' } as const
+import { DEFAULT_DIFF_RIGHT_SOURCE } from './constants'
 
 function relTime(unixSec: number | null | undefined): string {
   if (!unixSec) return 'never'
@@ -27,7 +25,7 @@ function isoDate(unixSec: number): string {
 
 export function BackupPicker({ characterId }: { characterId: string }) {
   const source = useStore(
-    (s) => s.flistDiffRightSource[characterId] ?? DEFAULT_RIGHT_SOURCE
+    (s) => s.flistDiffRightSource[characterId] ?? DEFAULT_DIFF_RIGHT_SOURCE
   )
   const setSource = useStore((s) => s.flistDiffSetRightSource)
   const loadBackup = useStore((s) => s.flistDiffLoadBackup)

@@ -1,10 +1,9 @@
-// Tier 2 §10 "Vitest" — snapshot per field renderer × {unset, set,
-// overlaid, read-only}. The plan called this out as missing; landing
-// it here so a future refactor can't quietly break the value/empty/dirty
-// renderings.
+// The profile field renderers of the Workbench's Profile fields tab:
+// what each shows for an empty, a set and an edited field, and what the
+// user can do with it.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 afterEach(() => {
   cleanup()
@@ -46,8 +45,8 @@ const numberDescriptor: InfotagDescriptor = {
 }
 
 describe('infotag field renderers', () => {
-  it('TextField unset matches snapshot', () => {
-    const { asFragment } = render(
+  it('TextField with no value shows its label and an empty input, with nothing to reset', () => {
+    render(
       <TextField
         descriptor={baseDescriptor}
         value=""
@@ -58,11 +57,18 @@ describe('infotag field renderers', () => {
         onReset={vi.fn()}
       />
     )
-    expect(asFragment()).toMatchSnapshot()
+    expect(screen.getByText('Species')).toBeTruthy()
+    const input = screen.getByRole('textbox') as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('—')
+    expect(input.disabled).toBe(false)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByText(/F-list:/)).toBeNull()
   })
 
-  it('TextField set + overlaid matches snapshot (renders F-list muted line)', () => {
-    const { asFragment, getByTestId, getByText } = render(
+  it('TextField edited away from Live shows the F-list value and resets to it', () => {
+    const reset = vi.fn()
+    render(
       <TextField
         descriptor={baseDescriptor}
         value="Human (mod)"
@@ -70,12 +76,43 @@ describe('infotag field renderers', () => {
         liveValue="Human"
         readOnly={false}
         onCommit={vi.fn()}
+        onReset={reset}
+      />
+    )
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Human (mod)')
+    expect(screen.getByText('F-list: Human')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Species to F-list value' }))
+    expect(reset).toHaveBeenCalledTimes(1)
+  })
+
+  it('TextField hands every keystroke to the Workbench as typing, and ends typing on leaving', () => {
+    const commit = vi.fn()
+    const endTyping = vi.fn()
+    render(
+      <TextField
+        descriptor={baseDescriptor}
+        value=""
+        overlaid={false}
+        liveValue={null}
+        readOnly={false}
+        onCommit={commit}
+        onEndTyping={endTyping}
         onReset={vi.fn()}
       />
     )
-    expect(getByTestId('infotag-9-input')).toBeTruthy()
-    expect(getByText(/F-list: Human/)).toBeTruthy()
-    expect(asFragment()).toMatchSnapshot()
+    const input = screen.getByRole('textbox') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'E' } })
+    fireEvent.change(input, { target: { value: 'Elf' } })
+    expect(commit.mock.calls).toEqual([
+      ['E', { typing: true }],
+      ['Elf', { typing: true }]
+    ])
+    expect(input.value).toBe('Elf')
+    expect(endTyping).not.toHaveBeenCalled()
+
+    fireEvent.blur(input)
+    expect(endTyping).toHaveBeenCalledTimes(1)
   })
 
   it('TextField read-only disables the input', () => {
