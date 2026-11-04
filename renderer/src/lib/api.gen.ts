@@ -422,7 +422,7 @@ export interface paths {
         /**
          * Flist Character Zip Backup Delete
          * @description Move a single Backup to the character's Trash, user-set name and
-         *     all; it can be restored from there until the Trash is emptied.
+         *     all; it can be put back from there until the Trash is emptied.
          *     Filename validated against the ISO-basic format so a crafted `../`
          *     path moves nothing. 404 if the Backup isn't there.
          */
@@ -804,7 +804,7 @@ export interface paths {
         /**
          * Flist Character Image Remove
          * @description Delete one image: off the Workbench's gallery if it is there,
-         *     and into the character's Trash, where it can be restored until the
+         *     and into the character's Trash, where it can be put back until the
          *     Trash is emptied. The same as the batch route below.
          */
         delete: operations["flist_character_image_remove_flist_character__character_id__images__image_id__delete"];
@@ -2628,6 +2628,11 @@ export interface components {
             /** Elapsed Ms */
             elapsed_ms: number;
         };
+        /** EmbeddingTestRequest */
+        EmbeddingTestRequest: {
+            /** Embed Model */
+            embed_model?: string | null;
+        };
         /**
          * ExtensionSeen
          * @description The extension version as of its last paired call; both null
@@ -2931,6 +2936,57 @@ export interface components {
             /** Conflicts */
             conflicts: string[];
         };
+        /** IndexSettings */
+        IndexSettings: {
+            /** Embed Model */
+            embed_model: string;
+            /** Rerank Model */
+            rerank_model: string;
+            /** Rerank Candidates */
+            rerank_candidates: number;
+            /** Top K */
+            top_k: number;
+            /** Neighbors */
+            neighbors: number;
+            /** Rerank Min Ratio */
+            rerank_min_ratio: number;
+            /** Hybrid Enabled */
+            hybrid_enabled: boolean;
+            /** Hybrid Bm25 Candidates */
+            hybrid_bm25_candidates: number;
+            /** Chunk Max Chars */
+            chunk_max_chars: number;
+            /** Chunk Soft Split Chars */
+            chunk_soft_split_chars: number;
+            /** Chunk Overlap Msgs */
+            chunk_overlap_msgs: number;
+            defaults: components["schemas"]["IndexValues"];
+        };
+        /** IndexSettingsUpdate */
+        IndexSettingsUpdate: {
+            /** Embed Model */
+            embed_model?: string | null;
+            /** Rerank Model */
+            rerank_model?: string | null;
+            /** Rerank Candidates */
+            rerank_candidates?: number | null;
+            /** Top K */
+            top_k?: number | null;
+            /** Neighbors */
+            neighbors?: number | null;
+            /** Rerank Min Ratio */
+            rerank_min_ratio?: number | null;
+            /** Hybrid Enabled */
+            hybrid_enabled?: boolean | null;
+            /** Hybrid Bm25 Candidates */
+            hybrid_bm25_candidates?: number | null;
+            /** Chunk Max Chars */
+            chunk_max_chars?: number | null;
+            /** Chunk Soft Split Chars */
+            chunk_soft_split_chars?: number | null;
+            /** Chunk Overlap Msgs */
+            chunk_overlap_msgs?: number | null;
+        };
         /**
          * IndexStatus
          * @description What the Index holds: model, dimension, last ingest, chunk
@@ -2949,6 +3005,34 @@ export interface components {
             job: components["schemas"]["Job"] | null;
             /** Chunk Count */
             chunk_count: number | null;
+        };
+        /**
+         * IndexValues
+         * @description The Index and retrieval tunables, as set or as their defaults.
+         */
+        IndexValues: {
+            /** Embed Model */
+            embed_model: string;
+            /** Rerank Model */
+            rerank_model: string;
+            /** Rerank Candidates */
+            rerank_candidates: number;
+            /** Top K */
+            top_k: number;
+            /** Neighbors */
+            neighbors: number;
+            /** Rerank Min Ratio */
+            rerank_min_ratio: number;
+            /** Hybrid Enabled */
+            hybrid_enabled: boolean;
+            /** Hybrid Bm25 Candidates */
+            hybrid_bm25_candidates: number;
+            /** Chunk Max Chars */
+            chunk_max_chars: number;
+            /** Chunk Soft Split Chars */
+            chunk_soft_split_chars: number;
+            /** Chunk Overlap Msgs */
+            chunk_overlap_msgs: number;
         };
         /** IndexWiped */
         IndexWiped: {
@@ -3040,6 +3124,23 @@ export interface components {
             embed_model: string | null;
             /** Embed Dimension */
             embed_dimension: number | null;
+        };
+        /** IngestRequest */
+        IngestRequest: {
+            /** Character */
+            character?: string | null;
+            /** Partner */
+            partner?: string | null;
+            /**
+             * Include Ooc
+             * @default false
+             */
+            include_ooc: boolean;
+            /**
+             * Force Rewipe
+             * @default false
+             */
+            force_rewipe: boolean;
         };
         /**
          * IngestScope
@@ -3976,107 +4077,6 @@ export interface components {
             /** Skipped */
             skipped: string[];
         };
-        /** RagIngestRequest */
-        RagIngestRequest: {
-            /** Character */
-            character?: string | null;
-            /** Partner */
-            partner?: string | null;
-            /**
-             * Include Ooc
-             * @default false
-             */
-            include_ooc: boolean;
-            /**
-             * Force Rewipe
-             * @default false
-             */
-            force_rewipe: boolean;
-        };
-        /** RagSettings */
-        RagSettings: {
-            /** Embed Model */
-            embed_model: string;
-            /** Rerank Model */
-            rerank_model: string;
-            /** Rerank Candidates */
-            rerank_candidates: number;
-            /** Top K */
-            top_k: number;
-            /** Neighbors */
-            neighbors: number;
-            /** Rerank Min Ratio */
-            rerank_min_ratio: number;
-            /** Hybrid Enabled */
-            hybrid_enabled: boolean;
-            /** Hybrid Bm25 Candidates */
-            hybrid_bm25_candidates: number;
-            /** Chunk Max Chars */
-            chunk_max_chars: number;
-            /** Chunk Soft Split Chars */
-            chunk_soft_split_chars: number;
-            /** Chunk Overlap Msgs */
-            chunk_overlap_msgs: number;
-            defaults: components["schemas"]["RagValues"];
-        };
-        /** RagSettingsUpdate */
-        RagSettingsUpdate: {
-            /** Embed Model */
-            embed_model?: string | null;
-            /** Rerank Model */
-            rerank_model?: string | null;
-            /** Rerank Candidates */
-            rerank_candidates?: number | null;
-            /** Top K */
-            top_k?: number | null;
-            /** Neighbors */
-            neighbors?: number | null;
-            /** Rerank Min Ratio */
-            rerank_min_ratio?: number | null;
-            /** Hybrid Enabled */
-            hybrid_enabled?: boolean | null;
-            /** Hybrid Bm25 Candidates */
-            hybrid_bm25_candidates?: number | null;
-            /** Chunk Max Chars */
-            chunk_max_chars?: number | null;
-            /** Chunk Soft Split Chars */
-            chunk_soft_split_chars?: number | null;
-            /** Chunk Overlap Msgs */
-            chunk_overlap_msgs?: number | null;
-        };
-        /** RagTestEmbeddingRequest */
-        RagTestEmbeddingRequest: {
-            /** Embed Model */
-            embed_model?: string | null;
-        };
-        /**
-         * RagValues
-         * @description The Index and retrieval tunables, as set or as their defaults.
-         */
-        RagValues: {
-            /** Embed Model */
-            embed_model: string;
-            /** Rerank Model */
-            rerank_model: string;
-            /** Rerank Candidates */
-            rerank_candidates: number;
-            /** Top K */
-            top_k: number;
-            /** Neighbors */
-            neighbors: number;
-            /** Rerank Min Ratio */
-            rerank_min_ratio: number;
-            /** Hybrid Enabled */
-            hybrid_enabled: boolean;
-            /** Hybrid Bm25 Candidates */
-            hybrid_bm25_candidates: number;
-            /** Chunk Max Chars */
-            chunk_max_chars: number;
-            /** Chunk Soft Split Chars */
-            chunk_soft_split_chars: number;
-            /** Chunk Overlap Msgs */
-            chunk_overlap_msgs: number;
-        };
         /**
          * RefusalBody
          * @description What every route answers when it is not ok, as the schema
@@ -4212,7 +4212,7 @@ export interface components {
             /** Fchat Data Dir Env Locked */
             fchat_data_dir_env_locked: boolean;
             labels: components["schemas"]["LabelsSettings"];
-            rag: components["schemas"]["RagSettings"];
+            rag: components["schemas"]["IndexSettings"];
             /** Image Import Roots */
             image_import_roots: string[];
             mcp: components["schemas"]["McpSettings"];
@@ -4223,7 +4223,7 @@ export interface components {
             /** Fchat Data Dir */
             fchat_data_dir?: string | null;
             labels?: components["schemas"]["LabelsSettingsUpdate"] | null;
-            rag?: components["schemas"]["RagSettingsUpdate"] | null;
+            rag?: components["schemas"]["IndexSettingsUpdate"] | null;
             /** Image Import Roots */
             image_import_roots?: string[] | null;
             mcp?: components["schemas"]["McpSettingsUpdate"] | null;
@@ -7575,7 +7575,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RagTestEmbeddingRequest"];
+                "application/json": components["schemas"]["EmbeddingTestRequest"];
             };
         };
         responses: {
@@ -7608,7 +7608,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RagIngestRequest"];
+                "application/json": components["schemas"]["IngestRequest"];
             };
         };
         responses: {

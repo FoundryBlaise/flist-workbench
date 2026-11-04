@@ -165,7 +165,7 @@ def flist_character_zip_backup_delete(
     character_id: str, filename: str
 ) -> None:
     """Move a single Backup to the character's Trash, user-set name and
-    all; it can be restored from there until the Trash is emptied.
+    all; it can be put back from there until the Trash is emptied.
     Filename validated against the ISO-basic format so a crafted `../`
     path moves nothing. 404 if the Backup isn't there."""
     archive_backups.require_backup_filename(filename)

@@ -113,14 +113,14 @@ class IndexStatus(WireModel):
     chunk_count: int | None
 
 
-class RagTestEmbeddingRequest(BaseModel):
+class EmbeddingTestRequest(BaseModel):
     # Optional — omitted means "the saved model". Kept so a model can be
     # tried before it is saved.
     embed_model: str | None = None
 
 
 @router.post("/rag/test-embedding")
-def rag_test_embedding(body: RagTestEmbeddingRequest) -> EmbeddingTest:
+def rag_test_embedding(body: EmbeddingTestRequest) -> EmbeddingTest:
     """One canned embedding — validates that the model loads and says
     what dimension it produces.
 
@@ -168,7 +168,7 @@ def rag_test_embedding(body: RagTestEmbeddingRequest) -> EmbeddingTest:
     )
 
 
-class RagIngestRequest(BaseModel):
+class IngestRequest(BaseModel):
     # Same scope shape as ClassifyJobRequest. {} = every char × every
     # partner; {character: X} = all partners for X; {character: X,
     # partner: Y} = one conversation.
@@ -185,7 +185,7 @@ class RagIngestRequest(BaseModel):
 
 
 @router.post("/rag/ingest", status_code=202)
-def rag_ingest_start(body: RagIngestRequest) -> IngestJob:
+def rag_ingest_start(body: IngestRequest) -> IngestJob:
     # The same resolver MCP ingest_logs uses: any case, and a partner's
     # alias reaches its conversation. An unknown name is refused instead
     # of indexing nothing.

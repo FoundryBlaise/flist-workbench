@@ -178,8 +178,13 @@ class PutBackImage(WireModel):
     from_: str = Field(alias="from")
 
 
+# Taking something out of the Trash is putting it back (GLOSSARY: not a
+# Restore). The answers' `restored` key is the wire and stays as the
+# window reads it; the models' own field names say put back.
+
+
 class ImagesPutBack(WireModel):
-    restored: list[PutBackImage]
+    put_back: list[PutBackImage] = Field(alias="restored")
     not_found: list[str]
     #: Trash ids left in the Trash: the Pool holds other bytes under
     #: every name they could come back as.
@@ -188,7 +193,7 @@ class ImagesPutBack(WireModel):
 
 class BackupsPutBack(WireModel):
     #: The Backups' file names in the Backup list.
-    restored: list[str]
+    put_back: list[str] = Field(alias="restored")
     not_found: list[str]
     conflicts: list[str]
 
@@ -198,12 +203,13 @@ class PutBackLabels(WireModel):
     since keeps its newer Label; its hash is under `skipped`."""
 
     id: str
-    restored: int
+    #: How many Labels came back.
+    put_back: int = Field(alias="restored")
     skipped: list[str]
 
 
 class LabelsPutBack(WireModel):
-    restored: list[PutBackLabels]
+    put_back: list[PutBackLabels] = Field(alias="restored")
     not_found: list[str]
 
 
@@ -322,7 +328,7 @@ def flist_character_image_remove(
     character_id: str, image_id: str
 ) -> ImageTrashed:
     """Delete one image: off the Workbench's gallery if it is there,
-    and into the character's Trash, where it can be restored until the
+    and into the character's Trash, where it can be put back until the
     Trash is emptied. The same as the batch route below."""
     result = image_trash_service.delete_images(character_id, [image_id])
     if not result["trashed"]:

@@ -33,7 +33,7 @@ class LabelsSettingsUpdate(BaseModel):
     threshold_chars: int | None = None
 
 
-class RagSettingsUpdate(BaseModel):
+class IndexSettingsUpdate(BaseModel):
     # Same convention as LabelsSettingsUpdate: empty string clears
     # (falls back to default on read), None leaves untouched.
     # A fastembed model id, "org/name".
@@ -74,7 +74,7 @@ class SettingsUpdate(BaseModel):
     # the directory picker's "no folder selected" state.
     fchat_data_dir: str | None = None
     labels: LabelsSettingsUpdate | None = None
-    rag: RagSettingsUpdate | None = None
+    rag: IndexSettingsUpdate | None = None
     # Folders MCP's import_images may read from. Only this endpoint — the
     # window — sets them; the MCP settings tool can read but not change.
     image_import_roots: list[str] | None = None
@@ -95,7 +95,7 @@ class LabelsSettings(WireModel):
     defaults: LabelsDefaults
 
 
-class RagValues(WireModel):
+class IndexValues(WireModel):
     """The Index and retrieval tunables, as set or as their defaults."""
 
     embed_model: str
@@ -111,8 +111,8 @@ class RagValues(WireModel):
     chunk_overlap_msgs: int
 
 
-class RagSettings(RagValues):
-    defaults: RagValues
+class IndexSettings(IndexValues):
+    defaults: IndexValues
 
 
 class McpSettings(WireModel):
@@ -143,14 +143,14 @@ class Settings(WireModel):
     #: FCHAT_DATA_DIR forces the folder; the picker is disabled.
     fchat_data_dir_env_locked: bool
     labels: LabelsSettings
-    rag: RagSettings
+    rag: IndexSettings
     image_import_roots: list[str]
     mcp: McpSettings
     foreign: ForeignSettings
 
 
 def _rag_values(source) -> dict:
-    return {name: getattr(source, name) for name in RagValues.model_fields}
+    return {name: getattr(source, name) for name in IndexValues.model_fields}
 
 
 def _settings(conn) -> Settings:
@@ -158,7 +158,7 @@ def _settings(conn) -> Settings:
 
     lab = labels_store.load_settings(conn)
     rag = rag_settings.load_settings(conn)
-    rag_defaults = RagValues(
+    rag_defaults = IndexValues(
         embed_model=rag_settings.DEFAULT_EMBED_MODEL,
         rerank_model=rag_settings.DEFAULT_RERANK_MODEL,
         rerank_candidates=rag_settings.DEFAULT_RERANK_CANDIDATES,
@@ -179,7 +179,7 @@ def _settings(conn) -> Settings:
             threshold_chars=lab.threshold_chars,
             defaults=LabelsDefaults(threshold_chars=labels_store.DEFAULT_THRESHOLD_CHARS),
         ),
-        rag=RagSettings(**_rag_values(rag), defaults=rag_defaults),
+        rag=IndexSettings(**_rag_values(rag), defaults=rag_defaults),
         image_import_roots=[str(p) for p in image_import_service.import_roots(conn)],
         mcp=McpSettings(log_text=settings_service.log_text_over_mcp(conn)),
         foreign=ForeignSettings(

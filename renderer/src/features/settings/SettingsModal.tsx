@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ForeignSettings, LabelsSettings, RagSettings } from '../../lib/api'
+import type { ForeignSettings, LabelsSettings, IndexSettings } from '../../lib/api'
 import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
 import type { EmbeddingTestResult, Settings, SettingsPatch } from '../../state/slices/settings'
@@ -1493,7 +1493,7 @@ function RetrievalPane({
   draft,
   onChange
 }: {
-  rag: RagSettings
+  rag: IndexSettings
   draft: Draft['rag']
   onChange: (patch: Partial<Draft['rag']>) => void
 }) {
@@ -1683,7 +1683,7 @@ function EmbeddingPane({
   draft,
   onChange
 }: {
-  rag: RagSettings
+  rag: IndexSettings
   draft: Draft['rag']
   onChange: (patch: Partial<Draft['rag']>) => void
 }) {

@@ -173,7 +173,7 @@ export type LabelSource = NonNullable<LogMessage['label_source']>
 /** Messages shorter than `threshold_chars` are OOC without asking
  *  anyone; `defaults` for the "(default)" hints. */
 export type LabelsSettings = Schema<'LabelsSettings'>
-export type RagSettings = Schema<'RagSettings'>
+export type IndexSettings = Schema<'IndexSettings'>
 
 /** What an ingest covers: every Log, every conversation of one
  *  character, or one conversation. */

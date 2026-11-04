@@ -693,7 +693,7 @@
     "/flist/character/{character_id}/zip-backups/{filename}": {
       "delete": {
         "summary": "Flist Character Zip Backup Delete",
-        "description": "Move a single Backup to the character's Trash, user-set name and\nall; it can be restored from there until the Trash is emptied.\nFilename validated against the ISO-basic format so a crafted `../`\npath moves nothing. 404 if the Backup isn't there.",
+        "description": "Move a single Backup to the character's Trash, user-set name and\nall; it can be put back from there until the Trash is emptied.\nFilename validated against the ISO-basic format so a crafted `../`\npath moves nothing. 404 if the Backup isn't there.",
         "operationId": "flist_character_zip_backup_delete_flist_character__character_id__zip_backups__filename__delete",
         "parameters": [
           {
@@ -1537,7 +1537,7 @@
     "/flist/character/{character_id}/images/{image_id}": {
       "delete": {
         "summary": "Flist Character Image Remove",
-        "description": "Delete one image: off the Workbench's gallery if it is there,\nand into the character's Trash, where it can be restored until the\nTrash is emptied. The same as the batch route below.",
+        "description": "Delete one image: off the Workbench's gallery if it is there,\nand into the character's Trash, where it can be put back until the\nTrash is emptied. The same as the batch route below.",
         "operationId": "flist_character_image_remove_flist_character__character_id__images__image_id__delete",
         "parameters": [
           {
@@ -4176,7 +4176,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RagTestEmbeddingRequest"
+                "$ref": "#/components/schemas/EmbeddingTestRequest"
               }
             }
           },
@@ -4214,7 +4214,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RagIngestRequest"
+                "$ref": "#/components/schemas/IngestRequest"
               }
             }
           },
@@ -5736,6 +5736,23 @@
         "title": "EmbeddingTest",
         "description": "One canned embedding: `ok` with its dimension, or `ok: false`\nwith the error. Always a 200, like the Labels connection test."
       },
+      "EmbeddingTestRequest": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          }
+        },
+        "type": "object",
+        "title": "EmbeddingTestRequest"
+      },
       "ExtensionSeen": {
         "properties": {
           "version": {
@@ -6440,6 +6457,201 @@
         ],
         "title": "ImagesPutBack"
       },
+      "IndexSettings": {
+        "properties": {
+          "embed_model": {
+            "type": "string",
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "type": "string",
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "type": "integer",
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K"
+          },
+          "neighbors": {
+            "type": "integer",
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "type": "number",
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "type": "integer",
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "type": "integer",
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "type": "integer",
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "type": "integer",
+            "title": "Chunk Overlap Msgs"
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/IndexValues"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "rerank_model",
+          "rerank_candidates",
+          "top_k",
+          "neighbors",
+          "rerank_min_ratio",
+          "hybrid_enabled",
+          "hybrid_bm25_candidates",
+          "chunk_max_chars",
+          "chunk_soft_split_chars",
+          "chunk_overlap_msgs",
+          "defaults"
+        ],
+        "title": "IndexSettings"
+      },
+      "IndexSettingsUpdate": {
+        "properties": {
+          "embed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          },
+          "neighbors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Overlap Msgs"
+          }
+        },
+        "type": "object",
+        "title": "IndexSettingsUpdate"
+      },
       "IndexStatus": {
         "properties": {
           "embed_model": {
@@ -6513,6 +6725,71 @@
         ],
         "title": "IndexStatus",
         "description": "What the Index holds: model, dimension, last ingest, chunk\ncount. While a job holds the Index, `busy` and that `job` instead,\nand `chunk_count` is null because the Index can't be counted."
+      },
+      "IndexValues": {
+        "properties": {
+          "embed_model": {
+            "type": "string",
+            "title": "Embed Model"
+          },
+          "rerank_model": {
+            "type": "string",
+            "title": "Rerank Model"
+          },
+          "rerank_candidates": {
+            "type": "integer",
+            "title": "Rerank Candidates"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K"
+          },
+          "neighbors": {
+            "type": "integer",
+            "title": "Neighbors"
+          },
+          "rerank_min_ratio": {
+            "type": "number",
+            "title": "Rerank Min Ratio"
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled"
+          },
+          "hybrid_bm25_candidates": {
+            "type": "integer",
+            "title": "Hybrid Bm25 Candidates"
+          },
+          "chunk_max_chars": {
+            "type": "integer",
+            "title": "Chunk Max Chars"
+          },
+          "chunk_soft_split_chars": {
+            "type": "integer",
+            "title": "Chunk Soft Split Chars"
+          },
+          "chunk_overlap_msgs": {
+            "type": "integer",
+            "title": "Chunk Overlap Msgs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "embed_model",
+          "rerank_model",
+          "rerank_candidates",
+          "top_k",
+          "neighbors",
+          "rerank_min_ratio",
+          "hybrid_enabled",
+          "hybrid_bm25_candidates",
+          "chunk_max_chars",
+          "chunk_soft_split_chars",
+          "chunk_overlap_msgs"
+        ],
+        "title": "IndexValues",
+        "description": "The Index and retrieval tunables, as set or as their defaults."
       },
       "IndexWiped": {
         "properties": {
@@ -6771,6 +7048,44 @@
         ],
         "title": "IngestProgress",
         "description": "What an ingest has done so far (`rag_jobs.IngestProgress`).\n`skipped_unlabeled`: messages left out for lack of an IC/OOC\nverdict; a high count means the classification flow should run\nfirst."
+      },
+      "IngestRequest": {
+        "properties": {
+          "character": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Character"
+          },
+          "partner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partner"
+          },
+          "include_ooc": {
+            "type": "boolean",
+            "title": "Include Ooc",
+            "default": false
+          },
+          "force_rewipe": {
+            "type": "boolean",
+            "title": "Force Rewipe",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "IngestRequest"
       },
       "IngestScope": {
         "properties": {
@@ -9022,321 +9337,6 @@
         "title": "PutBackLabels",
         "description": "One cleared-Labels entry put back. A message labelled again\nsince keeps its newer Label; its hash is under `skipped`."
       },
-      "RagIngestRequest": {
-        "properties": {
-          "character": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Character"
-          },
-          "partner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Partner"
-          },
-          "include_ooc": {
-            "type": "boolean",
-            "title": "Include Ooc",
-            "default": false
-          },
-          "force_rewipe": {
-            "type": "boolean",
-            "title": "Force Rewipe",
-            "default": false
-          }
-        },
-        "type": "object",
-        "title": "RagIngestRequest"
-      },
-      "RagSettings": {
-        "properties": {
-          "embed_model": {
-            "type": "string",
-            "title": "Embed Model"
-          },
-          "rerank_model": {
-            "type": "string",
-            "title": "Rerank Model"
-          },
-          "rerank_candidates": {
-            "type": "integer",
-            "title": "Rerank Candidates"
-          },
-          "top_k": {
-            "type": "integer",
-            "title": "Top K"
-          },
-          "neighbors": {
-            "type": "integer",
-            "title": "Neighbors"
-          },
-          "rerank_min_ratio": {
-            "type": "number",
-            "title": "Rerank Min Ratio"
-          },
-          "hybrid_enabled": {
-            "type": "boolean",
-            "title": "Hybrid Enabled"
-          },
-          "hybrid_bm25_candidates": {
-            "type": "integer",
-            "title": "Hybrid Bm25 Candidates"
-          },
-          "chunk_max_chars": {
-            "type": "integer",
-            "title": "Chunk Max Chars"
-          },
-          "chunk_soft_split_chars": {
-            "type": "integer",
-            "title": "Chunk Soft Split Chars"
-          },
-          "chunk_overlap_msgs": {
-            "type": "integer",
-            "title": "Chunk Overlap Msgs"
-          },
-          "defaults": {
-            "$ref": "#/components/schemas/RagValues"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "embed_model",
-          "rerank_model",
-          "rerank_candidates",
-          "top_k",
-          "neighbors",
-          "rerank_min_ratio",
-          "hybrid_enabled",
-          "hybrid_bm25_candidates",
-          "chunk_max_chars",
-          "chunk_soft_split_chars",
-          "chunk_overlap_msgs",
-          "defaults"
-        ],
-        "title": "RagSettings"
-      },
-      "RagSettingsUpdate": {
-        "properties": {
-          "embed_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embed Model"
-          },
-          "rerank_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank Model"
-          },
-          "rerank_candidates": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank Candidates"
-          },
-          "top_k": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Top K"
-          },
-          "neighbors": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Neighbors"
-          },
-          "rerank_min_ratio": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank Min Ratio"
-          },
-          "hybrid_enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hybrid Enabled"
-          },
-          "hybrid_bm25_candidates": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hybrid Bm25 Candidates"
-          },
-          "chunk_max_chars": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Max Chars"
-          },
-          "chunk_soft_split_chars": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Soft Split Chars"
-          },
-          "chunk_overlap_msgs": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chunk Overlap Msgs"
-          }
-        },
-        "type": "object",
-        "title": "RagSettingsUpdate"
-      },
-      "RagTestEmbeddingRequest": {
-        "properties": {
-          "embed_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embed Model"
-          }
-        },
-        "type": "object",
-        "title": "RagTestEmbeddingRequest"
-      },
-      "RagValues": {
-        "properties": {
-          "embed_model": {
-            "type": "string",
-            "title": "Embed Model"
-          },
-          "rerank_model": {
-            "type": "string",
-            "title": "Rerank Model"
-          },
-          "rerank_candidates": {
-            "type": "integer",
-            "title": "Rerank Candidates"
-          },
-          "top_k": {
-            "type": "integer",
-            "title": "Top K"
-          },
-          "neighbors": {
-            "type": "integer",
-            "title": "Neighbors"
-          },
-          "rerank_min_ratio": {
-            "type": "number",
-            "title": "Rerank Min Ratio"
-          },
-          "hybrid_enabled": {
-            "type": "boolean",
-            "title": "Hybrid Enabled"
-          },
-          "hybrid_bm25_candidates": {
-            "type": "integer",
-            "title": "Hybrid Bm25 Candidates"
-          },
-          "chunk_max_chars": {
-            "type": "integer",
-            "title": "Chunk Max Chars"
-          },
-          "chunk_soft_split_chars": {
-            "type": "integer",
-            "title": "Chunk Soft Split Chars"
-          },
-          "chunk_overlap_msgs": {
-            "type": "integer",
-            "title": "Chunk Overlap Msgs"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "embed_model",
-          "rerank_model",
-          "rerank_candidates",
-          "top_k",
-          "neighbors",
-          "rerank_min_ratio",
-          "hybrid_enabled",
-          "hybrid_bm25_candidates",
-          "chunk_max_chars",
-          "chunk_soft_split_chars",
-          "chunk_overlap_msgs"
-        ],
-        "title": "RagValues",
-        "description": "The Index and retrieval tunables, as set or as their defaults."
-      },
       "RefusalBody": {
         "properties": {
           "code": {
@@ -9706,7 +9706,7 @@
             "$ref": "#/components/schemas/LabelsSettings"
           },
           "rag": {
-            "$ref": "#/components/schemas/RagSettings"
+            "$ref": "#/components/schemas/IndexSettings"
           },
           "image_import_roots": {
             "items": {
@@ -9763,7 +9763,7 @@
           "rag": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/RagSettingsUpdate"
+                "$ref": "#/components/schemas/IndexSettingsUpdate"
               },
               {
                 "type": "null"
