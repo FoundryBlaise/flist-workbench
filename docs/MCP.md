@@ -149,9 +149,10 @@ it or the user clears it (Settings → Foreign profiles); after 24 hours
 the next read fetches it again. Fetching spends a quarter-share of
 the hourly F-list budget so a model browsing profiles cannot leave
 the user unable to pull their own. The activity log records each
-profile a model read, by name, also when a spent budget hands back the
-cached copy, and keeps those names across a restart. When F-list says a profile is gone
-or not visible, its cached copy is deleted on the spot.
+profile a model read, by name, also when a spent budget hands back
+the cached copy, and keeps those names across a restart. When F-list
+says a profile is gone or not visible, its cached copy is deleted on
+the spot.
 
 **Looking at the result** — `render_profile_image` returns the profile
 as a picture, rendered by the app's own preview: same BBCode renderer,
@@ -272,7 +273,9 @@ set_message_labels(character, partner, [...]) the Labels
 A Label the user set by hand in the app is never replaced by a model.
 `set_message_labels` leaves it as it is, writes the rest of the call
 and lists the hashes it left alone under `skipped`, each with the
-reason. Only the user changes or clears such a Label, in the window.
+reason. `clear_labels` takes only what a model wrote: it keeps every
+Label set by hand and lists those under `skipped` the same way. Only
+the user changes or clears such a Label, in the window.
 
 Some conversations do not need judging at all. A user who knows a
 chat is in-character from the first line to the last can say so once —
@@ -281,8 +284,10 @@ right-click the conversation header in the app — and every unlabeled
 message in it gets that Label in one write. It only ever adds:
 messages that already carry a Label keep it, and the rules keep
 deciding the short lines and `((` asides. The app can undo exactly
-that write. A model must not reach for it on its own — only when the
-user has said it about that conversation.
+that write. Filled through the tool, they count as a model's Labels,
+which `clear_labels` takes again; filled in the app, as Labels set by
+hand. A model must not reach for it on its own — only when the user
+has said it about that conversation.
 
 Each batch reports how many are left and roughly how many more calls
 that means. Worth telling the user before starting: on a long log this
@@ -469,7 +474,7 @@ server, so they cannot drift from it.
 | `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
-| `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
+| `clear_labels` | Clear the Labels a model wrote into the Trash; Labels set by hand stay. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |
 | `search_logs_semantic` | *Log text, opt-in.* Find passages that are about something, not ones holding a word. |
 | `get_rag_status` | What the Index holds, and whether the embedding model loads. |
@@ -554,7 +559,7 @@ server, so they cannot drift from it.
 | `get_unlabeled_messages` | *Log text, opt-in.* A batch of Unlabeled messages, each with its neighbours. |
 | `set_message_labels` | Store IC/OOC Labels for messages. |
 | `label_all_unlabeled` | Give every Unlabeled message in one conversation the same Label. Needs `confirm=true`. |
-| `clear_labels` | Clear stored Labels into the Trash. Needs `confirm=true`. |
+| `clear_labels` | Clear the Labels a model wrote into the Trash; Labels set by hand stay. Needs `confirm=true`. |
 | `ingest_logs` | Index labelled messages so search_logs_semantic finds them. A job. |
 | `search_logs_semantic` | *Log text, opt-in.* Find passages that are about something, not ones holding a word. |
 | `get_rag_status` | What the Index holds, and whether the embedding model loads. |

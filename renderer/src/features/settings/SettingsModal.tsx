@@ -8,7 +8,7 @@ import {
   type McpInfo,
   type RagSettings
 } from '../../lib/api'
-import { formatBytes } from '../../lib/bytes'
+import { formatBytes, MB } from '../../lib/bytes'
 import { useStore } from '../../state'
 import { TrashedLabels } from '../flist/TrashedEntries'
 import { IndexStatus } from '../rag/IndexStatus'
@@ -2045,8 +2045,6 @@ function EmbeddingPane({
     </>
   )
 }
-
-const MB = 1024 * 1024
 
 /** Settings → Foreign profiles. The cache of other people's profiles
  *  you opened, here or through a model: how much disk it takes, its

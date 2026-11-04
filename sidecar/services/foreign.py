@@ -29,7 +29,7 @@ import flist_api
 import foreign_cache
 import logs as log_store
 from logs import LogDirUnavailable
-from refusals import FlistRefused, ValidationFailed
+from refusals import FlistRefused, NoAvatar, ValidationFailed
 from services import settings as settings_service
 
 #: Where a list of candidate names can come from. `name` is the free
@@ -242,24 +242,27 @@ SERVER_ERROR_MESSAGE = (
 #: nothing is cached: `{error type: (code, message)}`. Any other
 #: `FlistApiError` (an HTTP 4xx, a page that is not JSON) is
 #: `flist_error` in F-list's own words, and never `not_found`.
-_NO_WORD_ON_THE_PROFILE: dict[type[flist_api.FlistApiError], tuple[str, str]] = {
+_UNANSWERED_READ_CODES: dict[type[flist_api.FlistApiError], tuple[str, str]] = {
     flist_api.FlistUnreachable: ("flist_unreachable", UNREACHABLE_MESSAGE),
     flist_api.FlistServerError: ("flist_server_error", SERVER_ERROR_MESSAGE),
 }
 
 
-def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
-    """The cached copy, served because F-list could not answer for it."""
+def _from_cache(cached: dict[str, Any], clean: str) -> dict[str, Any]:
+    """The cached copy as the answer to a profile read."""
     foreign_cache.mark_viewed(clean)
     return {
         "name": cached.get("name") or clean,
         "profile": cached,
         "from_cache": True,
-        "stale": True,
         "age_sec": foreign_cache.age_sec(cached),
         "fetched_at": cached.get("fetched_at"),
-        "refresh_error": str(exc),
     }
+
+
+def _stale(cached: dict[str, Any], clean: str, exc: Exception) -> dict[str, Any]:
+    """The cached copy, served because F-list could not answer for it."""
+    return {**_from_cache(cached, clean), "stale": True, "refresh_error": str(exc)}
 
 
 def _rate_limited(
@@ -304,14 +307,7 @@ async def get_profile(
 
     cached = foreign_cache.read_profile(clean)
     if cached is not None and not refresh and foreign_cache.is_fresh(cached, ttl_sec):
-        foreign_cache.mark_viewed(clean)
-        return {
-            "name": cached.get("name") or clean,
-            "profile": cached,
-            "from_cache": True,
-            "age_sec": foreign_cache.age_sec(cached),
-            "fetched_at": cached.get("fetched_at"),
-        }
+        return _from_cache(cached, clean)
 
     if budget is not None:
         try:
@@ -340,7 +336,7 @@ async def get_profile(
         # was this written", so serve it.
         if cached is not None:
             return _stale(cached, clean, exc)
-        code, message = _NO_WORD_ON_THE_PROFILE.get(type(exc), ("flist_error", str(exc)))
+        code, message = _UNANSWERED_READ_CODES.get(type(exc), ("flist_error", str(exc)))
         raise ForeignError(code, message) from exc
 
     # Key the cache on the spelling F-list considers canonical, not on
@@ -362,6 +358,29 @@ async def get_profile(
         "age_sec": 0.0,
         "fetched_at": stored.get("fetched_at"),
     }
+
+
+async def avatar(name: str) -> Path:
+    """Where `name`'s avatar is cached, inside its foreign folder.
+
+    Fetched when the cache holds none or the profile was refreshed
+    since; a failed download keeps serving the old file and only says
+    `NoAvatar` when there is none. A name the cache cannot hold is
+    `validation_failed`.
+    """
+    try:
+        dest = foreign_cache.avatar_path(name)
+    except ValueError as exc:
+        raise ValidationFailed("name", str(exc)) from exc
+    if not foreign_cache.avatar_is_current(name):
+        try:
+            await flist_api.download_to(flist_api.avatar_url(name), dest)
+        except flist_api.FlistApiError as exc:
+            if not dest.exists():
+                raise NoAvatar(str(exc)) from exc
+        else:
+            file_landed(name)
+    return dest
 
 
 def file_landed(name: str) -> None:

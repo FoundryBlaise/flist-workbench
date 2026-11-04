@@ -2,8 +2,8 @@
  *
  *  These render a `character-data.php` payload directly. They are
  *  deliberately *not* the editor's own panes: those bind to the
- *  working-set slot in the store, and a stranger's profile has no
- *  business anywhere near that machinery. What they do share are the
+ *  Workbench in the store, and a Foreign profile has no business
+ *  anywhere near that machinery. What they do share are the
  *  editor's read-only building blocks (kink columns, field shell and
  *  groups, theme switch), so a profile reads the same here as it does
  *  on the user's own characters, and both change together.

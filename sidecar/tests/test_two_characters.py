@@ -254,6 +254,104 @@ def test_the_window_still_changes_and_clears_a_manual_label(
     assert two_characters.message(AZURE, PARTNER, PARTNER_LINE)["label"] == "Unlabeled"
 
 
+async def _clear_over_mcp(**conversation: str) -> dict:
+    async with mcp_client() as session:
+        result, body = await call_tool(
+            session, "clear_labels", **conversation, confirm=True
+        )
+    assert not result.isError, body
+    return body
+
+
+async def test_clearing_over_mcp_keeps_a_manual_label_and_reports_it(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
+    manual_hash = two_characters.hash_of(AZURE, PARTNER, PARTNER_LINE)
+    await _label_over_mcp(two_characters, AZURE, PARTNER, {OLD_NAME_LINE: "IC"})
+
+    cleared = await _clear_over_mcp(character=AZURE, partner=PARTNER)
+
+    assert cleared["deleted"] == 1
+    assert [s["hash"] for s in cleared["skipped"]] == [manual_hash]
+    assert "by hand" in cleared["skipped"][0]["reason"]
+    assert "by hand" in cleared["note"]
+    kept = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
+    assert (kept["label"], kept["label_source"]) == ("OOC", "manual")
+    assert two_characters.message(AZURE, PARTNER, OLD_NAME_LINE)["label"] == "Unlabeled"
+    # Only what was cleared waits in the Trash; the kept Label is not there.
+    entries = two_characters.client.get("/labels/trash").json()["labels"]
+    assert [(e["id"], e["count"]) for e in entries] == [(cleared["trash_id"], 1)]
+
+
+async def test_clearing_a_characters_conversations_over_mcp_keeps_manual_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.label_by_hand(AZURE, AMBER, SHARED_LINE, "IC")
+    await _label_over_mcp(two_characters, AZURE, PARTNER, {OLD_NAME_LINE: "IC"})
+
+    cleared = await _clear_over_mcp(character=AZURE)
+
+    assert cleared["deleted"] == 1
+    assert len(cleared["skipped"]) == 1
+    assert two_characters.message(AMBER, AZURE, SHARED_LINE)["label"] == "IC"
+
+
+async def test_a_clear_over_mcp_that_finds_only_manual_labels_is_not_an_error(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
+
+    cleared = await _clear_over_mcp(character=AZURE, partner=PARTNER)
+
+    assert (cleared["deleted"], cleared["trash_id"]) == (0, None)
+    assert len(cleared["skipped"]) == 1
+    assert two_characters.client.get("/labels/trash").json()["labels"] == []
+
+
+async def test_filling_a_conversation_over_mcp_writes_a_models_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    async with mcp_client("logs") as session:
+        result, filled = await call_tool(
+            session, "label_all_unlabeled",
+            character=AZURE, partner=PARTNER, label="IC", confirm=True,
+        )
+    assert not result.isError, filled
+    assert filled["labeled"] == 2
+
+    written = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
+    assert (written["label"], written["label_source"]) == ("IC", "mcp")
+    assert two_characters.client.get("/labels/rollup").json()["manual"] == 0
+    # A model's Labels, so a model may clear them again.
+    assert (await _clear_over_mcp(character=AZURE, partner=PARTNER))["deleted"] == 2
+
+
+def test_filling_a_conversation_in_the_window_writes_manual_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.client.post(
+        "/labels/fill-unlabeled",
+        json={"character": AZURE, "partner": PARTNER, "label": "IC"},
+    )
+
+    written = two_characters.message(AZURE, PARTNER, PARTNER_LINE)
+    assert (written["label"], written["label_source"]) == ("IC", "manual")
+
+
+def test_the_windows_clear_still_takes_manual_labels(
+    two_characters: TwoCharacters,
+) -> None:
+    two_characters.label_by_hand(AZURE, PARTNER, PARTNER_LINE, "OOC")
+
+    cleared = two_characters.client.post(
+        "/labels/clear", json={"character": AZURE, "partner": PARTNER}
+    ).json()
+
+    assert cleared["deleted"] == 1
+    assert two_characters.message(AZURE, PARTNER, PARTNER_LINE)["label"] == "Unlabeled"
+
+
 async def test_clearing_every_conversation_of_a_character_follows_her_logs(
     two_characters: TwoCharacters,
 ) -> None:

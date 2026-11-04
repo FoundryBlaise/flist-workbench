@@ -43,10 +43,11 @@ def labels_stats_all(char: str) -> dict:
 
 # `character` and `partner` in the override and delete bodies name the
 # conversation the window shows; a Label belongs to the message (ADR
-# 0004), so they decide nothing and are only echoed back.
+# 0004), so they decide nothing, may be left out and are only echoed
+# back.
 class LabelOverride(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     hash: str
     ts: int
     speaker: str
@@ -61,8 +62,8 @@ class LabelOverrideItem(BaseModel):
 
 
 class LabelOverrideMany(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     items: list[LabelOverrideItem]
     # label=None deletes the rows (revert to rule / Unlabeled).
     label: str | None = None
@@ -86,7 +87,8 @@ def labels_clear(body: LabelsClearRequest) -> dict:
     return {
         "character": body.character,
         "partner": body.partner,
-        **cleared,
+        "deleted": cleared["deleted"],
+        "trash_id": cleared["trash_id"],
     }
 
 
@@ -124,8 +126,8 @@ class LabelsFillUnlabeled(BaseModel):
 
 
 class LabelsDeleteHashes(BaseModel):
-    character: str
-    partner: str
+    character: str | None = None
+    partner: str | None = None
     hashes: list[str]
 
 
@@ -144,7 +146,9 @@ def labels_fill_unlabeled(body: LabelsFillUnlabeled) -> dict:
     own. The response carries every hash written, which is what makes
     the undo exact.
     """
-    result = label_service.fill_unlabeled(body.character, body.partner, body.label)
+    result = label_service.fill_unlabeled(
+        body.character, body.partner, body.label, source="manual"
+    )
     return {"character": body.character, "partner": body.partner, **result}
 
 

@@ -686,13 +686,19 @@ def resolve(
 _HASH_BATCH = 500
 
 
-def _rows_for_hashes(
-    conn: sqlite3.Connection, columns: str, hashes: Iterable[str]
-) -> Iterator[sqlite3.Row]:
+def _hash_batches(hashes: Iterable[str]) -> Iterator[tuple[list[str], str]]:
+    """`hashes`, without blanks and repeats, in batches of at most
+    `_HASH_BATCH`, each with its `?,?,...` placeholders."""
     ids = list(dict.fromkeys(h for h in hashes if h))
     for start in range(0, len(ids), _HASH_BATCH):
         batch = ids[start : start + _HASH_BATCH]
-        placeholders = ",".join("?" * len(batch))
+        yield batch, ",".join("?" * len(batch))
+
+
+def _rows_for_hashes(
+    conn: sqlite3.Connection, columns: str, hashes: Iterable[str]
+) -> Iterator[sqlite3.Row]:
+    for batch, placeholders in _hash_batches(hashes):
         yield from conn.execute(
             f"SELECT {columns} FROM labels WHERE hash IN ({placeholders})", batch
         )
@@ -900,6 +906,45 @@ def restore_labels(
     return len(todo), [h for h in wanted if h in present]
 
 
+@dataclass(slots=True, frozen=True)
+class Triage:
+    """A conversation's written messages, sorted by what decides their
+    Label. System lines have none and are in no part of it."""
+
+    #: `(index into the messages, hash)` of each Unlabeled one, in Log
+    #: order: what is left to judge.
+    pending: list[tuple[int, str]]
+    #: How many carry a stored Label.
+    already_labelled: int
+    #: How many the rules decide (empty, short, `((` prefix).
+    decided_by_rules: int
+    #: How many written messages there are.
+    total: int
+
+
+def triage(
+    conn: sqlite3.Connection, messages: list[dict], settings: LabelsSettings
+) -> Triage:
+    """Sort `messages`, one conversation's Log, into those with a
+    stored Label (looked up by hash, ADR 0004), those the rules decide
+    and the Unlabeled rest."""
+    by_hash = labels_for_messages(conn, messages)
+    pending: list[tuple[int, str]] = []
+    already_labelled = decided_by_rules = total = 0
+    for idx, msg in enumerate(messages):
+        if is_system_line(msg):
+            continue
+        total += 1
+        h = msg_hash(msg)
+        if h in by_hash:
+            already_labelled += 1
+        elif resolve(msg, None, settings) != LABEL_UNLABELED:
+            decided_by_rules += 1
+        else:
+            pending.append((idx, h))
+    return Triage(pending, already_labelled, decided_by_rules, total)
+
+
 def fill_unlabeled(
     conn: sqlite3.Connection,
     messages: Iterable[dict],
@@ -933,23 +978,8 @@ def fill_unlabeled(
     if label not in (LABEL_IC, LABEL_OOC):
         raise ValueError(f"invalid label: {label!r}")
     messages = list(messages)
-    by_hash = labels_for_messages(conn, messages)
-    targets: list[tuple[str, dict]] = []
-    already_labelled = 0
-    decided_by_rules = 0
-    total = 0
-    for msg in messages:
-        if is_system_line(msg):
-            continue
-        total += 1
-        h = msg_hash(msg)
-        if h in by_hash:
-            already_labelled += 1
-            continue
-        if resolve(msg, None, settings) != LABEL_UNLABELED:
-            decided_by_rules += 1
-            continue
-        targets.append((h, msg))
+    sorted_out = triage(conn, messages, settings)
+    targets = [(h, messages[idx]) for idx, h in sorted_out.pending]
 
     now = time.time()
     conn.executemany(
@@ -981,9 +1011,9 @@ def fill_unlabeled(
         "label": label,
         "labeled": len(targets),
         "hashes": [h for h, _ in targets],
-        "already_labeled": already_labelled,
-        "decided_by_rules": decided_by_rules,
-        "total_messages": total,
+        "already_labeled": sorted_out.already_labelled,
+        "decided_by_rules": sorted_out.decided_by_rules,
+        "total_messages": sorted_out.total,
     }
 
 
@@ -994,13 +1024,8 @@ def delete_labels_by_hash(
     """Remove specific labels, reverting those messages to
     rule-or-Unlabeled. Undoes one `fill_unlabeled` without touching
     anything else in the conversation."""
-    ids = [h for h in hashes if h]
-    if not ids:
-        return 0
     removed = 0
-    for start in range(0, len(ids), _HASH_BATCH):
-        batch = ids[start : start + _HASH_BATCH]
-        placeholders = ",".join("?" * len(batch))
+    for batch, placeholders in _hash_batches(hashes):
         cur = conn.execute(
             f"DELETE FROM labels WHERE hash IN ({placeholders})", batch
         )

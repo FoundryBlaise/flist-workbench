@@ -237,7 +237,8 @@ def _backfill_if_empty(store: rag_store.RagStore, lex: rag_lexical.LexicalStore)
 
 def _chunk_fields(raw: dict[str, Any]) -> dict[str, Any]:
     """What a chunk says and when, from its stored payload: the fields a
-    hit and a neighbouring chunk share."""
+    hit and a neighbouring chunk share. A neighbour carries nothing
+    more: it was not ranked, and its conversation is the hit's own."""
     payload = raw.get("payload") or {}
     return {
         "chunk_id": str(payload.get("chunk_id") or ""),
@@ -263,14 +264,8 @@ def _to_hit(raw: dict[str, Any]) -> SearchHit:
         lexical_rank=raw.get("lexical_rank"),
         rerank_score=raw.get("rerank_score"),
         context={
-            side: [_to_context(c) for c in chunks]
+            side: [_chunk_fields(c) for c in chunks]
             for side, chunks in (raw.get("context") or {}).items()
         }
         or {"before": [], "after": []},
     )
-
-
-def _to_context(raw: dict[str, Any]) -> dict[str, Any]:
-    """A neighbouring chunk: what it says and when, without the hit's
-    ranks (it was not ranked) or the conversation (the hit's own)."""
-    return _chunk_fields(raw)

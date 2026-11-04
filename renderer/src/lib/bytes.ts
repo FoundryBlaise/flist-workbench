@@ -4,7 +4,7 @@
 // limit is 2,000,000 bytes and has to read as "2.0 MB" there.
 
 const KB = 1024
-const MB = 1024 * KB
+export const MB = 1024 * KB
 
 export function formatBytes(bytes: number): string {
   if (bytes < KB) return `${bytes} B`

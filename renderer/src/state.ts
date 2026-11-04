@@ -91,7 +91,7 @@ type State = {
    *  panel into a read-only state showing somebody else's profile.
    *
    *  It is a slot, not a character. It has no id, no archive entry, no
-   *  working set and no `flistActiveCharacterId` — which is exactly
+   *  Workbench and no `flistActiveCharacterId` — which is exactly
    *  what stops every edit, pull, backup and export path from finding
    *  anything to act on. The slot itself is not persisted: it lives in
    *  memory for as long as the app runs and is never written to the
