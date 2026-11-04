@@ -2,7 +2,13 @@ import { useLayoutEffect, useMemo, useRef } from 'react'
 import CodeMirror, { ExternalChange, type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { selectWorkingSlot, useStore } from '../../state'
+import {
+  selectEditorDescription,
+  selectEditorDirty,
+  selectEditorTitle,
+  selectWorkingSlot,
+  useStore
+} from '../../state'
 import { bbcodeExtensions } from '../../lib/bbcode/codemirror'
 import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { ProfileFieldsTab } from '../flist/ProfileFieldsTab'
@@ -37,25 +43,13 @@ export function EditorPane({
 }: {
   viewRef: React.MutableRefObject<EditorView | null>
 }) {
-  const content = useStore((s) => s.editorContent)
+  // The description, title and unsaved mark are read from the active
+  // character's Workbench slot; typing is an edit to its payload.
+  const content = useStore(selectEditorDescription)
   const setContent = useStore((s) => s.setEditorContent)
-  const titleRaw = useStore((s) => s.editorTitle)
-  // Reactive title — the underlying editorTitle is set once at openWorking
-  // time and stays stale as unsavedDirty flips. Wrap it here so the
-  // " — Workbench (unsaved)" suffix tracks per-keystroke (QA P3-1).
-  const flistActiveIdForTitle = useStore((s) => s.flistActiveCharacterId)
-  const flistSlotForTitle = useStore((s) =>
-    s.flistActiveCharacterId ? selectWorkingSlot(s, s.flistActiveCharacterId) : undefined
-  )
-  const title = (() => {
-    if (!flistActiveIdForTitle || !flistSlotForTitle) return titleRaw
-    const m = titleRaw.match(/^(.+?) — Workbench(?:\s*\(unsaved\))?$/)
-    if (!m) return titleRaw
-    return `${m[1]} — Workbench${flistSlotForTitle.unsavedDirty ? ' (unsaved)' : ''}`
-  })()
-  const dirty = useStore((s) => s.editorDirty)
-  const fetchStatus = useStore((s) => s.editorFetchStatus)
-  const fetchError = useStore((s) => s.editorFetchError)
+  const dirty = useStore(selectEditorDirty)
+  // The " (unsaved)" suffix tracks every keystroke (QA P3-1).
+  const title = useStore(selectEditorTitle) + (dirty ? ' (unsaved)' : '')
   const saveStatus = useStore((s) => s.saveStatus)
   const saveError = useStore((s) => s.saveError)
   const activeCharacter = useStore((s) => s.activeCharacter)
@@ -200,8 +194,6 @@ export function EditorPane({
         cmRef={cmRef}
         viewRef={viewRef}
         extensions={extensions}
-        fetchStatus={fetchStatus}
-        fetchError={fetchError}
         saveStatus={saveStatus}
         saveError={saveError}
         flistActiveId={flistActiveId}
@@ -222,8 +214,6 @@ function EditorActiveTabBody(props: {
   cmRef: React.RefObject<ReactCodeMirrorRef>
   viewRef: React.MutableRefObject<EditorView | null>
   extensions: unknown[]
-  fetchStatus: string
-  fetchError: string | null | undefined
   saveStatus: string
   saveError: string | null | undefined
   flistActiveId: string | null
@@ -297,15 +287,6 @@ function EditorActiveTabBody(props: {
   // AppLayout), not in here, so it always spans full width.
   return (
     <div className="editor-tab-description" data-testid="editor-tab-description">
-      {props.fetchStatus === 'fetching' && (
-        <div className="editor-progress" data-testid="editor-progress">
-          <div className="editor-progress-bar" />
-          <span>Fetching profile from F-list…</span>
-        </div>
-      )}
-      {props.fetchStatus === 'error' && (
-        <div className="editor-error">Couldn't fetch: {props.fetchError}</div>
-      )}
       {props.saveStatus === 'error' && (
         <div className="editor-error">Couldn't save: {props.saveError}</div>
       )}

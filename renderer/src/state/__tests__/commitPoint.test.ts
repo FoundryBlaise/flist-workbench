@@ -5,7 +5,7 @@
 // none for a view.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, selectEditorDirty, useStore } from '../../state'
 import { canUndo, resetUndoStacks } from '../undoStack'
 import type { CommitLabel } from '../commit'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
@@ -27,9 +27,7 @@ function seed(payload: Record<string, unknown>) {
   useStore.setState({
     flistWorking: { [CID]: workingSlot(workbenchPayload(payload)) },
     flistActiveCharacterId: CID,
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 }
 
@@ -60,9 +58,7 @@ beforeEach(() => {
     flistCustomKinksUI: {},
     flistBrowseBackup: null,
     flistActiveCharacterId: null,
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -100,12 +96,11 @@ describe('one edit per tab is one commit labelled edit', () => {
 
   it('the description', () => {
     seed({ character: { description: 'before' } })
-    useStore.setState({ editorContent: 'before' })
     useStore.getState().setEditorContent('after')
     const slot = useStore.getState().flistWorking[CID]
     expect((slot.payload.character as { description: string }).description).toBe('after')
-    expect(useStore.getState().editorContent).toBe('after')
-    expect(useStore.getState().editorDirty).toBe(true)
+    expect(selectEditorDescription(useStore.getState())).toBe('after')
+    expect(selectEditorDirty(useStore.getState())).toBe(true)
     expect(undoLabels()).toEqual(['edit'])
   })
 })
@@ -113,7 +108,6 @@ describe('one edit per tab is one commit labelled edit', () => {
 describe('what the sidecar wrote is one commit with its label, clean and over its etag', () => {
   it('a reset to Live', async () => {
     seed({ character: { description: 'mine' } })
-    useStore.setState({ editorContent: 'mine' })
     fake.on(
       `POST /flist/character/${CID}/workbench/reset-to-live`,
       json({
@@ -126,7 +120,7 @@ describe('what the sidecar wrote is one commit with its label, clean and over it
     const slot = useStore.getState().flistWorking[CID]
     expect(slot.etag).toBe('after-reset')
     expect(slot.unsavedDirty).toBe(false)
-    expect(useStore.getState().editorContent).toBe('live')
+    expect(selectEditorDescription(useStore.getState())).toBe('live')
     expect(undoLabels()).toEqual(['reset-to-live'])
   })
 
@@ -146,7 +140,7 @@ describe('what the sidecar wrote is one commit with its label, clean and over it
     const slot = useStore.getState().flistWorking[CID]
     expect(slot.etag).toBe('after-restore')
     expect(slot.unsavedDirty).toBe(false)
-    expect(useStore.getState().editorContent).toBe('restored')
+    expect(selectEditorDescription(useStore.getState())).toBe('restored')
     expect(undoLabels()).toEqual(['restore'])
   })
 
@@ -164,7 +158,7 @@ describe('what the sidecar wrote is one commit with its label, clean and over it
     await vi.advanceTimersByTimeAsync(0)
     expect(useStore.getState().flistWorking[CID].etag).toBe('theirs')
     expect(useStore.getState().flistWorking[CID].unsavedDirty).toBe(false)
-    expect(useStore.getState().editorContent).toBe('theirs')
+    expect(selectEditorDescription(useStore.getState())).toBe('theirs')
     expect(undoLabels()).toEqual(['mcp:set_description'])
   })
 
@@ -201,14 +195,14 @@ describe('loading a view is a commit that is not a change', () => {
       flistArchive: { [CID]: archiveEntry(livePayload({ character: { description: 'live' } })) }
     })
     await useStore.getState().flistShowLive(CID)
-    expect(useStore.getState().editorContent).toBe('live')
+    expect(selectEditorDescription(useStore.getState())).toBe('live')
     fake.on(
       `GET ${BENCH_URL}`,
       json(payloadRead(workbenchPayload({ character: { description: 'mine' } }), 'seed-etag'))
     )
     fake.on(`GET /flist/character/${CID}/workbench`, json(workbenchRead()))
     await useStore.getState().flistOpenWorking(CID)
-    expect(useStore.getState().editorContent).toBe('mine')
+    expect(selectEditorDescription(useStore.getState())).toBe('mine')
     expect(canUndo(CID)).toBe(false)
   })
 
@@ -238,11 +232,10 @@ describe('the payload after a commit', () => {
   it('is what the editor shows after a per-row reset of the description', () => {
     seed({ character: { description: 'mine' } })
     useStore.setState({
-      editorContent: 'mine',
       flistArchive: { [CID]: archiveEntry(livePayload({ character: { description: 'live' } })) }
     })
     useStore.getState().flistResetWorkingField(CID, 'character.description')
-    expect(useStore.getState().editorContent).toBe('live')
+    expect(selectEditorDescription(useStore.getState())).toBe('live')
     expect(undoLabels()).toEqual(['edit'])
   })
 })

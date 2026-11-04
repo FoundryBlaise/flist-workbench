@@ -65,7 +65,6 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistActiveCharacterId: CID,
     editorReadOnly: false,
-    editorContent: 'as I left her',
     flistMapping: {
       status: 'ready',
       payload: {

@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, renderHook } from '@testing-library/react'
-import { useStore } from '../../state'
+import { selectEditorDescription, useStore } from '../../state'
 import { resetUndoStacks } from '../../state/undoStack'
 import { useWorkbenchEvents } from '../useWorkbenchEvents'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
@@ -44,8 +44,7 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistWorkbenchNote: null,
     flistActiveCharacterId: CID,
-    editorReadOnly: false,
-    editorContent: 'as I left her'
+    editorReadOnly: false
   })
 })
 
@@ -62,7 +61,7 @@ it('a model’s change on the stream is reloaded and becomes one entry named aft
   modelWrote('theirs')
 
   await vi.waitFor(() => expect(descOf()).toBe('theirs'))
-  expect(useStore.getState().editorContent).toBe('theirs')
+  expect(selectEditorDescription(useStore.getState())).toBe('theirs')
   expect(useStore.getState().flistUndo(CID)).toBe('mcp:set_description')
   expect(useStore.getState().flistUndo(CID)).toBeNull()
 })
