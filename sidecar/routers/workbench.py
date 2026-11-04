@@ -218,7 +218,11 @@ def flist_character_workbench_load_backup(
     replaced = archive_backups.load_zip_backup_into_workbench(character_id, filename)
 
     info = archive_workbench.workbench_info(character_id)
-    assert info is not None, "a Restore writes the Workbench"
+    if info is None:
+        # The Restore has just written the Workbench; gone already means
+        # something else is wrong, which the caller hears as a 500
+        # `internal_error`. Not an `assert`: those vanish under `-O`.
+        raise RuntimeError(f"Restore of {filename} left character {character_id} without a Workbench")
     return BackupRestored(
         workbench=WorkbenchInfo.model_validate(info.to_dict()),
         payload=replaced.payload,
