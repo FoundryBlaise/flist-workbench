@@ -438,8 +438,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       if (!status.active && get().flistActiveCharacterId !== null) {
         // Session lapsed (e.g. sidecar restart). Drop active selection
         // so the UI doesn't render stale read-only docs.
-        // Workbench-owned fields: flistActiveCharacterId, editorReadOnly.
-        set({ flistActiveCharacterId: null, editorReadOnly: false })
+        get().flistCloseCharacter()
       }
     } catch {
       // Sidecar unreachable — leave existing flag, /health card already

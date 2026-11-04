@@ -192,6 +192,13 @@ export type WorkbenchSlice = WorkbenchState & {
 
   // ---- F-list actions ----
   flistSelectCharacter: (characterId: string | null) => Promise<void>
+  /** No F-list character is open any more (a Log-only character was
+   *  picked, the sign-in lapsed): the editor is editable again. What
+   *  the window holds of each Workbench stays. */
+  flistCloseCharacter: () => void
+  /** Back to the character's Workbench from a read-only view: the editor
+   *  is editable at once, and the Workbench is opened again. */
+  flistBackToWorkbench: (characterId: string) => Promise<void>
   // ---- v5 image actions ----
   /** Append `imageId` to working.json's gallery (move pool→profile).
    *  No-op if the id is already in the gallery. */
@@ -429,7 +436,7 @@ function _isNewestOpen(characterId: string, token: number): boolean {
 
 /** The editor patch that shows a character's Workbench as the slot in
  *  memory holds it, unsaved keystrokes included. */
-function _workbenchInEditor(s: State, characterId: string): Partial<State> {
+function _workbenchInEditor(s: State, characterId: string): Partial<WorkbenchState> {
   const slot = s.flistWorking[characterId]
   const live = s.flistArchive[characterId]?.live ?? null
   const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
@@ -456,7 +463,7 @@ function _workbenchInEditor(s: State, characterId: string): Partial<State> {
  *  until the read lands. Showing the character being left would save
  *  its text into this one on the next keystroke, and a keystroke with
  *  no slot to land in would be dropped when the read replaced it. */
-function _workbenchLoadingInEditor(s: State, characterId: string): Partial<State> {
+function _workbenchLoadingInEditor(s: State, characterId: string): Partial<WorkbenchState> {
   const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
   const name = entry?.name ?? 'Workbench'
   return {
@@ -481,7 +488,9 @@ function _scheduleFlush(characterId: string, fn: () => void): void {
   _autosaveTimers.set(characterId, t)
 }
 
-type SlotSet = (fn: (s: State) => Partial<State>) => void
+// A helper's set: it writes only Workbench fields, and reaches the other
+// slices through their actions.
+type SlotSet = (fn: (s: State) => Partial<WorkbenchState>) => void
 
 /** The editor follows the active character's slot: whatever a commit
  *  leaves in the payload is the description the editor shows. Edits and
@@ -492,7 +501,7 @@ function _editorFollows(
   characterId: string,
   next: FlistWorkingSlot | null,
   commit: Commit
-): Partial<State> {
+): Partial<WorkbenchState> {
   if (!next || s.flistActiveCharacterId !== characterId) return {}
   const editorContent = descriptionOf(next.payload)
   if (commit.kind === 'view') return { editorContent, editorDirty: false }
@@ -514,7 +523,7 @@ function _commit(
   set: SlotSet,
   characterId: string,
   commit: Commit,
-  also?: (s: State) => Partial<State>
+  also?: (s: State) => Partial<WorkbenchState>
 ): void {
   // Filled in by the update below; a callback assignment TypeScript
   // would not see through a plain `let`.
@@ -759,11 +768,11 @@ async function _takeExternalChange(
   }
   const label = externalLabel(change.origin)
   const payload = res.payload as WorkingPayload
-  const cleared = (st: State): Partial<State> => ({
+  const cleared = (st: State): Partial<WorkbenchState> => ({
     flistExternalChange: { ...st.flistExternalChange, [characterId]: null }
   })
   // Taken in by itself: say who changed it, the part the user cannot see.
-  const settled = (st: State): Partial<State> => ({
+  const settled = (st: State): Partial<WorkbenchState> => ({
     ...cleared(st),
     flistWorkbenchNote: { characterId, action: 'updated' as const, label, at: Date.now() }
   })
@@ -813,8 +822,8 @@ function _mergeExternal(
   set: SlotSet,
   characterId: string,
   their: TheirVersion,
-  merged: (s: State) => Partial<State>,
-  asked: (s: State) => Partial<State>
+  merged: (s: State) => Partial<WorkbenchState>,
+  asked: (s: State) => Partial<WorkbenchState>
 ): void {
   const slot = get().flistWorking[characterId]
   if (!slot) return
@@ -841,7 +850,7 @@ function _commitMerge(
   characterId: string,
   payload: WorkingPayload,
   { label, theirs, etag }: TheirVersion,
-  also: (s: State) => Partial<State>
+  also: (s: State) => Partial<WorkbenchState>
 ): void {
   const commit: Commit = isDeepEqual(payload, theirs)
     ? { kind: 'written', label, payload: theirs, etag, lastSavedAt: Date.now() }
@@ -850,7 +859,7 @@ function _commitMerge(
 }
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
-function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<State>): void {
+function _dropAllWorkbenches(set: SlotSet, also: (s: State) => Partial<WorkbenchState>): void {
   set((s) => ({ ...also(s), flistWorking: {} }))
   // Another account may sign in next: nothing of this one's to undo.
   resetUndoStacks()
@@ -876,7 +885,7 @@ function _cancelAllPendingTimers(): void {
 async function _flushWorkingNow(
   characterId: string,
   get: () => State,
-  set: (fn: (s: State) => Partial<State>) => void
+  set: SlotSet
 ): Promise<void> {
   const slot = get().flistWorking[characterId]
   if (!slot || !slot.unsavedDirty) {
@@ -1126,29 +1135,19 @@ function _workbenchSlot(payload: WorkingPayload, etag: string): FlistWorkingSlot
  *  the Live view or browsed Backup it was made from, which ends. */
 function _showWorkbench(
   get: () => State,
-  set: (fn: (s: State) => Partial<State>) => void,
+  set: SlotSet,
   characterId: string,
   commit: Commit & { kind: 'written' }
 ): void {
-  _commit(get, set, characterId, commit, (s) => {
-    const browse = s.flistBrowseBackup
-    if (browse?.characterId !== characterId) {
-      return { flistViewingLive: { ...s.flistViewingLive, [characterId]: false } }
-    }
-    // A browsed Backup ends too: Live goes back to what the browse
-    // stood in for.
-    return {
-      flistViewingLive: { ...s.flistViewingLive, [characterId]: false },
-      flistBrowseBackup: null,
-      flistArchive: {
-        ...s.flistArchive,
-        [characterId]: {
-          ...(s.flistArchive[characterId] ?? { pullStatus: 'idle' }),
-          live: browse.previousLive
-        }
-      }
-    }
-  })
+  // A browsed Backup ends too: Live goes back to what the browse stood
+  // in for. Ended before the commit, the Backup still sits in the slot
+  // as a view (flistShowReadOnlyView set flistViewingLive), so the
+  // commit still finds the Workbench that view hid and records it as
+  // the undo entry.
+  if (get().flistBrowseBackup?.characterId === characterId) get().flistEndBrowse()
+  _commit(get, set, characterId, commit, (s) => ({
+    flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
+  }))
   if (get().flistActiveCharacterId === characterId) {
     set((s) => _workbenchInEditor(s, characterId))
   }
@@ -1277,10 +1276,9 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
     }
     // Close any open Browse-Backup view — it's scoped to whoever
     // opened it, and carrying it across a character switch would
-    // surprise the user.
-    if (get().flistBrowseBackup) {
-      set({ flistBrowseBackup: null })
-    }
+    // surprise the user. The character it was opened on gets its Live
+    // back, which the browse stood in for.
+    get().flistEndBrowse()
     set({ flistActiveCharacterId: characterId })
     if (characterId === null) {
       set({ editorReadOnly: false })
@@ -1288,6 +1286,15 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
     }
     get().flistRememberCharacter(characterId)
     await get().flistLoadArchive(characterId)
+  },
+
+  flistCloseCharacter() {
+    set({ flistActiveCharacterId: null, editorReadOnly: false })
+  },
+
+  async flistBackToWorkbench(characterId) {
+    set({ editorReadOnly: false })
+    await get().flistOpenWorking(characterId)
   },
 
   flistMoveImageToProfile(characterId, imageId) {
@@ -1857,7 +1864,7 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
       saved: null
     }
     _commit(get, set, characterId, { kind: 'view', slot }, (s) => {
-      const patch: Partial<State> = {
+      const patch: Partial<WorkbenchState> = {
         flistViewingLive: { ...s.flistViewingLive, [characterId]: true },
         editorReadOnly: true
       }
@@ -2207,16 +2214,16 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
     // Picking a real character leaves the Foreign slot. What the slot
     // holds is kept, so going back to it shows the same profile again
     // without another F-list call.
-    set({ activeCharacter: name, activePartner: null, foreignActive: false })
+    get().setActiveCharacter(name)
+    get().foreignLeaveSlot()
     // Close any open Browse-Backup view on a character pick — the
     // sidebar Backups list is now showing a different character's
     // archive, and the viewer body would otherwise still be on the
-    // old character's backup (QA-S2 from the 2026-06-17 review).
-    if (get().flistBrowseBackup) {
-      set({ flistBrowseBackup: null })
-    }
+    // old character's backup (QA-S2 from the 2026-06-17 review). Its
+    // character gets its Live back.
+    get().flistEndBrowse()
     if (!name) {
-      set({ flistActiveCharacterId: null, editorReadOnly: false })
+      get().flistCloseCharacter()
       return
     }
     // Mirror the pick into the F-list slice when the name matches a
@@ -2282,7 +2289,7 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
       // Picked a log-only character that isn't on F-list — clear the
       // F-list zone so it doesn't show stale Live/Backup docs from the
       // previous character.
-      set({ flistActiveCharacterId: null, editorReadOnly: false })
+      get().flistCloseCharacter()
     }
   },
 
