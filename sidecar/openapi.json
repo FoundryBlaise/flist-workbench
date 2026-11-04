@@ -74,6 +74,9 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string"
+                },
+                "x-events": {
+                  "$ref": "#/components/schemas/ChangeEvents"
                 }
               }
             }
@@ -560,6 +563,9 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string"
+                },
+                "x-events": {
+                  "$ref": "#/components/schemas/PullEvents"
                 }
               }
             }
@@ -906,6 +912,9 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string"
+                },
+                "x-events": {
+                  "$ref": "#/components/schemas/BackupAllEvents"
                 }
               }
             }
@@ -4450,6 +4459,16 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string"
+                },
+                "x-events": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PullEvents"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BackupAllEvents"
+                    }
+                  ]
                 }
               }
             }
@@ -5004,6 +5023,139 @@
         "title": "Backup",
         "description": "One Backup as the Backup list shows it (`list_zip_backups`).\n`kind` is the older provenance the extension sorts by, as the\nBackup's `backup-meta.json` records it (\"unknown\" without one);\n`source` and `occasion` are \"unknown\" and null for a Backup from\nbefore they were recorded. `holds_profile` is false for the Backup\nthe move to one Workbench made, which can only be downloaded.\n`name` is the user's rename, null until there is one."
       },
+      "BackupAllCharacter": {
+        "additionalProperties": false,
+        "description": "One character of Back up all: being pulled (`fetching`), then\n`saved` as a Backup (`filename`), `unchanged` since its newest\nBackup, or `error` (`message`; the sweep goes on).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "character_id": {
+            "title": "Character Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "fetching",
+              "saved",
+              "unchanged",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "image_stats": {
+            "$ref": "#/components/schemas/ImageStats",
+            "title": "Image Stats"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "BackupAllCharacter",
+        "type": "object"
+      },
+      "BackupAllDone": {
+        "additionalProperties": false,
+        "description": "Back up all ended: the characters by outcome, and each one's\nlast event.",
+        "properties": {
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "saved": {
+            "title": "Saved",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "characters": {
+            "items": {
+              "$ref": "#/components/schemas/BackupAllCharacter"
+            },
+            "title": "Characters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "total",
+          "saved",
+          "unchanged",
+          "failed",
+          "characters"
+        ],
+        "title": "BackupAllDone",
+        "type": "object"
+      },
+      "BackupAllEvents": {
+        "additionalProperties": false,
+        "description": "Back up all's events: the job, `start`, a `character` event per\ncharacter as it is pulled and as it ends, then `done`, `error` or\n`cancelled`.",
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "start": {
+            "$ref": "#/components/schemas/BackupAllStart"
+          },
+          "character": {
+            "$ref": "#/components/schemas/BackupAllCharacter"
+          },
+          "done": {
+            "$ref": "#/components/schemas/BackupAllDone"
+          },
+          "error": {
+            "$ref": "#/components/schemas/StreamError"
+          },
+          "cancelled": {
+            "$ref": "#/components/schemas/JobCancelled"
+          }
+        },
+        "required": [
+          "job",
+          "start",
+          "character",
+          "done",
+          "error",
+          "cancelled"
+        ],
+        "title": "BackupAllEvents",
+        "type": "object"
+      },
+      "BackupAllStart": {
+        "additionalProperties": false,
+        "description": "Back up all starts: how many characters the account has.",
+        "properties": {
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "BackupAllStart",
+        "type": "object"
+      },
       "BackupList": {
         "properties": {
           "character_id": {
@@ -5219,6 +5371,121 @@
           "conflicts"
         ],
         "title": "BackupsPutBack"
+      },
+      "ChangeEvents": {
+        "additionalProperties": false,
+        "description": "The events of `/events`, by name: `ready` first, then a change\nhint whenever shared state changes.",
+        "properties": {
+          "ready": {
+            "$ref": "#/components/schemas/StreamReady"
+          },
+          "set-payload-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "sets-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "live-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "labels-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "settings-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "index-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "images-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "backups-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          },
+          "characters-changed": {
+            "$ref": "#/components/schemas/ChangeHint"
+          }
+        },
+        "required": [
+          "ready",
+          "set-payload-changed",
+          "sets-changed",
+          "live-changed",
+          "labels-changed",
+          "settings-changed",
+          "index-changed",
+          "images-changed",
+          "backups-changed",
+          "characters-changed"
+        ],
+        "title": "ChangeEvents",
+        "type": "object"
+      },
+      "ChangeHint": {
+        "additionalProperties": false,
+        "description": "A change to shared state, as a hint: the window re-reads\nthrough the normal routes. `origin` is who made it: `ui` for the\nwindow, `mcp:<tool>` for a connected model. The rest says what\nchanged: the character (`character_id`, the Workbench's new\n`etag`), how many Labels (`hashes` written, `deleted`), the\nsettings (`changed`: each field as stored, keyed by the settings\nservice's names, null = back to default), or the Index's job\n(`job_id`, `state`).",
+        "properties": {
+          "event": {
+            "enum": [
+              "set-payload-changed",
+              "sets-changed",
+              "live-changed",
+              "labels-changed",
+              "settings-changed",
+              "index-changed",
+              "images-changed",
+              "backups-changed",
+              "characters-changed"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "character_id": {
+            "title": "Character Id",
+            "type": "string"
+          },
+          "etag": {
+            "title": "Etag",
+            "type": "string"
+          },
+          "hashes": {
+            "title": "Hashes",
+            "type": "integer"
+          },
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "changed": {
+            "additionalProperties": true,
+            "title": "Changed",
+            "type": "object"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "at",
+          "origin"
+        ],
+        "title": "ChangeHint",
+        "type": "object"
       },
       "CharacterAliases": {
         "properties": {
@@ -6002,6 +6269,36 @@
         "title": "ImageReferences",
         "description": "Every image id mentioned anywhere, and where."
       },
+      "ImageStats": {
+        "additionalProperties": false,
+        "description": "A character's images after its Pull, by outcome.",
+        "properties": {
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "downloaded": {
+            "title": "Downloaded",
+            "type": "integer"
+          },
+          "cached": {
+            "title": "Cached",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "downloaded",
+          "cached",
+          "failed"
+        ],
+        "title": "ImageStats",
+        "type": "object"
+      },
       "ImageTrashed": {
         "properties": {
           "trashed": {
@@ -6586,6 +6883,13 @@
         ],
         "title": "Job",
         "description": "Long work the sidecar runs as a job, of any kind\n(`services.jobs`): started by its own route, then polled and\ncancelled by id (`/jobs/{id}`). `params`, `progress` and `result`\nare the kind's own; `error` is set when it failed."
+      },
+      "JobCancelled": {
+        "additionalProperties": false,
+        "description": "A stream's `cancelled` event: a cancel by job id stopped the\njob. No data.",
+        "properties": {},
+        "title": "JobCancelled",
+        "type": "object"
       },
       "JobError": {
         "properties": {
@@ -8336,6 +8640,188 @@
         "title": "PublicProfile",
         "description": "A character's public profile, for the editor's \"Fetch profile\".\n`stats` are its infotags by label; `inlines` F-list's inline images\nby id, as F-list sent them."
       },
+      "PullDone": {
+        "additionalProperties": false,
+        "description": "A Pull ended: `changed` whether F-list's profile differed from\nLive, and the images by outcome.",
+        "properties": {
+          "character_id": {
+            "title": "Character Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "image_count": {
+            "title": "Image Count",
+            "type": "integer"
+          },
+          "image_downloaded": {
+            "title": "Image Downloaded",
+            "type": "integer"
+          },
+          "image_cached": {
+            "title": "Image Cached",
+            "type": "integer"
+          },
+          "image_failed": {
+            "title": "Image Failed",
+            "type": "integer"
+          },
+          "pull_status": {
+            "enum": [
+              "never_pulled",
+              "unknown",
+              "interrupted",
+              "partial",
+              "complete"
+            ],
+            "title": "Pull Status",
+            "type": "string"
+          },
+          "pull_missing": {
+            "title": "Pull Missing",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "character_id",
+          "name",
+          "changed",
+          "image_count",
+          "image_downloaded",
+          "image_cached",
+          "image_failed",
+          "pull_status",
+          "pull_missing"
+        ],
+        "title": "PullDone",
+        "type": "object"
+      },
+      "PullEvents": {
+        "additionalProperties": false,
+        "description": "A Pull's events, in the order a Pull sends them: the job, then\nits progress, ending with `done`, `error` or `cancelled`.",
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "ticket": {
+            "$ref": "#/components/schemas/PullTicket"
+          },
+          "fetching": {
+            "$ref": "#/components/schemas/PullFetching"
+          },
+          "images": {
+            "$ref": "#/components/schemas/PullImages"
+          },
+          "image": {
+            "$ref": "#/components/schemas/PullImage"
+          },
+          "done": {
+            "$ref": "#/components/schemas/PullDone"
+          },
+          "error": {
+            "$ref": "#/components/schemas/StreamError"
+          },
+          "cancelled": {
+            "$ref": "#/components/schemas/JobCancelled"
+          }
+        },
+        "required": [
+          "job",
+          "ticket",
+          "fetching",
+          "images",
+          "image",
+          "done",
+          "error",
+          "cancelled"
+        ],
+        "title": "PullEvents",
+        "type": "object"
+      },
+      "PullFetching": {
+        "additionalProperties": false,
+        "description": "A Pull is asking F-list for the character.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PullFetching",
+        "type": "object"
+      },
+      "PullImage": {
+        "additionalProperties": false,
+        "description": "One image of a Pull: kept (`cached`: it was on disk already) or\nnot (`error` says why).",
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "image_id": {
+            "title": "Image Id",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "total",
+          "image_id",
+          "ok"
+        ],
+        "title": "PullImage",
+        "type": "object"
+      },
+      "PullImages": {
+        "additionalProperties": false,
+        "description": "A Pull's images start: how many the profile lists.",
+        "properties": {
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "downloaded": {
+            "title": "Downloaded",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "downloaded",
+          "failed"
+        ],
+        "title": "PullImages",
+        "type": "object"
+      },
       "PullScheduled": {
         "properties": {
           "scheduled": {
@@ -8414,6 +8900,13 @@
         ],
         "title": "PullStatus",
         "description": "Whether a character's last Pull got every image."
+      },
+      "PullTicket": {
+        "additionalProperties": false,
+        "description": "A Pull is getting (or refreshing) the F-list ticket. No data.",
+        "properties": {},
+        "title": "PullTicket",
+        "type": "object"
       },
       "PutBackImage": {
         "properties": {
@@ -9285,6 +9778,59 @@
         ],
         "title": "SignedOut"
       },
+      "StreamError": {
+        "additionalProperties": false,
+        "description": "A stream's `error` event, which ends it: the stage it stopped\nat, then the one error shape `{code, message, details}`.",
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefusalCode"
+              },
+              {
+                "$ref": "#/components/schemas/JobFailureCode"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          }
+        },
+        "required": [
+          "stage",
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "StreamError",
+        "type": "object"
+      },
+      "StreamReady": {
+        "additionalProperties": false,
+        "description": "The stream is live: its first event.",
+        "properties": {
+          "subscribers": {
+            "title": "Subscribers",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "subscribers"
+        ],
+        "title": "StreamReady",
+        "type": "object"
+      },
       "Trash": {
         "properties": {
           "character_id": {
@@ -10026,9 +10572,15 @@
             "title": "Filename"
           },
           "back_up_first": {
-            "type": "boolean",
-            "title": "Back Up First",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Back Up First"
           }
         },
         "type": "object",

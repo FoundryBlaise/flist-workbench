@@ -231,7 +231,7 @@ async def test_a_slow_subscriber_drops_the_oldest_not_the_newest(
     events.bind_loop(asyncio.get_running_loop())
     async with events.subscribe() as sub:
         for n in range(events.QUEUE_LIMIT + 10):
-            events.publish("set-payload-changed", seq=n)
+            events.publish("labels-changed", hashes=n)
         await asyncio.sleep(0.05)
         drained = []
         while not sub.queue.empty():
@@ -239,7 +239,7 @@ async def test_a_slow_subscriber_drops_the_oldest_not_the_newest(
 
     assert len(drained) <= events.QUEUE_LIMIT
     assert sub.dropped > 0
-    assert drained[-1]["seq"] == events.QUEUE_LIMIT + 9
+    assert drained[-1]["hashes"] == events.QUEUE_LIMIT + 9
 
 
 async def test_the_events_endpoint_streams(

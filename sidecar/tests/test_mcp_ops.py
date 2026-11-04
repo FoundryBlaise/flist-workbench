@@ -92,9 +92,19 @@ async def test_pull_reports_progress_and_returns_a_summary(
         yield "ticket", {}
         yield "fetching", {"name": name}
         yield "images", {"total": 2, "downloaded": 0, "failed": 0}
-        yield "image", {"index": 1, "total": 2, "image_id": "a"}
-        yield "image", {"index": 2, "total": 2, "image_id": "b"}
-        yield "done", {"character_id": "42", "image_count": 2, "changed": False}
+        yield "image", {"index": 1, "total": 2, "image_id": "a", "ok": True}
+        yield "image", {"index": 2, "total": 2, "image_id": "b", "ok": True}
+        yield "done", {
+            "character_id": "42",
+            "name": name,
+            "changed": False,
+            "image_count": 2,
+            "image_downloaded": 2,
+            "image_cached": 0,
+            "image_failed": 0,
+            "pull_status": "complete",
+            "pull_missing": 0,
+        }
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     async with mcp_client("character") as session:
@@ -535,7 +545,17 @@ def test_the_pull_route_still_streams_sse(
 
     async def fake_run(name: str):
         yield "ticket", {}
-        yield "done", {"character_id": "42", "image_count": 0}
+        yield "done", {
+            "character_id": "42",
+            "name": name,
+            "changed": True,
+            "image_count": 0,
+            "image_downloaded": 0,
+            "image_cached": 0,
+            "image_failed": 0,
+            "pull_status": "complete",
+            "pull_missing": 0,
+        }
 
     monkeypatch.setattr(pull_service, "run", fake_run)
     client = app_client(server.app)
@@ -564,8 +584,9 @@ def test_the_backup_all_route_still_streams_sse(
 
     async def fake_run(kind: str = "manual_bulk", source: str = "manual"):
         yield "start", {"total": 1}
-        yield "character", {"name": "A", "status": "saved", "filename": "a.zip"}
-        yield "done", {"total": 1, "saved": 1, "unchanged": 0, "failed": 0}
+        saved = {"name": "A", "status": "saved", "filename": "a.zip"}
+        yield "character", saved
+        yield "done", {"total": 1, "saved": 1, "unchanged": 0, "failed": 0, "characters": [saved]}
 
     monkeypatch.setattr(backup_all_service, "run", fake_run)
     client = app_client(server.app)

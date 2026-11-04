@@ -107,7 +107,7 @@ class _LoadBackupBody(BaseModel):
     """
 
     filename: str
-    back_up_first: bool = True
+    back_up_first: bool | None = None
 
 
 @router.get("/flist/character/{character_id}/workbench")

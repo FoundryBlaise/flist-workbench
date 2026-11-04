@@ -2326,6 +2326,70 @@ export interface components {
             /** Name */
             name: string | null;
         };
+        /**
+         * BackupAllCharacter
+         * @description One character of Back up all: being pulled (`fetching`), then
+         *     `saved` as a Backup (`filename`), `unchanged` since its newest
+         *     Backup, or `error` (`message`; the sweep goes on).
+         */
+        BackupAllCharacter: {
+            /** Name */
+            name: string;
+            /** Character Id */
+            character_id?: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "fetching" | "saved" | "unchanged" | "error";
+            /** Filename */
+            filename?: string;
+            /** Size */
+            size?: number;
+            /** Message */
+            message?: string;
+            /** Image Stats */
+            image_stats?: components["schemas"]["ImageStats"];
+        };
+        /**
+         * BackupAllDone
+         * @description Back up all ended: the characters by outcome, and each one's
+         *     last event.
+         */
+        BackupAllDone: {
+            /** Total */
+            total: number;
+            /** Saved */
+            saved: number;
+            /** Unchanged */
+            unchanged: number;
+            /** Failed */
+            failed: number;
+            /** Characters */
+            characters: components["schemas"]["BackupAllCharacter"][];
+        };
+        /**
+         * BackupAllEvents
+         * @description Back up all's events: the job, `start`, a `character` event per
+         *     character as it is pulled and as it ends, then `done`, `error` or
+         *     `cancelled`.
+         */
+        BackupAllEvents: {
+            job: components["schemas"]["Job"];
+            start: components["schemas"]["BackupAllStart"];
+            character: components["schemas"]["BackupAllCharacter"];
+            done: components["schemas"]["BackupAllDone"];
+            error: components["schemas"]["StreamError"];
+            cancelled: components["schemas"]["JobCancelled"];
+        };
+        /**
+         * BackupAllStart
+         * @description Back up all starts: how many characters the account has.
+         */
+        BackupAllStart: {
+            /** Total */
+            total: number;
+        };
         /** BackupList */
         BackupList: {
             /** Character Id */
@@ -2416,6 +2480,61 @@ export interface components {
             not_found: string[];
             /** Conflicts */
             conflicts: string[];
+        };
+        /**
+         * ChangeEvents
+         * @description The events of `/events`, by name: `ready` first, then a change
+         *     hint whenever shared state changes.
+         */
+        ChangeEvents: {
+            ready: components["schemas"]["StreamReady"];
+            "set-payload-changed": components["schemas"]["ChangeHint"];
+            "sets-changed": components["schemas"]["ChangeHint"];
+            "live-changed": components["schemas"]["ChangeHint"];
+            "labels-changed": components["schemas"]["ChangeHint"];
+            "settings-changed": components["schemas"]["ChangeHint"];
+            "index-changed": components["schemas"]["ChangeHint"];
+            "images-changed": components["schemas"]["ChangeHint"];
+            "backups-changed": components["schemas"]["ChangeHint"];
+            "characters-changed": components["schemas"]["ChangeHint"];
+        };
+        /**
+         * ChangeHint
+         * @description A change to shared state, as a hint: the window re-reads
+         *     through the normal routes. `origin` is who made it: `ui` for the
+         *     window, `mcp:<tool>` for a connected model. The rest says what
+         *     changed: the character (`character_id`, the Workbench's new
+         *     `etag`), how many Labels (`hashes` written, `deleted`), the
+         *     settings (`changed`: each field as stored, keyed by the settings
+         *     service's names, null = back to default), or the Index's job
+         *     (`job_id`, `state`).
+         */
+        ChangeHint: {
+            /**
+             * Event
+             * @enum {string}
+             */
+            event: "set-payload-changed" | "sets-changed" | "live-changed" | "labels-changed" | "settings-changed" | "index-changed" | "images-changed" | "backups-changed" | "characters-changed";
+            /** At */
+            at: number;
+            /** Origin */
+            origin: string;
+            /** Character Id */
+            character_id?: string;
+            /** Etag */
+            etag?: string;
+            /** Hashes */
+            hashes?: number;
+            /** Deleted */
+            deleted?: number;
+            /** Changed */
+            changed?: {
+                [key: string]: unknown;
+            };
+            /** Job Id */
+            job_id?: string;
+            /** State */
+            state?: string;
         };
         /**
          * CharacterAliases
@@ -2747,6 +2866,20 @@ export interface components {
         ImageReferences: {
             [key: string]: components["schemas"]["ImageReference"];
         };
+        /**
+         * ImageStats
+         * @description A character's images after its Pull, by outcome.
+         */
+        ImageStats: {
+            /** Total */
+            total: number;
+            /** Downloaded */
+            downloaded: number;
+            /** Cached */
+            cached: number;
+            /** Failed */
+            failed: number;
+        };
         /** ImageTrashed */
         ImageTrashed: {
             /**
@@ -2961,6 +3094,12 @@ export interface components {
             /** Finished At */
             finished_at: number | null;
         };
+        /**
+         * JobCancelled
+         * @description A stream's `cancelled` event: a cancel by job id stopped the
+         *     job. No data.
+         */
+        JobCancelled: Record<string, never>;
         /**
          * JobError
          * @description Why a job failed, in the one error shape `{code, message,
@@ -3672,6 +3811,88 @@ export interface components {
                 };
             };
         };
+        /**
+         * PullDone
+         * @description A Pull ended: `changed` whether F-list's profile differed from
+         *     Live, and the images by outcome.
+         */
+        PullDone: {
+            /** Character Id */
+            character_id: string;
+            /** Name */
+            name: string;
+            /** Changed */
+            changed: boolean;
+            /** Image Count */
+            image_count: number;
+            /** Image Downloaded */
+            image_downloaded: number;
+            /** Image Cached */
+            image_cached: number;
+            /** Image Failed */
+            image_failed: number;
+            /**
+             * Pull Status
+             * @enum {string}
+             */
+            pull_status: "never_pulled" | "unknown" | "interrupted" | "partial" | "complete";
+            /** Pull Missing */
+            pull_missing: number;
+        };
+        /**
+         * PullEvents
+         * @description A Pull's events, in the order a Pull sends them: the job, then
+         *     its progress, ending with `done`, `error` or `cancelled`.
+         */
+        PullEvents: {
+            job: components["schemas"]["Job"];
+            ticket: components["schemas"]["PullTicket"];
+            fetching: components["schemas"]["PullFetching"];
+            images: components["schemas"]["PullImages"];
+            image: components["schemas"]["PullImage"];
+            done: components["schemas"]["PullDone"];
+            error: components["schemas"]["StreamError"];
+            cancelled: components["schemas"]["JobCancelled"];
+        };
+        /**
+         * PullFetching
+         * @description A Pull is asking F-list for the character.
+         */
+        PullFetching: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * PullImage
+         * @description One image of a Pull: kept (`cached`: it was on disk already) or
+         *     not (`error` says why).
+         */
+        PullImage: {
+            /** Index */
+            index: number;
+            /** Total */
+            total: number;
+            /** Image Id */
+            image_id: string;
+            /** Ok */
+            ok: boolean;
+            /** Cached */
+            cached?: boolean;
+            /** Error */
+            error?: string;
+        };
+        /**
+         * PullImages
+         * @description A Pull's images start: how many the profile lists.
+         */
+        PullImages: {
+            /** Total */
+            total: number;
+            /** Downloaded */
+            downloaded: number;
+            /** Failed */
+            failed: number;
+        };
         /** PullScheduled */
         PullScheduled: {
             /** Scheduled */
@@ -3700,6 +3921,11 @@ export interface components {
             /** Last Attempt Ts */
             last_attempt_ts: number | null;
         };
+        /**
+         * PullTicket
+         * @description A Pull is getting (or refreshing) the F-list ticket. No data.
+         */
+        PullTicket: Record<string, never>;
         /**
          * PutBackImage
          * @description An image back in the Pool. `deduplicated`: the Pool already held
@@ -3987,6 +4213,31 @@ export interface components {
              * @constant
              */
             signed_out: true;
+        };
+        /**
+         * StreamError
+         * @description A stream's `error` event, which ends it: the stage it stopped
+         *     at, then the one error shape `{code, message, details}`.
+         */
+        StreamError: {
+            /** Stage */
+            stage: string;
+            /** Code */
+            code: components["schemas"]["RefusalCode"] | components["schemas"]["JobFailureCode"];
+            /** Message */
+            message: string;
+            /** Details */
+            details: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * StreamReady
+         * @description The stream is live: its first event.
+         */
+        StreamReady: {
+            /** Subscribers */
+            subscribers: number;
         };
         /**
          * Trash
@@ -4294,11 +4545,8 @@ export interface components {
         _LoadBackupBody: {
             /** Filename */
             filename: string;
-            /**
-             * Back Up First
-             * @default true
-             */
-            back_up_first: boolean;
+            /** Back Up First */
+            back_up_first?: boolean | null;
         };
         /** _PairAcceptBody */
         _PairAcceptBody: {

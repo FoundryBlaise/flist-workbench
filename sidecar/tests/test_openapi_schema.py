@@ -195,6 +195,29 @@ def test_every_route_declares_a_response_model() -> None:
     assert problems == []
 
 
+def test_every_event_stream_names_its_events() -> None:
+    # `x-events` names the stream's events model: one field per event
+    # name, typed with its data, so the window's types for the events
+    # are generated too.
+    schemas = openapi_schema.schema()["components"]["schemas"]
+
+    def names_an_events_model(events: dict) -> bool:
+        branches = events.get("anyOf", [events])
+        return all(
+            b.get("$ref", "").removeprefix("#/components/schemas/") in schemas for b in branches
+        )
+
+    problems = [
+        f"{method.upper()} {path}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        for status, response in operation["responses"].items()
+        if "text/event-stream" in response.get("content", {})
+        and not names_an_events_model(response["content"]["text/event-stream"].get("x-events", {}))
+    ]
+    assert problems == []
+
+
 def _undeclared_body(operation: dict) -> str | None:
     """Why `operation`'s JSON request body names no model, or None when
     it does (or takes no JSON body: bytes go as they are)."""
