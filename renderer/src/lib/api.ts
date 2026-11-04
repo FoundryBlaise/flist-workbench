@@ -54,51 +54,10 @@ export type FlistPullStatus = Schema<'PullStatus'>
 
 export type FlistRosterEntry = Schema<'RosterEntry'>
 
-/** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
- *  Each backup is a userscript-restoreable archive (JSON + images +
- *  avatar) written by the Tools → Back up all sweep or the per-
- *  character right-click → Back up now action. `kind` is read from
- *  the embedded `backup-meta.json` (added 2026-06-17); older backups
- *  predating that write come back as `"unknown"`. */
-export type FlistZipBackupKind =
-  | 'manual_single'
-  | 'manual_bulk'
-  | 'import'
-  | 'scheduled'
-  | 'pre_upload'
-  | 'unknown'
-
-/** What a Backup holds: the Live or the Workbench of its moment.
- *  Backups from before the app recorded it come back as `'unknown'`. */
-export type FlistBackupSource = 'live' | 'workbench' | 'unknown'
-
-/** Why a Backup was made; `null` for Backups from before the app
- *  recorded it. */
-export type FlistBackupOccasion =
-  | 'manual'
-  | 'before-upload'
-  | 'before-restore'
-  | 'before-replace'
-  | 'migration'
-  | 'backup-all'
-
-export type FlistZipBackupEntry = {
-  filename: string
-  created_at: number
-  size: number
-  kind: FlistZipBackupKind
-  source: FlistBackupSource
-  occasion: FlistBackupOccasion | null
-  /** False for a Backup that holds no profile: the one the move to one
-   *  Workbench made of the older copies from before the upgrade. The
-   *  sidecar refuses to restore, browse or upload it; it can be
-   *  downloaded. */
-  holds_profile: boolean
-  /** User-set name from `_names.json`. `null` when the user hasn't
-   *  renamed this backup yet — the UI then derives a default label
-   *  from the timestamp. */
-  name: string | null
-}
+/** A Backup as the Backup list shows it: its origin (`source`,
+ *  `occasion`; `kind` is the older one the extension sorts by),
+ *  whether it holds a profile, and the user's rename (`name`). */
+export type FlistZipBackupEntry = Schema<'Backup'>
 
 /** An image file in a character's Pool. */
 export type FlistCharacterImage = Schema<'PoolImage'>
@@ -154,13 +113,6 @@ export type ForeignProfileResult = Omit<Schema<'ForeignProfile'>, 'profile'> & {
   profile: ForeignProfilePayload
 }
 
-/** The Workbench's metadata as the sidecar sends it. The window reads
- *  only `updated_at`, for the Workbench row's "last changed". */
-export type WorkbenchInfoWire = {
-  name: string
-  created_at: number
-  updated_at: number
-}
 
 /** A Pull or Back up all runs as a job: the stream's first event is the
  *  job (its id is what Cancel and a reopened view use), and a cancel by
@@ -922,25 +874,18 @@ export const api = {
     get<Answer<'/flist/activity', 'get'>>('/flist/activity'),
   flistRoster: () => get<Answer<'/flist/characters', 'get'>>('/flist/characters'),
   flistLive: (characterId: string | number) =>
-    get<Record<string, unknown>>(
+    get<Answer<'/flist/character/{character_id}/live', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/live`
     ),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
-    request<{
-      saved: boolean
-      path?: string
-      filename?: string
-      created_at?: number
-      size?: number
-      reason?: string
-    }>(
+    request<Answer<'/flist/character/{character_id}/zip-backup', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backup`,
       { method: 'POST' }
     ),
   flistZipBackups: (characterId: string | number) =>
-    get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
+    get<Answer<'/flist/character/{character_id}/zip-backups', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
     ),
   /** Rename a single backup (user-set label persisted in a sidecar
@@ -952,7 +897,7 @@ export const api = {
     filename: string,
     name: string
   ) =>
-    request<FlistZipBackupEntry>(
+    request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'patch'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
       { method: 'PATCH', body: JSON.stringify({ name }) }
     ),
@@ -966,7 +911,7 @@ export const api = {
     filename: string
   ): Promise<void> => {
     try {
-      await request<unknown>(
+      await request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'delete'>>(
         `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
         { method: 'DELETE' }
       )
@@ -992,11 +937,7 @@ export const api = {
     characterId: string | number,
     filename: string
   ) =>
-    get<{
-      payload: Record<string, unknown>
-      filename: string
-      meta: { kind?: string; created_at?: string; note?: string } | null
-    }>(
+    get<Answer<'/flist/character/{character_id}/zip-backups/{filename}/payload', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/payload`
     ),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
@@ -1010,10 +951,7 @@ export const api = {
    *  what a read-only render wants — merely looking at a character
    *  should not bring a bench into being. */
   flistWorkbench: (characterId: string | number, create = true) =>
-    get<{
-      workbench: WorkbenchInfoWire | null
-      reason?: string
-    }>(
+    get<Answer<'/flist/character/{character_id}/workbench', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
         + (create ? '' : '?create=false')
     ),
@@ -1025,7 +963,7 @@ export const api = {
     characterId: string | number,
     opts: { create?: boolean } = {}
   ) =>
-    get<{ payload: Record<string, unknown>; etag: string; created: boolean }>(
+    get<Answer<'/flist/character/{character_id}/workbench/payload', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
         + (opts.create === false ? '?create=false' : '')
     ),
@@ -1035,10 +973,10 @@ export const api = {
    *  the refusal. */
   flistWorkbenchPayloadPut: (
     characterId: string | number,
-    payload: Record<string, unknown>,
+    payload: BodyOf<'/flist/character/{character_id}/workbench/payload', 'put'>,
     etag: string | null
   ) =>
-    request<{ etag: string }>(
+    request<Answer<'/flist/character/{character_id}/workbench/payload', 'put'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
       {
         method: 'PUT',
@@ -1052,11 +990,7 @@ export const api = {
    *  its etag. When the Backup cannot be written nothing is replaced:
    *  a `workbench_not_kept` refusal. */
   flistWorkbenchResetToLive: (characterId: string | number) =>
-    request<{
-      payload: Record<string, unknown>
-      etag: string
-      backed_up_first: { filename: string; created_at: number } | null
-    }>(
+    request<Answer<'/flist/character/{character_id}/workbench/reset-to-live', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
       { method: 'POST' }
     ),
@@ -1067,13 +1001,7 @@ export const api = {
     characterId: string | number,
     filename: string
   ) =>
-    get<{
-      filename: string
-      backup_created_at: number | null
-      live_pulled_at: number | null
-      live_diverged: boolean
-      workbench_has_edits: boolean
-    }>(
+    get<Answer<'/flist/character/{character_id}/workbench/load-backup/preflight', 'get'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}`
         + `/workbench/load-backup/preflight?filename=`
         + encodeURIComponent(filename)
@@ -1083,13 +1011,7 @@ export const api = {
    *  null when there was no Workbench yet); when it cannot, nothing is
    *  replaced: a `workbench_not_kept` refusal. */
   flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
-    request<{
-      workbench: WorkbenchInfoWire
-      payload: Record<string, unknown>
-      etag: string
-      loaded: string
-      backed_up_first: { filename: string; created_at: number } | null
-    }>(
+    request<Answer<'/flist/character/{character_id}/workbench/load-backup', 'post'>>(
       `/flist/character/${encodeURIComponent(String(characterId))}`
         + `/workbench/load-backup`,
       {
@@ -1238,29 +1160,27 @@ export const api = {
 
   // ---- Browser-extension pairing (restore flow) -------------------------
   restorePendingHandshakes: () =>
-    get<{ pending: { handshake_id: string; fingerprint: string; created_at: number }[] }>(
-      '/restore/handshake/pending'
-    ),
+    get<Answer<'/restore/handshake/pending', 'get'>>('/restore/handshake/pending'),
   restoreAcceptHandshake: (handshakeId: string) =>
-    request<{ ok: boolean; error?: string }>('/restore/handshake/accept', {
+    request<Answer<'/restore/handshake/accept', 'post'>>('/restore/handshake/accept', {
       method: 'POST',
       body: JSON.stringify({ handshake_id: handshakeId })
     }),
   restoreRejectHandshake: (handshakeId: string) =>
-    request<{ ok: boolean; error?: string }>('/restore/handshake/reject', {
+    request<Answer<'/restore/handshake/reject', 'post'>>('/restore/handshake/reject', {
       method: 'POST',
       body: JSON.stringify({ handshake_id: handshakeId })
     }),
   restoreRevokeToken: () =>
-    request<{ ok: boolean }>('/restore/token', { method: 'DELETE' }),
+    request<Answer<'/restore/token', 'delete'>>('/restore/token', { method: 'DELETE' }),
   /** Whether a pairing token is stored. The token itself never comes
    *  back; only the app window can ask. */
-  pairingStatus: () => get<{ paired: boolean }>('/pairing'),
+  pairingStatus: () => get<Answer<'/pairing', 'get'>>('/pairing'),
 
   /** The extension version the browser runs, as of its last paired
    *  call. Null until the extension has made one since the app started. */
   restoreExtensionSeen: () =>
-    request<{ version: string | null; seen_at: number | null }>('/restore/extension')
+    request<Answer<'/restore/extension', 'get'>>('/restore/extension')
 }
 
 function jobEventsPath(jobId: string): string {

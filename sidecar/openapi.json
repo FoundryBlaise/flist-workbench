@@ -555,10 +555,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The job, then its progress events until it ends.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -568,6 +570,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The job, started (`wait=false`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -607,8 +619,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupSaved"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BackupNotSaved"
+                    }
+                  ],
                   "title": "Response Flist Character Zip Backup Flist Character  Character Id  Zip Backup Post"
                 }
               }
@@ -648,9 +666,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Zip Backups Flist Character  Character Id  Zip Backups Get"
+                  "$ref": "#/components/schemas/BackupList"
                 }
               }
             }
@@ -749,9 +765,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Zip Backup Rename Flist Character  Character Id  Zip Backups  Filename  Patch"
+                  "$ref": "#/components/schemas/Backup"
                 }
               }
             }
@@ -796,10 +810,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Backup's zip, as it is on disk.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -847,9 +864,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Zip Backup Payload Flist Character  Character Id  Zip Backups  Filename  Payload Get"
+                  "$ref": "#/components/schemas/BackupPayload"
                 }
               }
             }
@@ -886,10 +901,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The job, then its progress events until it ends.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -899,6 +916,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RefusalBody"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The job, started (`wait=false`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -927,9 +954,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Live Flist Character  Character Id  Live Get"
+                  "$ref": "#/components/schemas/Live"
                 }
               }
             }
@@ -979,8 +1004,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkbenchExists"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorkbenchAbsent"
+                    }
+                  ],
                   "title": "Response Flist Character Workbench Flist Character  Character Id  Workbench Get"
                 }
               }
@@ -1031,9 +1062,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Payload Get Flist Character  Character Id  Workbench Payload Get"
+                  "$ref": "#/components/schemas/WorkbenchPayload"
                 }
               }
             }
@@ -1099,9 +1128,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Payload Put Flist Character  Character Id  Workbench Payload Put"
+                  "$ref": "#/components/schemas/WorkbenchSaved"
                 }
               }
             }
@@ -1151,9 +1178,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Load Backup Flist Character  Character Id  Workbench Load Backup Post"
+                  "$ref": "#/components/schemas/BackupRestored"
                 }
               }
             }
@@ -1193,9 +1218,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Reset To Live Flist Character  Character Id  Workbench Reset To Live Post"
+                  "$ref": "#/components/schemas/WorkbenchResetToLive"
                 }
               }
             }
@@ -1244,9 +1267,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Flist Character Workbench Load Preflight Flist Character  Character Id  Workbench Load Backup Preflight Get"
+                  "$ref": "#/components/schemas/RestorePreflight"
                 }
               }
             }
@@ -2267,10 +2288,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Upload ZIP, as an attachment.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -2297,11 +2321,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object",
-                  "title": "Response Handshake Begin Restore Handshake Post"
+                  "$ref": "#/components/schemas/PairingHandshake"
                 }
               }
             }
@@ -2340,11 +2360,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Handshake Status Restore Handshake Status Get"
+                  "$ref": "#/components/schemas/PairingHandshakeStatus"
                 }
               }
             }
@@ -2372,9 +2388,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Handshake Pending Restore Handshake Pending Get"
+                  "$ref": "#/components/schemas/PendingHandshakes"
                 }
               }
             }
@@ -2412,8 +2426,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandshakeAnswered"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HandshakeUnknown"
+                    }
+                  ],
                   "title": "Response Handshake Accept Restore Handshake Accept Post"
                 }
               }
@@ -2452,8 +2472,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandshakeAnswered"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HandshakeUnknown"
+                    }
+                  ],
                   "title": "Response Handshake Reject Restore Handshake Reject Post"
                 }
               }
@@ -2482,11 +2508,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "type": "object",
-                  "title": "Response Pairing Token Revoke Restore Token Delete"
+                  "$ref": "#/components/schemas/PairingRevoked"
                 }
               }
             }
@@ -2515,11 +2537,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "type": "object",
-                  "title": "Response Pairing Status Pairing Get"
+                  "$ref": "#/components/schemas/PairingStatus"
                 }
               }
             }
@@ -2548,9 +2566,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Extension Seen Restore Extension Get"
+                  "$ref": "#/components/schemas/ExtensionSeen"
                 }
               }
             }
@@ -2614,8 +2630,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/UploadCharacter"
                   },
                   "title": "Response Upload Characters Restore Characters Get"
                 }
@@ -2690,8 +2705,14 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/UploadSourceWorkbench"
+                      },
+                      {
+                        "$ref": "#/components/schemas/UploadSourceBackup"
+                      }
+                    ]
                   },
                   "title": "Response Upload Sources Restore Snapshots Get"
                 }
@@ -2770,10 +2791,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The Upload source's zip.",
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -2844,8 +2868,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PreUploadBackupKept"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PreUploadBackupNotKept"
+                    }
+                  ],
                   "title": "Response Pre Upload Backup Restore Snapshot Fresh Post"
                 }
               }
@@ -2919,9 +2949,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Upload Image Ids Restore Image Ids Post"
+                  "$ref": "#/components/schemas/ImageIdsDeferred"
                 }
               }
             }
@@ -2994,9 +3022,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Upload Saved Restore Saved Post"
+                  "$ref": "#/components/schemas/PullScheduled"
                 }
               }
             }
@@ -3068,11 +3094,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "title": "Response Upload Done Restore Done Post"
+                  "$ref": "#/components/schemas/UploadDone"
                 }
               }
             }
@@ -4836,6 +4858,273 @@
         ],
         "title": "AvatarPrefetchScheduled"
       },
+      "Backup": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "live",
+                  "workbench"
+                ]
+              },
+              {
+                "type": "string",
+                "const": "unknown"
+              }
+            ],
+            "title": "Source"
+          },
+          "occasion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "before-upload",
+                  "before-restore",
+                  "before-replace",
+                  "migration",
+                  "backup-all"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occasion"
+          },
+          "holds_profile": {
+            "type": "boolean",
+            "title": "Holds Profile"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "created_at",
+          "size",
+          "kind",
+          "source",
+          "occasion",
+          "holds_profile",
+          "name"
+        ],
+        "title": "Backup",
+        "description": "One Backup as the Backup list shows it (`list_zip_backups`).\n`kind` is the older provenance the extension sorts by, as the\nBackup's `backup-meta.json` records it (\"unknown\" without one);\n`source` and `occasion` are \"unknown\" and null for a Backup from\nbefore they were recorded. `holds_profile` is false for the Backup\nthe move to one Workbench made, which can only be downloaded.\n`name` is the user's rename, null until there is one."
+      },
+      "BackupList": {
+        "properties": {
+          "character_id": {
+            "type": "string",
+            "title": "Character Id"
+          },
+          "backups": {
+            "items": {
+              "$ref": "#/components/schemas/Backup"
+            },
+            "type": "array",
+            "title": "Backups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character_id",
+          "backups"
+        ],
+        "title": "BackupList"
+      },
+      "BackupNotSaved": {
+        "properties": {
+          "saved": {
+            "type": "boolean",
+            "const": false,
+            "title": "Saved"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "unchanged",
+              "no_live"
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "saved",
+          "reason"
+        ],
+        "title": "BackupNotSaved",
+        "description": "Nothing written: the newest Backup already holds this content,\nor the character has no Live to back up."
+      },
+      "BackupPayload": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "payload",
+          "filename",
+          "meta"
+        ],
+        "title": "BackupPayload",
+        "description": "A Backup's profile, for browsing it read-only. `meta` is its\n`backup-meta.json`, null for a Backup without one."
+      },
+      "BackupRestored": {
+        "properties": {
+          "workbench": {
+            "$ref": "#/components/schemas/WorkbenchInfo"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "loaded": {
+            "type": "string",
+            "title": "Loaded"
+          },
+          "backed_up_first": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KeptBackup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench",
+          "payload",
+          "etag",
+          "loaded",
+          "backed_up_first"
+        ],
+        "title": "BackupRestored"
+      },
+      "BackupSaved": {
+        "properties": {
+          "saved": {
+            "type": "boolean",
+            "const": true,
+            "title": "Saved"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "live",
+              "workbench"
+            ],
+            "title": "Source"
+          },
+          "occasion": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "before-upload",
+              "before-restore",
+              "before-replace",
+              "migration",
+              "backup-all"
+            ],
+            "title": "Occasion"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "saved",
+          "path",
+          "filename",
+          "created_at",
+          "size",
+          "kind",
+          "source",
+          "occasion"
+        ],
+        "title": "BackupSaved"
+      },
       "BackupsPutBack": {
         "properties": {
           "restored": {
@@ -5007,6 +5296,40 @@
           "error"
         ],
         "title": "EmbeddingModels"
+      },
+      "ExtensionSeen": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "seen_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seen At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "seen_at"
+        ],
+        "title": "ExtensionSeen",
+        "description": "The extension version as of its last paired call; both null\nuntil it has made one since the sidecar started."
       },
       "FlistActivity": {
         "properties": {
@@ -5393,6 +5716,43 @@
         "title": "GalleryRepair",
         "description": "What putting the gallery back together changed."
       },
+      "HandshakeAnswered": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "HandshakeAnswered"
+      },
+      "HandshakeUnknown": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ok"
+          },
+          "error": {
+            "type": "string",
+            "const": "expired_or_unknown",
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "error"
+        ],
+        "title": "HandshakeUnknown",
+        "description": "The handshake expired or never existed."
+      },
       "Health": {
         "properties": {
           "status": {
@@ -5413,6 +5773,25 @@
         ],
         "title": "Health",
         "description": "The sidecar answers, and which app version started it."
+      },
+      "ImageIdsDeferred": {
+        "properties": {
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "deferred": {
+            "type": "boolean",
+            "title": "Deferred"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "character",
+          "deferred"
+        ],
+        "title": "ImageIdsDeferred"
       },
       "ImageReference": {
         "properties": {
@@ -5562,6 +5941,147 @@
           "conflicts"
         ],
         "title": "ImagesPutBack"
+      },
+      "Job": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "resource": {
+            "type": "string",
+            "title": "Resource"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "cancelled",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "progress": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Progress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "resource",
+          "state",
+          "params",
+          "progress",
+          "result",
+          "error",
+          "cancel_requested",
+          "created_at",
+          "finished_at"
+        ],
+        "title": "Job",
+        "description": "Long work the sidecar runs as a job, of any kind (`services.jobs`):\na Pull, Back up all, an ingest. `params`, `progress` and `result`\nare the kind's own. The routes that start one and `/jobs` answer it."
+      },
+      "JobError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "title": "JobError",
+        "description": "Why a job failed, in the one error shape. `code` is the job's own\n(such as `embedding_model_changed`), not only a refusal code."
+      },
+      "KeptBackup": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "created_at"
+        ],
+        "title": "KeptBackup",
+        "description": "The Backup that keeps the Workbench a Restore or a reset to Live\nreplaced."
       },
       "LabelOverride": {
         "properties": {
@@ -5862,6 +6382,12 @@
         ],
         "title": "LabelsTrash"
       },
+      "Live": {
+        "additionalProperties": true,
+        "type": "object",
+        "title": "Live",
+        "description": "A character's Live: F-list's character-data answer as the last\nPull stored it, plus `fetched_at`. Free-form, because F-list may add\nfields and the window passes on what it does not know."
+      },
       "MappingList": {
         "properties": {
           "_etag": {
@@ -6069,6 +6595,116 @@
         ],
         "title": "MissingImage"
       },
+      "PairingHandshake": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "handshake_id",
+          "token"
+        ],
+        "title": "PairingHandshake",
+        "description": "A pairing the extension started: it keeps `token` and polls the\nhandshake's status until the window accepts it."
+      },
+      "PairingHandshakeStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "rejected",
+              "expired"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "PairingHandshakeStatus"
+      },
+      "PairingRevoked": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "PairingRevoked"
+      },
+      "PairingStatus": {
+        "properties": {
+          "paired": {
+            "type": "boolean",
+            "title": "Paired"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "paired"
+        ],
+        "title": "PairingStatus"
+      },
+      "PendingHandshake": {
+        "properties": {
+          "handshake_id": {
+            "type": "string",
+            "title": "Handshake Id"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "handshake_id",
+          "fingerprint",
+          "created_at"
+        ],
+        "title": "PendingHandshake",
+        "description": "A pairing waiting for the window's accept. `fingerprint` is a\nshort form of the token, for the user to compare."
+      },
+      "PendingHandshakes": {
+        "properties": {
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/PendingHandshake"
+            },
+            "type": "array",
+            "title": "Pending"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pending"
+        ],
+        "title": "PendingHandshakes"
+      },
       "PendingRender": {
         "properties": {
           "id": {
@@ -6162,6 +6798,58 @@
         "title": "PoolImage",
         "description": "An image file in the character's Pool."
       },
+      "PreUploadBackupKept": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "snapshot_id",
+          "path",
+          "bytes"
+        ],
+        "title": "PreUploadBackupKept",
+        "description": "The Backup taken before an Upload; `snapshot_id` is the\nextension's name for its file name."
+      },
+      "PreUploadBackupNotKept": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ok"
+          },
+          "error": {
+            "type": "string",
+            "const": "unknown_character",
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "error"
+        ],
+        "title": "PreUploadBackupNotKept"
+      },
       "PublicProfile": {
         "properties": {
           "name": {
@@ -6203,6 +6891,30 @@
         ],
         "title": "PublicProfile",
         "description": "A character's public profile, for the editor's \"Fetch profile\".\n`stats` are its infotags by label; `inlines` F-list's inline images\nby id, as F-list sent them."
+      },
+      "PullScheduled": {
+        "properties": {
+          "scheduled": {
+            "type": "boolean",
+            "title": "Scheduled"
+          },
+          "character": {
+            "type": "string",
+            "title": "Character"
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Delay Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scheduled",
+          "character",
+          "delay_seconds"
+        ],
+        "title": "PullScheduled"
       },
       "PullStatus": {
         "properties": {
@@ -6800,6 +7512,48 @@
         ],
         "title": "RenderPoll"
       },
+      "RestorePreflight": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "backup_created_at": {
+            "type": "integer",
+            "title": "Backup Created At"
+          },
+          "live_pulled_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Pulled At"
+          },
+          "live_diverged": {
+            "type": "boolean",
+            "title": "Live Diverged"
+          },
+          "workbench_has_edits": {
+            "type": "boolean",
+            "title": "Workbench Has Edits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "backup_created_at",
+          "live_pulled_at",
+          "live_diverged",
+          "workbench_has_edits"
+        ],
+        "title": "RestorePreflight",
+        "description": "What the Restore confirm dialog says: whether the Workbench holds\nedits, and whether Live was pulled after the Backup was taken."
+      },
       "Roster": {
         "properties": {
           "characters": {
@@ -7391,6 +8145,171 @@
         "title": "TrashedLabels",
         "description": "Labels cleared in one go, kept in the Trash."
       },
+      "UploadCharacter": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "character_id": {
+            "type": "string",
+            "title": "Character Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "character_id"
+        ],
+        "title": "UploadCharacter",
+        "description": "An archived character the extension can take Upload sources from."
+      },
+      "UploadDone": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "UploadDone"
+      },
+      "UploadSourceBackup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "backup",
+              "pre-restore"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "image_count": {
+            "type": "integer",
+            "title": "Image Count"
+          },
+          "backup_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backup Kind"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "upload_refused": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Refused"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "created_at",
+          "image_count",
+          "backup_kind",
+          "name",
+          "upload_refused"
+        ],
+        "title": "UploadSourceBackup",
+        "description": "A Backup as an Upload source. `kind` \"pre-restore\" is the\nextension's name for a Backup taken before an Upload; `backup_kind`\nis the Backup list's `kind`. `upload_refused` says why it cannot be\nuploaded, or is null."
+      },
+      "UploadSourceWorkbench": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "const": "workbench",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "set",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "image_count": {
+            "type": "integer",
+            "title": "Image Count"
+          },
+          "upload_refused": {
+            "type": "null",
+            "title": "Upload Refused"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "created_at",
+          "image_count",
+          "upload_refused"
+        ],
+        "title": "UploadSourceWorkbench",
+        "description": "The Workbench as an Upload source. `kind` is \"set\" because\nextension 0.1.1 finds the Workbench by it."
+      },
       "UploadedImage": {
         "properties": {
           "image_id": {
@@ -7425,6 +8344,139 @@
         ],
         "title": "UploadedImage",
         "description": "The Pool image an upload landed as. `deduplicated`: the Pool\nalready held these bytes, and this is that file."
+      },
+      "WorkbenchAbsent": {
+        "properties": {
+          "workbench": {
+            "type": "null",
+            "title": "Workbench"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "no_live",
+              "not_created_yet"
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench",
+          "reason"
+        ],
+        "title": "WorkbenchAbsent",
+        "description": "No Workbench yet. `no_live`: the character was never pulled, so\nthere is nothing to copy from; `not_created_yet`: nobody has edited\nit yet."
+      },
+      "WorkbenchExists": {
+        "properties": {
+          "workbench": {
+            "$ref": "#/components/schemas/WorkbenchInfo"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workbench"
+        ],
+        "title": "WorkbenchExists"
+      },
+      "WorkbenchInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "integer",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkbenchInfo",
+        "description": "When the Workbench was made and last saved (unix seconds)."
+      },
+      "WorkbenchPayload": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "payload",
+          "etag",
+          "created"
+        ],
+        "title": "WorkbenchPayload",
+        "description": "The Workbench payload and the etag a save sends back as\n`If-Match`. `created`: this read made it from Live."
+      },
+      "WorkbenchResetToLive": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          },
+          "backed_up_first": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KeptBackup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "payload",
+          "etag",
+          "backed_up_first"
+        ],
+        "title": "WorkbenchResetToLive"
+      },
+      "WorkbenchSaved": {
+        "properties": {
+          "etag": {
+            "type": "string",
+            "title": "Etag"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "etag"
+        ],
+        "title": "WorkbenchSaved"
       },
       "_ImageIdsBody": {
         "properties": {

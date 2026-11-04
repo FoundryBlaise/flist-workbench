@@ -7,7 +7,7 @@
 // fake sidecar.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, useStore } from '../../state'
 import { resetUndoStacks } from '../undoStack'
 import { applyWorkbenchEvent } from '../workbenchEvents'
 import type { WorkbenchEvent } from '../../lib/eventStream'
@@ -91,9 +91,7 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistWorkbenchNote: null,
     flistActiveCharacterId: CID,
-    editorReadOnly: false,
-    editorContent: 'as I left her',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -116,7 +114,7 @@ describe('the model and I changed different fields', () => {
     expect(merged.character?.description).toBe('as the model wrote her')
     expect(merged.infotags?.['3']).toBe('Half-elf')
     expect(slotOf().etag).toBe('theirs')
-    expect(store().editorContent).toBe('as the model wrote her')
+    expect(selectEditorDescription(store())).toBe('as the model wrote her')
     expect(store().flistMergeQuestion[CID]).toBeFalsy()
 
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
@@ -243,7 +241,7 @@ describe('the description is one field', () => {
       description: 'as I left her, with a new last line',
       custom_title: 'the returned'
     })
-    expect(store().editorContent).toBe('as I left her, with a new last line')
+    expect(selectEditorDescription(store())).toBe('as I left her, with a new last line')
   })
 
   it('keeping mine keeps my text whole', async () => {
@@ -316,7 +314,7 @@ describe('timing', () => {
 
     expect(bodyOf(slotOf().payload).character?.description).toBe('as I left her, typed during the read')
     expect(bodyOf(slotOf().payload).infotags?.['3']).toBe('Drow')
-    expect(store().editorContent).toBe('as I left her, typed during the read')
+    expect(selectEditorDescription(store())).toBe('as I left her, typed during the read')
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     const saves = fake.requestsTo(SAVE)
     expect(saves).toHaveLength(1)

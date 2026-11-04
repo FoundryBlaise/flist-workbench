@@ -13,15 +13,7 @@
 // leaving the Foreign profile through Foreign. The Account and the
 // Archive in turn reach the Workbench only through the actions here.
 
-import {
-  api,
-  errorDetail,
-  HttpError,
-  RefusalError,
-  refusalCode,
-  workbenchConflict,
-  type InlineImage
-} from '../../lib/api'
+import { api, errorDetail, RefusalError, workbenchConflict } from '../../lib/api'
 import {
   DESCRIPTION_PATH,
   applyEdit as flistApplyEdit,
@@ -29,7 +21,6 @@ import {
   descriptionOf,
   detectLiveDrift,
   emptyWorkingSlot,
-  extractInlines as flistExtractInlines,
   isDeepEqual,
   seedWorkingFromLive,
   type FlistWorkingSlot,
@@ -64,14 +55,9 @@ import type { SliceCreator } from './slice'
 // stays well under it at this rate.
 const STALE_AGE_SEC = 30 * 60
 
+// The editor keeps no copy of the description, its inline images or its
+// title: state/editorView.ts reads them from the active character's slot.
 export type WorkbenchState = {
-  editorContent: string
-  editorTitle: string
-  editorInlines: Record<string, InlineImage>
-  editorFetchStatus: 'idle' | 'fetching' | 'ok' | 'error'
-  editorFetchError: string | null
-  editorDirty: boolean
-
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
   saveError: string | null
   /** Set by EditorPane after an idle window; "draft has been flushed". */
@@ -184,9 +170,11 @@ export type WorkbenchState = {
 
 export type WorkbenchSlice = WorkbenchState & {
   selectCharacter: (name: string | null) => void
+  /** Typing in the description editor: an edit to the active
+   *  character's Workbench payload, keystrokes without a pause one undo
+   *  entry. Does nothing while the editor shows no Workbench (no
+   *  character, a read-only view, the Workbench still being read). */
   setEditorContent: (value: string) => void
-  fetchProfile: (name: string) => Promise<void>
-  resetEditorDirty: () => void
 
   // ---- F-list actions ----
   flistSelectCharacter: (characterId: string | null) => Promise<void>
@@ -220,7 +208,6 @@ export type WorkbenchSlice = WorkbenchState & {
     images: { image_id: string; description: string; sort_order: number }[],
     opts?: { typing?: string }
   ) => void
-  flistOpenLive: (characterId: string) => Promise<void>
   /** Load the editor with this character's working copy.
    *  Falls back to the Live description when no working copy exists
    *  yet (materialise-on-first-edit, §1.6). The previous character's
@@ -374,13 +361,6 @@ export type WorkbenchSlice = WorkbenchState & {
  *  `useStore.setState(workbenchInitialState())`. */
 export function workbenchInitialState(): WorkbenchState {
   return {
-    editorContent: '',
-    editorTitle: '',
-    editorInlines: {},
-    editorFetchStatus: 'idle',
-    editorFetchError: null,
-    editorDirty: false,
-
     saveStatus: 'idle',
     saveError: null,
     draftStatus: 'idle',
@@ -432,48 +412,19 @@ function _isNewestOpen(characterId: string, token: number): boolean {
   return _openTokens.get(characterId) === token
 }
 
-/** The editor patch that shows a character's Workbench as the slot in
- *  memory holds it, unsaved keystrokes included. */
-function _workbenchInEditor(s: State, characterId: string): Partial<WorkbenchState> {
-  const slot = s.flistWorking[characterId]
-  const live = s.flistArchive[characterId]?.live ?? null
-  const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
-  // "Workbench", not "My edits": the sidebar row, the window title
-  // and the read-only hints all name the same one thing now. Two
-  // names for it was half the reason testers could not say what they
-  // were editing.
-  const name = entry?.name ?? 'Workbench'
-  const titleSuffix = slot?.unsavedDirty ? ' (unsaved)' : ''
-  return {
-    editorContent: slot ? descriptionOf(slot.payload) : '',
-    editorTitle: `${name} — Workbench${titleSuffix}`,
-    editorInlines: live ? flistExtractInlines(live) : {},
-    editorReadOnly: false,
-    editorDirty: !!slot?.unsavedDirty,
-    saveStatus: 'idle',
-    saveError: null,
-    draftStatus: 'idle'
-  }
+/** The editor patch that shows the active character's Workbench, as the
+ *  slot in memory holds it (unsaved keystrokes included): editable. What
+ *  it shows is read from the slot (state/editorView.ts). */
+function _workbenchInEditor(): Partial<WorkbenchState> {
+  return { editorReadOnly: false, saveStatus: 'idle', saveError: null, draftStatus: 'idle' }
 }
 
 /** The editor patch for a switch to a character whose Workbench is not
- *  in memory yet: empty and read-only under the new character's name
- *  until the read lands. Showing the character being left would save
- *  its text into this one on the next keystroke, and a keystroke with
- *  no slot to land in would be dropped when the read replaced it. */
-function _workbenchLoadingInEditor(s: State, characterId: string): Partial<WorkbenchState> {
-  const entry = s.flistRoster.find((r) => String(r.id ?? '') === characterId)
-  const name = entry?.name ?? 'Workbench'
-  return {
-    editorContent: '',
-    editorTitle: `${name} — Workbench (loading)`,
-    editorInlines: {},
-    editorReadOnly: true,
-    editorDirty: false,
-    saveStatus: 'idle',
-    saveError: null,
-    draftStatus: 'idle'
-  }
+ *  in memory yet: read-only (and empty, there being no slot to read)
+ *  until the read lands. A keystroke with no slot to land in would be
+ *  dropped when the read replaced it. */
+function _workbenchLoadingInEditor(): Partial<WorkbenchState> {
+  return { editorReadOnly: true, saveStatus: 'idle', saveError: null, draftStatus: 'idle' }
 }
 
 function _scheduleFlush(characterId: string, fn: () => void): void {
@@ -491,28 +442,9 @@ function _scheduleFlush(characterId: string, fn: () => void): void {
 // through its host (UndoHost in state/undo.ts).
 export type SlotSet = (fn: (s: State) => Partial<WorkbenchState>) => void
 
-/** The editor follows the active character's slot: whatever a commit
- *  leaves in the payload is the description the editor shows. Edits and
- *  written commits reach it only while it shows the Workbench (not a
- *  read-only view); a view sets what it shows itself. */
-function _editorFollows(
-  s: State,
-  characterId: string,
-  next: FlistWorkingSlot | null,
-  commit: Commit
-): Partial<WorkbenchState> {
-  if (!next || s.flistActiveCharacterId !== characterId) return {}
-  const editorContent = descriptionOf(next.payload)
-  if (commit.kind === 'view') return { editorContent, editorDirty: false }
-  if (s.editorReadOnly) return {}
-  if (commit.kind === 'edit' || commit.kind === 'merged') {
-    return { editorContent, editorDirty: s.editorDirty || editorContent !== s.editorContent }
-  }
-  return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }
-}
-
 /** The one commit point: the only code that puts a new payload into a
- *  character's Workbench slot (see state/commit.ts for the kinds). An
+ *  character's Workbench slot (see state/commit.ts for the kinds), and
+ *  so the only way the description the editor shows changes. An
  *  edit marks the slot unsaved and schedules the autosave; a written
  *  commit adopts the sidecar's etag; a view replaces or drops the slot
  *  without being a change. The undo module records every commit made
@@ -546,11 +478,7 @@ function _commit(
       previous: current?.payload ?? null,
       next: next?.payload ?? null
     }
-    const patch = {
-      ...also?.(s),
-      flistWorking,
-      ..._editorFollows(s, characterId, next, commit)
-    }
+    const patch = { ...also?.(s), flistWorking }
     done.before = s
     done.after = { ...s, ...patch }
     return patch
@@ -1005,7 +933,7 @@ function _showWorkbench(
     flistViewingLive: { ...s.flistViewingLive, [characterId]: false }
   }))
   if (get().flistActiveCharacterId === characterId) {
-    set((s) => _workbenchInEditor(s, characterId))
+    set(() => _workbenchInEditor())
   }
 }
 
@@ -1053,61 +981,6 @@ function collectOverlayCandidates(payload: WorkingPayload): string[] {
     }
   }
   return Array.from(paths)
-}
-
-// F-list serves descriptions with literal CRLF / CR. Normalise before
-// they hit CodeMirror + the BBCode→HTML preview so they don't render
-// as doubled blank lines.
-function normaliseNewlines(s: string): string {
-  return s.replace(/\r\n?/g, '\n')
-}
-
-// character-data.php returns `inlines` as a top-level dict mapping
-// inline-image id → {hash, extension, nsfw}. The renderer's BBCode
-// transformer needs that dict to resolve `[img=<id>]` tags to CDN
-// URLs (`static.f-list.net/images/charinline/<hash>.<ext>`). Without
-// it, every inline tag renders as a broken image — caught after the
-// JSON-API swap because the working/Live/Backup loaders hardcoded
-// `editorInlines: {}` and only the old Fetch-profile path extracted
-// them properly.
-function extractInlines(payload: unknown): Record<string, InlineImage> {
-  if (!payload || typeof payload !== 'object') return {}
-  const raw = (payload as { inlines?: unknown }).inlines
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const out: Record<string, InlineImage> = {}
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (
-      v &&
-      typeof v === 'object' &&
-      typeof (v as { hash?: unknown }).hash === 'string' &&
-      typeof (v as { extension?: unknown }).extension === 'string'
-    ) {
-      const entry = v as { hash: string; extension: string; nsfw?: unknown }
-      out[String(k)] = {
-        hash: entry.hash,
-        extension: entry.extension,
-        nsfw: Boolean(entry.nsfw)
-      }
-    }
-  }
-  return out
-}
-
-// Pulled out so fetchProfile can reset shared editor state cleanly.
-function editorReplaceState(profile: {
-  bbcode: string
-  title: string
-  inlines: Record<string, InlineImage>
-}) {
-  return {
-    editorContent: profile.bbcode,
-    editorTitle: profile.title,
-    editorInlines: profile.inlines,
-    editorDirty: false,
-    saveStatus: 'idle' as const,
-    saveError: null,
-    draftStatus: 'idle' as const
-  }
 }
 
 export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => ({
@@ -1205,31 +1078,6 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
     })
   },
 
-  async flistOpenLive(characterId) {
-    const archive = get().flistArchive[characterId]
-    const live = archive?.live ?? (await api.flistLive(characterId).catch(() => null))
-    if (!live) return
-    const character = (live.character ?? live) as Record<string, unknown>
-    const name =
-      (typeof character.name === 'string' && character.name) ||
-      (typeof live.name === 'string' && (live.name as string)) ||
-      'Live'
-    const rawBbcode =
-      (typeof character.description === 'string' && (character.description as string)) ||
-      (typeof live.description === 'string' && (live.description as string)) ||
-      ''
-    set({
-      editorContent: normaliseNewlines(rawBbcode),
-      editorTitle: `${name} — Live.bbcode`,
-      editorInlines: extractInlines(live),
-      editorReadOnly: true,
-      editorDirty: false,
-      saveStatus: 'idle',
-      saveError: null,
-      draftStatus: 'idle'
-    })
-  },
-
   async flistOpenWorking(characterId) {
     const token = _beginOpen(characterId)
     // Ensure Live is loaded into flistArchive BEFORE the legacy read
@@ -1304,7 +1152,7 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
     // the user moved on to someone else leaves it alone; otherwise the
     // next keystroke would save this character's text into theirs.
     if (get().flistActiveCharacterId !== characterId) return
-    set(_workbenchInEditor(get(), characterId))
+    set(_workbenchInEditor())
   },
 
   flistSetWorkingField(characterId, path, value, opts) {
@@ -1648,9 +1496,8 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
     // If the user is sitting on this character's working copy and
     // hasn't typed anything yet, refresh the editor with the
     // freshly-pulled Live content. Skip when the working copy is
-    // dirty OR when the live editorContent has already diverged
-    // from the seeded content — covers the race where keystrokes
-    // arrived between the dirty=false snapshot we took and now.
+    // dirty — keystrokes are edits to the slot, so any typed since
+    // the seed show there.
     const isActive =
       get().flistActiveCharacterId === characterId &&
       !get().editorReadOnly
@@ -1724,9 +1571,9 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
         flistViewingLive: { ...s.flistViewingLive, [characterId]: true },
         editorReadOnly: true
       }
-      // The commit puts the payload's description into the editor.
+      // The editor shows the view's description and inline images
+      // because the slot now holds its payload.
       if (s.flistActiveCharacterId === characterId) {
-        patch.editorInlines = extractInlines(payload)
         patch.saveStatus = 'idle'
         patch.saveError = null
       }
@@ -2108,11 +1955,7 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
         // A Workbench already in memory is shown straight away; the
         // read below refreshes it unless the user types first. Without
         // one the editor waits, read-only, for the read to land.
-        set(
-          get().flistWorking[id]
-            ? _workbenchInEditor(get(), id)
-            : _workbenchLoadingInEditor(get(), id)
-        )
+        set(get().flistWorking[id] ? _workbenchInEditor() : _workbenchLoadingInEditor())
         void get().flistLoadArchive(id)
       }
       // Always reload the working copy on a picker click, even when
@@ -2150,77 +1993,19 @@ export const createWorkbenchSlice: SliceCreator<WorkbenchSlice> = (set, get) => 
   },
 
   setEditorContent(value) {
-    const s = get()
-    const before = s.editorContent
     // Mark draft stale as soon as the user types — the autosave
     // effect will pick this up and flush after the idle window.
     set({ draftStatus: 'idle' })
-    // Working-copy mode: editor is showing an F-list character's
-    // editable copy (no local doc active, not in read-only Live /
-    // Backup view). The description is an edit to the Workbench like
-    // any other: it goes into the payload, and the editor text is read
-    // back from there by the commit, so the two cannot drift.
+    // The description is an edit to the Workbench like any other: it
+    // goes into the payload, and the editor reads its text back from
+    // there (state/editorView.ts), so the two cannot drift. With no
+    // Workbench shown (a read-only view, the read still out) there is
+    // nothing to type into.
+    const s = get()
     const characterId = s.flistActiveCharacterId
-    const isWorkingCopyMode = characterId !== null && !s.editorReadOnly
-    if (isWorkingCopyMode && value !== before && s.flistWorking[characterId]) {
-      get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value, { typing: true })
-      return
-    }
-    set((st) => ({
-      editorContent: value,
-      editorDirty: st.editorDirty || value !== before
-    }))
-  },
-
-  resetEditorDirty() {
-    set({ editorDirty: false })
-  },
-
-  async fetchProfile(name) {
-    // Synchronous guard against rapid duplicate clicks: a `disabled`
-    // button alone doesn't help because React hasn't repainted between
-    // a burst of click events. Reading `editorFetchStatus` here AND
-    // setting it before the first await closes that race.
-    if (get().editorFetchStatus === 'fetching') return
-    set({ editorFetchStatus: 'fetching', editorFetchError: null })
-    try {
-      const profile = await api.profile(name)
-      const previousContent = get().editorContent
-      set({
-        ...editorReplaceState({
-          bbcode: profile.bbcode,
-          title: `${profile.name}.bbcode`,
-          inlines: profile.inlines ?? {}
-        }),
-        editorFetchStatus: 'ok',
-        editorFetchError: null,
-        editorDirty: previousContent !== profile.bbcode
-      })
-    } catch (err) {
-      set({
-        editorFetchStatus: 'error',
-        editorFetchError: humanizeFetchError(err, name)
-      })
-    }
+    if (characterId === null || s.editorReadOnly) return
+    const slot = s.flistWorking[characterId]
+    if (!slot || value === descriptionOf(slot.payload)) return
+    get().flistSetWorkingField(characterId, DESCRIPTION_PATH, value, { typing: true })
   }
 })
-
-/** What a failed profile look-up says, chosen by the refusal's code
- *  and status, never by its words. */
-function humanizeFetchError(err: unknown, name: string): string {
-  // The look-up needs a sign-in. Surface a clear CTA.
-  const code = refusalCode(err)
-  if (code === 'not_signed_in') {
-    return 'Sign in to F-list to fetch profiles. Click the chip in the sidebar.'
-  }
-  if (code === 'not_found') return `No character named "${name}" on F-list.`
-  // fetch rejects with a TypeError when the sidecar is down.
-  if (err instanceof TypeError) {
-    return "Can't reach the app's sidecar. Restart the app and try again."
-  }
-  if (err instanceof HttpError && err.status >= 500) {
-    return 'F-list is having trouble right now. Try again in a moment.'
-  }
-  if (err instanceof HttpError) return `F-list refused that name (${errorDetail(err)}).`
-  return errorDetail(err)
-}

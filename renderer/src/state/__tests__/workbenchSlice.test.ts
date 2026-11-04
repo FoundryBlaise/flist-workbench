@@ -5,7 +5,7 @@
 // (workingCopyActions, workbenchEvents, undo, fieldMerge ...).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, useStore } from '../../state'
 import { workbenchInitialState } from '../slices/workbench'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 import {
@@ -44,7 +44,6 @@ beforeEach(() => {
     ...workbenchInitialState(),
     flistWorking: { [A]: workingSlot(described('my draft'), { etag: 'e1' }) },
     flistActiveCharacterId: A,
-    editorContent: 'my draft',
     flistArchive: { [A]: archiveEntry(PUBLISHED) },
     flistBrowseBackup: null,
     flistRoster: [
@@ -129,6 +128,6 @@ describe('closing a browsed Backup opened from the Workbench', () => {
     expect(useStore.getState().editorReadOnly).toBe(false)
     read.resolve(json(payloadRead(described('my draft'), 'e1')))
     await vi.runAllTimersAsync()
-    expect(useStore.getState().editorContent).toBe('my draft')
+    expect(selectEditorDescription(useStore.getState())).toBe('my draft')
   })
 })

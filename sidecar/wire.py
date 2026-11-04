@@ -22,7 +22,7 @@ routers).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.experimental.missing_sentinel import MISSING
@@ -41,6 +41,33 @@ class WireModel(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+
+class JobError(WireModel):
+    """Why a job failed, in the one error shape. `code` is the job's own
+    (such as `embedding_model_changed`), not only a refusal code."""
+
+    code: str
+    message: str
+    details: dict[str, Any]
+
+
+class Job(WireModel):
+    """Long work the sidecar runs as a job, of any kind (`services.jobs`):
+    a Pull, Back up all, an ingest. `params`, `progress` and `result`
+    are the kind's own. The routes that start one and `/jobs` answer it."""
+
+    id: str
+    kind: str
+    resource: str
+    state: Literal["pending", "running", "done", "cancelled", "failed"]
+    params: dict[str, Any]
+    progress: dict[str, Any]
+    result: dict[str, Any] | None
+    error: JobError | None
+    cancel_requested: bool
+    created_at: float
+    finished_at: float | None
 
 
 def event_stream(description: str) -> dict[int | str, dict[str, Any]]:
