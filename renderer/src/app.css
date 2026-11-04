@@ -4958,13 +4958,7 @@ body {
   color: #ffd5d5;
   border: 1px solid #d04a4a;
 }
-.flist-images-toast--undo {
-  background: #1a2e1a;
-  color: #d5ffd5;
-  border: 1px solid #84c97a;
-}
-.flist-images-toast__close,
-.flist-images-toast__action {
+.flist-images-toast__close {
   background: transparent;
   border: 1px solid currentColor;
   color: inherit;
@@ -4973,8 +4967,7 @@ body {
   padding: 2px 8px;
   cursor: pointer;
 }
-.flist-images-toast__close:hover,
-.flist-images-toast__action:hover {
+.flist-images-toast__close:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 .flist-images-tab { position: relative; }
