@@ -323,6 +323,17 @@ type State = {
     string,
     { etag: string | null; origin: string; at: number } | null
   >
+  /** The last thing the window did to a Workbench by itself or on
+   *  Ctrl+Z / Ctrl+Y that the user should be told about: another
+   *  writer's change taken in (`updated`), or an undo / redo stepping
+   *  over a change, with that change's label. The note fades in the
+   *  window; null when there is nothing to say. */
+  flistWorkbenchNote: {
+    characterId: string
+    action: 'updated' | 'undo' | 'redo'
+    label: CommitLabel
+    at: number
+  } | null
   /** What an undo or redo did about gallery images whose files were not
    *  in the pool: put back from the Trash, or missing. Keyed by
    *  character id; the window shows the active character's and fades it. */
@@ -949,15 +960,17 @@ function _showsReadOnlyView(s: State, characterId: string): boolean {
   return !!s.flistViewingLive[characterId] || s.flistBrowseBackup?.characterId === characterId
 }
 
-/** One undo or redo step: `take` moves the character's stack and hands
- *  back the payload to put in, which is committed as an edit, so it is
- *  unsaved and the autosave writes it over the etag the slot holds. */
+/** One undo or redo step: the stack moves and hands back the payload to
+ *  put in, which is committed as an edit, so it is unsaved and the
+ *  autosave writes it over the etag the slot holds. The note says which
+ *  change was stepped over. */
 function _undoStep(
   get: () => State,
   set: SlotSet,
   characterId: string,
-  take: typeof takeUndo
+  action: 'undo' | 'redo'
 ): CommitLabel | null {
+  const take = action === 'undo' ? takeUndo : takeRedo
   const s = get()
   const slot = s.flistWorking[characterId]
   if (!slot || _showsReadOnlyView(s, characterId)) return null
@@ -965,14 +978,15 @@ function _undoStep(
   if (!entry) return null
   const pool = s.flistCharacterImages[characterId]
   const toFind = imagesToFind(entry.payload, slot.payload, pool?.byId ?? null)
-  _commit(get, set, characterId, {
-    kind: 'edit',
-    label: 'edit',
-    payload: entry.payload,
-    undoStep: true
-  })
+  _commit(
+    get,
+    set,
+    characterId,
+    { kind: 'edit', label: 'edit', payload: entry.payload, undoStep: true },
+    () => ({ flistWorkbenchNote: { characterId, action, label: entry.label, at: Date.now() } })
+  )
   if (toFind.length > 0) {
-    _putBackBeforeSave(get, set, characterId, toFind, take === takeUndo ? 'Undo' : 'Redo')
+    _putBackBeforeSave(get, set, characterId, toFind, action === 'undo' ? 'Undo' : 'Redo')
   }
   return entry.label
 }
@@ -1073,6 +1087,76 @@ async function _putBackFromTrash(
     const why = e instanceof Error ? e.message : String(e)
     note(`${step} brought back ${imageIds.join(', ')}, but the Trash could not be checked: ${why}.`)
   }
+}
+
+type ExternalChange = NonNullable<State['flistExternalChange'][string]>
+
+/** Take another writer's version of a character's Workbench: read it
+ *  and commit it over its etag, an undo entry labelled with the writer.
+ *  `auto` is the store doing it by itself because nothing was unsaved;
+ *  then anything the window commits while the read is out (typing) is
+ *  newer and stays, and the change waits for the banner. Without
+ *  `auto` the user chose to discard theirs. A failed read leaves the
+ *  change pending. */
+async function _takeExternalChange(
+  get: () => State,
+  set: SlotSet,
+  characterId: string,
+  change: ExternalChange,
+  auto: boolean
+): Promise<void> {
+  if (!auto) _cancelFlush(characterId)
+  const before = get().flistWorking[characterId]
+  let res: Awaited<ReturnType<typeof api.flistWorkbenchPayloadRead>>
+  try {
+    res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
+  } catch {
+    return
+  }
+  const s = get()
+  // A newer change came in while this read was out; its own read
+  // brings the newer payload.
+  if (s.flistExternalChange[characterId] !== change) return
+  if (auto && s.flistWorking[characterId] !== before) {
+    // Still nothing unsaved (the slot became a view, say): read again
+    // against what the slot holds now.
+    if (!s.flistWorking[characterId]?.unsavedDirty) {
+      void _takeExternalChange(get, set, characterId, change, true)
+    }
+    return
+  }
+  const label = externalLabel(change.origin)
+  const payload = res.payload as WorkingPayload
+  const settled = (st: State): Partial<State> => ({
+    flistExternalChange: { ...st.flistExternalChange, [characterId]: null },
+    // Taken in by itself: say who changed it, the part the user cannot
+    // see. Chosen from the banner, the user knows.
+    ...(auto
+      ? { flistWorkbenchNote: { characterId, action: 'updated' as const, label, at: Date.now() } }
+      : {})
+  })
+  const hidden = hiddenWorkbench(characterId)
+  if (s.flistViewingLive[characterId] || hidden) {
+    // The slot shows Live or a Backup, not the Workbench (or is about to
+    // get the Workbench back from its own read): leave the slot alone.
+    // Going back to the Workbench reads it from disk; the change is its
+    // entry now, stepping from the Workbench the view hid. A read that
+    // brings nothing new (the event of a write an earlier read already
+    // took in) is not a change.
+    if (hidden && JSON.stringify(hidden) !== JSON.stringify(payload)) {
+      recordChange(characterId, label, hidden)
+      hideWorkbench(characterId, { ...payload })
+    }
+    set(settled)
+    return
+  }
+  _commit(
+    get,
+    set,
+    characterId,
+    { kind: 'written', label, payload, etag: res.etag, lastSavedAt: Date.now() },
+    settled
+  )
 }
 
 /** Sign-out's commit: every slot dropped at once, as a view. */
@@ -2078,6 +2162,7 @@ export const useStore = create<State>((set, get) => ({
   flistRestoreRefusal: {},
   flistViewingLive: {},
   flistExternalChange: {},
+  flistWorkbenchNote: null,
   flistUndoNotes: {},
   flistMapping: {
     status: 'idle',
@@ -2386,6 +2471,7 @@ export const useStore = create<State>((set, get) => ({
       flistRestoreRefusal: {},
       flistViewingLive: {},
       flistExternalChange: {},
+      flistWorkbenchNote: null,
       flistUndoNotes: {},
       flistDriftBanners: {},
       flistDiffRightSource: {},
@@ -3017,11 +3103,11 @@ export const useStore = create<State>((set, get) => ({
   },
 
   flistUndo(characterId) {
-    return _undoStep(get, set, characterId, takeUndo)
+    return _undoStep(get, set, characterId, 'undo')
   },
 
   flistRedo(characterId) {
-    return _undoStep(get, set, characterId, takeRedo)
+    return _undoStep(get, set, characterId, 'redo')
   },
 
   flistDismissUndoNote(characterId) {
@@ -3152,44 +3238,24 @@ export const useStore = create<State>((set, get) => ({
   },
 
   flistNoteExternalChange(characterId, change) {
-    set((s) => {
-      const slot = s.flistWorking[characterId]
-      // A change we made ourselves arrives with the etag we already
-      // hold; there is nothing to tell the user about.
-      if (slot && change.etag && slot.etag === change.etag) return {}
-      return {
-        flistExternalChange: {
-          ...s.flistExternalChange,
-          [characterId]: { ...change, at: Date.now() }
-        }
-      }
-    })
+    const slot = get().flistWorking[characterId]
+    // A change we made ourselves arrives with the etag we already
+    // hold; there is nothing to tell the user about.
+    if (slot && change.etag && slot.etag === change.etag) return
+    // Nothing open for this character: opening it reads the Workbench
+    // from disk, the change included.
+    if (!slot) return
+    const pending = { ...change, at: Date.now() }
+    set((s) => ({ flistExternalChange: { ...s.flistExternalChange, [characterId]: pending } }))
+    // With unsaved edits there are two versions, and the banner asks.
+    // Without, there is nothing to decide: take theirs.
+    if (!slot.unsavedDirty) void _takeExternalChange(get, set, characterId, pending, true)
   },
 
   async flistReloadAfterExternalChange(characterId) {
     const change = get().flistExternalChange[characterId]
     if (!change) return
-    _cancelFlush(characterId)
-    try {
-      const res = await api.flistWorkbenchPayloadRead(characterId, { create: false })
-      // Their version, over their etag; the commit shows its
-      // description in the editor.
-      _commit(
-        get,
-        set,
-        characterId,
-        {
-          kind: 'written',
-          label: externalLabel(change.origin),
-          payload: res.payload as WorkingPayload,
-          etag: res.etag,
-          lastSavedAt: Date.now()
-        },
-        (s) => ({ flistExternalChange: { ...s.flistExternalChange, [characterId]: null } })
-      )
-    } catch {
-      // Leave the banner up — the user can retry or keep theirs.
-    }
+    await _takeExternalChange(get, set, characterId, change, false)
   },
 
   async flistOverwriteAfterExternalChange(characterId) {

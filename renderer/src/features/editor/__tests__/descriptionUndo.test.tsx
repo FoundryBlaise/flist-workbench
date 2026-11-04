@@ -180,12 +180,15 @@ describe('the editor keeps no history of its own', () => {
     renderEditor()
     await type('Hello')
     await act(() => vi.advanceTimersByTimeAsync(AUTOSAVE_MS + TYPING_PAUSE_MS))
-    act(() => store().flistNoteExternalChange(CID, { etag: 'theirs', origin: 'mcp:set_description' }))
     fake.on(
       `GET /flist/character/${CID}/workbench/payload`,
       json(payloadRead(workbenchPayload({ character: { description: 'Hi from the model' } }), 'theirs'))
     )
-    await act(() => store().flistReloadAfterExternalChange(CID))
+    // Nothing unsaved: the store takes the model's change in by itself.
+    await act(async () => {
+      store().flistNoteExternalChange(CID, { etag: 'theirs', origin: 'mcp:set_description' })
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(view().state.doc.toString()).toBe('Hi from the model')
 
     pressInEditor('z')

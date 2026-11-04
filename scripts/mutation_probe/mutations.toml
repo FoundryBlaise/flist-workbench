@@ -760,15 +760,19 @@ replace = '''
 id = "R05"
 suite = "renderer"
 file = "renderer/src/state.ts"
-breaks = "The app's own save, echoed back as a change event, raises the external-change banner."
+breaks = "A change event for a write the window already holds is taken in again: the banner, or a second reload and undo entry."
 tests = ["@renderer"]
 audit = "killed"
 spec = 7
 # audit: M05 own echo (same etag) raises external-change banner
+# Re-anchored for spec #7 (#113): the guard left the set() callback; an
+# echo the guard misses now sets off a reload and a second undo entry.
 find = '''
-if (slot && change.etag && slot.etag === change.etag) return {}'''
+if (slot && change.etag && slot.etag === change.etag) return
+'''
 replace = '''
-if (slot && change.etag && slot.etag === change.etag && false) return {}'''
+if (slot && change.etag && slot.etag === change.etag && false) return
+'''
 
 [[mutation]]
 id = "R06"

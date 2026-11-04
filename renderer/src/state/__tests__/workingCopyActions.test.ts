@@ -342,6 +342,19 @@ describe('flistFlushWorking 409 etag-mismatch path', () => {
 })
 
 describe('external-change resolution', () => {
+  // With nothing unsaved the store takes a change in by itself
+  // (modelChange.test.ts); these are the cases with unsaved edits, where
+  // the banner asks.
+  function seedUnsaved(characterId: string, payload: Record<string, unknown>) {
+    seedSlot(characterId, payload)
+    useStore.setState((s) => ({
+      flistWorking: {
+        ...s.flistWorking,
+        [characterId]: { ...s.flistWorking[characterId], unsavedDirty: true }
+      }
+    }))
+  }
+
   it('ignores a change carrying the etag we already hold', () => {
     // Our own write comes back over the event stream too.
     seedSlot('99', { character: { description: 'mine' } })
@@ -353,7 +366,7 @@ describe('external-change resolution', () => {
   })
 
   it('raises a banner for a change made by something else', () => {
-    seedSlot('99', { character: { description: 'mine' } })
+    seedUnsaved('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
       etag: 'theirs',
       origin: 'mcp:set_description'
@@ -363,7 +376,7 @@ describe('external-change resolution', () => {
   })
 
   it('reload takes their version and clears the banner', async () => {
-    seedSlot('99', { character: { description: 'mine' } })
+    seedUnsaved('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
       etag: 'theirs',
       origin: 'mcp:set_description'
@@ -381,10 +394,10 @@ describe('external-change resolution', () => {
     expect(useStore.getState().flistExternalChange['99']).toBeNull()
   })
 
-  it('after the reload the editor shows the reloaded description', async () => {
+  it('after discarding mine the editor shows the reloaded description', async () => {
     // The slot taking their version is half of it; the open editor has
     // to show it too, or the next keystroke saves the old text over it.
-    seedSlot('99', { character: { description: 'Lady Amber Blaise, as I left her' } })
+    seedUnsaved('99', { character: { description: 'Lady Amber Blaise, as I left her' } })
     useStore.setState({ editorContent: 'Lady Amber Blaise, as I left her' })
     useStore.getState().flistNoteExternalChange('99', {
       etag: 'theirs',
@@ -409,10 +422,11 @@ describe('external-change resolution', () => {
       'Lady Amber Blaise, as the model wrote her'
     )
     expect(useStore.getState().editorDirty).toBe(false)
+    expect(useStore.getState().flistWorking['99'].unsavedDirty).toBe(false)
   })
 
   it('keep-mine writes against their etag, which is what makes it win', async () => {
-    seedSlot('99', { character: { description: 'mine' } })
+    seedUnsaved('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
       etag: 'theirs',
       origin: 'mcp:set_description'
@@ -428,7 +442,7 @@ describe('external-change resolution', () => {
   })
 
   it('a failed keep-mine leaves the banner up', async () => {
-    seedSlot('99', { character: { description: 'mine' } })
+    seedUnsaved('99', { character: { description: 'mine' } })
     useStore.getState().flistNoteExternalChange('99', {
       etag: 'theirs',
       origin: 'mcp:set_description'

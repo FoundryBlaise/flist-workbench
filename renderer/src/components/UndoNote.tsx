@@ -20,7 +20,7 @@ export function UndoNote() {
 
   if (!characterId || !note) return null
   return (
-    <div className="external-change-note undo-note" role="status" data-testid="undo-note">
+    <div className="workbench-note undo-note" role="status" data-testid="undo-note">
       <span>{note.text}</span>
       <button
         type="button"

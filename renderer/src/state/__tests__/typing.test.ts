@@ -226,12 +226,13 @@ describe('writes from outside end the burst', () => {
     seed()
     await typeDescription('Hello')
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
-    store().flistNoteExternalChange(CID, { etag: 'theirs', origin: 'mcp:set_description' })
     fake.on(
       `GET /flist/character/${CID}/workbench/payload`,
       json(payloadRead(workbenchPayload({ character: { description: 'Hello from the model' } }), 'theirs'))
     )
-    await store().flistReloadAfterExternalChange(CID)
+    // Nothing unsaved: the store takes the model's change in by itself.
+    store().flistNoteExternalChange(CID, { etag: 'theirs', origin: 'mcp:set_description' })
+    await vi.advanceTimersByTimeAsync(0)
     expect(store().editorContent).toBe('Hello from the model')
     await typeDescription('!')
 
