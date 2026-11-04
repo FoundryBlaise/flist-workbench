@@ -151,16 +151,9 @@ def _log_messages(character: str, partner: str | None) -> list[dict]:
         except log_store.LogNotFound:
             return []
     try:
-        entries = log_store.list_partners(character)
+        return [m for _, msgs in log_store.read_conversations(character) for m in msgs]
     except log_store.LogNotFound:
         return []
-    messages: list[dict] = []
-    for entry in entries:
-        try:
-            messages.extend(log_store.read_messages(character, entry.name))
-        except log_store.LogDirError:
-            continue
-    return messages
 
 
 def clear_all() -> dict[str, Any]:

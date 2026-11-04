@@ -110,25 +110,21 @@ def character_stats(character: str) -> list[dict[str, Any]]:
     between calls, permission denied) is left out rather than failing
     the whole list.
     """
-    entries = log_store.list_partners(character)
+    conversations = log_store.read_conversations(character)
     base = log_store.data_dir() / character / "logs"
     rows: list[dict[str, Any]] = []
     with _store() as (conn, settings):
-        for entry in entries:
-            try:
-                messages = _messages(character, entry.name)
-            except log_store.LogDirError:
-                continue
-            alias_group = aliases_store.all_names_for(conn, character, entry.name)
+        for partner, messages in conversations:
+            alias_group = aliases_store.all_names_for(conn, character, partner)
             log_mtime = 0.0
-            for member in alias_group or [entry.name]:
+            for member in alias_group or [partner]:
                 try:
                     log_mtime = max(log_mtime, (base / member).stat().st_mtime)
                 except OSError:
                     continue
             rows.append(
                 {
-                    "partner": entry.name,
+                    "partner": partner,
                     **_counts(conn, settings, messages),
                     "log_mtime": log_mtime if log_mtime > 0 else None,
                     "last_label_at": labels_store.max_label_time(conn, messages),
@@ -149,18 +145,12 @@ def rollup() -> dict[str, Any]:
     with _store() as (conn, settings):
         manual = labels_store.count_by_source(conn, "manual")
         for char in characters:
-            try:
-                entries = log_store.list_partners(char.name)
-            except log_store.LogDirError:
-                continue
-            for entry in entries:
-                try:
-                    messages = _messages(char.name, entry.name)
-                except log_store.LogDirError:
-                    continue
-                counts = _counts(conn, settings, messages)
-                for key in totals:
-                    totals[key] += counts[key]
+            # A character folder whose Logs cannot be listed counts nothing.
+            with contextlib.suppress(log_store.LogDirError):
+                for _, messages in log_store.read_conversations(char.name):
+                    counts = _counts(conn, settings, messages)
+                    for key in totals:
+                        totals[key] += counts[key]
     return {
         "ic": totals["ic"],
         "ooc": totals["ooc"],
