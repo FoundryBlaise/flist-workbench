@@ -289,6 +289,29 @@ describe('Labels', () => {
 })
 
 describe('the Index', () => {
+  it('its status is read and kept, or why it could not be read', async () => {
+    const status = {
+      embed_model: 'org/m',
+      embed_dimension: 768,
+      last_ingest_at: null,
+      busy: false,
+      job: null,
+      chunk_count: 12
+    }
+    fake.once('GET /rag/status', json(status))
+    fake.once(
+      'GET /rag/status',
+      json({ code: 'index_unreadable', message: 'The Index could not be read', details: {} }, 500)
+    )
+
+    await state().indexLoadStatus()
+    expect(state().indexStatus).toEqual(status)
+    expect(state().indexStatusError).toBeNull()
+
+    await state().indexLoadStatus()
+    expect(state().indexStatusError).toBe('The Index could not be read')
+  })
+
   it('a test embedding runs with the model named', async () => {
     const result = { ok: true, elapsed_ms: 12, dimension: 768, model: 'org/m', error: null }
     fake.on('POST /rag/test-embedding', json(result))

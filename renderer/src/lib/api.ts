@@ -221,10 +221,6 @@ export type IngestJob = Schema<'IngestJob'>
  *  with another embedding model; the dialog offers wipe + re-ingest. */
 export const EMBEDDING_MODEL_CHANGED: Schema<'JobFailureCode'> = 'embedding_model_changed'
 
-/** What the Index holds; while a job (an ingest, a wipe) holds it,
- *  `busy` and that `job`, and `chunk_count` is null because the Index
- *  can't be counted. */
-export type RagStatus = Schema<'IndexStatus'>
 
 /** One MCP endpoint the sidecar serves. `all` carries every tool; the
  *  narrow ones exist because small local models choke on long tool

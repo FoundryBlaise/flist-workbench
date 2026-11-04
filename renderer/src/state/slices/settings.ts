@@ -26,6 +26,10 @@ export type SettingsPatch = Parameters<typeof api.settingsUpdate>[0]
 /** Label coverage across every character. */
 export type LabelsRollup = Awaited<ReturnType<typeof api.labelsRollup>>
 export type EmbeddingTestResult = Awaited<ReturnType<typeof api.ragTestEmbedding>>
+/** What the Index holds; while a job (an ingest, a wipe) holds it,
+ *  `busy` and that `job`, and `chunk_count` is null because the Index
+ *  can't be counted. */
+export type IndexStatus = Awaited<ReturnType<typeof api.ragStatus>>
 /** Whether the sidecar holds an accepted pairing token. Only the
  *  extension has the token; the sidecar tells the window whether one is
  *  stored, never the token itself (ADR 0002). 'unavailable': the
@@ -59,6 +63,10 @@ export type SettingsState = {
   foreignCacheUsage: ForeignCacheUsage | null
   /** Why the Foreign profile cache could not be read. */
   foreignCacheError: string | null
+  /** What the Index holds; null until read. */
+  indexStatus: IndexStatus | null
+  /** Why the Index status could not be read. */
+  indexStatusError: string | null
 }
 
 export type SettingsSlice = SettingsState & {
@@ -97,6 +105,9 @@ export type SettingsSlice = SettingsState & {
   /** Delete cleared Labels in the Trash for good. */
   labelsTrashPurge: (ids: string[]) => ReturnType<typeof api.labelsTrashPurge>
 
+  /** Read what the Index holds. Read again when the Index changes
+   *  (`indexRevision`), whoever changed it. */
+  indexLoadStatus: () => Promise<void>
   /** Embed a test sentence with `model`; a failure is a result too. */
   indexTestEmbedding: (model: string) => Promise<EmbeddingTestResult>
   /** Delete every embedded chunk of the Index. Labels and Logs stay. */
@@ -129,7 +140,9 @@ export function settingsInitialState(): SettingsState {
     labelsTrash: [],
     labelsTrashError: null,
     foreignCacheUsage: null,
-    foreignCacheError: null
+    foreignCacheError: null,
+    indexStatus: null,
+    indexStatusError: null
   }
 }
 
@@ -270,6 +283,14 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
 
   labelsTrashPurge(ids) {
     return api.labelsTrashPurge(ids)
+  },
+
+  async indexLoadStatus() {
+    try {
+      set({ indexStatus: await api.ragStatus(), indexStatusError: null })
+    } catch (err) {
+      set({ indexStatusError: errorDetail(err) })
+    }
   },
 
   async indexTestEmbedding(model) {
