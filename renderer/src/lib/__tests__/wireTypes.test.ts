@@ -45,6 +45,11 @@ const READERS: Record<string, string> = {
   JsonOf: "a response's or body's JSON",
   Answer: 'what an operation answers when ok',
   BodyOf: 'the JSON body an operation takes',
+  Route: 'the paths that serve a method',
+  AnswerAt: '`Answer` for a method the caller has already checked',
+  BodyAt: '`BodyOf` for a method the caller has already checked',
+  ParamsAt: "an operation's path and query parameters",
+  Fill: "what a call fills in of its route, from the route's operation",
   EventTable: "a handler per event of a stream, from its events model's names and data"
 }
 
@@ -209,7 +214,7 @@ function untypedBodies(): string[] {
   const file = parse('renderer/src/lib/api.ts')
   const found: string[] = []
   const isBodyOf = (type: ts.TypeNode | undefined) =>
-    !!type && ts.isTypeReferenceNode(type) && type.typeName.getText() === 'BodyOf'
+    !!type && ts.isTypeReferenceNode(type) && ['BodyOf', 'BodyAt'].includes(type.typeName.getText())
   const paramType = (node: ts.Node, name: string): ts.TypeNode | undefined => {
     for (let at: ts.Node | undefined = node; at; at = at.parent) {
       if (ts.isArrowFunction(at) || ts.isFunctionDeclaration(at) || ts.isFunctionExpression(at)) {

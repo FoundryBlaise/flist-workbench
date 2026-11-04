@@ -18,21 +18,51 @@ type Method = 'get' | 'put' | 'post' | 'delete' | 'patch'
 type MethodOf<P extends keyof paths> = {
   [M in Method]: paths[P][M] extends undefined ? never : M
 }[Method]
-type Operation<P extends keyof paths, M extends MethodOf<P>> = NonNullable<paths[P][M]>
+/** The routes that serve `M`. */
+type Route<M extends Method> = {
+  [P in keyof paths]: M extends MethodOf<P> ? P : never
+}[keyof paths]
+type Operation<P extends keyof paths, M extends Method> = NonNullable<paths[P][M]>
 type JsonOf<X> = X extends { content: { 'application/json': infer B } } ? B : never
 
-/** What `M P` answers when it is ok, as its response model says: the
- *  JSON of its 200, 201 or 202, or undefined for a 204. */
-export type Answer<P extends keyof paths, M extends MethodOf<P>> =
+/** `Answer` without the check that `P` serves `M`. */
+type AnswerAt<P extends keyof paths, M extends Method> =
   Operation<P, M> extends { responses: infer R }
     ? 204 extends keyof R
       ? undefined
       : JsonOf<R[Extract<keyof R, 200 | 201 | 202>]>
     : never
 
-/** The JSON body `M P` takes. */
-export type BodyOf<P extends keyof paths, M extends MethodOf<P>> =
+/** `BodyOf` without the check that `P` serves `M`. */
+type BodyAt<P extends keyof paths, M extends Method> =
   Operation<P, M> extends { requestBody?: infer B } ? JsonOf<NonNullable<B>> : never
+
+/** What `M P` answers when it is ok, as its response model says: the
+ *  JSON of its 200, 201 or 202, or undefined for a 204. */
+export type Answer<P extends keyof paths, M extends MethodOf<P>> = AnswerAt<P, M>
+
+/** The JSON body `M P` takes. */
+export type BodyOf<P extends keyof paths, M extends MethodOf<P>> = BodyAt<P, M>
+
+/** The parameters `M P` takes (path, query), as its operation names them. */
+type ParamsAt<P extends keyof paths, M extends Method> = Operation<P, M> extends {
+  parameters: infer X
+}
+  ? X
+  : never
+
+/** What a call fills in of its route, as the route's operation names
+ *  them: the path's parameters (when it has any), the query (a value
+ *  left undefined is not sent), the JSON body, and headers such as
+ *  `If-Match`. A route that takes a file sends it as `blob`. */
+type Fill<P extends keyof paths, M extends Method> = (ParamsAt<P, M> extends { path: infer Path }
+  ? { path: Path }
+  : { path?: never }) & {
+  query?: ParamsAt<P, M> extends { query?: infer Query } ? Query : never
+  body?: BodyAt<P, M>
+  blob?: Blob
+  headers?: Record<string, string>
+}
 
 /** Every code a sidecar refusal can carry (`refusals.RefusalCode`). */
 export type RefusalCode = Schema<'RefusalCode'>
@@ -476,23 +506,70 @@ async function requestStream(
   await readEventStream(res, onBlock)
 }
 
-async function get<T>(path: string, opts?: ApiOptions): Promise<T> {
-  return request<T>(path, {}, opts)
+/** `route` with its path's parameters filled in, then the query, each
+ *  value URL-encoded. */
+function url(route: string, path?: unknown, query?: unknown): string {
+  const values = new Map<string, unknown>(Object.entries(Object(path ?? {})))
+  const filled = route.replace(/\{(\w+)\}/g, (_, name: string) =>
+    encodeURIComponent(String(values.get(name)))
+  )
+  const pairs = Object.entries(Object(query ?? {}))
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
+  return pairs.length ? `${filled}?${pairs.join('&')}` : filled
 }
+
+/** A JSON body as it is sent, typed by its route's request model. */
+function jsonBody<P extends keyof paths, M extends Method>(body: BodyAt<P, M>): string {
+  return JSON.stringify(body)
+}
+
+/** `M route` and what a call fills in, as `send` takes them. */
+function sendArgs<P extends keyof paths, M extends Method>(
+  method: M,
+  route: P,
+  fill: Fill<P, M>
+): [string, SendInit] {
+  const init: SendInit = method === 'get' ? {} : { method: method.toUpperCase() }
+  if (fill.headers) init.headers = fill.headers
+  if (fill.body !== undefined) init.body = jsonBody<P, M>(fill.body)
+  else if (fill.blob) init.body = fill.blob
+  return [url(route, fill.path, fill.query), init]
+}
+
+/** The calls of one method. A call names its route once: the answer's
+ *  type, the path's parameters, the query and the body are the route's
+ *  operation's, so a route the method does not serve, a parameter it
+ *  lacks or a body it does not take fails the type-check. */
+function caller<M extends Method>(method: M) {
+  return <P extends Route<M>>(
+    route: P,
+    fill?: Fill<P, M>,
+    opts?: ApiOptions
+  ): Promise<AnswerAt<P, M>> =>
+    request<AnswerAt<P, M>>(...sendArgs(method, route, fill ?? ({} as Fill<P, M>)), opts)
+}
+
+const get = caller('get')
+const post = caller('post')
+const put = caller('put')
+const patch = caller('patch')
+const del = caller('delete')
+
+/** A character id as the routes take it. */
+const cid = (characterId: string | number) => String(characterId)
 
 export const api = {
   base,
   // ---- foreign profiles (read-only viewer) ----
   foreignSearch: (source: ForeignSource, q: string, opts?: ApiOptions) =>
-    get<Answer<'/foreign/search', 'get'>>(
-      `/foreign/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
-      opts
-    ),
+    get('/foreign/search', { query: { source, q } }, opts),
   foreignProfile: (name: string, refresh = false, opts?: ApiOptions) =>
-    get<ForeignProfileResult>(
-      `/foreign/character/${encodeURIComponent(name)}${refresh ? '?refresh=true' : ''}`,
+    get(
+      '/foreign/character/{name}',
+      { path: { name }, query: { refresh: refresh || undefined } },
       opts
-    ),
+    ) as Promise<ForeignProfileResult>,
   /** Avatar for a foreign profile. Cached in the profile's own folder,
    *  not in `<userdata>/avatars/` — that directory is the account
    *  picker's, and a looked-up stranger does not belong in it. */
@@ -502,232 +579,141 @@ export const api = {
    *  scrolling a gallery twice costs one fetch per image, not two. */
   foreignImageUrl: (name: string, imageId: string) =>
     `${base()}/foreign/character/${encodeURIComponent(name)}/image/${encodeURIComponent(imageId)}`,
-  foreignCacheUsage: () => get<Answer<'/foreign/cache', 'get'>>('/foreign/cache'),
+  foreignCacheUsage: () => get('/foreign/cache'),
   /** Delete every cached Foreign profile, images and avatars included. */
-  foreignCacheClear: () =>
-    request<Answer<'/foreign/cache', 'delete'>>('/foreign/cache', {
-      method: 'DELETE'
-    }),
-  health: () => get<Answer<'/health', 'get'>>('/health'),
+  foreignCacheClear: () => del('/foreign/cache'),
+  health: () => get('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
-    get<Answer<'/eicons/search', 'get'>>(`/eicons/search?q=${encodeURIComponent(q)}&limit=${limit}`, opts),
-  characters: () => get<Answer<'/logs/characters', 'get'>>('/logs/characters'),
-  partners: (char: string) =>
-    get<Answer<'/logs/partners', 'get'>>(`/logs/partners?char=${encodeURIComponent(char)}`),
+    get('/eicons/search', { query: { q, limit } }, opts),
+  characters: () => get('/logs/characters'),
+  partners: (char: string) => get('/logs/partners', { query: { char } }),
   messages: (char: string, partner: string) =>
-    get<Answer<'/logs/messages', 'get'>>(
-      `/logs/messages?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
-    ),
+    get('/logs/messages', { query: { char, partner } }),
   /** Search every conversation of `char` for `q`, which must not be
    *  empty: an empty query answers `hits: []` instead of `partners`
    *  (`LogSearchAllNothing`), which this call does not type. */
   searchAll: (char: string, q: string) =>
-    get<Schema<'LogSearchAll'>>(
-      `/logs/search_all?char=${encodeURIComponent(char)}&q=${encodeURIComponent(q)}`
-    ),
-  aliasesList: (char: string) =>
-    get<Answer<'/aliases', 'get'>>(`/aliases?char=${encodeURIComponent(char)}`),
-  aliasesAdd: (body: BodyOf<'/aliases', 'post'>) =>
-    request<Answer<'/aliases', 'post'>>('/aliases', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  aliasesRemove: (char: string, name: string) =>
-    request<Answer<'/aliases', 'delete'>>(
-      `/aliases?char=${encodeURIComponent(char)}&name=${encodeURIComponent(name)}`,
-      { method: 'DELETE' }
-    ),
+    get('/logs/search_all', { query: { char, q } }) as Promise<Schema<'LogSearchAll'>>,
+  aliasesList: (char: string) => get('/aliases', { query: { char } }),
+  aliasesAdd: (body: BodyOf<'/aliases', 'post'>) => post('/aliases', { body }),
+  aliasesRemove: (char: string, name: string) => del('/aliases', { query: { char, name } }),
   aliasesUnlinkGroup: (char: string, primary: string) =>
-    request<Answer<'/aliases/group', 'delete'>>(
-      `/aliases/group?char=${encodeURIComponent(char)}&primary=${encodeURIComponent(primary)}`,
-      { method: 'DELETE' }
-    ),
-  findContacts: (name: string) =>
-    get<Answer<'/logs/contacts', 'get'>>(`/logs/contacts?name=${encodeURIComponent(name)}`),
+    del('/aliases/group', { query: { char, primary } }),
+  findContacts: (name: string) => get('/logs/contacts', { query: { name } }),
 
-  settingsGet: () => get<Answer<'/settings', 'get'>>('/settings'),
+  settingsGet: () => get('/settings'),
   /** Fields left out (or null, for the numbers) stay as they are. */
-  settingsUpdate: (body: BodyOf<'/settings', 'put'>) =>
-    request<Answer<'/settings', 'put'>>('/settings', {
-      method: 'PUT',
-      body: JSON.stringify(body)
-    }),
+  settingsUpdate: (body: BodyOf<'/settings', 'put'>) => put('/settings', { body }),
   labelsStats: (char: string, partner: string) =>
-    get<Answer<'/labels/stats', 'get'>>(
-      `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
-    ),
+    get('/labels/stats', { query: { char, partner } }),
   // Batch coverage stats for every partner of a character. Lets the
   // sidebar render per-partner pips in a single roundtrip instead of
   // fanning out 30+ /labels/stats requests on first paint.
   // `log_mtime > last_label_at` means the conversation grew since the
   // last classify run: a stale dot in the sidebar.
-  labelsStatsAll: (char: string) =>
-    get<Answer<'/labels/stats-all', 'get'>>(
-      `/labels/stats-all?char=${encodeURIComponent(char)}`
-    ),
-  labelsClear: (body: BodyOf<'/labels/clear', 'post'>) =>
-    request<Answer<'/labels/clear', 'post'>>('/labels/clear', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  labelsClearAll: () =>
-    request<Answer<'/labels/clear-all', 'post'>>('/labels/clear-all', {
-      method: 'POST'
-    }),
+  labelsStatsAll: (char: string) => get('/labels/stats-all', { query: { char } }),
+  labelsClear: (body: BodyOf<'/labels/clear', 'post'>) => post('/labels/clear', { body }),
+  labelsClearAll: () => post('/labels/clear-all'),
   /** Every cleared-Labels entry in the Trash, whichever character it
    *  was cleared for: Settings → Labels lists them. */
-  labelsTrashList: () => get<Answer<'/labels/trash', 'get'>>('/labels/trash'),
+  labelsTrashList: () => get('/labels/trash'),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
-  labelsTrashPutBack: (ids: string[]) =>
-    request<Answer<'/labels/trash/put-back', 'post'>>('/labels/trash/put-back', {
-      method: 'POST',
-      body: JSON.stringify({ ids } satisfies BodyOf<'/labels/trash/put-back', 'post'>)
-    }),
+  labelsTrashPutBack: (ids: string[]) => post('/labels/trash/put-back', { body: { ids } }),
   /** Delete cleared Labels for good. */
-  labelsTrashPurge: (ids: string[]) =>
-    request<Answer<'/labels/trash/purge', 'post'>>('/labels/trash/purge', {
-      method: 'POST',
-      body: JSON.stringify({ ids } satisfies BodyOf<'/labels/trash/purge', 'post'>)
-    }),
+  labelsTrashPurge: (ids: string[]) => post('/labels/trash/purge', { body: { ids } }),
   /** Give every still-Unlabeled message in one conversation the same
    *  verdict. Adds labels only: an existing verdict is kept, and the
    *  rules keep deciding what they decide. `hashes` is exactly what
    *  was written, which is what `labelsDeleteHashes` undoes. */
   labelsFillUnlabeled: (body: BodyOf<'/labels/fill-unlabeled', 'post'>) =>
-    request<Answer<'/labels/fill-unlabeled', 'post'>>('/labels/fill-unlabeled', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
+    post('/labels/fill-unlabeled', { body }),
   /** Undo for the above — removes named labels and nothing else.
    *  `labelsClear` would take the model's verdicts with it. */
   labelsDeleteHashes: (body: BodyOf<'/labels/delete-hashes', 'post'>) =>
-    request<Answer<'/labels/delete-hashes', 'post'>>('/labels/delete-hashes', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  labelsRollup: () => get<Answer<'/labels/rollup', 'get'>>('/labels/rollup'),
+    post('/labels/delete-hashes', { body }),
+  labelsRollup: () => get('/labels/rollup'),
   /** The user's verdict on one message (`LabelSet`), or with
    *  `label: null` its removal (`LabelRemoved`). */
   labelsOverride: (body: BodyOf<'/labels/override', 'post'>) =>
-    request<Answer<'/labels/override', 'post'>>('/labels/override', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
+    post('/labels/override', { body }),
   /** One verdict (or a reset, with `label: null`) for any set of
    *  messages in a conversation — the log view's multi-select. */
   labelsOverrideMany: (body: BodyOf<'/labels/override-many', 'post'>) =>
-    request<Answer<'/labels/override-many', 'post'>>('/labels/override-many', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
+    post('/labels/override-many', { body }),
   ragTestEmbedding: (body: BodyOf<'/rag/test-embedding', 'post'>) =>
-    request<Answer<'/rag/test-embedding', 'post'>>('/rag/test-embedding', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  // Probe an OpenAI-compatible or Ollama endpoint for the list of
-  // loaded/installed models. Returns sorted+deduped IDs. Failure is
-  // signalled by an empty `models` + populated `error`.
+    post('/rag/test-embedding', { body }),
   /** The embedding models that can be selected — fastembed's catalogue,
    *  with the numbers the choice actually turns on. Licence is in there
    *  because the catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0. */
-  discoverModels: () =>
-    request<Answer<'/settings/discover-models', 'post'>>('/settings/discover-models', {
-      method: 'POST',
-      body: JSON.stringify({} satisfies BodyOf<'/settings/discover-models', 'post'>)
-    }),
+  discoverModels: () => post('/settings/discover-models', { body: {} }),
   ragIngestStart: (
     scope: IngestJobScope,
     opts: { include_ooc?: boolean; force_rewipe?: boolean } = {}
   ) =>
-    request<Answer<'/rag/ingest', 'post'>>('/rag/ingest', {
-      method: 'POST',
-      body: JSON.stringify({
+    post('/rag/ingest', {
+      body: {
         ...scope,
         include_ooc: opts.include_ooc ?? false,
         force_rewipe: opts.force_rewipe ?? false
-      } satisfies BodyOf<'/rag/ingest', 'post'>)
+      }
     }),
   /** Any job by id, whatever its kind. */
   jobGet: <J extends Job = Job>(id: string, opts?: ApiOptions) =>
-    get<J>(`/jobs/${encodeURIComponent(id)}`, opts),
+    get('/jobs/{job_id}', { path: { job_id: id } }, opts) as Promise<J>,
   /** Ask a job to stop; answers the job as it stands. */
   jobCancel: <J extends Job = Job>(id: string) =>
-    request<J>(`/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  ragStatus: () => get<Answer<'/rag/status', 'get'>>('/rag/status'),
+    del('/jobs/{job_id}', { path: { job_id: id } }) as Promise<J>,
+  ragStatus: () => get('/rag/status'),
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */
-  mcpInfo: () => get<Answer<'/mcp-info', 'get'>>('/mcp-info'),
+  mcpInfo: () => get('/mcp-info'),
   /** Issue a bearer token for /mcp, replacing any existing one. */
-  mcpCreateToken: () =>
-    request<Answer<'/mcp-info/token', 'post'>>('/mcp-info/token', { method: 'POST' }),
+  mcpCreateToken: () => post('/mcp-info/token'),
   /** Turn the bearer requirement back off. */
-  mcpRevokeToken: () =>
-    request<Answer<'/mcp-info/token', 'delete'>>('/mcp-info/token', { method: 'DELETE' }),
-  ragWipe: () => request<Answer<'/rag/wipe', 'post'>>('/rag/wipe', { method: 'POST' }),
+  mcpRevokeToken: () => del('/mcp-info/token'),
+  ragWipe: () => post('/rag/wipe'),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.
   // Cheaper than a full re-ingest — no LLM calls, no embeddings.
-  ragLexicalRebuild: () =>
-    request<Answer<'/rag/lexical/rebuild', 'post'>>('/rag/lexical/rebuild', { method: 'POST' }),
+  ragLexicalRebuild: () => post('/rag/lexical/rebuild'),
 
   // ---- F-list character archive ----
-  flistSignIn: (body: BodyOf<'/flist/session', 'post'>) =>
-    request<Answer<'/flist/session', 'post'>>('/flist/session', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  flistSignOut: () =>
-    request<Answer<'/flist/session', 'delete'>>('/flist/session', { method: 'DELETE' }),
-  flistSession: () => get<Answer<'/flist/session', 'get'>>('/flist/session'),
-  flistActivity: () =>
-    get<Answer<'/flist/activity', 'get'>>('/flist/activity'),
-  flistRoster: () => get<Answer<'/flist/characters', 'get'>>('/flist/characters'),
+  flistSignIn: (body: BodyOf<'/flist/session', 'post'>) => post('/flist/session', { body }),
+  flistSignOut: () => del('/flist/session'),
+  flistSession: () => get('/flist/session'),
+  flistActivity: () => get('/flist/activity'),
+  flistRoster: () => get('/flist/characters'),
   flistLive: (characterId: string | number) =>
-    get<Answer<'/flist/character/{character_id}/live', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/live`
-    ),
+    get('/flist/character/{character_id}/live', { path: { character_id: cid(characterId) } }),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
-    request<Answer<'/flist/character/{character_id}/zip-backup', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backup`,
-      { method: 'POST' }
-    ),
+    post('/flist/character/{character_id}/zip-backup', {
+      path: { character_id: cid(characterId) }
+    }),
   flistZipBackups: (characterId: string | number) =>
-    get<Answer<'/flist/character/{character_id}/zip-backups', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
-    ),
+    get('/flist/character/{character_id}/zip-backups', {
+      path: { character_id: cid(characterId) }
+    }),
   /** Rename a single backup (user-set label persisted in a sidecar
    *  `_names.json` map; the ZIP file is untouched). Empty name
    *  clears the rename. Returns the canonical updated entry so the
    *  renderer can patch its row without a full list re-fetch. */
-  flistZipBackupRename: (
-    characterId: string | number,
-    filename: string,
-    name: string
-  ) =>
-    request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'patch'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ name } satisfies BodyOf<'/flist/character/{character_id}/zip-backups/{filename}', 'patch'>)
-      }
-    ),
+  flistZipBackupRename: (characterId: string | number, filename: string, name: string) =>
+    patch('/flist/character/{character_id}/zip-backups/{filename}', {
+      path: { character_id: cid(characterId), filename },
+      body: { name }
+    }),
   /** Move a single backup ZIP to the character's Trash. Idempotent
    *  enough that the renderer refreshes the list either way: a Backup
    *  already gone (404) is not an error. Anything else surfaces to a
    *  toast.
    */
-  flistZipBackupDelete: async (
-    characterId: string | number,
-    filename: string
-  ): Promise<void> => {
+  flistZipBackupDelete: async (characterId: string | number, filename: string): Promise<void> => {
     try {
-      await request<Answer<'/flist/character/{character_id}/zip-backups/{filename}', 'delete'>>(
-        `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-        { method: 'DELETE' }
-      )
+      await del('/flist/character/{character_id}/zip-backups/{filename}', {
+        path: { character_id: cid(characterId), filename }
+      })
     } catch (err) {
       if (!(err instanceof HttpError) || err.status !== 404) throw err
     }
@@ -737,7 +723,10 @@ export const api = {
    *  to whatever path the user picks in the OS save dialog. */
   flistZipBackupDownload: (characterId: string | number, filename: string) =>
     requestBytes(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/download`
+      url('/flist/character/{character_id}/zip-backups/{filename}/download', {
+        character_id: cid(characterId),
+        filename
+      })
     ),
   /** Read the embedded `working.json` (+ `backup-meta.json` if
    *  present) out of a ZIP backup for read-only Browse Backup mode.
@@ -746,16 +735,13 @@ export const api = {
    *  header pill message. `meta` is
    *  `null` for backups created before the metadata write shipped
    *  (2026-06-17). */
-  flistZipBackupPayload: (
-    characterId: string | number,
-    filename: string
-  ) =>
-    get<Answer<'/flist/character/{character_id}/zip-backups/{filename}/payload', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/payload`
-    ),
+  flistZipBackupPayload: (characterId: string | number, filename: string) =>
+    get('/flist/character/{character_id}/zip-backups/{filename}/payload', {
+      path: { character_id: cid(characterId), filename }
+    }),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
   flistMappingList: (opts?: { force?: boolean }) =>
-    get<Answer<'/flist/mapping-list', 'get'>>(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
+    get('/flist/mapping-list', { query: { force: opts?.force || undefined } }),
   // ---- The workbench --------------------------------------------
   // A character has one editable copy of its profile beside Live,
   // seeded from Live when first needed (ADR 0001).
@@ -764,22 +750,19 @@ export const api = {
    *  what a read-only render wants — merely looking at a character
    *  should not bring a bench into being. */
   flistWorkbench: (characterId: string | number, create = true) =>
-    get<Answer<'/flist/character/{character_id}/workbench', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
-        + (create ? '' : '?create=false')
-    ),
+    get('/flist/character/{character_id}/workbench', {
+      path: { character_id: cid(characterId) },
+      query: { create: create ? undefined : false }
+    }),
   /** The character's Workbench payload and the etag a save must send
    *  back. Made from Live when there is none yet, and `created` then
    *  says this read made it, so nobody has edited it. `create: false`
    *  reads without making one: a 404 `no_workbench` refusal. */
-  flistWorkbenchPayloadRead: (
-    characterId: string | number,
-    opts: { create?: boolean } = {}
-  ) =>
-    get<Answer<'/flist/character/{character_id}/workbench/payload', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
-        + (opts.create === false ? '?create=false' : '')
-    ),
+  flistWorkbenchPayloadRead: (characterId: string | number, opts: { create?: boolean } = {}) =>
+    get('/flist/character/{character_id}/workbench/payload', {
+      path: { character_id: cid(characterId) },
+      query: { create: opts.create === false ? false : undefined }
+    }),
   /** Save the whole Workbench over the etag it was read with, sent as
    *  `If-Match`. Saved without one, or over a stale one, it is refused
    *  as a conflict: `workbenchConflict` reads the etag on disk from
@@ -789,51 +772,38 @@ export const api = {
     payload: BodyOf<'/flist/character/{character_id}/workbench/payload', 'put'>,
     etag: string | null
   ) =>
-    request<Answer<'/flist/character/{character_id}/workbench/payload', 'put'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
-      {
-        method: 'PUT',
-        headers: etag ? { 'If-Match': etag } : {},
-        body: JSON.stringify(payload)
-      }
-    ),
+    put('/flist/character/{character_id}/workbench/payload', {
+      path: { character_id: cid(characterId) },
+      headers: etag ? { 'If-Match': etag } : {},
+      body: payload
+    }),
   /** Reset to Live: the sidecar saves the Workbench as a Backup
    *  (`backed_up_first`, null when there was no Workbench yet), then
    *  makes it a fresh copy of Live and answers with that payload and
    *  its etag. When the Backup cannot be written nothing is replaced:
    *  a `workbench_not_kept` refusal. */
   flistWorkbenchResetToLive: (characterId: string | number) =>
-    request<Answer<'/flist/character/{character_id}/workbench/reset-to-live', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
-      { method: 'POST' }
-    ),
+    post('/flist/character/{character_id}/workbench/reset-to-live', {
+      path: { character_id: cid(characterId) }
+    }),
   /** What the confirm dialog needs before overwriting the bench:
    *  whether it holds unpublished edits, and whether F-list has moved
    *  on since this backup was taken. */
-  flistWorkbenchLoadPreflight: (
-    characterId: string | number,
-    filename: string
-  ) =>
-    get<Answer<'/flist/character/{character_id}/workbench/load-backup/preflight', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}`
-        + `/workbench/load-backup/preflight?filename=`
-        + encodeURIComponent(filename)
-    ),
+  flistWorkbenchLoadPreflight: (characterId: string | number, filename: string) =>
+    get('/flist/character/{character_id}/workbench/load-backup/preflight', {
+      path: { character_id: cid(characterId) },
+      query: { filename }
+    }),
   /** Restore: replace the Workbench contents with a Backup's. The
    *  sidecar saves the Workbench as a Backup first (`backed_up_first`,
    *  null when there was no Workbench yet); when it cannot, nothing is
    *  replaced: a `workbench_not_kept` refusal. */
   flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
-    request<Answer<'/flist/character/{character_id}/workbench/load-backup', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}`
-        + `/workbench/load-backup`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ filename } satisfies BodyOf<'/flist/character/{character_id}/workbench/load-backup', 'post'>)
-      }
-    ),
-  flistAvatarUrl: (name: string) =>
-    `${base()}/flist/avatar/${encodeURIComponent(name)}`,
+    post('/flist/character/{character_id}/workbench/load-backup', {
+      path: { character_id: cid(characterId) },
+      body: { filename }
+    }),
+  flistAvatarUrl: (name: string) => `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(filename)}`,
   /** Extension-blind variant — the sidecar tries png/jpg/gif on disk
@@ -847,107 +817,78 @@ export const api = {
    *  shows as a black placeholder and drops out of the restore ZIP,
    *  which the extension reads as "delete this from the profile". */
   flistRepairGallery: (characterId: string | number) =>
-    request<Answer<'/flist/character/{character_id}/images/repair', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/repair`,
-      { method: 'POST' }
-    ),
+    post('/flist/character/{character_id}/images/repair', {
+      path: { character_id: cid(characterId) }
+    }),
   flistCharacterImages: (characterId: string | number) =>
-    get<Answer<'/flist/character/{character_id}/images', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images`
-    ),
+    get('/flist/character/{character_id}/images', { path: { character_id: cid(characterId) } }),
   /** Upload a local image (PNG/JPG/GIF). Lands as `images/local-<sha8>.<ext>`
    *  and shows up in the renderer's Pool view; only a working.json
    *  gallery edit moves it on-profile. */
   flistImageUpload: (characterId: string | number, data: Blob) =>
-    request<Answer<'/flist/character/{character_id}/images', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images`,
-      { method: 'POST', body: data }
-    ),
+    post('/flist/character/{character_id}/images', {
+      path: { character_id: cid(characterId) },
+      blob: data
+    }),
   /** Delete images, in the gallery or only in the pool: the route MCP's
    *  `trash_images` takes too. The sidecar takes gallery images off the
    *  Workbench's gallery (`off_gallery`) and answers the Workbench's new
    *  `etag`, null when the gallery was left alone; every file goes to
    *  the Trash. */
   flistImagesTrash: (characterId: string | number, imageIds: string[]) =>
-    request<Answer<'/flist/character/{character_id}/images/trash', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ image_ids: imageIds } satisfies BodyOf<'/flist/character/{character_id}/images/trash', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/images/trash', {
+      path: { character_id: cid(characterId) },
+      body: { image_ids: imageIds }
+    }),
   /** Where each image id is still used: the Workbench, Live, Backups. */
   flistImageReferences: (characterId: string | number) =>
-    get<Answer<'/flist/character/{character_id}/image-references', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
-    ),
+    get('/flist/character/{character_id}/image-references', {
+      path: { character_id: cid(characterId) }
+    }),
   flistTrashList: (characterId: string | number) =>
-    get<Answer<'/flist/character/{character_id}/trash', 'get'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash`
-    ),
+    get('/flist/character/{character_id}/trash', { path: { character_id: cid(characterId) } }),
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
   /** Back into the pool, not onto the profile. Takes trash ids. */
   flistTrashPutBack: (characterId: string | number, trashIds: string[]) =>
-    request<Answer<'/flist/character/{character_id}/trash/put-back', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/put-back`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ image_ids: trashIds } satisfies BodyOf<'/flist/character/{character_id}/trash/put-back', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/trash/put-back', {
+      path: { character_id: cid(characterId) },
+      body: { image_ids: trashIds }
+    }),
   /** Delete trashed files for good. Takes trash ids. */
   flistTrashPurge: (characterId: string | number, trashIds: string[]) =>
-    request<Answer<'/flist/character/{character_id}/trash/purge', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ image_ids: trashIds } satisfies BodyOf<'/flist/character/{character_id}/trash/purge', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/trash/purge', {
+      path: { character_id: cid(characterId) },
+      body: { image_ids: trashIds }
+    }),
   /** Back into the Backup list, under the name they had. */
   flistTrashBackupsPutBack: (characterId: string | number, ids: string[]) =>
-    request<Answer<'/flist/character/{character_id}/trash/backups/put-back', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/put-back`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/backups/put-back', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/trash/backups/put-back', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Delete trashed Backups for good. */
   flistTrashBackupsPurge: (characterId: string | number, ids: string[]) =>
-    request<Answer<'/flist/character/{character_id}/trash/backups/purge', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/purge`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/backups/purge', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/trash/backups/purge', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
   flistTrashLabelsPutBack: (characterId: string | number, ids: string[]) =>
-    request<Answer<'/flist/character/{character_id}/trash/labels/put-back', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/put-back`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/labels/put-back', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/trash/labels/put-back', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Delete cleared Labels for good. */
   flistTrashLabelsPurge: (characterId: string | number, ids: string[]) =>
-    request<Answer<'/flist/character/{character_id}/trash/labels/purge', 'post'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/purge`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ ids } satisfies BodyOf<'/flist/character/{character_id}/trash/labels/purge', 'post'>)
-      }
-    ),
+    post('/flist/character/{character_id}/trash/labels/purge', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Empty the whole Trash: images, Backups and cleared Labels. */
   flistTrashEmpty: (characterId: string | number) =>
-    request<Answer<'/flist/character/{character_id}/trash', 'delete'>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash`,
-      { method: 'DELETE' }
-    ),
+    del('/flist/character/{character_id}/trash', { path: { character_id: cid(characterId) } }),
   flistExportZipUrl: (characterId: string | number) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
   /** Starts Back up all and follows its progress (SSE). Tools → "Back
@@ -968,14 +909,14 @@ export const api = {
    *  Back up all: aborting `opts.signal` only stops following. */
   flistPull: (name: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
     requestStream(
-      `/flist/character/${encodeURIComponent(name)}/pull`,
+      url('/flist/character/{name}/pull', { name }),
       { method: 'POST' },
       (block) => dispatchPullStream(block, handlers),
       opts
     ),
   /** Every job the sidecar remembers: running ones, and finished ones
    *  for a few minutes. A reopened window finds its Pulls here. */
-  jobsList: (opts?: ApiOptions) => get<Answer<'/jobs', 'get'>>('/jobs', opts),
+  jobsList: (opts?: ApiOptions) => get('/jobs', {}, opts),
   /** Follow a running Pull from the start of its events. */
   flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
     requestStream(jobEventsPath(jobId), {}, (block) => dispatchPullStream(block, handlers), opts),
@@ -993,36 +934,23 @@ export const api = {
     ),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
-  restorePendingHandshakes: () =>
-    get<Answer<'/restore/handshake/pending', 'get'>>('/restore/handshake/pending'),
+  restorePendingHandshakes: () => get('/restore/handshake/pending'),
   restoreAcceptHandshake: (handshakeId: string) =>
-    request<Answer<'/restore/handshake/accept', 'post'>>('/restore/handshake/accept', {
-      method: 'POST',
-      body: JSON.stringify({
-        handshake_id: handshakeId
-      } satisfies BodyOf<'/restore/handshake/accept', 'post'>)
-    }),
+    post('/restore/handshake/accept', { body: { handshake_id: handshakeId } }),
   restoreRejectHandshake: (handshakeId: string) =>
-    request<Answer<'/restore/handshake/reject', 'post'>>('/restore/handshake/reject', {
-      method: 'POST',
-      body: JSON.stringify({
-        handshake_id: handshakeId
-      } satisfies BodyOf<'/restore/handshake/reject', 'post'>)
-    }),
-  restoreRevokeToken: () =>
-    request<Answer<'/restore/token', 'delete'>>('/restore/token', { method: 'DELETE' }),
+    post('/restore/handshake/reject', { body: { handshake_id: handshakeId } }),
+  restoreRevokeToken: () => del('/restore/token'),
   /** Whether a pairing token is stored. The token itself never comes
    *  back; only the app window can ask. */
-  pairingStatus: () => get<Answer<'/pairing', 'get'>>('/pairing'),
+  pairingStatus: () => get('/pairing'),
 
   /** The extension version the browser runs, as of its last paired
    *  call. Null until the extension has made one since the app started. */
-  restoreExtensionSeen: () =>
-    request<Answer<'/restore/extension', 'get'>>('/restore/extension')
+  restoreExtensionSeen: () => get('/restore/extension')
 }
 
 function jobEventsPath(jobId: string): string {
-  return `/jobs/${encodeURIComponent(jobId)}/events`
+  return url('/jobs/{job_id}/events', { job_id: jobId })
 }
 
 /** Read an ok SSE response block by block until it ends. */
