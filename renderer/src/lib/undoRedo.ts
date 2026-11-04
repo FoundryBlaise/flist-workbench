@@ -57,11 +57,12 @@ export function isTextControl(target: Element | null): boolean {
 }
 
 /** The character whose Workbench a workbench undo applies to: the
- *  active one, while the window shows the F-list editor (not the Logs,
- *  not a Foreign profile). */
+ *  active one, while the window shows its Workbench in the F-list
+ *  editor (not the Logs, a Foreign profile, Live or a browsed Backup,
+ *  which are read-only; the store refuses those too). */
 function workbenchTarget(): string | null {
   const s = useStore.getState()
-  if (s.mode !== 'editor' || s.foreignActive) return null
+  if (s.mode !== 'editor' || s.foreignActive || s.editorReadOnly) return null
   return s.flistActiveCharacterId
 }
 

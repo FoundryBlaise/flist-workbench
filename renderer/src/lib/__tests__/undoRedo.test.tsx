@@ -165,4 +165,10 @@ describe('where there is no Workbench to undo', () => {
     press('z')
     expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
   })
+
+  it('the right-click menu offers no Undo while the window shows Live or a Backup', () => {
+    twoChanges()
+    useStore.setState({ editorReadOnly: true })
+    expect(workbenchUndoState()).toBeNull()
+  })
 })
