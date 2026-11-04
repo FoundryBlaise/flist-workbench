@@ -139,6 +139,10 @@ export type ArchiveState = {
 
 export type ArchiveSlice = ArchiveState & {
   flistLoadArchive: (characterId: string) => Promise<void>
+  /** The character's Live: the one the window holds, else read from the
+   *  sidecar and kept; null when the character has none. For the
+   *  Workbench, which seeds a character's first Workbench from it. */
+  flistEnsureLive: (characterId: string) => Promise<Record<string, unknown> | null>
   /** Pull a character from F-list into its slot. `skipWhenBusy`: when
    *  a job already holds the character, leave the slot without an
    *  error (Refresh all) instead of saying so. */
@@ -213,6 +217,11 @@ export type ArchiveSlice = ArchiveState & {
    *  Clears `flistBrowseBackup` so the editor tabs render against
    *  the live working copy again. */
   flistCloseBrowseBackup: () => void
+  /** End the browsed Backup where it is: Live goes back to what the
+   *  browse stood in for, and nothing else changes; what the window
+   *  shows next is the caller's to decide. For the Workbench, when a
+   *  Restore or reset to Live replaces the browsed view. */
+  flistEndBrowse: () => void
   /** Right-click → Download ZIP… on a Backups row. OS save dialog
    *  defaults the filename to the backup's on-disk name; we don't
    *  invent a friendlier one because the timestamp+UTC marker is
@@ -648,19 +657,8 @@ function _restoreFromBrowse(
   setter: ArchiveSet,
   browse: NonNullable<State['flistBrowseBackup']>
 ): void {
-  const { characterId, previousLive, previousViewingLive } = browse
-  setter((s) => ({
-    flistArchive: {
-      ...s.flistArchive,
-      [characterId]: {
-        ...(s.flistArchive[characterId] ?? {
-          pullStatus: 'idle'
-        }),
-        live: previousLive
-      }
-    },
-    flistBrowseBackup: null
-  }))
+  const { characterId, previousViewingLive } = browse
+  getter().flistEndBrowse()
   // Back to the row the user was on. Both overwrite editorReadOnly,
   // editorContent, editorInlines and the working slot, so there is
   // nothing to undo here.
@@ -736,6 +734,26 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
         }
       }
     }))
+  },
+
+  async flistEnsureLive(characterId) {
+    const held = get().flistArchive[characterId]?.live ?? null
+    if (held) return held
+    const fetched = await api.flistLive(characterId).catch(() => null)
+    if (!fetched) return null
+    set((s) => ({
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: {
+          ...(s.flistArchive[characterId] ?? {
+            live: null,
+            pullStatus: 'idle'
+          }),
+          live: fetched
+        }
+      }
+    }))
+    return fetched
   },
 
   async flistPullCharacter(name, characterId, opts) {
@@ -1130,6 +1148,24 @@ export const createArchiveSlice: SliceCreator<ArchiveSlice> = (set, get) => ({
     const browse = get().flistBrowseBackup
     if (!browse) return
     _restoreFromBrowse(get, set, browse)
+  },
+
+  flistEndBrowse() {
+    const browse = get().flistBrowseBackup
+    if (!browse) return
+    const { characterId, previousLive } = browse
+    set((s) => ({
+      flistArchive: {
+        ...s.flistArchive,
+        [characterId]: {
+          ...(s.flistArchive[characterId] ?? {
+            pullStatus: 'idle'
+          }),
+          live: previousLive
+        }
+      },
+      flistBrowseBackup: null
+    }))
   },
 
   async flistDownloadZipBackup(characterId, backupFilename) {

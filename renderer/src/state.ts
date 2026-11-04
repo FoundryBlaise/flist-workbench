@@ -2018,24 +2018,7 @@ export const useStore = create<State>((set, get, store) => ({
     // reads from flistArchive, so a race against the loader produces
     // an empty `character` block and the first edit ships a bare
     // payload (QA P1-3).
-    const archive = get().flistArchive[characterId]
-    if (!archive || archive.live === null) {
-      const fetched = await api.flistLive(characterId).catch(() => null)
-      if (fetched) {
-        set((s) => ({
-          flistArchive: {
-            ...s.flistArchive,
-            [characterId]: {
-              ...(s.flistArchive[characterId] ?? {
-                live: null,
-                pullStatus: 'idle'
-              }),
-              live: fetched as Record<string, unknown>
-            }
-          }
-        }))
-      }
-    }
+    await get().flistEnsureLive(characterId)
     // Opening the Workbench is what the Workbench row means, from a
     // click on it, on the character, or a Pull landing.
     set((s) => ({ flistViewingLive: { ...s.flistViewingLive, [characterId]: false } }))

@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../state'
 import { archiveInitialState } from '../slices/archive'
+import type { FlistZipBackupEntry } from '../../lib/api'
 import { installFakeApi, json, sse, type FakeApi } from '../../test/fakeApi'
 import { archiveEntry, livePayload, workbenchPayload, workingSlot } from '../../test/payloads'
 
@@ -16,7 +17,7 @@ const NEW = '2026-10-01T120000Z.zip'
 
 let fake: FakeApi
 
-function backup(filename: string, name: string | null = null) {
+function backup(filename: string, name: string | null = null): FlistZipBackupEntry {
   return {
     filename,
     created_at: 1,
@@ -356,5 +357,61 @@ describe('Back up all', () => {
     await useStore.getState().flistBackupAll()
 
     expect(fake.requests).toEqual([])
+  })
+})
+
+describe('what the Workbench asks of the Archive', () => {
+  it('Live the window holds is handed over without asking the sidecar', async () => {
+    useStore.setState({ flistArchive: { [CID]: archiveEntry(livePayload({ name: NAME })) } })
+
+    expect(await useStore.getState().flistEnsureLive(CID)).toMatchObject({ name: NAME })
+    expect(fake.requests).toEqual([])
+  })
+
+  it('Live the window does not hold yet is read once and kept', async () => {
+    fake.on(`GET ${BASE}/live`, json(livePayload({ name: NAME })))
+
+    expect(await useStore.getState().flistEnsureLive(CID)).toMatchObject({ name: NAME })
+    expect(archive()).toMatchObject({ live: { name: NAME }, pullStatus: 'idle' })
+    await useStore.getState().flistEnsureLive(CID)
+    expect(asked()).toEqual([`GET ${BASE}/live`])
+  })
+
+  it('a character without Live has none to hand over', async () => {
+    fake.on(`GET ${BASE}/live`, refused('not found', 404))
+
+    expect(await useStore.getState().flistEnsureLive(CID)).toBeNull()
+    expect(archive()).toBeUndefined()
+  })
+
+  it('ending a browse puts back the Live it stood in for, and goes nowhere', () => {
+    const published = livePayload({ name: NAME })
+    const browsed = livePayload({ name: 'as it was' })
+    useStore.setState({
+      flistArchive: { [CID]: archiveEntry(browsed) },
+      flistBrowseBackup: {
+        characterId: CID,
+        filename: NEW,
+        status: 'ready',
+        payload: browsed,
+        previousLive: published,
+        previousViewingLive: false
+      },
+      flistViewingLive: { [CID]: true }
+    })
+
+    useStore.getState().flistEndBrowse()
+
+    expect(useStore.getState().flistBrowseBackup).toBeNull()
+    expect(archive()?.live).toBe(published)
+    // What the window shows next is the caller's to decide.
+    expect(useStore.getState().flistViewingLive[CID]).toBe(true)
+    expect(fake.requests).toEqual([])
+  })
+
+  it('ending a browse when none is open changes nothing', () => {
+    const before = useStore.getState().flistArchive
+    useStore.getState().flistEndBrowse()
+    expect(useStore.getState().flistArchive).toBe(before)
   })
 })
