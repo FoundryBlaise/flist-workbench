@@ -195,6 +195,23 @@ describe('where there is no Workbench to undo', () => {
     expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
   })
 
+  it('a modal dialog is open: the keys and the Edit menu leave the Workbench behind it alone', () => {
+    twoChanges()
+    document.body.innerHTML =
+      '<div role="dialog" aria-modal="true"><button id="b">Keep mine</button></div>'
+    const button = document.getElementById('b')!
+    button.focus()
+    expect(press('z', {}, button).defaultPrevented).toBe(false)
+    press('y', {}, button)
+    runUndoRedo('undo')
+    expect(kinks()).toEqual({ '12': 'fave', '13': 'no' })
+    expect(workbenchUndoState()).toBeNull()
+
+    document.body.innerHTML = ''
+    press('z')
+    expect(kinks()).toEqual({ '12': 'fave' })
+  })
+
   it('the right-click menu offers no Undo while the window shows Live or a Backup', () => {
     twoChanges()
     useStore.setState({ editorReadOnly: true })

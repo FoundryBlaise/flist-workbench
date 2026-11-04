@@ -64,13 +64,21 @@ export function isTextControl(target: Element | null): boolean {
   return routeOf(target) !== 'workbench'
 }
 
+/** True while a modal dialog is open (the merge question, a confirm):
+ *  the Workbench behind it is out of reach, its undo included. */
+function modalOpen(): boolean {
+  return document.querySelector('[aria-modal="true"]') !== null
+}
+
 /** The character whose Workbench a workbench undo applies to: the
  *  active one, while the window shows its Workbench in the F-list
  *  editor (not the Logs, a Foreign profile, Live or a browsed Backup,
- *  which are read-only; the store refuses those too). */
+ *  which are read-only; the store refuses those too) and no modal
+ *  dialog covers it. */
 function workbenchTarget(): string | null {
   const s = useStore.getState()
   if (s.mode !== 'editor' || s.foreignActive || s.editorReadOnly) return null
+  if (modalOpen()) return null
   return s.flistActiveCharacterId
 }
 
@@ -149,7 +157,7 @@ export function handleUndoKeydown(e: KeyboardEvent): void {
   const action = undoKeyOf(e)
   if (!action) return
   const target = e.target instanceof Element ? e.target : null
-  if (isTextControl(target)) return
+  if (isTextControl(target) || modalOpen()) return
   e.preventDefault()
   runUndoRedo(action, target)
 }
