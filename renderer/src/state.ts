@@ -1117,7 +1117,14 @@ async function _takeExternalChange(
   // A newer change came in while this read was out; its own read
   // brings the newer payload.
   if (s.flistExternalChange[characterId] !== change) return
-  if (auto && s.flistWorking[characterId] !== before) return
+  if (auto && s.flistWorking[characterId] !== before) {
+    // Still nothing unsaved (the slot became a view, say): read again
+    // against what the slot holds now.
+    if (!s.flistWorking[characterId]?.unsavedDirty) {
+      void _takeExternalChange(get, set, characterId, change, true)
+    }
+    return
+  }
   const label = externalLabel(change.origin)
   const payload = res.payload as WorkingPayload
   const settled = (st: State): Partial<State> => ({

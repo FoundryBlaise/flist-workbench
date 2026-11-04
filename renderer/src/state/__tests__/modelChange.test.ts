@@ -192,6 +192,26 @@ describe('a model changes the Workbench while nothing is unsaved', () => {
     expect(useStore.getState().flistUndo(CID)).toBeNull()
   })
 
+  it('showing Live while the reload is out still makes the change one entry', async () => {
+    seed('as I left her')
+    useStore.setState({ flistArchive: { [CID]: archiveEntry(livePayload()) } })
+    fake.hold(READ)
+    await dispatch(modelEvent('theirs'))
+    await useStore.getState().flistShowLive(CID)
+    fake.pending(READ)[0].resolve(theirs('as the model wrote her', 'theirs'))
+    await vi.advanceTimersByTimeAsync(0)
+    fake.pending(READ)[0].resolve(theirs('as the model wrote her', 'theirs'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().flistExternalChange[CID]).toBeFalsy()
+
+    const opened = useStore.getState().flistOpenWorking(CID)
+    await vi.advanceTimersByTimeAsync(0)
+    fake.pending(READ)[0].resolve(theirs('as the model wrote her', 'theirs'))
+    await opened
+    expect(useStore.getState().flistUndo(CID)).toBe('mcp:set_description')
+    expect(descOf(slotOf().payload)).toBe('as I left her')
+  })
+
   it('while Live is shown, an event for a write already taken in is not a second entry', async () => {
     seed('as I left her')
     useStore.setState({ flistArchive: { [CID]: archiveEntry(livePayload()) } })
