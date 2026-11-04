@@ -153,7 +153,7 @@ describe('remembered across starts', () => {
   it('pre-fills the sign-in with the last account signed in with', async () => {
     useStore.setState({
       flistSignInOpen: true,
-      flistSignInStatus: 'idle',
+      flistSignInAttempt: { status: 'idle' },
       flistSavedCreds: { account: null, autoLogin: false, encryptionAvailable: false, hasPassword: false }
     })
     fake

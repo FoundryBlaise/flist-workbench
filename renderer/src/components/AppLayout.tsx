@@ -144,10 +144,10 @@ export function AppLayout() {
       if (refreshed.flistSavedCreds.autoLogin && refreshed.flistSavedCreds.hasPassword) {
         const ok = await refreshed.flistAttemptAutoLogin()
         if (cancelled) return
-        // Auto-login failure surfaces in flistSignInError; flip the
+        // Auto-login failure surfaces in flistSignInAttempt; flip the
         // modal open so the user can correct or cancel rather than
         // staring at a silent failure.
-        if (!ok || useStore.getState().flistSignInStatus === 'error') {
+        if (!ok || useStore.getState().flistSignInAttempt.status === 'error') {
           useStore.getState().flistOpenSignIn()
         }
       } else {

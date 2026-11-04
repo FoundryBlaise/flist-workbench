@@ -16,8 +16,7 @@ beforeEach(() => {
   fake = installFakeApi()
   useStore.setState({
     flistSignInOpen: true,
-    flistSignInStatus: 'idle',
-    flistSignInError: null
+    flistSignInAttempt: { status: 'idle' }
   })
 })
 
@@ -35,7 +34,7 @@ async function signInRefused(code: string, message: string, status: number) {
   })
   fireEvent.change(screen.getByTestId('flist-signin-password'), { target: { value: 'wrong' } })
   fireEvent.click(screen.getByTestId('flist-signin-submit'))
-  await waitFor(() => expect(useStore.getState().flistSignInStatus).toBe('error'))
+  await waitFor(() => expect(useStore.getState().flistSignInAttempt.status).toBe('error'))
 }
 
 it('explains a login F-list turned down, whatever F-list said', async () => {

@@ -19,7 +19,16 @@ import {
   type Schema
 } from '../../lib/api'
 import type { State } from '../../state'
+import type { ActionError } from '../actionResult'
 import type { SliceCreator } from './slice'
+
+/** Where the sign-in dialog's attempt stands, and why it failed: the
+ *  words to show (F-list's own, per the Tier 1 decision) and the
+ *  sidecar's code (`sign_in_failed` when F-list turned the login down;
+ *  null for a network failure). */
+export type SignInAttempt =
+  | { status: 'idle' | 'submitting' }
+  | { status: 'error'; error: ActionError }
 
 /** The F-list mapping list as the window holds it: the sidecar's
  *  answer (F-list's payload with the cache's `_etag`, `_fetched_at`)
@@ -51,13 +60,8 @@ export type AccountState = {
   flistMapping: MappingListState
   /** Modal visibility for the sign-in dialog. */
   flistSignInOpen: boolean
-  /** Last error from a sign-in attempt; passed verbatim from F-list per
-   *  the Tier 1 decision. */
-  flistSignInError: string | null
-  /** The sidecar's code for that error (`sign_in_failed` when F-list
-   *  turned the login down); null for none or a network failure. */
-  flistSignInErrorCode: string | null
-  flistSignInStatus: 'idle' | 'submitting' | 'error'
+  /** The sign-in dialog's attempt: submitting, or why it failed. */
+  flistSignInAttempt: SignInAttempt
   /** Saved-credential metadata, read from the OS keychain via the
    *  Electron preload. `account` is the saved username (or null if
    *  nothing is saved). `autoLogin` indicates whether the next launch
@@ -127,9 +131,7 @@ export function accountInitialState(): AccountState {
     flistAccountSweepStatus: 'idle',
     flistMapping: idleMapping(),
     flistSignInOpen: false,
-    flistSignInError: null,
-    flistSignInErrorCode: null,
-    flistSignInStatus: 'idle',
+    flistSignInAttempt: { status: 'idle' },
     flistSavedCreds: {
       account: null,
       autoLogin: false,
@@ -229,7 +231,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
   ...accountInitialState(),
 
   flistOpenSignIn() {
-    set({ flistSignInOpen: true, flistSignInError: null, flistSignInErrorCode: null, flistSignInStatus: 'idle' })
+    set({ flistSignInOpen: true, flistSignInAttempt: { status: 'idle' } })
   },
 
   async flistLoadSavedCreds() {
@@ -256,7 +258,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       // We do NOT pass rememberPassword/autoLogin here — saved
       // creds already exist, and re-saving on every auto-login
       // would also force-rewrite the meta blob for no reason. A
-      // failed auto-login surfaces via flistSignInError; the
+      // failed auto-login surfaces via flistSignInAttempt; the
       // saved creds stay put so the user can correct from the
       // modal without losing the username they remembered.
       await get().flistSignIn(flistSavedCreds.account, password)
@@ -298,7 +300,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
   },
 
   async flistSignIn(account, password, opts) {
-    set({ flistSignInStatus: 'submitting', flistSignInError: null, flistSignInErrorCode: null })
+    set({ flistSignInAttempt: { status: 'submitting' } })
     try {
       const res = await api.flistSignIn({ account, password })
       get().flistRememberAccount(account)
@@ -355,7 +357,7 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
         // because the epoch-bumped in-flight call returns silently.
         const mappingNeedsReset = s.flistMapping.status !== 'ready'
         return {
-          flistSignInStatus: 'idle',
+          flistSignInAttempt: { status: 'idle' },
           flistSignInOpen: false,
           flistAccountCharacters: res.characters,
           flistSession: {
@@ -380,7 +382,12 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
     } catch (err) {
       // The modal shows "Invalid account name or password", not
       // "HTTP 401: Invalid account name or password".
-      set({ flistSignInStatus: 'error', flistSignInError: errorDetail(err), flistSignInErrorCode: refusalCode(err) })
+      set({
+        flistSignInAttempt: {
+          status: 'error',
+          error: { message: errorDetail(err), code: refusalCode(err) }
+        }
+      })
     }
   },
 
