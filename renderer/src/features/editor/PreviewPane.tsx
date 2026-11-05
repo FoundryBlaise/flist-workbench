@@ -3,6 +3,7 @@ import { selectEditorDescription, selectEditorInlines, useStore } from '../../st
 import { bbcodeToHtml, bbcodeFromPreviewDom } from '../../lib/bbcode'
 import { validateBbcode } from '../../lib/bbcode/validate'
 import { writeKeepingScroll } from './previewScroll'
+import { enterAsLineBreak } from './previewLineBreaks'
 import {
   EDITOR_SELECTION_EVENT,
   type EditorSelectionDetail
@@ -122,6 +123,15 @@ export function PreviewPane() {
     })
     renderedFromRef.current = content
   }, [content, inlines, showAlternatePreview])
+
+  // Enter breaks the line rather than splitting the paragraph, whose
+  // copied span used to drop the text before the caret.
+  useEffect(() => {
+    if (showAlternatePreview) return
+    const el = ref.current
+    if (!el) return
+    return enterAsLineBreak(el)
+  }, [showAlternatePreview])
 
   // Browser contentEditable owns its own undo stack, but blurring +
   // refocusing the preview (or any innerHTML rewrite, which our blur

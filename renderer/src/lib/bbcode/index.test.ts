@@ -322,6 +322,20 @@ describe('bbcodeFromPreviewDom — reverse mapping', () => {
     expect(bbcodeFromPreviewDom(after, source)).toBe('[center][icon]Aurora[/icon]![/center]')
   })
 
+  // Chromium splits a paragraph by copying the span around the caret,
+  // source offsets and all. The copy used to replace the original, so
+  // only the text after the split reached the source.
+  it('keeps both halves of a span the browser split in two', () => {
+    const source = '[i]Olivia war lange Zeit. Es konnte gut gehen.[/i]'
+    const dom = document.createElement('div')
+    dom.innerHTML =
+      '<em><span data-bb-start="3" data-bb-end="46">Olivia war lange Zeit. </span></em>' +
+      '<div><em><span data-bb-start="3" data-bb-end="46">Es konnte gut gehen.</span></em></div>'
+    expect(bbcodeFromPreviewDom(dom, source)).toBe(
+      '[i]Olivia war lange Zeit. \nEs konnte gut gehen.[/i]'
+    )
+  })
+
   it('does not copy literal text that the render put next to an eicon', () => {
     // The unknown [foo] renders as bare text right after the <img>; it
     // is not something the user typed.

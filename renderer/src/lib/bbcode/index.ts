@@ -394,7 +394,12 @@ export function bbcodeFromPreviewDom(root: HTMLElement, originalSource: string):
   for (const span of root.querySelectorAll<HTMLElement>('[data-bb-start]')) {
     const start = Number(span.getAttribute('data-bb-start'))
     if (!Number.isFinite(start)) continue
-    currentBySrcStart.set(start, domTextWithBreaks(span))
+    // Two spans with one start are halves of a span the browser split
+    // into separate blocks (a paragraph break): keep both, joined by
+    // the newline the split stands for.
+    const text = domTextWithBreaks(span)
+    const earlier = currentBySrcStart.get(start)
+    currentBySrcStart.set(start, earlier === undefined ? text : `${earlier}\n${text}`)
   }
 
   // Walk the ORIGINAL token stream. For each text token:
