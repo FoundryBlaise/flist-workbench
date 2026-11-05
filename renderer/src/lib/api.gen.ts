@@ -4188,6 +4188,8 @@ export interface components {
             id: number | string | null;
             /** On Account */
             on_account: boolean;
+            /** Is Default */
+            is_default: boolean;
             /** Has Archive */
             has_archive: boolean;
             /** Has Logs */

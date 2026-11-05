@@ -85,6 +85,31 @@ async def test_acquire_ticket_parses_dict_character_list(httpx_mock):
     # Store should hold the same characters for /flist/characters to read.
     stored = flist_api.ticket_store().characters()
     assert [c["name"] for c in stored] == names
+    # ...and the account's default character for the picker to fall back on.
+    assert flist_api.ticket_store().default_character_id() == 1000001
+
+
+@pytest.mark.asyncio
+async def test_acquire_ticket_drops_a_default_not_on_the_account(httpx_mock):
+    """A default character F-list names but the character list does
+    not hold (a deleted character, a missing key) is no default."""
+    for default in (999, None):
+        payload = _ticket_response()
+        payload["default_character"] = default
+        httpx_mock.add_response(url=flist_api.TICKET_URL, method="POST", json=payload)
+        await flist_api.acquire_ticket("acct", "pw")
+        assert flist_api.ticket_store().default_character_id() is None
+
+
+def test_signing_out_forgets_the_default_character():
+    store = flist_api.ticket_store()
+    store.set(
+        flist_api.Ticket(account="a", value="v", password="p", acquired_at=time.monotonic()),
+        characters=[{"name": "One", "id": 1}],
+        default_character_id=1,
+    )
+    store.clear()
+    assert store.default_character_id() is None
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ function rosterEntry(id: number, name: string, extra: Record<string, unknown> = 
     id,
     name,
     on_account: true,
+    is_default: false,
     has_archive: true,
     has_logs: false,
     last_pulled_at: null,
@@ -308,6 +309,55 @@ describe('the session and the roster', () => {
     await useStore.getState().flistLoadRoster()
 
     expect(useStore.getState().flistArchive['7'].integrity).toEqual({ status: 'partial', missing: 2 })
+  })
+
+  describe('the character the roster opens', () => {
+    const LAST_CHARACTER_KEY = 'flist-workbench:last-flist-char-id'
+    const roster = () =>
+      json({
+        characters: [
+          rosterEntry(3, 'Aster'),
+          rosterEntry(7, 'Quill', { is_default: true }),
+          rosterEntry(9, 'Fennick')
+        ]
+      })
+
+    beforeEach(() => {
+      useStore.setState({ activeCharacter: null })
+      fake.on(ROSTER, roster()).fallback(json({}))
+    })
+
+    it('is the account’s default character when none was opened before', async () => {
+      await useStore.getState().flistLoadRoster()
+
+      expect(useStore.getState().activeCharacter).toBe('Quill')
+      expect(useStore.getState().flistActiveCharacterId).toBe('7')
+    })
+
+    it('is the character opened last, over the default', async () => {
+      localStorage.setItem(LAST_CHARACTER_KEY, '9')
+
+      await useStore.getState().flistLoadRoster()
+
+      expect(useStore.getState().activeCharacter).toBe('Fennick')
+      expect(useStore.getState().flistActiveCharacterId).toBe('9')
+    })
+
+    it('is the default when the character opened last is gone', async () => {
+      localStorage.setItem(LAST_CHARACTER_KEY, '42')
+
+      await useStore.getState().flistLoadRoster()
+
+      expect(useStore.getState().flistActiveCharacterId).toBe('7')
+    })
+
+    it('is none without a default, leaving the first character unopened', async () => {
+      fake.on(ROSTER, json({ characters: [rosterEntry(3, 'Aster'), rosterEntry(9, 'Fennick')] }))
+
+      await useStore.getState().flistLoadRoster()
+
+      expect(useStore.getState().flistActiveCharacterId).toBeNull()
+    })
   })
 
   it('a roster read that fails says so', async () => {
