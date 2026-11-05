@@ -174,10 +174,11 @@ export function validateBbcode(source: string): BbcodeWarning[] {
   const a = maskUnknownBrackets(source)
   const structural: BbcodeWarning[] = []
 
-  // `a.substring(from, end).indexOf(s)`, as an absolute offset.
+  // The first `s` at or after `from` that ends by `end`; Python's
+  // `a.find(s, from, end)`.
   const find = (s: string, from: number, end: number): number => {
-    const i = a.substring(from, end).indexOf(s)
-    return i === -1 ? -1 : i + Math.max(0, Math.min(from, end))
+    const i = a.indexOf(s, from)
+    return i === -1 || i + s.length > end ? -1 : i
   }
 
   // The content ends at `to`, or goes on after it.
@@ -193,6 +194,9 @@ export function validateBbcode(source: string): BbcodeWarning[] {
     const { n, end } = frame
     const o = find('[', n, end)
     const d = o === -1 ? -1 : find(']', o, end)
+    // F-list's own pattern, case-insensitive and a prefix match. Both
+    // matter: a lone `[` the escape leaves alone pairs with the next
+    // tag's `]`, so in `x [B [b]y` this reads "B [b" and opens a [b].
     const mm = o === -1 || d === -1 ? null : a.substring(o + 1, d).match(/^([a-z]+)(?:=([^\]]+))?/i)
     const name = mm ? mm[1].toLowerCase() : ''
     if (!known(name)) {

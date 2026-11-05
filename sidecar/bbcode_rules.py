@@ -87,8 +87,9 @@ Kind = Literal["not-allowed", "not-closed", "bad-nesting"]
 #: name is escaped to text before parsing. ([hr] is replaced before
 #: that, so it never counts as a tag either.)
 _BRACKETED = re.compile(r"(\[[\[ /]*)([^\[\]]+)([\] ]*\])")
-# A prefix match on purpose, as in F-list: "[b2]" would read as [b] here
-# (preprocessing has already escaped it, though).
+# F-list's own pattern, case-insensitive and a prefix match. Both are
+# reachable after the escape: a lone "[" it leaves alone pairs with the
+# next tag's "]", so in "x [B [b]y" this reads "B [b" and opens a [b].
 _OPENING = re.compile(r"^([a-z]+)(?:=([^\]]+))?", re.IGNORECASE)
 # Escaped brackets keep their offsets, so warnings point into the
 # source as written.
