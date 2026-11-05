@@ -27,14 +27,29 @@ it('dims the formatting buttons instead of removing them', () => {
   expect(screen.getByTestId('editor-toolbar')).toBeTruthy()
   // Accessible names carry the shortcut ("Bold (Ctrl+B)"), so match
   // on the leading word.
-  for (const label of [/^Bold/, /^Italic/, /^Character icon/]) {
+  for (const label of [/^Bold/, /^Italic/, /^Character icon/, /^Heading/, /^Indent/]) {
     const btn = screen.getByRole('button', { name: label }) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
   }
-  const more = screen.getByRole('button', {
-    name: 'more…'
-  }) as HTMLButtonElement
-  expect(more.disabled).toBe(true)
+})
+
+it('has a button in the bar for every tag on F-list wiki list of BBCode tags', () => {
+  // https://wiki.f-list.net/List_of_BBCode_tags — no tag hides behind
+  // a "more" menu.
+  toolbar(false)
+
+  const labels = Array.from(
+    screen.getByTestId('editor-toolbar').querySelectorAll('button.tool'),
+    (b) => b.textContent
+  )
+  for (const tag of [
+    'B', 'I', 'U', 'S', 'big', 'small', 'sup', 'sub', 'color', 'url',
+    'heading', 'indent', 'justify', 'collapse', 'quote', 'hr', 'left',
+    'center', 'right', 'icon', 'eicon', 'user', 'noparse'
+  ]) {
+    expect(labels).toContain(tag)
+  }
+  expect(screen.queryByRole('button', { name: /more/i })).toBeNull()
 })
 
 it('leaves the view-mode toggle usable while read-only', () => {
