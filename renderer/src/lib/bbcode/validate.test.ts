@@ -7,6 +7,7 @@
 
 import { expect, it } from 'vitest'
 import { validateBbcode } from './validate'
+import verified from './__fixtures__/flist_verified.json'
 
 const tags = (s: string) => validateBbcode(s).map((w) => w.tag)
 
@@ -64,40 +65,19 @@ it('has nothing to say about plain text', () => {
 
 // F-list's second class of complaint: tags that do not end in their
 // own closer. The site prints such a tag, with everything inside it,
-// as literal text. "B" is "Bad BBCode in [x] tag", "O" is "Open [x]
-// tag is not properly closed", "N" is "not allowed here". The rows are
-// #137's verified-case table, in F-list's own order.
+// as literal text. The verified cases live in a fixture the sidecar's
+// tests read too, so the preview and the MCP write guard cannot drift
+// apart; see its "about" for the letters and for how a case gets in.
 const verdicts = (s: string) =>
   validateBbcode(s).map((w) => `${KIND_LETTER[w.kind]} ${w.tag}`)
 const KIND_LETTER = { 'bad-nesting': 'B', 'not-closed': 'O', 'not-allowed': 'N' } as const
 
-it.each<[string, string[]]>([
-  ['[color=green][b]x[/color][/b]', ['B b', 'O color']],
-  ['[b][i]x[/b][/i]', ['B i', 'O b']],
-  ['[b]x', ['O b']],
-  // A stray closer is shown as text, without a warning.
-  ['x[/b]', []],
-  ['[b]x[/b][/b]', []],
-  // The well-formed [b] goes literal with its unclosed parent.
-  ['[color=green]a[b]b[/b]', ['O color']],
-  ['[color=green]x[/b][/color]', ['B color']],
-  // The shape from the report: a crossed pair inside a wrapper.
-  ['[collapse=Q][color=green][b]x[/color][/b][/collapse] after [b]ok[/b]', ['B b', 'O color']],
-  ['[color=green][collapse=Q][b]x[/collapse][/b][/color] after [b]ok[/b]', ['B b', 'O collapse']],
-  ['[quote][b]x[/quote]', ['O b', 'O quote']],
-  ['[url=https://example.com]x[/url] [b]y', ['O b']],
-  ['[noparse][b][/noparse]', []],
-  ['[big][b][color=cyan]X[/color][/b][/big]', ['N color']],
-  // Literal on the site, so never rendered, so never judged.
-  ['[color=green][big][b][color=cyan]X[/color][/b][/big]', ['O color']],
-  // Structural first, whatever the source order.
-  ['[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]', ['B b', 'O color', 'N color']],
-  // "B", not "O": a [/color follows later.
-  ['[color=green][b]x[/color][/b] [big][b][color=cyan]X[/color][/b][/big]', ['B b', 'B color', 'N color']],
-  ['[b]ok[/b] [i]ok[/i]', []]
-])('reports %j as F-list does', (source, expected) => {
-  expect(verdicts(source)).toEqual(expected)
-})
+it.each(verified.cases.map((c) => [c.source, c.warnings] as const))(
+  'reports %j as F-list does',
+  (source, expected) => {
+    expect(verdicts(source)).toEqual(expected)
+  }
+)
 
 it('names the tag and quotes the text after it, as F-list does', () => {
   const [bad, open] = validateBbcode('ab [color=green][b]x[/color][/b]')
@@ -113,6 +93,20 @@ it('names the tag and quotes the text after it, as F-list does', () => {
     start: 'ab '.length,
     message: 'Open [color] tag is not properly closed (with [/color]).'
   })
+})
+
+it('checks a long or deeply nested text whole', () => {
+  // Repeats "[b]ok[/b] [i]ok[/i]", "[b]x" and "[b]ok[/b]"; a
+  // description can be long, and the preview must not run out of stack
+  // on one.
+  expect(validateBbcode('[b]ok[/b] [i]ok[/i] '.repeat(5000))).toEqual([])
+  expect(verdicts('[b]'.repeat(5000) + 'x')).toEqual(Array(5000).fill('O b'))
+  expect(validateBbcode('[b]'.repeat(5000) + 'ok' + '[/b]'.repeat(5000))).toEqual([])
+  // Only the innermost [color] ends in its own closer; every one
+  // around it is left open.
+  expect(verdicts('[color=red]x '.repeat(4000) + '[/color]')).toEqual(
+    Array(3999).fill('O color')
+  )
 })
 
 it('marks the nesting complaint as not-allowed', () => {

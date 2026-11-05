@@ -365,6 +365,27 @@ async def test_bbcode_reference_covers_the_flist_specific_tags(
     assert any("no [img] tag" in n for n in body["notes"])
 
 
+async def test_bbcode_reference_lists_only_tags_f_list_knows(workbench) -> None:
+    async with mcp_client() as session:
+        _, body = await call_tool(session, "get_bbcode_reference")
+    tags = " ".join(t["tag"] for t in body["tags"])
+    assert "[spoiler]" not in tags, "not in F-list's tag table"
+
+
+async def test_bbcode_reference_says_to_close_tags_in_reverse_order(
+    workbench,
+) -> None:
+    # A write with tags closed out of order is refused, so the reference
+    # has to say so before the model writes one.
+    async with mcp_client() as session:
+        _, body = await call_tool(session, "get_bbcode_reference")
+    notes = " ".join(body["notes"])
+    assert "reverse order" in notes
+    assert "[color=green][b]x[/b][/color]" in notes
+    # The preview does warn now; telling the model otherwise is wrong.
+    assert "preview will not warn" not in notes
+
+
 async def test_mapping_list_section_is_validated(workbench) -> None:
     async with mcp_client() as session:
         result, _ = await call_tool(session, "get_mapping_list", section="nope")

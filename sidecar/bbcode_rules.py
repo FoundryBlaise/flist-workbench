@@ -38,8 +38,10 @@ returns them in that order.
 
 Mirrored in `renderer/src/lib/bbcode/validate.ts` for the preview.
 Both were checked case by case against the live parser on f-list.net;
-`tests/test_bbcode_rules.py` and `validate.test.ts` carry the same
-cases so the two cannot drift apart unnoticed.
+`tests/test_bbcode_rules.py` and `validate.test.ts` read the verified
+verdicts from one fixture,
+`renderer/src/lib/bbcode/__fixtures__/flist_verified.json`, so the two
+cannot drift apart unnoticed.
 """
 
 from __future__ import annotations
@@ -85,8 +87,9 @@ Kind = Literal["not-allowed", "not-closed", "bad-nesting"]
 #: name is escaped to text before parsing. ([hr] is replaced before
 #: that, so it never counts as a tag either.)
 _BRACKETED = re.compile(r"(\[[\[ /]*)([^\[\]]+)([\] ]*\])")
-# A prefix match on purpose, as in F-list: "[b2]" would read as [b] here
-# (preprocessing has already escaped it, though).
+# F-list's own pattern, case-insensitive and a prefix match. Both are
+# reachable after the escape: a lone "[" it leaves alone pairs with the
+# next tag's "]", so in "x [B [b]y" this reads "B [b" and opens a [b].
 _OPENING = re.compile(r"^([a-z]+)(?:=([^\]]+))?", re.IGNORECASE)
 # Escaped brackets keep their offsets, so warnings point into the
 # source as written.
@@ -288,7 +291,8 @@ _NESTING_ADVICE = (
 
 _CLOSING_ADVICE = (
     "F-list takes the first closing tag after a tag's content as that "
-    "tag's closer. When it belongs to another tag, or there is none, "
+    "tag's closer. When that is not the tag's own closer, or there is "
+    "none, "
     "F-list shows the whole tag, with everything inside it, as plain "
     "text. Close every tag you open, and close tags in the reverse "
     "order you opened them: [color=green][b]x[/b][/color], not "
@@ -304,8 +308,9 @@ def _line(w: Warning_) -> str:
         )
     if w.kind == "bad-nesting":
         return (
-            f"{w.message} It opens at character {w.start}; the next "
-            f"closing tag after it belongs to another tag."
+            f"{w.message} It opens at character {w.start}; close it "
+            f"with [/{w.tag}], in reverse order of opening: the first "
+            f"closing tag after its content must be its own."
         )
     return w.message
 

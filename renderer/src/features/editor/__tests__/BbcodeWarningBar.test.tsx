@@ -53,14 +53,18 @@ it('keeps the refusal wording and the [big] hint for a tag not allowed there', (
   expect(text).not.toContain('plain text')
 })
 
-it('leads with plain text when both kinds occur, as F-list lists them', () => {
+it('says both, with both hints, when both kinds occur', () => {
   const text = bar(
     '[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]'
   )
 
-  expect(text).toContain('F-list will show this part as plain text — 3 places.')
+  expect(text).toContain(
+    'F-list will refuse part of this and show part as plain text — 3 places.'
+  )
+  // F-list lists the structural warning first, so that one is quoted.
   expect(text).toContain('Bad BBCode in [b] tag')
-  expect(text).not.toContain('[big], [small]')
+  expect(text).toContain('reverse order')
+  expect(text).toContain('Only one level of formatting fits inside [big]')
 })
 
 it('sits above the preview, which still holds the broken text', () => {

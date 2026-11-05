@@ -48,8 +48,9 @@
  *  judged for nesting.
  *
  *  Verified against the live parser rather than inferred: each case in
- *  `validate.test.ts` was run through `FList.TagParser.parseEverything`
- *  on f-list.net and matched.
+ *  `validate.test.ts` and in `__fixtures__/flist_verified.json` (which
+ *  the sidecar's tests read too) was run through
+ *  `FList.TagParser.parseEverything` on f-list.net and matched.
  */
 
 export type BbcodeWarningKind = 'not-allowed' | 'not-closed' | 'bad-nesting'
@@ -147,99 +148,143 @@ function maskUnknownBrackets(source: string): string {
     })
 }
 
+/** A tag whose content is being parsed: F-list's recursion, made an
+ *  explicit stack so a long description cannot run out of it. */
+type Frame = {
+  /** null for the whole text. */
+  tag: string | null
+  start: number
+  /** The opening tag's `]`. */
+  openEnd: number
+  /** End of the enclosing range. */
+  end: number
+  /** Where the sibling scan goes on. */
+  n: number
+  children: TagNode[]
+  /** Where the content stopped: the end of the last tag in it, or the
+   *  start of the run of text that ends it. F-list looks for the tag's
+   *  closer from there. */
+  stop: number
+  done: boolean
+}
+
 /** Every warning F-list would show for this text, in its order.
  *  Empty means the site renders it as written. */
 export function validateBbcode(source: string): BbcodeWarning[] {
   const a = maskUnknownBrackets(source)
   const structural: BbcodeWarning[] = []
 
-  // `a.substring(from, end).indexOf(s)`, as an absolute offset.
+  // The first `s` at or after `from` that ends by `end`; Python's
+  // `a.find(s, from, end)`.
   const find = (s: string, from: number, end: number): number => {
-    const i = a.substring(from, end).indexOf(s)
-    return i === -1 ? -1 : i + Math.max(0, Math.min(from, end))
+    const i = a.indexOf(s, from)
+    return i === -1 || i + s.length > end ? -1 : i
   }
 
-  // Parses [n, end) into its tags. Returns them and where the parse
-  // stopped: the end of the last tag, or the start of the run of text
-  // that ends the range. F-list looks for a tag's closer from there.
-  const parseRange = (n: number, end: number): { tags: TagNode[]; stop: number } => {
-    const tags: TagNode[] = []
-    for (;;) {
-      const o = find('[', n, end)
-      const d = o === -1 ? -1 : find(']', o, end)
-      if (o === -1 || d === -1) return { tags, stop: n }
-      const mm = a.substring(o + 1, d).match(/^([a-z]+)(?:=([^\]]+))?/i)
-      const name = mm ? mm[1].toLowerCase() : ''
-      // A closer, or anything else that is not an opening tag, ends
-      // the range: the rest of it is text.
-      if (!known(name)) return { tags, stop: n }
-      const tag = parseTag(name, o, d, end)
-      if (tag.node) tags.push(tag.node)
-      if (tag.end >= end) return { tags, stop: tag.end }
-      n = tag.end
+  // The content ends at `to`, or goes on after it.
+  const advance = (frame: Frame, to: number) => {
+    frame.stop = to
+    if (to >= frame.end) frame.done = true
+    else frame.n = to
+  }
+
+  // One step of the sibling scan: the next opening tag at or after
+  // `frame.n`, or the end of the content where F-list would put it.
+  const scan = (frame: Frame, stack: Frame[]) => {
+    const { n, end } = frame
+    const o = find('[', n, end)
+    const d = o === -1 ? -1 : find(']', o, end)
+    // F-list's own pattern, case-insensitive and a prefix match. Both
+    // matter: a lone `[` the escape leaves alone pairs with the next
+    // tag's `]`, so in `x [B [b]y` this reads "B [b" and opens a [b].
+    const mm = o === -1 || d === -1 ? null : a.substring(o + 1, d).match(/^([a-z]+)(?:=([^\]]+))?/i)
+    const name = mm ? mm[1].toLowerCase() : ''
+    if (!known(name)) {
+      // A closer, or no tag left: the rest of the content is text.
+      frame.stop = n
+      frame.done = true
+      return
     }
-  }
-
-  const parseTag = (
-    name: string,
-    openStart: number,
-    openEnd: number,
-    end: number
-  ): { node: TagNode | null; end: number } => {
     if (name === 'noparse') {
-      const g = find('[/noparse]', openEnd, end)
-      return {
-        node: { tag: name, start: openStart, content: [] },
-        end: g === -1 ? end : g + 10
-      }
+      const g = find('[/noparse]', d, end)
+      frame.children.push({ tag: name, start: o, content: [] })
+      advance(frame, g === -1 ? end : g + 10)
+      return
     }
-    const inner = parseRange(openEnd + 1, end)
-    const v = find('[/', inner.stop, end)
+    stack.push({ tag: name, start: o, openEnd: d, end, n: d + 1, children: [], stop: d + 1, done: false })
+  }
+
+  // F-list's verdict on an open tag: the first `[/` after its content
+  // is its closer, or the whole tag becomes text.
+  const close = (frame: Frame, name: string): { node: TagNode | null; end: number } => {
+    const { end, stop } = frame
+    const v = find('[/', stop, end)
     const b = v === -1 ? -1 : find(']', v, end)
     if (v !== -1 && b !== -1 && a.substring(v + 2, b) === name) {
-      return { node: { tag: name, start: openStart, content: inner.tags }, end: b + 1 }
+      return { node: { tag: name, start: frame.start, content: frame.children }, end: b + 1 }
     }
-    if (find('[/' + name, inner.stop, end) === -1) {
+    if (find('[/' + name, stop, end) === -1) {
       structural.push({
         kind: 'not-closed',
         tag: name,
-        start: openStart,
+        start: frame.start,
         message: `Open [${name}] tag is not properly closed (with [/${name}]).`
       })
     } else {
       structural.push({
         kind: 'bad-nesting',
         tag: name,
-        start: openStart,
+        start: frame.start,
         message:
           `Bad BBCode in [${name}] tag, somewhere around/after ` +
-          `'${source.substr(openEnd + 1, 50)}...'.`
+          `'${source.substr(frame.openEnd + 1, 50)}...'.`
       })
     }
     // The whole tag is literal text on the site, up to that closer.
     return { node: null, end: v === -1 || b === -1 ? end : b + 1 }
   }
 
-  const notAllowed: BbcodeWarning[] = []
-  const judge = (nodes: TagNode[], allowed: Allowed) => {
-    for (const node of nodes) {
-      if (!permits(allowed, node.tag)) {
-        // F-list prints the offending tag as literal text and does not
-        // look inside it.
-        notAllowed.push({
-          kind: 'not-allowed',
-          tag: node.tag,
-          start: node.start,
-          message:
-            `The [${node.tag}] tag is not allowed here: ` +
-            `${source.substr(node.start, 60)}...`
-        })
+  const parse = (): TagNode[] => {
+    const stack: Frame[] = [
+      { tag: null, start: 0, openEnd: -1, end: a.length, n: 0, children: [], stop: 0, done: false }
+    ]
+    for (;;) {
+      const frame = stack[stack.length - 1]
+      if (!frame.done) {
+        scan(frame, stack)
         continue
       }
-      judge(node.content, newAllowed(allowed, node.tag))
+      stack.pop()
+      if (frame.tag === null) return frame.children
+      const closed = close(frame, frame.tag)
+      const parent = stack[stack.length - 1]
+      if (closed.node) parent.children.push(closed.node)
+      advance(parent, closed.end)
     }
   }
-  judge(parseRange(0, a.length).tags, true)
+
+  // F-list's rendering pass, in source order. A tag it prints as
+  // literal text has no node, so is never looked into; neither is one
+  // it refuses, since it prints that as literal text too.
+  const notAllowed: BbcodeWarning[] = []
+  const pending: [TagNode, Allowed][] = parse()
+    .reverse()
+    .map((node) => [node, true])
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    const [node, allowed] = next
+    if (!permits(allowed, node.tag)) {
+      notAllowed.push({
+        kind: 'not-allowed',
+        tag: node.tag,
+        start: node.start,
+        message:
+          `The [${node.tag}] tag is not allowed here: ` + `${source.substr(node.start, 60)}...`
+      })
+      continue
+    }
+    const inner = newAllowed(allowed, node.tag)
+    for (let i = node.content.length - 1; i >= 0; i--) pending.push([node.content[i], inner])
+  }
 
   return [...structural, ...notAllowed]
 }
