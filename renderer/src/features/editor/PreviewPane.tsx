@@ -13,6 +13,7 @@ import { ProfileFieldsPreview } from '../flist/ProfileFieldsPreview'
 import { KinksUndecidedPool } from '../flist/KinksUndecidedPool'
 import { GalleryPreviewPane } from '../flist/GalleryPreviewPane'
 import { PreviewThemeSwitch } from './PreviewThemeSwitch'
+import { BbcodeWarningBar } from './BbcodeWarningBar'
 
 const EDIT_HINT_KEY = 'flist-workbench:preview-edit-hint-dismissed'
 
@@ -61,9 +62,9 @@ export function PreviewPane() {
   const readOnly = useStore((s) => s.editorReadOnly)
   const endTyping = useStore((s) => s.flistEndTyping)
   // What F-list's parser would say about this text. It is the same
-  // check the site runs when the profile is uploaded, so the answer
-  // arrives here — where the text can still be fixed — instead of in
-  // a red box on f-list.net after the app has been closed.
+  // check the site runs on the profile, so the answer arrives here —
+  // where the text can still be fixed — instead of on f-list.net after
+  // the app has been closed.
   const bbcodeWarnings = useMemo(() => validateBbcode(content), [content])
   const previewTheme = useStore((s) => s.previewTheme)
   const editorActiveTab = useStore((s) => s.editorActiveTab)
@@ -258,30 +259,7 @@ export function PreviewPane() {
           <PreviewThemeSwitch testId="preview-theme-switch" />
         )}
       </header>
-      {bbcodeWarnings.length > 0 && !showAlternatePreview && (
-        <div
-          className="preview-bbcode-warning"
-          role="status"
-          data-testid="preview-bbcode-warning"
-        >
-          <span className="preview-bbcode-warning-icon" aria-hidden>
-            ⚠
-          </span>
-          <span className="preview-bbcode-warning-text">
-            <b>
-              F-list will refuse this
-              {bbcodeWarnings.length > 1
-                ? ` — ${bbcodeWarnings.length} places`
-                : ''}
-              .
-            </b>{' '}
-            {bbcodeWarnings[0].message}
-            {bbcodeWarnings.length === 1 &&
-              ' Only one level of formatting fits inside [big], [small],' +
-                ' [sub] and [sup] — put the outer tag outside instead.'}
-          </span>
-        </div>
-      )}
+      {!showAlternatePreview && <BbcodeWarningBar warnings={bbcodeWarnings} />}
       {showEditHint && !readOnly && !showAlternatePreview && (
         <div className="preview-edit-banner" data-testid="preview-edit-banner">
           <span className="preview-edit-banner-icon" aria-hidden>

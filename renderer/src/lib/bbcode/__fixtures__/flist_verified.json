@@ -1,0 +1,59 @@
+{
+  "about": [
+    "What F-list's own parser says about each source below. Every case was run through the live parser on f-list.net, FList.TagParser.enableWarnings(); parseEverything(htmlentities(source)), and gave exactly these warnings, in this order. Add a case only after doing the same: a guessed verdict here makes both checks agree with the guess instead of with the site.",
+    "Read by renderer/src/lib/bbcode/validate.test.ts and sidecar/tests/test_bbcode_rules.py, so the preview's check and the MCP write guard are held to the same verdicts.",
+    "Each warning is a letter and a tag name. B: Bad BBCode in [x] tag. O: Open [x] tag is not properly closed. N: The [x] tag is not allowed here."
+  ],
+  "cases": [
+    { "source": "[color=green][b]x[/color][/b]", "warnings": ["B b", "O color"] },
+    { "source": "[b][i]x[/b][/i]", "warnings": ["B i", "O b"] },
+    { "source": "[b]x", "warnings": ["O b"] },
+    {
+      "source": "x[/b]",
+      "warnings": [],
+      "note": "A stray closer is shown as text, without a warning."
+    },
+    { "source": "[b]x[/b][/b]", "warnings": [] },
+    {
+      "source": "[color=green]a[b]b[/b]",
+      "warnings": ["O color"],
+      "note": "The well-formed [b] goes literal with its unclosed parent."
+    },
+    { "source": "[color=green]x[/b][/color]", "warnings": ["B color"] },
+    {
+      "source": "[collapse=Q][color=green][b]x[/color][/b][/collapse] after [b]ok[/b]",
+      "warnings": ["B b", "O color"],
+      "note": "A crossed pair inside a wrapper."
+    },
+    {
+      "source": "[color=green][collapse=Q][b]x[/collapse][/b][/color] after [b]ok[/b]",
+      "warnings": ["B b", "O collapse"]
+    },
+    { "source": "[quote][b]x[/quote]", "warnings": ["O b", "O quote"] },
+    { "source": "[url=https://example.com]x[/url] [b]y", "warnings": ["O b"] },
+    { "source": "[noparse][b][/noparse]", "warnings": [] },
+    { "source": "[big][b][color=cyan]X[/color][/b][/big]", "warnings": ["N color"] },
+    {
+      "source": "[color=green][big][b][color=cyan]X[/color][/b][/big]",
+      "warnings": ["O color"],
+      "note": "Literal on the site, so never rendered, so never judged."
+    },
+    {
+      "source": "[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]",
+      "warnings": ["B b", "O color", "N color"],
+      "note": "Structural warnings first, whatever the source order."
+    },
+    {
+      "source": "[color=green][b]x[/color][/b] [big][b][color=cyan]X[/color][/b][/big]",
+      "warnings": ["B b", "B color", "N color"],
+      "note": "B, not O: a [/color follows later in the text."
+    },
+    { "source": "[b]ok[/b] [i]ok[/i]", "warnings": [] },
+    {
+      "source": "[B]x[/B]",
+      "warnings": [],
+      "note": "Uppercase names are not tags to F-list: shown literally, without a warning."
+    },
+    { "source": "[color=Blue]x[/color]", "warnings": [] }
+  ]
+}

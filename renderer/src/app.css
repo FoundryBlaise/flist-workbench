@@ -1396,7 +1396,7 @@ body {
   background: rgba(255,255,255,0.05);
   font-weight: bold;
   /* Inherit colour so an outer [color=orange] cascades into the header
-     the same way it does on F-list. */
+     the same way it does in Horizon (f-list.net does not). */
   list-style: none;
 }
 .preview-body .bb-collapse-header::-webkit-details-marker { display: none; }

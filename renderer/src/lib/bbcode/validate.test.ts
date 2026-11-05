@@ -7,6 +7,7 @@
 
 import { expect, it } from 'vitest'
 import { validateBbcode } from './validate'
+import verified from './__fixtures__/flist_verified.json'
 
 const tags = (s: string) => validateBbcode(s).map((w) => w.tag)
 
@@ -60,4 +61,61 @@ it('ignores tags F-list does not know', () => {
 
 it('has nothing to say about plain text', () => {
   expect(validateBbcode('Just a description, no markup at all.')).toEqual([])
+})
+
+// F-list's second class of complaint: tags that do not end in their
+// own closer. The site prints such a tag, with everything inside it,
+// as literal text. The verified cases live in a fixture the sidecar's
+// tests read too, so the preview and the MCP write guard cannot drift
+// apart; see its "about" for the letters and for how a case gets in.
+const verdicts = (s: string) =>
+  validateBbcode(s).map((w) => `${KIND_LETTER[w.kind]} ${w.tag}`)
+const KIND_LETTER = { 'bad-nesting': 'B', 'not-closed': 'O', 'not-allowed': 'N' } as const
+
+it.each(verified.cases.map((c) => [c.source, c.warnings] as const))(
+  'reports %j as F-list does',
+  (source, expected) => {
+    expect(verdicts(source)).toEqual(expected)
+  }
+)
+
+it('names the tag and quotes the text after it, as F-list does', () => {
+  const [bad, open] = validateBbcode('ab [color=green][b]x[/color][/b]')
+  expect(bad).toEqual({
+    kind: 'bad-nesting',
+    tag: 'b',
+    start: 'ab [color=green]'.length,
+    message: "Bad BBCode in [b] tag, somewhere around/after 'x[/color][/b]...'."
+  })
+  expect(open).toEqual({
+    kind: 'not-closed',
+    tag: 'color',
+    start: 'ab '.length,
+    message: 'Open [color] tag is not properly closed (with [/color]).'
+  })
+})
+
+it('checks a long or deeply nested text whole', () => {
+  // Repeats "[b]ok[/b] [i]ok[/i]", "[b]x" and "[b]ok[/b]"; a
+  // description can be long, and the preview must not run out of stack
+  // on one.
+  expect(validateBbcode('[b]ok[/b] [i]ok[/i] '.repeat(5000))).toEqual([])
+  expect(verdicts('[b]'.repeat(5000) + 'x')).toEqual(Array(5000).fill('O b'))
+  expect(validateBbcode('[b]'.repeat(5000) + 'ok' + '[/b]'.repeat(5000))).toEqual([])
+  // Only the innermost [color] ends in its own closer; every one
+  // around it is left open.
+  expect(verdicts('[color=red]x '.repeat(4000) + '[/color]')).toEqual(
+    Array(3999).fill('O color')
+  )
+})
+
+it('marks the nesting complaint as not-allowed', () => {
+  const [w] = validateBbcode('[big][b][color=cyan]X[/color][/b][/big]')
+  expect(w.kind).toBe('not-allowed')
+})
+
+it('treats [spoiler] as a tag F-list does not know', () => {
+  // Not in f-list.js's tag table: escaped to text, never judged.
+  expect(validateBbcode('[spoiler]x')).toEqual([])
+  expect(validateBbcode('[big][b][spoiler]x[/spoiler][/b][/big]')).toEqual([])
 })

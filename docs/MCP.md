@@ -379,7 +379,7 @@ window gets for the same situation:
 | `not_signed_in` | needs an F-list session — sign in from the app window |
 | `field_not_found` | F-list has no such field; `list_profile_fields` shows what exists (an unknown kink in `set_kinks` is a `validation_failed` naming it under `problems`) |
 | `validation_failed` | a value F-list wouldn't accept, or a `source` other than `workbench` (the default) or `live` — the error carries the allowed ones |
-| `bbcode_rejected` | the description has BBCode F-list would refuse; the error names the tags |
+| `bbcode_rejected` | the description has BBCode F-list would refuse (a tag not allowed where it sits) or show as plain text (a tag left unclosed, or tags closed out of order); the error names the tags and says how to fix them |
 | `image_not_found` | no image with that id where the tool looked (`list_trash` shows what the Trash holds) |
 | `etag_mismatch` | the Workbench changed since it was read (`put_workbench_payload` with an old `if_match`); details carry the `current_etag` |
 | `confirm_required` | a destructive tool, or `set_description` or `edit_description` cutting the description below half its length; ask the user, then pass `confirm=true` |
