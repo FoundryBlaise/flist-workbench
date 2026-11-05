@@ -61,3 +61,67 @@ it('ignores tags F-list does not know', () => {
 it('has nothing to say about plain text', () => {
   expect(validateBbcode('Just a description, no markup at all.')).toEqual([])
 })
+
+// F-list's second class of complaint: tags that do not end in their
+// own closer. The site prints such a tag, with everything inside it,
+// as literal text. "B" is "Bad BBCode in [x] tag", "O" is "Open [x]
+// tag is not properly closed", "N" is "not allowed here". The rows are
+// #137's verified-case table, in F-list's own order.
+const verdicts = (s: string) =>
+  validateBbcode(s).map((w) => `${KIND_LETTER[w.kind]} ${w.tag}`)
+const KIND_LETTER = { 'bad-nesting': 'B', 'not-closed': 'O', 'not-allowed': 'N' } as const
+
+it.each<[string, string[]]>([
+  ['[color=green][b]x[/color][/b]', ['B b', 'O color']],
+  ['[b][i]x[/b][/i]', ['B i', 'O b']],
+  ['[b]x', ['O b']],
+  // A stray closer is shown as text, without a warning.
+  ['x[/b]', []],
+  ['[b]x[/b][/b]', []],
+  // The well-formed [b] goes literal with its unclosed parent.
+  ['[color=green]a[b]b[/b]', ['O color']],
+  ['[color=green]x[/b][/color]', ['B color']],
+  // The shape from the report: a crossed pair inside a wrapper.
+  ['[collapse=Q][color=green][b]x[/color][/b][/collapse] after [b]ok[/b]', ['B b', 'O color']],
+  ['[color=green][collapse=Q][b]x[/collapse][/b][/color] after [b]ok[/b]', ['B b', 'O collapse']],
+  ['[quote][b]x[/quote]', ['O b', 'O quote']],
+  ['[url=https://example.com]x[/url] [b]y', ['O b']],
+  ['[noparse][b][/noparse]', []],
+  ['[big][b][color=cyan]X[/color][/b][/big]', ['N color']],
+  // Literal on the site, so never rendered, so never judged.
+  ['[color=green][big][b][color=cyan]X[/color][/b][/big]', ['O color']],
+  // Structural first, whatever the source order.
+  ['[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]', ['B b', 'O color', 'N color']],
+  // "B", not "O": a [/color follows later.
+  ['[color=green][b]x[/color][/b] [big][b][color=cyan]X[/color][/b][/big]', ['B b', 'B color', 'N color']],
+  ['[b]ok[/b] [i]ok[/i]', []]
+])('reports %j as F-list does', (source, expected) => {
+  expect(verdicts(source)).toEqual(expected)
+})
+
+it('names the tag and quotes the text after it, as F-list does', () => {
+  const [bad, open] = validateBbcode('ab [color=green][b]x[/color][/b]')
+  expect(bad).toEqual({
+    kind: 'bad-nesting',
+    tag: 'b',
+    start: 'ab [color=green]'.length,
+    message: "Bad BBCode in [b] tag, somewhere around/after 'x[/color][/b]...'."
+  })
+  expect(open).toEqual({
+    kind: 'not-closed',
+    tag: 'color',
+    start: 'ab '.length,
+    message: 'Open [color] tag is not properly closed (with [/color]).'
+  })
+})
+
+it('marks the nesting complaint as not-allowed', () => {
+  const [w] = validateBbcode('[big][b][color=cyan]X[/color][/b][/big]')
+  expect(w.kind).toBe('not-allowed')
+})
+
+it('treats [spoiler] as a tag F-list does not know', () => {
+  // Not in f-list.js's tag table: escaped to text, never judged.
+  expect(validateBbcode('[spoiler]x')).toEqual([])
+  expect(validateBbcode('[big][b][spoiler]x[/spoiler][/b][/big]')).toEqual([])
+})
