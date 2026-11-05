@@ -104,6 +104,9 @@ class RosterEntry(WireModel):
     name: str
     id: int | str | None
     on_account: bool
+    #: The account's default character on F-list. The window opens it
+    #: when no last-used character is saved.
+    is_default: bool
     has_archive: bool
     has_logs: bool
     last_pulled_at: int | float | None
@@ -291,13 +294,16 @@ def flist_characters() -> Roster:
     + characters with local F-Chat logs. Each entry carries flags so the
     picker can render status badges.
     """
-    account_chars = flist_api.ticket_store().characters()
+    store = flist_api.ticket_store()
+    account_chars = store.characters()
     log_chars: list[str] = []
     try:
         log_chars = [c.name for c in list_characters()]
     except LogDirError:
         pass
-    rows = archive_registry.merge_roster(account_chars, log_chars)
+    rows = archive_registry.merge_roster(
+        account_chars, log_chars, default_character_id=store.default_character_id()
+    )
     # Annotate every has_archive row with its on-disk pull integrity so
     # the picker / F-list zone can surface "incomplete — N missing" for
     # archives where a prior pull was interrupted or had image failures.

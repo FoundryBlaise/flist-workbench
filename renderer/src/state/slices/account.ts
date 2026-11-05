@@ -451,9 +451,10 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       set({ flistRoster: characters, flistRosterStatus: 'ready' })
       get().flistNotePullIntegrity(characters)
       // Restore the previously-selected character so signing back in
-      // lands the user on their default rather than the picker's
-      // empty state. Only fires when nothing is currently selected
-      // and the saved id still resolves against the fresh roster.
+      // lands the user where they left off rather than on the picker's
+      // first character. Only fires when nothing is currently selected.
+      // When no saved id resolves against the fresh roster, the
+      // account's default character on F-list is opened instead.
       // Route through selectCharacter(name) — going through the lower
       // flistSelectCharacter would only set flistActiveCharacterId and
       // leave activeCharacter (the picker chip's source) untouched,
@@ -462,11 +463,11 @@ export const createAccountSlice: SliceCreator<AccountSlice> = (set, get) => ({
       // activeCharacter to characters[0].
       if (get().flistActiveCharacterId === null) {
         const savedId = get().flistLastCharacterId()
-        if (savedId) {
-          const entry = characters.find((c) => String(c.id ?? '') === savedId)
-          if (entry) {
-            get().selectCharacter(entry.name)
-          }
+        const entry =
+          (savedId ? characters.find((c) => String(c.id ?? '') === savedId) : undefined) ??
+          characters.find((c) => c.is_default)
+        if (entry) {
+          get().selectCharacter(entry.name)
         }
       }
     } catch {

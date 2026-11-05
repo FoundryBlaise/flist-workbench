@@ -553,12 +553,15 @@ def list_archived_characters() -> list[dict[str, Any]]:
 def merge_roster(
     account_characters: Iterable[dict[str, Any]] | None,
     log_characters: Iterable[str] | None,
+    default_character_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Union of (F-list account roster) + (locally archived) + (log
     directories). Each entry carries status flags so the renderer can
     render badges:
 
         - `on_account`  — present in the live account roster
+        - `is_default`  — the account's default character on F-list
+                          (`default_character_id`)
         - `has_archive` — has a Live snapshot on disk
         - `has_logs`    — has F-Chat log directories under FCHAT_DATA_DIR
 
@@ -579,6 +582,7 @@ def merge_roster(
             "name": name,
             "id": None,
             "on_account": False,
+            "is_default": False,
             "has_archive": False,
             "has_logs": False,
             "last_pulled_at": None,
@@ -614,6 +618,12 @@ def merge_roster(
             cid = ch.get("id")
             row = _upsert_by_id(name, cid) if cid is not None else _upsert_by_name(name)
             row["on_account"] = True
+            if (
+                default_character_id is not None
+                and cid is not None
+                and str(cid) == str(default_character_id)
+            ):
+                row["is_default"] = True
 
     archived = list_archived_characters()
     for a in archived:

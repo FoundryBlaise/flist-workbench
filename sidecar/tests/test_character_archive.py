@@ -268,6 +268,22 @@ def test_merge_roster_dedupes_int_account_id_vs_str_archive_id():
     assert rows[0]["has_archive"] is True
 
 
+def test_merge_roster_marks_the_default_account_character():
+    # F-list's default_character is an int; an archive row's id is a str.
+    archive_live.write_live("5", {"name": "Kept", "fetched_at": 0})
+    rows = archive_registry.merge_roster(
+        [{"name": "Kept", "id": 5}, {"name": "Other", "id": 6}],
+        ["Kept"],
+        default_character_id=5,
+    )
+    assert {r["name"]: r["is_default"] for r in rows} == {"Kept": True, "Other": False}
+
+
+def test_merge_roster_without_a_default_marks_none():
+    rows = archive_registry.merge_roster([{"name": "One", "id": 1}], ["LogsOnly"])
+    assert [r["is_default"] for r in rows] == [False, False]
+
+
 def test_compute_pull_status_never_pulled():
     archive_registry.create_character_dir("404")
     s = archive_images.compute_pull_status("404")

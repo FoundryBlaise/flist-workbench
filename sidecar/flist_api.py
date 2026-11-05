@@ -186,6 +186,7 @@ class TicketStore:
 
     _ticket: Ticket | None = None
     _last_characters: list[dict] = field(default_factory=list)
+    _default_character_id: Any = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _last_touched: float = 0.0
 
@@ -198,17 +199,24 @@ class TicketStore:
                 return t
             return t
 
-    def set(self, ticket: Ticket, characters: list[dict] | None = None) -> None:
+    def set(
+        self,
+        ticket: Ticket,
+        characters: list[dict] | None = None,
+        default_character_id: Any = None,
+    ) -> None:
         with self._lock:
             self._ticket = ticket
             self._last_touched = time.monotonic()
             if characters is not None:
                 self._last_characters = characters
+                self._default_character_id = default_character_id
 
     def clear(self) -> None:
         with self._lock:
             self._ticket = None
             self._last_characters = []
+            self._default_character_id = None
             self._last_touched = 0.0
 
     def touch(self) -> None:
@@ -246,6 +254,12 @@ class TicketStore:
     def characters(self) -> list[dict]:
         with self._lock:
             return list(self._last_characters)
+
+    def default_character_id(self) -> Any:
+        """The id of the account's default character on F-list, or
+        None when F-list named none of the account's characters."""
+        with self._lock:
+            return self._default_character_id
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -583,13 +597,21 @@ async def acquire_ticket(
     # Sort by name for stable picker ordering — F-list returns them in
     # an unspecified order which renders differently per sign-in.
     characters.sort(key=lambda c: c["name"].lower())
+    # The account's default character, set in F-list's own settings.
+    # The window opens it when it has no last-used character to restore.
+    # Kept only when it names one of the characters above.
+    default_id = payload.get("default_character")
+    if default_id is None or not any(
+        c["id"] is not None and str(c["id"]) == str(default_id) for c in characters
+    ):
+        default_id = None
     ticket = Ticket(
         account=account,
         value=ticket_value,
         password=password,
         acquired_at=time.monotonic(),
     )
-    _STORE.set(ticket, characters=characters)
+    _STORE.set(ticket, characters=characters, default_character_id=default_id)
     return {
         "characters": characters,
         "expires_in_sec": TICKET_EFFECTIVE_TTL_SEC,

@@ -9636,6 +9636,10 @@
             "type": "boolean",
             "title": "On Account"
           },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
           "has_archive": {
             "type": "boolean",
             "title": "Has Archive"
@@ -9673,6 +9677,7 @@
           "name",
           "id",
           "on_account",
+          "is_default",
           "has_archive",
           "has_logs",
           "last_pulled_at",

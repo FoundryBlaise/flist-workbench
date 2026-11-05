@@ -191,6 +191,7 @@ describe('remembered across starts', () => {
       name: 'Quill',
       id: 99,
       on_account: true,
+      is_default: false,
       has_archive: true,
       has_logs: false,
       last_pulled_at: null,
