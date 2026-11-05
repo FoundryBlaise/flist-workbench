@@ -292,4 +292,41 @@ describe('bbcodeFromPreviewDom — reverse mapping', () => {
     const dom = renderToDom(source)
     expect(bbcodeFromPreviewDom(dom, source)).toBe(source)
   })
+
+  // Chromium puts text typed right next to an image into a bare text
+  // node beside the <img>, outside every source-mapped span. That text
+  // used to fall out of the source on the way back.
+  it('keeps text typed right after an eicon', () => {
+    const source = '[color=white]\n[big]7[/big] [eicon]ahsokat2[/eicon]\n[big]8[/big]\n[/color]'
+    const dom = renderToDom(source)
+    dom.querySelector('img.bb-eicon')!.after('XYZ')
+    expect(bbcodeFromPreviewDom(dom, source)).toBe(
+      '[color=white]\n[big]7[/big] [eicon]ahsokat2[/eicon]XYZ\n[big]8[/big]\n[/color]'
+    )
+  })
+
+  it('keeps text typed right before an eicon that opens a block', () => {
+    const source = '[center][eicon]wave[/eicon][/center]'
+    const dom = renderToDom(source)
+    dom.querySelector('img.bb-eicon')!.before('Hi ')
+    expect(bbcodeFromPreviewDom(dom, source)).toBe('[center]Hi [eicon]wave[/eicon][/center]')
+  })
+
+  it('keeps text typed after a character icon, inside or after its link', () => {
+    const source = '[center][icon]Aurora[/icon][/center]'
+    const inside = renderToDom(source)
+    inside.querySelector('a.bb-icon img')!.after('!')
+    expect(bbcodeFromPreviewDom(inside, source)).toBe('[center][icon]Aurora[/icon]![/center]')
+    const after = renderToDom(source)
+    after.querySelector('a.bb-icon')!.after('!')
+    expect(bbcodeFromPreviewDom(after, source)).toBe('[center][icon]Aurora[/icon]![/center]')
+  })
+
+  it('does not copy literal text that the render put next to an eicon', () => {
+    // The unknown [foo] renders as bare text right after the <img>; it
+    // is not something the user typed.
+    const source = '[eicon]wave[/eicon][foo] tail'
+    const dom = renderToDom(source)
+    expect(bbcodeFromPreviewDom(dom, source)).toBe(source)
+  })
 })
