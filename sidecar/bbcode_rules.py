@@ -38,8 +38,10 @@ returns them in that order.
 
 Mirrored in `renderer/src/lib/bbcode/validate.ts` for the preview.
 Both were checked case by case against the live parser on f-list.net;
-`tests/test_bbcode_rules.py` and `validate.test.ts` carry the same
-cases so the two cannot drift apart unnoticed.
+`tests/test_bbcode_rules.py` and `validate.test.ts` read the verified
+verdicts from one fixture,
+`renderer/src/lib/bbcode/__fixtures__/flist_verified.json`, so the two
+cannot drift apart unnoticed.
 """
 
 from __future__ import annotations

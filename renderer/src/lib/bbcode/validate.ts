@@ -48,8 +48,9 @@
  *  judged for nesting.
  *
  *  Verified against the live parser rather than inferred: each case in
- *  `validate.test.ts` was run through `FList.TagParser.parseEverything`
- *  on f-list.net and matched.
+ *  `validate.test.ts` and in `__fixtures__/flist_verified.json` (which
+ *  the sidecar's tests read too) was run through
+ *  `FList.TagParser.parseEverything` on f-list.net and matched.
  */
 
 export type BbcodeWarningKind = 'not-allowed' | 'not-closed' | 'bad-nesting'

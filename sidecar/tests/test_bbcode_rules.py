@@ -3,14 +3,19 @@
 Both implementations mirror F-list's parser, and every case below was
 run through the live one in the browser —
 `FList.TagParser.enableWarnings(); parseEverything(htmlentities(s))` on
-f-list.net — and matched. A few tests pad or repeat a verified case to
-check offsets, wording or long texts; each says which case it builds
-on. Two implementations of the same rules will drift; identical cases
-on both sides is what makes the drift show up as a failing test
-instead of a refused upload.
+f-list.net — and matched. The table of verified verdicts is one
+fixture both sides read,
+`renderer/src/lib/bbcode/__fixtures__/flist_verified.json`. A few tests
+pad or repeat a verified case to check offsets, wording or long texts;
+each says which case it builds on. Two implementations of the same
+rules will drift; identical cases on both sides is what makes the drift
+show up as a failing test instead of a refused upload.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
@@ -85,9 +90,14 @@ def test_the_explanation_names_the_fix() -> None:
 #
 # The second class of F-list parser warnings: a tag that does not end in
 # its own closer is printed, with everything inside it, as literal text.
-# Every row below comes from #137's table, run through the live parser
-# on f-list.net on 2026-11-05. "B" is "Bad BBCode in [x] tag", "O" is
-# "Open [x] tag is not properly closed", "N" is "not allowed here".
+# The verified cases live in a fixture the renderer's tests read too;
+# its "about" gives the letters and says how a case gets in.
+
+VERIFIED_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "renderer/src/lib/bbcode/__fixtures__/flist_verified.json"
+)
+VERIFIED = json.loads(VERIFIED_FIXTURE.read_text(encoding="utf-8"))["cases"]
 
 _KIND = {"B": "bad-nesting", "O": "not-closed", "N": "not-allowed"}
 
@@ -96,60 +106,20 @@ def verdicts(source: str) -> list[tuple[str, str]]:
     return [(w.kind, w.tag) for w in bbcode_rules.validate(source)]
 
 
-def expect(listed: str) -> list[tuple[str, str]]:
-    """'B b, O color' -> [('bad-nesting', 'b'), ('not-closed', 'color')]."""
-    if not listed:
-        return []
-    return [
-        (_KIND[part.split()[0]], part.split()[1])
-        for part in listed.split(", ")
-    ]
+def expect(listed: list[str]) -> list[tuple[str, str]]:
+    """['B b', 'O color'] -> [('bad-nesting', 'b'), ('not-closed', 'color')]."""
+    return [(_KIND[part.split()[0]], part.split()[1]) for part in listed]
 
 
 def test_an_unclosed_tag_is_reported() -> None:
-    assert verdicts("[b]x") == expect("O b")
+    assert verdicts("[b]x") == expect(["O b"])
 
 
-VERIFIED = [
-    ("[color=green][b]x[/color][/b]", "B b, O color"),
-    ("[b][i]x[/b][/i]", "B i, O b"),
-    ("[b]x", "O b"),
-    # F-list gives no warning for a stray closer; it shows it as text.
-    ("x[/b]", ""),
-    ("[b]x[/b][/b]", ""),
-    # The well-formed [b] inside goes literal with the [color] around it.
-    ("[color=green]a[b]b[/b]", "O color"),
-    ("[color=green]x[/b][/color]", "B color"),
-    (
-        "[collapse=Q][color=green][b]x[/color][/b][/collapse] after [b]ok[/b]",
-        "B b, O color",
-    ),
-    (
-        "[color=green][collapse=Q][b]x[/collapse][/b][/color] after [b]ok[/b]",
-        "B b, O collapse",
-    ),
-    ("[quote][b]x[/quote]", "O b, O quote"),
-    ("[url=https://example.com]x[/url] [b]y", "O b"),
-    ("[noparse][b][/noparse]", ""),
-    ("[big][b][color=cyan]X[/color][/b][/big]", "N color"),
-    # The content of a literal span is never rendered, so never judged.
-    ("[color=green][big][b][color=cyan]X[/color][/b][/big]", "O color"),
-    # Structural warnings come first, whatever the source order.
-    (
-        "[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]",
-        "B b, O color, N color",
-    ),
-    # "B", not "O": a [/color follows later in the text.
-    (
-        "[color=green][b]x[/color][/b] [big][b][color=cyan]X[/color][/b][/big]",
-        "B b, B color, N color",
-    ),
-    ("[b]ok[/b] [i]ok[/i]", ""),
-]
-
-
-@pytest.mark.parametrize(("source", "listed"), VERIFIED)
-def test_f_list_verdicts(source: str, listed: str) -> None:
+@pytest.mark.parametrize(
+    ("source", "listed"),
+    [(case["source"], case["warnings"]) for case in VERIFIED],
+)
+def test_f_list_verdicts(source: str, listed: list[str]) -> None:
     assert verdicts(source) == expect(listed)
 
 
