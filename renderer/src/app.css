@@ -1147,7 +1147,6 @@ body {
   border-color: var(--accent);
 }
 .tool-view-mode-btn.on:hover { filter: brightness(1.08); }
-.tool-more-wrap { position: relative; }
 .tool-popover-wrap { position: relative; display: inline-flex; }
 .tool-popover {
   position: absolute;
@@ -1244,40 +1243,6 @@ body {
   font-size: var(--font-meta);
 }
 .tool-popover-apply { background: var(--accent) !important; color: #0d1117 !important; border-color: var(--accent) !important; }
-.tool-more { font-size: var(--font-meta); min-width: 56px; }
-.tool-more-menu {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  z-index: 20;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
-  padding: 4px 0;
-  min-width: 220px;
-}
-.tool-more-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 6px 12px;
-  background: transparent;
-  border: none;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--font-body);
-}
-.tool-more-item:hover { background: var(--hover-soft); }
-.tool-more-tag {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  color: var(--accent);
-  font-size: var(--font-meta);
-}
-.tool-more-desc { color: var(--text-dim); }
 
 /* Preview body — F-list dark-theme BBCode rendering.
    Colour values, sizing, and spacing taken from the F-list wiki's

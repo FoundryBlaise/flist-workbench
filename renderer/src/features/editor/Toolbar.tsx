@@ -39,12 +39,11 @@ const NAMED_COLORS: { name: string; swatch: string }[] = [
 type ToolbarGroup = {
   key: string
   actions: ToolbarAction[]
-  /** When true, surfaced behind a "more…" popover instead of the main row. */
-  overflow?: boolean
 }
 
 // Flat action list, exported so the CodeMirror keymap can pick out the
-// ones with shortcuts. Order inside each group is the order rendered.
+// ones with shortcuts and the context menu can offer every tag. It holds
+// every tag on F-list's wiki list of BBCode tags, plus [spoiler].
 export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'B', title: 'Bold', shortcut: 'Mod-b', wrap: { open: '[b]', close: '[/b]' } },
   { label: 'I', title: 'Italic', shortcut: 'Mod-i', wrap: { open: '[i]', close: '[/i]' } },
@@ -58,6 +57,8 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   { label: 'icon', title: 'Character icon', wrap: { open: '[icon]', close: '[/icon]' } },
   { label: 'eicon', title: 'Emote icon — pick from catalog', popover: 'eicon' },
   { label: 'url', title: 'URL — pick a target', shortcut: 'Mod-k', popover: 'url' },
+  { label: 'user', title: 'User link', wrap: { open: '[user]', close: '[/user]' } },
+  { label: 'heading', title: 'Heading', wrap: { open: '[heading]', close: '[/heading]' } },
   { label: 'spoiler', title: 'Spoiler', wrap: { open: '[spoiler]', close: '[/spoiler]' } },
   {
     label: 'collapse',
@@ -65,9 +66,12 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
     wrap: { open: '[collapse=Show]', close: '[/collapse]' }
   },
   { label: 'quote', title: 'Quote block', wrap: { open: '[quote]', close: '[/quote]' } },
-  { label: 'hr', title: 'Horizontal rule', insert: '[hr]' },
+  { label: 'left', title: 'Align left', wrap: { open: '[left]', close: '[/left]' } },
   { label: 'center', title: 'Centre', wrap: { open: '[center]', close: '[/center]' } },
+  { label: 'right', title: 'Align right', wrap: { open: '[right]', close: '[/right]' } },
+  { label: 'justify', title: 'Justify', wrap: { open: '[justify]', close: '[/justify]' } },
   { label: 'indent', title: 'Indent', wrap: { open: '[indent]', close: '[/indent]' } },
+  { label: 'hr', title: 'Horizontal rule', insert: '[hr]' },
   {
     label: 'noparse',
     title: 'No parse — show raw BBCode',
@@ -75,16 +79,20 @@ export const TOOLBAR_ACTIONS: ToolbarAction[] = [
   }
 ]
 
-// Visual grouping for the toolbar. Order within each group is its
-// natural reading order; the overflow group is hidden behind a "more"
-// popover to keep the main bar uncluttered.
+function actionsLabelled(...labels: string[]): ToolbarAction[] {
+  return labels.map((label) => TOOLBAR_ACTIONS.find((a) => a.label === label)!)
+}
+
+// Visual grouping for the toolbar, every tag in one row (it wraps when
+// the pane is narrow). Order within each group is the order rendered.
 const TOOLBAR_GROUPS: ToolbarGroup[] = [
-  { key: 'format', actions: TOOLBAR_ACTIONS.slice(0, 4) },
-  { key: 'size', actions: TOOLBAR_ACTIONS.slice(4, 8) },
-  { key: 'colour', actions: TOOLBAR_ACTIONS.slice(8, 9) },
-  { key: 'refs', actions: TOOLBAR_ACTIONS.slice(9, 12) },
-  { key: 'blocks', actions: TOOLBAR_ACTIONS.slice(12, 15) },
-  { key: 'structural', actions: TOOLBAR_ACTIONS.slice(15, 19), overflow: true }
+  { key: 'format', actions: actionsLabelled('B', 'I', 'U', 'S') },
+  { key: 'size', actions: actionsLabelled('big', 'small', 'sub', 'sup') },
+  { key: 'colour', actions: actionsLabelled('color') },
+  { key: 'refs', actions: actionsLabelled('icon', 'eicon', 'url', 'user') },
+  { key: 'blocks', actions: actionsLabelled('heading', 'spoiler', 'collapse', 'quote') },
+  { key: 'align', actions: actionsLabelled('left', 'center', 'right', 'justify', 'indent') },
+  { key: 'structural', actions: actionsLabelled('hr', 'noparse') }
 ]
 
 // Convert "Mod-b" to a human label that mirrors how F-Chat shows
@@ -451,28 +459,6 @@ export function Toolbar({
   viewRef: RefObject<EditorView | null>
   disabled?: boolean
 }) {
-  const [moreOpen, setMoreOpen] = useState(false)
-  const moreWrapRef = useRef<HTMLDivElement>(null)
-  const overflowGroup = TOOLBAR_GROUPS.find((g) => g.overflow)
-  const visibleGroups = TOOLBAR_GROUPS.filter((g) => !g.overflow)
-
-  useEffect(() => {
-    if (!moreOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMoreOpen(false)
-    }
-    const onPointer = (e: PointerEvent) => {
-      const w = moreWrapRef.current
-      if (w && e.target instanceof Node && !w.contains(e.target)) setMoreOpen(false)
-    }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('pointerdown', onPointer)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('pointerdown', onPointer)
-    }
-  }, [moreOpen])
-
   return (
     <div
       className="editor-toolbar"
@@ -481,7 +467,7 @@ export function Toolbar({
       data-disabled={disabled ? 'true' : undefined}
       data-testid="editor-toolbar"
     >
-      {visibleGroups.map((group, idx) => (
+      {TOOLBAR_GROUPS.map((group, idx) => (
         <span key={group.key} className="tool-group" data-group={group.key}>
           {group.actions.map((a) => (
             <ToolButton
@@ -491,45 +477,9 @@ export function Toolbar({
               disabled={disabled}
             />
           ))}
-          {idx < visibleGroups.length - 1 && <span className="tool-divider" aria-hidden />}
+          {idx < TOOLBAR_GROUPS.length - 1 && <span className="tool-divider" aria-hidden />}
         </span>
       ))}
-      {overflowGroup && (
-        <span className="tool-group tool-more-wrap" ref={moreWrapRef}>
-          <span className="tool-divider" aria-hidden />
-          <button
-            type="button"
-            className="tool tool-more"
-            onClick={() => setMoreOpen((v) => !v)}
-            aria-expanded={moreOpen}
-            disabled={disabled}
-            title={disabled ? 'More tags — read-only' : 'More tags'}
-          >
-            more…
-          </button>
-          {moreOpen && (
-            <div className="tool-more-menu" role="menu" data-testid="toolbar-more-menu">
-              {overflowGroup.actions.map((a) => (
-                <button
-                  key={a.label}
-                  type="button"
-                  role="menuitem"
-                  className="tool-more-item"
-                  onClick={() => {
-                    const view = viewRef.current
-                    if (view) applyAction(view, a)
-                    setMoreOpen(false)
-                  }}
-                  title={a.title}
-                >
-                  <span className="tool-more-tag">[{a.label}]</span>
-                  <span className="tool-more-desc">{a.title}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </span>
-      )}
       <ViewModeToggle />
     </div>
   )
