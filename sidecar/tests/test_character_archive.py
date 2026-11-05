@@ -29,6 +29,24 @@ def isolated_userdata(tmp_path, monkeypatch):
     yield
 
 
+class _Clock:
+    """The Backup clock, moved by hand: a Backup is named for the second
+    `now` holds."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def time(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def backup_clock(monkeypatch):
+    clock = _Clock(1_790_000_000.0)
+    monkeypatch.setattr(archive_backups, "time", clock)
+    return clock
+
+
 def test_avatar_path_ascii_uses_slug():
     p = archive_images.avatar_path_for("Lady Amber Blaise")
     assert p.name == "lady_amber_blaise.png"
@@ -149,12 +167,15 @@ def test_save_zip_backup_no_live(tmp_path):
     }
 
 
-def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
+def test_list_zip_backups_orders_same_second_writes_newest_first(
+    tmp_path, backup_clock
+):
     """Two ZIP backups in the same second get the `-N` suffix counter.
     The sort key has to put the highest N at the top so the dedup
     check (`latest_zip_backup_content_hash`) compares against the
     *truly* most-recent ZIP. Lex order alone would surface the
-    no-suffix file (the oldest) because `.` > `-` in ASCII."""
+    no-suffix file (the oldest) because `.` > `-` in ASCII. The clock
+    stays put, so all three share one second on any machine."""
     cid = "5558"
     archive_live.write_live(
         cid,
@@ -174,6 +195,35 @@ def test_list_zip_backups_orders_same_second_writes_newest_first(tmp_path):
     assert rows[1]["filename"].endswith("-1.zip")
     # And the no-suffix one is the oldest → last.
     assert "-" not in rows[2]["filename"].rsplit(".zip", 1)[0].split("Z", 1)[1]
+
+
+def test_list_zip_backups_orders_writes_across_seconds_newest_first(
+    tmp_path, backup_clock
+):
+    """Backups a second apart get no `-N` suffix; the newer second
+    still lists first, ahead of a same-second pair from earlier."""
+    cid = "5559"
+    archive_live.write_live(
+        cid,
+        {
+            "character": {"id": int(cid), "name": "Z", "description": "a"},
+            "images": [],
+            "kinks": {},
+            "fetched_at": 100,
+        },
+    )
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all")
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    backup_clock.now += 1
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    backup_clock.now += 1
+    archive_backups.save_zip_backup(cid, source="live", occasion="backup-all", force=True)
+    assert [r["filename"] for r in archive_backups.list_zip_backups(cid)] == [
+        "2026-09-21T141322Z.zip",
+        "2026-09-21T141321Z.zip",
+        "2026-09-21T141320Z-1.zip",
+        "2026-09-21T141320Z.zip",
+    ]
 
 
 def test_merge_roster_keeps_case_only_distinct_ids():
