@@ -119,3 +119,9 @@ it('marks the nesting complaint as not-allowed', () => {
   const [w] = validateBbcode('[big][b][color=cyan]X[/color][/b][/big]')
   expect(w.kind).toBe('not-allowed')
 })
+
+it('treats [spoiler] as a tag F-list does not know', () => {
+  // Not in f-list.js's tag table: escaped to text, never judged.
+  expect(validateBbcode('[spoiler]x')).toEqual([])
+  expect(validateBbcode('[big][b][spoiler]x[/spoiler][/b][/big]')).toEqual([])
+})

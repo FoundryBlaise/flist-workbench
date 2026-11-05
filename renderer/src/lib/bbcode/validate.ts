@@ -86,7 +86,6 @@ const ALLOWED: Record<string, Allowed> = {
   indent: true,
   heading: true,
   collapse: true,
-  spoiler: true,
   noparse: false,
   url: false,
   user: false,
