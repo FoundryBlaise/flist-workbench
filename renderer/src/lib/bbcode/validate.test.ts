@@ -115,6 +115,20 @@ it('names the tag and quotes the text after it, as F-list does', () => {
   })
 })
 
+it('checks a long or deeply nested text whole', () => {
+  // Repeats "[b]ok[/b] [i]ok[/i]", "[b]x" and "[b]ok[/b]"; a
+  // description can be long, and the preview must not run out of stack
+  // on one.
+  expect(validateBbcode('[b]ok[/b] [i]ok[/i] '.repeat(5000))).toEqual([])
+  expect(verdicts('[b]'.repeat(5000) + 'x')).toEqual(Array(5000).fill('O b'))
+  expect(validateBbcode('[b]'.repeat(5000) + 'ok' + '[/b]'.repeat(5000))).toEqual([])
+  // Only the innermost [color] ends in its own closer; every one
+  // around it is left open.
+  expect(verdicts('[color=red]x '.repeat(4000) + '[/color]')).toEqual(
+    Array(3999).fill('O color')
+  )
+})
+
 it('marks the nesting complaint as not-allowed', () => {
   const [w] = validateBbcode('[big][b][color=cyan]X[/color][/b][/big]')
   expect(w.kind).toBe('not-allowed')
