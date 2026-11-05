@@ -35,6 +35,24 @@ def test_record_and_snapshot_roundtrip():
     assert all("t" in e for e in snap["events"])
 
 
+def test_every_event_has_its_own_rising_seq():
+    # Two events alike in every field, recorded within one tick of a
+    # coarse clock (15.6 ms on Windows), are still two events.
+    flist_activity.record("mcp:add_custom_kink", character="Azure Viper", name="Tea")
+    flist_activity.record("mcp:add_custom_kink", character="Azure Viper", name="Tea")
+    first, second = flist_activity.snapshot()["events"]
+    assert second["seq"] > first["seq"]
+
+
+def test_hydrated_events_get_a_seq_and_new_ones_follow_it():
+    flist_activity.record("sign-in", account="acct")
+    flist_activity.reset()
+    flist_activity.hydrate_from_disk()
+    flist_activity.record("pull-start", name="Lady Amber Blaise")
+    hydrated, new = flist_activity.snapshot()["events"]
+    assert new["seq"] > hydrated["seq"]
+
+
 def test_buffer_evicts_oldest_past_capacity():
     flist_activity.disable_disk_writes()  # avoid 1 MB writes during this test
     for i in range(flist_activity.MAX_EVENTS + 50):

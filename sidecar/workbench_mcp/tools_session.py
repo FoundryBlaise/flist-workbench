@@ -88,21 +88,34 @@ def get_app_status(include_label_rollup: bool = False) -> dict[str, Any]:
     title="Activity log",
     read_only=True,
 )
-def get_activity_log(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+def get_activity_log(
+    limit: int = 50, offset: int = 0, as_of: int | None = None
+) -> dict[str, Any]:
     """Recent activity, newest first: sign-ins, pulls, backups and every
     change an MCP tool made (those are prefixed `mcp:`).
 
     Useful to check what already happened before acting, and to show
     the user what you changed.
+
+    Every event has a `seq`, rising. The log grows while you page it,
+    so the answer carries `as_of`, the `seq` of the newest event it
+    pages: pass it back with `offset` and the next pages go on from
+    where the first one was, leaving out events that came later.
     """
     snap = flist_activity.snapshot()
-    newest_first = list(reversed(snap.get("events") or []))
+    oldest_first = snap.get("events") or []
+    if as_of is not None:
+        oldest_first = [e for e in oldest_first if e["seq"] <= as_of]
     events, paged = page(
-        newest_first, offset=offset, limit=limit, cap=MAX_ACTIVITY_EVENTS
+        list(reversed(oldest_first)),
+        offset=offset,
+        limit=limit,
+        cap=MAX_ACTIVITY_EVENTS,
     )
     return {
         "started_at": snap.get("started_at"),
         "event_count": snap.get("event_count"),
+        "as_of": oldest_first[-1]["seq"] if oldest_first else as_of,
         "events": events,
         "page": paged,
     }

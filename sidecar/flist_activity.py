@@ -21,6 +21,7 @@ REVIEW_2026-05-30_post_tier1_polish.md.
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 import threading
 import time
@@ -78,6 +79,11 @@ _lock = threading.Lock()
 _disk_lock = threading.Lock()
 _started_at = time.time()
 _disk_enabled = True
+# Every event in the buffer gets the next number, under `_lock`, so two
+# events alike in every field (the clock ticks only every 15.6 ms on
+# Windows) stay two, and a reader can page from a fixed point. Memory
+# only: events hydrated from disk are numbered as they load.
+_seq = itertools.count(1)
 
 
 def log_path(root: Path | None = None) -> Path:
@@ -182,6 +188,7 @@ def hydrate_from_disk(root: Path | None = None, max_events: int | None = None) -
                 continue
             if not isinstance(event, dict) or "kind" not in event:
                 continue
+            event["seq"] = next(_seq)
             _buffer.append(event)
             loaded += 1
     return loaded
@@ -192,9 +199,11 @@ def record(kind: str, **fields: Any) -> None:
     ticket-refresh, pull-start, pull-done, pull-error, idle-clear,
     sign-out, etc.). Extra fields are captured verbatim into the
     in-memory buffer; only the disk-allow-listed subset is persisted.
+    The buffer adds `seq`, the event's rising number in this run.
     """
     event = {"t": time.time(), "kind": kind, **fields}
     with _lock:
+        event["seq"] = next(_seq)
         _buffer.append(event)
     _append_to_disk(event)
 
