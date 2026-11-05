@@ -81,7 +81,37 @@ async def collect(seconds: float = 0.4) -> list[dict]:
                 )
             except asyncio.TimeoutError:
                 continue
+        # A synchronous write blocks this loop; on a slow runner it can
+        # outlast the window. Its events are already handed to the loop
+        # by then: let those hand-offs run, then take what is queued.
+        await asyncio.sleep(0)
+        while not sub.queue.empty():
+            received.append(sub.queue.get_nowait())
     return received
+
+
+async def test_an_event_that_lands_while_the_loop_is_busy_is_still_collected(
+    workbench,
+) -> None:
+    """The writes in these tests are synchronous calls on the test's own
+    loop. On a slow CI runner one outlasted collect()'s window: the
+    event was queued, but collect() gave up before reading it."""
+    import time
+
+    from services import events
+
+    events.bind_loop(asyncio.get_running_loop())
+    payload = workbench_payload("42")
+
+    async def write() -> None:
+        await asyncio.sleep(0.05)
+        put_workbench("42", payload)
+        time.sleep(0.5)  # the loop stays blocked past collect()'s window
+
+    collector = asyncio.create_task(collect())
+    await write()
+    received = await collector
+    assert [e for e in received if e["event"] == "set-payload-changed"], received
 
 
 async def test_a_payload_write_is_announced_with_its_etag(workbench) -> None:
