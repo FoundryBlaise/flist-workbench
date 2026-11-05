@@ -1,166 +1,112 @@
+import { refusalCodeValues, type paths } from './api.gen'
+import type { Schema } from './schema'
+
 type ApiOptions = { signal?: AbortSignal }
 
-export type InlineImage = { hash: string; extension: string; nsfw: boolean }
+// ---- Generated wire types -----------------------------------------------
+// api.gen.ts is generated from the sidecar's OpenAPI schema
+// (sidecar/openapi.json; `npm run gen:api` writes both), so a field
+// renamed in Python fails the type-check where the window reads it.
+// Every request and answer type here is built from them; an event
+// stream's events too (`PullEvents`, `BackupAllEvents`).
+// `lib/__tests__/wireTypes.test.ts` fails on one written by hand.
 
-export type CharacterEntry = { name: string; mtime: number }
+/** A model the sidecar's schema names, by its Python class name. */
+export type { Schema } from './schema'
+
+type Method = 'get' | 'put' | 'post' | 'delete' | 'patch'
+/** The methods `P` serves. */
+type MethodOf<P extends keyof paths> = {
+  [M in Method]: paths[P][M] extends undefined ? never : M
+}[Method]
+/** The routes that serve `M`. */
+type Route<M extends Method> = {
+  [P in keyof paths]: M extends MethodOf<P> ? P : never
+}[keyof paths]
+type Operation<P extends keyof paths, M extends Method> = NonNullable<paths[P][M]>
+type JsonOf<X> = X extends { content: { 'application/json': infer B } } ? B : never
+
+/** `Answer` without the check that `P` serves `M`. */
+type AnswerAt<P extends keyof paths, M extends Method> =
+  Operation<P, M> extends { responses: infer R }
+    ? 204 extends keyof R
+      ? undefined
+      : JsonOf<R[Extract<keyof R, 200 | 201 | 202>]>
+    : never
+
+/** `BodyOf` without the check that `P` serves `M`. */
+type BodyAt<P extends keyof paths, M extends Method> =
+  Operation<P, M> extends { requestBody?: infer B } ? JsonOf<NonNullable<B>> : never
+
+/** What `M P` answers when it is ok, as its response model says: the
+ *  JSON of its 200, 201 or 202, or undefined for a 204. */
+export type Answer<P extends keyof paths, M extends MethodOf<P>> = AnswerAt<P, M>
+
+/** The JSON body `M P` takes. */
+export type BodyOf<P extends keyof paths, M extends MethodOf<P>> = BodyAt<P, M>
+
+/** The parameters `M P` takes (path, query), as its operation names them. */
+type ParamsAt<P extends keyof paths, M extends Method> = Operation<P, M> extends {
+  parameters: infer X
+}
+  ? X
+  : never
+
+/** What a call fills in of its route, as the route's operation names
+ *  them: the path's parameters (when it has any), the query (a value
+ *  left undefined is not sent), the JSON body, and headers such as
+ *  `If-Match`. A route that takes a file sends it as `blob`. */
+type Fill<P extends keyof paths, M extends Method> = (ParamsAt<P, M> extends { path: infer Path }
+  ? { path: Path }
+  : { path?: never }) & {
+  query?: ParamsAt<P, M> extends { query?: infer Query } ? Query : never
+  body?: BodyAt<P, M>
+  blob?: Blob
+  headers?: Record<string, string>
+}
+
+/** Every code a sidecar refusal can carry (`refusals.RefusalCode`). */
+export type RefusalCode = Schema<'RefusalCode'>
+
+/** An inline image as F-list's profile payload lists it. */
+export type { InlineImage } from './bbcode'
+
+/** One of the user's characters with Logs; `mtime` is the newest
+ *  change in its Logs folder. */
+export type CharacterEntry = Schema<'LogCharacter'>
 
 // ---- F-list character archive (Phase 7 Tier 1) ----
 
-export type FlistAccountCharacter = {
-  name: string
-  id: number | string | null
-}
+export type FlistAccountCharacter = Schema<'AccountCharacter'>
 
-export type FlistSessionStatus = {
-  active: boolean
-  account?: string
-  expires_in_sec?: number
-  needs_refresh?: boolean
-  api_hourly_count?: number
-  // True while the sidecar still has the password cached for
-  // auto-refresh. False after the idle watchdog drops it.
-  password_cached?: boolean
-  // Seconds remaining until the idle watchdog drops the cached
-  // password; null when nothing is cached. Used by the renderer to
-  // surface a pre-drop warning banner.
-  password_idle_seconds_remaining?: number | null
-}
+/** What the window knows of the F-list session: `GET /flist/session`'s
+ *  answer, or the part a sign-in or sign-out already tells. */
+export type FlistSessionStatus = Pick<Schema<'FlistSession'>, 'active'> &
+  Partial<Omit<Schema<'FlistSession'>, 'active'>>
 
-export type FlistPullStatus = {
-  status: 'never_pulled' | 'unknown' | 'interrupted' | 'partial' | 'complete'
-  missing_image_ids: { image_id: string; extension: string }[]
-  expected: number
-  present: number
-  last_attempt_ts: number | null
-}
+export type FlistPullStatus = Schema<'PullStatus'>
 
-export type FlistRosterEntry = {
-  name: string
-  id: number | string | null
-  on_account: boolean
-  has_archive: boolean
-  has_logs: boolean
-  last_pulled_at: number | null
-  /** Count of ZIP backups in `backups/` — the explicit "Back up"
-   *  artefacts that include images + avatar. */
-  backup_count: number
-  // Only present for rows where has_archive is true. Surfaces whether
-  // a prior pull was interrupted or had image failures so the renderer
-  // can prompt the user to resume.
-  pull_status?: FlistPullStatus
-}
+export type FlistRosterEntry = Schema<'RosterEntry'>
 
-/** A single ZIP-backup entry as listed by /flist/character/<id>/zip-backups.
- *  Each backup is a userscript-restoreable archive (JSON + images +
- *  avatar) written by the Tools → Back up all sweep or the per-
- *  character right-click → Back up now action. `kind` is read from
- *  the embedded `backup-meta.json` (added 2026-06-17); older backups
- *  predating that write come back as `"unknown"`. */
-export type FlistZipBackupKind =
-  | 'manual_single'
-  | 'manual_bulk'
-  | 'import'
-  | 'scheduled'
-  | 'pre_upload'
-  | 'unknown'
+/** A Backup as the Backup list shows it: its origin (`source`,
+ *  `occasion`; `kind` is the older one the extension sorts by),
+ *  whether it holds a profile, and the user's rename (`name`). */
+export type FlistZipBackupEntry = Schema<'Backup'>
 
-/** What a Backup holds: the Live or the Workbench of its moment.
- *  Backups from before the app recorded it come back as `'unknown'`. */
-export type FlistBackupSource = 'live' | 'workbench' | 'unknown'
+/** An image file in a character's Pool. */
+export type FlistCharacterImage = Schema<'PoolImage'>
 
-/** Why a Backup was made; `null` for Backups from before the app
- *  recorded it. */
-export type FlistBackupOccasion =
-  | 'manual'
-  | 'before-upload'
-  | 'before-restore'
-  | 'before-replace'
-  | 'migration'
-  | 'backup-all'
-
-export type FlistZipBackupEntry = {
-  filename: string
-  created_at: number
-  size: number
-  kind: FlistZipBackupKind
-  source: FlistBackupSource
-  occasion: FlistBackupOccasion | null
-  /** False for a Backup that holds no profile: the one the move to one
-   *  Workbench made of the older copies from before the upgrade. The
-   *  sidecar refuses to restore, browse or upload it; it can be
-   *  downloaded. */
-  holds_profile: boolean
-  /** User-set name from `_names.json`. `null` when the user hasn't
-   *  renamed this backup yet — the UI then derives a default label
-   *  from the timestamp. */
-  name: string | null
-}
-
-export type FlistCharacterImage = {
-  image_id: string
-  extension: string
-  size: number
-  /** File mtime in unix seconds. Used to sort the Pool pane newest-
-   *  first; absent on older sidecar builds, in which case the renderer
-   *  falls back to image_id order. */
-  added_at?: number
-}
-
-/** A file in a character's image trash (`<character>/trash/`). */
-export type FlistTrashItem = {
-  /** Names this entry for put-back and purge. The image id, unless the
-   *  Trash holds several files under that id (a Pull replaced one). */
-  trash_id: string
-  image_id: string
-  extension: string
-  filename: string
-  size: number
-  deleted_at: number
-  /** 'ui' or 'mcp'; null for a file that got there without an index entry. */
-  deleted_by: string | null
-  source_name: string | null
-}
+/** A file in a character's image Trash (`<character>/trash/`). */
+export type FlistTrashItem = Schema<'TrashItem'>
 
 /** A deleted Backup in a character's Trash (`<character>/trash/backups/`). */
-export type FlistTrashedBackup = {
-  /** Its file name in the Trash; what put-back and purge take. */
-  id: string
-  /** The Backup's file name in the Backup list, where a put-back returns it. */
-  filename: string
-  /** The user-set name it had, kept for the put-back. */
-  name: string | null
-  size: number
-  deleted_at: number
-  deleted_by: string | null
-}
+export type FlistTrashedBackup = Schema<'TrashedBackup'>
 
-/** Labels cleared in one go, kept in the character's Trash. */
-export type FlistTrashedLabels = {
-  /** What put-back and purge take. */
-  id: string
-  /** The Log character they were cleared for; null for Labels whose
-   *  messages were in none of the Logs when every Label was reset. */
-  character: string | null
-  /** The conversation cleared; null when every conversation was. */
-  partner: string | null
-  /** How many Labels the entry holds. */
-  count: number
-  deleted_at: number
-  deleted_by: string | null
-}
+/** Labels cleared in one go, kept in the Trash. */
+export type FlistTrashedLabels = Schema<'TrashedLabels'>
 
-/** Where an image id is still used, beyond the pool: the Workbench's
- *  gallery, Live, and how many Backups keep it (each with its own copy
- *  of the bytes), with the newest of them. `migration_backup`: the
- *  older copies from before the upgrade name it; that Backup holds JSON
- *  only, no copy of the bytes, and is not counted in `backups`. */
-export type FlistImageReferences = {
-  workbench: boolean
-  live: boolean
-  backups: number
-  newest_backup: string | null
-  migration_backup: boolean
-}
+/** Where an image id is still used, beyond the Pool. */
+export type FlistImageReferences = Schema<'ImageReference'>
 
 
 // ---- foreign profiles (read-only viewer) ----------------------------
@@ -173,17 +119,9 @@ export type FlistImageReferences = {
 
 /** Where the viewer's candidate names come from. `name` is free text
  *  taken as an exact character name — F-list has no search endpoint. */
-export type ForeignSource = 'bookmarks' | 'friends' | 'logs' | 'name'
+export type ForeignSource = Schema<'ForeignSearch'>['source']
 
-export type ForeignSearchResult = {
-  source: ForeignSource
-  query: string
-  results: string[]
-  truncated: boolean
-  /** True for the free-text source: the row is what the user typed,
-   *  not something known to exist. */
-  exact: boolean
-}
+export type ForeignSearchResult = Schema<'ForeignSearch'>
 
 /** A character-data.php payload plus the cache's `fetched_at` stamp.
  *  Indexed because F-list may add fields and the viewer passes
@@ -203,293 +141,107 @@ export type ForeignProfilePayload = Record<string, unknown> & {
   fetched_at?: number
 }
 
-export type ForeignProfileResult = {
-  name: string
+/** A Foreign profile as the sidecar answers it, its F-list payload
+ *  read as `ForeignProfilePayload`. */
+export type ForeignProfileResult = Omit<Schema<'ForeignProfile'>, 'profile'> & {
   profile: ForeignProfilePayload
-  from_cache: boolean
-  age_sec: number | null
-  fetched_at: number | null
-  /** Set when a refresh failed and the cached copy was served anyway. */
-  stale?: boolean
-  refresh_error?: string
 }
 
-/** The Workbench's metadata as the sidecar sends it. The window reads
- *  only `updated_at`, for the Workbench row's "last changed". */
-export type WorkbenchInfoWire = {
-  name: string
-  created_at: number
-  updated_at: number
-}
 
-/** A Pull or Back up all runs as a job: the stream's first event is the
+/** What to do with each event of a stream, by its name: the names
+ *  and data are the stream's events model's, so an event the sidecar
+ *  renames or reshapes fails the type-check where it is handled. */
+export type EventTable<Events> = { [Name in keyof Events]?: (data: Events[Name]) => void }
+
+/** A Pull's events by name, each with its data, as the sidecar's
+ *  schema declares them. A Pull runs as a job: the first event is the
  *  job (its id is what Cancel and a reopened view use), and a cancel by
  *  id ends the events with `cancelled`. */
-type JobStreamHandlers = {
-  onJob?: (job: Job) => void
-  onCancelled?: () => void
+type PullEvents = Schema<'PullEvents'>
+/** Back up all's events by name, each with its data; a job like a Pull. */
+type BackupAllEvents = Schema<'BackupAllEvents'>
+/** The change broadcast's events (`/events`): `ready`, then a change
+ *  hint per change to shared state. */
+type ChangeEvents = Schema<'ChangeEvents'>
+
+/** What a follower of a Pull does with its events. */
+export type FlistPullHandlers = EventTable<PullEvents>
+
+/** One character of Back up all, as it is pulled and as it ends. */
+export type FlistBackupAllCharacterEvent = BackupAllEvents['character']
+
+/** What a follower of Back up all does with its events. */
+export type FlistBackupAllHandlers = EventTable<BackupAllEvents>
+
+/** What the window does with the change broadcast's events. */
+export type ChangeEventHandlers = EventTable<ChangeEvents>
+
+/** One conversation of a character: the partner, or the primary name
+ *  of an alias group whose other members are `aliases`. */
+export type PartnerEntry = Schema<'LogPartner'>
+
+/** A Log's message with the Label it resolves to (null for a system
+ *  line) and the `hash` the Label routes take. `label_source` and the
+ *  rest are there only when a stored Label decides it. The sidecar
+ *  always sends `label`; the window leaves it out of a message whose
+ *  Label it just reset, until the next read resolves it again. */
+export type LogMessage = Omit<Schema<'LabelledMessage'>, 'label'> & {
+  label?: Schema<'LabelledMessage'>['label']
 }
 
-export type FlistPullHandlers = JobStreamHandlers & {
-  onTicket?: () => void
-  onFetching?: () => void
-  onImages?: (info: { total: number }) => void
-  onImage?: (info: {
-    index: number
-    total: number
-    image_id: string
-    ok: boolean
-    cached?: boolean
-    error?: string
-  }) => void
-  onDone?: (info: {
-    character_id: string
-    name: string
-    image_count: number
-    image_downloaded?: number
-    image_cached?: number
-    image_failed: number
-    pull_status?: FlistPullStatus['status']
-    pull_missing?: number
-  }) => void
-  onError?: (info: StreamError) => void
-}
-
-export type FlistBackupAllCharacterEvent = {
-  name: string
-  character_id?: string
-  status: 'fetching' | 'saved' | 'unchanged' | 'error'
-  filename?: string
-  message?: string
-}
-
-export type FlistBackupAllHandlers = JobStreamHandlers & {
-  onStart?: (info: { total: number }) => void
-  onCharacter?: (info: FlistBackupAllCharacterEvent) => void
-  onDone?: (info: {
-    total: number
-    saved: number
-    unchanged: number
-    failed: number
-  }) => void
-  onError?: (info: StreamError) => void
-}
-
-export type Profile = {
-  name: string
-  avatar_url: string | null
-  stats: Record<string, string>
-  bbcode: string
-  inlines: Record<string, InlineImage>
-}
-
-export type PartnerEntry = {
-  name: string
-  bytes: number
-  // Alternate names linked to this partner via the alias system.
-  // Empty array for unaliased entries. The entry's `name` is the
-  // primary; `aliases` are the other members of the group.
-  aliases: string[]
-}
-
-export type AliasGroups = Record<string, string[]>
-
-export type Label = 'IC' | 'OOC' | 'Unlabeled'
+export type Label = NonNullable<LogMessage['label']>
 /** Who decided a stored verdict. 'mcp' is the model the user connected
  *  over MCP; 'manual' is their own right-click override; 'llm' only
  *  appears on rows written by the in-app classifier that existed
  *  before the MCP migration. */
-export type LabelSource = 'mcp' | 'manual' | 'llm'
-export type PriorSource = LabelSource | null
+export type LabelSource = NonNullable<LogMessage['label_source']>
 
-export type LogMessage = {
-  ts: number
-  iso: string
-  type: number
-  type_name: string
-  speaker: string
-  raw: string
-  text: string
-  mentions: string[]
-  // kind is F-Chat's message type bucket (chat/action vs ad/roll/warn/event).
-  // Used to keep "System" filtering working independently of semantic IC/OOC.
-  kind: 'ic' | 'ooc' | 'system'
-  // Sidecar-computed sha1(ts|speaker|raw)[:16] used as the labels-DB
-  // primary key. The renderer passes this back when overriding.
-  hash: string
-  // label is the semantic IC/OOC classification from the resolver. Always
-  // present for chat/action messages, null for a system line (it never gets
-  // a Label); absent label_source means rule-or-unlabeled (no explicit DB row).
-  label?: Label | null
-  label_source?: LabelSource
-  // Free-text reason the labeller gave for the verdict. Surfaced in
-  // the badge tooltip so users can audit why a label was chosen.
-  label_reason?: string
-  // Snapshot of what the label was before the most recent change.
-  // Present only on manual overrides; lets the UI surface "the model
-  // said IC; you changed it to OOC" without a separate lookup.
-  prior_label?: 'IC' | 'OOC'
-  prior_source?: LabelSource
-  // Present when label === 'Failed'. Holds the classifier's error
-  // message (truncated) so the badge tooltip can explain why the
-  // message couldn't be classified — e.g. "bad json: '<garbage>'" or
-  // "api error: HTTP 500". The full prompt + context lives in
-  // <user_data>/classify-failures.log, surfaced via Tools → Open log.
-  label_error?: string
-}
+/** Messages shorter than `threshold_chars` are OOC without asking
+ *  anyone; `defaults` for the "(default)" hints. */
+export type LabelsSettings = Schema<'LabelsSettings'>
+export type IndexSettings = Schema<'IndexSettings'>
 
-export type LabelsSettings = {
-  /** Messages shorter than this are OOC without asking anyone. The
-   *  only labels setting left — everything the rules cannot settle now
-   *  goes to the model the user connected over MCP. */
-  threshold_chars: number
-  defaults: {
-    threshold_chars: number
-  }
-}
-
-export type RagSettings = {
-  embed_model: string
-  rerank_model: string
-  rerank_candidates: number
-  top_k: number
-  neighbors: number
-  rerank_min_ratio: number
-  hybrid_enabled: boolean
-  hybrid_bm25_candidates: number
-  chunk_max_chars: number
-  chunk_soft_split_chars: number
-  chunk_overlap_msgs: number
-  defaults: {
-      embed_model: string
-          rerank_model: string
-    rerank_candidates: number
-    top_k: number
-    neighbors: number
-    rerank_min_ratio: number
-    hybrid_enabled: boolean
-    hybrid_bm25_candidates: number
-      chunk_max_chars: number
-    chunk_soft_split_chars: number
-    chunk_overlap_msgs: number
-  }
-}
-
-export type LabelsStats = {
-  character: string
-  partner: string
-  ic: number
-  ooc: number
-  unlabeled: number
-  total: number
-}
-
-export type IngestJobScope = {
-  character?: string | null
-  partner?: string | null
-}
-
-export type JobState = 'pending' | 'running' | 'done' | 'cancelled' | 'failed'
+/** What an ingest covers: every Log, every conversation of one
+ *  character, or one conversation. */
+export type IngestJobScope = Pick<BodyOf<'/rag/ingest', 'post'>, 'character' | 'partner'>
 
 /** Long work the sidecar runs as a job, of any kind: started by its
  *  own route, then polled and cancelled by id (`/jobs/{id}`). `error`
  *  is set when it failed. */
-export type Job<Params = Record<string, unknown>, Progress = Record<string, unknown>, Result = Record<string, unknown>> = {
-  id: string
-  kind: string
-  resource: string
-  state: JobState
-  params: Params
-  progress: Progress
-  result: Result | null
-  error: ErrorBody | null
-  cancel_requested: boolean
-  created_at: number
-  finished_at: number | null
-}
+export type Job = Schema<'Job'>
 
-export type IngestProgress = {
-  chunked: number
-  embedded: number
-  upserted: number
-  skipped_existing: number
-  removed: number
-  /** Messages dropped for lack of an IC/OOC verdict. A high count
-   *  means the classification flow should run first — an unjudged
-   *  message could be either IC prose or OOC chatter, and indexing OOC
-   *  poisons retrieval. */
-  skipped_unlabeled: number
-  failed: number
-  total_chunks: number
-  current_partner: string | null
-  last_error: string | null
-  embed_model: string | null
-  embed_dimension: number | null
-}
+/** Why a job failed: a refusal code, or a code only a job fails with
+ *  (`JobFailureCode`). */
+export type JobError = Schema<'JobError'>
 
-export type IngestJob = Job<
-  {
-    scope: { character?: string; partner?: string }
-    include_ooc: boolean
-    force_rewipe: boolean
-  },
-  IngestProgress
->
+/** An ingest as a job, with the ingest's params, progress and result. */
+export type IngestJob = Schema<'IngestJob'>
 
 /** The `error.code` of an ingest stopped because the Index was built
  *  with another embedding model; the dialog offers wipe + re-ingest. */
-export const EMBEDDING_MODEL_CHANGED = 'embedding_model_changed'
+export const EMBEDDING_MODEL_CHANGED: Schema<'JobFailureCode'> = 'embedding_model_changed'
 
-export type RagStatus = {
-  embed_model: string | null
-  embed_dimension: number | null
-  last_ingest_at: number | null
-  /** A job (an ingest, a wipe) holds the Index right now: `job` is it,
-   *  and `chunk_count` is null because the Index can't be counted. */
-  busy: boolean
-  job: Job | null
-  chunk_count: number | null
-}
 
 /** One MCP endpoint the sidecar serves. `all` carries every tool; the
  *  narrow ones exist because small local models choke on long tool
  *  lists. */
-export type McpEndpoint = {
-  id: 'all' | 'character' | 'logs' | 'classify'
-  label: string
-  path: string
-  url: string
-  tool_count: number
-}
+export type McpEndpoint = Schema<'McpEndpoint'>
 
 /** MCP settings only the window may change. `log_text`: whether MCP
  *  clients get the tools that return Log text; off by default. */
-export type McpSettings = {
-  log_text: boolean
-}
+export type McpSettings = Schema<'McpSettings'>
 
 /** The Foreign profile cache's cap, in whole megabytes (at least 1).
  *  Only the window sets it; a lower cap evicts at once. */
-export type ForeignSettings = {
-  cache_cap_mb: number
-  defaults: { cache_cap_mb: number }
-}
+export type ForeignSettings = Schema<'ForeignSettings'>
 
 /** What the Foreign profile cache holds on disk, and what it may hold. */
-export type ForeignCacheUsage = {
-  bytes: number
-  profiles: number
-  cap_bytes: number
-}
+export type ForeignCacheUsage = Schema<'ForeignCacheUsage'>
 
-export type McpInfo = {
-  port: number
-  endpoints: McpEndpoint[]
-  /** The optional bearer token. Off by default — the endpoints are
-   *  loopback-only, so requiring one buys nothing against an attacker
-   *  already running code as this user. */
-  auth: { required: boolean; token: string | null }
-}
+/** The MCP endpoints and the optional bearer token. The token is off
+ *  by default: the endpoints are loopback-only, so requiring one buys
+ *  nothing against an attacker already running code as this user. */
+export type McpInfo = Schema<'McpInfo'>
 
 function base(): string {
   return window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
@@ -498,9 +250,9 @@ function base(): string {
 // Mid-session ticket recovery. The sidecar holds the F-list password
 // in RAM only and drops it after an idle window (P0-C safety), so a
 // long-running session eventually loses the ability to auto-refresh
-// its ticket and the next /flist/* call returns 401. If the user saved
-// their password to the OS keychain we can transparently re-sign in
-// and retry, so they don't see "invalid ticket" pop up.
+// its ticket and the next F-list call is refused `not_signed_in`. If
+// the user saved their password to the OS keychain we can transparently
+// re-sign in and retry, so they don't see "invalid ticket" pop up.
 let recoveryInFlight: Promise<boolean> | null = null
 async function tryFlistRecovery(): Promise<boolean> {
   if (recoveryInFlight) return recoveryInFlight
@@ -517,24 +269,25 @@ async function tryFlistRecovery(): Promise<boolean> {
       if (!meta.autoLogin || !meta.hasPassword || !meta.account) return false
       const password = await creds.getPassword()
       if (!password) return false
-      const res = await fetch(`${base()}/flist/session`, {
+      await send('/flist/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account: meta.account, password })
+        body: JSON.stringify({
+          account: meta.account,
+          password
+        } satisfies BodyOf<'/flist/session', 'post'>)
       })
-      if (res.ok) {
-        // Let the renderer refresh its FlistSessionStatus so the sidebar
-        // chip stops showing "expired" after we just resurrected it.
-        window.dispatchEvent(new CustomEvent('flist-session-recovered'))
-        return true
-      }
+      // Let the renderer refresh its FlistSessionStatus so the sidebar
+      // chip stops showing "expired" after we just resurrected it.
+      window.dispatchEvent(new CustomEvent('flist-session-recovered'))
+      return true
+    } catch (e) {
       // Surface the failure so debugging "autologin not reliable" has
       // something to read in DevTools — the alternative is a silent
       // false that leaves the user wondering why the modal popped.
-      console.warn('[flist] auto-recovery POST /flist/session failed:', res.status)
-      return false
-    } catch (e) {
-      console.warn('[flist] auto-recovery threw:', e)
+      console.warn(
+        '[flist] auto-recovery POST /flist/session failed:',
+        e instanceof HttpError ? e.status : e
+      )
       return false
     } finally {
       // Cleared in microtask so concurrent callers that joined this
@@ -557,129 +310,266 @@ type WindowCreds = {
   getPassword: () => Promise<string | null>
 }
 
-/** Every error the sidecar answers: a code to switch on, a message to
- *  show, and whatever else the situation carries (the etag on disk,
- *  the field that was wrong). */
-export type ErrorBody = {
-  code: string
-  message: string
-  details: Record<string, unknown>
-}
+/** Every error the sidecar answers: a code to switch on (one its
+ *  schema lists), a message to show, and whatever else the situation
+ *  carries (the etag on disk, the field that was wrong). */
+export type ErrorBody = Schema<'RefusalBody'>
 
 /** A Pull's or Back up all's `error` event: where it stopped, then
- *  the same three fields a REST error carries. */
-export type StreamError = ErrorBody & { stage: string }
+ *  the same three fields a job's error carries. */
+export type StreamError = Schema<'StreamError'>
+
+/**
+ * A sidecar answer that was not ok. `status` is its HTTP status and
+ * `detail` what it says, ready to show: the sidecar's or F-list's own
+ * words, without the status. The message (`HTTP <status>: <detail>`)
+ * is for logs; nothing reads it back.
+ */
+export class HttpError extends Error {
+  readonly status: number
+  readonly detail: string
+
+  constructor(status: number, detail: string) {
+    super(`HTTP ${status}: ${detail}`)
+    this.name = 'HttpError'
+    this.status = status
+    this.detail = detail
+  }
+}
 
 /**
  * A request the sidecar turned down (`{code, message, details}`), so a
  * caller can tell "not signed in" from "no such character" without
- * matching on prose. Narrow with `instanceof`.
+ * matching on prose. Narrow with `instanceof`, or read the code with
+ * `refusalCode`. `message` is the sidecar's own words.
  */
-export class RefusalError extends Error {
-  readonly code: string
-  readonly status: number
+export class RefusalError extends HttpError {
+  readonly code: RefusalCode
   readonly details: Record<string, unknown>
 
   constructor(
-    code: string,
+    code: RefusalCode,
     status: number,
     message: string,
     details: Record<string, unknown> = {}
   ) {
-    super(message)
+    super(status, message)
     this.name = 'RefusalError'
     this.code = code
-    this.status = status
     this.details = details
   }
 }
 
+/** The codes the sidecar's schema lists (`refusals.RefusalCode`), at
+ *  run time: a body's code is a `RefusalCode` only when it is one. */
+const REFUSAL_CODES: ReadonlySet<string> = new Set(refusalCodeValues)
+
+/** A body that says why, in the sidecar's words, whatever its code. */
+function hasMessage(body: unknown): body is Pick<ErrorBody, 'message'> {
+  return !!body && typeof body === 'object' && typeof (body as Partial<ErrorBody>).message === 'string'
+}
+
 function isErrorBody(body: unknown): body is ErrorBody {
-  if (!body || typeof body !== 'object') return false
-  const b = body as Partial<ErrorBody>
-  return typeof b.code === 'string' && typeof b.message === 'string'
+  return hasMessage(body) && REFUSAL_CODES.has(String((body as Partial<ErrorBody>).code))
 }
 
 /** The error a failed response stands for: a `RefusalError` carrying
- *  the sidecar's code, message and details, or a plain `HTTP <status>`
- *  error when the body is not one (a proxy, a crash mid-stream). */
-async function failure(res: Response): Promise<Error> {
+ *  the sidecar's code, message and details, or a plain `HttpError`
+ *  when the body is not one (a proxy, a crash mid-stream) or carries a
+ *  code the schema does not list (its message still reads as said). */
+async function failure(res: Response): Promise<HttpError> {
   const body: unknown = await res.json().catch(() => null)
   if (isErrorBody(body)) {
     const details =
       body.details && typeof body.details === 'object' ? body.details : {}
-    return new RefusalError(
-      body.code,
-      res.status,
-      `HTTP ${res.status}: ${body.message}`,
-      details
-    )
+    return new RefusalError(body.code, res.status, body.message, details)
   }
-  return new Error(`HTTP ${res.status}: ${res.statusText}`)
+  return new HttpError(res.status, hasMessage(body) ? body.message : res.statusText)
 }
 
-/** What a failed request says, without the `HTTP <status>: ` prefix
- *  `request` puts in front of it: the sidecar's or F-list's own words,
- *  ready to show. Any other error's message as it is. */
+/** What a failed request says, ready to show: the sidecar's or
+ *  F-list's own words for a failed answer, any other error's message
+ *  as it is. */
 export function errorDetail(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^HTTP \d+:\s*/, '')
+  if (err instanceof HttpError) return err.detail
+  return err instanceof Error ? err.message : String(err)
 }
 
-async function request<T>(
-  path: string,
-  init: RequestInit = {},
-  opts?: ApiOptions,
-  // Internal — set on the retry leg after a successful recovery so a
-  // second 401 surfaces normally instead of looping.
-  _retried = false
-): Promise<T> {
-  const res = await fetch(`${base()}${path}`, {
-    ...init,
-    signal: opts?.signal,
-    headers: {
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(init.headers ?? {})
-    }
-  })
-  if (
-    res.status === 401 &&
-    !_retried &&
-    (path.startsWith('/flist/') || path.startsWith('/foreign/')) &&
-    path !== '/flist/session'
-  ) {
+// ---- Refusal codes ----------------------------------------------------
+// The window tells refusals apart by the sidecar's code, never by its
+// words or an `HTTP <status>` string, and reads the codes here.
+
+/** The sidecar's code for a lost F-list session: no ticket, or one
+ *  F-list rejected. */
+const SESSION_LOST: RefusalCode = 'not_signed_in'
+
+/** The codes of a Workbench write that has not seen what is on disk
+ *  now: it sent no etag, or a stale one. */
+const WORKBENCH_CONFLICT_CODES: readonly RefusalCode[] = ['etag_mismatch', 'etag_required']
+
+/** The sidecar's code for a request it refused; null for any other
+ *  error (the network, an answer that is not a refusal). */
+export function refusalCode(err: unknown): RefusalCode | null {
+  return err instanceof RefusalError ? err.code : null
+}
+
+/** A Workbench save refused because something else wrote the Workbench
+ *  since it was read, however the sidecar words it: the etag on disk
+ *  (null when the sidecar did not say). Null when `err` is not one. */
+export function workbenchConflict(err: unknown): { currentEtag: string | null } | null {
+  const code = refusalCode(err)
+  if (!code || !WORKBENCH_CONFLICT_CODES.includes(code)) return null
+  const etag = (err as RefusalError).details.current_etag
+  return { currentEtag: typeof etag === 'string' ? etag : null }
+}
+
+/** Whether `err`, answered for `path`, says the F-list session is
+ *  gone. Signing in itself is never one: its refusal is the answer. */
+function sessionLost(err: HttpError, path: string): boolean {
+  return err.status === 401 && refusalCode(err) === SESSION_LOST && path !== '/flist/session'
+}
+
+// ---- The request function ----------------------------------------------
+
+/** What a call sends: `RequestInit` with plain-object headers (such as
+ *  `If-Match`). A string body is JSON and goes as `application/json`;
+ *  a Blob or bytes go as they are, typed by the browser. */
+type SendInit = Omit<RequestInit, 'headers' | 'signal'> & {
+  headers?: Record<string, string>
+}
+
+/**
+ * The one place the window calls `fetch` for a sidecar route. Answers
+ * the response when it is ok; anything else throws a `RefusalError`
+ * (or an `HttpError` for an answer that is not a refusal).
+ *
+ * A route refused because the F-list session is gone (401
+ * `not_signed_in`) gets one recovery attempt and is sent again; when
+ * recovery cannot run or the second answer is refused the same way,
+ * the window hears `flist-session-expired` so it can open the sign-in
+ * modal. Without this, a 401-stuck /flist/mapping-list leaves the kink
+ * picker and diff silently empty.
+ *
+ * `request`, `requestBytes` and `requestStream` read the answer.
+ */
+async function send(path: string, init: SendInit = {}, opts?: ApiOptions): Promise<Response> {
+  const attempt = () =>
+    fetch(`${base()}${path}`, {
+      ...init,
+      signal: opts?.signal,
+      headers: {
+        ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers
+      }
+    })
+  const res = await attempt()
+  if (res.ok) return res
+  let err = await failure(res)
+  if (sessionLost(err, path)) {
     if (await tryFlistRecovery()) {
-      return request<T>(path, init, opts, true)
+      const retried = await attempt()
+      if (retried.ok) return retried
+      err = await failure(retried)
     }
-    // Recovery didn't fire (no autoLogin, no stored password) or it
-    // tried and failed. Either way the user needs to re-authenticate
-    // mid-session — surface this as an event so AppLayout can open the
-    // sign-in modal. Without this, /flist/mapping-list 401-stuck leaves
-    // the kink picker and diff silently empty.
-    window.dispatchEvent(new CustomEvent('flist-session-expired'))
+    if (sessionLost(err, path)) window.dispatchEvent(new CustomEvent('flist-session-expired'))
   }
-  if (!res.ok) throw await failure(res)
+  throw err
+}
+
+/** A call answered with JSON (or nothing, for a 204). */
+async function request<T>(path: string, init: SendInit = {}, opts?: ApiOptions): Promise<T> {
+  const res = await send(path, init, opts)
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
 
-async function get<T>(path: string, opts?: ApiOptions): Promise<T> {
-  return request<T>(path, {}, opts)
+/** A call answered with bytes: a Backup's zip. */
+async function requestBytes(path: string, init: SendInit = {}, opts?: ApiOptions): Promise<Uint8Array> {
+  const res = await send(path, init, opts)
+  return new Uint8Array(await res.arrayBuffer())
 }
+
+/** A call answered with a server-sent event stream: each block goes to
+ *  `onBlock` until the stream ends. A refused start (busy, not signed
+ *  in) throws its RefusalError. */
+async function requestStream(
+  path: string,
+  init: SendInit,
+  onBlock: (block: string) => void,
+  opts?: ApiOptions
+): Promise<void> {
+  const res = await send(
+    path,
+    { ...init, headers: { Accept: 'text/event-stream', ...init.headers } },
+    opts
+  )
+  await readEventStream(res, onBlock)
+}
+
+/** `route` with its path's parameters filled in, then the query, each
+ *  value URL-encoded. */
+function url(route: string, path?: unknown, query?: unknown): string {
+  const values = new Map<string, unknown>(Object.entries(Object(path ?? {})))
+  const filled = route.replace(/\{(\w+)\}/g, (_, name: string) =>
+    encodeURIComponent(String(values.get(name)))
+  )
+  const pairs = Object.entries(Object(query ?? {}))
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
+  return pairs.length ? `${filled}?${pairs.join('&')}` : filled
+}
+
+/** A JSON body as it is sent, typed by its route's request model. */
+function jsonBody<P extends keyof paths, M extends Method>(body: BodyAt<P, M>): string {
+  return JSON.stringify(body)
+}
+
+/** `M route` and what a call fills in, as `send` takes them. */
+function sendArgs<P extends keyof paths, M extends Method>(
+  method: M,
+  route: P,
+  fill: Fill<P, M>
+): [string, SendInit] {
+  const init: SendInit = method === 'get' ? {} : { method: method.toUpperCase() }
+  if (fill.headers) init.headers = fill.headers
+  if (fill.body !== undefined) init.body = jsonBody<P, M>(fill.body)
+  else if (fill.blob) init.body = fill.blob
+  return [url(route, fill.path, fill.query), init]
+}
+
+/** The calls of one method. A call names its route once: the answer's
+ *  type, the path's parameters, the query and the body are the route's
+ *  operation's, so a route the method does not serve, a parameter it
+ *  lacks or a body it does not take fails the type-check. */
+function caller<M extends Method>(method: M) {
+  return <P extends Route<M>>(
+    route: P,
+    fill?: Fill<P, M>,
+    opts?: ApiOptions
+  ): Promise<AnswerAt<P, M>> =>
+    request<AnswerAt<P, M>>(...sendArgs(method, route, fill ?? ({} as Fill<P, M>)), opts)
+}
+
+const get = caller('get')
+const post = caller('post')
+const put = caller('put')
+const patch = caller('patch')
+const del = caller('delete')
+
+/** A character id as the routes take it. */
+const cid = (characterId: string | number) => String(characterId)
 
 export const api = {
   base,
   // ---- foreign profiles (read-only viewer) ----
   foreignSearch: (source: ForeignSource, q: string, opts?: ApiOptions) =>
-    get<ForeignSearchResult>(
-      `/foreign/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
-      opts
-    ),
+    get('/foreign/search', { query: { source, q } }, opts),
   foreignProfile: (name: string, refresh = false, opts?: ApiOptions) =>
-    get<ForeignProfileResult>(
-      `/foreign/character/${encodeURIComponent(name)}${refresh ? '?refresh=true' : ''}`,
+    get(
+      '/foreign/character/{name}',
+      { path: { name }, query: { refresh: refresh || undefined } },
       opts
-    ),
+    ) as Promise<ForeignProfileResult>,
   /** Avatar for a foreign profile. Cached in the profile's own folder,
    *  not in `<userdata>/avatars/` — that directory is the account
    *  picker's, and a looked-up stranger does not belong in it. */
@@ -689,387 +579,155 @@ export const api = {
    *  scrolling a gallery twice costs one fetch per image, not two. */
   foreignImageUrl: (name: string, imageId: string) =>
     `${base()}/foreign/character/${encodeURIComponent(name)}/image/${encodeURIComponent(imageId)}`,
-  foreignCacheUsage: () => get<ForeignCacheUsage>('/foreign/cache'),
+  foreignCacheUsage: () => get('/foreign/cache'),
   /** Delete every cached Foreign profile, images and avatars included. */
-  foreignCacheClear: () =>
-    request<ForeignCacheUsage & { removed: number }>('/foreign/cache', {
-      method: 'DELETE'
-    }),
-  health: () => get<{ status: string; version: string }>('/health'),
+  foreignCacheClear: () => del('/foreign/cache'),
+  health: () => get('/health'),
   eiconsSearch: (q: string, limit = 200, opts?: ApiOptions) =>
-    get<{
-      eicons: string[]
-      total: number
-      as_of: number
-      status: 'loading' | 'ready' | 'error'
-      error: string | null
-    }>(`/eicons/search?q=${encodeURIComponent(q)}&limit=${limit}`, opts),
-  characters: () => get<{ characters: CharacterEntry[] }>('/logs/characters'),
-  partners: (char: string) =>
-    get<{ character: string; partners: PartnerEntry[] }>(
-      `/logs/partners?char=${encodeURIComponent(char)}`
-    ),
+    get('/eicons/search', { query: { q, limit } }, opts),
+  characters: () => get('/logs/characters'),
+  partners: (char: string) => get('/logs/partners', { query: { char } }),
   messages: (char: string, partner: string) =>
-    get<{ character: string; partner: string; messages: LogMessage[] }>(
-      `/logs/messages?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
-    ),
+    get('/logs/messages', { query: { char, partner } }),
+  /** Search every conversation of `char` for `q`, which must not be
+   *  empty: an empty query answers `hits: []` instead of `partners`
+   *  (`LogSearchAllNothing`), which this call does not type. */
   searchAll: (char: string, q: string) =>
-    get<{
-      character: string
-      query: string
-      partners: {
-        partner: string
-        bytes: number
-        hits: (LogMessage & { index: number })[]
-        truncated: boolean
-      }[]
-    }>(`/logs/search_all?char=${encodeURIComponent(char)}&q=${encodeURIComponent(q)}`),
-  aliasesList: (char: string) =>
-    get<{ character: string; groups: AliasGroups }>(
-      `/aliases?char=${encodeURIComponent(char)}`
-    ),
-  aliasesAdd: (body: { character: string; name: string; primary_name: string }) =>
-    request<{ character: string; primary_name: string; group: string[] }>(
-      '/aliases',
-      { method: 'POST', body: JSON.stringify(body) }
-    ),
-  aliasesRemove: (char: string, name: string) =>
-    request<{ character: string; name: string; removed: boolean }>(
-      `/aliases?char=${encodeURIComponent(char)}&name=${encodeURIComponent(name)}`,
-      { method: 'DELETE' }
-    ),
+    get('/logs/search_all', { query: { char, q } }) as Promise<Schema<'LogSearchAll'>>,
+  aliasesList: (char: string) => get('/aliases', { query: { char } }),
+  aliasesAdd: (body: BodyOf<'/aliases', 'post'>) => post('/aliases', { body }),
+  aliasesRemove: (char: string, name: string) => del('/aliases', { query: { char, name } }),
   aliasesUnlinkGroup: (char: string, primary: string) =>
-    request<{ character: string; primary: string; deleted: number }>(
-      `/aliases/group?char=${encodeURIComponent(char)}&primary=${encodeURIComponent(primary)}`,
-      { method: 'DELETE' }
-    ),
-  findContacts: (name: string) =>
-    get<{
-      name: string
-      dm: { character: string; partner: string; bytes: number; mtime: number }[]
-    }>(`/logs/contacts?name=${encodeURIComponent(name)}`),
+    del('/aliases/group', { query: { char, primary } }),
+  findContacts: (name: string) => get('/logs/contacts', { query: { name } }),
 
-  settingsGet: () =>
-    get<{
-      fchat_data_dir: string | null
-      fchat_data_dir_effective: string
-      fchat_data_dir_env_locked: boolean
-      labels: LabelsSettings
-      rag: RagSettings
-      image_import_roots: string[]
-      mcp: McpSettings
-      foreign: ForeignSettings
-    }>('/settings'),
-  settingsUpdate: (body: {
-    fchat_data_dir?: string | null
-    labels?: Partial<Omit<LabelsSettings, 'defaults'>>
-    rag?: Partial<Omit<RagSettings, 'defaults'>>
-    image_import_roots?: string[]
-    mcp?: Partial<McpSettings>
-    foreign?: Partial<Omit<ForeignSettings, 'defaults'>>
-  }) =>
-    request<{
-      fchat_data_dir: string | null
-      fchat_data_dir_effective: string
-      fchat_data_dir_env_locked: boolean
-      labels: LabelsSettings
-      rag: RagSettings
-      image_import_roots: string[]
-      mcp: McpSettings
-      foreign: ForeignSettings
-    }>('/settings', {
-      method: 'PUT',
-      body: JSON.stringify(body)
-    }),
+  settingsGet: () => get('/settings'),
+  /** Fields left out (or null, for the numbers) stay as they are. */
+  settingsUpdate: (body: BodyOf<'/settings', 'put'>) => put('/settings', { body }),
   labelsStats: (char: string, partner: string) =>
-    get<LabelsStats>(
-      `/labels/stats?char=${encodeURIComponent(char)}&partner=${encodeURIComponent(partner)}`
-    ),
+    get('/labels/stats', { query: { char, partner } }),
   // Batch coverage stats for every partner of a character. Lets the
   // sidebar render per-partner pips in a single roundtrip instead of
   // fanning out 30+ /labels/stats requests on first paint.
-  labelsStatsAll: (char: string) =>
-    get<{
-      character: string
-      partners: Array<{
-        partner: string
-        ic: number
-        ooc: number
-        unlabeled: number
-        total: number
-        // Epoch seconds. `log_mtime > last_label_at` means the
-        // conversation grew since the last classify run — surfaced as
-        // a stale dot in the sidebar.
-        log_mtime: number | null
-        last_label_at: number | null
-      }>
-    }>(`/labels/stats-all?char=${encodeURIComponent(char)}`),
-  labelsClear: (body: { character: string; partner: string }) =>
-    request<{ character: string; partner: string; deleted: number; trash_id: string | null }>(
-      '/labels/clear',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      }
-    ),
-  labelsClearAll: () =>
-    request<{ labels_deleted: number; trash_ids: string[] }>('/labels/clear-all', {
-      method: 'POST'
-    }),
+  // `log_mtime > last_label_at` means the conversation grew since the
+  // last classify run: a stale dot in the sidebar.
+  labelsStatsAll: (char: string) => get('/labels/stats-all', { query: { char } }),
+  labelsClear: (body: BodyOf<'/labels/clear', 'post'>) => post('/labels/clear', { body }),
+  labelsClearAll: () => post('/labels/clear-all'),
   /** Every cleared-Labels entry in the Trash, whichever character it
    *  was cleared for: Settings → Labels lists them. */
-  labelsTrashList: () => get<{ labels: FlistTrashedLabels[] }>('/labels/trash'),
+  labelsTrashList: () => get('/labels/trash'),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
-  labelsTrashPutBack: (ids: string[]) =>
-    request<{
-      restored: { id: string; restored: number; skipped: string[] }[]
-      not_found: string[]
-    }>('/labels/trash/put-back', { method: 'POST', body: JSON.stringify({ ids }) }),
+  labelsTrashPutBack: (ids: string[]) => post('/labels/trash/put-back', { body: { ids } }),
   /** Delete cleared Labels for good. */
-  labelsTrashPurge: (ids: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>('/labels/trash/purge', {
-      method: 'POST',
-      body: JSON.stringify({ ids })
-    }),
+  labelsTrashPurge: (ids: string[]) => post('/labels/trash/purge', { body: { ids } }),
   /** Give every still-Unlabeled message in one conversation the same
    *  verdict. Adds labels only: an existing verdict is kept, and the
    *  rules keep deciding what they decide. `hashes` is exactly what
    *  was written, which is what `labelsDeleteHashes` undoes. */
-  labelsFillUnlabeled: (body: {
-    character: string
-    partner: string
-    label: 'IC' | 'OOC'
-  }) =>
-    request<{
-      character: string
-      partner: string
-      label: 'IC' | 'OOC'
-      labeled: number
-      hashes: string[]
-      already_labeled: number
-      decided_by_rules: number
-      total_messages: number
-    }>('/labels/fill-unlabeled', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
+  labelsFillUnlabeled: (body: BodyOf<'/labels/fill-unlabeled', 'post'>) =>
+    post('/labels/fill-unlabeled', { body }),
   /** Undo for the above — removes named labels and nothing else.
    *  `labelsClear` would take the model's verdicts with it. */
-  labelsDeleteHashes: (body: {
-    character: string
-    partner: string
-    hashes: string[]
-  }) =>
-    request<{ character: string; partner: string; deleted: number }>(
-      '/labels/delete-hashes',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      }
-    ),
-  labelsRollup: () =>
-    get<{
-      ic: number
-      ooc: number
-      unlabeled: number
-      manual: number
-      total: number
-      character_count: number
-    }>('/labels/rollup'),
-  labelsOverride: (body: {
-    character: string
-    partner: string
-    hash: string
-    ts: number
-    speaker: string
-    label: Label | null
-  }) =>
-    request<{
-      hash: string
-      label: Label | null
-      source?: LabelSource
-      prior_label?: Label | null
-      prior_source?: LabelSource | null
-      deleted?: boolean
-    }>('/labels/override', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
+  labelsDeleteHashes: (body: BodyOf<'/labels/delete-hashes', 'post'>) =>
+    post('/labels/delete-hashes', { body }),
+  labelsRollup: () => get('/labels/rollup'),
+  /** The user's verdict on one message (`LabelSet`), or with
+   *  `label: null` its removal (`LabelRemoved`). */
+  labelsOverride: (body: BodyOf<'/labels/override', 'post'>) =>
+    post('/labels/override', { body }),
   /** One verdict (or a reset, with `label: null`) for any set of
    *  messages in a conversation — the log view's multi-select. */
-  labelsOverrideMany: (body: {
-    character: string
-    partner: string
-    items: { hash: string; ts: number; speaker: string }[]
-    label: Label | null
-  }) =>
-    request<{ character: string; partner: string; label: Label | null; changed: number }>(
-      '/labels/override-many',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      }
-    ),
-  ragTestEmbedding: (body: {
-    embed_model?: string
-  }) =>
-    request<{
-      ok: boolean
-      elapsed_ms: number
-      dimension: number | null
-      model: string
-      error: string | null
-    }>('/rag/test-embedding', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  // Probe an OpenAI-compatible or Ollama endpoint for the list of
-  // loaded/installed models. Returns sorted+deduped IDs. Failure is
-  // signalled by an empty `models` + populated `error`.
+  labelsOverrideMany: (body: BodyOf<'/labels/override-many', 'post'>) =>
+    post('/labels/override-many', { body }),
+  ragTestEmbedding: (body: BodyOf<'/rag/test-embedding', 'post'>) =>
+    post('/rag/test-embedding', { body }),
   /** The embedding models that can be selected — fastembed's catalogue,
    *  with the numbers the choice actually turns on. Licence is in there
    *  because the catalogue mixes apache-2.0 and MIT with cc-by-nc-4.0. */
-  discoverModels: () =>
-    request<{
-      models: Array<{
-        model: string
-        dimension: number
-        size_gb: number | null
-        license: string | null
-      }>
-      source: 'local'
-      error: string | null
-    }>('/settings/discover-models', {
-      method: 'POST',
-      body: JSON.stringify({})
-    }),
+  discoverModels: () => post('/settings/discover-models', { body: {} }),
   ragIngestStart: (
     scope: IngestJobScope,
     opts: { include_ooc?: boolean; force_rewipe?: boolean } = {}
   ) =>
-    request<IngestJob>('/rag/ingest', {
-      method: 'POST',
-      body: JSON.stringify({
+    post('/rag/ingest', {
+      body: {
         ...scope,
         include_ooc: opts.include_ooc ?? false,
         force_rewipe: opts.force_rewipe ?? false
-      })
+      }
     }),
   /** Any job by id, whatever its kind. */
   jobGet: <J extends Job = Job>(id: string, opts?: ApiOptions) =>
-    get<J>(`/jobs/${encodeURIComponent(id)}`, opts),
+    get('/jobs/{job_id}', { path: { job_id: id } }, opts) as Promise<J>,
   /** Ask a job to stop; answers the job as it stands. */
   jobCancel: <J extends Job = Job>(id: string) =>
-    request<J>(`/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  ragStatus: () => get<RagStatus>('/rag/status'),
+    del('/jobs/{job_id}', { path: { job_id: id } }) as Promise<J>,
+  ragStatus: () => get('/rag/status'),
   /** Which MCP endpoints the sidecar serves and how many tools each
    *  carries. Powers Settings → MCP. */
-  mcpInfo: () => get<McpInfo>('/mcp-info'),
+  mcpInfo: () => get('/mcp-info'),
   /** Issue a bearer token for /mcp, replacing any existing one. */
-  mcpCreateToken: () =>
-    request<{ token: string }>('/mcp-info/token', { method: 'POST' }),
+  mcpCreateToken: () => post('/mcp-info/token'),
   /** Turn the bearer requirement back off. */
-  mcpRevokeToken: () =>
-    request<{ required: boolean }>('/mcp-info/token', { method: 'DELETE' }),
-  ragWipe: () =>
-    request<{ wiped: true }>('/rag/wipe', { method: 'POST' }),
+  mcpRevokeToken: () => del('/mcp-info/token'),
+  ragWipe: () => post('/rag/wipe'),
   // Rebuild the BM25 lexical index from the existing Qdrant chunks.
   // Cheaper than a full re-ingest — no LLM calls, no embeddings.
-  ragLexicalRebuild: () =>
-    request<{ indexed: number }>('/rag/lexical/rebuild', { method: 'POST' }),
-  profile: (name: string) => get<Profile>(`/profile/${encodeURIComponent(name)}`),
+  ragLexicalRebuild: () => post('/rag/lexical/rebuild'),
 
   // ---- F-list character archive ----
-  flistSignIn: (body: { account: string; password: string }) =>
-    request<{
-      characters: FlistAccountCharacter[]
-      expires_in_sec: number
-      account: string
-    }>('/flist/session', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    }),
-  flistSignOut: () =>
-    request<{ signed_out: true }>('/flist/session', { method: 'DELETE' }),
-  flistSession: () => get<FlistSessionStatus>('/flist/session'),
-  flistActivity: () =>
-    get<{
-      started_at: number
-      event_count: number
-      max_events: number
-      events: { t: number; kind: string; [k: string]: unknown }[]
-    }>('/flist/activity'),
-  flistRoster: () => get<{ characters: FlistRosterEntry[] }>('/flist/characters'),
+  flistSignIn: (body: BodyOf<'/flist/session', 'post'>) => post('/flist/session', { body }),
+  flistSignOut: () => del('/flist/session'),
+  flistSession: () => get('/flist/session'),
+  flistActivity: () => get('/flist/activity'),
+  flistRoster: () => get('/flist/characters'),
   flistLive: (characterId: string | number) =>
-    get<Record<string, unknown>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/live`
-    ),
+    get('/flist/character/{character_id}/live', { path: { character_id: cid(characterId) } }),
   /** Right-click → 'Back up now': pulls (assumed already done by the
    *  caller) and writes a fresh ZIP regardless of dedup. */
   flistZipBackup: (characterId: string | number) =>
-    request<{
-      saved: boolean
-      path?: string
-      filename?: string
-      created_at?: number
-      size?: number
-      reason?: string
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backup`,
-      { method: 'POST' }
-    ),
+    post('/flist/character/{character_id}/zip-backup', {
+      path: { character_id: cid(characterId) }
+    }),
   flistZipBackups: (characterId: string | number) =>
-    get<{ character_id: string; backups: FlistZipBackupEntry[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups`
-    ),
+    get('/flist/character/{character_id}/zip-backups', {
+      path: { character_id: cid(characterId) }
+    }),
   /** Rename a single backup (user-set label persisted in a sidecar
    *  `_names.json` map; the ZIP file is untouched). Empty name
    *  clears the rename. Returns the canonical updated entry so the
    *  renderer can patch its row without a full list re-fetch. */
-  flistZipBackupRename: async (
-    characterId: string | number,
-    filename: string,
-    name: string
-  ) => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      }
-    )
-    if (!res.ok) throw await failure(res)
-    return (await res.json()) as FlistZipBackupEntry
-  },
+  flistZipBackupRename: (characterId: string | number, filename: string, name: string) =>
+    patch('/flist/character/{character_id}/zip-backups/{filename}', {
+      path: { character_id: cid(characterId), filename },
+      body: { name }
+    }),
   /** Move a single backup ZIP to the character's Trash. Idempotent
-   *  enough that the renderer refreshes the list either way; surfaces
-   *  error status to a toast.
+   *  enough that the renderer refreshes the list either way: a Backup
+   *  already gone (404) is not an error. Anything else surfaces to a
+   *  toast.
    */
-  flistZipBackupDelete: async (
-    characterId: string | number,
-    filename: string
-  ): Promise<void> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}`,
-      { method: 'DELETE' }
-    )
-    if (!res.ok && res.status !== 404) throw await failure(res)
+  flistZipBackupDelete: async (characterId: string | number, filename: string): Promise<void> => {
+    try {
+      await del('/flist/character/{character_id}/zip-backups/{filename}', {
+        path: { character_id: cid(characterId), filename }
+      })
+    } catch (err) {
+      if (!(err instanceof HttpError) || err.status !== 404) throw err
+    }
   },
   /** Raw ZIP bytes for Sidebar → Backups → right-click → Download.
    *  The renderer pipes these through `window.workbench.writeFile`
    *  to whatever path the user picks in the OS save dialog. */
-  flistZipBackupDownload: async (
-    characterId: string | number,
-    filename: string
-  ): Promise<Uint8Array> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/download`
-    )
-    if (!res.ok) throw await failure(res)
-    return new Uint8Array(await res.arrayBuffer())
-  },
+  flistZipBackupDownload: (characterId: string | number, filename: string) =>
+    requestBytes(
+      url('/flist/character/{character_id}/zip-backups/{filename}/download', {
+        character_id: cid(characterId),
+        filename
+      })
+    ),
   /** Read the embedded `working.json` (+ `backup-meta.json` if
    *  present) out of a ZIP backup for read-only Browse Backup mode.
    *  409 `backup_too_old` when the backup predates the working.json
@@ -1077,25 +735,13 @@ export const api = {
    *  header pill message. `meta` is
    *  `null` for backups created before the metadata write shipped
    *  (2026-06-17). */
-  flistZipBackupPayload: (
-    characterId: string | number,
-    filename: string
-  ) =>
-    get<{
-      payload: Record<string, unknown>
-      filename: string
-      meta: { kind?: string; created_at?: string; note?: string } | null
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/zip-backups/${encodeURIComponent(filename)}/payload`
-    ),
+  flistZipBackupPayload: (characterId: string | number, filename: string) =>
+    get('/flist/character/{character_id}/zip-backups/{filename}/payload', {
+      path: { character_id: cid(characterId), filename }
+    }),
   // ---- F-list mapping list (Tier 2: §2.x cached + force-refresh) ----
   flistMappingList: (opts?: { force?: boolean }) =>
-    get<
-      Record<string, unknown> & {
-        _etag: string | null
-        _fetched_at: number | null
-      }
-    >(`/flist/mapping-list${opts?.force ? '?force=true' : ''}`),
+    get('/flist/mapping-list', { query: { force: opts?.force || undefined } }),
   // ---- The workbench --------------------------------------------
   // A character has one editable copy of its profile beside Live,
   // seeded from Live when first needed (ADR 0001).
@@ -1104,107 +750,60 @@ export const api = {
    *  what a read-only render wants — merely looking at a character
    *  should not bring a bench into being. */
   flistWorkbench: (characterId: string | number, create = true) =>
-    get<{
-      workbench: WorkbenchInfoWire | null
-      reason?: string
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench`
-        + (create ? '' : '?create=false')
-    ),
+    get('/flist/character/{character_id}/workbench', {
+      path: { character_id: cid(characterId) },
+      query: { create: create ? undefined : false }
+    }),
   /** The character's Workbench payload and the etag a save must send
    *  back. Made from Live when there is none yet, and `created` then
    *  says this read made it, so nobody has edited it. `create: false`
    *  reads without making one: a 404 `no_workbench` refusal. */
-  flistWorkbenchPayloadRead: (
+  flistWorkbenchPayloadRead: (characterId: string | number, opts: { create?: boolean } = {}) =>
+    get('/flist/character/{character_id}/workbench/payload', {
+      path: { character_id: cid(characterId) },
+      query: { create: opts.create === false ? false : undefined }
+    }),
+  /** Save the whole Workbench over the etag it was read with, sent as
+   *  `If-Match`. Saved without one, or over a stale one, it is refused
+   *  as a conflict: `workbenchConflict` reads the etag on disk from
+   *  the refusal. */
+  flistWorkbenchPayloadPut: (
     characterId: string | number,
-    opts: { create?: boolean } = {}
-  ) =>
-    get<{ payload: Record<string, unknown>; etag: string; created: boolean }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`
-        + (opts.create === false ? '?create=false' : '')
-    ),
-  /** Save the whole Workbench over the etag it was read with. A 409
-   *  (no etag, or a stale one) throws `Error('etag_mismatch')` carrying
-   *  the etag on disk as `currentEtag`. */
-  flistWorkbenchPayloadPut: async (
-    characterId: string | number,
-    payload: Record<string, unknown>,
+    payload: BodyOf<'/flist/character/{character_id}/workbench/payload', 'put'>,
     etag: string | null
-  ): Promise<{ etag: string }> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
-    if (etag) headers['If-Match'] = etag
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/workbench/payload`,
-      { method: 'PUT', headers, body: JSON.stringify(payload) }
-    )
-    if (!res.ok) {
-      const err = await failure(res)
-      if (res.status === 409) {
-        const etag =
-          err instanceof RefusalError ? err.details.current_etag : undefined
-        throw Object.assign(new Error('etag_mismatch'), {
-          currentEtag: typeof etag === 'string' ? etag : null
-        })
-      }
-      throw err
-    }
-    return (await res.json()) as { etag: string }
-  },
+  ) =>
+    put('/flist/character/{character_id}/workbench/payload', {
+      path: { character_id: cid(characterId) },
+      headers: etag ? { 'If-Match': etag } : {},
+      body: payload
+    }),
   /** Reset to Live: the sidecar saves the Workbench as a Backup
    *  (`backed_up_first`, null when there was no Workbench yet), then
    *  makes it a fresh copy of Live and answers with that payload and
    *  its etag. When the Backup cannot be written nothing is replaced:
    *  a `workbench_not_kept` refusal. */
   flistWorkbenchResetToLive: (characterId: string | number) =>
-    request<{
-      payload: Record<string, unknown>
-      etag: string
-      backed_up_first: { filename: string; created_at: number } | null
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/workbench/reset-to-live`,
-      { method: 'POST' }
-    ),
+    post('/flist/character/{character_id}/workbench/reset-to-live', {
+      path: { character_id: cid(characterId) }
+    }),
   /** What the confirm dialog needs before overwriting the bench:
    *  whether it holds unpublished edits, and whether F-list has moved
    *  on since this backup was taken. */
-  flistWorkbenchLoadPreflight: (
-    characterId: string | number,
-    filename: string
-  ) =>
-    get<{
-      filename: string
-      backup_created_at: number | null
-      live_pulled_at: number | null
-      live_diverged: boolean
-      workbench_has_edits: boolean
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}`
-        + `/workbench/load-backup/preflight?filename=`
-        + encodeURIComponent(filename)
-    ),
+  flistWorkbenchLoadPreflight: (characterId: string | number, filename: string) =>
+    get('/flist/character/{character_id}/workbench/load-backup/preflight', {
+      path: { character_id: cid(characterId) },
+      query: { filename }
+    }),
   /** Restore: replace the Workbench contents with a Backup's. The
    *  sidecar saves the Workbench as a Backup first (`backed_up_first`,
    *  null when there was no Workbench yet); when it cannot, nothing is
    *  replaced: a `workbench_not_kept` refusal. */
   flistWorkbenchLoadBackup: (characterId: string | number, filename: string) =>
-    request<{
-      workbench: WorkbenchInfoWire
-      payload: Record<string, unknown>
-      etag: string
-      loaded: string
-      backed_up_first: { filename: string; created_at: number } | null
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}`
-        + `/workbench/load-backup`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ filename })
-      }
-    ),
-  flistAvatarUrl: (name: string) =>
-    `${base()}/flist/avatar/${encodeURIComponent(name)}`,
+    post('/flist/character/{character_id}/workbench/load-backup', {
+      path: { character_id: cid(characterId) },
+      body: { filename }
+    }),
+  flistAvatarUrl: (name: string) => `${base()}/flist/avatar/${encodeURIComponent(name)}`,
   flistImageUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images/${encodeURIComponent(filename)}`,
   /** Extension-blind variant — the sidecar tries png/jpg/gif on disk
@@ -1218,116 +817,78 @@ export const api = {
    *  shows as a black placeholder and drops out of the restore ZIP,
    *  which the extension reads as "delete this from the profile". */
   flistRepairGallery: (characterId: string | number) =>
-    request<{
-      relinked: { from: string; to: string }[]
-      duplicates_removed: string[]
-      stale_removed: string[]
-      unresolved: string[]
-      sets_rewritten: number
-      repaired: boolean
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/repair`,
-      { method: 'POST' }
-    ),
+    post('/flist/character/{character_id}/images/repair', {
+      path: { character_id: cid(characterId) }
+    }),
   flistCharacterImages: (characterId: string | number) =>
-    get<{ character_id: string; images: FlistCharacterImage[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images`
-    ),
+    get('/flist/character/{character_id}/images', { path: { character_id: cid(characterId) } }),
   /** Upload a local image (PNG/JPG/GIF). Lands as `images/local-<sha8>.<ext>`
    *  and shows up in the renderer's Pool view; only a working.json
    *  gallery edit moves it on-profile. */
-  flistImageUpload: async (
-    characterId: string | number,
-    data: Blob
-  ): Promise<FlistCharacterImage> => {
-    const res = await fetch(
-      `${base()}/flist/character/${encodeURIComponent(String(characterId))}/images`,
-      { method: 'POST', body: data }
-    )
-    if (!res.ok) throw await failure(res)
-    return (await res.json()) as FlistCharacterImage
-  },
+  flistImageUpload: (characterId: string | number, data: Blob) =>
+    post('/flist/character/{character_id}/images', {
+      path: { character_id: cid(characterId) },
+      blob: data
+    }),
   /** Delete images, in the gallery or only in the pool: the route MCP's
    *  `trash_images` takes too. The sidecar takes gallery images off the
    *  Workbench's gallery (`off_gallery`) and answers the Workbench's new
    *  `etag`, null when the gallery was left alone; every file goes to
    *  the Trash. */
   flistImagesTrash: (characterId: string | number, imageIds: string[]) =>
-    request<{
-      trashed: FlistTrashItem[]
-      not_found: string[]
-      off_gallery: string[]
-      etag: string | null
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/images/trash`,
-      { method: 'POST', body: JSON.stringify({ image_ids: imageIds }) }
-    ),
+    post('/flist/character/{character_id}/images/trash', {
+      path: { character_id: cid(characterId) },
+      body: { image_ids: imageIds }
+    }),
   /** Where each image id is still used: the Workbench, Live, Backups. */
   flistImageReferences: (characterId: string | number) =>
-    get<Record<string, FlistImageReferences>>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/image-references`
-    ),
+    get('/flist/character/{character_id}/image-references', {
+      path: { character_id: cid(characterId) }
+    }),
   flistTrashList: (characterId: string | number) =>
-    get<{
-      character_id: string
-      items: FlistTrashItem[]
-      backups?: FlistTrashedBackup[]
-      labels?: FlistTrashedLabels[]
-    }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash`
-    ),
+    get('/flist/character/{character_id}/trash', { path: { character_id: cid(characterId) } }),
   flistTrashFileUrl: (characterId: string | number, filename: string) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/trash/${encodeURIComponent(filename)}`,
   /** Back into the pool, not onto the profile. Takes trash ids. */
   flistTrashPutBack: (characterId: string | number, trashIds: string[]) =>
-    request<{
-      restored: { image_id: string; deduplicated: boolean; from: string }[]
-      not_found: string[]
-      conflicts: string[]
-    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/put-back`, {
-      method: 'POST',
-      body: JSON.stringify({ image_ids: trashIds })
+    post('/flist/character/{character_id}/trash/put-back', {
+      path: { character_id: cid(characterId) },
+      body: { image_ids: trashIds }
     }),
   /** Delete trashed files for good. Takes trash ids. */
   flistTrashPurge: (characterId: string | number, trashIds: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/purge`,
-      { method: 'POST', body: JSON.stringify({ image_ids: trashIds }) }
-    ),
+    post('/flist/character/{character_id}/trash/purge', {
+      path: { character_id: cid(characterId) },
+      body: { image_ids: trashIds }
+    }),
   /** Back into the Backup list, under the name they had. */
   flistTrashBackupsPutBack: (characterId: string | number, ids: string[]) =>
-    request<{ restored: string[]; not_found: string[]; conflicts: string[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/put-back`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
-    ),
+    post('/flist/character/{character_id}/trash/backups/put-back', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Delete trashed Backups for good. */
   flistTrashBackupsPurge: (characterId: string | number, ids: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/backups/purge`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
-    ),
+    post('/flist/character/{character_id}/trash/backups/purge', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Put cleared Labels back. A message labelled again since keeps its
    *  newer Label; its hash is listed under `skipped`. */
   flistTrashLabelsPutBack: (characterId: string | number, ids: string[]) =>
-    request<{
-      restored: { id: string; restored: number; skipped: string[] }[]
-      not_found: string[]
-    }>(`/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/put-back`, {
-      method: 'POST',
-      body: JSON.stringify({ ids })
+    post('/flist/character/{character_id}/trash/labels/put-back', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
     }),
   /** Delete cleared Labels for good. */
   flistTrashLabelsPurge: (characterId: string | number, ids: string[]) =>
-    request<{ purged: string[]; not_found: string[] }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash/labels/purge`,
-      { method: 'POST', body: JSON.stringify({ ids }) }
-    ),
+    post('/flist/character/{character_id}/trash/labels/purge', {
+      path: { character_id: cid(characterId) },
+      body: { ids }
+    }),
   /** Empty the whole Trash: images, Backups and cleared Labels. */
   flistTrashEmpty: (characterId: string | number) =>
-    request<{ purged: number }>(
-      `/flist/character/${encodeURIComponent(String(characterId))}/trash`,
-      { method: 'DELETE' }
-    ),
+    del('/flist/character/{character_id}/trash', { path: { character_id: cid(characterId) } }),
   flistExportZipUrl: (characterId: string | number) =>
     `${base()}/flist/character/${encodeURIComponent(String(characterId))}/export.zip`,
   /** Starts Back up all and follows its progress (SSE). Tools → "Back
@@ -1338,81 +899,60 @@ export const api = {
    *  renders. It runs as a job: aborting `opts.signal` only stops
    *  following; `jobCancel` stops the sweep. */
   flistBackupAll: (handlers: FlistBackupAllHandlers, opts?: ApiOptions): Promise<void> =>
-    followStream(`${base()}/flist/backup-all`, { method: 'POST', signal: opts?.signal }, (block) =>
-      dispatchBackupAllStream(block, handlers)
-    ),
+    requestStream('/flist/backup-all', { method: 'POST' }, (block) => dispatch(block, handlers), opts),
   /** Starts a Pull of `name` and follows its progress (SSE). A job, like
    *  Back up all: aborting `opts.signal` only stops following. */
   flistPull: (name: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
-    followStream(
-      `${base()}/flist/character/${encodeURIComponent(name)}/pull`,
-      { method: 'POST', signal: opts?.signal },
-      (block) => dispatchPullStream(block, handlers)
+    requestStream(
+      url('/flist/character/{name}/pull', { name }),
+      { method: 'POST' },
+      (block) => dispatch(block, handlers),
+      opts
     ),
   /** Every job the sidecar remembers: running ones, and finished ones
    *  for a few minutes. A reopened window finds its Pulls here. */
-  jobsList: (opts?: ApiOptions) => get<{ jobs: Job[] }>('/jobs', opts),
+  jobsList: (opts?: ApiOptions) => get('/jobs', {}, opts),
   /** Follow a running Pull from the start of its events. */
   flistPullFollow: (jobId: string, handlers: FlistPullHandlers, opts?: ApiOptions): Promise<void> =>
-    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
-      dispatchPullStream(block, handlers)
-    ),
+    requestStream(jobEventsPath(jobId), {}, (block) => dispatch(block, handlers), opts),
   /** Follow a running Back up all from the start of its events. */
   flistBackupAllFollow: (
     jobId: string,
     handlers: FlistBackupAllHandlers,
     opts?: ApiOptions
   ): Promise<void> =>
-    followStream(jobEventsUrl(jobId), { signal: opts?.signal }, (block) =>
-      dispatchBackupAllStream(block, handlers)
-    ),
+    requestStream(jobEventsPath(jobId), {}, (block) => dispatch(block, handlers), opts),
+
+  /** The sidecar's change broadcast: each change to shared state (a
+   *  model's edit over MCP, this window's own) as a hint, until the
+   *  stream ends or `opts.signal` is aborted. The window holds one open
+   *  for its life (`lib/eventStream`, which opens it again). */
+  changeEvents: (handlers: ChangeEventHandlers, opts?: ApiOptions): Promise<void> =>
+    requestStream('/events', {}, (block) => dispatch(block, handlers), opts),
 
   // ---- Browser-extension pairing (restore flow) -------------------------
-  restorePendingHandshakes: () =>
-    get<{ pending: { handshake_id: string; fingerprint: string; created_at: number }[] }>(
-      '/restore/handshake/pending'
-    ),
+  restorePendingHandshakes: () => get('/restore/handshake/pending'),
   restoreAcceptHandshake: (handshakeId: string) =>
-    request<{ ok: boolean; error?: string }>('/restore/handshake/accept', {
-      method: 'POST',
-      body: JSON.stringify({ handshake_id: handshakeId })
-    }),
+    post('/restore/handshake/accept', { body: { handshake_id: handshakeId } }),
   restoreRejectHandshake: (handshakeId: string) =>
-    request<{ ok: boolean; error?: string }>('/restore/handshake/reject', {
-      method: 'POST',
-      body: JSON.stringify({ handshake_id: handshakeId })
-    }),
-  restoreRevokeToken: () =>
-    request<{ ok: boolean }>('/restore/token', { method: 'DELETE' }),
+    post('/restore/handshake/reject', { body: { handshake_id: handshakeId } }),
+  restoreRevokeToken: () => del('/restore/token'),
   /** Whether a pairing token is stored. The token itself never comes
    *  back; only the app window can ask. */
-  pairingStatus: () => get<{ paired: boolean }>('/pairing'),
+  pairingStatus: () => get('/pairing'),
 
   /** The extension version the browser runs, as of its last paired
    *  call. Null until the extension has made one since the app started. */
-  restoreExtensionSeen: () =>
-    request<{ version: string | null; seen_at: number | null }>('/restore/extension')
+  restoreExtensionSeen: () => get('/restore/extension')
 }
 
-function jobEventsUrl(jobId: string): string {
-  return `${base()}/jobs/${encodeURIComponent(jobId)}/events`
+function jobEventsPath(jobId: string): string {
+  return url('/jobs/{job_id}/events', { job_id: jobId })
 }
 
-/** Open an SSE route and hand each block to `onBlock` until the stream
- *  ends. A refused start (busy, not signed in) throws its RefusalError. */
-async function followStream(
-  url: string,
-  init: Pick<RequestInit, 'method' | 'signal'>,
-  onBlock: (block: string) => void
-): Promise<void> {
-  const res = await fetch(url, { ...init, headers: { Accept: 'text/event-stream' } })
-  await readEventStream(res, onBlock)
-}
-
-/** Read an SSE response block by block until it ends. */
+/** Read an ok SSE response block by block until it ends. */
 async function readEventStream(res: Response, onBlock: (block: string) => void): Promise<void> {
-  if (!res.ok) throw await failure(res)
-  if (!res.body) throw new Error(`HTTP ${res.status}: no body`)
+  if (!res.body) throw new HttpError(res.status, 'no body')
   const reader = res.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
@@ -1456,65 +996,10 @@ function parseBlock(block: string): { event: string | null; data: unknown } {
   return { event, data }
 }
 
-/** The events every job stream carries. True when `event` was one. */
-function dispatchJobEvent(event: string, data: unknown, handlers: JobStreamHandlers): boolean {
-  if (event === 'job') {
-    handlers.onJob?.(data as Job)
-    return true
-  }
-  if (event === 'cancelled') {
-    handlers.onCancelled?.()
-    return true
-  }
-  return false
+/** Hand one SSE block to the handler its event name picks, if any. */
+function dispatch<Events>(block: string, table: EventTable<Events>): void {
+  const { event, data } = parseBlock(block)
+  if (!event || !Object.hasOwn(table, event)) return
+  const handle = table[event as keyof Events]
+  handle?.(data as Events[keyof Events])
 }
-
-function dispatchPullStream(block: string, handlers: FlistPullHandlers): void {
-  const { event, data: parsed } = parseBlock(block)
-  if (!event || dispatchJobEvent(event, parsed, handlers)) return
-  switch (event) {
-    case 'ticket':
-      handlers.onTicket?.()
-      break
-    case 'fetching':
-      handlers.onFetching?.()
-      break
-    case 'images':
-      handlers.onImages?.(parsed as { total: number })
-      break
-    case 'image':
-      handlers.onImage?.(parsed as Parameters<NonNullable<FlistPullHandlers['onImage']>>[0])
-      break
-    case 'done':
-      handlers.onDone?.(parsed as Parameters<NonNullable<FlistPullHandlers['onDone']>>[0])
-      break
-    case 'error':
-      handlers.onError?.(parsed as StreamError)
-      break
-  }
-}
-
-function dispatchBackupAllStream(
-  block: string,
-  handlers: FlistBackupAllHandlers
-): void {
-  const { event, data: parsed } = parseBlock(block)
-  if (!event || dispatchJobEvent(event, parsed, handlers)) return
-  switch (event) {
-    case 'start':
-      handlers.onStart?.(parsed as { total: number })
-      break
-    case 'character':
-      handlers.onCharacter?.(parsed as FlistBackupAllCharacterEvent)
-      break
-    case 'done':
-      handlers.onDone?.(
-        parsed as Parameters<NonNullable<FlistBackupAllHandlers['onDone']>>[0]
-      )
-      break
-    case 'error':
-      handlers.onError?.(parsed as StreamError)
-      break
-  }
-}
-

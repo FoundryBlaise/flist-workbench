@@ -9,9 +9,8 @@ let fake: FakeApi
 beforeEach(() => {
   fake = installFakeApi()
   useStore.setState({
-    flistSignInStatus: 'idle',
+    flistSignInAttempt: { status: 'idle' },
     flistSignInOpen: true,
-    flistSignInError: null,
     flistActiveCharacterId: null
   })
 })
@@ -35,7 +34,7 @@ describe('flistSignIn', () => {
     await useStore.getState().flistSignIn('Quill Account', 'pw')
     await vi.waitFor(() => expect(useStore.getState().flistSignInOpen).toBe(false))
 
-    expect(useStore.getState().flistSignInStatus).toBe('idle')
+    expect(useStore.getState().flistSignInAttempt.status).toBe('idle')
     expect(useStore.getState().flistSession.active).toBe(true)
     expect(fake.requestsTo('POST /flist/backup-all')).toEqual([])
   })

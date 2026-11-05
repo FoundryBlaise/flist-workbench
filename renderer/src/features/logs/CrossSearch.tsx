@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../state'
-import { api, type LogMessage } from '../../lib/api'
+import { api, errorDetail, type Schema } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 
-type Hit = LogMessage & { index: number }
-type PartnerHits = { partner: string; bytes: number; hits: Hit[]; truncated: boolean }
+type PartnerHits = Schema<'LogSearchPartner'>
 
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString(undefined, {
@@ -52,7 +51,7 @@ export function CrossSearch({ onClose }: { onClose: () => void }) {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(errorDetail(err))
         setStatus('error')
       })
     return () => {

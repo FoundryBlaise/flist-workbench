@@ -3,7 +3,7 @@
 // gets its code and details, rather than a bare HTTP status.
 
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { api, RefusalError } from '../../lib/api'
+import { api, errorDetail, HttpError, RefusalError, refusalCode } from '../../lib/api'
 import { useStore } from '../../state'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 
@@ -27,7 +27,7 @@ it('shows the reason a Log was refused', async () => {
   await useStore.getState().loadMessages('me', 'stranger')
 
   const errors = Object.values(useStore.getState().messagesError)
-  expect(errors).toEqual(['HTTP 404: no such log'])
+  expect(errors).toEqual(['no such log'])
 })
 
 it('hands the refusal code to the caller', async () => {
@@ -42,6 +42,17 @@ it('hands the refusal code to the caller', async () => {
   expect((err as RefusalError).message).toBe('HTTP 400: invalid backup filename')
   expect((err as RefusalError).code).toBe('invalid_file_name')
   expect((err as RefusalError).status).toBe(400)
+})
+
+it('takes no code the sidecar schema does not list for a refusal code', async () => {
+  fake.on('GET /logs/characters', json({ code: 'busy', message: 'try later', details: {} }, 409))
+
+  const err = await api.characters().catch((e: unknown) => e)
+
+  expect(err).toBeInstanceOf(HttpError)
+  expect(err).not.toBeInstanceOf(RefusalError)
+  expect(refusalCode(err)).toBeNull()
+  expect(errorDetail(err)).toBe('try later')
 })
 
 it('hands the details to the caller', async () => {

@@ -5,6 +5,8 @@ is deliberately no route here that writes into the archive: no
 Workbench, no Backup, no export. The viewer reads.
 """
 
+from typing import Any, Literal
+
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
@@ -14,12 +16,55 @@ import foreign_cache
 from refusals import ImageNotFound, NoAvatar, ProfileNotCached, UnsupportedType
 from services import avatars
 from services import foreign as foreign_service
+from wire import MISSING, WireModel, binary, image
 
 router = APIRouter()
 
 
+class ForeignSearch(WireModel):
+    """Candidate names from one source. `exact`: the free-text source
+    answers what was typed, not a name known to exist."""
+
+    source: Literal["bookmarks", "friends", "logs", "name"]
+    query: str
+    results: list[str]
+    truncated: bool
+    exact: bool
+
+
+class ForeignCacheUsage(WireModel):
+    """What the Foreign profile cache holds on disk, and what it may hold."""
+
+    bytes: int
+    profiles: int
+    cap_bytes: int
+
+
+class ForeignCacheCleared(WireModel):
+    """How many cached Foreign profiles went, and what the cache holds after."""
+
+    removed: int
+    bytes: int
+    profiles: int
+    cap_bytes: int
+
+
+class ForeignProfile(WireModel):
+    """A Foreign profile. `profile` is F-list's character-data payload
+    as cached, with the cache's `fetched_at` stamp."""
+
+    name: str
+    profile: dict[str, Any]
+    from_cache: bool
+    age_sec: float | None
+    fetched_at: int | float | None
+    #: Set when a refresh failed and the cached copy was served anyway.
+    stale: bool | MISSING = MISSING
+    refresh_error: str | MISSING = MISSING
+
+
 @router.get("/foreign/search")
-async def foreign_search(source: str, q: str = "") -> dict:
+async def foreign_search(source: str, q: str = "") -> ForeignSearch:
     """Candidate names from one of the viewer's three sources.
 
     `bookmarks` and `friends` come off the F-list account (one API
@@ -27,31 +72,35 @@ async def foreign_search(source: str, q: str = "") -> dict:
     costs nothing; `name` echoes the typed string back because F-list
     has no character search to call.
     """
-    return await foreign_service.search(q, source)
+    return ForeignSearch.model_validate(await foreign_service.search(q, source))
 
 
 @router.get("/foreign/cache")
-def foreign_cache_usage() -> dict:
+def foreign_cache_usage() -> ForeignCacheUsage:
     """How much disk the Foreign profile cache takes: `{bytes,
     profiles, cap_bytes}`."""
-    return foreign_service.cache_usage()
+    return ForeignCacheUsage.model_validate(foreign_service.cache_usage())
 
 
 @router.delete("/foreign/cache")
-def foreign_cache_clear() -> dict:
+def foreign_cache_clear() -> ForeignCacheCleared:
     """Delete every cached Foreign profile, images and avatars included.
     Not the Trash: these are copies of other people's profiles."""
-    return foreign_service.clear_cache()
+    return ForeignCacheCleared.model_validate(foreign_service.clear_cache())
 
 
 @router.get("/foreign/character/{name}")
-async def foreign_character(name: str, refresh: bool = False) -> dict:
+async def foreign_character(name: str, refresh: bool = False) -> ForeignProfile:
     """One foreign profile. Served from cache while it is under the
     24-hour TTL; `refresh=true` is the viewer's reload button."""
-    return await foreign_service.get_profile(name, refresh=refresh)
+    return ForeignProfile.model_validate(await foreign_service.get_profile(name, refresh=refresh))
 
 
-@router.get("/foreign/character/{name}/avatar")
+@router.get(
+    "/foreign/character/{name}/avatar",
+    response_class=FileResponse,
+    responses=binary("image/png", "The avatar of the Foreign profile."),
+)
 async def foreign_character_avatar(name: str) -> FileResponse:
     """The profile's avatar, cached inside its own foreign folder.
 
@@ -73,7 +122,11 @@ async def foreign_character_avatar(name: str) -> FileResponse:
     return FileResponse(dest)
 
 
-@router.get("/foreign/character/{name}/image/{image_id}")
+@router.get(
+    "/foreign/character/{name}/image/{image_id}",
+    response_class=FileResponse,
+    responses=image("A gallery image of the Foreign profile."),
+)
 async def foreign_character_image(name: str, image_id: str) -> FileResponse:
     """A gallery image, downloaded on first request and cached after.
 

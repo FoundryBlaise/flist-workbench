@@ -19,6 +19,10 @@
     // model's picture and the user's preview cannot disagree. Pure
     // string functions, no DOM.
     "renderer/src/lib/bbcode/index.ts",
+    // The render loop reads the sidecar's answers with the window's
+    // generated API types (`npm run gen:api`). Types only.
+    "renderer/src/lib/api.gen.ts",
+    "renderer/src/lib/schema.ts",
     "electron.vite.config.ts",
     "playwright.config.ts",
     "tests/**/*.ts"

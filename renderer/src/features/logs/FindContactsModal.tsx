@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../../lib/api'
+import { api, errorDetail } from '../../lib/api'
 import { formatBytes } from '../../lib/bytes'
 import { useStore } from '../../state'
 import { displayCharacter } from '../../lib/partnerName'
@@ -63,7 +63,7 @@ export function FindContactsModal({ onClose }: { onClose: () => void }) {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(errorDetail(err))
         setStatus('error')
       })
     return () => {

@@ -116,8 +116,7 @@ it('Labels a model clears while the Trash is open show up in it', async () => {
         event: 'labels-changed',
         at: 2,
         origin: 'mcp:clear_labels',
-        character: 'Lady Amber Blaise',
-        partner: 'Daelan Envale'
+        hashes: 2
       },
       useStore.getState()
     )

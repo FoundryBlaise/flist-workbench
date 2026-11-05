@@ -6,7 +6,7 @@
 // nothing on disk to point at.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, useStore } from '../../state'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 import {
   archiveEntry,
@@ -42,9 +42,7 @@ beforeEach(() => {
     flistActiveCharacterId: CID,
     flistBrowseBackup: null,
     flistRestoreRefusal: {},
-    editorReadOnly: false,
-    editorContent: 'my draft',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -60,7 +58,7 @@ describe('the Live row', () => {
     const s = useStore.getState()
     expect(s.flistViewingLive[CID]).toBe(true)
     expect(s.editorReadOnly).toBe(true)
-    expect(s.editorContent).toBe('published')
+    expect(selectEditorDescription(s)).toBe('published')
     expect(fake.requests).toEqual([])
   })
 
@@ -73,7 +71,7 @@ describe('the Live row', () => {
     const puts = fake.requestsTo(SAVE)
     expect(puts).toHaveLength(1)
     expect(puts[0].headers['If-Match']).toBe('e1')
-    expect(useStore.getState().editorContent).toBe('published')
+    expect(selectEditorDescription(useStore.getState())).toBe('published')
   })
 
   it('keeps edits that could not be saved on screen instead of showing Live', async () => {
@@ -89,7 +87,7 @@ describe('the Live row', () => {
     expect(s.flistViewingLive[CID]).not.toBe(true)
     expect(s.editorReadOnly).toBe(false)
     expect(s.flistWorking[CID].unsavedDirty).toBe(true)
-    expect(s.editorContent).toBe('typed just now')
+    expect(selectEditorDescription(s)).toBe('typed just now')
   })
 })
 
@@ -103,7 +101,7 @@ describe('the Workbench row', () => {
     const s = useStore.getState()
     expect(s.flistViewingLive[CID]).toBe(false)
     expect(s.editorReadOnly).toBe(false)
-    expect(s.editorContent).toBe('my draft')
+    expect(selectEditorDescription(s)).toBe('my draft')
     expect(s.flistWorking[CID].etag).toBe('e1')
     expect(fake.requests.map((r) => r.path).filter((p) => !p.startsWith(BENCH_URL))).toEqual([])
   })
@@ -150,14 +148,14 @@ describe('browsing a Backup', () => {
     fake.on(READ, json(payloadRead(described('my draft'), 'e1')))
 
     await useStore.getState().flistOpenBrowseBackup(CID, BACKUP)
-    expect(useStore.getState().editorContent).toBe('as it was')
+    expect(selectEditorDescription(useStore.getState())).toBe('as it was')
     useStore.getState().flistCloseBrowseBackup()
     await vi.runAllTimersAsync()
 
     const s = useStore.getState()
     expect(s.flistViewingLive[CID]).toBe(false)
     expect(s.editorReadOnly).toBe(false)
-    expect(s.editorContent).toBe('my draft')
+    expect(selectEditorDescription(s)).toBe('my draft')
   })
 
   it('returns to Live it was opened from', async () => {
@@ -171,7 +169,7 @@ describe('browsing a Backup', () => {
     const s = useStore.getState()
     expect(s.flistViewingLive[CID]).toBe(true)
     expect(s.editorReadOnly).toBe(true)
-    expect(s.editorContent).toBe('published')
+    expect(selectEditorDescription(s)).toBe('published')
     expect(fake.requestsTo(READ)).toEqual([])
   })
 })
@@ -194,7 +192,7 @@ describe('Restore', () => {
 
     expect(ok).toBe(true)
     const s = useStore.getState()
-    expect(s.editorContent).toBe('from the Backup')
+    expect(selectEditorDescription(s)).toBe('from the Backup')
     expect(s.flistWorking[CID].etag).toBe('e9')
     expect(s.flistWorkbenchInfo[CID]).toEqual({ updatedAt: 300 })
     expect(s.flistViewingLive[CID]).toBe(false)
@@ -220,7 +218,7 @@ describe('Restore', () => {
     expect(ok).toBe(false)
     const s = useStore.getState()
     expect(s.flistRestoreRefusal[CID]).toBe('This Backup keeps older files, not a profile.')
-    expect(s.editorContent).toBe('my draft')
+    expect(selectEditorDescription(s)).toBe('my draft')
     expect(s.flistWorking[CID].etag).toBe('e1')
   })
 
@@ -257,7 +255,7 @@ describe('Restore', () => {
 
     const s = useStore.getState()
     expect(s.flistViewingLive[CID]).toBe(false)
-    expect(s.editorContent).toBe('from the Backup')
+    expect(selectEditorDescription(s)).toBe('from the Backup')
     expect(s.editorReadOnly).toBe(false)
   })
 })

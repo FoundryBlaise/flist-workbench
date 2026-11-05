@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { api, type FlistImageReferences } from '../../lib/api'
+import { api, errorDetail, type FlistImageReferences } from '../../lib/api'
 import { WORKBENCH_UNDO_MARK } from '../../lib/undoRedo'
 import { selectWorkingSlot, useStore } from '../../state'
+import {
+  DRAG_MIME_GALLERY_REORDER,
+  DRAG_MIME_POOL_TO_PROFILE,
+  DRAG_MIME_PROFILE_TO_POOL
+} from './constants'
 import {
   EMPTY_SELECTION,
   pruneSelection,
@@ -49,17 +54,6 @@ function galleryFromSlot(payload: unknown): GalleryEntry[] {
 }
 
 const TOAST_MS = 5000
-
-// MIME markers for cross-pane drags. Custom types so they don't conflict
-// with the system's text/uri-list or text/plain that drag events also
-// dispatch. Each direction has its own type so a drop handler can refuse
-// the wrong direction (e.g. profile pane shouldn't accept profile→pool).
-const DRAG_MIME_PROFILE_TO_POOL = 'application/x-flist-image-to-pool'
-const DRAG_MIME_POOL_TO_PROFILE = 'application/x-flist-image-to-profile'
-// Drag from any gallery view (here or the right-pane preview) onto
-// another gallery item — reorders within working.json's `images`.
-// Same MIME both panes use so reorders sync automatically.
-const DRAG_MIME_GALLERY_REORDER = 'application/x-flist-gallery-reorder'
 
 function reorderGallery(
   list: GalleryEntry[],
@@ -270,7 +264,7 @@ export function ImagesTab({
       try {
         await uploadImage(characterId, file)
       } catch (err) {
-        const raw = err instanceof Error ? err.message : String(err)
+        const raw = errorDetail(err)
         setUploadError(`"${file.name}" wasn't accepted: ${raw}`)
         break
       }
@@ -317,7 +311,7 @@ export function ImagesTab({
       await trashImages(characterId, ids)
       setSel(EMPTY_SELECTION)
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err)
+      const raw = errorDetail(err)
       setUploadError(`Couldn’t move to the Trash: ${raw}`)
     }
   }

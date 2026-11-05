@@ -4,10 +4,10 @@ import { useStore } from '../../state'
 // Hint we prepend to F-list's verbatim "Login Failed…" string so users
 // have a checklist of common causes (caps lock, trailing space, signing
 // in with a character name instead of the account login) instead of
-// only the bare F-list error which reads as an accusation.
-function friendlierAuthHint(rawError: string | null): string | null {
-  if (!rawError) return null
-  if (/Login Failed|Invalid account/i.test(rawError)) {
+// only the bare F-list error which reads as an accusation. Chosen by
+// the sidecar's code, not by F-list's words.
+function friendlierAuthHint(code: string | null): string | null {
+  if (code === 'sign_in_failed') {
     return (
       "F-list rejected this login. Common causes: Caps Lock is on, a trailing "
       + "space, or you used a character name instead of your account login."
@@ -19,8 +19,10 @@ function friendlierAuthHint(rawError: string | null): string | null {
 export function SignInModal({ onClose }: { onClose: () => void }) {
   const signIn = useStore((s) => s.flistSignIn)
   const getLastAccount = useStore((s) => s.flistGetLastAccount)
-  const status = useStore((s) => s.flistSignInStatus)
-  const error = useStore((s) => s.flistSignInError)
+  const attempt = useStore((s) => s.flistSignInAttempt)
+  const status = attempt.status
+  const error = attempt.status === 'error' ? attempt.error.message : null
+  const errorCode = attempt.status === 'error' ? attempt.error.code : null
   const savedCreds = useStore((s) => s.flistSavedCreds)
   // Lazy initializer reads the saved account BEFORE first paint so the
   // focus useEffect below sees the right `value` and routes initial
@@ -104,7 +106,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
       autoLogin
     })
     // The store closes the modal on success; on failure status flips to
-    // 'error' with the message in `flistSignInError`. Either way we
+    // 'error' with the message in `flistSignInAttempt`. Either way we
     // clear the password from local state — never echo a wrong password
     // back into the input.
     setPassword('')
@@ -119,7 +121,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const friendly = friendlierAuthHint(error)
+  const friendly = friendlierAuthHint(errorCode)
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">

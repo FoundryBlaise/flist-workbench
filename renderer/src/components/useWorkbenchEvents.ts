@@ -8,9 +8,6 @@ import { applyWorkbenchEvent } from '../state/workbenchEvents'
  *  state/workbenchEvents). Open while the layout is mounted. */
 export function useWorkbenchEvents(): void {
   useEffect(() => {
-    const base = window.workbench?.sidecarUrl ?? 'http://127.0.0.1:27384'
-    return subscribeToWorkbenchEvents(base, (event) =>
-      applyWorkbenchEvent(event, useStore.getState())
-    )
+    return subscribeToWorkbenchEvents((event) => applyWorkbenchEvent(event, useStore.getState()))
   }, [])
 }

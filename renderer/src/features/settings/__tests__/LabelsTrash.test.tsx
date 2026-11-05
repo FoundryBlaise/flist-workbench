@@ -133,8 +133,7 @@ it('Labels a model cleared show up without reopening Settings', async () => {
         event: 'labels-changed',
         at: 2,
         origin: 'mcp:clear_labels',
-        character: ENTRY.character,
-        partner: ENTRY.partner
+        hashes: 2
       },
       useStore.getState()
     )

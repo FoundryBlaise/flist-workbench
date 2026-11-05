@@ -1,0 +1,314 @@
+"""The sidecar's OpenAPI schema is what the renderer's API types are
+generated from (`npm run gen:api`). These tests keep the committed
+schema honest: it is the app's schema, it names every refusal code, and
+each route says what it answers."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import openapi_schema
+
+
+def test_the_committed_schema_is_the_apps_schema() -> None:
+    committed = openapi_schema.SCHEMA_PATH.read_text(encoding="utf-8")
+    assert committed == openapi_schema.render(), (
+        "sidecar/openapi.json is stale: run `npm run gen:api` and commit "
+        "the schema and the generated types"
+    )
+
+
+def _refusal_classes() -> list[type]:
+    import server  # noqa: F401 - imports every module that raises a refusal
+    from refusals import Refusal
+
+    found, todo = [], [Refusal]
+    while todo:
+        cls = todo.pop()
+        found.append(cls)
+        todo.extend(cls.__subclasses__())
+    return found
+
+
+def _codes_raised_in_code() -> set[str]:
+    """Every code a `Refusal` can carry: a class's own `code`, the codes
+    a class takes per instance (`STATUS_BY_CODE`, `CODES`)."""
+    codes: set[str] = set()
+    for cls in _refusal_classes():
+        codes.add(cls.code)
+        codes.update(getattr(cls, "STATUS_BY_CODE", {}))
+        codes.update(getattr(cls, "CODES", ()))
+    return codes
+
+
+def _schema_refusal_codes() -> set[str]:
+    return set(openapi_schema.schema()["components"]["schemas"]["RefusalCode"]["enum"])
+
+
+def test_the_schema_names_every_refusal_code() -> None:
+    missing = _codes_raised_in_code() - _schema_refusal_codes()
+    assert missing == set(), f"add these to refusals.RefusalCode: {sorted(missing)}"
+
+
+def test_the_schema_names_the_refusals_no_class_raises() -> None:
+    # The local-access guard, the framework and the error handlers in
+    # server.py answer these without a Refusal class.
+    assert {
+        "unauthorized",
+        "forbidden_origin",
+        "forbidden_host",
+        "invalid_request",
+        "internal_error",
+        "http_404",
+        "http_405",
+    } <= _schema_refusal_codes()
+
+
+#: Where a job takes its code from something other than a literal or a
+#: constant: `_drive` fails a stream job with the code of the stream's
+#: `error` event, which `sse.error` (checked below) or a refusal built.
+FORWARDED_JOB_CODES = {("services/jobs.py", "_drive")}
+
+
+def _job_failure_codes_in_code() -> tuple[set[str], list[str]]:
+    """Every code a job fails with (`job.fail(code, ...)`) or a job's
+    stream stops with (`sse.error(stage, code, ...)`), read from the
+    source; plus the calls whose code could not be read."""
+    import ast
+    import importlib
+
+    sidecar = Path(openapi_schema.__file__).resolve().parent
+    codes: set[str] = set()
+    unreadable: list[str] = []
+    for path in sorted(sidecar.rglob("*.py")):
+        rel = path.relative_to(sidecar).as_posix()
+        if rel.startswith((".venv/", "tests/")):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        module = None
+        # Module functions and methods, each with the functions nested in it.
+        defs = tree.body + [n for c in tree.body if isinstance(c, ast.ClassDef) for n in c.body]
+        for func in [n for n in defs if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            for call in [n for n in ast.walk(func) if isinstance(n, ast.Call)]:
+                f = call.func
+                if not isinstance(f, ast.Attribute) or not isinstance(f.value, ast.Name):
+                    continue
+                if (f.value.id, f.attr) == ("job", "fail"):
+                    arg = call.args[0]
+                elif (f.value.id, f.attr) == ("sse", "error"):
+                    arg = call.args[1]
+                else:
+                    continue
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    codes.add(arg.value)
+                elif isinstance(arg, ast.Name):
+                    if module is None:
+                        module = importlib.import_module(rel.removesuffix(".py").replace("/", "."))
+                    codes.add(str(getattr(module, arg.id)))
+                elif (rel, func.name) not in FORWARDED_JOB_CODES:
+                    unreadable.append(f"{rel}:{call.lineno}")
+    return codes, unreadable
+
+
+def test_the_schema_names_every_code_a_job_fails_with() -> None:
+    schemas = openapi_schema.schema()["components"]["schemas"]
+    job_codes = set(schemas["RefusalCode"]["enum"]) | set(schemas["JobFailureCode"]["enum"])
+    codes, unreadable = _job_failure_codes_in_code()
+
+    assert unreadable == [], "use a literal or a module constant as the code"
+    assert {"embedding_model_changed", "not_signed_in", "internal_error"} <= codes
+    missing = codes - job_codes
+    assert missing == set(), f"add these to wire.JobFailureCode: {sorted(missing)}"
+
+
+def test_every_route_answers_a_refusal_when_it_is_not_ok() -> None:
+    undeclared = [
+        f"{method.upper()} {path}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        if operation["responses"].get("default", {}).get("content", {}).get("application/json", {}).get("schema")
+        != {"$ref": "#/components/schemas/RefusalBody"}
+    ]
+    assert undeclared == []
+
+
+#: What a route that answers no JSON model declares instead: an event
+#: stream, bytes, or nothing.
+NOT_JSON = {
+    "text/event-stream",
+    "application/octet-stream",
+    "application/zip",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+}
+
+
+def _names_models(schema: dict) -> bool:
+    """Whether a body schema is a model, a list of models, or one of
+    several models (a route answering either shape, such as a Backup
+    saved or not)."""
+    if schema.get("$ref", "").startswith("#/components/schemas/"):
+        return True
+    if schema.get("type") == "array":
+        return _names_models(schema.get("items", {}))
+    branches = schema.get("anyOf") or schema.get("oneOf")
+    return bool(branches) and all(_names_models(b) for b in branches)
+
+
+def _undeclared_answer(operation: dict) -> str | None:
+    """Why `operation`'s ok answer says nothing about its body, or None
+    when it names a model (or a stream, bytes, or no body)."""
+    ok = {status: r for status, r in operation["responses"].items() if status.startswith("2")}
+    if not ok:
+        return "no 2xx answer"
+    for status, response in ok.items():
+        content = response.get("content")
+        if status == "204":
+            if content:
+                return "204 with a body"
+            continue
+        if not content:
+            return f"{status} without content"
+        for media_type, body in content.items():
+            if media_type in NOT_JSON:
+                continue
+            if not _names_models(body.get("schema", {})):
+                return f"{status} {media_type} names no model: {body.get('schema')}"
+    return None
+
+
+def test_every_route_declares_a_response_model() -> None:
+    # A handler annotated `-> dict` (or not at all) answers an object
+    # the schema cannot name, so the window's type for it would be
+    # written by hand.
+    from sidecar_client import api_routes
+
+    from server import app
+
+    paths = openapi_schema.schema()["paths"]
+    problems = []
+    for route in api_routes(app):
+        why = _undeclared_answer(paths[route.path][route.method.lower()])
+        if why:
+            problems.append(f"{route.method} {route.path}: {why}")
+    assert problems == []
+
+
+def test_every_event_stream_names_its_events() -> None:
+    # `x-events` names the stream's events model: one field per event
+    # name, typed with its data, so the window's types for the events
+    # are generated too.
+    schemas = openapi_schema.schema()["components"]["schemas"]
+
+    def names_an_events_model(events: dict) -> bool:
+        branches = events.get("anyOf", [events])
+        return all(
+            b.get("$ref", "").removeprefix("#/components/schemas/") in schemas for b in branches
+        )
+
+    problems = [
+        f"{method.upper()} {path}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        for status, response in operation["responses"].items()
+        if "text/event-stream" in response.get("content", {})
+        and not names_an_events_model(response["content"]["text/event-stream"].get("x-events", {}))
+    ]
+    assert problems == []
+
+
+def _undeclared_body(operation: dict) -> str | None:
+    """Why `operation`'s JSON request body names no model, or None when
+    it does (or takes no JSON body: bytes go as they are)."""
+    content = operation.get("requestBody", {}).get("content", {})
+    body = content.get("application/json")
+    if body is None:
+        return None
+    schema = body.get("schema", {})
+    # An optional body is a model or nothing.
+    branches = [b for b in schema.get("anyOf", [schema]) if b != {"type": "null"}]
+    if branches and all(_names_models(b) for b in branches):
+        return None
+    return f"body names no model: {schema}"
+
+
+def test_every_json_body_names_a_request_model() -> None:
+    # A body typed `dict` takes any object, and the window's type for
+    # what it sends would be written by hand.
+    problems = [
+        f"{method.upper()} {path}: {why}"
+        for path, operations in openapi_schema.schema()["paths"].items()
+        for method, operation in operations.items()
+        if (why := _undeclared_body(operation))
+    ]
+    assert problems == []
+
+
+def _body_model_names(operation: dict) -> list[str]:
+    """The models `operation`'s JSON request body names."""
+    schema = operation.get("requestBody", {}).get("content", {}).get("application/json", {})
+    refs = json.dumps(schema.get("schema", {}))
+    return re.findall(r'"#/components/schemas/([^"]+)"', refs)
+
+
+def test_a_request_model_is_named_for_a_request() -> None:
+    # The class name is the schema's and the window's name for the
+    # body (wire.py): `...Request`, or `...Update` for a partial change.
+    misnamed = sorted(
+        {
+            f"{name} ({method.upper()} {path})"
+            for path, operations in openapi_schema.schema()["paths"].items()
+            for method, operation in operations.items()
+            for name in _body_model_names(operation)
+            if not name.endswith(("Request", "Update"))
+        }
+    )
+    assert misnamed == []
+
+
+def test_model_names_are_unique_across_routers() -> None:
+    # Two models of one name get module-qualified names in the schema
+    # (`routers__settings__Settings`), and the renderer's names with them.
+    names = openapi_schema.schema()["components"]["schemas"]
+    assert [name for name in names if "__" in name] == []
+
+
+def _bare_dict_returns() -> list[str]:
+    """Every `return {...}` or `return dict(...)` in a route handler of
+    a router module."""
+    import ast
+
+    routers = Path(openapi_schema.__file__).resolve().parent / "routers"
+    found = []
+    for path in sorted(routers.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and isinstance(d.func.value, ast.Name)
+                and d.func.value.id == "router"
+                for d in func.decorator_list
+            ):
+                continue
+            for node in ast.walk(func):
+                value = node.value if isinstance(node, ast.Return) else None
+                if isinstance(value, ast.Dict) or (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "dict"
+                ):
+                    found.append(f"routers/{path.name}:{node.lineno} {func.name}")
+    return found
+
+
+def test_no_route_handler_returns_a_bare_dict() -> None:
+    # The handler builds its response model (or hands a shared
+    # function's dict to it: `Model.model_validate(d)`), so what goes
+    # out is what the schema says, whatever FastAPI would coerce.
+    assert _bare_dict_returns() == []

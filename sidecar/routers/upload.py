@@ -7,7 +7,7 @@ extension calls them so; they move only with an extension release that
 knows new ones (services/upload.py).
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from refusals import BackupNotFound, InvalidRequest, NotPaired
 from services import events
 from services import pull as pull_service
 from services import upload as upload_service
+from wire import WireModel, binary
 
 router = APIRouter()
 
@@ -27,7 +28,11 @@ router = APIRouter()
 EXTENSION = "extension"
 
 
-@router.get("/flist/character/{character_id}/export.zip")
+@router.get(
+    "/flist/character/{character_id}/export.zip",
+    response_class=Response,
+    responses=binary("application/zip", "The Upload ZIP, as an attachment."),
+)
 def flist_character_export_zip(character_id: str) -> Response:
     """Build the userscript-compatible Upload ZIP (Tier 6).
 
@@ -91,16 +96,151 @@ def _safe_filename_part(name: str) -> str:
     return cleaned[:64]
 
 
-class _PairAcceptBody(BaseModel):
+# ---- what the pairing and extension routes answer ----------------------
+#
+# The released extension reads these answers; the models describe them
+# as they are and do not change them (ADR 0002).
+
+
+class PairingHandshake(WireModel):
+    """A pairing the extension started: it keeps `token` and polls the
+    handshake's status until the window accepts it."""
+
+    handshake_id: str
+    token: str
+
+
+class PairingHandshakeStatus(WireModel):
+    status: Literal["pending", "accepted", "rejected", "expired"]
+
+
+class PendingHandshake(WireModel):
+    """A pairing waiting for the window's accept. `fingerprint` is a
+    short form of the token, for the user to compare."""
+
+    handshake_id: str
+    fingerprint: str
+    created_at: float
+
+
+class PendingHandshakes(WireModel):
+    pending: list[PendingHandshake]
+
+
+class HandshakeAnswered(WireModel):
+    ok: Literal[True]
+
+
+class HandshakeUnknown(WireModel):
+    """The handshake expired or never existed."""
+
+    ok: Literal[False]
+    error: Literal["expired_or_unknown"]
+
+
+class PairingRevoked(WireModel):
+    ok: bool
+
+
+class PairingStatus(WireModel):
+    paired: bool
+
+
+class ExtensionSeen(WireModel):
+    """The extension version as of its last paired call; both null
+    until it has made one since the sidecar started."""
+
+    version: str | None
+    seen_at: float | None
+
+
+class UploadCharacter(WireModel):
+    """An archived character the extension can take Upload sources from."""
+
+    name: str
+    character_id: str
+
+
+class UploadSourceWorkbench(WireModel):
+    """The Workbench as an Upload source. `kind` is "set" because
+    extension 0.1.1 finds the Workbench by it."""
+
+    id: Literal["workbench"]
+    kind: Literal["set"]
+    label: str
+    created_at: str | None
+    image_count: int
+    upload_refused: None
+
+
+class UploadSourceBackup(WireModel):
+    """A Backup as an Upload source. `kind` "pre-restore" is the
+    extension's name for a Backup taken before an Upload; `backup_kind`
+    is the Backup list's `kind`. `upload_refused` says why it cannot be
+    uploaded, or is null."""
+
+    id: str
+    kind: Literal["backup", "pre-restore"]
+    label: str
+    created_at: str | None
+    image_count: int
+    backup_kind: str | None
+    name: str | None
+    upload_refused: str | None
+
+
+class PreUploadBackupKept(WireModel):
+    """The Backup taken before an Upload; `snapshot_id` is the
+    extension's name for its file name."""
+
+    ok: Literal[True]
+    snapshot_id: str
+    path: str
+    bytes: int
+
+
+class PreUploadBackupNotKept(WireModel):
+    ok: Literal[False]
+    error: Literal["unknown_character"]
+
+
+class ImageIdsDeferred(WireModel):
+    character: str
+    deferred: bool
+
+
+class PullScheduled(WireModel):
+    scheduled: bool
+    character: str
+    delay_seconds: float
+
+
+class UploadDone(WireModel):
+    ok: bool
+
+
+def _handshake_answer(answer: dict[str, Any]) -> HandshakeAnswered | HandshakeUnknown:
+    if answer["ok"]:
+        return HandshakeAnswered.model_validate(answer)
+    return HandshakeUnknown.model_validate(answer)
+
+
+def _upload_source(source: dict[str, Any]) -> UploadSourceWorkbench | UploadSourceBackup:
+    if source["kind"] == "set":
+        return UploadSourceWorkbench.model_validate(source)
+    return UploadSourceBackup.model_validate(source)
+
+
+class HandshakeAnswerRequest(BaseModel):
     handshake_id: str
 
 
-class _PreUploadBackupBody(BaseModel):
+class PreUploadBackupRequest(BaseModel):
     character: str
     payload: dict[str, Any]
 
 
-class _UploadDoneBody(BaseModel):
+class UploadDoneRequest(BaseModel):
     character: str | None = None
 
 
@@ -115,69 +255,83 @@ def _require_pairing(
 
 
 @router.post("/restore/handshake")
-def handshake_begin() -> dict[str, str]:
-    return upload_service.begin_handshake()
+def handshake_begin() -> PairingHandshake:
+    return PairingHandshake.model_validate(upload_service.begin_handshake())
 
 
 @router.get("/restore/handshake-status")
-def handshake_status(handshake_id: str) -> dict[str, str]:
-    return upload_service.handshake_status(handshake_id)
+def handshake_status(handshake_id: str) -> PairingHandshakeStatus:
+    return PairingHandshakeStatus.model_validate(
+        upload_service.handshake_status(handshake_id)
+    )
 
 
 @router.get("/restore/handshake/pending")
-def handshake_pending() -> dict[str, Any]:
-    return {"pending": upload_service.list_pending_handshakes()}
+def handshake_pending() -> PendingHandshakes:
+    return PendingHandshakes(
+        pending=[
+            PendingHandshake.model_validate(h)
+            for h in upload_service.list_pending_handshakes()
+        ]
+    )
 
 
 @router.post("/restore/handshake/accept")
-def handshake_accept(body: _PairAcceptBody) -> dict[str, Any]:
-    return upload_service.accept_handshake(body.handshake_id)
+def handshake_accept(body: HandshakeAnswerRequest) -> HandshakeAnswered | HandshakeUnknown:
+    return _handshake_answer(upload_service.accept_handshake(body.handshake_id))
 
 
 @router.post("/restore/handshake/reject")
-def handshake_reject(body: _PairAcceptBody) -> dict[str, Any]:
-    return upload_service.reject_handshake(body.handshake_id)
+def handshake_reject(body: HandshakeAnswerRequest) -> HandshakeAnswered | HandshakeUnknown:
+    return _handshake_answer(upload_service.reject_handshake(body.handshake_id))
 
 
 @router.delete("/restore/token")
-def pairing_token_revoke() -> dict[str, bool]:
+def pairing_token_revoke() -> PairingRevoked:
     upload_service.revoke_token()
-    return {"ok": True}
+    return PairingRevoked(ok=True)
 
 
 @router.get("/pairing")
-def pairing_status() -> dict[str, bool]:
+def pairing_status() -> PairingStatus:
     """Whether the browser extension is paired, for Settings → Security.
 
     Outside `/restore/` on purpose: it answers the app window only
     (launch secret), never the extension, and never returns the token.
     """
-    return {"paired": upload_service.is_paired()}
+    return PairingStatus(paired=upload_service.is_paired())
 
 
 @router.get("/restore/extension")
-def extension_seen() -> dict[str, Any]:
+def extension_seen() -> ExtensionSeen:
     """Which extension version the browser is running, as of its last
     authenticated call. `version` is null until it has made one."""
-    return upload_service.extension_seen()
+    return ExtensionSeen.model_validate(upload_service.extension_seen())
 
 
 @router.get("/restore/characters")
 def upload_characters(
     _auth: str = Depends(_require_pairing),
-) -> list[dict[str, Any]]:
-    return upload_service.list_archived_characters()
+) -> list[UploadCharacter]:
+    return [
+        UploadCharacter.model_validate(c)
+        for c in upload_service.list_archived_characters()
+    ]
 
 
 @router.get("/restore/snapshots")
 def upload_sources(
     character: str,
     _auth: str = Depends(_require_pairing),
-) -> list[dict[str, Any]]:
-    return upload_service.list_upload_sources(character)
+) -> list[UploadSourceWorkbench | UploadSourceBackup]:
+    return [_upload_source(s) for s in upload_service.list_upload_sources(character)]
 
 
-@router.get("/restore/snapshot/{snapshot_id}")
+@router.get(
+    "/restore/snapshot/{snapshot_id}",
+    response_class=Response,
+    responses=binary("application/zip", "The Upload source's zip."),
+)
 def upload_source(
     snapshot_id: str,
     character: str,
@@ -193,16 +347,19 @@ def upload_source(
 
 @router.post("/restore/snapshot/fresh")
 def pre_upload_backup(
-    body: _PreUploadBackupBody,
+    body: PreUploadBackupRequest,
     _auth: str = Depends(_require_pairing),
-) -> dict[str, Any]:
+) -> PreUploadBackupKept | PreUploadBackupNotKept:
     # The extension's writes are not the window's: attributed to the
     # default `ui`, the window would skip them as its own echo.
     with events.origin(EXTENSION):
-        return upload_service.write_pre_upload_backup(body.character, body.payload)
+        kept = upload_service.write_pre_upload_backup(body.character, body.payload)
+    if kept["ok"]:
+        return PreUploadBackupKept.model_validate(kept)
+    return PreUploadBackupNotKept.model_validate(kept)
 
 
-class _UploadSavedBody(BaseModel):
+class UploadSavedRequest(BaseModel):
     character: str
     #: Seconds to wait before pulling. The extension reports the click
     #: on F-list's save button, which is a moment before the POST has
@@ -215,7 +372,7 @@ def _character_required() -> InvalidRequest:
     return InvalidRequest(("body", "character"), "character is required")
 
 
-class _UploadImageIdsBody(BaseModel):
+class UploadImageIdsRequest(BaseModel):
     character: str
     #: `local-<sha8>` -> the id F-list minted for it on upload.
     mapping: dict[str, str]
@@ -223,9 +380,9 @@ class _UploadImageIdsBody(BaseModel):
 
 @router.post("/restore/image-ids")
 def upload_image_ids(
-    body: _UploadImageIdsBody,
+    body: UploadImageIdsRequest,
     _auth: str = Depends(_require_pairing),
-) -> dict[str, Any]:
+) -> ImageIdsDeferred:
     """The extension reporting what F-list called our uploads — noted, not applied.
 
     An image uploaded in the app is keyed by a hash of its bytes, because
@@ -254,14 +411,14 @@ def upload_image_ids(
     character_id = upload_service.character_id_for_name(name)
     if character_id is None:
         raise CharacterNotFound(name)
-    return {"character": name, "deferred": True}
+    return ImageIdsDeferred(character=name, deferred=True)
 
 
 @router.post("/restore/saved")
 async def upload_saved(
-    body: _UploadSavedBody,
+    body: UploadSavedRequest,
     _auth: str = Depends(_require_pairing),
-) -> dict[str, Any]:
+) -> PullScheduled:
     """The user pressed Save on f-list.net — re-pull so Live matches
     what is published again.
 
@@ -286,12 +443,12 @@ async def upload_saved(
     delay = max(0.0, min(60.0, float(body.delay_seconds)))
     with events.origin(EXTENSION):
         pull_service.start_when_free(name, delay=delay)
-    return {"scheduled": True, "character": name, "delay_seconds": delay}
+    return PullScheduled(scheduled=True, character=name, delay_seconds=delay)
 
 
 @router.post("/restore/done")
 def upload_done(
-    body: _UploadDoneBody,
+    body: UploadDoneRequest,
     _auth: str = Depends(_require_pairing),
-) -> dict[str, bool]:
-    return {"ok": True}
+) -> UploadDone:
+    return UploadDone(ok=True)

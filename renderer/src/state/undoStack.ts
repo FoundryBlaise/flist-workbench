@@ -13,8 +13,8 @@
 // TYPING_PAUSE_MS, the field losing focus (endTyping), any other
 // change, an undo or redo, or the Workbench being shown afresh.
 //
-// No store import: the store calls in, so this file can move with the
-// store's split into modules without dragging it along.
+// No store import: the undo module (undo.ts) calls in; the Workbench
+// slice never does.
 
 import type { CommitLabel } from './commit'
 import type { WorkingPayload } from './flist'

@@ -1,6 +1,7 @@
 """Logs: F-Chat's own records, read in place, with each message's Label."""
 
 from dataclasses import asdict
+from typing import Literal
 
 from fastapi import APIRouter
 
@@ -13,23 +14,147 @@ from logs import (
     search_messages,
 )
 from services import labels as label_service
+from wire import MISSING, LabelSource, Verdict, WireModel
 
 router = APIRouter()
 
 
+class LogCharacter(WireModel):
+    """One of the user's characters with Logs. `mtime`: the newest
+    change in its Logs folder (epoch seconds), 0 when it has none."""
+
+    name: str
+    mtime: float
+
+
+class LogCharacters(WireModel):
+    characters: list[LogCharacter]
+
+
+class LogPartner(WireModel):
+    """One conversation of a character. `name` is the partner, or the
+    primary name of an alias group whose other members are `aliases`;
+    `bytes` counts the whole group's Logs."""
+
+    name: str
+    bytes: int
+    aliases: list[str]
+
+
+class LogPartners(WireModel):
+    character: str
+    partners: list[LogPartner]
+
+
+class LogMessage(WireModel):
+    """One record of a Log, as the parser reads it. `kind` is F-Chat's
+    bucket for its type (a system line is an ad, roll, warning or
+    status event), not its Label."""
+
+    ts: int
+    iso: str
+    type: int
+    type_name: str
+    speaker: str
+    raw: str
+    text: str
+    mentions: list[str]
+    kind: Literal["ic", "ooc", "system"]
+
+
+class LabelledMessage(LogMessage):
+    """A message with the Label it resolves to (null for a system line)
+    and its `hash`, which the Label routes take. `label_source` and the
+    rest are there only when a stored Label decides it: who set it, the
+    reason given, and the verdict it replaced."""
+
+    hash: str
+    label: Literal["IC", "OOC", "Unlabeled"] | None
+    label_source: LabelSource | MISSING = MISSING
+    label_reason: str | MISSING = MISSING
+    prior_label: Verdict | MISSING = MISSING
+    prior_source: LabelSource | MISSING = MISSING
+
+
+class LogMessages(WireModel):
+    character: str
+    partner: str
+    offset: int
+    messages: list[LabelledMessage]
+
+
+class _HitIndex(WireModel):
+    index: int
+
+
+class LogSearchHit(LogMessage, _HitIndex):
+    """A message that matches a search, with its `index` in its
+    conversation. (Bases in this order put `index` first, as the
+    answer has it.)"""
+
+
+class LogSearch(WireModel):
+    character: str
+    partner: str
+    query: str
+    hits: list[LogSearchHit]
+
+
+class LogSearchPartner(WireModel):
+    """One conversation's matches; `truncated` when it had more than
+    the limit (open the conversation to see the rest)."""
+
+    partner: str
+    bytes: int
+    hits: list[LogSearchHit]
+    truncated: bool
+
+
+class LogSearchAll(WireModel):
+    character: str
+    query: str
+    partners: list[LogSearchPartner]
+
+
+class LogSearchAllNothing(WireModel):
+    """What a search of every conversation answers for an empty query."""
+
+    character: str
+    query: str
+    hits: list[LogSearchHit]
+
+
+class LogContact(WireModel):
+    """One of the user's characters with a 1-on-1 Log with the name."""
+
+    character: str
+    partner: str
+    bytes: int
+    mtime: float
+
+
+class LogContacts(WireModel):
+    name: str
+    dm: list[LogContact]
+
+
 @router.get("/logs/characters")
-def logs_characters() -> dict:
-    return {"characters": [asdict(c) for c in list_characters()]}
+def logs_characters() -> LogCharacters:
+    return LogCharacters.model_validate({"characters": [asdict(c) for c in list_characters()]})
 
 
 @router.get("/logs/partners")
-def logs_partners(char: str) -> dict:
+def logs_partners(char: str) -> LogPartners:
     entries = list_partners(char)
-    return {"character": char, "partners": [asdict(e) for e in entries]}
+    return LogPartners.model_validate(
+        {"character": char, "partners": [asdict(e) for e in entries]}
+    )
 
 
 @router.get("/logs/messages")
-def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = None) -> dict:
+def logs_messages(
+    char: str, partner: str, offset: int = 0, limit: int | None = None
+) -> LogMessages:
     messages = list(read_messages(char, partner, offset=offset, limit=limit))
 
     # Resolve each message's IC/OOC/Unlabeled label live — labels are
@@ -57,20 +182,30 @@ def logs_messages(char: str, partner: str, offset: int = 0, limit: int | None = 
         # Otherwise no source is attached — the UI infers "rule
         # or unlabeled" from absence of label_source.
 
-    return {"character": char, "partner": partner, "offset": offset, "messages": messages}
+    return LogMessages.model_validate(
+        {"character": char, "partner": partner, "offset": offset, "messages": messages}
+    )
 
 
 @router.get("/logs/search")
-def logs_search(char: str, partner: str, q: str) -> dict:
+def logs_search(char: str, partner: str, q: str) -> LogSearch:
     hits = search_messages(char, partner, q)
-    return {"character": char, "partner": partner, "query": q, "hits": hits}
+    return LogSearch.model_validate(
+        {"character": char, "partner": partner, "query": q, "hits": hits}
+    )
 
 
 @router.get("/logs/search_all")
-def logs_search_all(char: str, q: str, limit_per_partner: int = 50) -> dict:
-    return search_all_partners(char, q, limit_per_partner=limit_per_partner)
+def logs_search_all(
+    char: str, q: str, limit_per_partner: int = 50
+) -> LogSearchAll | LogSearchAllNothing:
+    found = search_all_partners(char, q, limit_per_partner=limit_per_partner)
+    if "partners" not in found:
+        # An empty query searches nothing.
+        return LogSearchAllNothing.model_validate(found)
+    return LogSearchAll.model_validate(found)
 
 
 @router.get("/logs/contacts")
-def logs_contacts(name: str) -> dict:
-    return find_contacts(name)
+def logs_contacts(name: str) -> LogContacts:
+    return LogContacts.model_validate(find_contacts(name))

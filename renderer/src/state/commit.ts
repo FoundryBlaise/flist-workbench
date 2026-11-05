@@ -1,8 +1,8 @@
 // The one commit point for a character's Workbench slot.
 //
 // Every new payload the window puts into `flistWorking[characterId]`
-// goes through the store's `_commit` (state.ts), which builds the slot
-// here. A commit is one of four kinds:
+// goes through `_commit` in the Workbench slice (slices/workbench.ts),
+// which builds the slot here. A commit is one of four kinds:
 //
 //   edit     the window changed the payload: the slot turns unsaved and
 //            the autosave is scheduled.
@@ -18,11 +18,11 @@
 //            read, or the seed from Live), or the slot being dropped
 //            (a Pull landing, sign-out). A view has no label.
 //
-// `_commit` also records the change on the undo stack
-// (state/undoStack.ts): every edit, written and merged commit records
-// the payload it replaced, with its label; a view never does, nor does
-// an undo or redo step itself. Keystrokes (an edit with `typing`)
-// record only the first of a burst.
+// `_commit` also hands every commit to the undo module (state/undo.ts),
+// which records it on the undo stack: every edit, written and merged
+// commit records the payload it replaced, with its label; a view never
+// does, nor does an undo or redo step itself. Keystrokes (an edit with
+// `typing`) record only the first of a burst.
 
 import { emptyWorkingSlot, type FlistWorkingSlot, type WorkingPayload } from './flist'
 

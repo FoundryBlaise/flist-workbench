@@ -18,9 +18,10 @@ import eicons as eicons_catalog
 import flist_activity
 import flist_api
 import model_weights
+import wire
 import workbench_mcp
 import workbench_migration
-from refusals import INTERNAL_ERROR, Refusal
+from refusals import INTERNAL_ERROR, REFUSAL_RESPONSES, Refusal
 from routers import (
     aliases,
     flist_session,
@@ -255,6 +256,20 @@ async def _internal_error(_request: Request, _exc: Exception) -> JSONResponse:
     )
 
 
+# The schema also carries the event streams' events models, which
+# FastAPI does not collect (`wire.declare_events`).
+_fastapi_openapi = app.openapi
+
+
+def _openapi() -> dict:
+    if app.openapi_schema is None:
+        wire.declare_events(_fastapi_openapi())
+    return app.openapi_schema
+
+
+app.openapi = _openapi
+
+
 for _area in (
     health,
     lookups,
@@ -273,7 +288,8 @@ for _area in (
     aliases,
     settings,
 ):
-    app.include_router(_area.router)
+    # Every route's non-2xx answer is a RefusalBody, in the schema too.
+    app.include_router(_area.router, responses=REFUSAL_RESPONSES)
 
 
 # Entry point: the packaged app spawns sidecar.exe (this script frozen),

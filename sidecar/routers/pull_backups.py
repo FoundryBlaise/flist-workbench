@@ -5,8 +5,10 @@ progress as server-sent events; the work itself lives in
 `services/pull.py` and `services/backup_all.py`.
 """
 
+from typing import Any, Literal
+
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 import archive_backups
@@ -18,11 +20,83 @@ from services import backup_trash as backup_trash_service
 from services import jobs
 from services import pull as pull_service
 from services import sse
+from wire import BackupAllEvents, Job, PullEvents, WireModel, binary, event_stream
 
 router = APIRouter()
 
+BackupSource = Literal["live", "workbench"]
+BackupOccasion = Literal[
+    "manual", "before-upload", "before-restore", "before-replace", "migration", "backup-all"
+]
 
-@router.post("/flist/character/{name}/pull", response_model=None)
+
+class Backup(WireModel):
+    """One Backup as the Backup list shows it (`list_zip_backups`).
+    `kind` is the older provenance the extension sorts by, as the
+    Backup's `backup-meta.json` records it ("unknown" without one);
+    `source` and `occasion` are "unknown" and null for a Backup from
+    before they were recorded. `holds_profile` is false for the Backup
+    the move to one Workbench made, which can only be downloaded.
+    `name` is the user's rename, null until there is one."""
+
+    filename: str
+    created_at: int
+    size: int
+    kind: str
+    source: BackupSource | Literal["unknown"]
+    occasion: BackupOccasion | None
+    holds_profile: bool
+    name: str | None
+
+
+class BackupList(WireModel):
+    character_id: str
+    backups: list[Backup]
+
+
+class BackupSaved(WireModel):
+    saved: Literal[True]
+    path: str
+    filename: str
+    created_at: int
+    size: int
+    kind: str
+    source: BackupSource
+    occasion: BackupOccasion
+
+
+class BackupNotSaved(WireModel):
+    """Nothing written: the newest Backup already holds this content,
+    or the character has no Live to back up."""
+
+    saved: Literal[False]
+    reason: Literal["unchanged", "no_live"]
+
+
+class BackupPayload(WireModel):
+    """A Backup's profile, for browsing it read-only. `meta` is its
+    `backup-meta.json`, null for a Backup without one."""
+
+    payload: dict[str, Any]
+    filename: str
+    meta: dict[str, Any] | None
+
+
+def _job_answers(events: type[BaseModel]) -> dict[int | str, dict[str, Any]]:
+    """What a Pull or Back up all answers: the progress stream (its
+    `events`), or with `wait=false` the job."""
+    return {
+        **event_stream("The job, then its progress events until it ends.", events),
+        202: {"model": Job, "description": "The job, started (`wait=false`)."},
+    }
+
+
+@router.post(
+    "/flist/character/{name}/pull",
+    response_model=None,
+    response_class=StreamingResponse,
+    responses=_job_answers(PullEvents),
+)
 def flist_character_pull(name: str, wait: bool = True) -> Response:
     """Pull live character data + images for `name`, as a job.
 
@@ -39,7 +113,9 @@ def flist_character_pull(name: str, wait: bool = True) -> Response:
 
 def _answer(job: jobs.Job, wait: bool) -> Response:
     if not wait:
-        return JSONResponse(job.to_dict(), status_code=202)
+        # Through the model, so the schema's `Job` is what goes out.
+        job_answer = Job.model_validate(job.to_dict()).model_dump(mode="json")
+        return JSONResponse(job_answer, status_code=202)
     return sse.follow(job)
 
 
@@ -47,7 +123,7 @@ def _answer(job: jobs.Job, wait: bool) -> Response:
 def flist_character_zip_backup(
     character_id: str,
     force: bool = True,
-) -> dict:
+) -> BackupSaved | BackupNotSaved:
     """A manual Backup: pack the character's Workbench into a
     userscript-restoreable ZIP at `backups/<ISO>.zip`, recorded as
     `source: workbench, occasion: manual`, so the user can park their
@@ -59,7 +135,7 @@ def flist_character_zip_backup(
     query parameter, which older windows sent, is ignored.
     """
     try:
-        return archive_backups.save_zip_backup(
+        result = archive_backups.save_zip_backup(
             character_id,
             source=backup_origin.WORKBENCH,
             occasion=backup_origin.MANUAL,
@@ -68,14 +144,17 @@ def flist_character_zip_backup(
     except FileNotFoundError as exc:
         # A file the Backup needed went away while it was packed.
         raise BackupNotWritten(str(exc)) from exc
+    if result["saved"]:
+        return BackupSaved.model_validate(result)
+    return BackupNotSaved.model_validate(result)
 
 
 @router.get("/flist/character/{character_id}/zip-backups")
-def flist_character_zip_backups(character_id: str) -> dict:
-    return {
-        "character_id": character_id,
-        "backups": archive_backups.list_zip_backups(character_id),
-    }
+def flist_character_zip_backups(character_id: str) -> BackupList:
+    return BackupList(
+        character_id=character_id,
+        backups=[Backup.model_validate(b) for b in archive_backups.list_zip_backups(character_id)],
+    )
 
 
 @router.delete(
@@ -86,7 +165,7 @@ def flist_character_zip_backup_delete(
     character_id: str, filename: str
 ) -> None:
     """Move a single Backup to the character's Trash, user-set name and
-    all; it can be restored from there until the Trash is emptied.
+    all; it can be put back from there until the Trash is emptied.
     Filename validated against the ISO-basic format so a crafted `../`
     path moves nothing. 404 if the Backup isn't there."""
     archive_backups.require_backup_filename(filename)
@@ -98,14 +177,14 @@ def flist_character_zip_backup_delete(
         raise NotTrashed(f"could not move backup to the Trash: {exc}") from exc
 
 
-class _ZipBackupRename(BaseModel):
+class BackupRenameRequest(BaseModel):
     name: str
 
 
 @router.patch("/flist/character/{character_id}/zip-backups/{filename}")
 def flist_character_zip_backup_rename(
-    character_id: str, filename: str, body: _ZipBackupRename
-) -> dict:
+    character_id: str, filename: str, body: BackupRenameRequest
+) -> Backup:
     """Rename a single backup. The ZIP file itself isn't modified;
     the user-set name lives in a sidecar `_names.json` map next to
     the ZIPs. Empty-string name clears the entry (so the UI falls
@@ -116,12 +195,14 @@ def flist_character_zip_backup_rename(
     # Return the freshly-read entry so the client can patch its row.
     for row in archive_backups.list_zip_backups(character_id):
         if row["filename"] == filename:
-            return row
+            return Backup.model_validate(row)
     raise BackupNotFound("no such Backup")
 
 
 @router.get(
-    "/flist/character/{character_id}/zip-backups/{filename}/download"
+    "/flist/character/{character_id}/zip-backups/{filename}/download",
+    response_class=FileResponse,
+    responses=binary("application/zip", "The Backup's zip, as it is on disk."),
 )
 def flist_character_zip_backup_download(
     character_id: str, filename: str
@@ -148,7 +229,7 @@ def flist_character_zip_backup_download(
 )
 def flist_character_zip_backup_payload(
     character_id: str, filename: str
-) -> dict:
+) -> BackupPayload:
     """Read the embedded working.json out of a ZIP backup for the
     read-only Browse Backup mode.
 
@@ -170,10 +251,15 @@ def flist_character_zip_backup_payload(
     # "unknown" provenance.
     meta = archive_backups.zip_backup_meta(character_id, filename) or None
     payload = archive_workbench.backup_payload(payload)
-    return {"payload": payload, "filename": filename, "meta": meta}
+    return BackupPayload(payload=payload, filename=filename, meta=meta)
 
 
-@router.post("/flist/backup-all", response_model=None)
+@router.post(
+    "/flist/backup-all",
+    response_model=None,
+    response_class=StreamingResponse,
+    responses=_job_answers(BackupAllEvents),
+)
 def flist_backup_all(wait: bool = True) -> Response:
     """Back up every character on the signed-in account, as a job.
 

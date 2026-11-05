@@ -4,7 +4,7 @@
 // change together.
 
 import { useState } from 'react'
-import { CHOICE_LABELS, KINK_BUCKET_ORDER, type KinkChoice } from './ChoiceButtons'
+import { CHOICE_LABELS, KINK_BUCKET_ORDER, type KinkChoice } from './constants'
 import type { Buckets, UnifiedKink } from './kinksUnified'
 import { KinkRow } from './KinkRow'
 import type { KinkSelectionAPI } from './useKinkSelection'

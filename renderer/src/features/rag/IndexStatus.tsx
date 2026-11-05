@@ -1,33 +1,22 @@
-import { useEffect, useState } from 'react'
-import { api, type RagStatus } from '../../lib/api'
+import { useEffect } from 'react'
 import { useStore } from '../../state'
 
 /** "N chunks indexed" for Settings. Read again whenever the sidecar
  *  says the Index changed (`indexRevision`), so an ingest or a wipe a
  *  model runs over MCP shows up without reopening Settings. While a
  *  job holds the Index it says so instead of a count, and an Index
- *  that cannot be read is shown as that, not as empty. */
+ *  that cannot be read is shown as that, not as empty. The read is the
+ *  Settings slice's (`indexLoadStatus`). */
 export function IndexStatus() {
   const revision = useStore((s) => s.indexRevision)
-  const [status, setStatus] = useState<RagStatus | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const status = useStore((s) => s.indexStatus)
+  const error = useStore((s) => s.indexStatusError)
+  const load = useStore((s) => s.indexLoadStatus)
 
   useEffect(() => {
-    let cancelled = false
-    api
-      .ragStatus()
-      .then((s) => {
-        if (cancelled) return
-        setStatus(s)
-        setError(null)
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [revision])
+    void load()
+  }, [revision, load])
+
 
   if (error !== null) {
     return (

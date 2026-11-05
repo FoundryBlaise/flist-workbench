@@ -689,12 +689,13 @@ replace = '''
 [[mutation]]
 id = "R01"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "A Workbench save that hits a conflict adopts the server's etag, so the next save silently overwrites the other change."
 tests = ["@renderer"]
 audit = "killed"
 spec = 2
 # audit: M01 409 conflict adopts server etag
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
           etag: existing.etag,
           unsavedDirty: true'''
@@ -705,12 +706,13 @@ replace = '''
 [[mutation]]
 id = "R02"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Autosave stops coalescing typing: every keystroke schedules its own save."
 tests = ["@renderer"]
 audit = "survived"
 spec = 2
 # audit: M02 debounce never clears previous timer (no coalescing)
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
   const prev = _autosaveTimers.get(characterId)
   if (prev) clearTimeout(prev)
@@ -723,12 +725,13 @@ replace = '''
 [[mutation]]
 id = "R03"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "A save that lands marks the Workbench clean although the user typed while it was in flight; those keystrokes are never saved."
 tests = ["@renderer"]
 audit = "killed"
 spec = 9
 # audit: M03 save success clears dirty even if user typed during PUT
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
         unsavedDirty: isFresh ? false : existing.unsavedDirty,'''
 replace = '''
@@ -737,7 +740,7 @@ replace = '''
 [[mutation]]
 id = "R04"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Edits typed while a save is in flight get no follow-up save."
 tests = ["@renderer"]
 audit = "survived"
@@ -747,6 +750,7 @@ spec = 2
 # saved without the follow-up (the in-flight test from spec #9 checks that
 # and passes either way). Spec #2's "one follow-up flush per character"
 # fix makes the follow-up the only path and this mutation killable.
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
     if (next?.unsavedDirty) {
       _scheduleFlush(characterId, () => {
@@ -759,7 +763,7 @@ replace = '''
 [[mutation]]
 id = "R05"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "A change event for a write the window already holds is taken in again: the banner, or a second reload and undo entry."
 tests = ["@renderer"]
 audit = "killed"
@@ -767,6 +771,7 @@ spec = 7
 # audit: M05 own echo (same etag) raises external-change banner
 # Re-anchored for spec #7 (#113): the guard left the set() callback; an
 # echo the guard misses now sets off a reload and a second undo entry.
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
 if (slot && change.etag && slot.etag === change.etag) return
 '''
@@ -777,29 +782,37 @@ if (slot && change.etag && slot.etag === change.etag && false) return
 [[mutation]]
 id = "R06"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Reloading after an external change leaves the editor showing the old description."
 tests = ["@renderer"]
 audit = "survived"
 spec = 7
 # audit: M06 reload-after-external-change leaves editor showing stale text
 # Since #109 the reload is a written commit, and the editor reads the
-# reloaded description back from the payload in _editorFollows.
+# reloaded description back from the payload (_editorFollows until #126).
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
+# Re-anchored for spec #8 (#126): the editor keeps no copy of the
+# description and reads it from the slot (state/editorView.ts), so the
+# stale editor is now a reload that adopts their etag but keeps the old
+# payload.
 find = '''
-return commit.keepPending ? { editorContent } : { editorContent, editorDirty: false }'''
+    { kind: 'written', label, payload, etag: res.etag, lastSavedAt: Date.now() },
+    settled'''
 replace = '''
-return commit.keepPending ? { editorContent } : { editorDirty: false }'''
+    { kind: 'written', label, payload: slot.payload, etag: res.etag, lastSavedAt: Date.now() },
+    settled'''
 
 [[mutation]]
 id = "R07"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Merging my unsaved edits with another writer's change saves the merge over my stale etag instead of theirs."
 tests = ["@renderer"]
 audit = "killed"
 spec = 7
 # audit: M07 keep-mine writes against own stale etag; #114 replaced
 # keep-mine with the field merge, which takes the other writer's etag.
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
 _mergeExternal(get, set, characterId, { label, theirs: payload, etag: res.etag }, settled, cleared)'''
 replace = '''
@@ -808,12 +821,13 @@ _mergeExternal(get, set, characterId, { label, theirs: payload, etag: slot.etag 
 [[mutation]]
 id = "R08"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Switching character no longer saves the pending edit of the character left behind."
 tests = ["@renderer"]
 audit = "killed"
 spec = 2
 # audit: M08 character switch skips flushing pending edit
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
     if (prevId && prevId !== characterId) {
       try {
@@ -826,12 +840,13 @@ replace = '''
 [[mutation]]
 id = "R09"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Resetting the Workbench to Live uses the etag from before pending saves drained."
 tests = ["@renderer"]
 audit = "survived"
 spec = 2
 # audit: M09 reset-to-Live uses pre-drain etag
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
 const current = get().flistWorking[characterId] ?? slot'''
 replace = '''
@@ -947,9 +962,10 @@ suite = "renderer"
 file = "renderer/src/features/flist/kinksUnified.ts"
 breaks = "Custom kinks sort last instead of first."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 8
 # audit: M17 customs-first kink sort puts customs last
+# Killed since spec #8 (#117, KinksPane.test.tsx).
 find = '''
 if (a.type !== b.type) return a.type === 'custom' ? -1 : 1'''
 replace = '''
@@ -961,9 +977,10 @@ suite = "renderer"
 file = "renderer/src/features/flist/kinksUnified.ts"
 breaks = "Kinks marked undecided drop out of the choice buckets."
 tests = ["@renderer"]
-audit = "survived"
+audit = "killed"
 spec = 8
 # audit: M18 bucketByChoice drops undecided
+# Killed since spec #8 (#117, kinksUnified.test.ts).
 find = '''
 for (const entry of list) buckets[entry.choice].push(entry)'''
 replace = '''
@@ -1032,12 +1049,13 @@ replace = '''
 [[mutation]]
 id = "R23"
 suite = "renderer"
-file = "renderer/src/state.ts"
+file = "renderer/src/state/slices/workbench.ts"
 breaks = "Two saves of the same Workbench can be in flight at once and race."
 tests = ["@renderer"]
 audit = "killed"
 spec = 9
 # audit: M23 flush no longer registers single-flight (overlapping PUTs race)
+# Re-anchored for spec #8 (#124): moved into the Workbench slice.
 find = '''
     _flushInflight.set(characterId, link)
 '''

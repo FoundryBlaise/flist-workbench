@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { useStore } from '../../state'
-import { api, type Label, type LabelSource, type LogMessage } from '../../lib/api'
+import { api, errorDetail, type Label, type LabelSource, type LogMessage } from '../../lib/api'
 import { displayPartner } from '../../lib/partnerName'
 import { exportMessages, type ExportFormat } from '../../lib/sceneExport'
 
@@ -595,7 +595,7 @@ export function LogViewer() {
     } catch (err) {
       console.error('[labels] bulk fill failed', err)
       window.alert(
-        `Couldn't label the conversation: ${err instanceof Error ? err.message : String(err)}`
+        `Couldn't label the conversation: ${errorDetail(err)}`
       )
     }
   }
@@ -713,7 +713,7 @@ export function LogViewer() {
             } catch (err) {
               console.error('[labels] clear failed', err)
               window.alert(
-                `Couldn't reset labels: ${err instanceof Error ? err.message : String(err)}`
+                `Couldn't reset labels: ${errorDetail(err)}`
               )
             }
           }}

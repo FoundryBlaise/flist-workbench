@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../../lib/api'
+import { api, errorDetail } from '../../lib/api'
 
 type Pending = {
   handshake_id: string
@@ -80,7 +80,7 @@ function ExtensionPairModal({
       }
       onResolved()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorDetail(e))
       setBusy(null)
     }
   }
@@ -92,7 +92,7 @@ function ExtensionPairModal({
       await api.restoreRejectHandshake(pending.handshake_id)
       onResolved()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(errorDetail(e))
       setBusy(null)
     }
   }

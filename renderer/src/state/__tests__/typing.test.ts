@@ -5,7 +5,7 @@
 // fake sidecar.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useStore } from '../../state'
+import { selectEditorDescription, useStore } from '../../state'
 import { TYPING_PAUSE_MS, resetUndoStacks } from '../undoStack'
 import { installFakeApi, json, type FakeApi } from '../../test/fakeApi'
 import { payloadRead, workbenchPayload, workingSlot } from '../../test/payloads'
@@ -33,15 +33,14 @@ function seed(payload: Record<string, unknown> = {}) {
   useStore.setState({
     flistWorking: { [CID]: workingSlot(workbenchPayload(payload)) },
     flistActiveCharacterId: CID,
-    editorReadOnly: false,
-    editorContent: ''
+    editorReadOnly: false
   })
 }
 
 /** Type `text` into the description one character at a time, quickly,
  *  as the editor reports it: the whole text after each keystroke. */
 async function typeDescription(text: string) {
-  const start = store().editorContent
+  const start = selectEditorDescription(store())
   for (let i = 1; i <= text.length; i++) {
     store().setEditorContent(start + text.slice(0, i))
     await vi.advanceTimersByTimeAsync(KEYSTROKE_MS)
@@ -79,9 +78,7 @@ beforeEach(() => {
     flistBrowseBackup: null,
     flistActiveCharacterId: null,
     editorActiveTab: 'description',
-    editorReadOnly: false,
-    editorContent: '',
-    editorDirty: false
+    editorReadOnly: false
   })
 })
 
@@ -102,7 +99,7 @@ describe('description typing', () => {
     fake.on(SAVE, json({ etag: 'e2' }))
     store().flistUndo(CID)
     expect(description()).toBe('Hello')
-    expect(store().editorContent).toBe('Hello')
+    expect(selectEditorDescription(store())).toBe('Hello')
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS)
     const saves = fake.requestsTo(SAVE)
     expect((saves[saves.length - 1].body as { character: unknown }).character).toEqual({
@@ -169,7 +166,7 @@ describe('description typing', () => {
     store().flistUndo(CID)
     store().flistRedo(CID)
     expect(description()).toBe('Hello')
-    expect(store().editorContent).toBe('Hello')
+    expect(selectEditorDescription(store())).toBe('Hello')
   })
 })
 
@@ -234,7 +231,7 @@ describe('writes from outside end the burst', () => {
     // Nothing unsaved: the store takes the model's change in by itself.
     store().flistNoteExternalChange(CID, { etag: 'theirs', origin: 'mcp:set_description' })
     await vi.advanceTimersByTimeAsync(0)
-    expect(store().editorContent).toBe('Hello from the model')
+    expect(selectEditorDescription(store())).toBe('Hello from the model')
     await typeDescription('!')
 
     store().flistUndo(CID)
