@@ -161,6 +161,21 @@ interface Frame {
   attr: string | null
   raw: string
   children: string[]
+  // Source offsets: of the opening tag's bracket, and just past the
+  // closing tag (unset when the tag is auto-closed).
+  start: number
+  end?: number
+}
+
+/**
+ * Where an image's tag sits in the source, so text typed beside the
+ * image in the preview can be put back next to it (see
+ * textBesideImages).
+ */
+function imageAnchor(frame: Frame, opts: BbcodeOptions): string {
+  if (!opts.withSourceMap) return ''
+  const after = frame.end === undefined ? '' : ` data-bb-after="${frame.end}"`
+  return ` data-bb-before="${frame.start}"${after}`
 }
 
 function emit(frame: Frame, opts: BbcodeOptions = {}): string {
@@ -202,12 +217,12 @@ function emit(frame: Frame, opts: BbcodeOptions = {}): string {
     case 'icon': {
       const name = stripTags(body).trim()
       if (!name) return ''
-      return `<a class="bb-icon" href="https://www.f-list.net/c/${escapeAttr(encodeURIComponent(name))}" target="_blank" rel="noreferrer noopener"><img src="${escapeAttr(characterAvatarUrl(name))}" alt="${escapeHtml(name)}" title="${escapeHtml(name)}" /></a>`
+      return `<a class="bb-icon"${imageAnchor(frame, opts)} href="https://www.f-list.net/c/${escapeAttr(encodeURIComponent(name))}" target="_blank" rel="noreferrer noopener"><img src="${escapeAttr(characterAvatarUrl(name))}" alt="${escapeHtml(name)}" title="${escapeHtml(name)}" /></a>`
     }
     case 'eicon': {
       const name = stripTags(body).trim()
       if (!name) return ''
-      return `<img class="bb-eicon" src="${escapeAttr(eiconUrl(name))}" alt="${escapeHtml(name)}" title="${escapeHtml(name)}" />`
+      return `<img class="bb-eicon"${imageAnchor(frame, opts)} src="${escapeAttr(eiconUrl(name))}" alt="${escapeHtml(name)}" title="${escapeHtml(name)}" />`
     }
     case 'img': {
       // [img=12345]optional alt[/img] — F-list inline gallery image,
@@ -218,10 +233,10 @@ function emit(frame: Frame, opts: BbcodeOptions = {}): string {
       if (!inline) {
         // No manifest entry — render a placeholder rather than guessing.
         const alt = stripTags(body).trim() || `inline ${id}`
-        return `<span class="bb-img bb-img-missing" title="No manifest entry for inline ${escapeHtml(id)}">[Inline ${escapeHtml(alt)}]</span>`
+        return `<span class="bb-img bb-img-missing"${imageAnchor(frame, opts)} title="No manifest entry for inline ${escapeHtml(id)}">[Inline ${escapeHtml(alt)}]</span>`
       }
       const alt = stripTags(body).trim() || `inline ${id}`
-      return `<img class="bb-img" src="${escapeAttr(inlineImageUrl(inline))}" alt="${escapeHtml(alt)}" />`
+      return `<img class="bb-img"${imageAnchor(frame, opts)} src="${escapeAttr(inlineImageUrl(inline))}" alt="${escapeHtml(alt)}" />`
     }
     case 'row':
       return `<div class="bb-row">${body}</div>`
@@ -316,8 +331,65 @@ function computeEditableTextStarts(source: string): Set<number> {
   return editable
 }
 
+function isBareText(n: Node | null): n is Text {
+  return n !== null && n.nodeType === 3
+}
+
+/**
+ * Text typed right next to an image ([icon], [eicon], [img]). Chromium
+ * puts it in a bare text node beside the <img> (or inside the icon's
+ * link), outside every source-mapped span, so the span walk never sees
+ * it. Returns it keyed by the source offset it belongs at: just past
+ * the image's closing tag, or at its opening tag when typed before it.
+ *
+ * A side where the render itself put bare text (an unknown tag's
+ * literal, say) is left alone: that text is the render's, not the
+ * user's, and copying it would duplicate it in the source.
+ */
+function textBesideImages(root: HTMLElement, originalSource: string): Map<number, string> {
+  const fresh = root.ownerDocument.createElement('div')
+  fresh.innerHTML = bbcodeToHtml(originalSource, { withSourceMap: true })
+  const renderedBare = new Set<string>()
+  for (const el of fresh.querySelectorAll<HTMLElement>('[data-bb-before]')) {
+    if (isBareText(el.previousSibling)) renderedBare.add(`before:${el.dataset.bbBefore}`)
+    if (isBareText(el.nextSibling)) renderedBare.add(`after:${el.dataset.bbAfter}`)
+  }
+
+  const taken = new Set<Node>()
+  const inserted = new Map<number, string>()
+  const take = (offset: number, nodes: Text[]) => {
+    let text = ''
+    for (const n of nodes) {
+      if (taken.has(n)) continue
+      taken.add(n)
+      text += n.nodeValue ?? ''
+    }
+    if (text) inserted.set(offset, (inserted.get(offset) ?? '') + text)
+  }
+  const images = Array.from(root.querySelectorAll<HTMLElement>('[data-bb-before]'))
+  // Text after one image and before the next sits at the same offset;
+  // afters first keeps it in document order.
+  for (const el of images) {
+    const after = el.dataset.bbAfter
+    if (after === undefined || renderedBare.has(`after:${after}`)) continue
+    const nodes: Text[] = []
+    if (el.tagName === 'A') for (const c of el.childNodes) if (isBareText(c)) nodes.push(c)
+    for (let n = el.nextSibling; isBareText(n); n = n.nextSibling) nodes.push(n)
+    take(Number(after), nodes)
+  }
+  for (const el of images) {
+    const before = el.dataset.bbBefore!
+    if (renderedBare.has(`before:${before}`)) continue
+    const nodes: Text[] = []
+    for (let n = el.previousSibling; isBareText(n); n = n.previousSibling) nodes.unshift(n)
+    take(Number(before), nodes)
+  }
+  return inserted
+}
+
 export function bbcodeFromPreviewDom(root: HTMLElement, originalSource: string): string {
   const editableStarts = computeEditableTextStarts(originalSource)
+  const besideImages = textBesideImages(root, originalSource)
   const currentBySrcStart = new Map<number, string>()
   for (const span of root.querySelectorAll<HTMLElement>('[data-bb-start]')) {
     const start = Number(span.getAttribute('data-bb-start'))
@@ -330,10 +402,12 @@ export function bbcodeFromPreviewDom(root: HTMLElement, originalSource: string):
   //   - If it was editable and the span is gone, emit nothing (user deleted).
   //   - If it wasn't editable (inside [icon] / [noparse] / etc.), keep the
   //     original text — it never had an editable surface to begin with.
-  // Tag tokens always pass through verbatim.
+  // Tag tokens always pass through verbatim. Text typed beside an image
+  // goes in before the token at its offset.
   const tokens = tokenize(originalSource)
   let out = ''
   for (const tok of tokens) {
+    out += besideImages.get(tok.start) ?? ''
     if (tok.type === 'text') {
       if (editableStarts.has(tok.start)) {
         out += currentBySrcStart.get(tok.start) ?? ''
@@ -344,7 +418,7 @@ export function bbcodeFromPreviewDom(root: HTMLElement, originalSource: string):
       out += tok.raw
     }
   }
-  return out
+  return out + (besideImages.get(originalSource.length) ?? '')
 }
 
 function domTextWithBreaks(el: HTMLElement): string {
@@ -382,7 +456,7 @@ export interface BbcodeOptions {
 }
 
 export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
-  const root: Frame = { name: '__root__', attr: null, raw: '', children: [] }
+  const root: Frame = { name: '__root__', attr: null, raw: '', children: [], start: 0 }
   const stack: Frame[] = [root]
   const top = (): Frame => stack[stack.length - 1]
 
@@ -420,7 +494,7 @@ export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
         top().children.push(escapeHtml(tok.raw))
         continue
       }
-      stack.push({ name: tok.name, attr: tok.attr, raw: tok.raw, children: [] })
+      stack.push({ name: tok.name, attr: tok.attr, raw: tok.raw, children: [], start: tok.start })
       if (tok.name === 'noparse') inNoparse = true
     } else {
       // close
@@ -443,6 +517,7 @@ export function bbcodeToHtml(source: string, opts: BbcodeOptions = {}): string {
         top().children.push(emit(frame, opts))
       }
       const frame = stack.pop()!
+      frame.end = tok.start + tok.raw.length
       top().children.push(emit(frame, opts))
     }
   }
