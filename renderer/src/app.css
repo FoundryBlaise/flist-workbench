@@ -1301,6 +1301,14 @@ body {
 .preview-body .bb-color-brown { color: #967117; }
 .preview-body .bb-color-white { color: #fff; text-shadow: none; }
 .preview-body .bb-color-gray { color: #d3d3d3; }
+/* Where the other F-list themes differ from the dark one (the wiki's
+   "List of BBCode tags" shows all three). */
+.pane.preview[data-flist-theme='default'] .bb-color-purple { color: #e2afff; }
+.pane.preview[data-flist-theme='default'] .bb-color-black {
+  color: #000;
+  text-shadow: 0 1px 2px #777, 0 0 2px #9e9e9e;
+}
+.pane.preview[data-flist-theme='light'] .bb-color-black { color: #000; text-shadow: none; }
 .preview-body .bb-big { font-size: 1.4em; }
 .preview-body .bb-small { font-size: 0.8em; }
 .preview-body .bb-sub { vertical-align: baseline; font-size: 0.8em; }
