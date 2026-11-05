@@ -57,13 +57,14 @@ def _kept_as(replaced: archive_backups.WorkbenchReplaced) -> str | None:
 
 
 def _guard_bbcode(updated: str) -> None:
-    """Stop a description F-list's own parser would reject.
+    """Stop a description F-list's own parser would object to: a tag
+    not allowed where it sits, or tags left unclosed or crossed, which
+    F-list shows as raw BBCode on the site.
 
     The check lives inside the write because a separate "validate
     this" tool is a step a model can skip, and the cost of skipping it
-    lands on the user: they find out when the site refuses the upload,
-    with the text already pasted into F-list's form and the app closed
-    behind them.
+    lands on the user: they find out on the site, with the text already
+    pasted into F-list's form and the app closed behind them.
 
     Only MCP writes are held to this. The window's editor stays free to
     hold anything, which is what keeps a broken description fixable by

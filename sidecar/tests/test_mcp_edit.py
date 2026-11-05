@@ -894,3 +894,50 @@ async def test_editing_in_something_invalid_is_refused_too(workbench) -> None:
             new_string="An opening paragraph.\n[big][i][color=red]and this[/color][/i][/big]",
         )
     assert "not allowed here" in tool_error_text(result)
+
+
+# F-list takes text with unclosed or crossed tags, and then shows that
+# part, with everything inside it, as raw BBCode on the site. Held to
+# the same guard, with advice the model can act on.
+
+
+async def test_crossed_closing_tags_are_refused(workbench) -> None:
+    async with mcp_client("character") as session:
+        await open_workbench(session)
+        await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="An opening paragraph.",
+        )
+        result, _ = await call_tool(
+            session,
+            "edit_description",
+            character="Lady Amber Blaise",
+            old_string="An opening paragraph.",
+            new_string="An opening paragraph.\n[color=green][b]x[/color][/b]",
+        )
+        _, body = await call_tool(
+            session, "get_description", character="Lady Amber Blaise"
+        )
+    text = tool_error_text(result)
+    assert "bbcode_rejected" in text
+    assert "Bad BBCode in [b] tag" in text
+    assert "Open [color] tag is not properly closed" in text
+    assert "reverse order" in text
+    assert body["description"] == "An opening paragraph."
+
+
+async def test_an_unclosed_tag_is_refused(workbench) -> None:
+    async with mcp_client("character") as session:
+        await open_workbench(session)
+        result, _ = await call_tool(
+            session,
+            "set_description",
+            character="Lady Amber Blaise",
+            text="[collapse=Q][b]x[/collapse]",
+            confirm=True,
+        )
+    text = tool_error_text(result)
+    assert "bbcode_rejected" in text
+    assert "Open [b] tag is not properly closed (with [/b])" in text
