@@ -3,12 +3,16 @@
 Both implementations mirror F-list's parser, and every case below was
 run through the live one in the browser —
 `FList.TagParser.enableWarnings(); parseEverything(htmlentities(s))` on
-f-list.net — and matched. Two implementations of the same rules will
-drift; identical cases on both sides is what makes the drift show up
-as a failing test instead of a refused upload.
+f-list.net — and matched. A few tests pad or repeat a verified case to
+check offsets, wording or long texts; each says which case it builds
+on. Two implementations of the same rules will drift; identical cases
+on both sides is what makes the drift show up as a failing test
+instead of a refused upload.
 """
 
 from __future__ import annotations
+
+import pytest
 
 import bbcode_rules
 
@@ -75,3 +79,136 @@ def test_the_explanation_names_the_fix() -> None:
     assert "not allowed here" in text
     assert "[color=cyan][big][b]" in text, "say what to write instead"
     assert bbcode_rules.explain([]) == ""
+
+
+# ---- Tags F-list will show as plain text --------------------------------
+#
+# The second class of F-list parser warnings: a tag that does not end in
+# its own closer is printed, with everything inside it, as literal text.
+# Every row below comes from #137's table, run through the live parser
+# on f-list.net on 2026-11-05. "B" is "Bad BBCode in [x] tag", "O" is
+# "Open [x] tag is not properly closed", "N" is "not allowed here".
+
+_KIND = {"B": "bad-nesting", "O": "not-closed", "N": "not-allowed"}
+
+
+def verdicts(source: str) -> list[tuple[str, str]]:
+    return [(w.kind, w.tag) for w in bbcode_rules.validate(source)]
+
+
+def expect(listed: str) -> list[tuple[str, str]]:
+    """'B b, O color' -> [('bad-nesting', 'b'), ('not-closed', 'color')]."""
+    if not listed:
+        return []
+    return [
+        (_KIND[part.split()[0]], part.split()[1])
+        for part in listed.split(", ")
+    ]
+
+
+def test_an_unclosed_tag_is_reported() -> None:
+    assert verdicts("[b]x") == expect("O b")
+
+
+VERIFIED = [
+    ("[color=green][b]x[/color][/b]", "B b, O color"),
+    ("[b][i]x[/b][/i]", "B i, O b"),
+    ("[b]x", "O b"),
+    # F-list gives no warning for a stray closer; it shows it as text.
+    ("x[/b]", ""),
+    ("[b]x[/b][/b]", ""),
+    # The well-formed [b] inside goes literal with the [color] around it.
+    ("[color=green]a[b]b[/b]", "O color"),
+    ("[color=green]x[/b][/color]", "B color"),
+    (
+        "[collapse=Q][color=green][b]x[/color][/b][/collapse] after [b]ok[/b]",
+        "B b, O color",
+    ),
+    (
+        "[color=green][collapse=Q][b]x[/collapse][/b][/color] after [b]ok[/b]",
+        "B b, O collapse",
+    ),
+    ("[quote][b]x[/quote]", "O b, O quote"),
+    ("[url=https://example.com]x[/url] [b]y", "O b"),
+    ("[noparse][b][/noparse]", ""),
+    ("[big][b][color=cyan]X[/color][/b][/big]", "N color"),
+    # The content of a literal span is never rendered, so never judged.
+    ("[color=green][big][b][color=cyan]X[/color][/b][/big]", "O color"),
+    # Structural warnings come first, whatever the source order.
+    (
+        "[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]",
+        "B b, O color, N color",
+    ),
+    # "B", not "O": a [/color follows later in the text.
+    (
+        "[color=green][b]x[/color][/b] [big][b][color=cyan]X[/color][/b][/big]",
+        "B b, B color, N color",
+    ),
+    ("[b]ok[/b] [i]ok[/i]", ""),
+]
+
+
+@pytest.mark.parametrize(("source", "listed"), VERIFIED)
+def test_f_list_verdicts(source: str, listed: str) -> None:
+    assert verdicts(source) == expect(listed)
+
+
+def test_structural_warnings_carry_f_lists_text_and_the_opening_tag() -> None:
+    crossed, unclosed = bbcode_rules.validate("[color=green][b]x[/color][/b]")
+    assert crossed.start == len("[color=green]")
+    assert crossed.message == (
+        "Bad BBCode in [b] tag, somewhere around/after 'x[/color][/b]...'."
+    )
+    assert unclosed.start == 0
+    assert unclosed.message == (
+        "Open [color] tag is not properly closed (with [/color])."
+    )
+
+
+def test_offsets_count_brackets_f_list_escapes() -> None:
+    # Builds on "[b]x", padded with brackets F-list escapes to text.
+    (w,) = bbcode_rules.validate("[x] [] [blink] [b]x")
+    assert w.start == len("[x] [] [blink] ")
+
+
+def test_a_long_or_deeply_nested_text_is_checked_whole() -> None:
+    # Repeats "[b]ok[/b] [i]ok[/i]" and "[b]x"; a description can be
+    # long, and a write guard must not run out of stack on one.
+    assert bbcode_rules.validate("[b]ok[/b] [i]ok[/i] " * 5000) == []
+    assert verdicts("[b]" * 2000 + "x") == [("not-closed", "b")] * 2000
+
+
+def test_the_explanation_for_an_unclosed_tag_says_to_close_it() -> None:
+    # Builds on "[b]x", after plain text.
+    text = bbcode_rules.explain(bbcode_rules.validate("Intro. [b]x"))
+    assert "Open [b] tag is not properly closed (with [/b])." in text
+    assert "as plain text" in text, "F-list takes it; it shows it raw"
+    assert "character 7" in text, "say roughly where"
+    assert "close it with [/b]" in text.lower()
+    assert "[big]" not in text, "the nesting hint does not apply"
+
+
+def test_the_explanation_for_crossed_tags_says_reverse_order() -> None:
+    text = bbcode_rules.explain(
+        bbcode_rules.validate("[color=green][b]x[/color][/b]")
+    )
+    assert "Bad BBCode in [b] tag" in text
+    assert "reverse order" in text
+    assert "[big]" not in text
+
+
+def test_the_explanation_covers_both_classes_when_both_occur() -> None:
+    text = bbcode_rules.explain(
+        bbcode_rules.validate(
+            "[big][b][color=cyan]X[/color][/b][/big] [color=green][b]x[/color][/b]"
+        )
+    )
+    assert "reverse order" in text
+    assert "[color=cyan][big][b]" in text
+
+
+def test_spoiler_is_not_an_f_list_tag() -> None:
+    # F-list's tag table has no [spoiler]: it stays literal text, with
+    # no warning and no nesting check.
+    assert verdicts("[spoiler]x") == []
+    assert verdicts("[big][b][spoiler]x[/spoiler][/b][/big]") == []
