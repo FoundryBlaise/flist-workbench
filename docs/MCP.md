@@ -239,7 +239,9 @@ for more and you get the cap. Every page carries the same `page`:
 which cannot count past the page) and `next_offset`. When
 `next_offset` is not null, passing it as `offset` fetches the next
 page. `search_logs` without a partner pages the partners, each with up
-to `hits_per_partner` hits.
+to `hits_per_partner` hits. `get_activity_log` grows while it is paged:
+its answer carries `as_of`, and passing that back with `offset` keeps
+the later pages where the first one was, so no event comes twice.
 
 Every tool that deletes or replaces something the user would miss is
 marked destructive and refuses to run without `confirm=true`; the

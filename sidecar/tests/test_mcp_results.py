@@ -739,17 +739,46 @@ async def test_a_list_asked_for_too_much_answers_the_cap_and_pages_the_rest(
         assert body["page"]["limit"] == paged.cap
         assert body["page"]["next_offset"] == paged.cap
 
+        # A list that grows while it is paged pins the later pages to
+        # where the first one was.
+        pinned = {"as_of": body["as_of"]} if "as_of" in body else {}
         while body["page"]["next_offset"] is not None:
             body = await _call(
                 session,
                 tool,
                 **paged.arguments,
+                **pinned,
                 limit=TOO_MANY,
                 offset=body["page"]["next_offset"],
             )
             rows += paged.rows(body)
     assert len(rows) == body["page"]["total"] > paged.cap
     assert len({_row_key(row) for row in rows}) == len(rows), "a row came twice"
+
+
+async def test_the_activity_log_pages_on_from_where_its_first_page_was(
+    scene: Path,
+) -> None:
+    """An event that arrives between two pages neither repeats a row
+    nor pushes one out: the later pages pass back the first's `as_of`."""
+    import flist_activity
+
+    flist_activity.reset()
+    _much_activity(120)
+    async with mcp_client("") as session:
+        first = await _call(session, "get_activity_log", limit=TOO_MANY)
+        flist_activity.record("test", n=120)
+        rest = await _call(
+            session,
+            "get_activity_log",
+            limit=TOO_MANY,
+            offset=first["page"]["next_offset"],
+            as_of=first["as_of"],
+        )
+    assert rest["page"]["next_offset"] is None
+    assert rest["as_of"] == first["as_of"]
+    ns = [e["n"] for e in first["events"] + rest["events"]]
+    assert ns == list(reversed(range(120)))
 
 
 def _row_key(row: Any) -> str:
