@@ -431,13 +431,17 @@ def get_bbcode_reference() -> dict[str, Any]:
             "eicon — no link.",
             "Unsupported tags are shown literally, brackets and all.",
             "Newlines are preserved; there is no paragraph tag.",
+            "Close every tag you open, in the reverse order you opened "
+            "them: [color=green][b]x[/b][/color], not "
+            "[color=green][b]x[/color][/b]. F-list shows a tag left open "
+            "or closed out of order as plain text, everything inside it "
+            "included, so a description write with one is refused.",
             "Nesting is not free: F-list's own parser refuses [color] "
             "inside a size tag and answers 'The [color] tag is not "
-            "allowed here' when the profile is saved. Put the colour "
-            "outermost — [color=cyan][big][b]Name[/b][/big][/color], "
-            "not [big][b][color=cyan]Name[/color][/b][/big]. The app "
-            "renders both, so a preview will not warn you; the site "
-            "does, at upload time.",
+            "allowed here'. Put the colour outermost — "
+            "[color=cyan][big][b]Name[/b][/big][/color], not "
+            "[big][b][color=cyan]Name[/color][/b][/big]. A description "
+            "write that breaks this is refused too, naming the tag.",
         ],
         "note": NO_PUSH_NOTE,
     }
@@ -467,7 +471,6 @@ _BBCODE_TAGS: list[dict[str, str]] = [
         "does": "collapsible section with a clickable title — the usual "
         "way to keep a long profile navigable",
     },
-    {"tag": "[spoiler]…[/spoiler]", "does": "hidden until clicked"},
     {"tag": "[noparse]…[/noparse]", "does": "show BBCode literally"},
     {"tag": "[url=https://…]…[/url]", "does": "link"},
     {"tag": "[icon]Character Name[/icon]", "does": "avatar, links to that profile"},
