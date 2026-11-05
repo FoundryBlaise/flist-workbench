@@ -167,6 +167,19 @@ def test_the_explanation_for_crossed_tags_says_reverse_order() -> None:
     assert "[big]" not in text
 
 
+def test_the_explanation_for_crossed_tags_names_the_closer_to_use() -> None:
+    # Builds on "[color=green][b]x[/color][/b]". F-list calls a tag "Bad"
+    # when any closer starting with "[/b" follows, [/big] included, so
+    # the advice must not claim the next closer belongs to another tag.
+    text = bbcode_rules.explain(
+        bbcode_rules.validate("[color=green][b]x[/color][/b]")
+    )
+    (line,) = [ln for ln in text.splitlines() if "Bad BBCode in [b]" in ln]
+    assert "close it with [/b]" in line
+    assert "reverse order" in line
+    assert "belongs to another tag" not in text
+
+
 def test_the_explanation_covers_both_classes_when_both_occur() -> None:
     text = bbcode_rules.explain(
         bbcode_rules.validate(

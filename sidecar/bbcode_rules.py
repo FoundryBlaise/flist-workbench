@@ -291,7 +291,8 @@ _NESTING_ADVICE = (
 
 _CLOSING_ADVICE = (
     "F-list takes the first closing tag after a tag's content as that "
-    "tag's closer. When it belongs to another tag, or there is none, "
+    "tag's closer. When that is not the tag's own closer, or there is "
+    "none, "
     "F-list shows the whole tag, with everything inside it, as plain "
     "text. Close every tag you open, and close tags in the reverse "
     "order you opened them: [color=green][b]x[/b][/color], not "
@@ -307,8 +308,9 @@ def _line(w: Warning_) -> str:
         )
     if w.kind == "bad-nesting":
         return (
-            f"{w.message} It opens at character {w.start}; the next "
-            f"closing tag after it belongs to another tag."
+            f"{w.message} It opens at character {w.start}; close it "
+            f"with [/{w.tag}], in reverse order of opening: the first "
+            f"closing tag after its content must be its own."
         )
     return w.message
 
