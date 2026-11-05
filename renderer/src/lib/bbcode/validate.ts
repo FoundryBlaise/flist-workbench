@@ -135,16 +135,17 @@ type TagNode = { tag: string; start: number; content: TagNode[] }
  *  keeping every offset an offset into the source. */
 function maskUnknownBrackets(source: string): string {
   const mask = (s: string) => s.replace(/[[\]]/g, '\u0001')
-  let a = source.replace(/\[\]/g, mask)
-  const tagRe = /(\[[[ /]*)([^[\]]+)([\] ]*\])/g
-  for (let m = tagRe.exec(a); m !== null; m = tagRe.exec(a)) {
-    const eq = m[2].indexOf('=')
-    const name = eq === -1 ? m[2] : m[2].slice(0, eq)
-    if ((m[1] !== '[' && m[1] !== '[/') || m[3] !== ']' || !known(name)) {
-      a = a.slice(0, m.index) + mask(m[0]) + a.slice(m.index + m[0].length)
-    }
-  }
-  return a
+  // F-list escapes in a loop that scans on past each match; a single
+  // replace pass sees the same matches, since no escape reaches beyond
+  // its own match.
+  return source
+    .replace(/\[\]/g, mask)
+    .replace(/(\[[[ /]*)([^[\]]+)([\] ]*\])/g, (whole, open, inner, close) => {
+      const eq = inner.indexOf('=')
+      const name = eq === -1 ? inner : inner.slice(0, eq)
+      const isTag = (open === '[' || open === '[/') && close === ']' && known(name)
+      return isTag ? whole : mask(whole)
+    })
 }
 
 /** Every warning F-list would show for this text, in its order.
